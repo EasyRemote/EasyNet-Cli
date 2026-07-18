@@ -719,6 +719,12 @@ pub fn start_daemon_invocation_transport(
             hot_agent_registrar.set_hot_agent_advertiser(Arc::new(
                 SessionHotAgentAdvertiser::new(Arc::clone(&handle), identity.caller_ura.clone()),
             ))?;
+            register_dynamic_owner_projection_republisher(
+                Arc::clone(&local_ability_catalog),
+                Arc::clone(&handle),
+                &outbox,
+                identity.caller_ura.clone(),
+            );
         }
         register_purge_recovery_on_outbox_ready(&outbox, Arc::clone(&hot_agent_registrar_cell));
         service = service.with_session_escalation(Arc::clone(&handle));
@@ -893,6 +899,139 @@ pub(crate) fn register_purge_recovery_on_outbox_ready(
             }
         });
     }));
+}
+
+fn register_dynamic_owner_projection_republisher(
+    catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
+    escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
+    outbox: &crate::daemon::invocation::bidi::session_escalation::SharedSessionOutbox,
+    owner_ura: String,
+) {
+    let schedule: Arc<dyn Fn() + Send + Sync> = Arc::new({
+        let catalog = Arc::clone(&catalog);
+        let escalation = Arc::clone(&escalation);
+        let owner_ura = owner_ura.clone();
+        move || {
+            let catalog = Arc::clone(&catalog);
+            let escalation = Arc::clone(&escalation);
+            let owner_ura = owner_ura.clone();
+            tokio::spawn(async move {
+                publish_dynamic_owner_projection(catalog, escalation, owner_ura).await;
+            });
+        }
+    });
+    catalog.register_dynamic_publication_hook(Arc::clone(&schedule));
+    outbox.register_ready_hook(schedule);
+}
+
+async fn publish_dynamic_owner_projection(
+    catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
+    escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
+    owner_ura: String,
+) {
+    let snapshot =
+        crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(catalog.as_ref());
+    let descriptors = snapshot.owner_descriptors(&owner_ura);
+    let projection =
+        match crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
+            &owner_ura,
+            &owner_ura,
+            &descriptors,
+        ) {
+            Ok(projection) => projection,
+            Err(error) => {
+                let error = error.to_string();
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = dynamic_owner_projection_prepare_failed,
+                    owner_ura = owner_ura.as_str(),
+                    error = error.as_str(),
+                );
+                return;
+            }
+        };
+    let payload = match crate::daemon::federation::advertise::advertise_abilities_payload(
+        &owner_ura,
+        &projection,
+    ) {
+        Ok(payload) => payload,
+        Err(error) => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = dynamic_owner_projection_payload_failed,
+                owner_ura = owner_ura.as_str(),
+                error = error.as_str(),
+            );
+            return;
+        }
+    };
+    let args = match serde_json::to_vec(&payload) {
+        Ok(args) => args,
+        Err(error) => {
+            let error = error.to_string();
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = dynamic_owner_projection_payload_serialize_failed,
+                owner_ura = owner_ura.as_str(),
+                error = error.as_str(),
+            );
+            return;
+        }
+    };
+    let ability_count = descriptors.len();
+    match escalation
+        .escalate_with_timeout(
+            "federation.advertise_abilities".to_string(),
+            args,
+            Duration::from_secs(5),
+        )
+        .await
+    {
+        crate::daemon::invocation::bidi::session_wire::RequestOutcome::Ok { result_bytes } => {
+            match serde_json::from_slice::<
+                crate::daemon::invocation::dispatch::federation_wrappers::AdvertiseAbilitiesResponse,
+            >(&result_bytes)
+            {
+                Ok(response) if response.ack => {
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = dynamic_owner_projection_published,
+                        owner_ura = owner_ura.as_str(),
+                        ability_count = ability_count,
+                    );
+                }
+                Ok(response) => {
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = dynamic_owner_projection_rejected,
+                        owner_ura = owner_ura.as_str(),
+                        ability_count = ability_count,
+                        accepted_count = response.count,
+                    );
+                }
+                Err(error) => {
+                    let error = error.to_string();
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = dynamic_owner_projection_response_decode_failed,
+                        owner_ura = owner_ura.as_str(),
+                        ability_count = ability_count,
+                        error = error.as_str(),
+                    );
+                }
+            }
+        }
+        crate::daemon::invocation::bidi::session_wire::RequestOutcome::Err { error } => {
+            let error = format!("{error:?}");
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = dynamic_owner_projection_publish_failed,
+                owner_ura = owner_ura.as_str(),
+                ability_count = ability_count,
+                error = error.as_str(),
+            );
+        }
+    }
 }
 
 fn transport_daemon_ura(

@@ -1652,35 +1652,8 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                     result.call_id.len()
                 ))
             })?;
-            let outcome = match result.failure.as_ref() {
-                None => {
-                    crate::daemon::invocation::bidi::session_escalation::EscalationReply::Canonical(
-                        Box::new(axon_sdk::pb::axon::v1::InvokeResponse {
-                            result: result.payload.clone(),
-                            admission_receipt: result.admission_receipt.clone(),
-                            terminal_receipt: result.terminal_receipt.clone(),
-                            ..axon_sdk::pb::axon::v1::InvokeResponse::default()
-                        }),
-                    )
-                }
-                Some(failure) => {
-                    let error = match failure.code.as_str() {
-                        "TARGET_OFFLINE" => crate::daemon::invocation::bidi::session_wire::SessionRequestError::TargetOffline,
-                        "PERMISSION_DENIED" => crate::daemon::invocation::bidi::session_wire::SessionRequestError::PermissionDenied {
-                            reason: failure.message.clone(),
-                        },
-                        "UPSTREAM_TIMEOUT" => crate::daemon::invocation::bidi::session_wire::SessionRequestError::UpstreamTimeout,
-                        _ => crate::daemon::invocation::bidi::session_wire::SessionRequestError::UpstreamFailure {
-                            reason: failure.message.clone(),
-                        },
-                    };
-                    crate::daemon::invocation::bidi::session_escalation::EscalationReply::Error(
-                        error,
-                    )
-                }
-            };
             if let Some(correlation) = self.escalation_correlation.as_ref() {
-                correlation.complete(call_id, outcome);
+                correlation.deliver_reverse_dispatch_result(call_id, result.clone());
             }
             return Ok(());
         }

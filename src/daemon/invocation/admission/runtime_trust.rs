@@ -175,19 +175,28 @@ impl<'a> RuntimeTrust<'a> {
             tls_ca_pem_path: None,
         };
 
-        self.mutate_anchor("identity.register_pubkey", |next_anchor| {
+        self.mutate_anchor_when_changed("identity.register_pubkey", |next_anchor| {
+            let user_key_already_present = matches!(role, TrustedAgentRole::User)
+                && next_anchor
+                    .lookup_user_by_pubkey(&agent_ura, &public_key_b64)
+                    .is_some();
+            let mut changed = false;
             match role {
                 TrustedAgentRole::Backend | TrustedAgentRole::Hub | TrustedAgentRole::Device => {
                     next_anchor.upsert_singleton_agent(entry)?;
+                    changed = true;
                 }
-                TrustedAgentRole::User => {
+                TrustedAgentRole::User if !user_key_already_present => {
                     next_anchor.append_agent(entry)?;
+                    changed = true;
                 }
+                TrustedAgentRole::User => {}
             }
             if let Some(owner) = owner {
                 next_anchor.upsert_principal_owner(owner)?;
+                changed = true;
             }
-            Ok(())
+            Ok(((), changed))
         })
     }
 
@@ -229,13 +238,26 @@ impl<'a> RuntimeTrust<'a> {
         ability: &'static str,
         mutation: impl FnOnce(&mut RealmTrustAnchor) -> Result<T, RealmTrustError>,
     ) -> Result<T, Status> {
+        self.mutate_anchor_when_changed(ability, |next_anchor| {
+            mutation(next_anchor).map(|value| (value, true))
+        })
+    }
+
+    fn mutate_anchor_when_changed<T>(
+        &self,
+        ability: &'static str,
+        mutation: impl FnOnce(&mut RealmTrustAnchor) -> Result<(T, bool), RealmTrustError>,
+    ) -> Result<T, Status> {
         let _cell_guard = self.cell.mutation_guard();
         let _file_guard = self.lock_store(ability)?;
         let mut next_anchor = self.anchor_for_mutation(ability)?;
         let result =
             mutation(&mut next_anchor).map_err(|err| realm_error_to_status(ability, err))?;
+        let (result, changed) = result;
 
-        self.persist_and_publish(ability, next_anchor)?;
+        if changed {
+            self.persist_and_publish(ability, next_anchor)?;
+        }
         Ok(result)
     }
 
@@ -454,6 +476,27 @@ mod tests {
         let from_disk =
             RealmTrustAnchor::try_load_strict(&ctx.trust_anchor_path).expect("disk load");
         assert_eq!(from_disk.len(), 1);
+    }
+
+    #[test]
+    fn register_user_same_pubkey_retry_is_idempotent_noop() {
+        let (_dir, ctx) = context();
+        let user_ura = "easynet:///r/realm/user/alice".to_string();
+        let public_key = b64_pubkey(1);
+        ctx.writer()
+            .register_pubkey(user_ura.clone(), public_key.clone(), TrustedAgentRole::User)
+            .expect("initial register");
+        let generation = ctx.cell.cert_anchor_generation();
+
+        ctx.writer()
+            .register_pubkey(user_ura.clone(), public_key, TrustedAgentRole::User)
+            .expect("same-key retry is idempotent");
+
+        assert_eq!(ctx.cell.cert_anchor_generation(), generation);
+        assert_eq!(ctx.reader().user_snapshot(&user_ura).keys.len(), 1);
+        let from_disk =
+            RealmTrustAnchor::try_load_strict(&ctx.trust_anchor_path).expect("disk load");
+        assert_eq!(from_disk.lookup_user_all(&user_ura).len(), 1);
     }
 
     #[test]

@@ -164,6 +164,12 @@ pub struct ResolveKeyResponse {
     pub public_key_hex: String,
     #[serde(default)]
     pub public_keys_b64: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub principal_owner_ura: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub principal_owner_user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub principal_owner_username: Option<String>,
 }
 
 #[cfg(test)]

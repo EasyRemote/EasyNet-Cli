@@ -2505,6 +2505,10 @@ pub struct AxonAbilityCatalog {
     /// Invariant 2: static boot registration never takes this mutex; static
     /// rows are built before the catalogue is shared through `Arc`.
     dynamic_txn: std::sync::Mutex<()>,
+    /// Post-commit hooks for consumers that derive external read models from
+    /// the committed catalog. Hooks are notifications only; they must schedule
+    /// their own async work and must not mutate the catalog inline.
+    dynamic_publication_hooks: std::sync::RwLock<Vec<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3344,7 +3348,11 @@ impl DynamicRegistration {
             execution_index.install_dynamic(predicted_execution_key, self);
         }
         txn.mark_execution_index_committed()?;
-        txn.sync_runtime_or_rollback()
+        let commit_result = txn.sync_runtime_or_rollback();
+        drop(_dynamic_txn_guard);
+        commit_result?;
+        catalog.notify_dynamic_publication_hooks();
+        Ok(())
     }
 }
 
@@ -3592,6 +3600,7 @@ impl AxonAbilityCatalog {
             static_authority_exclusions: BTreeMap::new(),
             control_plane: std::sync::RwLock::new(AbilityControlPlaneRegistry::default()),
             dynamic_txn: std::sync::Mutex::new(()),
+            dynamic_publication_hooks: std::sync::RwLock::new(Vec::new()),
         }
     }
 
@@ -3631,6 +3640,30 @@ impl AxonAbilityCatalog {
             static_authority_exclusions: BTreeMap::new(),
             control_plane: std::sync::RwLock::new(AbilityControlPlaneRegistry::default()),
             dynamic_txn: std::sync::Mutex::new(()),
+            dynamic_publication_hooks: std::sync::RwLock::new(Vec::new()),
+        }
+    }
+
+    /// Register a notification hook fired after a dynamic ability transaction
+    /// has committed to the control plane, execution index, and LocalRuntime.
+    /// The hook observes only stable catalog state. It is intentionally a
+    /// no-argument signal so product-specific publication stays in boot wiring,
+    /// not in the canonical catalog abstraction.
+    pub(crate) fn register_dynamic_publication_hook(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        self.dynamic_publication_hooks
+            .write()
+            .expect("dynamic_publication_hooks RwLock poisoned")
+            .push(hook);
+    }
+
+    pub(crate) fn notify_dynamic_publication_hooks(&self) {
+        let hooks = self
+            .dynamic_publication_hooks
+            .read()
+            .expect("dynamic_publication_hooks RwLock poisoned")
+            .clone();
+        for hook in hooks {
+            hook();
         }
     }
 

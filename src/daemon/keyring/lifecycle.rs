@@ -74,6 +74,20 @@ pub fn shutdown_key_service() -> anyhow::Result<()> {
     }
 }
 
+/// Stop a key service that a short-lived bootstrap command started.
+///
+/// `device join` needs the custody service before `easynet-daemon` exists so it
+/// can publish the device public projection.  That CLI-owned service must not
+/// remain alive for a later daemon to attach to a soon-to-exit owner.  Unlike
+/// daemon shutdown, this transition leaves the process-local manager reusable
+/// for the rest of the command.
+pub fn shutdown_bootstrap_key_service() -> anyhow::Result<()> {
+    match KEY_SERVICE_MANAGER.get() {
+        Some(manager) => manager.shutdown_bootstrap(),
+        None => Ok(()),
+    }
+}
+
 struct KeyServiceManager {
     lifecycle: KeyServiceLifecycle,
     state: Mutex<KeyServiceManagerState>,
@@ -248,6 +262,31 @@ impl KeyServiceManager {
                 message: error.to_string(),
             },
         };
+        result
+    }
+
+    fn shutdown_bootstrap(&self) -> anyhow::Result<()> {
+        let supervisor = {
+            let mut state = self.lock_state();
+            state.shutdown_requested = true;
+            state.supervisor.take()
+        };
+
+        if let Some(supervisor) = supervisor {
+            supervisor
+                .join()
+                .map_err(|_| anyhow::anyhow!("join bootstrap key service supervisor"))?;
+        }
+
+        let mut state = self.lock_state();
+        let result = state.terminate_owned_child();
+        state.phase = match &result {
+            Ok(()) => KeyServiceManagerPhase::Dormant,
+            Err(error) => KeyServiceManagerPhase::Failed {
+                message: error.to_string(),
+            },
+        };
+        state.shutdown_requested = false;
         result
     }
 
@@ -747,6 +786,49 @@ mod tests {
 
         let state = manager.lock_state();
         assert!(state.shutdown_requested);
+        assert!(state.child.is_none());
+        assert_eq!(state.snapshot(), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bootstrap_shutdown_reaps_owned_service_without_disabling_restart() {
+        use std::path::PathBuf;
+        use std::process::{Command, Stdio};
+        use std::sync::Mutex;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let child = Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn owned test child");
+        let manager = KeyServiceManager {
+            lifecycle: KeyServiceLifecycle {
+                socket_path: directory.path().join("key-service.sock"),
+                binary_path: PathBuf::from("unused"),
+                log_path: directory.path().join("key-service.log"),
+                lease_path: directory.path().join("key-service.start.lock"),
+                ready_timeout: Duration::from_secs(1),
+            },
+            state: Mutex::new(KeyServiceManagerState {
+                phase: KeyServiceManagerPhase::Running,
+                child: Some(child),
+                ..KeyServiceManagerState::default()
+            }),
+        };
+
+        manager
+            .shutdown_bootstrap()
+            .expect("bootstrap-owned child stops");
+
+        let state = manager.lock_state();
+        assert!(
+            !state.shutdown_requested,
+            "bootstrap shutdown must leave the manager reusable"
+        );
         assert!(state.child.is_none());
         assert_eq!(state.snapshot(), None);
     }

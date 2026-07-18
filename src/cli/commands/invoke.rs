@@ -43,9 +43,8 @@ use clap::Args;
 use serde_json::Value;
 
 use crate::cli::commands::invocation_tuple::{
-    require_causal_root, required_nonce_hex, required_subject,
+    require_causal_root, required_nonce_hex, required_subject, AbilityInvocationRef,
 };
-use crate::core::ura::AbilitySelector;
 use crate::support::platform::local_invoke::{
     invoke_local_ability_target_explicit_root_timeout, LocalAbilityTarget,
 };
@@ -110,7 +109,7 @@ pub struct InvokeArgs {
 }
 
 pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
-    let ability_ref = InvokeAbilityRef::parse(&invoke_args.ability_ura)?;
+    let ability_ref = AbilityInvocationRef::parse(&invoke_args.ability_ura)?;
     let ability_selector = ability_ref.selector();
 
     // PR-N1 commit 8/N: `--node` is now wired against the local
@@ -166,7 +165,8 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
                 .context("remote ability invoke requires paired device credentials")?;
             let caller_ura =
                 crate::support::platform::remote_device::caller_device_ura(&credentials)?;
-            let target_call = ability_ref.remote_target(target)?;
+            let target_call = ability_ref
+                .remote_target_for_mode(target, crate::daemon::ability::CallMode::Rpc)?;
             let surface = "remote ability invoke with --node";
             let subject = required_subject(invoke_args.subject.as_deref(), surface)?.to_string();
             let invocation_nonce = required_nonce_hex(invoke_args.nonce_hex.as_deref(), surface)?;
@@ -241,69 +241,6 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-struct InvokeAbilityRef {
-    selector: AbilitySelector,
-    descriptor_ref: Option<String>,
-}
-
-impl InvokeAbilityRef {
-    fn parse(raw: &str) -> anyhow::Result<Self> {
-        let raw = raw.trim();
-        if raw.contains('@') {
-            let descriptor_ref = axon_sdk::invocation::canonical_ability_descriptor_ref(raw)
-                .map_err(|err| anyhow::anyhow!("parse <ability-ura>@<version>: {err}"))?;
-            let ability_ura =
-                crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
-                    &descriptor_ref,
-                )
-                .map_err(|err| anyhow::anyhow!("parse ability URA inside descriptor ref: {err}"))?;
-            let selector = AbilitySelector::parse(&ability_ura)
-                .with_context(|| "parse ability URA inside descriptor ref")?;
-            return Ok(Self {
-                selector,
-                descriptor_ref: Some(descriptor_ref),
-            });
-        }
-
-        Ok(Self {
-            selector: AbilitySelector::parse(raw).with_context(|| "parse <ability-ura>")?,
-            descriptor_ref: None,
-        })
-    }
-
-    fn selector(&self) -> &AbilitySelector {
-        &self.selector
-    }
-
-    fn is_descriptor_ref(&self) -> bool {
-        self.descriptor_ref.is_some()
-    }
-
-    #[cfg(feature = "axon-pb")]
-    fn remote_target(
-        &self,
-        execution_target_ura: &str,
-    ) -> anyhow::Result<
-        crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget,
-    > {
-        match self.descriptor_ref.as_deref() {
-            Some(descriptor_ref) => {
-                crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::from_descriptor_ref(
-                    execution_target_ura,
-                    descriptor_ref,
-                )
-            }
-            None => {
-                crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::from_ability_ura(
-                    execution_target_ura,
-                    self.selector.ability_ura(),
-                )
-            }
-        }
-    }
-}
-
 /// Strip one layer of the standard ability envelope when present.
 ///
 /// The dispatch surfaces (chat handler, shell executor, invoke
@@ -340,7 +277,7 @@ mod tests {
     #[test]
     fn invoke_ability_ref_parses_plain_ability_ura() {
         let parsed =
-            InvokeAbilityRef::parse("easynet:///r/acme/ability/device.node.observe.health")
+            AbilityInvocationRef::parse("easynet:///r/acme/ability/device.node.observe.health")
                 .expect("plain ability URA");
 
         assert_eq!(
@@ -354,13 +291,13 @@ mod tests {
     fn invoke_ability_ref_preserves_explicit_descriptor_ref() {
         let descriptor_ref =
             "easynet:///r/acme/ability/device.node.observe.health@2.1.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
-        let parsed = InvokeAbilityRef::parse(descriptor_ref).expect("descriptor ref");
+        let parsed = AbilityInvocationRef::parse(descriptor_ref).expect("descriptor ref");
 
         assert_eq!(
             parsed.selector().ability_ura(),
             "easynet:///r/acme/ability/device.node.observe.health"
         );
-        assert_eq!(parsed.descriptor_ref.as_deref(), Some(descriptor_ref));
+        assert_eq!(parsed.descriptor_ref(), Some(descriptor_ref));
     }
 
     #[test]

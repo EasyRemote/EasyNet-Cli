@@ -119,14 +119,12 @@ pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
                     });
                 }
                 expected_down_sequence = expected_down_sequence.saturating_add(1);
-                if frame.sequence == 0 {
-                    apply_session_contract(
-                        &frame,
-                        &outbound_tx,
-                        &hub_endpoint,
-                        connection_state_sink.as_ref(),
-                    );
-                }
+                apply_session_contract(
+                    &frame,
+                    &outbound_tx,
+                    &hub_endpoint,
+                    connection_state_sink.as_ref(),
+                );
                 if let Err(err) = dispatcher.handle_down(frame, &outbound_tx).await {
                     let err_msg = format!("{err}");
                     crate::op_event!(
@@ -262,5 +260,46 @@ mod tests {
             Some("T10_ADMIT_PRESENCE")
         );
         assert_eq!(snapshot.source, "session.contract_negotiated");
+    }
+
+    #[test]
+    fn session_contract_control_enables_carrier_v1_independent_of_sequence() {
+        let _home = HomeGuard::new();
+        let credentials = credentials();
+        record_snapshot(JoinConnectionSnapshot::from_credentials(
+            JoinConnectionState::SelfSessionAdmissionPending,
+            Some(JoinTransition::OpenSelfSession),
+            &credentials,
+            "test.start",
+        ));
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let outbound = SessionUpSender::new(tx);
+        let frame = InvokeBidiDown {
+            sequence: 7,
+            payload: Some(axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::Control(
+                axon_sdk::pb::axon::v1::BidiControl {
+                    control: Some(
+                        axon_sdk::pb::axon::v1::bidi_control::Control::SessionEstablished(
+                            axon_sdk::pb::axon::v1::BidiSessionEstablished {
+                                contract_version: DEVICE_DISPATCH_CONTRACT_VERSION,
+                                dispatch_encoding: "proto".to_string(),
+                                session_id: 42,
+                                displaced_prior: false,
+                            },
+                        ),
+                    ),
+                },
+            )),
+            ..InvokeBidiDown::default()
+        };
+
+        apply_session_contract(
+            &frame,
+            &outbound,
+            "https://hub:50443",
+            &super::super::PersistentSessionConnectionStateSink,
+        );
+
+        assert!(outbound.carrier_v1());
     }
 }

@@ -1358,6 +1358,18 @@ fn route_selector_from_query(query_name: &str, ability_name: &str) -> Option<Rou
     if looks_like_descriptor_ref(ability_name) {
         return None;
     }
+    if is_ability_ura(ability_name) {
+        let selector = crate::core::ura::AbilitySelector::parse(ability_name).ok()?;
+        if selector.owner_ura() != owner_ura {
+            return None;
+        }
+        return Some(RouteSelector {
+            query_name: selector.ability_ura().to_string(),
+            owner_ura: selector.owner_ura().to_string(),
+            ability_ura: selector.ability_ura().to_string(),
+            public_name: selector.public_name().to_string(),
+        });
+    }
     let public_name = crate::core::ura::owner_local_ability_name(owner_ura, ability_name);
     let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, &public_name)?;
     Some(RouteSelector {
@@ -2192,6 +2204,28 @@ mod tests {
             .at(TEST_NOW_MS)
             .resolve_route(&descriptor_ref, "")
             .expect("descriptor-bound ability query must resolve through the same route gate");
+
+        assert_eq!(route.kind(), SelectedRouteKind::LocalDevice);
+        assert_eq!(route.owner_ura, owner_ura);
+        assert_eq!(route.ability_ura, ability_ura);
+        assert_eq!(route.dispatch_name, "agent.list");
+    }
+
+    #[test]
+    fn owner_plus_full_ability_ura_resolves_same_final_route() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
+
+        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .with_local_catalog_authority(owner_ura.clone(), authority)
+            .at(TEST_NOW_MS)
+            .resolve_route(&owner_ura, &ability_ura)
+            .expect("owner + full Ability URA must resolve through the same route gate");
 
         assert_eq!(route.kind(), SelectedRouteKind::LocalDevice);
         assert_eq!(route.owner_ura, owner_ura);

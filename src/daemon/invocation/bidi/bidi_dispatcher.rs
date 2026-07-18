@@ -70,7 +70,7 @@ use crate::daemon::invocation::dispatch::federation_wrappers::{
     ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
 };
 use crate::daemon::invocation::dispatch::forwarded_finalization::{
-    ForwardedFinalizationVerifier, ForwardedInvocationBinding,
+    ensure_forwarded_receipt_signer_key, ForwardedFinalizationVerifier, ForwardedInvocationBinding,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
     status_from_axon_invoke_error, target_ura_from_envelope, BoxedDownStream,
@@ -79,6 +79,7 @@ use crate::daemon::invocation::dispatch::unary_dispatcher::UnaryDispatcher;
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
 };
+use crate::daemon::invocation::streams::stream_dispatcher::StreamDispatcher;
 use axon_sdk::invocation::{AbilityContext, AbilityFrame, AxonError, BidiInputFrame, CallMode};
 
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
@@ -644,6 +645,12 @@ impl BidiDispatcher {
         let forwarded_request =
             remote_bidi_forwarded_request(selected_route, envelope_open, call_mode)?;
         let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        ensure_forwarded_receipt_signer_key(
+            self.sessions.device_trust_sync.as_ref(),
+            &selected_route.execution_host_ura,
+            "InvokeBidi",
+        )
+        .await?;
         let receipt_resolver = self.admission.receipt_key_resolver();
         let open_frame = build_carrier_v1_dispatch_frame(call_id, forwarded_request, true);
         match sender.try_send(Ok(open_frame)) {
@@ -1980,6 +1987,36 @@ impl BidiDispatcher {
         }
     }
 
+    async fn dispatch_canonical_session_stream(
+        &self,
+        request: axon_sdk::pb::axon::v1::InvokeRequest,
+    ) -> Result<Response<BoxedDownStream<axon_sdk::pb::axon::v1::InvokeStreamChunk>>, Status> {
+        let stream_request = axon_sdk::pb::axon::v1::InvokeServerStreamRequest {
+            envelope: request.envelope,
+            target: request.target,
+            arguments: request.arguments,
+            content_type: request.content_type,
+            timeout_seconds: request.timeout_seconds,
+            metadata: request.metadata,
+            payload_ref: request.payload_ref,
+            content_envelope: request.content_envelope,
+        };
+        self.stream_dispatcher()
+            .dispatch_selected_route(&stream_request)
+            .await
+    }
+
+    fn stream_dispatcher(&self) -> StreamDispatcher {
+        StreamDispatcher::new(
+            self.admission.clone(),
+            self.directory.clone(),
+            self.sessions.clone(),
+            self.runtime.clone(),
+            self.gate.clone(),
+            std::sync::Weak::new(),
+        )
+    }
+
     fn session_control_lifecycle_from_wire(
         &self,
         caller_device_ura: &str,
@@ -2357,6 +2394,112 @@ pub(crate) fn build_reverse_dispatch_result_frame(
     })
 }
 
+fn reverse_dispatch_request_is_stream(request: &axon_sdk::pb::axon::v1::InvokeRequest) -> bool {
+    crate::daemon::invocation::dispatch::invocation_wire::ability_binding_from_invocation_target(
+        "carrier-v1 reverse call",
+        request.target.as_ref(),
+    )
+    .ok()
+    .and_then(|binding| {
+        axon_sdk::invocation::canonical_ability_descriptor_ref(binding)
+            .ok()
+            .and_then(|canonical| {
+                canonical
+                    .rsplit_once('!')
+                    .map(|(_, action)| action == "stream")
+            })
+    })
+    .unwrap_or(false)
+}
+
+async fn forward_reverse_dispatch_stream_results(
+    mut stream: BoxedDownStream<axon_sdk::pb::axon::v1::InvokeStreamChunk>,
+    presence: &Arc<PresenceRegistry>,
+    caller_ura: &str,
+    id_hex: &str,
+    call_id: [u8; 16],
+) {
+    while let Some(next) = stream.next().await {
+        let frame = match next {
+            Ok(chunk) => build_reverse_dispatch_stream_chunk_frame(call_id, chunk),
+            Err(status) => build_reverse_dispatch_stream_failure_frame(
+                call_id,
+                session_request_error_from_status(status),
+            ),
+        };
+        let terminal = reverse_dispatch_frame_is_terminal(&frame);
+        push_session_request_result(presence, caller_ura, id_hex, frame);
+        if terminal {
+            return;
+        }
+    }
+    let frame = build_reverse_dispatch_stream_failure_frame(
+        call_id,
+        SessionRequestError::UpstreamFailure {
+            reason: "hub reverse stream ended without terminal checkpoint".to_string(),
+        },
+    );
+    push_session_request_result(presence, caller_ura, id_hex, frame);
+}
+
+fn build_reverse_dispatch_stream_chunk_frame(
+    call_id: [u8; 16],
+    chunk: axon_sdk::pb::axon::v1::InvokeStreamChunk,
+) -> DispatchFrame {
+    use axon_sdk::pb::axon::v1::ReverseDispatchResult;
+    DispatchFrame::control(InvokeBidiDown {
+        payload: Some(DownPayload::ReverseDispatchResult(ReverseDispatchResult {
+            call_id: call_id.to_vec(),
+            payload: chunk.payload,
+            terminal: chunk.terminal,
+            failure: chunk.error,
+            admission_receipt: chunk.admission_receipt,
+            terminal_receipt: chunk.terminal_receipt,
+        })),
+        ..InvokeBidiDown::default()
+    })
+}
+
+fn build_reverse_dispatch_stream_failure_frame(
+    call_id: [u8; 16],
+    error: SessionRequestError,
+) -> DispatchFrame {
+    use axon_sdk::pb::axon::v1::ReverseDispatchResult;
+    let (code, retryable) = match &error {
+        SessionRequestError::TargetOffline => ("TARGET_OFFLINE", true),
+        SessionRequestError::PermissionDenied { .. } => ("PERMISSION_DENIED", false),
+        SessionRequestError::UpstreamFailure { .. } => ("UPSTREAM_FAILURE", true),
+        SessionRequestError::UpstreamTimeout => ("UPSTREAM_TIMEOUT", true),
+    };
+    let message = match error {
+        SessionRequestError::TargetOffline => "target offline".to_string(),
+        SessionRequestError::PermissionDenied { reason }
+        | SessionRequestError::UpstreamFailure { reason } => reason,
+        SessionRequestError::UpstreamTimeout => "upstream timeout".to_string(),
+    };
+    DispatchFrame::control(InvokeBidiDown {
+        payload: Some(DownPayload::ReverseDispatchResult(ReverseDispatchResult {
+            call_id: call_id.to_vec(),
+            terminal: true,
+            failure: Some(axon_sdk::pb::axon::v1::Error {
+                code: code.to_string(),
+                message,
+                retryable,
+                ..axon_sdk::pb::axon::v1::Error::default()
+            }),
+            ..ReverseDispatchResult::default()
+        })),
+        ..InvokeBidiDown::default()
+    })
+}
+
+fn reverse_dispatch_frame_is_terminal(frame: &DispatchFrame) -> bool {
+    matches!(
+        frame.frame.payload.as_ref(),
+        Some(DownPayload::ReverseDispatchResult(result)) if result.terminal
+    )
+}
+
 /// Terminal-result settlement shared by the JSON `Result` arm and the
 /// carrier-v1 `DispatchResult` arm: streaming map first, unary map as
 /// fallback, every miss surfaced (DEC-F004 — one settle path, not two).
@@ -2648,16 +2791,46 @@ async fn drain_session_runtime_up_stream(
                 let presence_for_reply = Arc::clone(&presence);
                 let caller_ura_for_reply = caller_ura.clone();
                 tokio::spawn(async move {
-                    let outcome = dispatcher_for_request
-                        .dispatch_canonical_session_invoke(request)
-                        .await;
-                    let frame = build_reverse_dispatch_result_frame(call_id, outcome);
-                    push_session_request_result(
-                        &presence_for_reply,
-                        &caller_ura_for_reply,
-                        &id_hex,
-                        frame,
-                    );
+                    if reverse_dispatch_request_is_stream(&request) {
+                        match dispatcher_for_request
+                            .dispatch_canonical_session_stream(request)
+                            .await
+                        {
+                            Ok(response) => {
+                                forward_reverse_dispatch_stream_results(
+                                    response.into_inner(),
+                                    &presence_for_reply,
+                                    &caller_ura_for_reply,
+                                    &id_hex,
+                                    call_id,
+                                )
+                                .await;
+                            }
+                            Err(status) => {
+                                let frame = build_reverse_dispatch_stream_failure_frame(
+                                    call_id,
+                                    session_request_error_from_status(status),
+                                );
+                                push_session_request_result(
+                                    &presence_for_reply,
+                                    &caller_ura_for_reply,
+                                    &id_hex,
+                                    frame,
+                                );
+                            }
+                        }
+                    } else {
+                        let outcome = dispatcher_for_request
+                            .dispatch_canonical_session_invoke(request)
+                            .await;
+                        let frame = build_reverse_dispatch_result_frame(call_id, outcome);
+                        push_session_request_result(
+                            &presence_for_reply,
+                            &caller_ura_for_reply,
+                            &id_hex,
+                            frame,
+                        );
+                    }
                 });
                 continue;
             }

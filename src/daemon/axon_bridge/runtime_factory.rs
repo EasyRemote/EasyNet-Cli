@@ -503,6 +503,10 @@ fn ledger_invocation_ura(invocation_id: &str, binding: &AxiomBinding) -> String 
 }
 
 fn ledger_route_ura(ability_name: &str, binding: &AxiomBinding) -> String {
+    if let Some(ability_ura) = canonical_ledger_ability_ura(ability_name, binding) {
+        return ability_ura;
+    }
+
     // RFC-005: a route names the same canonical `/ability/` URA the owner
     // publishes. Axon's ledger sink passes the daemon registry key here
     // (`liangbing.chat`, `fs.read`, ...), while public Ability URAs
@@ -519,6 +523,31 @@ fn ledger_route_ura(ability_name: &str, binding: &AxiomBinding) -> String {
         .unwrap_or_else(|| {
             crate::core::ura::hub_ability_ura("_system", &format!("system.{ability_name}"))
         })
+}
+
+fn canonical_ledger_ability_ura(ability_name: &str, binding: &AxiomBinding) -> Option<String> {
+    let ability_name = ability_name.trim();
+    if ability_name.is_empty() {
+        return None;
+    }
+    if axon_sdk::invocation::canonical_ability_descriptor_ref(ability_name).is_ok() {
+        if let Ok(ability_ura) = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+            &binding.callee.ura,
+            ability_name,
+        ) {
+            return Some(ability_ura);
+        }
+        if let Ok(ability_ura) = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+            &binding.caller.ura,
+            ability_name,
+        ) {
+            return Some(ability_ura);
+        }
+    }
+    if let Ok(selector) = crate::core::ura::AbilitySelector::parse(ability_name) {
+        return Some(selector.ability_ura().to_string());
+    }
+    None
 }
 
 #[cfg(test)]
@@ -560,6 +589,20 @@ mod tests {
 
         assert_eq!(
             ledger_route_ura("liangbing.chat", &binding),
+            "easynet:///r/localhost/ability/dev.liangbing.chat"
+        );
+        assert_eq!(
+            ledger_route_ura(
+                "easynet:///r/localhost/ability/dev.liangbing.chat@1.2.3#0000000000000000000000000000000000000000000000000000000000000001!invoke",
+                &binding,
+            ),
+            "easynet:///r/localhost/ability/dev.liangbing.chat"
+        );
+        assert_eq!(
+            ledger_route_ura(
+                "easynet:///r/localhost/ability/dev.liangbing.chat",
+                &binding,
+            ),
             "easynet:///r/localhost/ability/dev.liangbing.chat"
         );
         assert_eq!(

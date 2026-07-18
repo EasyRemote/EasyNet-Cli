@@ -688,6 +688,7 @@ impl DeviceAbilityRegistrar {
             ));
         }
         control_plane_txn.commit();
+        catalog.notify_dynamic_publication_hooks();
         Ok(state)
     }
 
@@ -820,6 +821,7 @@ impl DeviceAbilityRegistrar {
             );
         }
         transaction.advance(DeviceAbilityUninstallStep::StoreCommitted);
+        catalog.notify_dynamic_publication_hooks();
 
         Ok(transaction.outcome())
     }
@@ -1646,6 +1648,45 @@ mod tests {
         assert_eq!(
             facts.implementation_content_hash.as_deref(),
             Some(content_hash.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn install_and_uninstall_notify_dynamic_publication_hooks_after_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DeviceAbilityStore::open_at(dir.path().join("device-abilities.json"));
+        let (registrar, _, catalog) = wired_registrar(store);
+        let notifications = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        catalog.register_dynamic_publication_hook(Arc::new({
+            let notifications = Arc::clone(&notifications);
+            move || {
+                notifications.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }));
+
+        let install = host_stream_install(dir.path(), "/tmp/er-host.sock");
+        let ability_ura = install.ability_ura().to_string();
+        let state = registrar.install(install).await.unwrap();
+
+        assert_eq!(state, InstallState::Active);
+        assert_eq!(
+            notifications.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "ability.deploy must publish a fresh owner projection only after commit"
+        );
+
+        registrar
+            .uninstall(DeviceAbilityUninstall {
+                ability_ura,
+                install_id: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            notifications.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "ability.uninstall must publish the tombstoned owner projection after commit"
         );
     }
 

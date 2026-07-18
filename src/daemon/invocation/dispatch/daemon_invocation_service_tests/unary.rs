@@ -2031,6 +2031,7 @@ async fn invoke_dispatches_federation_resolve_key_uses_federated_resolver_on_loc
         result: serde_json::to_vec(&federation_wrappers::resolve_key_response(
             peer_public_key_b64,
             Vec::new(),
+            None,
         ))
         .expect("resolve_key response serializes"),
         result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),

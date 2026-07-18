@@ -677,9 +677,12 @@ fn build_registry_with_services_result_inner(
     // call-mode slot single-owner and avoids precedence-based
     // replacement semantics.
     media::register(&mut reg);
-    media::camera_snapshot::register(&mut reg);
-    media::screen_snapshot::register(&mut reg);
-    media::mic_subscribe::register(&mut reg);
+    #[cfg(feature = "native-media")]
+    {
+        media::camera_snapshot::register(&mut reg);
+        media::screen_snapshot::register(&mut reg);
+        media::mic_subscribe::register(&mut reg);
+    }
     list_resources_ability::register(&mut reg);
     // agent.start / agent.stop / agent.refresh —
     // Invoke-side surface of `easynet agent add/remove/refresh`. LLM sub-agents are registry

@@ -370,6 +370,11 @@ fn is_unprovided_hub_voice(name: &str) -> bool {
 }
 
 fn has_real_media_handler(name: &str) -> bool {
+    has_native_media_handler(name)
+}
+
+#[cfg(feature = "native-media")]
+fn has_native_media_handler(name: &str) -> bool {
     matches!(
         name,
         ABILITY_MIC_SUBSCRIBE
@@ -380,6 +385,11 @@ fn has_real_media_handler(name: &str) -> bool {
             | ABILITY_SCREEN_SUBSCRIBE
             | ABILITY_SCREEN_SNAPSHOT
     )
+}
+
+#[cfg(not(feature = "native-media"))]
+fn has_native_media_handler(_name: &str) -> bool {
+    false
 }
 
 // ── INV-SUBJECT-ENVELOPE enforcement ─────────────────────────

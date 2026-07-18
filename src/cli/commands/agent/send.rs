@@ -258,19 +258,8 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // pulled out of `MissionRunResult.bound_vars`. `eal_string_literal`
     // can fail if the user's prompt contains an embedded NUL byte — we
     // surface that as a CLI error rather than silently truncating.
-    let eal_source = match resolved_session_id.as_deref() {
-        Some(sid) => format!(
-            "mission \"agent-send\" {{\n    let __reply = {agent}.chat(prompt: {prompt}, session_id: {sid})\n}}\n",
-            agent = args.name,
-            prompt = eal_string_literal(&composed_prompt)?,
-            sid = eal_string_literal(sid)?,
-        ),
-        None => format!(
-            "mission \"agent-send\" {{\n    let __reply = {agent}.chat(prompt: {prompt})\n}}\n",
-            agent = args.name,
-            prompt = eal_string_literal(&composed_prompt)?,
-        ),
-    };
+    let eal_source =
+        build_agent_send_eal_source(&args.name, &composed_prompt, resolved_session_id.as_deref())?;
 
     let value = crate::support::platform::local_invoke::invoke_local_ability_with_subject_timeout(
         crate::daemon::ability::builtins::automation::mission::ABILITY_RUN,
@@ -432,6 +421,24 @@ pub(super) fn eal_string_literal(s: &str) -> anyhow::Result<String> {
     Ok(out)
 }
 
+fn build_agent_send_eal_source(
+    agent_name: &str,
+    composed_prompt: &str,
+    session_id: Option<&str>,
+) -> anyhow::Result<String> {
+    let agent = eal_string_literal(agent_name)?;
+    let prompt = eal_string_literal(composed_prompt)?;
+    match session_id {
+        Some(sid) => Ok(format!(
+            "mission \"agent-send\" {{\n    let __reply = {agent}.chat(prompt: {prompt}, session_id: {sid})\n}}\n",
+            sid = eal_string_literal(sid)?,
+        )),
+        None => Ok(format!(
+            "mission \"agent-send\" {{\n    let __reply = {agent}.chat(prompt: {prompt})\n}}\n",
+        )),
+    }
+}
+
 /// Read the most recent agent run dir for `agent_name` and extract the
 /// usage stats from its `meta.json`. Returns `None` if no run dir
 /// exists or the meta is unreadable. This is the temporary glue that
@@ -588,4 +595,57 @@ fn compact_markdown(src: &str) -> String {
         out.pop();
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::eal::parser::ast::{FieldValue, Statement, TargetKind};
+
+    use super::*;
+
+    #[test]
+    fn agent_send_eal_quotes_non_identifier_agent_receiver() {
+        let source = build_agent_send_eal_source("er_agent_20260719-071307", "hello", None)
+            .expect("agent send source");
+
+        assert!(source.contains(r#""er_agent_20260719-071307".chat("#));
+        assert!(!source.contains("er_agent_20260719-071307.chat("));
+
+        let parsed = crate::eal::parser::parse(&source).expect("generated source must parse");
+        let Statement::LetCall { call, .. } = &parsed.mission.statements[0] else {
+            panic!("agent send should generate one let-bound member call");
+        };
+        assert_eq!(call.target_kind, TargetKind::Agent);
+        assert_eq!(
+            call.target_node.as_deref(),
+            Some("er_agent_20260719-071307")
+        );
+        assert_eq!(call.function_name, "chat");
+    }
+
+    #[test]
+    fn agent_send_eal_preserves_session_id_as_named_arg() {
+        let source = build_agent_send_eal_source(
+            "claude",
+            "hello",
+            Some("8f7dd3b3-992a-48c7-9ecf-e1c9821eda4b"),
+        )
+        .expect("agent send source");
+
+        let parsed = crate::eal::parser::parse(&source).expect("generated source must parse");
+        let Statement::LetCall { call, .. } = &parsed.mission.statements[0] else {
+            panic!("agent send should generate one let-bound member call");
+        };
+        let session = call
+            .arguments
+            .iter()
+            .find(|field| field.key == "session_id")
+            .expect("session_id argument");
+        match &session.value {
+            FieldValue::String(value) => {
+                assert_eq!(value, "8f7dd3b3-992a-48c7-9ecf-e1c9821eda4b")
+            }
+            value => panic!("session_id must be a string literal, got {value:?}"),
+        }
+    }
 }

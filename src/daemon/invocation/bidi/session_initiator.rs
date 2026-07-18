@@ -638,6 +638,17 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
                 let frames_received = stats.frames_received;
                 let close_class = stats.classify().as_str();
                 phase.transition(DeviceSessionPhase::Backoff, close_class);
+                // A clean EOF still tears down the actual `session.open`
+                // carrier and clears SharedSessionOutbox. Keep the public
+                // connection projection bound to carrier liveness: a previously
+                // negotiated contract is no longer sufficient evidence for
+                // FRONTEND_CONNECTED once the down stream has closed.
+                project_connection_state(
+                    connection_state_sink.as_ref(),
+                    crate::daemon::boot::join_connection_state::JoinConnectionState::ConnectedSuspect,
+                    crate::daemon::boot::join_connection_state::JoinTransition::OpenSelfSession,
+                    "session.clean_close_reconnecting",
+                );
                 let next_backoff_ms = backoff.as_millis() as u64;
                 crate::op_event!(
                     component = session,
@@ -1685,6 +1696,53 @@ mod tests {
             "immediate close cannot count as healthy uptime, got {:?}",
             stats.uptime
         );
+    }
+
+    #[tokio::test]
+    async fn clean_close_projects_connection_suspect_when_carrier_drops() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        seed_session_credentials();
+        let (addr, _server) = spawn_clean_close_session_hub().await;
+        let sink = Arc::new(InMemorySessionConnectionStateSink::default());
+        let sink_port: Arc<dyn SessionConnectionStateSink> = sink.clone();
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let supervisor = tokio::spawn(run_session_supervisor(SessionSupervisorRunConfig {
+            hub_endpoint: format!("http://{addr}"),
+            signer: TestSessionSigner::random("easynet:///r/realm/device/n1"),
+            hub_ca_pem_path: None,
+            dispatcher: Arc::new(RecordingDispatcher::default()),
+            escalation_outbox: None,
+            ability_descriptors: Vec::new(),
+            hub_published_abilities: hub_store(),
+            initial_admission: None,
+            user_trust_sync: None,
+            connection_state_sink: sink_port,
+            cancel: cancel_rx,
+        }));
+
+        tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, async {
+            loop {
+                if sink.changes().iter().any(|change| {
+                    change.state
+                        == crate::daemon::boot::join_connection_state::JoinConnectionState::ConnectedSuspect
+                        && change.transition
+                            == crate::daemon::boot::join_connection_state::JoinTransition::OpenSelfSession
+                        && change.source == "session.clean_close_reconnecting"
+                }) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("clean session close must revoke connected projection");
+
+        let _ = cancel_tx.send(());
+        tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, supervisor)
+            .await
+            .expect("supervisor stops after cancellation")
+            .expect("supervisor task did not panic");
     }
 
     #[test]

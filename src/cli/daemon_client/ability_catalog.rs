@@ -91,8 +91,48 @@ impl AbilityCatalogueClient {
             .get("abilities")
             .and_then(Value::as_array)
             .cloned()
+            .map(|entries| entries.into_iter().map(enrich_descriptor_ref).collect())
             .unwrap_or_default()
     }
+}
+
+fn enrich_descriptor_ref(mut entry: Value) -> Value {
+    let Some(object) = entry.as_object_mut() else {
+        return entry;
+    };
+    if object.contains_key("descriptor_ref") {
+        return entry;
+    }
+    let Some(ability_ura) = object.get("ability_ura").and_then(Value::as_str) else {
+        return entry;
+    };
+    let Some(version) = object
+        .get("version")
+        .or_else(|| object.get("ability_version"))
+        .and_then(Value::as_str)
+    else {
+        return entry;
+    };
+    let Some(descriptor_hash) = object.get("descriptor_hash").and_then(Value::as_str) else {
+        return entry;
+    };
+    let Some(admission_action) = object.get("admission_action").and_then(Value::as_str) else {
+        return entry;
+    };
+    let Some(hash_hex) = descriptor_hash.trim().strip_prefix("sha256:") else {
+        return entry;
+    };
+    let candidate = format!(
+        "{}@{}#{}!{}",
+        ability_ura.trim(),
+        version.trim(),
+        hash_hex.trim(),
+        admission_action.trim()
+    );
+    if axon_sdk::invocation::canonical_ability_descriptor_ref(&candidate).is_ok() {
+        object.insert("descriptor_ref".to_string(), Value::String(candidate));
+    }
+    entry
 }
 
 fn invoke_remote_catalogue(
@@ -101,4 +141,28 @@ fn invoke_remote_catalogue(
     action_label: &str,
 ) -> anyhow::Result<Value> {
     invoke_remote_device_system_ability(node, "meta.list_abilities", request, action_label)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn abilities_from_value_adds_descriptor_bound_ref() {
+        let value = serde_json::json!({
+            "abilities": [{
+                "ability_ura": "easynet:///r/acme/ability/device.dev.er.add",
+                "version": "1.0.0",
+                "descriptor_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "admission_action": "stream"
+            }]
+        });
+
+        let abilities = AbilityCatalogueClient::abilities_from_value(&value);
+
+        assert_eq!(
+            abilities[0].get("descriptor_ref").and_then(Value::as_str),
+            Some("easynet:///r/acme/ability/device.dev.er.add@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream")
+        );
+    }
 }

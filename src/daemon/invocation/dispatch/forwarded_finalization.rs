@@ -16,6 +16,7 @@ use axon_sdk::pb::axon::v1::{
 };
 use tonic::Status;
 
+use crate::daemon::invocation::admission::device_trust_sync::DeviceTrustSync;
 use crate::daemon::invocation::receipts::finalization_projection::{
     self, FinalizationProjectionError, ReceiptCheckpointStage,
 };
@@ -171,6 +172,70 @@ pub(crate) struct ForwardedFinalizationVerifier {
     resolver: Arc<dyn KeyResolver>,
     admission: Option<SignedInvocationReceipt>,
     terminal_seen: bool,
+}
+
+pub(crate) async fn ensure_forwarded_receipt_signer_key(
+    sync: Option<&Arc<DeviceTrustSync>>,
+    execution_host_ura: &str,
+    surface: &str,
+) -> Result<(), Status> {
+    ensure_forwarded_receipt_signer_keys(sync, [execution_host_ura], surface).await
+}
+
+pub(crate) async fn ensure_forwarded_response_receipt_signer_keys(
+    sync: Option<&Arc<DeviceTrustSync>>,
+    response: &InvokeResponse,
+    surface: &str,
+) -> Result<(), Status> {
+    let signers = [
+        response
+            .admission_receipt
+            .as_ref()
+            .and_then(receipt_signer_ura),
+        response
+            .terminal_receipt
+            .as_ref()
+            .and_then(receipt_signer_ura),
+    ];
+    ensure_forwarded_receipt_signer_keys(sync, signers.into_iter().flatten(), surface).await
+}
+
+async fn ensure_forwarded_receipt_signer_keys<'a>(
+    sync: Option<&Arc<DeviceTrustSync>>,
+    signer_uras: impl IntoIterator<Item = &'a str>,
+    surface: &str,
+) -> Result<(), Status> {
+    let Some(sync) = sync else {
+        return Ok(());
+    };
+    let mut checked = Vec::<String>::new();
+    for signer_ura in signer_uras {
+        let signer_ura = signer_ura.trim();
+        if signer_ura.is_empty() || checked.iter().any(|seen| seen == signer_ura) {
+            continue;
+        }
+        checked.push(signer_ura.to_string());
+        let status = sync.ensure_caller_key_status(signer_ura, None).await;
+        if status.trusted() {
+            continue;
+        }
+        let diagnostic = status
+            .diagnostic()
+            .unwrap_or_else(|| "receipt signer is not syncable through hub trust".to_string());
+        return Err(Status::failed_precondition(format!(
+            "{surface}: remote receipt signer `{signer_ura}` cannot be trusted for forwarded receipt finalization: {diagnostic}"
+        )));
+    }
+    Ok(())
+}
+
+fn receipt_signer_ura(receipt: &WireInvocationReceipt) -> Option<&str> {
+    receipt
+        .signer_binding
+        .as_ref()
+        .or(receipt.callee_binding.as_ref())
+        .map(|identity| identity.ura.trim())
+        .filter(|ura| !ura.is_empty())
 }
 
 impl ForwardedFinalizationVerifier {

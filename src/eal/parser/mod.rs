@@ -10,7 +10,7 @@
 //   statement   = "let" IDENT "=" rhs | emit_stmt | rhs
 //   rhs         = call_expr | member_call
 //   call_expr   = "call" STRING ("on" STRING)? ("with" "{" field_list "}")? option*
-//   member_call = IDENT "." IDENT "(" named_arg_list? ")" option*
+//   member_call = (IDENT | STRING) "." IDENT "(" named_arg_list? ")" option*
 //   emit_stmt   = "emit" STRING "kind" (STRING | IDENT) "value" arg_value
 //   named_arg_list = named_arg ("," named_arg)*
 //   named_arg   = IDENT ":" arg_value
@@ -320,11 +320,13 @@ impl Parser {
     /// "..."` form or the member-call `agent.ability(args)` form. The
     /// branch is chosen by looking at the current token plus one
     /// lookahead — `Call` keyword takes the traditional path, an
-    /// identifier followed by `.` takes the member-call path.
+    /// identifier or quoted agent id followed by `.` takes the member-call
+    /// path.
     fn parse_rhs(&mut self) -> anyhow::Result<CallExpr> {
         match self.peek() {
             Token::Call => self.parse_call_expr(),
             Token::Ident(_) if *self.peek_at(1) == Token::Dot => self.parse_member_call(),
+            Token::StringLit(_) if *self.peek_at(1) == Token::Dot => self.parse_member_call(),
             t => anyhow::bail!("expected `call ...` or `<agent>.<ability>(...)`, got {t:?}"),
         }
     }
@@ -360,13 +362,19 @@ impl Parser {
     }
 
     /// Parse a member-call form: `<agent>.<ability>(name: value, ...)`.
+    /// Agent ids that are valid EasyNet `AgentId`s but not EAL bare
+    /// identifiers, such as `er-agent`, use the quoted form
+    /// `"er-agent".chat(...)`.
     /// Lowers to a `CallExpr` with `target_kind = TargetKind::Agent`.
     /// The planner uses `target_kind` to choose the IR target variant
     /// (`IrTarget::Agent` here vs `IrTarget::Device` for the
     /// traditional form). The runtime dispatcher matches the resolved
     /// `IrTarget` and never re-classifies based on names.
     fn parse_member_call(&mut self) -> anyhow::Result<CallExpr> {
-        let agent = self.expect_ident()?;
+        let agent = match self.advance() {
+            Token::Ident(s) | Token::StringLit(s) => s,
+            t => anyhow::bail!("expected member-call agent id, got {t:?}"),
+        };
         self.expect(&Token::Dot)?;
         let ability = self.expect_ident()?;
         self.expect(&Token::LParen)?;
@@ -698,6 +706,15 @@ mod tests {
             FieldValue::String(s) => assert_eq!(s, "hi"),
             v => panic!("expected string, got {v:?}"),
         }
+    }
+
+    #[test]
+    fn member_call_accepts_quoted_agent_id_for_non_eal_identifier() {
+        let p = parse(r#"mission "t" { let r = "er_agent_20260719-071307".chat(prompt: "hi") }"#)
+            .unwrap();
+        let c = extract_call(&p, 0);
+        assert_eq!(c.function_name, "chat");
+        assert_eq!(c.target_node.as_deref(), Some("er_agent_20260719-071307"));
     }
 
     #[test]

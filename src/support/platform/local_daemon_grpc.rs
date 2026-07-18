@@ -1221,6 +1221,67 @@ impl axon_sdk::invocation::KeyResolver for LocalKeyServiceReceiptResolver {
 }
 
 #[cfg(feature = "axon-pb")]
+pub(crate) struct CanonicalRuntimeReceiptResolver {
+    realm_trust: Option<crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver>,
+    local_self_identity: LocalKeyServiceReceiptResolver,
+}
+
+#[cfg(feature = "axon-pb")]
+impl CanonicalRuntimeReceiptResolver {
+    pub(crate) fn new() -> Self {
+        let trust_anchor_path =
+            crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default();
+        let realm_trust =
+            crate::daemon::trust::anchor::RealmTrustAnchor::load_or_empty(&trust_anchor_path)
+                .ok()
+                .filter(|anchor| !anchor.is_empty())
+                .map(|anchor| {
+                    crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
+                        crate::daemon::trust::cell::SharedTrustAnchor::new(std::sync::Arc::new(
+                            anchor,
+                        )),
+                    )
+                });
+        Self {
+            realm_trust,
+            local_self_identity: LocalKeyServiceReceiptResolver::new(),
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl axon_sdk::invocation::KeyResolver for CanonicalRuntimeReceiptResolver {
+    fn resolve(
+        &self,
+        signer_ura: &str,
+    ) -> Result<ed25519_dalek::VerifyingKey, axon_sdk::invocation::AxonError> {
+        let realm_error = match self.realm_trust.as_ref() {
+            Some(resolver) => {
+                match axon_sdk::invocation::KeyResolver::resolve(resolver, signer_ura) {
+                    Ok(key) => return Ok(key),
+                    Err(error) => Some(error.to_string()),
+                }
+            }
+            None => Some("realm trust anchor is empty or unavailable".to_string()),
+        };
+        match axon_sdk::invocation::KeyResolver::resolve(&self.local_self_identity, signer_ura) {
+            Ok(key) => Ok(key),
+            Err(local_error) => {
+                let realm_error =
+                    realm_error.unwrap_or_else(|| "realm trust resolver unavailable".to_string());
+                Err(axon_sdk::invocation::AxonError::permission_denied(
+                    "runtime_receipt_signer_key_untrusted",
+                )
+                .with_message(format!(
+                    "canonical runtime trust cannot resolve receipt signer {signer_ura:?}: \
+                     realm_trust={realm_error}; local_self_identity={local_error}"
+                )))
+            }
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
 #[derive(Debug)]
 struct SubmittedInvocationProjection {
     envelope: axon_sdk::pb::axon::v1::Envelope,

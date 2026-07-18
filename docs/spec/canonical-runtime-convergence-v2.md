@@ -261,9 +261,9 @@ release ownership, live production rollout, or future repository revisions have
 already been audited. The 2026-07-18 closure report was withdrawn after its
 claims were found not to describe the accepted checkout.
 
-Current gate-conformant evidence:
+Current gate-conformant evidence, manually rechecked on 2026-07-19:
 
-- EasyNet-Cli revision: `cf9ddfaa2eb3270ac657db3f8d1b239536b26b34`.
+- EasyNet-Cli revision: `9125109cc54290f02a41b6f950bac3babf2bd64b`.
 - EasyNet-Axon revision: `e5110473da2d9ef02a0876bcfe1c5ba4c0afbb10`.
 - Lifecycle matrix digest:
   `00473e644fd92a1c7688ec42bc56aa2497f5a3a6fbb767c54123f4ae2071e5e1`.
@@ -285,6 +285,10 @@ Current gate-conformant evidence:
 | RF-7 | Gate-conformant | `check_daemon_tuple_route_contract`, `check_daemon_runtime_route_inventory_contract`, and `check_daemon_runtime_assembly_contract` require unary, stream, bidi, sidecar, exact route, and loopback paths to enter descriptor-bound `LocalRuntime` through typed route inventories and registered route adapters. Live production daemon evidence remains outside this document unless separately recorded. |
 | RF-8 | Gate-conformant | `check_daemon_tuple_route_contract` rejects public ingress that patches missing subject or causal context, raw `FreshRoot` use outside named issuers/lowering, anonymous nonce minting, and direct remote/local tuple defaults. Complete tuple inputs remain inspectable before dispatch. |
 | RF-9 | Gate-conformant | `check_ura_vocabulary_contract`, Axon protocol-pack/vector/document/proto/source terminology gates, and `check_schema_source_derivation_contract` enforce URA-only active vocabulary and deterministic schema-source derivation. |
+
+The 2026-07-19 manual recheck found no basis to call RF-1 through RF-9
+independently accepted or production rolled out. The defensible claim is
+gate-conformant implementation evidence at the pinned revisions above.
 
 `docs/reviews/canonical-runtime-convergence-v2-closure-2026-07-18.md` remains
 a withdrawn historical closure attempt and is not acceptance evidence.

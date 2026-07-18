@@ -28,16 +28,13 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use serde_json::{json, Value};
 
 use crate::core::ura::{parse_ura, URAKind};
-use crate::daemon::invocation::dispatch::forwarded_finalization::{
-    ForwardedFinalizedInvocation, ForwardedInvocationBinding,
-};
+use crate::daemon::ability::CallMode;
 use crate::daemon::invocation::routing::target::InvocationCausalContext;
 use crate::daemon::invocation::{
     InvocationDerivationPolicy, ProtoEnvelope, RootInvocationDerivationIssuer,
@@ -150,6 +147,16 @@ impl RemoteAbilityInvocationTarget {
         execution_target_ura: &str,
         ability_ura: &str,
     ) -> anyhow::Result<Self> {
+        Self::from_ability_ura_for_mode(execution_target_ura, ability_ura, CallMode::Rpc)
+    }
+
+    /// Accept an already-canonical Ability URA for the requested call mode and
+    /// bind it to an execution target without rewriting the Ability owner.
+    pub(crate) fn from_ability_ura_for_mode(
+        execution_target_ura: &str,
+        ability_ura: &str,
+        call_mode: CallMode,
+    ) -> anyhow::Result<Self> {
         validate_remote_target_ura(execution_target_ura)?;
         let trimmed = ability_ura.trim();
         let selector = crate::core::ura::AbilitySelector::parse(trimmed)?;
@@ -158,7 +165,7 @@ impl RemoteAbilityInvocationTarget {
             crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
                 selector.owner_ura(),
                 selector.public_name(),
-                crate::daemon::ability::CallMode::Rpc,
+                call_mode,
             )
             .map_err(|err| {
                 anyhow!(
@@ -225,6 +232,16 @@ impl RemoteAbilityInvocationTarget {
 
     pub(crate) fn descriptor_ref(&self) -> &str {
         &self.descriptor_ref
+    }
+
+    /// Public route function sent to namespace.resolve.
+    ///
+    /// The signed descriptor ref remains the canonical ability proof. The
+    /// route function is only the owner-local executable name (`er.add`,
+    /// `fs.read`, ...), matching the resolver and LocalRuntime dispatch
+    /// contract used by unary, stream, and bidi ingress.
+    pub(crate) fn route_function_name(&self) -> &str {
+        &self.public_ability
     }
 
     pub(crate) fn callee_ura(&self) -> &str {
@@ -537,7 +554,7 @@ pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyh
             },
         )?
         .signed_descriptor_ref_invoke_request_with_signer(
-            target.as_str(),
+            target.route_function_name(),
             target.descriptor_ref(),
             arguments,
             &signer,
@@ -550,15 +567,6 @@ pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyh
             ..axon_sdk::pb::axon::v1::ContentEnvelope::default()
         });
         request.timeout_seconds = timeout_seconds;
-        let response_binding =
-            ForwardedInvocationBinding::from_request(&request).map_err(|status| {
-                anyhow!(
-                    "remote Invoke request is not receipt-verifiable (code={:?}): {}",
-                    status.code(),
-                    status.message(),
-                )
-            })?;
-
         let channel = crate::support::platform::local_daemon_grpc::connect_channel(
             socket_path.clone(),
             timeout,
@@ -579,9 +587,137 @@ pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyh
             )
         })?;
         let body = response.into_inner();
-        let finalized =
-            verify_completed_remote_invoke_response("remote Invoke", &response_binding, body)?;
-        decode_invoke_result_bytes(&finalized.output)
+        // The local daemon owns remote dispatch and has already verified the
+        // forwarded admission/terminal receipt chain against its live
+        // DeviceTrustSync-backed key resolver before returning this response.
+        // Re-verifying here with a fresh static realm-trust.toml snapshot would
+        // reintroduce a second, stale receipt authority.
+        ensure_completed_invoke_response("remote Invoke", &body)?;
+        decode_invoke_result_bytes(&body.result)
+    })
+}
+
+pub(crate) fn invoke_remote_target_stream(
+    request: RemoteInvocationRequest<'_>,
+    max_frames: Option<usize>,
+) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
+    let RemoteInvocationRequest {
+        target,
+        caller_ura,
+        subject_ura,
+        invocation_nonce,
+        causal_context,
+        args,
+        timeout,
+    } = request;
+    if max_frames == Some(0) {
+        bail!("--max-frames must be greater than 0 when provided");
+    }
+    let arguments = serde_json::to_vec(&args).context("serialise remote stream arguments")?;
+    let timeout_seconds = i32::try_from(timeout.as_secs()).unwrap_or(i32::MAX);
+    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+    if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
+        bail!(
+            "daemon not running (local gRPC listener unreachable at {}). \
+             Start it with `easynet runtime start`.",
+            socket_path.display()
+        );
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime for remote InvokeStream")?;
+
+    runtime.block_on(async move {
+        let signer = crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(
+            caller_ura.clone(),
+        )
+        .map_err(|err| {
+            anyhow!(
+                "remote stream invocation requires a caller signer for `{caller_ura}`; \
+                 load or provision that identity in the local key service: {err}"
+            )
+        })?;
+        let mut stream_request = ProtoEnvelope::from_target(
+            caller_ura.clone(),
+            target.callee_ura.clone(),
+            subject_ura,
+            InvocationDerivationPolicy::Explicit {
+                invocation_nonce,
+                causal_context,
+            },
+        )?
+        .signed_descriptor_ref_stream_request_with_signer(
+            target.route_function_name(),
+            target.descriptor_ref(),
+            arguments,
+            &signer,
+        )
+        .await?;
+        stream_request.content_type = "application/json".to_string();
+        stream_request.content_envelope = Some(axon_sdk::pb::axon::v1::ContentEnvelope {
+            content_type: "application/json".to_string(),
+            encoding: "identity".to_string(),
+            ..axon_sdk::pb::axon::v1::ContentEnvelope::default()
+        });
+        stream_request.timeout_seconds = timeout_seconds;
+
+        let channel = crate::support::platform::local_daemon_grpc::connect_channel(
+            socket_path.clone(),
+            timeout,
+            Duration::from_secs(10),
+        )
+        .await
+        .context("connect to local daemon gRPC endpoint")?;
+        let mut client = InvocationClient::new(channel);
+        let mut stream = client
+            .invoke_stream(stream_request)
+            .await
+            .map_err(|status| {
+                anyhow!(
+                    "daemon rejected canonical remote stream invocation `{}` for target `{}` \
+                     (code={:?}): {}",
+                    target.as_str(),
+                    target.execution_target_ura(),
+                    status.code(),
+                    status.message(),
+                )
+            })?
+            .into_inner();
+
+        let mut frames = Vec::new();
+        while let Some(chunk) = stream.message().await.map_err(|status| {
+            anyhow!(
+                "remote stream invocation `{}` for target `{}` failed while reading \
+                 daemon stream (code={:?}): {}",
+                target.as_str(),
+                target.execution_target_ura(),
+                status.code(),
+                status.message(),
+            )
+        })? {
+            let payload = if chunk.payload.is_empty() {
+                Value::Null
+            } else {
+                serde_json::from_slice(&chunk.payload)
+                    .with_context(|| format!("decode {} stream frame JSON", target.as_str()))?
+            };
+            let terminal = chunk.terminal;
+            frames.push(crate::support::platform::local_invoke::LocalStreamFrame {
+                sequence: chunk.sequence,
+                content_type: chunk.content_type,
+                terminal,
+                payload,
+            });
+            if terminal {
+                break;
+            }
+            if max_frames.is_some_and(|limit| frames.len() >= limit) {
+                break;
+            }
+        }
+        Ok::<_, anyhow::Error>(frames)
     })
 }
 
@@ -633,72 +769,6 @@ pub(crate) fn ensure_completed_invoke_response(
         } else {
             message.as_str()
         },
-    )
-}
-
-fn verify_completed_remote_invoke_response(
-    surface: &str,
-    binding: &ForwardedInvocationBinding,
-    body: InvokeResponse,
-) -> anyhow::Result<ForwardedFinalizedInvocation> {
-    let resolver = remote_receipt_key_resolver()?;
-    let finalized = ForwardedFinalizedInvocation::verify_response(binding, body, &resolver)
-        .map_err(|status| {
-            anyhow!(
-                "{surface} receipt finalization failed (code={:?}): {}",
-                status.code(),
-                status.message(),
-            )
-        })?;
-    if finalized.terminal_state == axon_sdk::invocation::InvocationState::Completed {
-        return Ok(finalized);
-    }
-
-    let (code, message) = finalized
-        .failure
-        .as_ref()
-        .map(|error| {
-            (
-                error.code.trim().to_string(),
-                error.message.trim().to_string(),
-            )
-        })
-        .unwrap_or_else(|| {
-            (
-                "INVOKE_NOT_COMPLETED".to_string(),
-                "verified terminal receipt did not carry a structured failure".to_string(),
-            )
-        });
-    bail!(
-        "{surface} did not complete: state={} code={} message={}",
-        finalized.terminal_state.as_str(),
-        if code.is_empty() {
-            "INVOKE_NOT_COMPLETED"
-        } else {
-            code.as_str()
-        },
-        if message.is_empty() {
-            "verified terminal receipt did not carry an error message"
-        } else {
-            message.as_str()
-        },
-    )
-}
-
-type RemoteReceiptKeyResolver = crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver;
-
-fn remote_receipt_key_resolver() -> anyhow::Result<RemoteReceiptKeyResolver> {
-    let trust_path = crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default();
-    let trust_context = format!(
-        "load realm trust anchor for remote receipt verification: {}",
-        trust_path.display()
-    );
-    let trust_anchor = crate::daemon::trust::anchor::RealmTrustAnchor::load_or_empty(&trust_path)
-        .with_context(|| trust_context)?;
-    Ok(
-        crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
-            crate::daemon::trust::cell::SharedTrustAnchor::new(Arc::new(trust_anchor)),
-        ),
     )
 }
 
@@ -1039,6 +1109,8 @@ mod tests {
         )
         .expect("descriptor");
         assert_eq!(target.descriptor_ref(), expected);
+        assert_eq!(target.route_function_name(), "fs.read");
+        assert_ne!(target.route_function_name(), target.as_str());
     }
 
     #[test]
@@ -1074,6 +1146,7 @@ mod tests {
         )
         .expect("target");
         assert_eq!(target.descriptor_ref(), descriptor);
+        assert_eq!(target.route_function_name(), "echo");
     }
 
     #[test]
@@ -1261,36 +1334,6 @@ mod tests {
             Duration::from_secs(1),
         );
         assert!(zero_nonce.is_err());
-    }
-
-    #[test]
-    fn remote_receipt_key_resolver_rejects_malformed_trust_anchor() {
-        let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let trust_path = std::env::temp_dir().join(format!(
-            "easynet-remote-receipt-trust-{}.toml",
-            std::process::id()
-        ));
-        std::fs::write(&trust_path, "trusted_agents = [").expect("write malformed trust anchor");
-
-        let previous = std::env::var_os("EASYNET_REALM_TRUST_PATH");
-        std::env::set_var("EASYNET_REALM_TRUST_PATH", &trust_path);
-        let result = remote_receipt_key_resolver();
-        match previous {
-            Some(value) => std::env::set_var("EASYNET_REALM_TRUST_PATH", value),
-            None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
-        }
-        let _ = std::fs::remove_file(&trust_path);
-
-        let error = match result {
-            Ok(_) => panic!("malformed trust anchor must reject receipt verification"),
-            Err(error) => error,
-        };
-        assert!(
-            error
-                .to_string()
-                .contains("load realm trust anchor for remote receipt verification"),
-            "diagnostic should identify the remote receipt trust source: {error:#}"
-        );
     }
 
     #[test]

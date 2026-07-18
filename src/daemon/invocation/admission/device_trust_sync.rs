@@ -173,7 +173,7 @@ impl DeviceTrustSync {
         &self,
         agent_ura: &str,
         presented_pubkey_b64: Option<&str>,
-    ) -> anyhow::Result<Vec<String>> {
+    ) -> anyhow::Result<ResolvedCallerTrust> {
         match &self.source {
             KeySource::Session(handle) => {
                 let mut args_value = serde_json::json!({ "agent_ura": agent_ura });
@@ -184,13 +184,15 @@ impl DeviceTrustSync {
                 let ability =
                     crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY;
                 match handle.escalate(ability.to_string(), args).await {
-                    RequestOutcome::Ok { result_bytes } => parse_resolved_keys(&result_bytes),
+                    RequestOutcome::Ok { result_bytes } => {
+                        parse_resolved_caller_trust(&result_bytes)
+                    }
                     RequestOutcome::Err { error } => {
                         anyhow::bail!("hub resolve_key failed: {error:?}")
                     }
                 }
             }
-            KeySource::Static(resolver) => resolver(agent_ura),
+            KeySource::Static(resolver) => resolver(agent_ura).map(ResolvedCallerTrust::keys_only),
         }
     }
 
@@ -241,11 +243,11 @@ impl DeviceTrustSync {
             }
         }
 
-        let keys = match self
+        let resolved = match self
             .resolve_from_hub(caller_ura, role.presented_pubkey_b64())
             .await
         {
-            Ok(keys) if !keys.is_empty() => keys,
+            Ok(resolved) if !resolved.public_keys_b64.is_empty() => resolved,
             Ok(_) => {
                 state.insert(cache_key, Instant::now());
                 return DeviceTrustSyncStatus::HubReturnedNoKeys;
@@ -263,7 +265,7 @@ impl DeviceTrustSync {
             }
         };
 
-        let imported = self.import_caller_keys(caller_ura, &keys, &role);
+        let imported = self.import_caller_trust(caller_ura, &resolved, &role);
         if imported {
             state.remove(&cache_key);
             crate::op_event!(
@@ -326,13 +328,27 @@ impl DeviceTrustSync {
     /// Import hub-attested keys through the SAME write policy the gRPC
     /// surface and the prelude sync use, then report whether the anchor
     /// now resolves the caller.
-    fn import_caller_keys(&self, caller_ura: &str, keys: &[String], role: &SyncableCaller) -> bool {
-        for public_key_b64 in keys {
-            let register_args = match serde_json::to_vec(&serde_json::json!({
+    fn import_caller_trust(
+        &self,
+        caller_ura: &str,
+        resolved: &ResolvedCallerTrust,
+        role: &SyncableCaller,
+    ) -> bool {
+        for public_key_b64 in &resolved.public_keys_b64 {
+            let mut register_args_value = serde_json::json!({
                 "agent_ura": caller_ura,
                 "public_key_b64": public_key_b64,
                 "role": role.register_role(),
-            })) {
+            });
+            if let Some(owner_ura) = resolved.principal_owner_ura.as_deref() {
+                register_args_value["principal_owner_ura"] =
+                    serde_json::Value::String(owner_ura.to_string());
+            }
+            if let Some(owner_username) = resolved.principal_owner_username.as_deref() {
+                register_args_value["principal_owner_username"] =
+                    serde_json::Value::String(owner_username.to_string());
+            }
+            let register_args = match serde_json::to_vec(&register_args_value) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
@@ -359,10 +375,28 @@ impl DeviceTrustSync {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ResolvedCallerTrust {
+    public_keys_b64: Vec<String>,
+    principal_owner_ura: Option<String>,
+    principal_owner_username: Option<String>,
+}
+
+impl ResolvedCallerTrust {
+    fn keys_only(public_keys_b64: Vec<String>) -> Self {
+        Self {
+            public_keys_b64,
+            principal_owner_ura: None,
+            principal_owner_username: None,
+        }
+    }
+}
+
 /// Parse the hub's resolve_key reply: prefer the multi-key field
-/// (DEC-EU), fall back to the single-key field of older hubs — the
-/// same tolerance the paired-user sync applies.
-fn parse_resolved_keys(result_bytes: &[u8]) -> anyhow::Result<Vec<String>> {
+/// (DEC-EU), fall back to the single-key field of older hubs. New hubs also
+/// return principal-owner facts; importing them keeps caller verification and
+/// owner authorization as one trust projection instead of a policy exception.
+fn parse_resolved_caller_trust(result_bytes: &[u8]) -> anyhow::Result<ResolvedCallerTrust> {
     let response: serde_json::Value = serde_json::from_slice(result_bytes)?;
     let mut keys: Vec<String> = response
         .get("public_keys_b64")
@@ -378,7 +412,21 @@ fn parse_resolved_keys(result_bytes: &[u8]) -> anyhow::Result<Vec<String>> {
             keys.push(pk.to_string());
         }
     }
-    Ok(keys)
+    Ok(ResolvedCallerTrust {
+        public_keys_b64: keys,
+        principal_owner_ura: response
+            .get("principal_owner_ura")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
+        principal_owner_username: response
+            .get("principal_owner_username")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
+    })
 }
 
 #[cfg(test)]
@@ -451,6 +499,40 @@ mod tests {
         // returns true immediately).
         assert!(sync.ensure_caller_key(ura).await);
         let _ = test_key_b64();
+    }
+
+    #[test]
+    fn import_caller_trust_persists_key_and_principal_owner_fact() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let sync = sync_with(|_| Ok(Vec::new()), &dir);
+        let ura = "easynet:///r/test-realm/device/node-a";
+        let key = test_key_b64();
+        let resolved = ResolvedCallerTrust {
+            public_keys_b64: vec![key.clone()],
+            principal_owner_ura: Some("easynet:///r/test-realm/user/alice".to_string()),
+            principal_owner_username: Some("alice".to_string()),
+        };
+
+        assert!(sync.import_caller_trust(
+            ura,
+            &resolved,
+            &SyncableCaller::Device {
+                presented_pubkey_b64: Some(key.clone()),
+            },
+        ));
+        let anchor = sync.cell.snapshot();
+        assert_eq!(
+            anchor
+                .lookup(ura)
+                .map(|entry| entry.public_key_b64.as_str()),
+            Some(key.as_str())
+        );
+        let owner = anchor
+            .lookup_principal_owner(ura)
+            .expect("principal owner imported");
+        assert_eq!(owner.owner_user_id, "alice");
+        assert_eq!(owner.owner_ura, "easynet:///r/test-realm/user/alice");
+        assert_eq!(owner.owner_username.as_deref(), Some("alice"));
     }
 
     #[tokio::test]

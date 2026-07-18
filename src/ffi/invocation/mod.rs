@@ -316,6 +316,84 @@ pub unsafe extern "C" fn easynet_runtime_diagnostics(
     }
 }
 
+/// Resolve one AbilityDescriptorRef through the daemon-owned descriptor
+/// catalogue for the requested callee.
+///
+/// # Safety
+/// `request_json` must be a valid UTF-8 C string and `out_descriptor_json`
+/// must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn easynet_runtime_resolve_descriptor_ref(
+    handle: EasynetHandle,
+    request_json: *const c_char,
+    out_descriptor_json: *mut *mut c_char,
+) -> i32 {
+    if out_descriptor_json.is_null() {
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            "easynet_runtime_resolve_descriptor_ref: out_descriptor_json pointer is null",
+        );
+    }
+    unsafe { *out_descriptor_json = std::ptr::null_mut() };
+    let session = match get(handle) {
+        Some(session) => session,
+        None => {
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_runtime_resolve_descriptor_ref: handle {handle} is not registered"
+                ),
+            );
+        }
+    };
+    let raw = match read_cstr(request_json) {
+        Ok(value) => value,
+        Err(StringError::Null) => {
+            return record_invocation_error(
+                ERR_NULL_POINTER,
+                "easynet_runtime_resolve_descriptor_ref: request_json pointer is null",
+            );
+        }
+        Err(StringError::NotUtf8) => {
+            return record_invocation_error(
+                ERR_INVALID_UTF8,
+                "easynet_runtime_resolve_descriptor_ref: request_json is not valid UTF-8",
+            );
+        }
+    };
+
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = (session, raw);
+        record_invocation_error(
+            ERR_NOT_IMPLEMENTED,
+            "easynet_runtime_resolve_descriptor_ref: axon-pb feature is not enabled in this build",
+        )
+    }
+
+    #[cfg(feature = "axon-pb")]
+    {
+        match runtime_resolve_descriptor_ref_json(session.as_ref(), raw) {
+            Ok(value) => {
+                let ptr = alloc_output_cstring(value.to_string());
+                if ptr.is_null() {
+                    return record_invocation_error(
+                        ERR_GENERIC,
+                        "easynet_runtime_resolve_descriptor_ref: out-of-memory allocating descriptor JSON",
+                    );
+                }
+                unsafe { *out_descriptor_json = ptr };
+                clear_last_error();
+                EASYNET_OK
+            }
+            Err(error) => record_invocation_error(
+                ERR_NOT_FOUND,
+                format!("easynet_runtime_resolve_descriptor_ref: {error:#}"),
+            ),
+        }
+    }
+}
+
 /// Allocate a mutable Invocation builder handle.
 ///
 /// The builder starts empty. Bindings must set the complete seven-tuple
@@ -1734,6 +1812,118 @@ fn runtime_descriptor_catalog_entries(
 }
 
 #[cfg(feature = "axon-pb")]
+fn runtime_resolve_descriptor_ref_json(
+    session: &crate::ffi::client::handle::ClientSession,
+    request_json: &str,
+) -> anyhow::Result<serde_json::Value> {
+    use crate::daemon::invocation::routing::remote_invoke::{
+        self, RemoteAbilityInvocationTarget, RemoteInvocationSubject, RemoteSystemInvocationIssuer,
+    };
+
+    let request: serde_json::Value = serde_json::from_str(request_json)
+        .map_err(|error| anyhow::anyhow!("decode descriptor_ref request: {error}"))?;
+    let object = request
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("descriptor_ref request must be a JSON object"))?;
+    let callee_ura = object
+        .get("callee_ura")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("descriptor_ref request missing callee_ura"))?;
+    let ability = object
+        .get("ability")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("descriptor_ref request missing ability"))?;
+    let call_mode = object
+        .get("call_mode")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("rpc");
+    let caller_ura = object
+        .get("caller_ura")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .map(Ok)
+        .unwrap_or_else(|| runtime_owner_ura_from_session(session).map_err(anyhow::Error::msg))?;
+
+    let ability_ura = if ability.starts_with("easynet:///r/") {
+        let selector = crate::core::ura::AbilitySelector::parse(ability)?;
+        selector.ability_ura().to_string()
+    } else {
+        crate::core::ura::owner_ability_ura(callee_ura, ability)
+            .ok_or_else(|| anyhow::anyhow!("derive ability URA for `{callee_ura}` `{ability}`"))?
+    };
+    let target_call = RemoteAbilityInvocationTarget::for_target_owned_selector(
+        callee_ura,
+        "meta.list_abilities",
+    )?;
+    let subject_ura =
+        target_owned_descriptor_catalog_subject_ura(callee_ura, target_call.as_str())?;
+    let output = RemoteSystemInvocationIssuer::root_plan(
+        &target_call,
+        caller_ura,
+        RemoteInvocationSubject::TargetOwnedSystem(subject_ura),
+        serde_json::json!({ "subject_ura": ability_ura }),
+        std::time::Duration::from_secs(30),
+    )?
+    .into_request()
+    .and_then(remote_invoke::invoke_remote_target)?;
+
+    let abilities = output
+        .get("abilities")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("meta.list_abilities result omitted abilities array"))?;
+    for row in abilities {
+        let Some(entry) = descriptor_catalog_entry_from_value(row) else {
+            continue;
+        };
+        let entry_ability = entry
+            .get("ability_ura")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let entry_call_mode = entry
+            .get("call_mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("rpc");
+        if entry_ability == ability_ura && entry_call_mode == call_mode {
+            return Ok(serde_json::json!({
+                "descriptor_ref": entry.get("descriptor_ref").cloned().unwrap_or_default(),
+                "ability_ura": entry_ability,
+                "owner_ura": entry.get("owner_ura").cloned().unwrap_or_default(),
+                "name": entry.get("name").cloned().unwrap_or_default(),
+                "call_mode": call_mode,
+                "source": "runtime_meta_list_abilities",
+            }));
+        }
+    }
+    anyhow::bail!(
+        "descriptor_ref not found for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+fn target_owned_descriptor_catalog_subject_ura(
+    callee_ura: &str,
+    ability_ura: &str,
+) -> anyhow::Result<String> {
+    let parsed = crate::core::ura::parse_ura(callee_ura)
+        .map_err(|error| anyhow::anyhow!("remote descriptor callee URA is invalid: {error}"))?;
+    match parsed.kind {
+        crate::core::ura::URAKind::Device => Ok(callee_ura.to_string()),
+        crate::core::ura::URAKind::Authority => Ok(ability_ura.to_string()),
+        other => anyhow::bail!(
+            "target-owned descriptor catalogue requires Device or Hub callee, got {other}"
+        ),
+    }
+}
+
+#[cfg(feature = "axon-pb")]
 fn runtime_system_descriptor_catalog_entries(
     owner_ura: &str,
 ) -> std::result::Result<Vec<serde_json::Value>, String> {
@@ -1777,8 +1967,7 @@ fn runtime_meta_descriptor_catalog_entries(
         )
         .map_err(|error| error.to_string())?
         .args_json(&serde_json::json!({
-            "scope": "local",
-            "subject_ura": owner_ura,
+            "scope": "realm",
         }))
         .map_err(|error| error.to_string())?
         .build();
@@ -2261,7 +2450,7 @@ fn invoke_with_axon_pb(
     let outcome = match crate::daemon::InvocationOutcome::from_invoke_response(
         tuple,
         response,
-        &crate::support::platform::local_daemon_grpc::LocalKeyServiceReceiptResolver::new(),
+        &crate::support::platform::local_daemon_grpc::CanonicalRuntimeReceiptResolver::new(),
     ) {
         Ok(outcome) => outcome,
         Err(error) => return ffi_daemon_error("easynet_invocation_invoke", error),
@@ -6085,7 +6274,7 @@ fn bidi_control_json(control: axon_sdk::pb::axon::v1::BidiControl) -> serde_json
 
 #[cfg(feature = "axon-pb")]
 struct InboundReceiptCheckpointVerifier {
-    resolver: crate::support::platform::local_daemon_grpc::LocalKeyServiceReceiptResolver,
+    resolver: crate::support::platform::local_daemon_grpc::CanonicalRuntimeReceiptResolver,
     admission: Option<axon_sdk::invocation::SignedInvocationReceipt>,
 }
 
@@ -6094,7 +6283,7 @@ impl InboundReceiptCheckpointVerifier {
     fn new() -> Self {
         Self {
             resolver:
-                crate::support::platform::local_daemon_grpc::LocalKeyServiceReceiptResolver::new(),
+                crate::support::platform::local_daemon_grpc::CanonicalRuntimeReceiptResolver::new(),
             admission: None,
         }
     }

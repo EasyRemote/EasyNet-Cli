@@ -23,7 +23,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
 
-use axon_sdk::invocation::{CallMode, StreamingInvocationHandle};
+use axon_sdk::invocation::{CallMode, KeyResolver, StreamingInvocationHandle};
 use futures::Stream;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
@@ -42,7 +42,7 @@ use crate::daemon::invocation::bidi::session_wire::{
     build_carrier_v1_dispatch_frame, require_canonical_dispatch_session,
 };
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
-    DispatchResult, DispatchStreamEvent,
+    DispatchResult, DispatchStreamEvent, PendingStreamHandle,
 };
 use crate::daemon::invocation::bidi::state::presence::PresenceRegistry;
 use crate::daemon::invocation::dispatch::cancellation::RegisteredInvocationLifecycle;
@@ -51,12 +51,13 @@ use crate::daemon::invocation::dispatch::deps::{DirectoryPlane, RuntimePlane, Se
 use crate::daemon::invocation::dispatch::descriptor_binding::RuntimeBoundAbility;
 use crate::daemon::invocation::dispatch::federation_wrappers;
 use crate::daemon::invocation::dispatch::forwarded_finalization::{
-    ForwardedFinalizationVerifier, ForwardedInvocationBinding,
+    ensure_forwarded_receipt_signer_key, ForwardedFinalizationVerifier, ForwardedInvocationBinding,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
     function_name_from_invocation_target, status_from_axon_invoke_error, target_ura_from_envelope,
     BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
 };
+use crate::daemon::invocation::dispatch::unary_dispatcher::require_complete_signed_remote_request;
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
 };
@@ -135,7 +136,17 @@ impl StreamDispatcher {
         &self,
         request: &InvokeServerStreamRequest,
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
-        let selection = self.resolve_stream_route(request).await?;
+        let selection = match self.resolve_stream_route(request).await {
+            Ok(selection) => selection,
+            Err(status) => {
+                if let Some(handle) = self.sessions.escalation.as_ref() {
+                    return self
+                        .escalate_canonical_stream(handle, request, status)
+                        .await;
+                }
+                return Err(status);
+            }
+        };
         let call_mode = selection.call_mode();
         let selected_route = match selection.into_dispatch() {
             CanonicalRouteDispatch::Local(route) => route,
@@ -160,6 +171,48 @@ impl StreamDispatcher {
         } else {
             self.dispatch_remote_selected_route(request, selected_route, call_mode)
                 .await
+        }
+    }
+
+    async fn escalate_canonical_stream(
+        &self,
+        handle: &Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
+        request: &InvokeServerStreamRequest,
+        local_route_failure: Status,
+    ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
+        if matches!(
+            local_route_failure.code(),
+            tonic::Code::InvalidArgument | tonic::Code::PermissionDenied
+        ) {
+            return Err(local_route_failure);
+        }
+        let forwarded_request = stream_request_as_invoke_request(request);
+        require_complete_signed_remote_request(&forwarded_request)?;
+        let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        let receipt_resolver = self.admission.receipt_key_resolver();
+        match handle.escalate_stream(request.clone()).await {
+            Ok(stream) => project_forwarded_remote_stream(
+                RemoteStreamEventSource::Session(stream),
+                forwarded_binding,
+                receipt_resolver,
+            )
+            .await,
+            Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::TargetOffline) => {
+                Err(Status::failed_precondition("remote InvokeStream target is offline"))
+            }
+            Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::PermissionDenied {
+                reason,
+            }) => Err(Status::permission_denied(reason)),
+            Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::UpstreamFailure {
+                reason,
+            }) => Err(Status::unavailable(format!(
+                "remote InvokeStream session escalation failed: {reason}"
+            ))),
+            Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::UpstreamTimeout) => {
+                Err(Status::deadline_exceeded(
+                    "remote InvokeStream session escalation timed out",
+                ))
+            }
         }
     }
 
@@ -317,7 +370,7 @@ impl StreamDispatcher {
         let sender = session.sender;
         let carrier_version = session.contract_version;
 
-        let mut handle = pending.register_pending_for(&selected_route.execution_host_ura);
+        let handle = pending.register_pending_for(&selected_route.execution_host_ura);
         let call_id = handle.call_id();
         let forwarded_request = axon_sdk::pb::axon::v1::InvokeRequest {
             envelope: request.envelope.clone(),
@@ -330,6 +383,12 @@ impl StreamDispatcher {
             ..axon_sdk::pb::axon::v1::InvokeRequest::default()
         };
         let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        ensure_forwarded_receipt_signer_key(
+            self.sessions.device_trust_sync.as_ref(),
+            &selected_route.execution_host_ura,
+            "InvokeStream",
+        )
+        .await?;
         let receipt_resolver = self.admission.receipt_key_resolver();
         let dispatch_frame = build_carrier_v1_dispatch_frame(
             call_id,
@@ -367,118 +426,145 @@ impl StreamDispatcher {
             call_id = call_id,
         );
 
-        let (tx, rx) = mpsc::channel::<Result<InvokeStreamChunk, Status>>(16);
-        tokio::spawn(async move {
-            let mut sequence = 0_u64;
-            let mut canonical_invocation_id = None::<String>;
-            let mut finalization =
-                ForwardedFinalizationVerifier::new(forwarded_binding, receipt_resolver);
-            while let Some(event) = handle.recv().await {
-                match event {
-                    DispatchStreamEvent::Admission(receipt) => {
-                        let receipt = *receipt;
-                        if let Err(status) = finalization.admit(receipt.clone()) {
-                            let _ = tx.send(Err(status)).await;
-                            break;
-                        }
-                        canonical_invocation_id = Some(receipt.invocation_id.clone());
-                        let chunk = remote_stream_chunk(RemoteStreamChunkParts {
-                            invocation_id: receipt.invocation_id.clone(),
-                            state: axon_sdk::invocation::InvocationState::Running,
-                            payload: Vec::new(),
-                            sequence,
-                            terminal: false,
-                            admission_receipt: Some(receipt),
-                            terminal_receipt: None,
-                            error: None,
-                        });
-                        sequence = sequence.saturating_add(1);
-                        if tx.send(Ok(chunk)).await.is_err() {
-                            break;
-                        }
+        project_forwarded_remote_stream(
+            RemoteStreamEventSource::Presence(handle),
+            forwarded_binding,
+            receipt_resolver,
+        )
+        .await
+    }
+}
+
+enum RemoteStreamEventSource {
+    Presence(PendingStreamHandle),
+    Session(crate::daemon::invocation::bidi::session_escalation::EscalatedStreamHandle),
+}
+
+impl RemoteStreamEventSource {
+    async fn recv(&mut self) -> Option<DispatchStreamEvent> {
+        match self {
+            Self::Presence(handle) => handle.recv().await,
+            Self::Session(handle) => handle.recv().await,
+        }
+    }
+}
+
+async fn project_forwarded_remote_stream(
+    mut source: RemoteStreamEventSource,
+    forwarded_binding: ForwardedInvocationBinding,
+    receipt_resolver: Arc<dyn KeyResolver>,
+) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
+    let (tx, rx) = mpsc::channel::<Result<InvokeStreamChunk, Status>>(16);
+    tokio::spawn(async move {
+        let mut sequence = 0_u64;
+        let mut canonical_invocation_id = None::<String>;
+        let mut finalization =
+            ForwardedFinalizationVerifier::new(forwarded_binding, receipt_resolver);
+        while let Some(event) = source.recv().await {
+            match event {
+                DispatchStreamEvent::Admission(receipt) => {
+                    let receipt = *receipt;
+                    if let Err(status) = finalization.admit(receipt.clone()) {
+                        let _ = tx.send(Err(status)).await;
+                        break;
                     }
-                    DispatchStreamEvent::Chunk(payload) => {
-                        if let Err(status) = finalization.observe_data() {
-                            let _ = tx.send(Err(status)).await;
-                            break;
-                        }
-                        let Some(invocation_id) = canonical_invocation_id.clone() else {
-                            let _ = tx
-                                .send(Err(Status::failed_precondition(
-                                    "CANONICAL_ADMISSION_REQUIRED: remote stream data arrived before admission receipt",
-                                )))
-                                .await;
-                            break;
-                        };
-                        let chunk = remote_stream_chunk(RemoteStreamChunkParts {
-                            invocation_id,
-                            state: axon_sdk::invocation::InvocationState::Running,
-                            payload,
-                            sequence,
-                            terminal: false,
-                            admission_receipt: None,
-                            terminal_receipt: None,
-                            error: None,
-                        });
-                        sequence = sequence.saturating_add(1);
-                        if tx.send(Ok(chunk)).await.is_err() {
-                            break;
-                        }
-                    }
-                    DispatchStreamEvent::Terminal(result) => {
-                        let DispatchResult {
-                            payload: _,
-                            admission_receipt,
-                            terminal_receipt,
-                            error,
-                            failure: _,
-                            request_id: _,
-                        } = *result;
-                        if let Some(error) = error.filter(|_| terminal_receipt.is_none()) {
-                            let _ = tx
-                                .send(Err(Status::unavailable(format!(
-                                    "remote stream transport failed: {error}"
-                                ))))
-                                .await;
-                            break;
-                        }
-                        let Some(terminal_receipt) = terminal_receipt else {
-                            let _ = tx
-                                .send(Err(Status::failed_precondition(
-                                    "CANONICAL_TERMINAL_RECEIPT_REQUIRED: remote stream ended without a terminal checkpoint",
-                                )))
-                                .await;
-                            break;
-                        };
-                        let finalized =
-                            match finalization.finalize(admission_receipt, terminal_receipt) {
-                                Ok(finalized) => finalized,
-                                Err(status) => {
-                                    let _ = tx.send(Err(status)).await;
-                                    break;
-                                }
-                            };
-                        let chunk = remote_stream_chunk(RemoteStreamChunkParts {
-                            invocation_id: finalized.terminal_receipt.invocation_id.clone(),
-                            state: finalized.terminal_state,
-                            payload: finalized.output,
-                            sequence,
-                            terminal: true,
-                            admission_receipt: None,
-                            terminal_receipt: Some(finalized.terminal_receipt),
-                            error: finalized.failure,
-                        });
-                        let _ = tx.send(Ok(chunk)).await;
+                    canonical_invocation_id = Some(receipt.invocation_id.clone());
+                    let chunk = remote_stream_chunk(RemoteStreamChunkParts {
+                        invocation_id: receipt.invocation_id.clone(),
+                        state: axon_sdk::invocation::InvocationState::Running,
+                        payload: Vec::new(),
+                        sequence,
+                        terminal: false,
+                        admission_receipt: Some(receipt),
+                        terminal_receipt: None,
+                        error: None,
+                    });
+                    sequence = sequence.saturating_add(1);
+                    if tx.send(Ok(chunk)).await.is_err() {
                         break;
                     }
                 }
+                DispatchStreamEvent::Chunk(payload) => {
+                    if let Err(status) = finalization.observe_data() {
+                        let _ = tx.send(Err(status)).await;
+                        break;
+                    }
+                    let Some(invocation_id) = canonical_invocation_id.clone() else {
+                        let _ = tx
+                            .send(Err(Status::failed_precondition(
+                                "CANONICAL_ADMISSION_REQUIRED: remote stream data arrived before admission receipt",
+                            )))
+                            .await;
+                        break;
+                    };
+                    let chunk = remote_stream_chunk(RemoteStreamChunkParts {
+                        invocation_id,
+                        state: axon_sdk::invocation::InvocationState::Running,
+                        payload,
+                        sequence,
+                        terminal: false,
+                        admission_receipt: None,
+                        terminal_receipt: None,
+                        error: None,
+                    });
+                    sequence = sequence.saturating_add(1);
+                    if tx.send(Ok(chunk)).await.is_err() {
+                        break;
+                    }
+                }
+                DispatchStreamEvent::Terminal(result) => {
+                    let DispatchResult {
+                        payload: _,
+                        admission_receipt,
+                        terminal_receipt,
+                        error,
+                        failure: _,
+                        request_id: _,
+                    } = *result;
+                    if let Some(error) = error.filter(|_| terminal_receipt.is_none()) {
+                        let _ = tx
+                            .send(Err(Status::unavailable(format!(
+                                "remote stream transport failed: {error}"
+                            ))))
+                            .await;
+                        break;
+                    }
+                    let Some(terminal_receipt) = terminal_receipt else {
+                        let _ = tx
+                            .send(Err(Status::failed_precondition(
+                                "CANONICAL_TERMINAL_RECEIPT_REQUIRED: remote stream ended without a terminal checkpoint",
+                            )))
+                            .await;
+                        break;
+                    };
+                    let finalized = match finalization.finalize(admission_receipt, terminal_receipt)
+                    {
+                        Ok(finalized) => finalized,
+                        Err(status) => {
+                            let _ = tx.send(Err(status)).await;
+                            break;
+                        }
+                    };
+                    let chunk = remote_stream_chunk(RemoteStreamChunkParts {
+                        invocation_id: finalized.terminal_receipt.invocation_id.clone(),
+                        state: finalized.terminal_state,
+                        payload: finalized.output,
+                        sequence,
+                        terminal: true,
+                        admission_receipt: None,
+                        terminal_receipt: Some(finalized.terminal_receipt),
+                        error: finalized.failure,
+                    });
+                    let _ = tx.send(Ok(chunk)).await;
+                    break;
+                }
             }
-        });
+        }
+    });
 
-        Ok(Response::new(
-            Box::pin(ReceiverStream::new(rx)) as BoxedDownStream<InvokeStreamChunk>
-        ))
-    }
+    Ok(Response::new(
+        Box::pin(ReceiverStream::new(rx)) as BoxedDownStream<InvokeStreamChunk>
+    ))
 }
 
 async fn project_local_runtime_stream(
@@ -1025,6 +1111,21 @@ fn daemon_route_initial_sequence(
 
 fn local_stream_target_ura(request: &InvokeServerStreamRequest) -> Result<String, Status> {
     target_ura_from_envelope(request.envelope.as_ref(), "InvokeStream")
+}
+
+fn stream_request_as_invoke_request(
+    request: &InvokeServerStreamRequest,
+) -> axon_sdk::pb::axon::v1::InvokeRequest {
+    axon_sdk::pb::axon::v1::InvokeRequest {
+        envelope: request.envelope.clone(),
+        target: request.target.clone(),
+        arguments: request.arguments.clone(),
+        content_type: request.content_type.clone(),
+        timeout_seconds: request.timeout_seconds,
+        metadata: request.metadata.clone(),
+        payload_ref: request.payload_ref.clone(),
+        content_envelope: request.content_envelope.clone(),
+    }
 }
 
 struct RemoteStreamChunkParts {

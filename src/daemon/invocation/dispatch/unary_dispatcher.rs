@@ -77,6 +77,7 @@ use crate::daemon::invocation::dispatch::federation_wrappers::{
     ABILITY_FEDERATION_LIST_USER_DEVICES, ABILITY_NAMESPACE_RESOLVE,
 };
 use crate::daemon::invocation::dispatch::forwarded_finalization::{
+    ensure_forwarded_receipt_signer_key, ensure_forwarded_response_receipt_signer_keys,
     ForwardedFinalizedInvocation, ForwardedInvocationBinding,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
@@ -1067,9 +1068,13 @@ impl UnaryDispatcher {
                     presented_pubkey_b64.as_deref(),
                 )?;
                 match resolved {
-                    Some(public_key_b64) => encode_json_payload(
-                        &federation_wrappers::resolve_key_response(&public_key_b64, Vec::new()),
-                    ),
+                    Some(public_key_b64) => {
+                        encode_json_payload(&federation_wrappers::resolve_key_response(
+                            &public_key_b64,
+                            Vec::new(),
+                            None,
+                        ))
+                    }
                     None => Err(Status::not_found(format!(
                         "federation.resolve_key: agent_ura `{}` not in this hub's trust set",
                         request.agent_ura
@@ -1666,6 +1671,12 @@ impl UnaryDispatcher {
         );
         match client.invoke(&endpoint, request.clone()).await {
             Ok(response) => {
+                ensure_forwarded_response_receipt_signer_keys(
+                    self.sessions.device_trust_sync.as_ref(),
+                    &response,
+                    "remote Invoke peer delegation",
+                )
+                .await?;
                 let finalized = ForwardedFinalizedInvocation::verify_response(
                     &forwarded_binding,
                     response,
@@ -1701,6 +1712,12 @@ impl UnaryDispatcher {
         let receipt_resolver = self.admission.receipt_key_resolver();
         match handle.escalate_invoke(request.clone()).await {
             Ok(response) => {
+                ensure_forwarded_response_receipt_signer_keys(
+                    self.sessions.device_trust_sync.as_ref(),
+                    &response,
+                    "remote Invoke session escalation",
+                )
+                .await?;
                 let finalized = ForwardedFinalizedInvocation::verify_response(
                     &forwarded_binding,
                     response,
@@ -1754,6 +1771,12 @@ impl UnaryDispatcher {
             &request.arguments,
         )?;
         let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
+        ensure_forwarded_receipt_signer_key(
+            self.sessions.device_trust_sync.as_ref(),
+            &selected_route.execution_host_ura,
+            "Invoke",
+        )
+        .await?;
         let receipt_resolver = self.admission.receipt_key_resolver();
         self.reject_self_presence_host(selected_route, "Invoke")?;
         let (_call_id, dispatch_result, carrier_version) = self

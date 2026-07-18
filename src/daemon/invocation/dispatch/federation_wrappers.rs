@@ -790,6 +790,7 @@ fn resolved_owner_projection_values(
 pub(crate) fn resolve_key_response(
     public_key_b64: &str,
     all_keys_b64: Vec<String>,
+    principal_owner: Option<&crate::daemon::trust::anchor::TrustedPrincipalOwner>,
 ) -> ResolveKeyResponse {
     let public_key_hex = BASE64_STANDARD
         .decode(public_key_b64.as_bytes())
@@ -803,6 +804,9 @@ pub(crate) fn resolve_key_response(
         } else {
             all_keys_b64
         },
+        principal_owner_ura: principal_owner.map(|owner| owner.owner_ura.clone()),
+        principal_owner_user_id: principal_owner.map(|owner| owner.owner_user_id.clone()),
+        principal_owner_username: principal_owner.and_then(|owner| owner.owner_username.clone()),
     }
 }
 
@@ -856,6 +860,7 @@ pub fn handle_resolve_key(
             return Some(resolve_key_response(
                 &entry.public_key_b64,
                 all_user_keys_b64(trust_anchor, &request.agent_ura),
+                trust_anchor.lookup_principal_owner(&request.agent_ura),
             ));
         }
         if matches!(
@@ -874,6 +879,7 @@ pub fn handle_resolve_key(
         Some(resolve_key_response(
             &entry.public_key_b64,
             all_user_keys_b64(trust_anchor, &request.agent_ura),
+            trust_anchor.lookup_principal_owner(&request.agent_ura),
         ))
     })
 }
@@ -2086,7 +2092,9 @@ mod tests {
 
     #[test]
     fn handle_resolve_key_returns_pubkey_when_present_in_anchor() {
-        use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+        use crate::daemon::trust::anchor::{
+            RealmTrustAnchor, TrustedAgent, TrustedAgentRole, TrustedPrincipalOwner,
+        };
         let entry = TrustedAgent {
             agent_ura: "easynet:///r/realm-a/device/n1".to_string(),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
@@ -2096,7 +2104,18 @@ mod tests {
             hub_endpoint: None,
             tls_ca_pem_path: None,
         };
-        let anchor = RealmTrustAnchor::from_entries(vec![entry]).expect("anchor");
+        let anchor = RealmTrustAnchor::from_parts_with_principal_owners(
+            vec![entry],
+            vec![TrustedPrincipalOwner {
+                principal_ura: "easynet:///r/realm-a/device/n1".to_string(),
+                owner_user_id: "alice".to_string(),
+                owner_ura: "easynet:///r/realm-a/user/alice".to_string(),
+                owner_username: Some("alice".to_string()),
+                added_at_unix_ms: 1_700_000_000_001,
+            }],
+            Vec::new(),
+        )
+        .expect("anchor");
         let resp = handle_resolve_key(
             &ResolveKeyRequest {
                 agent_ura: "easynet:///r/realm-a/device/n1".to_string(),
@@ -2114,6 +2133,12 @@ mod tests {
             resp.public_key_hex,
             "0000000000000000000000000000000000000000000000000000000000000000"
         );
+        assert_eq!(
+            resp.principal_owner_ura.as_deref(),
+            Some("easynet:///r/realm-a/user/alice")
+        );
+        assert_eq!(resp.principal_owner_user_id.as_deref(), Some("alice"));
+        assert_eq!(resp.principal_owner_username.as_deref(), Some("alice"));
     }
 
     #[test]

@@ -25,6 +25,7 @@ pub struct PolicyInput {
     pub ability_ura: String,
     pub action: AccessAction,
     pub safe_read: bool,
+    pub authority_self_read: bool,
     pub interactive_context_available: bool,
     pub canonical_hash: Option<String>,
     pub signature_key_id: Option<String>,
@@ -77,6 +78,15 @@ impl PolicyEngine {
                 &input,
                 PolicyDecisionOutcome::Allow,
                 PolicyDecisionReason::ExplicitGrantAllow,
+                None,
+            );
+        }
+
+        if input.authority_self_read && input.action == AccessAction::Read && input.safe_read {
+            return decision(
+                &input,
+                PolicyDecisionOutcome::Allow,
+                PolicyDecisionReason::HubTokenReadAllow,
                 None,
             );
         }
@@ -224,6 +234,7 @@ mod tests {
             ability_ura: "easynet:///r/test/ability/device.meta.list_resources".to_string(),
             action: AccessAction::Read,
             safe_read: true,
+            authority_self_read: false,
             interactive_context_available: false,
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: Some("ed25519:key".to_string()),
@@ -268,6 +279,61 @@ mod tests {
         let mut input = base_input();
         input.owner.owner_user_id = None;
         input.owner.owner_source = OwnerSource::Unresolved;
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
+        assert_eq!(got.reason, PolicyDecisionReason::OwnerUnresolved);
+    }
+
+    #[test]
+    fn authority_self_read_allows_safe_hub_link_without_user_owner() {
+        let mut input = base_input();
+        input.owner.owner_user_id = None;
+        input.owner.owner_ura = Some("easynet:///r/test/authority".to_string());
+        input.owner.owner_source = OwnerSource::Unresolved;
+        input.caller_ura = "easynet:///r/test/authority".to_string();
+        input.callee_ura = "easynet:///r/test/authority".to_string();
+        input.subject_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
+        input.ability_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
+        input.authority_self_read = true;
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(got.reason, PolicyDecisionReason::HubTokenReadAllow);
+        assert!(got.owner_user_id.is_none());
+    }
+
+    #[test]
+    fn authority_self_read_uses_gate_projection_not_token_class_duplication() {
+        let mut input = base_input();
+        input.owner.owner_user_id = None;
+        input.owner.owner_ura = Some("easynet:///r/test/authority".to_string());
+        input.owner.owner_source = OwnerSource::Unresolved;
+        input.token_class = None;
+        input.caller_ura = "easynet:///r/test/authority".to_string();
+        input.callee_ura = "easynet:///r/test/authority".to_string();
+        input.subject_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
+        input.ability_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
+        input.authority_self_read = true;
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(got.reason, PolicyDecisionReason::HubTokenReadAllow);
+    }
+
+    #[test]
+    fn authority_self_read_does_not_allow_mutation_without_owner() {
+        let mut input = base_input();
+        input.owner.owner_user_id = None;
+        input.owner.owner_ura = Some("easynet:///r/test/authority".to_string());
+        input.owner.owner_source = OwnerSource::Unresolved;
+        input.caller_ura = "easynet:///r/test/authority".to_string();
+        input.callee_ura = "easynet:///r/test/authority".to_string();
+        input.subject_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
+        input.ability_ura = "easynet:///r/test/ability/authority.federation.discover".to_string();
+        input.action = AccessAction::Invoke;
+        input.safe_read = false;
+        input.authority_self_read = true;
+
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
         assert_eq!(got.reason, PolicyDecisionReason::OwnerUnresolved);

@@ -53,6 +53,14 @@ impl AdmissionPolicyGate {
             context.trust_anchor,
         );
         let principal = principal_for(context.trusted_role, &caller_ura, context.trust_anchor);
+        let authority_self_read = authority_self_read_scope(
+            &caller_ura,
+            &callee_ura,
+            &subject_ura,
+            &ability_ura,
+            context.daemon_ura,
+            context.trusted_role,
+        );
         if remote_owner_forward_allowed(
             &caller_ura,
             &callee_ura,
@@ -106,6 +114,7 @@ impl AdmissionPolicyGate {
             ability_ura,
             action: context.action,
             safe_read: context.safe_read,
+            authority_self_read,
             interactive_context_available: false,
             canonical_hash: context.canonical_hash,
             signature_key_id: context.signature_key_id,
@@ -240,11 +249,16 @@ fn owner_fact_from_ura(
                     daemon_ura,
                 )
             }),
-            AbilityOwner::Authority => {
+            AbilityOwner::Authority => owner_fact_from_local_authority(
+                &crate::core::ura::hub_ura(&parsed.realm),
+                daemon_ura,
+            )
+            .or_else(|| {
                 owner_fact_from_local_device(&crate::core::ura::hub_ura(&parsed.realm), daemon_ura)
-            }
+            }),
         }),
         URAKind::Device | URAKind::Authority => owner_fact_from_trust_anchor(ura, trust_anchor)
+            .or_else(|| owner_fact_from_local_authority(ura, daemon_ura))
             .or_else(|| owner_fact_from_local_device(ura, daemon_ura)),
         URAKind::Resource => resource_owner_user_id(&parsed).map(|user_id| {
             OwnerFact::user(
@@ -262,6 +276,21 @@ fn owner_fact_from_trust_anchor(ura: &str, trust_anchor: &RealmTrustAnchor) -> O
         owner.owner_user_id.clone(),
         owner.owner_ura.clone(),
     ))
+}
+
+fn owner_fact_from_local_authority(ura: &str, daemon_ura: Option<&str>) -> Option<OwnerFact> {
+    if Some(ura) != daemon_ura {
+        return None;
+    }
+    let parsed = parse_ura(ura).ok()?;
+    if parsed.kind != URAKind::Authority {
+        return None;
+    }
+    Some(OwnerFact {
+        owner_user_id: None,
+        owner_ura: Some(ura.to_string()),
+        authoritative: true,
+    })
 }
 
 fn owner_fact_from_local_device(ura: &str, daemon_ura: Option<&str>) -> Option<OwnerFact> {
@@ -334,6 +363,43 @@ fn remote_owner_forward_allowed(
         return false;
     }
     trust_anchor.has_federation_peer_for_realm(&callee.realm)
+}
+
+fn authority_self_read_scope(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability_ura: &str,
+    daemon_ura: Option<&str>,
+    trusted_role: TrustedAgentRole,
+) -> bool {
+    if trusted_role != TrustedAgentRole::Hub {
+        return false;
+    }
+    if Some(callee_ura) != daemon_ura || caller_ura != callee_ura {
+        return false;
+    }
+    let Ok(callee) = parse_ura(callee_ura) else {
+        return false;
+    };
+    if callee.kind != URAKind::Authority {
+        return false;
+    }
+    if !is_authority_owned_ura_in_realm(ability_ura, &callee.realm) {
+        return false;
+    }
+    subject_ura == callee_ura || is_authority_owned_ura_in_realm(subject_ura, &callee.realm)
+}
+
+fn is_authority_owned_ura_in_realm(ura: &str, realm: &str) -> bool {
+    let Ok(parsed) = parse_ura(ura) else {
+        return false;
+    };
+    parsed.realm == realm
+        && parsed.kind == URAKind::Ability
+        && parsed
+            .ability()
+            .is_some_and(|ability| ability.owner == AbilityOwner::Authority)
 }
 
 pub(crate) fn ability_ura_for(callee_ura: &str, ability: &str) -> Result<String, Status> {
@@ -489,6 +555,28 @@ mod tests {
     }
 
     #[test]
+    fn local_authority_ability_projects_authority_owner_without_device_credentials() {
+        let _home = HomeGuard::new();
+        let anchor = empty_anchor();
+        let owner = resolve_owner(
+            "easynet:///r/test/ability/authority.federation.discover",
+            "easynet:///r/test/authority",
+            Some("easynet:///r/test/authority"),
+            &anchor,
+        );
+
+        assert!(owner.owner_user_id.is_none());
+        assert_eq!(
+            owner.owner_ura.as_deref(),
+            Some("easynet:///r/test/authority")
+        );
+        assert_eq!(
+            owner.owner_source,
+            crate::daemon::invocation::admission::decision::OwnerSource::Unresolved
+        );
+    }
+
+    #[test]
     fn user_subject_projects_owner_policy_allow() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let stores = AccessControlStoreRegistry::ephemeral();
@@ -553,6 +641,92 @@ mod tests {
         assert_eq!(
             decision.token_id.as_deref(),
             Some("easynet:///r/test/authority")
+        );
+    }
+
+    #[test]
+    fn local_authority_self_read_enters_policy_without_user_owner() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let authority = "easynet:///r/test/authority";
+        let subject = crate::core::ura::owner_ability_ura(authority, "federation.discover")
+            .expect("authority ability subject");
+        let envelope = Envelope {
+            caller: Some(identity(authority)),
+            callee: Some(identity(authority)),
+            subject: Some(SubjectIdentity {
+                ura: subject,
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        let decision = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: "federation.discover",
+            action: AccessAction::Read,
+            safe_read: true,
+            trusted_role: TrustedAgentRole::Hub,
+            daemon_ura: Some(authority),
+            trust_anchor: &empty_anchor(),
+            access_control_stores: &stores,
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: None,
+            verified_authority_id: None,
+            rejector_ura: Some(authority.to_string()),
+        })
+        .expect("local authority must read its descriptor-bound system catalog");
+
+        assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(decision.reason, PolicyDecisionReason::HubTokenReadAllow);
+        assert!(decision.owner_user_id.is_none());
+        assert_eq!(decision.caller_ura, authority);
+        assert_eq!(decision.callee_ura, authority);
+    }
+
+    #[test]
+    fn local_authority_descriptor_ref_self_read_enters_policy_without_user_owner() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let authority = "easynet:///r/hub/authority";
+        let subject = crate::core::ura::owner_ability_ura(authority, "federation.discover")
+            .expect("authority ability subject");
+        let descriptor_ref =
+            crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+                authority,
+                "federation.discover",
+                crate::daemon::ability::CallMode::Rpc,
+            )
+            .expect("descriptor ref");
+        let envelope = Envelope {
+            caller: Some(identity(authority)),
+            callee: Some(identity(authority)),
+            subject: Some(SubjectIdentity {
+                ura: subject,
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        let decision = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: &descriptor_ref,
+            action: AccessAction::Read,
+            safe_read: true,
+            trusted_role: TrustedAgentRole::Hub,
+            daemon_ura: Some(authority),
+            trust_anchor: &empty_anchor(),
+            access_control_stores: &stores,
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: None,
+            verified_authority_id: None,
+            rejector_ura: Some(authority.to_string()),
+        })
+        .expect("local authority must read descriptor-bound system catalog");
+
+        assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(decision.reason, PolicyDecisionReason::HubTokenReadAllow);
+        assert_eq!(
+            decision.ability_ura,
+            "easynet:///r/hub/ability/authority.federation.discover"
         );
     }
 

@@ -383,7 +383,9 @@ fn run_ura_join_stages(
     };
 
     let node_id = uuid::Uuid::new_v4().to_string();
-    let (membership_ura, _, public_key) = ensure_device_runtime_identity(&target.realm, &node_id)?;
+    let (membership_ura, _, public_key, key_service_startup) =
+        ensure_device_runtime_identity_with_startup(&target.realm, &node_id)?;
+    let _key_service_guard = JoinKeyServiceShutdownGuard::new(key_service_startup);
     let public_key_hex = hex::encode(public_key.to_bytes());
     let local_user_id = principal_enrollment
         .as_ref()
@@ -856,15 +858,16 @@ fn run_join_stages(
     };
 
     renderer.set_active("validate-token");
-    let device_public_key = match derive_device_public_key_hex(&preflight.realm, &preflight.node_id)
-    {
-        Ok(public_key) => public_key,
-        Err(error) => {
-            renderer.stage_failed("validate-token", &error.to_string());
-            renderer.finish();
-            return Err(error);
-        }
-    };
+    let (device_public_key, key_service_startup) =
+        match derive_device_public_key_hex_with_startup(&preflight.realm, &preflight.node_id) {
+            Ok(public_key) => public_key,
+            Err(error) => {
+                renderer.stage_failed("validate-token", &error.to_string());
+                renderer.finish();
+                return Err(error);
+            }
+        };
+    let _key_service_guard = JoinKeyServiceShutdownGuard::new(key_service_startup);
     let mut creds =
         match validate_pairing_token(token, validate_base, &preflight, &device_public_key) {
             Ok(c) => {
@@ -994,6 +997,20 @@ fn ensure_device_runtime_identity(
     crate::daemon::identity::self_identity::KeyringClient,
     ed25519_dalek::VerifyingKey,
 )> {
+    let (primary_self, client, public_key, _) =
+        ensure_device_runtime_identity_with_startup(realm, node_id)?;
+    Ok((primary_self, client, public_key))
+}
+
+fn ensure_device_runtime_identity_with_startup(
+    realm: &str,
+    node_id: &str,
+) -> anyhow::Result<(
+    String,
+    crate::daemon::identity::self_identity::KeyringClient,
+    ed25519_dalek::VerifyingKey,
+    crate::daemon::keyring::lifecycle::KeyServiceStartup,
+)> {
     use crate::daemon::identity::self_identity::KeyringClient;
 
     let realm = realm.trim();
@@ -1009,14 +1026,16 @@ fn ensure_device_runtime_identity(
     // spawned it) we go straight to `ensure`. When it is down we
     // auto-provision it below so the encrypted vault is the default
     // posture rather than something only `dev-backend.sh` sets up.
-    if client.health().is_err() {
-        crate::daemon::keyring::lifecycle::ensure_key_service_running()?;
-    }
+    let startup = if client.health().is_err() {
+        crate::daemon::keyring::lifecycle::ensure_key_service_running()?
+    } else {
+        crate::daemon::keyring::lifecycle::KeyServiceStartup::Attached
+    };
 
     let public_key = client
         .ensure(&primary_self)
         .map_err(|error| anyhow::anyhow!("ensure runtime identity: {error}"))?;
-    Ok((primary_self, client, public_key))
+    Ok((primary_self, client, public_key, startup))
 }
 
 fn validate_token_format(token: &str) -> anyhow::Result<()> {
@@ -1366,9 +1385,33 @@ fn build_validate_pairing_payload(
     }
 }
 
-fn derive_device_public_key_hex(realm: &str, node_id: &str) -> anyhow::Result<String> {
-    let (_, _, public_key) = ensure_device_runtime_identity(realm, node_id)?;
-    Ok(hex::encode(public_key.to_bytes()))
+fn derive_device_public_key_hex_with_startup(
+    realm: &str,
+    node_id: &str,
+) -> anyhow::Result<(String, crate::daemon::keyring::lifecycle::KeyServiceStartup)> {
+    let (_, _, public_key, startup) = ensure_device_runtime_identity_with_startup(realm, node_id)?;
+    Ok((hex::encode(public_key.to_bytes()), startup))
+}
+
+struct JoinKeyServiceShutdownGuard {
+    should_shutdown: bool,
+}
+
+impl JoinKeyServiceShutdownGuard {
+    fn new(startup: crate::daemon::keyring::lifecycle::KeyServiceStartup) -> Self {
+        Self {
+            should_shutdown: startup
+                == crate::daemon::keyring::lifecycle::KeyServiceStartup::Spawned,
+        }
+    }
+}
+
+impl Drop for JoinKeyServiceShutdownGuard {
+    fn drop(&mut self) {
+        if self.should_shutdown {
+            let _ = crate::daemon::keyring::lifecycle::shutdown_bootstrap_key_service();
+        }
+    }
 }
 
 // Deregister the previously-paired device from the hub before a re-pair

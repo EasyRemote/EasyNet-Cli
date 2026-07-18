@@ -357,7 +357,7 @@ impl RuntimeClient {
         let outcome = InvocationOutcome::from_invoke_response(
             tuple,
             response,
-            &local_daemon_grpc::LocalKeyServiceReceiptResolver::new(),
+            &local_daemon_grpc::CanonicalRuntimeReceiptResolver::new(),
         )?;
         Ok(InvocationHandle { outcome })
     }
@@ -389,7 +389,7 @@ impl RuntimeClient {
         let outcome = InvocationOutcome::from_invoke_response(
             tuple,
             response,
-            &local_daemon_grpc::LocalKeyServiceReceiptResolver::new(),
+            &local_daemon_grpc::CanonicalRuntimeReceiptResolver::new(),
         )?;
         Ok(InvocationHandle { outcome })
     }
