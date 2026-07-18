@@ -154,6 +154,13 @@ func TestPreparedInvocationDecodesCurrentABIShape(t *testing.T) {
 	if policy := prepared.SigningMaterial().SignerPolicy(); policy == nil || policy.SignerID() != "browser-key" {
 		t.Fatalf("signer policy not preserved: %#v", policy)
 	}
+	if prepared.SigningMaterial().CanonicalHashHex() != prepared.CanonicalHashHex() {
+		t.Fatalf(
+			"signing material canonical hash = %q, prepared = %q",
+			prepared.SigningMaterial().CanonicalHashHex(),
+			prepared.CanonicalHashHex(),
+		)
+	}
 }
 
 func TestPreparedInvocationRejectsRequestIDOnlyPayload(t *testing.T) {
@@ -259,6 +266,7 @@ func TestPreparedInvocationRejectsCanonicalHashMismatch(t *testing.T) {
 		"signing_material": {
 			"canonical_bytes_base64": "ZXhhbXBsZQ==",
 			"args_digest_hex": "00",
+			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 			"expires_at_unix_ms": 1783000000000
 		}
 	}`))
@@ -267,6 +275,9 @@ func TestPreparedInvocationRejectsCanonicalHashMismatch(t *testing.T) {
 	}
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if !strings.Contains(err.Error(), "canonical_hash_hex does not match canonical_bytes_base64") {
+		t.Fatalf("error = %v, want canonical hash mismatch", err)
 	}
 }
 

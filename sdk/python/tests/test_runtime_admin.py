@@ -27,12 +27,12 @@ from easynet_sdk._runtime_admin_routes import (
     _RUNTIME_ADMIN_SESSION_LIST_ABILITY,
 )
 from easynet_sdk.health import HealthClient
+from test_runtime import canonical_runtime_receipt_pair
 
 
 def test_runtime_admin_routes_are_generated_from_manifest() -> None:
     manifest = (
-        Path(__file__).resolve().parents[2]
-        .parent
+        Path(__file__).resolve().parents[2].parent
         / "provider_routes"
         / "easynet-runtime-admin-routes.v1.json"
     )
@@ -110,8 +110,7 @@ class RuntimeAdminTransportFake:
         return json.dumps(
             {
                 "descriptor_ref": (
-                    "easynet:///r/example/ability/hub."
-                    f"{request['ability']}@1.0.0"
+                    f"easynet:///r/example/ability/hub.{request['ability']}@1.0.0"
                 )
             }
         ).encode()
@@ -120,6 +119,7 @@ class RuntimeAdminTransportFake:
         import json
 
         self.seen = json.loads(draft_json)
+        admission, terminal = canonical_runtime_receipt_pair("inv-admin-test")
         return json.dumps(
             {
                 "ok": True,
@@ -129,6 +129,8 @@ class RuntimeAdminTransportFake:
                 "output_content_type": "application/json",
                 "output_json": self.output_json,
                 "elapsed_ms": 1,
+                "admission_receipt": admission,
+                "terminal_receipt": terminal,
                 "error": None,
             }
         ).encode()

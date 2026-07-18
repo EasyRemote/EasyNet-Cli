@@ -974,7 +974,6 @@ type InvocationTargetKind int32
 const (
 	InvocationTargetKind_INVOCATION_TARGET_KIND_UNSPECIFIED InvocationTargetKind = 0
 	InvocationTargetKind_INVOCATION_TARGET_KIND_ABILITY     InvocationTargetKind = 1 // Native Axon ability
-	InvocationTargetKind_INVOCATION_TARGET_KIND_A2A_SKILL   InvocationTargetKind = 3 // A2A skill (resolves via skill binding)
 )
 
 // Enum value maps for InvocationTargetKind.
@@ -982,12 +981,10 @@ var (
 	InvocationTargetKind_name = map[int32]string{
 		0: "INVOCATION_TARGET_KIND_UNSPECIFIED",
 		1: "INVOCATION_TARGET_KIND_ABILITY",
-		3: "INVOCATION_TARGET_KIND_A2A_SKILL",
 	}
 	InvocationTargetKind_value = map[string]int32{
 		"INVOCATION_TARGET_KIND_UNSPECIFIED": 0,
 		"INVOCATION_TARGET_KIND_ABILITY":     1,
-		"INVOCATION_TARGET_KIND_A2A_SKILL":   3,
 	}
 )
 
@@ -4729,11 +4726,6 @@ type NodeDescriptor struct {
 	//
 	// Reserved prefixes with protocol semantics:
 	//
-	//	"a2a.*"  — opt-in A2A discovery enrollment. Setting any a2a.* label
-	//	           causes the runtime to materialize an A2AAgentCard for the
-	//	           node. `a2a.url` (when set) MUST be an http(s) absolute
-	//	           URL with a host. `a2a.enabled=false` is the explicit
-	//	           opt-out even if other a2a.* labels are present.
 	//	"axon.*" — reserved for internal metadata; do not set manually.
 	Labels              map[string]string `protobuf:"bytes,8,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Resources           *ResourceSnapshot `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
@@ -4743,15 +4735,6 @@ type NodeDescriptor struct {
 	OwnerId     string      `protobuf:"bytes,12,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`             // principal_id of the owning user (structured, not labels)
 	DeviceGroup string      `protobuf:"bytes,13,opt,name=device_group,json=deviceGroup,proto3" json:"device_group,omitempty"` // "home" | "office" | "lab" | custom group name
 	Device      *DeviceMeta `protobuf:"bytes,14,opt,name=device,proto3" json:"device,omitempty"`                              // device hardware/OS metadata
-	// ─── Protocol exposure ────────────────────────────────
-	// At most one A2AAgentCard per node. If the node hosts multiple
-	// A2A-exposed abilities, they are aggregated as skills on this single
-	// card (see A2AAgentCard.skills). Callers that need distinct personas
-	// per ability should register separate logical nodes.
-	//
-	// Populated automatically during RegisterNode from `labels["a2a.*"]`
-	// and later enriched with A2ASkillSpec entries from activated abilities.
-	A2ACard *A2AAgentCard `protobuf:"bytes,15,opt,name=a2a_card,json=a2aCard,proto3" json:"a2a_card,omitempty"` // if set, node is discoverable as an A2A agent
 	// ─── Presence ─────────────────────────────────────────
 	// online=true means the node heartbeat is within timeout window.
 	Online bool `protobuf:"varint,16,opt,name=online,proto3" json:"online,omitempty"`
@@ -4891,13 +4874,6 @@ func (x *NodeDescriptor) GetDevice() *DeviceMeta {
 	return nil
 }
 
-func (x *NodeDescriptor) GetA2ACard() *A2AAgentCard {
-	if x != nil {
-		return x.A2ACard
-	}
-	return nil
-}
-
 func (x *NodeDescriptor) GetOnline() bool {
 	if x != nil {
 		return x.Online
@@ -4989,7 +4965,6 @@ type CapabilityDescriptor struct {
 	Signature         []byte                 `protobuf:"bytes,6,opt,name=signature,proto3" json:"signature,omitempty"`                                                                                 // Ed25519 over payload hash
 	PublisherId       string                 `protobuf:"bytes,7,opt,name=publisher_id,json=publisherId,proto3" json:"publisher_id,omitempty"`
 	PublishedAtUnixMs int64                  `protobuf:"varint,8,opt,name=published_at_unix_ms,json=publishedAtUnixMs,proto3" json:"published_at_unix_ms,omitempty"`
-	A2ASkill          *A2ASkillSpec          `protobuf:"bytes,10,opt,name=a2a_skill,json=a2aSkill,proto3" json:"a2a_skill,omitempty"` // explicit A2A exposure derived from a2a.* metadata
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -5080,13 +5055,6 @@ func (x *CapabilityDescriptor) GetPublishedAtUnixMs() int64 {
 	return 0
 }
 
-func (x *CapabilityDescriptor) GetA2ASkill() *A2ASkillSpec {
-	if x != nil {
-		return x.A2ASkill
-	}
-	return nil
-}
-
 type AbilityTarget struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	AbilityName   string                 `protobuf:"bytes,1,opt,name=ability_name,json=abilityName,proto3" json:"ability_name,omitempty"`
@@ -5139,58 +5107,6 @@ func (x *AbilityTarget) GetFunctionName() string {
 	return ""
 }
 
-type A2ASkillTarget struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TargetAgentId string                 `protobuf:"bytes,1,opt,name=target_agent_id,json=targetAgentId,proto3" json:"target_agent_id,omitempty"`
-	SkillId       string                 `protobuf:"bytes,2,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *A2ASkillTarget) Reset() {
-	*x = A2ASkillTarget{}
-	mi := &file_axon_v1_types_proto_msgTypes[49]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *A2ASkillTarget) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*A2ASkillTarget) ProtoMessage() {}
-
-func (x *A2ASkillTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[49]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use A2ASkillTarget.ProtoReflect.Descriptor instead.
-func (*A2ASkillTarget) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{49}
-}
-
-func (x *A2ASkillTarget) GetTargetAgentId() string {
-	if x != nil {
-		return x.TargetAgentId
-	}
-	return ""
-}
-
-func (x *A2ASkillTarget) GetSkillId() string {
-	if x != nil {
-		return x.SkillId
-	}
-	return ""
-}
-
 type InvocationTarget struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Strategy RoutingStrategy        `protobuf:"varint,1,opt,name=strategy,proto3,enum=axon.v1.RoutingStrategy" json:"strategy,omitempty"`
@@ -5206,7 +5122,6 @@ type InvocationTarget struct {
 	// Types that are valid to be assigned to TypedTarget:
 	//
 	//	*InvocationTarget_Ability
-	//	*InvocationTarget_A2ASkill
 	TypedTarget   isInvocationTarget_TypedTarget `protobuf_oneof:"typed_target"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -5214,7 +5129,7 @@ type InvocationTarget struct {
 
 func (x *InvocationTarget) Reset() {
 	*x = InvocationTarget{}
-	mi := &file_axon_v1_types_proto_msgTypes[50]
+	mi := &file_axon_v1_types_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5226,7 +5141,7 @@ func (x *InvocationTarget) String() string {
 func (*InvocationTarget) ProtoMessage() {}
 
 func (x *InvocationTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[50]
+	mi := &file_axon_v1_types_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5239,7 +5154,7 @@ func (x *InvocationTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvocationTarget.ProtoReflect.Descriptor instead.
 func (*InvocationTarget) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{50}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *InvocationTarget) GetStrategy() RoutingStrategy {
@@ -5300,15 +5215,6 @@ func (x *InvocationTarget) GetAbility() *AbilityTarget {
 	return nil
 }
 
-func (x *InvocationTarget) GetA2ASkill() *A2ASkillTarget {
-	if x != nil {
-		if x, ok := x.TypedTarget.(*InvocationTarget_A2ASkill); ok {
-			return x.A2ASkill
-		}
-	}
-	return nil
-}
-
 type isInvocationTarget_TypedTarget interface {
 	isInvocationTarget_TypedTarget()
 }
@@ -5317,13 +5223,7 @@ type InvocationTarget_Ability struct {
 	Ability *AbilityTarget `protobuf:"bytes,10,opt,name=ability,proto3,oneof"`
 }
 
-type InvocationTarget_A2ASkill struct {
-	A2ASkill *A2ASkillTarget `protobuf:"bytes,12,opt,name=a2a_skill,json=a2aSkill,proto3,oneof"`
-}
-
 func (*InvocationTarget_Ability) isInvocationTarget_TypedTarget() {}
-
-func (*InvocationTarget_A2ASkill) isInvocationTarget_TypedTarget() {}
 
 type KeyInfo struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
@@ -5340,7 +5240,7 @@ type KeyInfo struct {
 
 func (x *KeyInfo) Reset() {
 	*x = KeyInfo{}
-	mi := &file_axon_v1_types_proto_msgTypes[51]
+	mi := &file_axon_v1_types_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5352,7 +5252,7 @@ func (x *KeyInfo) String() string {
 func (*KeyInfo) ProtoMessage() {}
 
 func (x *KeyInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[51]
+	mi := &file_axon_v1_types_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5365,7 +5265,7 @@ func (x *KeyInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyInfo.ProtoReflect.Descriptor instead.
 func (*KeyInfo) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{51}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *KeyInfo) GetKeyHash() string {
@@ -5433,7 +5333,7 @@ type AuditEntry struct {
 
 func (x *AuditEntry) Reset() {
 	*x = AuditEntry{}
-	mi := &file_axon_v1_types_proto_msgTypes[52]
+	mi := &file_axon_v1_types_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5445,7 +5345,7 @@ func (x *AuditEntry) String() string {
 func (*AuditEntry) ProtoMessage() {}
 
 func (x *AuditEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[52]
+	mi := &file_axon_v1_types_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5458,7 +5358,7 @@ func (x *AuditEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditEntry.ProtoReflect.Descriptor instead.
 func (*AuditEntry) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{52}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *AuditEntry) GetEntryId() string {
@@ -5534,7 +5434,7 @@ type ContentMeta struct {
 
 func (x *ContentMeta) Reset() {
 	*x = ContentMeta{}
-	mi := &file_axon_v1_types_proto_msgTypes[53]
+	mi := &file_axon_v1_types_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5546,7 +5446,7 @@ func (x *ContentMeta) String() string {
 func (*ContentMeta) ProtoMessage() {}
 
 func (x *ContentMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[53]
+	mi := &file_axon_v1_types_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5559,7 +5459,7 @@ func (x *ContentMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContentMeta.ProtoReflect.Descriptor instead.
 func (*ContentMeta) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{53}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *ContentMeta) GetWidth() uint32 {
@@ -5635,7 +5535,7 @@ type PayloadRef struct {
 
 func (x *PayloadRef) Reset() {
 	*x = PayloadRef{}
-	mi := &file_axon_v1_types_proto_msgTypes[54]
+	mi := &file_axon_v1_types_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5647,7 +5547,7 @@ func (x *PayloadRef) String() string {
 func (*PayloadRef) ProtoMessage() {}
 
 func (x *PayloadRef) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[54]
+	mi := &file_axon_v1_types_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5660,7 +5560,7 @@ func (x *PayloadRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PayloadRef.ProtoReflect.Descriptor instead.
 func (*PayloadRef) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{54}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *PayloadRef) GetUra() string {
@@ -5701,207 +5601,6 @@ func (x *PayloadRef) GetExpiresAtUnixMs() int64 {
 func (x *PayloadRef) GetLabels() map[string]string {
 	if x != nil {
 		return x.Labels
-	}
-	return nil
-}
-
-type A2ASkillSpec struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SkillId       string                 `protobuf:"bytes,1,opt,name=skill_id,json=skillId,proto3" json:"skill_id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`                                     // human-readable skill name
-	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`                       // what this skill does (for agent discovery)
-	Tags          []string               `protobuf:"bytes,4,rep,name=tags,proto3" json:"tags,omitempty"`                                     // skill tags for filtering
-	InputSchema   []byte                 `protobuf:"bytes,5,opt,name=input_schema,json=inputSchema,proto3" json:"input_schema,omitempty"`    // JSON Schema
-	OutputSchema  []byte                 `protobuf:"bytes,6,opt,name=output_schema,json=outputSchema,proto3" json:"output_schema,omitempty"` // JSON Schema
-	Examples      []string               `protobuf:"bytes,7,rep,name=examples,proto3" json:"examples,omitempty"`                             // example natural language queries
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *A2ASkillSpec) Reset() {
-	*x = A2ASkillSpec{}
-	mi := &file_axon_v1_types_proto_msgTypes[55]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *A2ASkillSpec) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*A2ASkillSpec) ProtoMessage() {}
-
-func (x *A2ASkillSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[55]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use A2ASkillSpec.ProtoReflect.Descriptor instead.
-func (*A2ASkillSpec) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{55}
-}
-
-func (x *A2ASkillSpec) GetSkillId() string {
-	if x != nil {
-		return x.SkillId
-	}
-	return ""
-}
-
-func (x *A2ASkillSpec) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *A2ASkillSpec) GetDescription() string {
-	if x != nil {
-		return x.Description
-	}
-	return ""
-}
-
-func (x *A2ASkillSpec) GetTags() []string {
-	if x != nil {
-		return x.Tags
-	}
-	return nil
-}
-
-func (x *A2ASkillSpec) GetInputSchema() []byte {
-	if x != nil {
-		return x.InputSchema
-	}
-	return nil
-}
-
-func (x *A2ASkillSpec) GetOutputSchema() []byte {
-	if x != nil {
-		return x.OutputSchema
-	}
-	return nil
-}
-
-func (x *A2ASkillSpec) GetExamples() []string {
-	if x != nil {
-		return x.Examples
-	}
-	return nil
-}
-
-type A2AAgentCard struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	Name        string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`               // agent display name
-	Description string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"` // what this agent does
-	Url         string                 `protobuf:"bytes,3,opt,name=url,proto3" json:"url,omitempty"`                 // A2A endpoint URL (auto-generated from Axon gateway)
-	Provider    string                 `protobuf:"bytes,4,opt,name=provider,proto3" json:"provider,omitempty"`       // organization/person providing this agent
-	Version     string                 `protobuf:"bytes,5,opt,name=version,proto3" json:"version,omitempty"`
-	Skills      []*A2ASkillSpec        `protobuf:"bytes,6,rep,name=skills,proto3" json:"skills,omitempty"` // auto-populated from abilities with a2a_skill
-	// A2A protocol capabilities
-	SupportsStreaming         bool              `protobuf:"varint,7,opt,name=supports_streaming,json=supportsStreaming,proto3" json:"supports_streaming,omitempty"`                                           // maps to Axon InvokeStream
-	SupportsPushNotifications bool              `protobuf:"varint,8,opt,name=supports_push_notifications,json=supportsPushNotifications,proto3" json:"supports_push_notifications,omitempty"`                 // maps to A2A push notification transport
-	Authentication            map[string]string `protobuf:"bytes,9,rep,name=authentication,proto3" json:"authentication,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // supported auth schemes
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
-}
-
-func (x *A2AAgentCard) Reset() {
-	*x = A2AAgentCard{}
-	mi := &file_axon_v1_types_proto_msgTypes[56]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *A2AAgentCard) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*A2AAgentCard) ProtoMessage() {}
-
-func (x *A2AAgentCard) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[56]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use A2AAgentCard.ProtoReflect.Descriptor instead.
-func (*A2AAgentCard) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{56}
-}
-
-func (x *A2AAgentCard) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *A2AAgentCard) GetDescription() string {
-	if x != nil {
-		return x.Description
-	}
-	return ""
-}
-
-func (x *A2AAgentCard) GetUrl() string {
-	if x != nil {
-		return x.Url
-	}
-	return ""
-}
-
-func (x *A2AAgentCard) GetProvider() string {
-	if x != nil {
-		return x.Provider
-	}
-	return ""
-}
-
-func (x *A2AAgentCard) GetVersion() string {
-	if x != nil {
-		return x.Version
-	}
-	return ""
-}
-
-func (x *A2AAgentCard) GetSkills() []*A2ASkillSpec {
-	if x != nil {
-		return x.Skills
-	}
-	return nil
-}
-
-func (x *A2AAgentCard) GetSupportsStreaming() bool {
-	if x != nil {
-		return x.SupportsStreaming
-	}
-	return false
-}
-
-func (x *A2AAgentCard) GetSupportsPushNotifications() bool {
-	if x != nil {
-		return x.SupportsPushNotifications
-	}
-	return false
-}
-
-func (x *A2AAgentCard) GetAuthentication() map[string]string {
-	if x != nil {
-		return x.Authentication
 	}
 	return nil
 }
@@ -6233,7 +5932,7 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\x0ehardware_model\x18\x03 \x01(\tR\rhardwareModel\x12\"\n" +
 	"\farchitecture\x18\x04 \x01(\tR\farchitecture\x12!\n" +
 	"\fnetwork_type\x18\x05 \x01(\tR\vnetworkType\x12\x1a\n" +
-	"\bhostname\x18\x06 \x01(\tR\bhostname\"\xa5\x06\n" +
+	"\bhostname\x18\x06 \x01(\tR\bhostname\"\x83\x06\n" +
 	"\x0eNodeDescriptor\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12!\n" +
@@ -6250,19 +5949,18 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\x16last_heartbeat_unix_ms\x18\v \x01(\x03R\x13lastHeartbeatUnixMs\x12\x19\n" +
 	"\bowner_id\x18\f \x01(\tR\aownerId\x12!\n" +
 	"\fdevice_group\x18\r \x01(\tR\vdeviceGroup\x12+\n" +
-	"\x06device\x18\x0e \x01(\v2\x13.axon.v1.DeviceMetaR\x06device\x120\n" +
-	"\ba2a_card\x18\x0f \x01(\v2\x15.axon.v1.A2AAgentCardR\aa2aCard\x12\x16\n" +
+	"\x06device\x18\x0e \x01(\v2\x13.axon.v1.DeviceMetaR\x06device\x12\x16\n" +
 	"\x06online\x18\x10 \x01(\bR\x06online\x12)\n" +
 	"\x11last_seen_unix_ms\x18\x11 \x01(\x03R\x0elastSeenUnixMs\x12%\n" +
 	"\x04role\x18\x12 \x01(\x0e2\x11.axon.v1.NodeRoleR\x04role\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"g\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x0f\x10\x10R\ba2a_card\"g\n" +
 	"\x14CapabilityPackageRef\x12\x1d\n" +
 	"\n" +
 	"package_id\x18\x01 \x01(\tR\tpackageId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x16\n" +
-	"\x06digest\x18\x03 \x01(\tR\x06digest\"\xca\x03\n" +
+	"\x06digest\x18\x03 \x01(\tR\x06digest\"\xa7\x03\n" +
 	"\x14CapabilityDescriptor\x12\x1d\n" +
 	"\n" +
 	"ability_id\x18\x01 \x01(\tR\tabilityId\x12\x12\n" +
@@ -6272,19 +5970,15 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\frequirements\x18\x05 \x03(\v2/.axon.v1.CapabilityDescriptor.RequirementsEntryR\frequirements\x12\x1c\n" +
 	"\tsignature\x18\x06 \x01(\fR\tsignature\x12!\n" +
 	"\fpublisher_id\x18\a \x01(\tR\vpublisherId\x12/\n" +
-	"\x14published_at_unix_ms\x18\b \x01(\x03R\x11publishedAtUnixMs\x122\n" +
-	"\ta2a_skill\x18\n" +
-	" \x01(\v2\x15.axon.v1.A2ASkillSpecR\ba2aSkill\x1a?\n" +
+	"\x14published_at_unix_ms\x18\b \x01(\x03R\x11publishedAtUnixMs\x1a?\n" +
 	"\x11RequirementsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\t\x10\n" +
-	"J\x04\b\v\x10\fR\tmcp_tools\"W\n" +
+	"J\x04\b\n" +
+	"\x10\vJ\x04\b\v\x10\fR\tmcp_toolsR\ta2a_skill\"W\n" +
 	"\rAbilityTarget\x12!\n" +
 	"\fability_name\x18\x01 \x01(\tR\vabilityName\x12#\n" +
-	"\rfunction_name\x18\x02 \x01(\tR\ffunctionName\"S\n" +
-	"\x0eA2aSkillTarget\x12&\n" +
-	"\x0ftarget_agent_id\x18\x01 \x01(\tR\rtargetAgentId\x12\x19\n" +
-	"\bskill_id\x18\x02 \x01(\tR\askillId\"\x97\x03\n" +
+	"\rfunction_name\x18\x02 \x01(\tR\ffunctionName\"\xf0\x02\n" +
 	"\x10InvocationTarget\x124\n" +
 	"\bstrategy\x18\x01 \x01(\x0e2\x18.axon.v1.RoutingStrategyR\bstrategy\x12\x17\n" +
 	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12!\n" +
@@ -6293,9 +5987,8 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\rrequired_tags\x18\x05 \x03(\tR\frequiredTags\x12;\n" +
 	"\x0fmin_trust_level\x18\x06 \x01(\x0e2\x13.axon.v1.TrustLevelR\rminTrustLevel\x122\n" +
 	"\aability\x18\n" +
-	" \x01(\v2\x16.axon.v1.AbilityTargetH\x00R\aability\x126\n" +
-	"\ta2a_skill\x18\f \x01(\v2\x17.axon.v1.A2aSkillTargetH\x00R\ba2aSkillB\x0e\n" +
-	"\ftyped_targetJ\x04\b\v\x10\fR\bmcp_tool\"\x8c\x02\n" +
+	" \x01(\v2\x16.axon.v1.AbilityTargetH\x00R\aabilityB\x0e\n" +
+	"\ftyped_targetJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\bmcp_toolR\ta2a_skill\"\x8c\x02\n" +
 	"\aKeyInfo\x12\x19\n" +
 	"\bkey_hash\x18\x01 \x01(\tR\akeyHash\x12\x1c\n" +
 	"\talgorithm\x18\x02 \x01(\tR\talgorithm\x12\x18\n" +
@@ -6336,27 +6029,6 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\x12expires_at_unix_ms\x18\x05 \x01(\x03R\x0fexpiresAtUnixMs\x127\n" +
 	"\x06labels\x18\x06 \x03(\v2\x1f.axon.v1.PayloadRef.LabelsEntryR\x06labels\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd7\x01\n" +
-	"\fA2ASkillSpec\x12\x19\n" +
-	"\bskill_id\x18\x01 \x01(\tR\askillId\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
-	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x12\n" +
-	"\x04tags\x18\x04 \x03(\tR\x04tags\x12!\n" +
-	"\finput_schema\x18\x05 \x01(\fR\vinputSchema\x12#\n" +
-	"\routput_schema\x18\x06 \x01(\fR\foutputSchema\x12\x1a\n" +
-	"\bexamples\x18\a \x03(\tR\bexamples\"\xc0\x03\n" +
-	"\fA2AAgentCard\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
-	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x10\n" +
-	"\x03url\x18\x03 \x01(\tR\x03url\x12\x1a\n" +
-	"\bprovider\x18\x04 \x01(\tR\bprovider\x12\x18\n" +
-	"\aversion\x18\x05 \x01(\tR\aversion\x12-\n" +
-	"\x06skills\x18\x06 \x03(\v2\x15.axon.v1.A2ASkillSpecR\x06skills\x12-\n" +
-	"\x12supports_streaming\x18\a \x01(\bR\x11supportsStreaming\x12>\n" +
-	"\x1bsupports_push_notifications\x18\b \x01(\bR\x19supportsPushNotifications\x12Q\n" +
-	"\x0eauthentication\x18\t \x03(\v2).axon.v1.A2AAgentCard.AuthenticationEntryR\x0eauthentication\x1aA\n" +
-	"\x13AuthenticationEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*\xed\x01\n" +
 	"\fResourceType\x12\x1d\n" +
@@ -6474,11 +6146,10 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\x13ROUTING_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eROUTING_DIRECT\x10\x01\x12\x19\n" +
 	"\x15ROUTING_LOAD_BALANCED\x10\x02\x12\x15\n" +
-	"\x11ROUTING_BROADCAST\x10\x03*\xaf\x01\n" +
+	"\x11ROUTING_BROADCAST\x10\x03*\xb1\x01\n" +
 	"\x14InvocationTargetKind\x12&\n" +
 	"\"INVOCATION_TARGET_KIND_UNSPECIFIED\x10\x00\x12\"\n" +
-	"\x1eINVOCATION_TARGET_KIND_ABILITY\x10\x01\x12$\n" +
-	" INVOCATION_TARGET_KIND_A2A_SKILL\x10\x03\"\x04\b\x02\x10\x02*\x1fINVOCATION_TARGET_KIND_MCP_TOOL*\x8a\x02\n" +
+	"\x1eINVOCATION_TARGET_KIND_ABILITY\x10\x01\"\x04\b\x02\x10\x02\"\x04\b\x03\x10\x03*\x1fINVOCATION_TARGET_KIND_MCP_TOOL* INVOCATION_TARGET_KIND_A2A_SKILL*\x8a\x02\n" +
 	"\x0fStreamFrameType\x12\x1c\n" +
 	"\x18STREAM_FRAME_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11STREAM_FRAME_OPEN\x10\x01\x12\x15\n" +
@@ -6509,7 +6180,7 @@ func file_axon_v1_types_proto_rawDescGZIP() []byte {
 }
 
 var file_axon_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 18)
-var file_axon_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 63)
+var file_axon_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 59)
 var file_axon_v1_types_proto_goTypes = []any{
 	(ResourceType)(0),                         // 0: axon.v1.ResourceType
 	(ExecutionMode)(0),                        // 1: axon.v1.ExecutionMode
@@ -6578,25 +6249,21 @@ var file_axon_v1_types_proto_goTypes = []any{
 	(*CapabilityPackageRef)(nil),              // 64: axon.v1.CapabilityPackageRef
 	(*CapabilityDescriptor)(nil),              // 65: axon.v1.CapabilityDescriptor
 	(*AbilityTarget)(nil),                     // 66: axon.v1.AbilityTarget
-	(*A2ASkillTarget)(nil),                    // 67: axon.v1.A2aSkillTarget
-	(*InvocationTarget)(nil),                  // 68: axon.v1.InvocationTarget
-	(*KeyInfo)(nil),                           // 69: axon.v1.KeyInfo
-	(*AuditEntry)(nil),                        // 70: axon.v1.AuditEntry
-	(*ContentMeta)(nil),                       // 71: axon.v1.ContentMeta
-	(*PayloadRef)(nil),                        // 72: axon.v1.PayloadRef
-	(*A2ASkillSpec)(nil),                      // 73: axon.v1.A2ASkillSpec
-	(*A2AAgentCard)(nil),                      // 74: axon.v1.A2AAgentCard
-	nil,                                       // 75: axon.v1.Error.ContextEntry
-	nil,                                       // 76: axon.v1.LedgerErrorRecord.ContextEntry
-	nil,                                       // 77: axon.v1.NodeDescriptor.LabelsEntry
-	nil,                                       // 78: axon.v1.CapabilityDescriptor.RequirementsEntry
-	nil,                                       // 79: axon.v1.PayloadRef.LabelsEntry
-	nil,                                       // 80: axon.v1.A2AAgentCard.AuthenticationEntry
+	(*InvocationTarget)(nil),                  // 67: axon.v1.InvocationTarget
+	(*KeyInfo)(nil),                           // 68: axon.v1.KeyInfo
+	(*AuditEntry)(nil),                        // 69: axon.v1.AuditEntry
+	(*ContentMeta)(nil),                       // 70: axon.v1.ContentMeta
+	(*PayloadRef)(nil),                        // 71: axon.v1.PayloadRef
+	nil,                                       // 72: axon.v1.Error.ContextEntry
+	nil,                                       // 73: axon.v1.LedgerErrorRecord.ContextEntry
+	nil,                                       // 74: axon.v1.NodeDescriptor.LabelsEntry
+	nil,                                       // 75: axon.v1.CapabilityDescriptor.RequirementsEntry
+	nil,                                       // 76: axon.v1.PayloadRef.LabelsEntry
 }
 var file_axon_v1_types_proto_depIdxs = []int32{
 	0,  // 0: axon.v1.ResourceRef.type:type_name -> axon.v1.ResourceType
 	3,  // 1: axon.v1.CircuitBreakerStatus.state:type_name -> axon.v1.CircuitState
-	71, // 2: axon.v1.ContentEnvelope.meta:type_name -> axon.v1.ContentMeta
+	70, // 2: axon.v1.ContentEnvelope.meta:type_name -> axon.v1.ContentMeta
 	4,  // 3: axon.v1.ContentEnvelope.encryption:type_name -> axon.v1.EncryptionAlgorithm
 	4,  // 4: axon.v1.EncryptedPayload.algorithm:type_name -> axon.v1.EncryptionAlgorithm
 	5,  // 5: axon.v1.EntityRef.kind:type_name -> axon.v1.EntityRefKind
@@ -6620,7 +6287,7 @@ var file_axon_v1_types_proto_depIdxs = []int32{
 	28, // 23: axon.v1.Envelope.subject:type_name -> axon.v1.SubjectIdentity
 	31, // 24: axon.v1.Envelope.causal_context:type_name -> axon.v1.CausalContext
 	36, // 25: axon.v1.Envelope.caller_signature:type_name -> axon.v1.CallerSignature
-	75, // 26: axon.v1.Error.context:type_name -> axon.v1.Error.ContextEntry
+	72, // 26: axon.v1.Error.context:type_name -> axon.v1.Error.ContextEntry
 	6,  // 27: axon.v1.Error.stage:type_name -> axon.v1.ErrorStage
 	7,  // 28: axon.v1.Error.security_class:type_name -> axon.v1.SecurityClass
 	8,  // 29: axon.v1.LedgerEventPayload.kind:type_name -> axon.v1.LedgerEventPayloadKind
@@ -6630,7 +6297,7 @@ var file_axon_v1_types_proto_depIdxs = []int32{
 	51, // 33: axon.v1.LedgerVisibilitySummary.args:type_name -> axon.v1.LedgerPayloadVisibility
 	51, // 34: axon.v1.LedgerVisibilitySummary.result:type_name -> axon.v1.LedgerPayloadVisibility
 	51, // 35: axon.v1.LedgerVisibilitySummary.diagnostics:type_name -> axon.v1.LedgerPayloadVisibility
-	76, // 36: axon.v1.LedgerErrorRecord.context:type_name -> axon.v1.LedgerErrorRecord.ContextEntry
+	73, // 36: axon.v1.LedgerErrorRecord.context:type_name -> axon.v1.LedgerErrorRecord.ContextEntry
 	49, // 37: axon.v1.LedgerDiagnosticRecord.payload:type_name -> axon.v1.LedgerEventPayload
 	55, // 38: axon.v1.InvocationReceiptChainSummary.anchors:type_name -> axon.v1.InvocationReceiptAnchor
 	60, // 39: axon.v1.InvocationTraceGraph.records:type_name -> axon.v1.InvocationLedgerRecord
@@ -6644,27 +6311,22 @@ var file_axon_v1_types_proto_depIdxs = []int32{
 	52, // 47: axon.v1.InvocationLedgerRecord.visibility:type_name -> axon.v1.LedgerVisibilitySummary
 	9,  // 48: axon.v1.NodeDescriptor.state:type_name -> axon.v1.NodeState
 	10, // 49: axon.v1.NodeDescriptor.trust_level:type_name -> axon.v1.TrustLevel
-	77, // 50: axon.v1.NodeDescriptor.labels:type_name -> axon.v1.NodeDescriptor.LabelsEntry
+	74, // 50: axon.v1.NodeDescriptor.labels:type_name -> axon.v1.NodeDescriptor.LabelsEntry
 	61, // 51: axon.v1.NodeDescriptor.resources:type_name -> axon.v1.ResourceSnapshot
 	62, // 52: axon.v1.NodeDescriptor.device:type_name -> axon.v1.DeviceMeta
-	74, // 53: axon.v1.NodeDescriptor.a2a_card:type_name -> axon.v1.A2AAgentCard
-	11, // 54: axon.v1.NodeDescriptor.role:type_name -> axon.v1.NodeRole
-	78, // 55: axon.v1.CapabilityDescriptor.requirements:type_name -> axon.v1.CapabilityDescriptor.RequirementsEntry
-	73, // 56: axon.v1.CapabilityDescriptor.a2a_skill:type_name -> axon.v1.A2ASkillSpec
-	14, // 57: axon.v1.InvocationTarget.strategy:type_name -> axon.v1.RoutingStrategy
-	10, // 58: axon.v1.InvocationTarget.min_trust_level:type_name -> axon.v1.TrustLevel
-	66, // 59: axon.v1.InvocationTarget.ability:type_name -> axon.v1.AbilityTarget
-	67, // 60: axon.v1.InvocationTarget.a2a_skill:type_name -> axon.v1.A2aSkillTarget
-	17, // 61: axon.v1.KeyInfo.state:type_name -> axon.v1.KeyState
-	24, // 62: axon.v1.PayloadRef.content:type_name -> axon.v1.ContentEnvelope
-	79, // 63: axon.v1.PayloadRef.labels:type_name -> axon.v1.PayloadRef.LabelsEntry
-	73, // 64: axon.v1.A2AAgentCard.skills:type_name -> axon.v1.A2ASkillSpec
-	80, // 65: axon.v1.A2AAgentCard.authentication:type_name -> axon.v1.A2AAgentCard.AuthenticationEntry
-	66, // [66:66] is the sub-list for method output_type
-	66, // [66:66] is the sub-list for method input_type
-	66, // [66:66] is the sub-list for extension type_name
-	66, // [66:66] is the sub-list for extension extendee
-	0,  // [0:66] is the sub-list for field type_name
+	11, // 53: axon.v1.NodeDescriptor.role:type_name -> axon.v1.NodeRole
+	75, // 54: axon.v1.CapabilityDescriptor.requirements:type_name -> axon.v1.CapabilityDescriptor.RequirementsEntry
+	14, // 55: axon.v1.InvocationTarget.strategy:type_name -> axon.v1.RoutingStrategy
+	10, // 56: axon.v1.InvocationTarget.min_trust_level:type_name -> axon.v1.TrustLevel
+	66, // 57: axon.v1.InvocationTarget.ability:type_name -> axon.v1.AbilityTarget
+	17, // 58: axon.v1.KeyInfo.state:type_name -> axon.v1.KeyState
+	24, // 59: axon.v1.PayloadRef.content:type_name -> axon.v1.ContentEnvelope
+	76, // 60: axon.v1.PayloadRef.labels:type_name -> axon.v1.PayloadRef.LabelsEntry
+	61, // [61:61] is the sub-list for method output_type
+	61, // [61:61] is the sub-list for method input_type
+	61, // [61:61] is the sub-list for extension type_name
+	61, // [61:61] is the sub-list for extension extendee
+	0,  // [0:61] is the sub-list for field type_name
 }
 
 func init() { file_axon_v1_types_proto_init() }
@@ -6686,9 +6348,8 @@ func file_axon_v1_types_proto_init() {
 		(*AuthorityBinding_SessionAuthority)(nil),
 		(*AuthorityBinding_BootstrapAuthority)(nil),
 	}
-	file_axon_v1_types_proto_msgTypes[50].OneofWrappers = []any{
+	file_axon_v1_types_proto_msgTypes[49].OneofWrappers = []any{
 		(*InvocationTarget_Ability)(nil),
-		(*InvocationTarget_A2ASkill)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -6696,7 +6357,7 @@ func file_axon_v1_types_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_axon_v1_types_proto_rawDesc), len(file_axon_v1_types_proto_rawDesc)),
 			NumEnums:      18,
-			NumMessages:   63,
+			NumMessages:   59,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://axon.run/sdk/schemas/runtime-recovery-request.schema.json",
+  "title": "RuntimeRecoveryRequest",
+  "description": "A bounded provider-owned runtime restart-recovery scan.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "recovery_id",
+    "deadline_unix_ms",
+    "max_invocations"
+  ],
+  "properties": {
+    "recovery_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "deadline_unix_ms": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_invocations": {
+      "type": "integer",
+      "minimum": 1
+    }
+  }
+}

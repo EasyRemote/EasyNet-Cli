@@ -3,8 +3,6 @@ profile: runtime_core
 required_for:
   - go
   - python
-lifecycle_actions:
-  - deadline
 description: Runtime ability facades delegate invocation deadlines to the Runtime Core provider and expose typed timeout outcomes without making the provider unreusable.
 steps:
   - action: dispatch_ability_with_provider_deadline

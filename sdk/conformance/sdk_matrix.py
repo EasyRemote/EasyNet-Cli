@@ -5,6 +5,7 @@ import argparse
 import functools
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -13,15 +14,14 @@ from typing import Any
 from sdk_concepts import (
     CONCEPTS,
     LANGUAGES,
-    PUBLIC_LANGUAGES,
     STATUS_CANONICAL_NAMES,
     STATUSES,
-    LIFECYCLE_ACTIONS,
-    LIFECYCLE_TRANSITION_CONTRACT,
+    canonical_lifecycle_reference,
     case_contracts,
     self_test as concepts_self_test,
     validate_schema,
 )
+from source_revision import AXON_REVISION_ROOTS, axon_root, git_source_revision
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = CONCEPTS
@@ -32,7 +32,9 @@ MATRIX = ROOT / "sdk/conformance/sdk-parity-matrix.json"
 def tree_sha256() -> str:
     output = subprocess.run(
         ["git", "ls-files", "-co", "--exclude-standard", "-z"],
-        cwd=ROOT, check=True, capture_output=True,
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
     ).stdout
     material = bytearray()
     for raw in sorted(path for path in output.split(b"\0") if path):
@@ -46,16 +48,19 @@ def tree_sha256() -> str:
 
 @functools.lru_cache(maxsize=None)
 def toolchain_attestation(language: str) -> tuple[str, str]:
+    python = os.environ.get("SDK_CONFORMANCE_PYTHON", sys.executable)
     commands = {
         "rust": ["rustc", "--version"],
         "c_abi": ["rustc", "--version"],
         "go": ["go", "version"],
-        "python": ["python", "--version"],
+        "python": [python, "--version"],
         "node": ["node", "--version"],
         "java": ["java", "-version"],
         "swift": ["swift", "--version"],
     }
-    completed = subprocess.run(commands[language], check=True, capture_output=True, text=True)
+    completed = subprocess.run(
+        commands[language], check=True, capture_output=True, text=True
+    )
     version = (completed.stdout or completed.stderr).strip()
     contract = (ROOT / "sdk/conformance/toolchains.json").read_bytes()
     payload = {
@@ -63,9 +68,13 @@ def toolchain_attestation(language: str) -> tuple[str, str]:
         "language": language,
         "version": version,
     }
-    digest = hashlib.sha256(json.dumps(
-        payload, separators=(",", ":"), sort_keys=True,
-    ).encode()).hexdigest()
+    digest = hashlib.sha256(
+        json.dumps(
+            payload,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
     return digest, version
 
 
@@ -115,22 +124,6 @@ def generate() -> dict[str, Any]:
         ids = capability["case_ids"]
         for language in LANGUAGES:
             evidence = [case_id for case_id in ids if language in known_cases[case_id]]
-            lifecycle_vector_evidence = [
-                {
-                    "case_id": case_id,
-                    "action": lifecycle_action,
-                }
-                for case_id in evidence
-                for lifecycle_action in contracts[case_id]["lifecycle_actions"]
-            ]
-            lifecycle_vector_actions = sorted({
-                item["action"] for item in lifecycle_vector_evidence
-            })
-            missing_lifecycle_vector_actions = [
-                action
-                for action in sorted(LIFECYCLE_ACTIONS)
-                if action not in lifecycle_vector_actions
-            ]
             unproven = [
                 requirement["requirement_id"]
                 for requirement in capability.get("unproven_requirements", [])
@@ -148,20 +141,11 @@ def generate() -> dict[str, Any]:
                 )
                 if not has_public_surface or evidence != ids or unproven:
                     fail(f"provider_status_not_closed:{capability_id}:{language}")
-                if (
-                    status == "cutover-ready"
-                    and profile == "runtime_core"
-                    and missing_lifecycle_vector_actions
-                ):
-                    fail(f"cutover_lifecycle_vectors_not_closed:{capability_id}:{language}")
             elif has_public_surface or evidence:
                 status = "seam"
             else:
                 status = "unsupported"
                 evidence = []
-                lifecycle_vector_evidence = []
-                lifecycle_vector_actions = []
-                missing_lifecycle_vector_actions = sorted(LIFECYCLE_ACTIONS)
             cells.append(
                 {
                     "capability_id": capability_id,
@@ -169,9 +153,6 @@ def generate() -> dict[str, Any]:
                     "profile": profile,
                     "status": status,
                     "evidence_case_ids": evidence,
-                    "lifecycle_vector_actions": lifecycle_vector_actions,
-                    "missing_lifecycle_vector_actions": missing_lifecycle_vector_actions,
-                    "lifecycle_vector_evidence": lifecycle_vector_evidence,
                     "unproven_requirement_ids": unproven,
                     "shape_evidence": [
                         {
@@ -180,22 +161,28 @@ def generate() -> dict[str, Any]:
                         }
                         for item in public_items
                     ],
-                    "step_shape_evidence": ([
-                        {
-                            "case_id": case_id,
-                            "action": action,
-                            "execution_case_bound": case_id in evidence,
-                            "items": [
-                                {
-                                    "item": item,
-                                    "sha256": source["shape_sha256"][language][item],
-                                }
-                                for item in public_items
-                            ],
-                        }
-                        for case_id in ids
-                        for action in contracts[case_id]["actions"]
-                    ] if has_public_surface else []),
+                    "step_shape_evidence": (
+                        [
+                            {
+                                "case_id": case_id,
+                                "action": action,
+                                "execution_case_bound": case_id in evidence,
+                                "items": [
+                                    {
+                                        "item": item,
+                                        "sha256": source["shape_sha256"][language][
+                                            item
+                                        ],
+                                    }
+                                    for item in public_items
+                                ],
+                            }
+                            for case_id in ids
+                            for action in contracts[case_id]["actions"]
+                        ]
+                        if has_public_surface
+                        else []
+                    ),
                     "public_api_ref": f"sdk/conformance/canonical-public-api.json#capability_inventory/{capability_id}",
                     "provider_proof_ref": (
                         f"sdk/conformance/canonical-public-api.json#provider_proofs/{capability_id}/{language}"
@@ -205,13 +192,12 @@ def generate() -> dict[str, Any]:
                 }
             )
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "source": "sdk/conformance/canonical-public-api.json",
         "languages": LANGUAGES,
         "status_order": STATUSES,
         "status_canonical_names": STATUS_CANONICAL_NAMES,
-        "lifecycle_actions": sorted(LIFECYCLE_ACTIONS),
-        "lifecycle_transition_contract": LIFECYCLE_TRANSITION_CONTRACT,
+        "canonical_lifecycle_contract": canonical_lifecycle_reference(),
         "capability_ids": capability_ids,
         "cells": cells,
     }
@@ -296,10 +282,16 @@ def validate_execution(record: dict[str, Any], language: str, case_id: str) -> N
     }
     if any(not isinstance(value, str) or not value for value in run_context.values()):
         fail(f"missing_run_context:{language}:{case_id}")
-    expected_attestation = hashlib.sha256(json.dumps(
-        {"command_attestation_sha256": command_attestation, "run_context": run_context},
-        separators=(",", ":"), sort_keys=True,
-    ).encode()).hexdigest()
+    expected_attestation = hashlib.sha256(
+        json.dumps(
+            {
+                "command_attestation_sha256": command_attestation,
+                "run_context": run_context,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
     if record.get("attestation_sha256") != expected_attestation:
         fail(f"attestation_mismatch:{language}:{case_id}")
 
@@ -343,14 +335,6 @@ def validate(
         ):
             fail("invalid_source_attestation_tree")
         expected_tree = snapshot_tree
-    expected_axon = concepts["dependency_revisions"]["easynet_axon"]
-    current_axon = subprocess.run(
-        ["git", "-C", "../EasyNet-Axon", "rev-parse", "HEAD"],
-        cwd=ROOT, check=True, capture_output=True, text=True,
-    ).stdout.strip()
-    if check_checkout and current_axon != expected_axon:
-        fail(f"axon_checkout_revision_mismatch:expected={expected_axon}:actual={current_axon}")
-    observed_nonces: set[str] = set()
     missing_results = [
         language
         for language in selected_languages
@@ -358,6 +342,13 @@ def validate(
     ]
     if missing_results:
         fail("missing_live_results:" + ",".join(missing_results))
+    expected_axon = concepts["dependency_revisions"]["axon_sdk"]
+    current_axon = git_source_revision(axon_root(), AXON_REVISION_ROOTS)
+    if check_checkout and current_axon != expected_axon:
+        fail(
+            f"axon_checkout_revision_mismatch:expected={expected_axon}:actual={current_axon}"
+        )
+    observed_nonces: set[str] = set()
     for language in selected_languages:
         result_path = results_dir / f"{language}.json"
         records = json.loads(result_path.read_text(encoding="utf-8"))
@@ -381,7 +372,10 @@ def validate(
             if record.get("axon_revision") != expected_axon:
                 fail(f"axon_attestation_revision_mismatch:{language}:{case_id}")
             digest, version = toolchain_attestation(language)
-            if record.get("toolchain_sha256") != digest or record.get("toolchain_version") != version:
+            if (
+                record.get("toolchain_sha256") != digest
+                or record.get("toolchain_version") != version
+            ):
                 fail(f"toolchain_attestation_mismatch:{language}:{case_id}")
             indexed[case_id] = record
         current_cases = set(case_paths())
@@ -427,7 +421,10 @@ def validate(
             if record.get("status") == "passed" and case_id in quality_cases:
                 validate_execution(record, language, case_id)
                 referenced.add((language, case_id))
-            if record.get("status") == "passed" and (language, case_id) not in referenced:
+            if (
+                record.get("status") == "passed"
+                and (language, case_id) not in referenced
+            ):
                 fail(f"unmodeled_passed_case:{language}:{case_id}")
 
 
@@ -448,15 +445,13 @@ def synthetic_results(directory: Path, matrix: dict[str, Any]) -> None:
     contracts = case_languages()
     for language in matrix["languages"]:
         evidence_by_language[language].update(
-            case_id
-            for case_id in quality_cases
-            if language in contracts[case_id]
+            case_id for case_id in quality_cases if language in contracts[case_id]
         )
     source_ref = "sdk/conformance/canonical-public-api.json"
     source_digest = hashlib.sha256((ROOT / source_ref).read_bytes()).hexdigest()
     paths = case_paths()
     current_tree = tree_sha256()
-    expected_axon = concepts["dependency_revisions"]["easynet_axon"]
+    expected_axon = concepts["dependency_revisions"]["axon_sdk"]
     for language, evidence_case_ids in evidence_by_language.items():
         toolchain_digest, toolchain_version = toolchain_attestation(language)
         run_context = {
@@ -514,12 +509,20 @@ def synthetic_results(directory: Path, matrix: dict[str, Any]) -> None:
                 "execution_failure": None,
             }
             command_attestation = hashlib.sha256(
-                json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+                json.dumps(payload, separators=(",", ":"), sort_keys=True).encode(
+                    "utf-8"
+                )
             ).hexdigest()
-            attestation = hashlib.sha256(json.dumps(
-                {"command_attestation_sha256": command_attestation, "run_context": run_context},
-                separators=(",", ":"), sort_keys=True,
-            ).encode()).hexdigest()
+            attestation = hashlib.sha256(
+                json.dumps(
+                    {
+                        "command_attestation_sha256": command_attestation,
+                        "run_context": run_context,
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
             records.append(
                 {
                     "case_id": case_id,
@@ -544,6 +547,31 @@ def synthetic_results(directory: Path, matrix: dict[str, Any]) -> None:
 
 def self_test(tmp: Path) -> None:
     concepts_self_test(tmp / "concepts")
+    fake_python = tmp / "python-toolchain"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "${1:-}" == "--version" ]]; then\n'
+        "  printf 'Python conformance-fixture\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    original_python = os.environ.get("SDK_CONFORMANCE_PYTHON")
+    try:
+        os.environ["SDK_CONFORMANCE_PYTHON"] = str(fake_python)
+        toolchain_attestation.cache_clear()
+        _, selected_version = toolchain_attestation("python")
+        if selected_version != "Python conformance-fixture":
+            fail("self_test_explicit_python_toolchain_was_ignored")
+    finally:
+        if original_python is None:
+            os.environ.pop("SDK_CONFORMANCE_PYTHON", None)
+        else:
+            os.environ["SDK_CONFORMANCE_PYTHON"] = original_python
+        toolchain_attestation.cache_clear()
+
     matrix = generate()
     good_matrix = tmp / "matrix.json"
     good_matrix.write_text(json.dumps(matrix, indent=2) + "\n", encoding="utf-8")
@@ -699,8 +727,7 @@ def main() -> int:
                 allow_snapshot_results=args.allow_snapshot_results,
             )
             print(
-                "sdk parity matrix language slice ok: "
-                + ",".join(args.validate_slice)
+                "sdk parity matrix language slice ok: " + ",".join(args.validate_slice)
             )
         else:
             parser.error("one mode is required")

@@ -119,11 +119,9 @@ class InvocationStub:
         invoke_pb2.InvokeBidiUp,
         invoke_pb2.InvokeBidiDown,
     ]
-    """Bidirectional invocation (P5-rewrite-15) — realtime multimodal
-    sessions. PTY uses the session-as-subject pattern: unary
-    `device.terminal.create` mints the session URA, then a single
-    InvokeBidi against `device.terminal.attach` carries the
-    bidirectional binary stream until close.
+    """Bidirectional invocation for realtime multimodal sessions.
+    Product session creation and attachment are provider abilities built on
+    this generic stream primitive.
     """
 
 class InvocationAsyncStub:
@@ -203,11 +201,9 @@ class InvocationAsyncStub:
         invoke_pb2.InvokeBidiUp,
         invoke_pb2.InvokeBidiDown,
     ]
-    """Bidirectional invocation (P5-rewrite-15) — realtime multimodal
-    sessions. PTY uses the session-as-subject pattern: unary
-    `device.terminal.create` mints the session URA, then a single
-    InvokeBidi against `device.terminal.attach` carries the
-    bidirectional binary stream until close.
+    """Bidirectional invocation for realtime multimodal sessions.
+    Product session creation and attachment are provider abilities built on
+    this generic stream primitive.
     """
 
 class InvocationServicer(metaclass=abc.ABCMeta):
@@ -293,11 +289,9 @@ class InvocationServicer(metaclass=abc.ABCMeta):
         request_iterator: _MaybeAsyncIterator[invoke_pb2.InvokeBidiUp],
         context: _ServicerContext,
     ) -> typing.Union[collections.abc.Iterator[invoke_pb2.InvokeBidiDown], collections.abc.AsyncIterator[invoke_pb2.InvokeBidiDown]]:
-        """Bidirectional invocation (P5-rewrite-15) — realtime multimodal
-        sessions. PTY uses the session-as-subject pattern: unary
-        `device.terminal.create` mints the session URA, then a single
-        InvokeBidi against `device.terminal.attach` carries the
-        bidirectional binary stream until close.
+        """Bidirectional invocation for realtime multimodal sessions.
+        Product session creation and attachment are provider abilities built on
+        this generic stream primitive.
         """
 
 def add_InvocationServicer_to_server(servicer: InvocationServicer, server: typing.Union[grpc.Server, grpc.aio.Server]) -> None: ...

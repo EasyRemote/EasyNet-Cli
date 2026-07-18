@@ -1,4 +1,4 @@
-"""Product-neutral Directory facade over Axon-owned wire projections."""
+"""EasyNet Directory facade and product-owned wire projections."""
 
 from __future__ import annotations
 
@@ -6,11 +6,12 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Mapping, Protocol
 
-from easynet_axon.federation_directory import (
+from ._directory_wire import (
     DirectoryAgentSummary,
     DirectoryEntry,
     DirectoryEvent,
     DirectorySigningAuthority,
+    parse_directory_entry,
     parse_directory_event,
 )
 
@@ -39,6 +40,8 @@ __all__ = [
     "DirectorySubscribeRequest",
     "DirectorySubscription",
     "DirectorySubscriptionState",
+    "parse_directory_entry",
+    "parse_directory_event",
 ]
 
 DEFAULT_DIRECTORY_PAGE_LIMIT = 50

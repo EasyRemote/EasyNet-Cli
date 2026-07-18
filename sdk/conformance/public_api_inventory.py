@@ -13,16 +13,16 @@ import tempfile
 from pathlib import Path
 from typing import Any, Iterable
 
+from source_revision import AXON_REVISION_ROOTS, axon_root, git_source_revision
+
 ROOT = Path(__file__).resolve().parents[2]
 LANGUAGES = ("rust", "c_abi", "go", "python", "node", "java", "swift")
+PYTHON_AST_SHAPE_SCHEMA = "python-ast-normalized-v1"
 
 
-def axon_root() -> Path:
-    configured = os.environ.get("EASYNET_AXON_ROOT")
-    return Path(configured).resolve() if configured else (ROOT / "../EasyNet-Axon").resolve()
-
-
-def run(command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None) -> str:
+def run(
+    command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None
+) -> str:
     completed = subprocess.run(
         command,
         cwd=cwd,
@@ -34,7 +34,13 @@ def run(command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = No
     return completed.stdout
 
 
-def result(parser: str, symbols: Iterable[str], members: Iterable[str], shapes: dict[str, str], **extra: Any) -> dict[str, Any]:
+def result(
+    parser: str,
+    symbols: Iterable[str],
+    members: Iterable[str],
+    shapes: dict[str, str],
+    **extra: Any,
+) -> dict[str, Any]:
     symbol_list = sorted(set(symbols))
     member_list = sorted(set(members))
     if set(shapes) != set(symbol_list) | set(member_list):
@@ -50,6 +56,33 @@ def result(parser: str, symbols: Iterable[str], members: Iterable[str], shapes: 
     }
 
 
+def normalized_python_ast(value: Any) -> Any:
+    if isinstance(value, ast.AST):
+        fields = {}
+        for name, nested in ast.iter_fields(value):
+            if name == "type_params" and nested == []:
+                continue
+            fields[name] = normalized_python_ast(nested)
+        return {"node": type(value).__name__, "fields": fields}
+    if isinstance(value, list):
+        return [normalized_python_ast(item) for item in value]
+    if value is Ellipsis:
+        return {"literal": "ellipsis"}
+    if isinstance(value, bytes):
+        return {"literal": "bytes", "hex": value.hex()}
+    if isinstance(value, complex):
+        return {"literal": "complex", "real": value.real, "imag": value.imag}
+    return value
+
+
+def python_shape(node: ast.AST) -> str:
+    return json.dumps(
+        normalized_python_ast(node),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def python_inventory() -> dict[str, Any]:
     package = ROOT / "sdk/python/easynet_sdk"
     init_path = package / "__init__.py"
@@ -60,9 +93,14 @@ def python_inventory() -> dict[str, Any]:
         if isinstance(node, ast.ImportFrom) and node.module:
             for alias in node.names:
                 imports[alias.asname or alias.name] = (node.module, alias.name)
-        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "__all__"
+            for target in node.targets
+        ):
             value = ast.literal_eval(node.value)
-            if not isinstance(value, (list, tuple)) or not all(isinstance(item, str) for item in value):
+            if not isinstance(value, (list, tuple)) or not all(
+                isinstance(item, str) for item in value
+            ):
                 raise ValueError("Python __all__ must be a literal string list")
             exported = list(value)
     if exported is None:
@@ -75,32 +113,45 @@ def python_inventory() -> dict[str, Any]:
     def module_path(module_name: str) -> Path:
         roots = {
             "easynet_sdk": ROOT / "sdk/python/easynet_sdk",
-            "easynet_axon": axon_root() / "sdk/python/easynet_axon",
+            "axon_sdk": axon_root() / "sdk/python/axon_sdk",
         }
         package_name, _, suffix = module_name.partition(".")
         base = roots.get(package_name)
         if base is None:
-            raise ValueError(f"Python public re-export leaves owned SDK roots: {module_name}")
-        candidate = base / (suffix.replace(".", "/") + ".py") if suffix else base / "__init__.py"
+            raise ValueError(
+                f"Python public re-export leaves owned SDK roots: {module_name}"
+            )
+        candidate = (
+            base / (suffix.replace(".", "/") + ".py")
+            if suffix
+            else base / "__init__.py"
+        )
         if not candidate.is_file():
             candidate = base / suffix.replace(".", "/") / "__init__.py"
         if not candidate.is_file():
             raise ValueError(f"Python public module is missing: {module_name}")
         return candidate
 
-    def resolve(module_name: str, source_name: str, seen: set[tuple[str, str]]) -> ast.AST:
+    def resolve(
+        module_name: str, source_name: str, seen: set[tuple[str, str]]
+    ) -> ast.AST:
         key = (module_name, source_name)
         if key in seen:
             raise ValueError(f"Python re-export cycle: {module_name}.{source_name}")
         seen.add(key)
         path = module_path(module_name)
-        tree = modules.setdefault(str(path), ast.parse(path.read_text(encoding="utf-8")))
+        tree = modules.setdefault(
+            str(path), ast.parse(path.read_text(encoding="utf-8"))
+        )
         declarations = [
-            node for node in tree.body
-            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == source_name
+            node
+            for node in tree.body
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == source_name
         ]
         assignments = [
-            node for node in tree.body
+            node
+            for node in tree.body
             if isinstance(node, (ast.Assign, ast.AnnAssign))
             and any(name == source_name for name in _assigned_names(node))
         ]
@@ -114,7 +165,9 @@ def python_inventory() -> dict[str, Any]:
                 if (alias.asname or alias.name) == source_name:
                     imported.append((node, alias))
         if len(imported) != 1:
-            raise ValueError(f"Python export cannot be resolved uniquely: {module_name}.{source_name}")
+            raise ValueError(
+                f"Python export cannot be resolved uniquely: {module_name}.{source_name}"
+            )
         node, alias = imported[0]
         if node.level:
             parts = module_name.split(".")
@@ -132,7 +185,7 @@ def python_inventory() -> dict[str, Any]:
         declaration = resolve(f"easynet_sdk.{module_name}", source_name, set())
         if isinstance(declaration, ast.ClassDef):
             reject_duplicate_class_members(declaration, public_name)
-        shapes[public_name] = ast.dump(declaration, annotate_fields=True, include_attributes=False)
+        shapes[public_name] = python_shape(declaration)
         if isinstance(declaration, ast.ClassDef):
             for node in declaration.body:
                 names: list[str] = []
@@ -145,10 +198,10 @@ def python_inventory() -> dict[str, Any]:
                         continue
                     member = f"{public_name}.{name}"
                     members.add(member)
-                    shapes[member] = ast.dump(node, annotate_fields=True, include_attributes=False)
-    revision = run(["git", "-C", str(axon_root()), "rev-parse", "HEAD"]).strip()
+                    shapes[member] = python_shape(node)
+    revision = git_source_revision(axon_root(), AXON_REVISION_ROOTS)
     return result(
-        f"python-ast-{sys.version_info.major}.{sys.version_info.minor}",
+        PYTHON_AST_SHAPE_SCHEMA,
         symbols,
         members,
         shapes,
@@ -182,23 +235,48 @@ def _assigned_names(node: ast.Assign | ast.AnnAssign) -> Iterable[str]:
 
 
 def go_inventory() -> dict[str, Any]:
-    decoded = json.loads(run(["go", "run", "./tools/sdk-api-inventory/main.go", "-dir", "sdk/go"]))
+    decoded = json.loads(
+        run(["go", "run", "./tools/sdk-api-inventory/main.go", "-dir", "sdk/go"])
+    )
     shapes = decoded.get("shapes")
     if not isinstance(shapes, dict):
         raise ValueError("Go inventory did not emit shapes")
-    listed = run(["go", "list", "-f", "{{.ImportPath}}|{{.Dir}}", "./..."], cwd=ROOT / "sdk/go").splitlines()
-    package_roots = [str(Path(directory).resolve().relative_to(ROOT)) for _, directory in (line.split("|", 1) for line in listed)]
-    return result("go/ast", decoded["symbols"], decoded["members"], shapes, package_roots=sorted(package_roots))
+    listed = run(
+        ["go", "list", "-f", "{{.ImportPath}}|{{.Dir}}", "./..."], cwd=ROOT / "sdk/go"
+    ).splitlines()
+    package_roots = [
+        str(Path(directory).resolve().relative_to(ROOT))
+        for _, directory in (line.split("|", 1) for line in listed)
+    ]
+    return result(
+        "go/ast",
+        decoded["symbols"],
+        decoded["members"],
+        shapes,
+        package_roots=sorted(package_roots),
+    )
 
 
 def node_inventory() -> dict[str, Any]:
-    return json.loads(run(["node", "sdk/conformance/typescript_public_api.mjs", "sdk/node/index.d.ts"]))
+    return json.loads(
+        run(
+            ["node", "sdk/conformance/typescript_public_api.mjs", "sdk/node/index.d.ts"]
+        )
+    )
 
 
 def c_inventory() -> dict[str, Any]:
     with tempfile.NamedTemporaryFile(suffix=".json") as output:
-        completed = subprocess.run(
-            ["clang", "-Xclang", "-ast-dump=json", "-fsyntax-only", "-x", "c", "include/easynet_cli.h"],
+        subprocess.run(
+            [
+                "clang",
+                "-Xclang",
+                "-ast-dump=json",
+                "-fsyntax-only",
+                "-x",
+                "c",
+                "include/easynet_cli.h",
+            ],
             cwd=ROOT,
             check=True,
             stdout=output,
@@ -213,19 +291,27 @@ def c_inventory() -> dict[str, Any]:
     def walk(node: dict[str, Any], parent: str | None = None) -> None:
         kind = node.get("kind")
         name = node.get("name")
-        location = node.get("loc", {})
-        included = location.get("includedFrom")
         public = isinstance(name, str) and (
-            name.startswith("easynet_") or name.startswith("EASYNET_") or name.startswith("Easynet")
+            name.startswith("easynet_")
+            or name.startswith("EASYNET_")
+            or name.startswith("Easynet")
         )
         if public and kind in {"FunctionDecl", "TypedefDecl", "EnumDecl", "VarDecl"}:
             symbols.add(name)
-            shapes[name] = json.dumps(_clang_shape(node), sort_keys=True, separators=(",", ":"))
+            shapes[name] = json.dumps(
+                _clang_shape(node), sort_keys=True, separators=(",", ":")
+            )
             parent = name
-        if parent and kind in {"FieldDecl", "EnumConstantDecl"} and isinstance(name, str):
+        if (
+            parent
+            and kind in {"FieldDecl", "EnumConstantDecl"}
+            and isinstance(name, str)
+        ):
             item = f"{parent}.{name}"
             members.add(item)
-            shapes[item] = json.dumps(_clang_shape(node), sort_keys=True, separators=(",", ":"))
+            shapes[item] = json.dumps(
+                _clang_shape(node), sort_keys=True, separators=(",", ":")
+            )
         for child in node.get("inner", []):
             if isinstance(child, dict):
                 walk(child, parent)
@@ -255,7 +341,9 @@ def _stable_clang_value(value: Any) -> Any:
 
 
 def java_inventory() -> dict[str, Any]:
-    sources = sorted((ROOT / "sdk/java/src/main/java/run/easynet/daemon").glob("*.java"))
+    sources = sorted(
+        (ROOT / "sdk/java/src/main/java/run/easynet/daemon").glob("*.java")
+    )
     with tempfile.TemporaryDirectory() as directory:
         classes = Path(directory)
         run(["javac", "--release", "17", "-d", str(classes), *map(str, sources)])
@@ -268,16 +356,26 @@ def java_inventory() -> dict[str, Any]:
         members: set[str] = set()
         shapes: dict[str, str] = {}
         for class_name in class_names:
-            raw = run(["javap", "-classpath", str(classes), "-public", "-s", class_name])
+            raw = run(
+                ["javap", "-classpath", str(classes), "-public", "-s", class_name]
+            )
             lines = [line.strip() for line in raw.splitlines() if line.strip()]
-            header = next((line for line in lines if re.search(r"\b(class|interface|record|enum)\b", line) and line.endswith("{")), None)
+            header = next(
+                (
+                    line
+                    for line in lines
+                    if re.search(r"\b(class|interface|record|enum)\b", line)
+                    and line.endswith("{")
+                ),
+                None,
+            )
             if header is None:
                 continue
             simple = class_name.rsplit(".", 1)[-1]
             symbols.add(simple)
             shapes[simple] = header
             pending: str | None = None
-            for line in lines[lines.index(header) + 1:]:
+            for line in lines[lines.index(header) + 1 :]:
                 if line == "}":
                     break
                 if line.startswith("descriptor:"):
@@ -311,16 +409,26 @@ def swift_inventory() -> dict[str, Any]:
     target = target_info["target"]["triple"]
     sdk_path = run(["xcrun", "--sdk", "macosx", "--show-sdk-path"], cwd=package).strip()
     with tempfile.TemporaryDirectory() as directory:
-        run([
-            "xcrun", "swift-symbolgraph-extract",
-            "-module-name", "EasyNetDaemonSDK",
-            "-target", target,
-            "-sdk", sdk_path,
-            "-I", str(Path(bin_path) / "Modules"),
-            "-output-dir", directory,
-            "-pretty-print",
-            "-minimum-access-level", "public",
-        ], cwd=package)
+        run(
+            [
+                "xcrun",
+                "swift-symbolgraph-extract",
+                "-module-name",
+                "EasyNetDaemonSDK",
+                "-target",
+                target,
+                "-sdk",
+                sdk_path,
+                "-I",
+                str(Path(bin_path) / "Modules"),
+                "-output-dir",
+                directory,
+                "-pretty-print",
+                "-minimum-access-level",
+                "public",
+            ],
+            cwd=package,
+        )
         graphs = list(Path(directory).glob("*.symbols.json"))
         if len(graphs) != 1:
             raise ValueError(f"expected one Swift symbol graph, found {len(graphs)}")
@@ -333,7 +441,9 @@ def swift_inventory() -> dict[str, Any]:
         kind = entry["kind"]["identifier"]
         components = entry["pathComponents"]
         name = components[0]
-        shape = "".join(fragment["spelling"] for fragment in entry["declarationFragments"])
+        shape = "".join(
+            fragment["spelling"] for fragment in entry["declarationFragments"]
+        )
         if len(components) == 1 and kind not in {"swift.module"}:
             symbols.add(name)
             shapes[name] = shape
@@ -351,18 +461,31 @@ def rust_inventory() -> dict[str, Any]:
     manifest = source_root / "sdk/rust/Cargo.toml"
     target = ROOT / "target/sdk-rustdoc-inventory"
     env = dict(os.environ, CARGO_TARGET_DIR=str(target))
-    run([
-        "cargo", "+nightly", "rustdoc", "--manifest-path", str(manifest), "--lib", "--",
-        "-Z", "unstable-options", "--output-format", "json",
-    ], env=env)
-    graph = json.loads((target / "doc/easynet_axon.json").read_text(encoding="utf-8"))
+    run(
+        [
+            "cargo",
+            "+nightly",
+            "rustdoc",
+            "--manifest-path",
+            str(manifest),
+            "--lib",
+            "--",
+            "-Z",
+            "unstable-options",
+            "--output-format",
+            "json",
+        ],
+        env=env,
+    )
+    graph = json.loads((target / "doc/axon_sdk.json").read_text(encoding="utf-8"))
     index = graph["index"]
     crate_id = int(index[str(graph["root"])]["crate_id"])
     symbols: set[str] = set()
     members: set[str] = set()
     shapes: dict[str, str] = {}
     symbol_ids = {
-        item_id for item_id, summary in graph["paths"].items()
+        item_id
+        for item_id, summary in graph["paths"].items()
         if summary.get("crate_id") == crate_id
     }
     parent_by_child: dict[str, str] = {}
@@ -391,7 +514,9 @@ def rust_inventory() -> dict[str, Any]:
     ):
         public_name = name
         if symbol_counts[name] > 1:
-            public_name += "#" + _stable_rustdoc_suffix(graph["paths"][item_id]["path"], kind)
+            public_name += "#" + _stable_rustdoc_suffix(
+                graph["paths"][item_id]["path"], kind
+            )
         symbols.add(public_name)
         symbol_public_names[item_id] = public_name
         shapes[public_name] = json.dumps(
@@ -421,7 +546,7 @@ def rust_inventory() -> dict[str, Any]:
             sort_keys=True,
             separators=(",", ":"),
         )
-    revision = run(["git", "-C", str(source_root), "rev-parse", "HEAD"]).strip()
+    revision = git_source_revision(source_root, AXON_REVISION_ROOTS)
     return result("rustdoc-json", symbols, members, shapes, source_revision=revision)
 
 
@@ -438,7 +563,9 @@ def _stable_rustdoc_value(value: Any) -> Any:
             if key not in {"crate_id", "id", "impls", "items"}
         }
     if isinstance(value, list):
-        return [_stable_rustdoc_value(item) for item in value if not isinstance(item, int)]
+        return [
+            _stable_rustdoc_value(item) for item in value if not isinstance(item, int)
+        ]
     return value
 
 
@@ -472,6 +599,48 @@ class UniqueTrace:
     if not isinstance(unique, ast.ClassDef):
         raise AssertionError("self-test unique fixture did not parse as a class")
     reject_duplicate_class_members(unique, "UniqueTrace")
+    normalized = json.loads(python_shape(unique))
+    if normalized["node"] != "ClassDef":
+        raise AssertionError("normalized Python shape lost its declaration kind")
+    if "type_params" in normalized["fields"]:
+        raise AssertionError("normalized Python shape retained empty type parameters")
+    ellipsis = ast.parse("value: str = ...").body[0]
+    if '"literal":"ellipsis"' not in python_shape(ellipsis):
+        raise AssertionError("normalized Python shape lost an ellipsis literal")
+
+    with tempfile.TemporaryDirectory(prefix="sdk-source-revision-") as raw:
+        repository = Path(raw)
+        subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Inventory Test"],
+            cwd=repository,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "inventory@example.test"],
+            cwd=repository,
+            check=True,
+        )
+        source = repository / "sdk/example.txt"
+        source.parent.mkdir(parents=True)
+        source.write_text("committed\n", encoding="utf-8")
+        subprocess.run(["git", "add", "sdk/example.txt"], cwd=repository, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "fixture"],
+            cwd=repository,
+            check=True,
+        )
+        clean = git_source_revision(repository, ("sdk",))
+        if clean.startswith("working_tree:"):
+            raise AssertionError("clean source revision was marked as a working tree")
+        source.write_text("modified\n", encoding="utf-8")
+        modified = git_source_revision(repository, ("sdk",))
+        if not modified.startswith("working_tree:") or modified == clean:
+            raise AssertionError("modified source revision was not content-attested")
+        source.unlink()
+        deleted = git_source_revision(repository, ("sdk",))
+        if not deleted.startswith("working_tree:") or deleted == modified:
+            raise AssertionError("deleted source revision was not content-attested")
 
 
 def main() -> int:
@@ -497,7 +666,12 @@ def main() -> int:
     }
     try:
         inventory = functions[args.language]()
-    except (OSError, ValueError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+    except (
+        OSError,
+        ValueError,
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+    ) as error:
         print(f"public_api_inventory:{args.language}: {error}", file=sys.stderr)
         return 1
     encoded = json.dumps(inventory, indent=2, sort_keys=True) + "\n"

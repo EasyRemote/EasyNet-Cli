@@ -80,8 +80,8 @@ reject_grep 'hub       easynet:///r/<realm>/hub/<id>' src/core/ura/mod.rs \
 
 require_any_grep src/daemon/invocation/routing/remote_invoke.rs \
     "parse_node_ura must delegate grammar to Axon" \
-    'use easynet_axon::ura::{parse_ura, URAKind};' \
-    'use easynet_axon::ura::{URAKind, parse_ura};'
+    'use axon_sdk::ura::{parse_ura, URAKind};' \
+    'use axon_sdk::ura::{URAKind, parse_ura};'
 require_grep 'whose clean protocol identity is `easynet:///r/<realm>/hub`' src/daemon/invocation/routing/remote_invoke.rs \
     "parse_node_ura docs must state the canonical /hub identity"
 require_grep 'fn parse_node_ura_accepts_protocol_hub_identity()' src/daemon/invocation/routing/remote_invoke.rs \

@@ -6,7 +6,7 @@ DEFAULT_MANIFEST="$ROOT/sdk/conformance/canonical-public-api.json"
 DEFAULT_MATRIX="$ROOT/sdk/conformance/sdk-parity-matrix.json"
 MANIFEST="${SDK_CONCEPT_MANIFEST:-$DEFAULT_MANIFEST}"
 VALIDATOR="$ROOT/sdk/conformance/sdk_concepts.py"
-PYTHON_BIN="${PYTHON:-python}"
+PYTHON_BIN="${PYTHON:-python3}"
 GO_BIN="${GO:-go}"
 
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"

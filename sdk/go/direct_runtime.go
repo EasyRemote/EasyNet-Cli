@@ -13,11 +13,11 @@ import (
 	"io"
 	"net"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	axoninv "axon.run/sdk/go/axon/invocation"
 	"easynet.run/cli/sdk/go/internal/axonpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -30,8 +30,6 @@ const (
 	defaultDirectRuntimeDialTimeout   = 3 * time.Second
 	defaultDirectRuntimeInvokeTimeout = 60 * time.Second
 	defaultDirectRuntimeTransportName = "direct-axon-grpc-uds"
-	defaultURAProfile                 = "easynet-strict-v2"
-	directSignedDescriptorRefMetadata = "x-easynet-signed-descriptor-ref"
 )
 
 // DirectRuntimeConnector opens a concrete Runtime Core transport over an Axon
@@ -42,7 +40,6 @@ type DirectRuntimeConnector struct {
 
 	mu                   sync.Mutex
 	handle               RuntimeTransport
-	addressing           Addressing
 	closeHandleTransport bool
 	transports           map[*DirectRuntimeTransport]struct{}
 	closed               bool
@@ -56,7 +53,6 @@ type DirectRuntimeConnectorOptions struct {
 	ControlPath          string
 	Reader               ControlDiscoveryReader
 	HandleTransport      RuntimeTransport
-	Addressing           Addressing
 	CloseHandleTransport bool
 }
 
@@ -79,7 +75,6 @@ func NewDirectRuntimeConnectorWithOptions(options DirectRuntimeConnectorOptions)
 		ControlPath:          options.ControlPath,
 		Reader:               reader,
 		handle:               options.HandleTransport,
-		addressing:           options.Addressing,
 		closeHandleTransport: options.CloseHandleTransport,
 		transports:           map[*DirectRuntimeTransport]struct{}{},
 	}
@@ -99,21 +94,6 @@ func (c *DirectRuntimeConnector) WithHandleTransport(handle RuntimeTransport, cl
 	}
 	c.handle = handle
 	c.closeHandleTransport = closeOnConnectorClose
-	return c
-}
-
-// WithAddressing sets the canonical provider used to project DescriptorRef
-// values and descriptor-bound subjects before direct runtime dispatch.
-func (c *DirectRuntimeConnector) WithAddressing(addressing Addressing) *DirectRuntimeConnector {
-	if c == nil {
-		return c
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return c
-	}
-	c.addressing = addressing
 	return c
 }
 
@@ -162,13 +142,12 @@ func (c *DirectRuntimeConnector) Handshake(ctx context.Context, endpointJSON []b
 	if err != nil {
 		return nil, nil, err
 	}
-	handleTransport, addressing, _ := c.transportConfig(ctx)
+	handleTransport := c.handleTransport(ctx)
 	transport, err := OpenDirectRuntimeTransport(ctx, endpoint.Endpoint, DirectRuntimeOptions{
 		DialTimeoutMS:   options.DialTimeoutMS,
 		InvokeTimeoutMS: options.InvokeTimeoutMS,
 		MaxMessageBytes: options.MaxMessageBytes,
 		HandleTransport: handleTransport,
-		Addressing:      addressing,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -213,7 +192,6 @@ func (c *DirectRuntimeConnector) Close(ctx context.Context) error {
 	handle := c.handle
 	closeHandle := c.closeHandleTransport
 	c.handle = nil
-	c.addressing = nil
 	c.closeHandleTransport = false
 	transports := make([]*DirectRuntimeTransport, 0, len(c.transports))
 	for transport := range c.transports {
@@ -250,13 +228,13 @@ func (c *DirectRuntimeConnector) requireOpen(ctx context.Context) error {
 	return nil
 }
 
-func (c *DirectRuntimeConnector) transportConfig(ctx context.Context) (RuntimeTransport, Addressing, bool) {
+func (c *DirectRuntimeConnector) handleTransport(ctx context.Context) RuntimeTransport {
 	if c == nil || ctx == nil {
-		return nil, nil, false
+		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.handle, c.addressing, c.closeHandleTransport
+	return c.handle
 }
 
 // DirectRuntimeOptions are SDK-internal direct runtime transport knobs.
@@ -265,7 +243,6 @@ type DirectRuntimeOptions struct {
 	InvokeTimeoutMS      int64
 	MaxMessageBytes      int
 	HandleTransport      RuntimeTransport
-	Addressing           Addressing
 	CloseHandleTransport bool
 }
 
@@ -277,7 +254,7 @@ type DirectRuntimeTransport struct {
 	endpoint             string
 	invokeTimeout        time.Duration
 	handle               RuntimeTransport
-	addressing           Addressing
+	codec                *directDescriptorBoundCodec
 	closeHandleTransport bool
 	closed               bool
 }
@@ -290,11 +267,12 @@ func OpenDirectRuntimeTransport(ctx context.Context, endpoint string, options Di
 	if strings.TrimSpace(endpoint) == "" {
 		return nil, invalidRuntimeClient("endpoint is required")
 	}
-	if options.Addressing == nil {
-		return nil, invalidProfileClient(addressingProfile, "addressing provider is required for direct runtime descriptor projection")
-	}
 	dialTimeout := durationFromMillis(options.DialTimeoutMS, defaultDirectRuntimeDialTimeout)
 	invokeTimeout := durationFromMillis(options.InvokeTimeoutMS, defaultDirectRuntimeInvokeTimeout)
+	codec, err := newDirectDescriptorBoundCodec(invokeTimeout)
+	if err != nil {
+		return nil, err
+	}
 	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
 	target, transportOptions, err := directRuntimeDialTarget(endpoint)
@@ -327,7 +305,7 @@ func OpenDirectRuntimeTransport(ctx context.Context, endpoint string, options Di
 		endpoint:             endpoint,
 		invokeTimeout:        invokeTimeout,
 		handle:               options.HandleTransport,
-		addressing:           options.Addressing,
+		codec:                codec,
 		closeHandleTransport: options.CloseHandleTransport,
 	}, nil
 }
@@ -337,7 +315,11 @@ func (t *DirectRuntimeTransport) Invoke(ctx context.Context, draftJSON []byte) (
 	if err != nil {
 		return nil, err
 	}
-	draft, request, err := directInvokeRequestFromDraftJSON(ctx, t.addressing, draftJSON)
+	invocation, err := t.codec.decode(ctx, draftJSON, axoninv.CallModeRPC)
+	if err != nil {
+		return nil, err
+	}
+	request, err := invocation.unary()
 	if err != nil {
 		return nil, err
 	}
@@ -347,7 +329,7 @@ func (t *DirectRuntimeTransport) Invoke(ctx context.Context, draftJSON []byte) (
 	if err != nil {
 		return nil, directRuntimeGRPCError(err, t.endpoint)
 	}
-	return directInvokeResponseJSON(draft, response)
+	return directInvokeResponseJSON(invocation.draft, response)
 }
 
 func (t *DirectRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
@@ -355,7 +337,11 @@ func (t *DirectRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byt
 	if err != nil {
 		return nil, nil, err
 	}
-	_, request, err := directStreamRequestFromDraftJSON(ctx, t.addressing, draftJSON)
+	invocation, err := t.codec.decode(ctx, draftJSON, axoninv.CallModeStream)
+	if err != nil {
+		return nil, nil, err
+	}
+	request, err := invocation.stream()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -383,7 +369,7 @@ func (t *DirectRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte,
 	if err != nil {
 		return nil, nil, err
 	}
-	draft, err := NewInvocationDraftFromJSON(draftJSON)
+	invocation, err := t.codec.decode(ctx, draftJSON, axoninv.CallModeBidi)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -391,7 +377,7 @@ func (t *DirectRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte,
 	if err != nil {
 		return nil, nil, err
 	}
-	openFrame, err := directBidiOpenFrame(ctx, t.addressing, draft, streams)
+	openFrame, err := invocation.bidi(streams)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -422,13 +408,15 @@ func (t *DirectRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, 
 	if err != nil {
 		return nil, err
 	}
-	projected, err := directPreparedInvocationDraft(ctx, t.addressing, draft)
-	if err != nil {
-		return nil, err
+	if _, err := descriptorBoundInvocationDraft(draft); err != nil {
+		return nil, invalidRuntimePayload(
+			fmt.Sprintf("build Axon descriptor-bound prepare draft: %v", err),
+			err,
+		)
 	}
-	projectedJSON, err := json.Marshal(projected)
+	projectedJSON, err := json.Marshal(draft)
 	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("encode projected direct prepare draft: %v", err), err)
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode direct prepare draft: %v", err), err)
 	}
 	return handle.Prepare(ctx, projectedJSON, optionsJSON)
 }
@@ -473,46 +461,6 @@ func (t *DirectRuntimeTransport) FreeHandle(ctx context.Context, control Invocat
 	return handle.FreeHandle(ctx, control)
 }
 
-func directPreparedInvocationDraft(ctx context.Context, addressing Addressing, draft InvocationDraft) (InvocationDraft, error) {
-	abilityName, err := directLocalAbilityName(ctx, addressing, draft)
-	if err != nil {
-		return InvocationDraft{}, err
-	}
-	return directPreparedInvocationDraftWithAbility(ctx, addressing, draft, abilityName)
-}
-
-func directPreparedInvocationDraftWithAbility(ctx context.Context, addressing Addressing, draft InvocationDraft, abilityName string) (InvocationDraft, error) {
-	subjectURA, err := descriptorBoundSubjectURA(ctx, addressing, draft.SubjectURA(), abilityName)
-	if err != nil {
-		return InvocationDraft{}, err
-	}
-	if subjectURA == draft.SubjectURA() {
-		return draft, nil
-	}
-	return invocationDraftWithSubjectURA(draft, subjectURA)
-}
-
-func invocationDraftWithSubjectURA(draft InvocationDraft, subjectURA string) (InvocationDraft, error) {
-	builder := NewInvocationBuilder().
-		WithCallerURA(draft.CallerURA()).
-		WithCalleeURA(draft.CalleeURA()).
-		WithDescriptorRef(draft.DescriptorRef()).
-		WithSubjectURA(subjectURA).
-		WithNonceBase64(draft.NonceBase64()).
-		WithCausalContext(draft.CausalContext()).
-		WithContentType(draft.ContentType()).
-		WithMetadata(draft.Metadata())
-	if signature := draft.CallerSignature(); signature != nil {
-		builder.WithCallerSignature(*signature)
-	}
-	if draft.HasJSONArgs() {
-		builder.WithJSONArgs(draft.JSONArgs())
-	} else {
-		builder.WithArgumentsBase64(draft.ArgumentsBase64())
-	}
-	return builder.Build()
-}
-
 func (t *DirectRuntimeTransport) Close(ctx context.Context) error {
 	if t == nil {
 		return invalidRuntimeClient("runtime transport is not initialized")
@@ -531,6 +479,7 @@ func (t *DirectRuntimeTransport) Close(ctx context.Context) error {
 	t.conn = nil
 	t.client = nil
 	t.handle = nil
+	t.codec = nil
 	t.closeHandleTransport = false
 	t.closed = true
 	t.mu.Unlock()
@@ -559,7 +508,7 @@ func (t *DirectRuntimeTransport) requireOpen(ctx context.Context) (axonpb.Invoca
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.closed || t.client == nil {
+	if t.closed || t.client == nil || t.codec == nil {
 		return nil, 0, invalidRuntimeClient("runtime transport is closed")
 	}
 	return t.client, t.invokeTimeout, nil
@@ -590,8 +539,9 @@ type directRuntimeStreamTransport struct {
 	endpoint string
 	streamID string
 
-	mu     sync.Mutex
-	closed bool
+	mu               sync.Mutex
+	closed           bool
+	admissionReceipt *axonpb.InvocationReceipt
 }
 
 func newDirectRuntimeStreamTransport(stream grpc.ServerStreamingClient[axonpb.InvokeStreamChunk], cancel context.CancelFunc, endpoint string) *directRuntimeStreamTransport {
@@ -620,7 +570,19 @@ func (t *directRuntimeStreamTransport) Recv(ctx context.Context) ([]byte, error)
 		}
 		return nil, directRuntimeGRPCError(err, t.endpoint)
 	}
-	return directStreamChunkJSON(chunk)
+	t.mu.Lock()
+	priorAdmission := t.admissionReceipt
+	t.mu.Unlock()
+	raw, err := directStreamChunkJSONWithAdmission(chunk, priorAdmission)
+	if err != nil {
+		return nil, err
+	}
+	if chunk.GetAdmissionReceipt() != nil {
+		t.mu.Lock()
+		t.admissionReceipt = chunk.GetAdmissionReceipt()
+		t.mu.Unlock()
+	}
+	return raw, nil
 }
 
 func (t *directRuntimeStreamTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
@@ -674,10 +636,11 @@ type directRuntimeBidiTransport struct {
 	endpoint  string
 	sessionID string
 
-	mu             sync.Mutex
-	closed         bool
-	sendClosed     bool
-	lastUpSequence uint64
+	mu               sync.Mutex
+	closed           bool
+	sendClosed       bool
+	lastUpSequence   uint64
+	admissionReceipt *axonpb.InvocationReceipt
 }
 
 func newDirectRuntimeBidiTransport(
@@ -775,10 +738,37 @@ func (t *directRuntimeBidiTransport) Recv(ctx context.Context) ([]byte, error) {
 			}
 			return nil, directRuntimeGRPCError(err, t.endpoint)
 		}
-		if directBidiDownIsInternalAdmission(down) {
+		role, err := directBidiDownReceiptRole(down)
+		if err != nil {
+			return nil, err
+		}
+		if role == directReceiptAdmission {
+			if down.GetSequence() != 0 {
+				return nil, directRuntimeProtocolError(
+					"direct_runtime.bidi",
+					"runtime bidi admission receipt must be frame 0",
+				)
+			}
+			t.mu.Lock()
+			t.admissionReceipt = down.GetReceipt()
+			t.mu.Unlock()
 			continue
 		}
-		return directBidiDownJSON(down)
+		if role == directReceiptTerminal {
+			t.mu.Lock()
+			admissionReceipt := t.admissionReceipt
+			t.mu.Unlock()
+			if err := validateDirectReceiptPair(
+				admissionReceipt,
+				down.GetReceipt(),
+				directStateName(down.GetReceipt().GetState()),
+				"direct_runtime.bidi",
+			); err != nil {
+				return nil, err
+			}
+			return directBidiDownJSON(down, directReceipt(admissionReceipt))
+		}
+		return directBidiDownJSON(down, nil)
 	}
 }
 
@@ -891,306 +881,6 @@ func directRuntimeEndpointJSON(endpoint RuntimeEndpoint, options ConnectOptions)
 	return raw, nil
 }
 
-func directInvokeRequestFromDraftJSON(ctx context.Context, addressing Addressing, raw []byte) (InvocationDraft, *axonpb.InvokeRequest, error) {
-	draft, err := NewInvocationDraftFromJSON(raw)
-	if err != nil {
-		return InvocationDraft{}, nil, err
-	}
-	fields, err := directInvokeFields(ctx, addressing, draft)
-	if err != nil {
-		return InvocationDraft{}, nil, err
-	}
-	return fields.draft, &axonpb.InvokeRequest{
-		Envelope:        fields.envelope,
-		Target:          fields.target,
-		FunctionName:    fields.abilityName,
-		Arguments:       fields.arguments,
-		ContentType:     draft.ContentType(),
-		Metadata:        fields.metadata,
-		ContentEnvelope: fields.contentEnvelope,
-	}, nil
-}
-
-func directStreamRequestFromDraftJSON(ctx context.Context, addressing Addressing, raw []byte) (InvocationDraft, *axonpb.InvokeServerStreamRequest, error) {
-	draft, err := NewInvocationDraftFromJSON(raw)
-	if err != nil {
-		return InvocationDraft{}, nil, err
-	}
-	fields, err := directInvokeFields(ctx, addressing, draft)
-	if err != nil {
-		return InvocationDraft{}, nil, err
-	}
-	return draft, &axonpb.InvokeServerStreamRequest{
-		Envelope:        fields.envelope,
-		Target:          fields.target,
-		FunctionName:    fields.abilityName,
-		Arguments:       fields.arguments,
-		ContentType:     draft.ContentType(),
-		Metadata:        fields.metadata,
-		ContentEnvelope: fields.contentEnvelope,
-	}, nil
-}
-
-type directInvokeFieldSet struct {
-	draft           InvocationDraft
-	envelope        *axonpb.Envelope
-	target          *axonpb.InvocationTarget
-	abilityName     string
-	arguments       []byte
-	metadata        map[string]string
-	contentEnvelope *axonpb.ContentEnvelope
-}
-
-func directInvokeFields(ctx context.Context, addressing Addressing, draft InvocationDraft) (directInvokeFieldSet, error) {
-	projectedDraft, abilityName, err := directExecutableInvocationDraft(ctx, addressing, draft)
-	if err != nil {
-		return directInvokeFieldSet{}, err
-	}
-	draft = projectedDraft
-	nonce, err := base64.StdEncoding.DecodeString(draft.NonceBase64())
-	if err != nil {
-		return directInvokeFieldSet{}, invalidRuntimePayload(fmt.Sprintf("decode nonce_base64: %v", err), err)
-	}
-	causal, err := directCausalContext(draft.CausalContext())
-	if err != nil {
-		return directInvokeFieldSet{}, err
-	}
-	args, err := invocationDraftArgumentBytes(draft)
-	if err != nil {
-		return directInvokeFieldSet{}, err
-	}
-	metadata, err := directMetadata(draft)
-	if err != nil {
-		return directInvokeFieldSet{}, err
-	}
-	callerSignature, err := directCallerSignature(draft)
-	if err != nil {
-		return directInvokeFieldSet{}, err
-	}
-	return directInvokeFieldSet{
-		draft: draft,
-		envelope: &axonpb.Envelope{
-			RequestId:       fmt.Sprintf("req-%d", time.Now().UnixNano()),
-			Caller:          directAgentIdentity(draft.CallerURA()),
-			Callee:          directAgentIdentity(draft.CalleeURA()),
-			Subject:         &axonpb.SubjectIdentity{Ura: draft.SubjectURA(), Profile: defaultURAProfile},
-			InvocationNonce: nonce,
-			CausalContext:   causal,
-			CallerSignature: callerSignature,
-		},
-		target:      directInvocationTarget(abilityName),
-		abilityName: abilityName,
-		arguments:   args,
-		metadata:    metadata,
-		contentEnvelope: &axonpb.ContentEnvelope{
-			ContentType: draft.ContentType(),
-			Encoding:    "identity",
-		},
-	}, nil
-}
-
-func directExecutableInvocationDraft(ctx context.Context, addressing Addressing, draft InvocationDraft) (InvocationDraft, string, error) {
-	localAbilityName, err := directLocalAbilityName(ctx, addressing, draft)
-	if err != nil {
-		return InvocationDraft{}, "", err
-	}
-	projected, err := directPreparedInvocationDraftWithAbility(ctx, addressing, draft, localAbilityName)
-	if err != nil {
-		return InvocationDraft{}, "", err
-	}
-	wireAbilityName := localAbilityName
-	if projected.CallerSignature() != nil {
-		wireAbilityName = projected.DescriptorRef()
-	}
-	return projected, wireAbilityName, nil
-}
-
-func directBidiOpenFrame(ctx context.Context, addressing Addressing, draft InvocationDraft, streams []*axonpb.StreamDescriptor) (*axonpb.InvokeBidiUp, error) {
-	fields, err := directInvokeFields(ctx, addressing, draft)
-	if err != nil {
-		return nil, err
-	}
-	mac := []byte(nil)
-	if signature := draft.CallerSignature(); signature != nil {
-		decoded, err := base64.StdEncoding.DecodeString(signature.SignatureBase64)
-		if err != nil {
-			return nil, invalidRuntimePayload(fmt.Sprintf("decode caller_signature.signature_base64: %v", err), err)
-		}
-		mac = decoded
-	}
-	return &axonpb.InvokeBidiUp{
-		Sequence: 0,
-		Mac:      mac,
-		Payload: &axonpb.InvokeBidiUp_EnvelopeOpen{EnvelopeOpen: &axonpb.EnvelopeOpen{
-			Envelope:        fields.envelope,
-			Target:          fields.target,
-			InitialArgs:     fields.arguments,
-			ArgsContentType: draft.ContentType(),
-			Streams:         streams,
-			Metadata:        fields.metadata,
-			ContentEnvelope: fields.contentEnvelope,
-		}},
-	}, nil
-}
-
-func directInvocationTarget(abilityName string) *axonpb.InvocationTarget {
-	return &axonpb.InvocationTarget{
-		AbilityName: abilityName,
-		TypedTarget: &axonpb.InvocationTarget_Ability{
-			Ability: &axonpb.AbilityTarget{
-				AbilityName:  abilityName,
-				FunctionName: abilityName,
-			},
-		},
-	}
-}
-
-func directLocalAbilityName(ctx context.Context, addressing Addressing, draft InvocationDraft) (string, error) {
-	ref, err := ProjectAbilityDescriptorRef(ctx, addressing, draft.DescriptorRef())
-	if err != nil {
-		return "", invalidRuntimePayload(fmt.Sprintf("project descriptor_ref: %v", err), err)
-	}
-	abilityName, ok := PublicAbilityNameFromAbilityURA(draft.CalleeURA(), ref.AbilityURA)
-	if !ok || strings.TrimSpace(abilityName) == "" {
-		return "", invalidRuntimePayload(
-			fmt.Sprintf("descriptor_ref %q is not owned by callee %q", draft.DescriptorRef(), draft.CalleeURA()),
-			nil,
-		)
-	}
-	return abilityName, nil
-}
-
-func directAgentIdentity(ura string) *axonpb.AgentIdentity {
-	return &axonpb.AgentIdentity{Ura: ura, Profile: defaultURAProfile}
-}
-
-func directCallerSignature(draft InvocationDraft) (*axonpb.CallerSignature, error) {
-	signature := draft.CallerSignature()
-	if signature == nil {
-		return nil, nil
-	}
-	decoded, err := base64.StdEncoding.DecodeString(signature.SignatureBase64)
-	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("decode caller_signature.signature_base64: %v", err), err)
-	}
-	keyIDHint := strings.TrimSpace(signature.KeyIDHint)
-	if keyIDHint == "" {
-		keyIDHint = strings.TrimSpace(signature.SignerPublicKeyBase64)
-	}
-	return &axonpb.CallerSignature{
-		Algorithm: signature.Algorithm,
-		Signature: decoded,
-		KeyIdHint: keyIDHint,
-	}, nil
-}
-
-func directMetadata(draft InvocationDraft) (map[string]string, error) {
-	result := map[string]string{}
-	for key, value := range draft.Metadata() {
-		stringValue, ok, err := directMetadataValueString(key, value)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-		result[key] = stringValue
-	}
-	result[directSignedDescriptorRefMetadata] = draft.DescriptorRef()
-	return result, nil
-}
-
-func directMetadataValueString(key string, value any) (string, bool, error) {
-	switch v := value.(type) {
-	case nil:
-		return "", false, nil
-	case string:
-		return v, true, nil
-	case bool:
-		return strconv.FormatBool(v), true, nil
-	case int:
-		return strconv.FormatInt(int64(v), 10), true, nil
-	case int8:
-		return strconv.FormatInt(int64(v), 10), true, nil
-	case int16:
-		return strconv.FormatInt(int64(v), 10), true, nil
-	case int32:
-		return strconv.FormatInt(int64(v), 10), true, nil
-	case int64:
-		return strconv.FormatInt(v, 10), true, nil
-	case uint:
-		return strconv.FormatUint(uint64(v), 10), true, nil
-	case uint8:
-		return strconv.FormatUint(uint64(v), 10), true, nil
-	case uint16:
-		return strconv.FormatUint(uint64(v), 10), true, nil
-	case uint32:
-		return strconv.FormatUint(uint64(v), 10), true, nil
-	case uint64:
-		return strconv.FormatUint(v, 10), true, nil
-	case float32:
-		return strconv.FormatFloat(float64(v), 'f', -1, 32), true, nil
-	case float64:
-		return strconv.FormatFloat(v, 'f', -1, 64), true, nil
-	default:
-		raw, err := json.Marshal(v)
-		if err != nil {
-			return "", false, invalidRuntimePayload(fmt.Sprintf("metadata[%q] must be JSON-encodable for Axon InvokeRequest: %v", key, err), err)
-		}
-		return string(raw), true, nil
-	}
-}
-
-func directCausalContext(value map[string]any) (*axonpb.CausalContext, error) {
-	causal, err := causalContextForInvocationDraft(value)
-	if err != nil {
-		return nil, err
-	}
-	switch causal.Kind {
-	case CausalContextNull:
-		return &axonpb.CausalContext{Form: &axonpb.CausalContext_None{None: &axonpb.Empty{}}}, nil
-	case CausalContextScalar:
-		ref, err := directReceiptRef(causal.Scalar)
-		if err != nil {
-			return nil, err
-		}
-		return &axonpb.CausalContext{Form: &axonpb.CausalContext_Scalar{Scalar: ref}}, nil
-	case CausalContextVector:
-		prior := make([]*axonpb.ReceiptRef, 0, len(causal.Vector))
-		for _, item := range causal.Vector {
-			ref, err := directReceiptRef(item)
-			if err != nil {
-				return nil, err
-			}
-			prior = append(prior, ref)
-		}
-		return &axonpb.CausalContext{Form: &axonpb.CausalContext_List{List: &axonpb.ReceiptList{Prior: prior}}}, nil
-	case CausalContextDAG:
-		root, err := hex.DecodeString(causal.DAGRootHex)
-		if err != nil {
-			return nil, invalidRuntimePayload(fmt.Sprintf("decode root_hex: %v", err), err)
-		}
-		return &axonpb.CausalContext{Form: &axonpb.CausalContext_Merkle{Merkle: &axonpb.MerkleRoot{Root: root, ProofUra: causal.DAGProofURA}}}, nil
-	default:
-		return nil, invalidRuntimePayload("unknown causal_context kind", nil)
-	}
-}
-
-func directReceiptRef(value any) (*axonpb.ReceiptRef, error) {
-	ref, ok := value.(CausalReceiptRef)
-	if !ok {
-		return nil, invalidRuntimePayload("causal receipt ref must be a CausalReceiptRef", nil)
-	}
-	if ref.URA == "" || ref.HashHex == "" {
-		return nil, invalidRuntimePayload("receipt_ura and receipt_hash_hex are required", nil)
-	}
-	receiptHash, err := hex.DecodeString(ref.HashHex)
-	if err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("decode receipt_hash_hex: %v", err), err)
-	}
-	return &axonpb.ReceiptRef{ReceiptUra: ref.URA, ReceiptHash: receiptHash}, nil
-}
-
 func directBidiStreamDescriptors(raw []byte) ([]*axonpb.StreamDescriptor, error) {
 	var decoded []struct {
 		StreamID    uint64 `json:"stream_id"`
@@ -1225,12 +915,49 @@ func directBidiStreamDescriptors(raw []byte) ([]*axonpb.StreamDescriptor, error)
 }
 
 func directInvokeResponseJSON(draft InvocationDraft, response *axonpb.InvokeResponse) ([]byte, error) {
+	if response == nil {
+		return nil, directRuntimeProtocolError("direct_runtime.invoke", "runtime unary response is required")
+	}
 	stateName := directStateName(response.GetState())
+	if response.GetProofError() != nil && response.GetTerminalReceipt() == nil {
+		return nil, directRuntimeProtocolError(
+			"direct_runtime.invoke",
+			"runtime unary proof failure omitted terminal_receipt",
+		)
+	}
+	if (response.GetAdmissionReceipt() == nil) != (response.GetTerminalReceipt() == nil) {
+		return nil, directRuntimeProtocolError(
+			"direct_runtime.invoke",
+			"runtime unary outcome must carry both admission_receipt and terminal_receipt or neither",
+		)
+	}
+	if err := validateDirectReceiptPair(
+		response.GetAdmissionReceipt(),
+		response.GetTerminalReceipt(),
+		stateName,
+		"direct_runtime.invoke",
+	); err != nil {
+		return nil, err
+	}
 	errorValue := directResponseFailure(response.GetError(), stateName, "direct_runtime.invoke")
+	if response.GetProofError() != nil {
+		errorValue = directAxonFailure(response.GetProofError(), directErrorStage(response.GetProofError().GetStage(), "direct_runtime.invoke"))
+	}
+	if errorValue == nil && response.GetTerminalReceipt() != nil && response.GetTerminalReceipt().GetFailure() != nil {
+		errorValue = directAxonFailure(
+			response.GetTerminalReceipt().GetFailure(),
+			directErrorStage(response.GetTerminalReceipt().GetFailure().GetStage(), "direct_runtime.invoke"),
+		)
+	}
+	if response.GetTerminalReceipt() == nil {
+		if err := validateDirectReceiptFreeUnaryRejection(response); err != nil {
+			return nil, err
+		}
+	}
 	admissionReceipt := directReceipt(response.GetAdmissionReceipt())
 	terminalReceipt := directReceipt(response.GetTerminalReceipt())
 	value := map[string]any{
-		"ok":                  errorValue == nil,
+		"ok":                  errorValue == nil && terminalReceipt != nil,
 		"tuple":               draft,
 		"terminal_state":      stateName,
 		"output_content_type": response.GetResultContentType(),
@@ -1246,14 +973,91 @@ func directInvokeResponseJSON(draft InvocationDraft, response *axonpb.InvokeResp
 	return json.Marshal(value)
 }
 
+func validateDirectReceiptFreeUnaryRejection(response *axonpb.InvokeResponse) error {
+	if response.GetState() != axonpb.InvocationState_INVOCATION_STATE_FAILED {
+		return directRuntimeProtocolError(
+			"direct_runtime.invoke",
+			"receipt-free unary outcome must be Failed before lifecycle admission",
+		)
+	}
+	if response.GetProofError() != nil {
+		return directRuntimeProtocolError(
+			"direct_runtime.invoke",
+			"receipt-free unary outcome must not carry proof_error",
+		)
+	}
+	errorValue := response.GetError()
+	if errorValue == nil {
+		return directRuntimeProtocolError(
+			"direct_runtime.invoke",
+			"receipt-free unary rejection requires a typed pre-admission error",
+		)
+	}
+	if !directPreAdmissionErrorStage(errorValue.GetStage()) {
+		return directRuntimeProtocolError(
+			"direct_runtime.invoke",
+			"receipt-free unary rejection has a non-admission error stage",
+		)
+	}
+	return nil
+}
+
+func directPreAdmissionErrorStage(stage axonpb.ErrorStage) bool {
+	return isCanonicalPreAdmissionErrorStage(directErrorStage(stage, ""))
+}
+
 func directStreamChunkJSON(chunk *axonpb.InvokeStreamChunk) ([]byte, error) {
-	terminal := chunk.GetTerminal() || directStateTerminal(chunk.GetState())
-	errorValue := directResponseFailure(chunk.GetError(), directStateName(chunk.GetState()), "direct_runtime.stream")
+	return directStreamChunkJSONWithAdmission(chunk, nil)
+}
+
+func directStreamChunkJSONWithAdmission(
+	chunk *axonpb.InvokeStreamChunk,
+	priorAdmission *axonpb.InvocationReceipt,
+) ([]byte, error) {
+	if chunk == nil {
+		return nil, directRuntimeProtocolError("direct_runtime.stream", "runtime stream chunk is required")
+	}
+	stateName := directStateName(chunk.GetState())
+	admission := chunk.GetAdmissionReceipt()
+	if admission == nil && chunk.GetTerminalReceipt() != nil {
+		admission = priorAdmission
+	}
+	if err := validateDirectReceiptPair(
+		admission,
+		chunk.GetTerminalReceipt(),
+		stateName,
+		"direct_runtime.stream",
+	); err != nil {
+		return nil, err
+	}
+	errorSource := chunk.GetError()
+	if chunk.GetProofError() != nil {
+		errorSource = chunk.GetProofError()
+	}
+	errorValue := directResponseFailure(errorSource, stateName, "direct_runtime.stream")
+	terminal := chunk.GetTerminalReceipt() != nil
+	terminalClaim := chunk.GetTerminal() || directStateTerminal(chunk.GetState())
+	transportTerminal := false
+	if !terminal && errorValue != nil {
+		transportTerminal = true
+		terminalClaim = false
+	}
+	if terminalClaim != terminal {
+		return nil, directRuntimeProtocolError(
+			"direct_runtime.stream",
+			"runtime stream terminal claim must match terminal_receipt presence",
+		)
+	}
+	kind := directStreamEventKind(terminal)
+	if transportTerminal {
+		kind = "error"
+	}
 	value := map[string]any{
 		"sequence":             chunk.GetSequence() + 1,
-		"kind":                 directStreamEventKind(terminal),
-		"state":                directStateName(chunk.GetState()),
+		"kind":                 kind,
+		"state":                stateName,
 		"terminal":             terminal,
+		"transport_terminal":   transportTerminal,
 		"payload_content_type": chunk.GetContentType(),
 		"payload_base64":       base64.StdEncoding.EncodeToString(chunk.GetPayload()),
 		"payload_json":         directOutputJSON(chunk.GetPayload(), chunk.GetContentType()),
@@ -1271,8 +1075,8 @@ func directStreamChunkJSON(chunk *axonpb.InvokeStreamChunk) ([]byte, error) {
 	if chunk.GetElapsedMs() != 0 {
 		value["elapsed_ms"] = chunk.GetElapsedMs()
 	}
-	if chunk.GetAdmissionReceipt() != nil {
-		value["admission_receipt"] = directReceipt(chunk.GetAdmissionReceipt())
+	if admission != nil {
+		value["admission_receipt"] = directReceipt(admission)
 	}
 	if chunk.GetTerminalReceipt() != nil {
 		value["terminal_receipt"] = directReceipt(chunk.GetTerminalReceipt())
@@ -1352,8 +1156,15 @@ func directBidiControl(raw json.RawMessage) (*axonpb.BidiControl, error) {
 	return nil, invalidRuntimePayload("unsupported bidi control payload", nil)
 }
 
-func directBidiDownJSON(frame *axonpb.InvokeBidiDown) ([]byte, error) {
-	terminal := directBidiDownTerminal(frame)
+func directBidiDownJSON(frame *axonpb.InvokeBidiDown, admissionReceipt map[string]any) ([]byte, error) {
+	if frame == nil {
+		return nil, directRuntimeProtocolError("direct_runtime.bidi", "runtime bidi frame is required")
+	}
+	role, err := directBidiDownReceiptRole(frame)
+	if err != nil {
+		return nil, err
+	}
+	terminal := role == directReceiptTerminal
 	value := map[string]any{
 		"sequence":  frame.GetSequence() + 1,
 		"kind":      directBidiDownKind(frame),
@@ -1370,6 +1181,9 @@ func directBidiDownJSON(frame *axonpb.InvokeBidiDown) ([]byte, error) {
 		receipt := directReceipt(payload.Receipt)
 		if terminal {
 			value["terminal_receipt"] = receipt
+			if admissionReceipt != nil {
+				value["admission_receipt"] = admissionReceipt
+			}
 		} else {
 			value["admission_receipt"] = receipt
 		}
@@ -1377,30 +1191,22 @@ func directBidiDownJSON(frame *axonpb.InvokeBidiDown) ([]byte, error) {
 			value["error"] = directAxonFailure(failure, "direct_runtime.bidi")
 		}
 	case *axonpb.InvokeBidiDown_DispatchCall, *axonpb.InvokeBidiDown_ReverseDispatchResult:
-		value["error"] = map[string]any{
-			"code":      string(ErrProtocolMismatch),
-			"stage":     "direct_runtime.bidi",
-			"message":   "carrier-v1 dispatch frame before SDK dual-read support",
-			"retryable": false,
-		}
+		return nil, directRuntimeProtocolError(
+			"direct_runtime.bidi",
+			"runtime bidi callback frame is unsupported by the direct invocation capability",
+		)
 	default:
-		return nil, invalidRuntimePayload("runtime bidi frame did not include a payload", nil)
+		return nil, directRuntimeProtocolError("direct_runtime.bidi", "runtime bidi frame did not include a payload")
 	}
 	return json.Marshal(value)
 }
 
-func directBidiDownIsInternalAdmission(frame *axonpb.InvokeBidiDown) bool {
+func directBidiDownReceiptRole(frame *axonpb.InvokeBidiDown) (directReceiptRole, error) {
 	receipt, ok := frame.GetPayload().(*axonpb.InvokeBidiDown_Receipt)
-	return ok && frame.GetSequence() == 0 && !directBidiReceiptTerminal(receipt.Receipt)
-}
-
-func directBidiDownTerminal(frame *axonpb.InvokeBidiDown) bool {
-	receipt, ok := frame.GetPayload().(*axonpb.InvokeBidiDown_Receipt)
-	return ok && directBidiReceiptTerminal(receipt.Receipt)
-}
-
-func directBidiReceiptTerminal(receipt *axonpb.InvocationReceipt) bool {
-	return receipt.GetCleanupComplete() || directStateTerminal(receipt.GetState())
+	if !ok {
+		return directReceiptNone, nil
+	}
+	return directCanonicalReceiptRole(receipt.Receipt, "direct_runtime.bidi")
 }
 
 func directBidiDownKind(frame *axonpb.InvokeBidiDown) string {
@@ -1413,14 +1219,102 @@ func directBidiDownKind(frame *axonpb.InvokeBidiDown) string {
 		}
 		return "control"
 	case *axonpb.InvokeBidiDown_Receipt:
-		if directBidiReceiptTerminal(payload.Receipt) {
+		role, err := directCanonicalReceiptRole(payload.Receipt, "direct_runtime.bidi")
+		if err != nil {
+			return "invalid_receipt"
+		}
+		if role == directReceiptTerminal {
 			return "terminal"
 		}
-		return "receipt"
+		return "admission"
 	case *axonpb.InvokeBidiDown_DispatchCall, *axonpb.InvokeBidiDown_ReverseDispatchResult:
 		return "unsupported_frame"
 	default:
 		return "unknown"
+	}
+}
+
+type directReceiptRole uint8
+
+const (
+	directReceiptNone directReceiptRole = iota
+	directReceiptAdmission
+	directReceiptTerminal
+)
+
+func directCanonicalReceiptRole(receipt *axonpb.InvocationReceipt, stage string) (directReceiptRole, error) {
+	if receipt == nil {
+		return directReceiptNone, directRuntimeProtocolError(stage, "runtime receipt payload is required")
+	}
+	switch receipt.GetState() {
+	case axonpb.InvocationState_INVOCATION_STATE_ACCEPTED,
+		axonpb.InvocationState_INVOCATION_STATE_ADMITTED:
+		if receipt.GetCleanupComplete() {
+			return directReceiptNone, directRuntimeProtocolError(stage, "admission receipt must not claim cleanup completion")
+		}
+		return directReceiptAdmission, nil
+	case axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
+		axonpb.InvocationState_INVOCATION_STATE_FAILED,
+		axonpb.InvocationState_INVOCATION_STATE_TIMED_OUT,
+		axonpb.InvocationState_INVOCATION_STATE_CANCELLED:
+		return directReceiptTerminal, nil
+	default:
+		return directReceiptNone, directRuntimeProtocolError(
+			stage,
+			fmt.Sprintf("runtime receipt has unsupported lifecycle state %s", directStateName(receipt.GetState())),
+		)
+	}
+}
+
+func validateDirectReceiptPair(
+	admission *axonpb.InvocationReceipt,
+	terminal *axonpb.InvocationReceipt,
+	wireState string,
+	stage string,
+) error {
+	if admission != nil {
+		role, err := directCanonicalReceiptRole(admission, stage)
+		if err != nil {
+			return err
+		}
+		if role != directReceiptAdmission {
+			return directRuntimeProtocolError(stage, "admission_receipt does not carry an admission state")
+		}
+	}
+	if terminal == nil {
+		return nil
+	}
+	role, err := directCanonicalReceiptRole(terminal, stage)
+	if err != nil {
+		return err
+	}
+	if role != directReceiptTerminal {
+		return directRuntimeProtocolError(stage, "terminal_receipt does not carry a terminal state")
+	}
+	if wireState != directStateName(terminal.GetState()) {
+		return directRuntimeProtocolError(stage, "wire state does not match terminal_receipt state")
+	}
+	if admission == nil {
+		return nil
+	}
+	if admission.GetInvocationId() != "" &&
+		terminal.GetInvocationId() != "" &&
+		admission.GetInvocationId() != terminal.GetInvocationId() {
+		return directRuntimeProtocolError(stage, "admission and terminal receipts bind different invocations")
+	}
+	if terminal.GetIndex() <= admission.GetIndex() {
+		return directRuntimeProtocolError(stage, "terminal receipt index must follow admission receipt index")
+	}
+	return nil
+}
+
+func directRuntimeProtocolError(stage string, message string) error {
+	return &SDKError{
+		Code:      ErrProtocol,
+		Stage:     stage,
+		Retry:     RetryNever,
+		Retryable: false,
+		Message:   message,
 	}
 }
 
@@ -1506,7 +1400,7 @@ func directReceipt(receipt *axonpb.InvocationReceipt) map[string]any {
 		"causal_binding_kind":     directCausalBindingKind(receipt.GetCausalBinding()),
 		"causal_binding":          directCausalBinding(receipt.GetCausalBinding()),
 		"callee_signature":        directSignature(receipt.GetCalleeSignature()),
-		"signer_binding":          directAgentBinding(receipt.GetSignerBinding()),
+		"signer_binding":          directReceiptSignerBinding(receipt),
 		"host_attestation_base64": base64.StdEncoding.EncodeToString(receipt.GetHostAttestation()),
 		"authority_binding_kind":  directAuthorityBindingKind(receipt.GetAuthorityBinding()),
 		"authority_binding":       directAuthorityBinding(receipt.GetAuthorityBinding()),
@@ -1543,6 +1437,16 @@ func directAgentBinding(binding *axonpb.AgentIdentity) map[string]any {
 		return nil
 	}
 	return map[string]any{"ura": binding.GetUra(), "profile": binding.GetProfile()}
+}
+
+func directReceiptSignerBinding(receipt *axonpb.InvocationReceipt) map[string]any {
+	if receipt == nil {
+		return nil
+	}
+	if signer := receipt.GetSignerBinding(); signer != nil {
+		return directAgentBinding(signer)
+	}
+	return directAgentBinding(receipt.GetCalleeBinding())
 }
 
 func directSubjectBinding(binding *axonpb.SubjectIdentity) map[string]any {

@@ -3,8 +3,6 @@ profile: runtime_core
 required_for:
   - go
   - python
-lifecycle_actions:
-  - deadline
 description: Runtime Core stream providers own invocation deadlines and surface typed timeout outcomes without making the parent runtime transport unreusable.
 steps:
   - action: open_stream_with_deadline

@@ -3,6 +3,7 @@ package easynet
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -66,7 +67,6 @@ func TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces(t *testing.T) {
 	var seenInvoke map[string]any
 	var seenStream map[string]any
 	var seenBidi map[string]any
-	var seenRecovery map[string]any
 	var seenStreams []map[string]any
 	var seenCancelReason string
 	var descriptorModes []string
@@ -103,12 +103,6 @@ func TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces(t *testing.T) {
 			}
 			seenCancelReason = reason
 			return []byte(`{"handle_id":7,"request_accepted":true,"deduplicated":false,"cancelled":true,"state":"CancelRequested","terminal":false}`), nil
-		},
-		RecoverFunc: func(_ context.Context, raw []byte) ([]byte, error) {
-			if err := json.Unmarshal(raw, &seenRecovery); err != nil {
-				return nil, err
-			}
-			return runtimeRecoveryReportJSON("recovery-1"), nil
 		},
 		ResolveDescriptorRefFunc: func(_ context.Context, requestJSON []byte) ([]byte, error) {
 			var request map[string]any
@@ -150,10 +144,6 @@ func TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	recovery, err := client.Recover(context.Background(), runtimeRecoveryRequestForTest())
-	if err != nil {
-		t.Fatalf("Recover: %v", err)
-	}
 
 	if output["answer_kind"] != "positive" || seenInvoke["descriptor_ref"] == "" {
 		t.Fatalf("unary provider dispatch missing: output=%#v draft=%#v", output, seenInvoke)
@@ -173,11 +163,36 @@ func TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces(t *testing.T) {
 	if !cancelled.RequestAccepted() || !cancelled.Cancelled() || cancelled.Terminal() || seenCancelReason != "client stop" {
 		t.Fatalf("ability cancel = %#v reason=%q", cancelled, seenCancelReason)
 	}
-	if recovery.State != "runtime_started" || seenRecovery["recovery_id"] != "recovery-1" {
-		t.Fatalf("ability recovery did not delegate to runtime provider: recovery=%#v request=%#v", recovery, seenRecovery)
-	}
 	if got := mustJSONString(descriptorModes); got != `["rpc","stream","bidi"]` {
 		t.Fatalf("descriptor call modes = %s", got)
+	}
+}
+
+func TestRuntimeAbilityClientRestartRecoverDelegatesToProvider(t *testing.T) {
+	var seenRecovery map[string]any
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		RecoverFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+			if err := json.Unmarshal(raw, &seenRecovery); err != nil {
+				return nil, err
+			}
+			return runtimeRecoveryReportJSON("recovery-1"), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+
+	recovery, err := client.Recover(context.Background(), runtimeRecoveryRequestForTest())
+	if err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+
+	if recovery.State != "runtime_started" || seenRecovery["recovery_id"] != "recovery-1" {
+		t.Fatalf("ability recovery did not delegate to runtime provider: recovery=%#v request=%#v", recovery, seenRecovery)
 	}
 }
 
@@ -187,7 +202,39 @@ func TestRuntimeAbilityChildContextDispatchesWithParentReceiptCausality(t *testi
 		if err := json.Unmarshal(raw, &seen); err != nil {
 			return nil, err
 		}
-		return []byte(`{"ok":true,"tuple":` + string(raw) + `,"invocation_id":"child-1","terminal_state":"Completed","output_content_type":"application/json","output_json":{"child":true},"elapsed_ms":1,"terminal_receipt":{"receipt_ura":"easynet:///r/example/resource/agent.child.client/invocation/child-1/receipt","invocation_id":"child-1","receipt_type":"terminal","state":"completed","index":1,"timestamp_unix_ms":1783100000456,"prev_receipt_hash_hex":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","self_hash_hex":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","causal_binding":` + mustJSONString(seen["causal_context"]) + `,"parent_receipts":[{"receipt_ura":"easynet:///r/example/resource/agent.alice.client/invocation/parent-1/receipt","receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"cleanup_complete":true},"error":null}`), nil
+		causalContext := seen["causal_context"].(map[string]any)
+		causalBinding := map[string]any{
+			"form": "scalar",
+			"receipt": map[string]any{
+				"receipt_ura":      causalContext["receipt_ura"],
+				"receipt_hash_hex": causalContext["receipt_hash_hex"],
+			},
+		}
+		parents := []any{map[string]any{
+			"receipt_ura":      causalContext["receipt_ura"],
+			"receipt_hash_hex": causalContext["receipt_hash_hex"],
+		}}
+		admission, terminal := canonicalRuntimeReceiptPairFixture("child-1", "Completed")
+		for _, receipt := range []map[string]any{admission, terminal} {
+			receipt["caller_binding"] = map[string]any{"ura": "easynet:///r/example/agent/child.client", "profile": "easynet-strict-v2"}
+			receipt["causal_binding_kind"] = "scalar"
+			receipt["causal_binding"] = causalBinding
+			receipt["parent_receipts"] = parents
+		}
+		terminal["receipt_ura"] = "easynet:///r/example/resource/agent.child.client/invocation/child-1/receipt"
+		terminal["self_hash_hex"] = strings.Repeat("dd", 32)
+		return mustJSON(map[string]any{
+			"ok":                  true,
+			"tuple":               seen,
+			"invocation_id":       "child-1",
+			"terminal_state":      "Completed",
+			"output_content_type": "application/json",
+			"output_json":         map[string]any{"child": true},
+			"elapsed_ms":          1,
+			"admission_receipt":   admission,
+			"terminal_receipt":    terminal,
+			"error":               nil,
+		}), nil
 	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
 	runtime, err := NewRuntimeClient(transport)
 	if err != nil {
@@ -278,15 +325,60 @@ func runtimeAbilityTestContext() RuntimeCallContext {
 }
 
 func runtimeAbilityResultJSON(ok bool, outputJSON string, message string, retryable bool) []byte {
-	errorJSON := "null"
-	if !ok {
-		errorJSON = `{"code":"DENIED","stage":"admission","message":` + string(mustJSON(message)) + `,"retryable":` + string(mustJSON(retryable)) + `}`
+	var output any
+	if err := json.Unmarshal([]byte(outputJSON), &output); err != nil {
+		panic(err)
 	}
-	return []byte(`{"ok":` + string(mustJSON(ok)) + `,"tuple":` + runtimeAbilityDraftJSON() + `,"invocation_id":"inv-1","terminal_state":"Completed","output_content_type":"application/json","output_json":` + outputJSON + `,"elapsed_ms":1,"terminal_receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.client/invocation/inv-1/receipt","invocation_id":"inv-1","receipt_type":"terminal","state":"Completed","index":1,"timestamp_unix_ms":1783100000123,"prev_receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","cleanup_complete":true},"error":` + errorJSON + `}`)
+	terminalState := "Completed"
+	var failure any
+	if !ok {
+		terminalState = "Failed"
+		failure = map[string]any{
+			"code":      "DENIED",
+			"stage":     "execution",
+			"message":   message,
+			"retryable": retryable,
+		}
+	}
+	admission, terminal := canonicalRuntimeReceiptPairFixture("inv-1", terminalState)
+	var draft any
+	if err := json.Unmarshal([]byte(runtimeAbilityDraftJSON()), &draft); err != nil {
+		panic(err)
+	}
+	return mustJSON(map[string]any{
+		"ok":                  ok,
+		"tuple":               draft,
+		"invocation_id":       "inv-1",
+		"terminal_state":      terminalState,
+		"output_content_type": "application/json",
+		"output_json":         output,
+		"elapsed_ms":          1,
+		"admission_receipt":   admission,
+		"terminal_receipt":    terminal,
+		"error":               failure,
+	})
 }
 
 func runtimeAbilityParentResultJSON() []byte {
-	return []byte(`{"ok":true,"tuple":` + runtimeAbilityDraftJSON() + `,"invocation_id":"parent-1","terminal_state":"Completed","output_content_type":"application/json","output_json":{},"elapsed_ms":1,"terminal_receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.client/invocation/parent-1/receipt","invocation_id":"parent-1","receipt_type":"terminal","state":"completed","index":1,"timestamp_unix_ms":1783100000123,"prev_receipt_hash_hex":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","self_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","cleanup_complete":true},"error":null}`)
+	admission, terminal := canonicalRuntimeReceiptPairFixture("parent-1", "Completed")
+	terminal["receipt_ura"] = "easynet:///r/example/resource/agent.alice.client/invocation/parent-1/receipt"
+	terminal["self_hash_hex"] = strings.Repeat("aa", 32)
+	var draft any
+	if err := json.Unmarshal([]byte(runtimeAbilityDraftJSON()), &draft); err != nil {
+		panic(err)
+	}
+	return mustJSON(map[string]any{
+		"ok":                  true,
+		"tuple":               draft,
+		"invocation_id":       "parent-1",
+		"terminal_state":      "Completed",
+		"output_content_type": "application/json",
+		"output_json":         map[string]any{},
+		"elapsed_ms":          1,
+		"admission_receipt":   admission,
+		"terminal_receipt":    terminal,
+		"error":               nil,
+	})
 }
 
 func runtimeAbilityDraftJSON() string {

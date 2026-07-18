@@ -1,4 +1,6 @@
+import base64
 import concurrent.futures
+import hashlib
 import json
 import tempfile
 import time
@@ -21,6 +23,7 @@ from easynet_sdk import (
     InvocationHandle,
     InvocationSignature,
     RuntimeClient,
+    RuntimeReceipt,
     SDKError,
     is_code,
 )
@@ -34,6 +37,8 @@ from easynet_sdk.direct_runtime import (
     DirectRuntimeBidiTransport,
     DirectRuntimeConnector,
     DirectRuntimeTransport,
+    _canonical_receipt_document,
+    _canonical_receipt_projection,
 )
 from test_runtime import complete_draft
 from addressing_fake import MemoryAddressingTransport
@@ -47,9 +52,152 @@ ABILITY_URA = "easynet:///r/example/ability/device.dev-a.observe.health"
 ABILITY_PUBLIC_NAME = "observe.health"
 CALLEE_URA = "easynet:///r/example/device/dev-a"
 USER_SUBJECT_URA = "easynet:///r/example/user/alice"
-PROJECTED_USER_SUBJECT_URA = (
-    "easynet:///r/example/resource/user.alice/invoke/observe.health"
-)
+RESOURCE_SUBJECT_URA = "easynet:///r/example/resource/job-42"
+
+
+def _caller_signature() -> InvocationSignature:
+    return InvocationSignature(
+        algorithm="ed25519",
+        signature_base64=base64.b64encode(bytes.fromhex("71" * 64)).decode("ascii"),
+        key_id_hint="caller-key",
+    )
+
+
+def _signed_draft():
+    return replace(complete_draft(), caller_signature=_caller_signature())
+
+
+def _canonical_receipt(
+    *,
+    index: int,
+    invocation_id: str,
+    receipt_type: str,
+    state: int,
+    cleanup_complete: bool = False,
+    parent_receipts: tuple[Any, ...] = (),
+) -> Any:
+    caller_ura = "easynet:///r/example/agent/alice.sdk"
+    proof_payload = b'{"authority":"self"}'
+    payload = b'{"ready":true}' if cleanup_complete else b'{"admitted":true}'
+    authority = types_pb2.AuthorityBinding(
+        self_authority=types_pb2.SelfAuthority(principal_ura=caller_ura)
+    )
+    return invoke_pb2.InvocationReceipt(
+        index=index,
+        invocation_id=invocation_id,
+        receipt_type=receipt_type,
+        state=state,
+        timestamp_unix_ms=1783100000123 + index,
+        prev_receipt_hash=(bytes(32) if index == 0 else bytes.fromhex("01" * 32)),
+        self_hash=bytes.fromhex(f"{index + 1:02x}" * 32),
+        payload=payload,
+        payload_content_type="application/json",
+        cleanup_complete=cleanup_complete,
+        caller_binding=types_pb2.AgentIdentity(
+            ura=caller_ura,
+            profile="easynet-strict-v2",
+        ),
+        callee_binding=types_pb2.AgentIdentity(
+            ura=CALLEE_URA,
+            profile="easynet-strict-v2",
+        ),
+        subject_binding=types_pb2.SubjectIdentity(
+            ura=CALLEE_URA,
+            profile="easynet-strict-v2",
+        ),
+        invocation_nonce=bytes(range(1, 17)),
+        causal_binding=types_pb2.CausalContext(none=types_pb2.Empty()),
+        callee_signature=types_pb2.CalleeSignature(
+            algorithm="ed25519",
+            signature=bytes.fromhex("91" * 64),
+            key_id_hint="callee-key",
+        ),
+        authority_binding=authority,
+        ability_binding=DESCRIPTOR_REF,
+        usage=invoke_pb2.InvocationUsage(
+            tokens_in=3,
+            tokens_out=5,
+            duration_ms=11,
+            external_calls=1,
+        ),
+        subject_ref=types_pb2.EntityRef(
+            kind=types_pb2.ENTITY_REF_KIND_DEVICE,
+            ura=CALLEE_URA,
+            profile="easynet-strict-v2",
+        ),
+        descriptor_version="1.0.0",
+        schema_hash=bytes.fromhex("21" * 32),
+        impl_hash=bytes.fromhex("31" * 32),
+        runtime_env="python-test",
+        authority_proof=types_pb2.InvocationAuthorityProof(
+            proof_type="self",
+            binding=authority,
+            proof_payload=proof_payload,
+            proof_hash=hashlib.sha256(proof_payload).digest(),
+            issuer=types_pb2.AgentIdentity(
+                ura=CALLEE_URA,
+                profile="easynet-strict-v2",
+            ),
+            signature=types_pb2.CalleeSignature(
+                algorithm="ed25519",
+                signature=bytes.fromhex("a1" * 64),
+                key_id_hint="authority-key",
+            ),
+            admission_hook="self-authority",
+        ),
+        input_hash=hashlib.sha256(b"{}").digest(),
+        output_hash=hashlib.sha256(payload).digest(),
+        parent_receipts=parent_receipts,
+    )
+
+
+def _admission_receipt(invocation_id: str) -> Any:
+    return _canonical_receipt(
+        index=0,
+        invocation_id=invocation_id,
+        receipt_type="admitted",
+        state=types_pb2.INVOCATION_STATE_ADMITTED,
+    )
+
+
+def _assert_complete_receipt_projection(
+    test: unittest.TestCase,
+    receipt: dict[str, object],
+) -> None:
+    test.assertEqual(receipt["descriptor_version"], "1.0.0")
+    test.assertEqual(receipt["schema_hash_hex"], "21" * 32)
+    test.assertEqual(receipt["impl_hash_hex"], "31" * 32)
+    test.assertEqual(receipt["runtime_env"], "python-test")
+    test.assertEqual(receipt["input_hash_hex"], hashlib.sha256(b"{}").hexdigest())
+    payload = base64.b64decode(cast(str, receipt["payload_base64"]), validate=True)
+    test.assertEqual(
+        receipt["output_hash_hex"],
+        hashlib.sha256(payload).hexdigest(),
+    )
+    test.assertEqual(receipt["causal_binding_kind"], "none")
+    test.assertEqual(receipt["causal_binding"], {"form": "none"})
+    test.assertEqual(receipt["authority_binding_kind"], "self")
+    authority = cast(dict[str, object], receipt["authority_binding"])
+    test.assertEqual(
+        authority["principal_ura"],
+        "easynet:///r/example/agent/alice.sdk",
+    )
+    signature = cast(dict[str, object], receipt["callee_signature"])
+    test.assertEqual(signature["algorithm"], "ed25519")
+    test.assertTrue(signature["signature_base64"])
+    signer = cast(dict[str, object], receipt["signer_binding"])
+    test.assertEqual(signer["ura"], CALLEE_URA)
+    proof = cast(dict[str, object], receipt["authority_proof"])
+    test.assertEqual(proof["proof_type"], "self")
+    test.assertEqual(proof["binding_kind"], "self")
+    test.assertIsInstance(proof["binding"], dict)
+    test.assertTrue(proof["proof_payload_base64"])
+    test.assertTrue(proof["proof_hash_hex"])
+    test.assertIsInstance(proof["issuer"], dict)
+    test.assertIsInstance(proof["signature"], dict)
+    test.assertEqual(proof["admission_hook"], "self-authority")
+    test.assertIn("parent_receipts", receipt)
+    RuntimeReceipt.from_required_mapping(receipt)
 
 
 class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
@@ -81,13 +229,11 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
                 sequence=1,
                 terminal=True,
                 elapsed_ms=11,
-                terminal_receipt=invoke_pb2.InvocationReceipt(
+                terminal_receipt=_canonical_receipt(
                     index=1,
                     invocation_id="inv-stream",
-                    receipt_type="terminal",
+                    receipt_type="completed",
                     state=types_pb2.INVOCATION_STATE_COMPLETED,
-                    timestamp_unix_ms=1783100000123,
-                    self_hash=bytes.fromhex("22" * 32),
                     cleanup_complete=True,
                 ),
             ),
@@ -104,13 +250,12 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
             result=b'{"ready":true}',
             result_content_type="application/json",
             elapsed_ms=9,
-            terminal_receipt=invoke_pb2.InvocationReceipt(
+            admission_receipt=_admission_receipt("inv-direct"),
+            terminal_receipt=_canonical_receipt(
                 index=1,
                 invocation_id="inv-direct",
-                receipt_type="terminal",
+                receipt_type="completed",
                 state=types_pb2.INVOCATION_STATE_COMPLETED,
-                timestamp_unix_ms=1783100000123,
-                self_hash=bytes.fromhex("11" * 32),
                 cleanup_complete=True,
             ),
         )
@@ -128,13 +273,11 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
             time.sleep(self.bidi_delay_seconds)
         yield invoke_pb2.InvokeBidiDown(
             sequence=0,
-            receipt=invoke_pb2.InvocationReceipt(
-                index=1,
+            receipt=_canonical_receipt(
+                index=0,
                 invocation_id="inv-bidi",
-                receipt_type="admission",
-                state=types_pb2.INVOCATION_STATE_ACCEPTED,
-                timestamp_unix_ms=1783100000123,
-                self_hash=bytes.fromhex("33" * 32),
+                receipt_type="admitted",
+                state=types_pb2.INVOCATION_STATE_ADMITTED,
             ),
         )
         for frame in request_iterator:
@@ -151,13 +294,11 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
             elif payload == "control" and frame.control.WhichOneof("control") == "eof":
                 yield invoke_pb2.InvokeBidiDown(
                     sequence=frame.sequence,
-                    receipt=invoke_pb2.InvocationReceipt(
-                        index=2,
+                    receipt=_canonical_receipt(
+                        index=1,
                         invocation_id="inv-bidi",
-                        receipt_type="terminal",
+                        receipt_type="completed",
                         state=types_pb2.INVOCATION_STATE_COMPLETED,
-                        timestamp_unix_ms=1783100000456,
-                        self_hash=bytes.fromhex("44" * 32),
                         cleanup_complete=True,
                     ),
                 )
@@ -293,7 +434,7 @@ class DirectRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(handle_transport.close_count, 0)
 
-    def test_direct_connector_projects_delegated_prepare_subject(self) -> None:
+    def test_direct_connector_rejects_non_entity_prepare_subject(self) -> None:
         servicer = RecordingInvocationServicer()
         handle_transport = _RecordingHandleTransport()
         draft_json = _user_subject_draft_json()
@@ -313,14 +454,15 @@ class DirectRuntimeTests(unittest.TestCase):
                 ).encode("utf-8")
             )
             try:
-                transport.prepare(draft_json, b"{}")
+                with self.assertRaises(SDKError) as raised:
+                    transport.prepare(draft_json, b"{}")
             finally:
                 transport.close()
                 connector.close()
 
-        _, projected_json, _ = handle_transport.calls[0]
-        projected = json.loads(projected_json.decode("utf-8"))
-        self.assertEqual(projected["subject_ura"], PROJECTED_USER_SUBJECT_URA)
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_INVOCATION))
+        self.assertIn("subject_ref_kind_unsupported:user", raised.exception.message)
+        self.assertEqual(handle_transport.calls, [])
 
     def test_direct_connector_closes_owned_handle_transport_once(self) -> None:
         servicer = RecordingInvocationServicer()
@@ -385,7 +527,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 identity=identity,
             )
             try:
-                result = transport.invoke(complete_draft())
+                result = transport.invoke(_signed_draft())
             finally:
                 transport.close()
 
@@ -395,13 +537,14 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(result["selected_node_id"], "node-direct")
         receipt = cast(dict[str, object], result["terminal_receipt"])
         self.assertEqual(receipt["invocation_id"], "inv-direct")
+        _assert_complete_receipt_projection(self, receipt)
 
         self.assertEqual(len(servicer.requests), 1)
         request = servicer.requests[0]
         self.assertEqual(request.function_name, ABILITY_PUBLIC_NAME)
-        self.assertEqual(request.target.ability_name, ABILITY_PUBLIC_NAME)
+        self.assertEqual(request.target.ability_name, DESCRIPTOR_REF)
         self.assertEqual(request.target.WhichOneof("typed_target"), "ability")
-        self.assertEqual(request.target.ability.ability_name, ABILITY_PUBLIC_NAME)
+        self.assertEqual(request.target.ability.ability_name, DESCRIPTOR_REF)
         self.assertEqual(request.target.ability.function_name, ABILITY_PUBLIC_NAME)
         self.assertEqual(request.content_type, "application/json")
         self.assertEqual(request.arguments, b"{}")
@@ -421,6 +564,44 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(request.envelope.causal_context.WhichOneof("form"), "none")
         self.assertEqual(identity.descriptor_refs, [DESCRIPTOR_REF])
         self.assertEqual(identity.ability_uras, [ABILITY_URA])
+
+    def test_direct_dispatch_rejects_unsigned_drafts_before_wire(self) -> None:
+        servicer = RecordingInvocationServicer()
+        draft_json = complete_draft().to_json().encode("utf-8")
+        streams_json = b'[{"stream_id":1,"content_type":"application/json"}]'
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                operations = (
+                    ("unary", lambda: transport.invoke(draft_json)),
+                    ("stream", lambda: transport.open_stream(draft_json)),
+                    (
+                        "bidi",
+                        lambda: transport.open_bidi(draft_json, streams_json),
+                    ),
+                )
+                for mode, operation in operations:
+                    with self.subTest(mode=mode):
+                        with self.assertRaises(SDKError) as raised:
+                            operation()
+                        self.assertTrue(
+                            is_code(raised.exception, ErrorCode.INVALID_INVOCATION)
+                        )
+                        self.assertIn(
+                            "requires caller_signature",
+                            raised.exception.message,
+                        )
+            finally:
+                transport.close()
+
+        self.assertEqual(servicer.requests, [])
+        self.assertEqual(servicer.stream_requests, [])
+        self.assertEqual(servicer.bidi_up_frames, [])
 
     def test_runtime_ability_deadline_is_provider_owned(self) -> None:
         servicer = RecordingInvocationServicer()
@@ -455,7 +636,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertTrue(retry.ok)
         self.assertIsNotNone(retry.terminal_receipt_summary)
 
-    def test_direct_transport_projects_user_subject_before_daemon_invoke(self) -> None:
+    def test_direct_transport_rejects_user_subject_instead_of_rewriting(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
             transport = DaemonInvocationTransport.connect_direct(
@@ -467,17 +648,14 @@ class DirectRuntimeTests(unittest.TestCase):
                 identity=_identity(),
             )
             try:
-                result = transport.invoke(_user_subject_draft_dict())
+                with self.assertRaises(SDKError) as raised:
+                    transport.invoke(_user_subject_draft_dict())
             finally:
                 transport.close()
 
-        self.assertEqual(len(servicer.requests), 1)
-        self.assertEqual(
-            servicer.requests[0].envelope.subject.ura,
-            PROJECTED_USER_SUBJECT_URA,
-        )
-        tuple_json = cast(dict[str, object], result["tuple"])
-        self.assertEqual(tuple_json["subject_ura"], PROJECTED_USER_SUBJECT_URA)
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_INVOCATION))
+        self.assertIn("subject_ref_kind_unsupported:user", raised.exception.message)
+        self.assertEqual(servicer.requests, [])
 
     def test_direct_transport_projects_signer_pubkey_as_wire_key_hint(self) -> None:
         servicer = RecordingInvocationServicer()
@@ -510,6 +688,69 @@ class DirectRuntimeTests(unittest.TestCase):
             public_key_b64,
         )
 
+    def test_direct_transport_preserves_complete_caller_supplied_tuple(self) -> None:
+        servicer = RecordingInvocationServicer()
+        nonce = bytes.fromhex("51" * 16)
+        parent_hash = bytes.fromhex("61" * 32)
+        signature = bytes.fromhex("71" * 64)
+        draft = replace(
+            complete_draft(),
+            subject_ura=RESOURCE_SUBJECT_URA,
+            nonce_base64=base64.b64encode(nonce).decode("ascii"),
+            causal_context={
+                "form": "scalar",
+                "receipt_hash_hex": parent_hash.hex(),
+                "receipt_ura": "easynet:///r/example/resource/job-41/receipt/terminal",
+            },
+            args=None,
+            arguments_base64=base64.b64encode(b"\x00\x01\x02").decode("ascii"),
+            content_type="application/octet-stream",
+            metadata={"trace": "caller-owned"},
+            caller_signature=InvocationSignature(
+                algorithm="ed25519",
+                signature_base64=base64.b64encode(signature).decode("ascii"),
+                key_id_hint="caller-key",
+            ),
+            _has_args=False,
+        )
+        with _fake_daemon(servicer) as endpoint:
+            transport = DaemonInvocationTransport.connect_direct(
+                options=ConnectOptions(
+                    endpoint=endpoint,
+                    dial_timeout_ms=1000,
+                    invoke_timeout_ms=5000,
+                ),
+                identity=_identity(),
+            )
+            try:
+                result = transport.invoke(draft)
+            finally:
+                transport.close()
+
+        request = servicer.requests[0]
+        self.assertEqual(request.envelope.caller.ura, draft.caller_ura)
+        self.assertEqual(request.envelope.callee.ura, draft.callee_ura)
+        self.assertEqual(request.envelope.subject.ura, RESOURCE_SUBJECT_URA)
+        self.assertEqual(request.envelope.invocation_nonce, nonce)
+        self.assertEqual(
+            request.envelope.causal_context.scalar.receipt_hash,
+            parent_hash,
+        )
+        self.assertEqual(
+            request.envelope.causal_context.scalar.receipt_ura,
+            draft.causal_context["receipt_ura"],
+        )
+        self.assertEqual(request.arguments, b"\x00\x01\x02")
+        self.assertEqual(request.envelope.caller_signature.signature, signature)
+        self.assertEqual(request.envelope.caller_signature.key_id_hint, "caller-key")
+        self.assertEqual(request.target.ability_name, DESCRIPTOR_REF)
+        self.assertEqual(request.target.ability.ability_name, DESCRIPTOR_REF)
+        self.assertEqual(request.target.ability.function_name, "observe.health")
+        self.assertEqual(request.function_name, "observe.health")
+        self.assertNotIn("x-easynet-signed-descriptor-ref", request.metadata)
+        tuple_projection = cast(dict[str, object], result["tuple"])
+        self.assertEqual(tuple_projection, draft.to_json_dict())
+
     def test_direct_transport_rejects_descriptor_not_owned_by_callee(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
@@ -521,20 +762,30 @@ class DirectRuntimeTests(unittest.TestCase):
             )
             try:
                 with self.assertRaises(SDKError) as raised:
-                    transport.invoke(complete_draft().to_json().encode("utf-8"))
+                    transport.invoke(_signed_draft().to_json().encode("utf-8"))
             finally:
                 transport.close()
 
         self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_INVOCATION))
         self.assertEqual(servicer.requests, [])
 
-    def test_direct_transport_projects_failed_terminal_state_to_admission_denied(self) -> None:
+    def test_direct_transport_projects_failed_terminal_state_to_admission_denied(
+        self,
+    ) -> None:
         class FailedServicer(RecordingInvocationServicer):
             def Invoke(self, request, context):
                 self.requests.append(request)
                 return invoke_pb2.InvokeResponse(
                     state=types_pb2.INVOCATION_STATE_FAILED,
                     elapsed_ms=4,
+                    admission_receipt=_admission_receipt("inv-failed"),
+                    terminal_receipt=_canonical_receipt(
+                        index=1,
+                        invocation_id="inv-failed",
+                        receipt_type="failed",
+                        state=types_pb2.INVOCATION_STATE_FAILED,
+                        cleanup_complete=True,
+                    ),
                 )
 
         servicer = FailedServicer()
@@ -548,7 +799,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 identity=_identity(),
             )
             try:
-                result = transport.invoke(complete_draft())
+                result = transport.invoke(_signed_draft())
             finally:
                 transport.close()
 
@@ -557,13 +808,23 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(result["terminal_state"], "Failed")
         self.assertEqual(error["code"], ErrorCode.ADMISSION_DENIED.value)
 
-    def test_direct_transport_projects_cancelled_terminal_state_to_cancelled(self) -> None:
+    def test_direct_transport_projects_cancelled_terminal_state_to_cancelled(
+        self,
+    ) -> None:
         class CancelledServicer(RecordingInvocationServicer):
             def Invoke(self, request, context):
                 self.requests.append(request)
                 return invoke_pb2.InvokeResponse(
                     state=types_pb2.INVOCATION_STATE_CANCELLED,
                     elapsed_ms=4,
+                    admission_receipt=_admission_receipt("inv-cancelled"),
+                    terminal_receipt=_canonical_receipt(
+                        index=1,
+                        invocation_id="inv-cancelled",
+                        receipt_type="cancelled",
+                        state=types_pb2.INVOCATION_STATE_CANCELLED,
+                        cleanup_complete=True,
+                    ),
                 )
 
         servicer = CancelledServicer()
@@ -577,7 +838,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 identity=_identity(),
             )
             try:
-                result = transport.invoke(complete_draft())
+                result = transport.invoke(_signed_draft())
             finally:
                 transport.close()
 
@@ -598,14 +859,16 @@ class DirectRuntimeTests(unittest.TestCase):
                 identity=_identity(),
             )
             try:
-                draft = complete_draft().to_json_dict()
+                draft = _signed_draft().to_json_dict()
                 draft["metadata"] = {
                     "attempt": 1,
                     "dry_run": False,
                     "shape": {"b": 2, "a": 1},
                     "empty": None,
                 }
-                transport.invoke(json.dumps(draft, separators=(",", ":")).encode("utf-8"))
+                transport.invoke(
+                    json.dumps(draft, separators=(",", ":")).encode("utf-8")
+                )
             finally:
                 transport.close()
 
@@ -615,11 +878,21 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(servicer.requests[0].metadata["shape"], '{"a":1,"b":2}')
         self.assertNotIn("empty", servicer.requests[0].metadata)
         self.assertEqual(
-            servicer.requests[0].metadata["x-easynet-signed-descriptor-ref"],
+            servicer.requests[0].target.ability_name,
             DESCRIPTOR_REF,
         )
+        self.assertEqual(
+            servicer.requests[0].target.ability.function_name,
+            "observe.health",
+        )
+        self.assertNotIn(
+            "x-easynet-signed-descriptor-ref",
+            servicer.requests[0].metadata,
+        )
 
-    def test_direct_transport_projects_daemon_stream_events_over_axon_grpc_uds(self) -> None:
+    def test_direct_transport_projects_daemon_stream_events_over_axon_grpc_uds(
+        self,
+    ) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
             transport = DaemonInvocationTransport.connect_direct(
@@ -631,7 +904,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 identity=_identity(),
             )
             try:
-                stream = transport.stream(complete_draft())
+                stream = transport.stream(_signed_draft())
                 first = stream.recv()
                 terminal = stream.recv()
                 stream.close()
@@ -649,8 +922,10 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(len(servicer.stream_requests), 1)
         request = servicer.stream_requests[0]
         self.assertEqual(request.function_name, ABILITY_PUBLIC_NAME)
-        self.assertEqual(request.target.ability_name, ABILITY_PUBLIC_NAME)
+        self.assertEqual(request.target.ability_name, DESCRIPTOR_REF)
         self.assertEqual(request.target.WhichOneof("typed_target"), "ability")
+        self.assertEqual(request.target.ability.ability_name, DESCRIPTOR_REF)
+        self.assertEqual(request.target.ability.function_name, ABILITY_PUBLIC_NAME)
         self.assertEqual(request.content_type, "application/json")
         self.assertEqual(request.arguments, b"{}")
         self.assertEqual(
@@ -680,7 +955,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 identity=_identity(),
             )
             try:
-                stream = transport.stream(complete_draft())
+                stream = transport.stream(_signed_draft())
                 event = stream.recv(timeout=1)
                 stream.close()
             finally:
@@ -703,7 +978,7 @@ class DirectRuntimeTests(unittest.TestCase):
             )
             try:
                 bidi = transport.bidi(
-                    complete_draft(),
+                    _signed_draft(),
                     (
                         {
                             "stream_id": 1,
@@ -743,6 +1018,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertNotIn("receipt", payload)
         terminal_receipt = cast(dict[str, object], terminal["terminal_receipt"])
         self.assertEqual(terminal_receipt["invocation_id"], "inv-bidi")
+        _assert_complete_receipt_projection(self, terminal_receipt)
 
         self.assertEqual(len(servicer.bidi_up_frames), 3)
         open_frame = servicer.bidi_up_frames[0]
@@ -761,10 +1037,12 @@ class DirectRuntimeTests(unittest.TestCase):
             envelope_open.envelope.subject.ura,
             "easynet:///r/example/device/dev-a",
         )
-        self.assertEqual(envelope_open.target.ability_name, ABILITY_PUBLIC_NAME)
+        self.assertEqual(envelope_open.target.ability_name, DESCRIPTOR_REF)
         self.assertEqual(envelope_open.target.WhichOneof("typed_target"), "ability")
-        self.assertEqual(envelope_open.target.ability.ability_name, ABILITY_PUBLIC_NAME)
-        self.assertEqual(envelope_open.target.ability.function_name, ABILITY_PUBLIC_NAME)
+        self.assertEqual(envelope_open.target.ability.ability_name, DESCRIPTOR_REF)
+        self.assertEqual(
+            envelope_open.target.ability.function_name, ABILITY_PUBLIC_NAME
+        )
         self.assertEqual(envelope_open.initial_args, b"{}")
         self.assertEqual(envelope_open.args_content_type, "application/json")
         self.assertEqual(envelope_open.content_envelope.encoding, "identity")
@@ -773,10 +1051,14 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(envelope_open.streams[0].content_type, "application/json")
         self.assertEqual(envelope_open.streams[0].ordering, "STRICT")
         self.assertEqual(servicer.bidi_up_frames[1].sequence, 1)
-        self.assertEqual(servicer.bidi_up_frames[1].WhichOneof("payload"), "binary_chunk")
+        self.assertEqual(
+            servicer.bidi_up_frames[1].WhichOneof("payload"), "binary_chunk"
+        )
         self.assertEqual(servicer.bidi_up_frames[2].sequence, 2)
         self.assertEqual(servicer.bidi_up_frames[2].WhichOneof("payload"), "control")
-        self.assertEqual(servicer.bidi_up_frames[2].control.WhichOneof("control"), "eof")
+        self.assertEqual(
+            servicer.bidi_up_frames[2].control.WhichOneof("control"), "eof"
+        )
 
     def test_direct_runtime_provider_json_uses_canonical_receipt_fields(self) -> None:
         servicer = RecordingInvocationServicer()
@@ -788,7 +1070,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 identity=_identity(),
             )
             try:
-                raw = transport.invoke(complete_draft().to_json().encode("utf-8"))
+                raw = transport.invoke(_signed_draft().to_json().encode("utf-8"))
             finally:
                 transport.close()
 
@@ -796,6 +1078,679 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertNotIn("receipt", result)
         receipt = cast(dict[str, object], result["terminal_receipt"])
         self.assertEqual(receipt["invocation_id"], "inv-direct")
+        _assert_complete_receipt_projection(self, receipt)
+
+    def test_receipt_projection_rejects_every_required_proof_fact_omission(
+        self,
+    ) -> None:
+        omissions = (
+            ("self_hash",),
+            ("caller_binding",),
+            ("callee_binding",),
+            ("subject_binding",),
+            ("invocation_nonce",),
+            ("causal_binding",),
+            ("callee_signature",),
+            ("authority_binding",),
+            ("authority_binding", "self_authority", "principal_ura"),
+            ("ability_binding",),
+            ("usage",),
+            ("subject_ref",),
+            ("descriptor_version",),
+            ("schema_hash",),
+            ("impl_hash",),
+            ("runtime_env",),
+            ("authority_proof",),
+            ("input_hash",),
+            ("output_hash",),
+            ("authority_proof", "binding"),
+            (
+                "authority_proof",
+                "binding",
+                "self_authority",
+                "principal_ura",
+            ),
+            ("authority_proof", "proof_payload"),
+            ("authority_proof", "proof_hash"),
+            ("authority_proof", "issuer"),
+            ("authority_proof", "signature"),
+            ("authority_proof", "admission_hook"),
+        )
+        for path in omissions:
+            with self.subTest(field=".".join(path)):
+                receipt = _canonical_receipt(
+                    index=1,
+                    invocation_id="inv-omission",
+                    receipt_type="completed",
+                    state=types_pb2.INVOCATION_STATE_COMPLETED,
+                    cleanup_complete=True,
+                )
+                target = receipt
+                for part in path[:-1]:
+                    target = getattr(target, part)
+                target.ClearField(path[-1])
+
+                with self.assertRaises(SDKError) as raised:
+                    _canonical_receipt_projection(receipt)
+
+                self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+                self.assertIn("canonical receipt rejected", raised.exception.message)
+
+    def test_receipt_projection_retains_parent_and_causal_proof_facts(self) -> None:
+        parent = types_pb2.ReceiptRef(
+            receipt_hash=bytes.fromhex("81" * 32),
+            receipt_ura="easynet:///r/example/resource/job-41/receipt/terminal",
+        )
+        receipt = _canonical_receipt(
+            index=1,
+            invocation_id="inv-causal",
+            receipt_type="completed",
+            state=types_pb2.INVOCATION_STATE_COMPLETED,
+            cleanup_complete=True,
+            parent_receipts=(parent,),
+        )
+        receipt.causal_binding.CopyFrom(types_pb2.CausalContext(scalar=parent))
+
+        projection = _canonical_receipt_projection(receipt)
+
+        self.assertEqual(projection["causal_binding_kind"], "scalar")
+        self.assertEqual(
+            projection["causal_binding"],
+            {
+                "form": "scalar",
+                "receipt": {
+                    "receipt_hash_hex": "81" * 32,
+                    "receipt_ura": parent.receipt_ura,
+                },
+            },
+        )
+        self.assertEqual(
+            projection["parent_receipts"],
+            [
+                {
+                    "receipt_hash_hex": "81" * 32,
+                    "receipt_ura": parent.receipt_ura,
+                }
+            ],
+        )
+
+    def test_receipt_projection_uses_canonical_timed_out_state(self) -> None:
+        receipt = _canonical_receipt(
+            index=1,
+            invocation_id="inv-timed-out",
+            receipt_type="timed_out",
+            state=types_pb2.INVOCATION_STATE_TIMED_OUT,
+            cleanup_complete=True,
+        )
+
+        projection = _canonical_receipt_projection(receipt)
+        canonical = _canonical_receipt_document(receipt)
+
+        self.assertEqual(projection["state"], "TimedOut")
+        self.assertEqual(canonical["state"], "TIMED_OUT")
+
+    def test_receipt_projection_accepts_every_complete_authority_binding(
+        self,
+    ) -> None:
+        signature = bytes.fromhex("c1" * 64)
+        cases = (
+            (
+                "self",
+                types_pb2.AuthorityBinding(
+                    self_authority=types_pb2.SelfAuthority(
+                        principal_ura="easynet:///r/example/agent/alice.sdk"
+                    )
+                ),
+                "self_authority",
+                "principal_ura",
+            ),
+            (
+                "delegation",
+                types_pb2.AuthorityBinding(
+                    delegated_authority=types_pb2.DelegationProof(
+                        issuer_ura="easynet:///r/example/agent/authority",
+                        subject_ura=RESOURCE_SUBJECT_URA,
+                        caller_ura="easynet:///r/example/agent/alice.sdk",
+                        audience=DESCRIPTOR_REF,
+                        scopes=("invoke",),
+                        issued_at_ms=1,
+                        expires_at_ms=2,
+                        signature=signature,
+                    )
+                ),
+                "delegated_authority",
+                "audience",
+            ),
+            (
+                "capability",
+                types_pb2.AuthorityBinding(
+                    capability_grant=types_pb2.CapabilityGrant(
+                        capability_ura="easynet:///r/example/resource/capability-1"
+                    )
+                ),
+                "capability_grant",
+                "capability_ura",
+            ),
+            (
+                "policy",
+                types_pb2.AuthorityBinding(
+                    policy_grant=types_pb2.PolicyGrant(
+                        policy_ura="easynet:///r/example/resource/policy-1"
+                    )
+                ),
+                "policy_grant",
+                "policy_ura",
+            ),
+            (
+                "session",
+                types_pb2.AuthorityBinding(
+                    session_authority=types_pb2.SessionAuthority(
+                        backend_ura="easynet:///r/example/agent/backend",
+                        user_ura="easynet:///r/example/agent/alice",
+                        session_id="session-1",
+                        scopes=("invoke",),
+                        audiences=(DESCRIPTOR_REF,),
+                        issued_at_ms=1,
+                        expires_at_ms=2,
+                        signature=signature,
+                    )
+                ),
+                "session_authority",
+                "session_id",
+            ),
+            (
+                "bootstrap",
+                types_pb2.AuthorityBinding(
+                    bootstrap_authority=types_pb2.BootstrapAuthority(
+                        principal_ura="easynet:///r/example/agent/alice.sdk",
+                        realm="example",
+                        ability=DESCRIPTOR_REF,
+                    )
+                ),
+                "bootstrap_authority",
+                "realm",
+            ),
+        )
+        for kind, binding, arm, required_field in cases:
+            with self.subTest(kind=kind):
+                receipt = _canonical_receipt(
+                    index=1,
+                    invocation_id=f"inv-authority-{kind}",
+                    receipt_type="completed",
+                    state=types_pb2.INVOCATION_STATE_COMPLETED,
+                    cleanup_complete=True,
+                )
+                receipt.authority_binding.CopyFrom(binding)
+                receipt.authority_proof.binding.CopyFrom(binding)
+
+                projection = _canonical_receipt_projection(receipt)
+
+                self.assertEqual(projection["authority_binding_kind"], kind)
+                proof = cast(dict[str, object], projection["authority_proof"])
+                self.assertEqual(proof["binding_kind"], kind)
+
+                getattr(receipt.authority_binding, arm).ClearField(required_field)
+                with self.assertRaises(SDKError) as raised:
+                    _canonical_receipt_projection(receipt)
+                self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+
+    def test_receipt_projection_rejects_authority_proof_binding_mismatch(
+        self,
+    ) -> None:
+        receipt = _canonical_receipt(
+            index=1,
+            invocation_id="inv-authority-mismatch",
+            receipt_type="completed",
+            state=types_pb2.INVOCATION_STATE_COMPLETED,
+            cleanup_complete=True,
+        )
+        receipt.authority_proof.binding.CopyFrom(
+            types_pb2.AuthorityBinding(
+                policy_grant=types_pb2.PolicyGrant(
+                    policy_ura="easynet:///r/example/resource/policy-1"
+                )
+            )
+        )
+
+        with self.assertRaises(SDKError) as raised:
+            _canonical_receipt_projection(receipt)
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+        self.assertIn("does not match", raised.exception.message)
+
+    def test_receipt_projection_rejects_incomplete_parent_receipt(self) -> None:
+        for parent in (
+            types_pb2.ReceiptRef(
+                receipt_ura="easynet:///r/example/resource/job-41/receipt/terminal"
+            ),
+            types_pb2.ReceiptRef(receipt_hash=bytes.fromhex("81" * 32)),
+        ):
+            with self.subTest(parent=parent):
+                receipt = _canonical_receipt(
+                    index=1,
+                    invocation_id="inv-incomplete-parent",
+                    receipt_type="completed",
+                    state=types_pb2.INVOCATION_STATE_COMPLETED,
+                    cleanup_complete=True,
+                    parent_receipts=(parent,),
+                )
+
+                with self.assertRaises(SDKError) as raised:
+                    _canonical_receipt_projection(receipt)
+
+                self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+
+    def test_receipt_projection_requires_host_attestation_for_hosted_signer(
+        self,
+    ) -> None:
+        receipt = _canonical_receipt(
+            index=1,
+            invocation_id="inv-hosted",
+            receipt_type="completed",
+            state=types_pb2.INVOCATION_STATE_COMPLETED,
+            cleanup_complete=True,
+        )
+        receipt.signer_binding.CopyFrom(
+            types_pb2.AgentIdentity(
+                ura="easynet:///r/example/agent/runtime-host",
+                profile="easynet-strict-v2",
+            )
+        )
+
+        with self.assertRaises(SDKError) as raised:
+            _canonical_receipt_projection(receipt)
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+
+        receipt.host_attestation = bytes.fromhex("b1" * 64)
+        projection = _canonical_receipt_projection(receipt)
+        signer = cast(dict[str, object], projection["signer_binding"])
+        self.assertEqual(
+            signer["ura"],
+            "easynet:///r/example/agent/runtime-host",
+        )
+        self.assertEqual(
+            projection["host_attestation_base64"],
+            base64.b64encode(receipt.host_attestation).decode("ascii"),
+        )
+
+    def test_unary_allows_only_typed_pre_admission_receipt_free_failures(
+        self,
+    ) -> None:
+        allowed_stages = (
+            types_pb2.ERROR_STAGE_GLOBAL_ADMISSION,
+            types_pb2.ERROR_STAGE_CALLER_AUTHENTICATION,
+            types_pb2.ERROR_STAGE_AUTHORITY_VALIDATION,
+            types_pb2.ERROR_STAGE_BOOTSTRAP_AUTHORIZATION,
+            types_pb2.ERROR_STAGE_QUOTA,
+            types_pb2.ERROR_STAGE_ABILITY_RESOLUTION,
+            types_pb2.ERROR_STAGE_ABILITY_POLICY,
+            types_pb2.ERROR_STAGE_REQUEST_VALIDATION,
+        )
+
+        class PreAdmissionFailureServicer(RecordingInvocationServicer):
+            stage = types_pb2.ERROR_STAGE_UNSPECIFIED
+
+            def Invoke(self, request, context):
+                self.requests.append(request)
+                return invoke_pb2.InvokeResponse(
+                    state=types_pb2.INVOCATION_STATE_FAILED,
+                    error=types_pb2.Error(
+                        code="AXON_ADMISSION_REJECTED",
+                        message="rejected before admission",
+                        stage=self.stage,
+                    ),
+                )
+
+        servicer = PreAdmissionFailureServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                for stage in allowed_stages:
+                    with self.subTest(stage=types_pb2.ErrorStage.Name(stage)):
+                        servicer.stage = stage
+                        result = json.loads(
+                            transport.invoke(
+                                _signed_draft().to_json().encode("utf-8")
+                            ).decode("utf-8")
+                        )
+                        self.assertFalse(result["ok"])
+                        self.assertEqual(result["terminal_state"], "Failed")
+                        self.assertIsNone(result["admission_receipt"])
+                        self.assertIsNone(result["terminal_receipt"])
+            finally:
+                transport.close()
+
+        self.assertEqual(len(servicer.requests), len(allowed_stages))
+
+    def test_unary_rejects_receipt_free_failures_outside_pre_admission(
+        self,
+    ) -> None:
+        rejected_stages = (
+            types_pb2.ERROR_STAGE_UNSPECIFIED,
+            types_pb2.ERROR_STAGE_TRANSPORT,
+            types_pb2.ERROR_STAGE_EXECUTION,
+        )
+
+        class ReceiptFreeFailureServicer(RecordingInvocationServicer):
+            stage = types_pb2.ERROR_STAGE_UNSPECIFIED
+
+            def Invoke(self, request, context):
+                self.requests.append(request)
+                return invoke_pb2.InvokeResponse(
+                    state=types_pb2.INVOCATION_STATE_FAILED,
+                    error=types_pb2.Error(
+                        code="AXON_EXECUTION_FAILED",
+                        message="receipt-free failure",
+                        stage=self.stage,
+                    ),
+                )
+
+        servicer = ReceiptFreeFailureServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                for stage in rejected_stages:
+                    with self.subTest(stage=types_pb2.ErrorStage.Name(stage)):
+                        servicer.stage = stage
+                        with self.assertRaises(SDKError) as raised:
+                            transport.invoke(_signed_draft().to_json().encode("utf-8"))
+                        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+            finally:
+                transport.close()
+
+    def test_unary_rejects_receipt_free_failure_with_proof_error(self) -> None:
+        class ProofFailureServicer(RecordingInvocationServicer):
+            def Invoke(self, request, context):
+                self.requests.append(request)
+                return invoke_pb2.InvokeResponse(
+                    state=types_pb2.INVOCATION_STATE_FAILED,
+                    error=types_pb2.Error(
+                        code="AXON_ADMISSION_REJECTED",
+                        message="pre-admission failure",
+                        stage=types_pb2.ERROR_STAGE_GLOBAL_ADMISSION,
+                    ),
+                    proof_error=types_pb2.Error(
+                        code="AXON_RECEIPT_CONSTRUCTION_FAILED",
+                        message="proof plane failed",
+                        stage=types_pb2.ERROR_STAGE_EXECUTION,
+                    ),
+                )
+
+        servicer = ProofFailureServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                with self.assertRaises(SDKError) as raised:
+                    transport.invoke(_signed_draft().to_json().encode("utf-8"))
+            finally:
+                transport.close()
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+
+    def test_unary_rejects_partial_checkpoint_pairs(self) -> None:
+        class PartialCheckpointServicer(RecordingInvocationServicer):
+            admission = True
+            terminal = False
+
+            def Invoke(self, request, context):
+                self.requests.append(request)
+                response = invoke_pb2.InvokeResponse(
+                    state=types_pb2.INVOCATION_STATE_COMPLETED,
+                )
+                if self.admission:
+                    response.admission_receipt.CopyFrom(
+                        _admission_receipt("inv-partial")
+                    )
+                if self.terminal:
+                    response.terminal_receipt.CopyFrom(
+                        _canonical_receipt(
+                            index=1,
+                            invocation_id="inv-partial",
+                            receipt_type="completed",
+                            state=types_pb2.INVOCATION_STATE_COMPLETED,
+                            cleanup_complete=True,
+                        )
+                    )
+                return response
+
+        servicer = PartialCheckpointServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                for admission, terminal in ((True, False), (False, True)):
+                    with self.subTest(admission=admission, terminal=terminal):
+                        servicer.admission = admission
+                        servicer.terminal = terminal
+                        with self.assertRaises(SDKError) as raised:
+                            transport.invoke(_signed_draft().to_json().encode("utf-8"))
+                        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+                        self.assertIn(
+                            "partial checkpoint pair", raised.exception.message
+                        )
+            finally:
+                transport.close()
+
+    def test_unary_requires_complete_checkpoint_pair(self) -> None:
+        class MissingReceiptServicer(RecordingInvocationServicer):
+            def Invoke(self, request, context):
+                self.requests.append(request)
+                return invoke_pb2.InvokeResponse(
+                    state=types_pb2.INVOCATION_STATE_COMPLETED,
+                )
+
+        servicer = MissingReceiptServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                with self.assertRaises(SDKError) as raised:
+                    transport.invoke(_signed_draft().to_json().encode("utf-8"))
+            finally:
+                transport.close()
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+        self.assertIn(
+            "requires admission_receipt and terminal_receipt",
+            raised.exception.message,
+        )
+
+    def test_unary_rejects_checkpoint_binding_mismatch(self) -> None:
+        class MismatchedCheckpointServicer(RecordingInvocationServicer):
+            def Invoke(self, request, context):
+                self.requests.append(request)
+                return invoke_pb2.InvokeResponse(
+                    state=types_pb2.INVOCATION_STATE_COMPLETED,
+                    admission_receipt=_admission_receipt("inv-admission"),
+                    terminal_receipt=_canonical_receipt(
+                        index=1,
+                        invocation_id="inv-terminal",
+                        receipt_type="completed",
+                        state=types_pb2.INVOCATION_STATE_COMPLETED,
+                        cleanup_complete=True,
+                    ),
+                )
+
+        servicer = MismatchedCheckpointServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                with self.assertRaises(SDKError) as raised:
+                    transport.invoke(_signed_draft().to_json().encode("utf-8"))
+            finally:
+                transport.close()
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+        self.assertIn("binding mismatch", raised.exception.message)
+
+    def test_unary_receipt_projection_fails_closed_on_missing_schema_hash(
+        self,
+    ) -> None:
+        class InvalidReceiptServicer(RecordingInvocationServicer):
+            def Invoke(self, request, context):
+                self.requests.append(request)
+                receipt = _canonical_receipt(
+                    index=1,
+                    invocation_id="inv-invalid-unary",
+                    receipt_type="completed",
+                    state=types_pb2.INVOCATION_STATE_COMPLETED,
+                    cleanup_complete=True,
+                )
+                receipt.ClearField("schema_hash")
+                return invoke_pb2.InvokeResponse(
+                    state=types_pb2.INVOCATION_STATE_COMPLETED,
+                    admission_receipt=_admission_receipt("inv-invalid-unary"),
+                    terminal_receipt=receipt,
+                )
+
+        servicer = InvalidReceiptServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                with self.assertRaises(SDKError) as raised:
+                    transport.invoke(_signed_draft().to_json().encode("utf-8"))
+            finally:
+                transport.close()
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+
+    def test_stream_receipt_projection_fails_closed_on_missing_impl_hash(
+        self,
+    ) -> None:
+        receipt = _canonical_receipt(
+            index=1,
+            invocation_id="inv-invalid-stream",
+            receipt_type="completed",
+            state=types_pb2.INVOCATION_STATE_COMPLETED,
+            cleanup_complete=True,
+        )
+        receipt.ClearField("impl_hash")
+        servicer = RecordingInvocationServicer()
+        servicer.stream_chunks = [
+            invoke_pb2.InvokeStreamChunk(
+                invocation_id="inv-invalid-stream",
+                state=types_pb2.INVOCATION_STATE_COMPLETED,
+                sequence=0,
+                terminal=True,
+                terminal_receipt=receipt,
+            )
+        ]
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                stream, _ = transport.open_stream(
+                    _signed_draft().to_json().encode("utf-8")
+                )
+                with self.assertRaises(SDKError) as raised:
+                    stream.recv(timeout=1)
+            finally:
+                transport.close()
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+
+    def test_stream_retains_complete_admission_receipt(self) -> None:
+        servicer = RecordingInvocationServicer()
+        servicer.stream_chunks[0].admission_receipt.CopyFrom(
+            _canonical_receipt(
+                index=0,
+                invocation_id="inv-stream",
+                receipt_type="admitted",
+                state=types_pb2.INVOCATION_STATE_ADMITTED,
+            )
+        )
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                stream, _ = transport.open_stream(
+                    _signed_draft().to_json().encode("utf-8")
+                )
+                event = json.loads(stream.recv(timeout=1).decode("utf-8"))
+            finally:
+                transport.close()
+
+        receipt = cast(dict[str, object], event["admission_receipt"])
+        self.assertEqual(receipt["receipt_type"], "admitted")
+        _assert_complete_receipt_projection(self, receipt)
+
+    def test_bidi_admission_receipt_fails_closed_before_internal_filtering(
+        self,
+    ) -> None:
+        class InvalidAdmissionServicer(RecordingInvocationServicer):
+            def InvokeBidi(self, request_iterator, context):
+                self.bidi_up_frames.append(next(request_iterator))
+                receipt = _canonical_receipt(
+                    index=0,
+                    invocation_id="inv-invalid-bidi",
+                    receipt_type="admitted",
+                    state=types_pb2.INVOCATION_STATE_ADMITTED,
+                )
+                receipt.ClearField("authority_proof")
+                yield invoke_pb2.InvokeBidiDown(sequence=0, receipt=receipt)
+
+        servicer = InvalidAdmissionServicer()
+        streams = b'[{"stream_id":1,"content_type":"application/json"}]'
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                bidi, _ = transport.open_bidi(
+                    _signed_draft().to_json().encode("utf-8"),
+                    streams,
+                )
+                with self.assertRaises(SDKError) as raised:
+                    bidi.recv(timeout=1)
+            finally:
+                transport.close()
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
 
     def test_direct_runtime_stream_provider_json_uses_terminal_receipt(self) -> None:
         servicer = RecordingInvocationServicer()
@@ -808,7 +1763,7 @@ class DirectRuntimeTests(unittest.TestCase):
             )
             try:
                 stream_transport, _ = transport.open_stream(
-                    complete_draft().to_json().encode("utf-8")
+                    _signed_draft().to_json().encode("utf-8")
                 )
                 raw_first = stream_transport.recv(timeout=1)
                 raw_terminal = stream_transport.recv(timeout=1)
@@ -824,6 +1779,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertNotIn("receipt", terminal)
         receipt = cast(dict[str, object], terminal["terminal_receipt"])
         self.assertEqual(receipt["invocation_id"], "inv-stream")
+        _assert_complete_receipt_projection(self, receipt)
 
     def test_direct_runtime_stream_deadline_is_typed_timeout(self) -> None:
         servicer = RecordingInvocationServicer()
@@ -837,7 +1793,7 @@ class DirectRuntimeTests(unittest.TestCase):
             )
             try:
                 stream_transport, _ = transport.open_stream(
-                    complete_draft().to_json().encode("utf-8")
+                    _signed_draft().to_json().encode("utf-8")
                 )
                 with self.assertRaises(SDKError) as raised:
                     stream_transport.recv(timeout=1)
@@ -845,7 +1801,7 @@ class DirectRuntimeTests(unittest.TestCase):
 
                 servicer.stream_delay_seconds = 0.0
                 retry_stream, _ = transport.open_stream(
-                    complete_draft().to_json().encode("utf-8")
+                    _signed_draft().to_json().encode("utf-8")
                 )
                 retry_event = json.loads(retry_stream.recv(timeout=1).decode("utf-8"))
                 retry_stream.close()
@@ -874,7 +1830,7 @@ class DirectRuntimeTests(unittest.TestCase):
             )
             try:
                 stream_transport, _ = transport.open_stream(
-                    complete_draft().to_json().encode("utf-8")
+                    _signed_draft().to_json().encode("utf-8")
                 )
                 raw_cancel = stream_transport.cancel("client stop")
             finally:
@@ -901,7 +1857,7 @@ class DirectRuntimeTests(unittest.TestCase):
             )
             try:
                 bidi_transport, _ = transport.open_bidi(
-                    complete_draft().to_json().encode("utf-8"),
+                    _signed_draft().to_json().encode("utf-8"),
                     streams_json,
                 )
                 bidi_transport.send(
@@ -929,6 +1885,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertNotIn("receipt", payload)
         receipt = cast(dict[str, object], terminal["terminal_receipt"])
         self.assertEqual(receipt["invocation_id"], "inv-bidi")
+        _assert_complete_receipt_projection(self, receipt)
 
     def test_direct_runtime_bidi_deadline_is_typed_timeout(self) -> None:
         servicer = RecordingInvocationServicer()
@@ -946,7 +1903,7 @@ class DirectRuntimeTests(unittest.TestCase):
             )
             try:
                 bidi_transport, _ = transport.open_bidi(
-                    complete_draft().to_json().encode("utf-8"),
+                    _signed_draft().to_json().encode("utf-8"),
                     streams_json,
                 )
                 with self.assertRaises(SDKError) as raised:
@@ -955,7 +1912,7 @@ class DirectRuntimeTests(unittest.TestCase):
 
                 servicer.bidi_delay_seconds = 0.0
                 retry_bidi, _ = transport.open_bidi(
-                    complete_draft().to_json().encode("utf-8"),
+                    _signed_draft().to_json().encode("utf-8"),
                     streams_json,
                 )
                 retry_bidi.send(
@@ -993,7 +1950,7 @@ class DirectRuntimeTests(unittest.TestCase):
             )
             try:
                 bidi_transport, _ = transport.open_bidi(
-                    complete_draft().to_json().encode("utf-8"),
+                    _signed_draft().to_json().encode("utf-8"),
                     streams_json,
                 )
                 raw_cancel = bidi_transport.cancel("client stop")
@@ -1044,7 +2001,7 @@ class DirectRuntimeTests(unittest.TestCase):
             )
             try:
                 bidi = transport.bidi(
-                    complete_draft(),
+                    _signed_draft(),
                     ({"stream_id": 1, "content_type": "application/json"},),
                 )
                 with self.assertRaises(SDKError) as raised:
@@ -1194,13 +2151,6 @@ class _RecordingIdentity:
             metadata={"grammar_owner": "axon"},
         )
 
-    def descriptor_bound_resource_subject_ura(self, owner_ura: str, path: str) -> str:
-        if owner_ura != USER_SUBJECT_URA:
-            raise AssertionError(f"unexpected descriptor-bound owner: {owner_ura}")
-        if path != "invoke/observe.health":
-            raise AssertionError(f"unexpected descriptor-bound path: {path}")
-        return PROJECTED_USER_SUBJECT_URA
-
     def close(self) -> None:
         self.close_count += 1
 
@@ -1265,6 +2215,7 @@ def _ability_request() -> AbilityCallRequest:
         causal_context={"form": "none"},
         ability_ura=ABILITY_URA,
         args={"city": "Singapore"},
+        caller_signature=_caller_signature(),
     )
 
 
@@ -1274,7 +2225,7 @@ def _user_subject_draft_json() -> bytes:
 
 
 def _user_subject_draft_dict() -> dict[str, object]:
-    draft = complete_draft().to_json_dict()
+    draft = _signed_draft().to_json_dict()
     draft["subject_ura"] = USER_SUBJECT_URA
     return draft
 

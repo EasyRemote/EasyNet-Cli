@@ -3,8 +3,6 @@ profile: runtime_core
 required_for:
   - go
   - python
-lifecycle_actions:
-  - cancel
 description: Runtime Core bidi cancellation is an explicit non-terminal request acknowledgement; terminal cancellation facts must arrive through runtime terminal frames.
 steps:
   - action: open_bidi

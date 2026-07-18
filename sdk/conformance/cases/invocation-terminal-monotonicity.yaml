@@ -6,10 +6,6 @@ required_for:
   - go
   - python
   - node
-lifecycle_actions:
-  - cancel
-  - dispatch
-  - terminal_receipt
 description: Submitted invocation handles expose terminal results and cannot rewrite terminal state after cancel or transport completion.
 steps:
   - action: prepare_complete_tuple

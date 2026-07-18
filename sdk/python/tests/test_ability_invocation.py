@@ -20,7 +20,7 @@ from easynet_sdk import (
 from easynet_sdk import AddressingClient
 
 from addressing_fake import MemoryAddressingTransport
-from test_runtime import MemoryRuntimeTransport
+from test_runtime import MemoryRuntimeTransport, canonical_runtime_receipt_pair
 from test_signing import signer_handle
 
 
@@ -538,33 +538,44 @@ class ChildReceiptTransport:
 class ChildDispatchRuntimeTransport(MemoryRuntimeTransport):
     def invoke(self, draft_json: bytes) -> bytes:
         self.seen_draft = json.loads(draft_json.decode("utf-8"))
+        causal_context = self.seen_draft["causal_context"]
+        assert isinstance(causal_context, dict)
+        causal_binding = {
+            "form": "scalar",
+            "receipt": {
+                "receipt_ura": causal_context["receipt_ura"],
+                "receipt_hash_hex": causal_context["receipt_hash_hex"],
+            },
+        }
+        parents = [
+            {
+                "receipt_ura": causal_context["receipt_ura"],
+                "receipt_hash_hex": causal_context["receipt_hash_hex"],
+            }
+        ]
+        admission, terminal = canonical_runtime_receipt_pair("child-1")
+        for receipt in (admission, terminal):
+            receipt["causal_binding_kind"] = "scalar"
+            receipt["causal_binding"] = causal_binding
+            receipt["parent_receipts"] = parents
+        terminal.update(
+            {
+                "receipt_ura": "easynet:///r/example/resource/agent.child.sdk/invocation/child-1/receipt",
+                "self_hash_hex": "cc" * 32,
+            }
+        )
         return json.dumps(
             {
                 "ok": True,
                 "tuple": self.seen_draft,
+                "invocation_id": "child-1",
                 "terminal_state": "Completed",
                 "output_content_type": "application/json",
                 "output_base64": "eyJjaGlsZCI6dHJ1ZX0=",
                 "output_json": {"child": True},
                 "elapsed_ms": 8,
-                "terminal_receipt": {
-                    "receipt_ura": "easynet:///r/example/resource/agent.child.sdk/invocation/child-1/receipt",
-                    "invocation_id": "child-1",
-                    "receipt_type": "terminal",
-                    "state": "completed",
-                    "index": 1,
-                    "timestamp_unix_ms": 1783100000456,
-                    "prev_receipt_hash_hex": "bb" * 32,
-                    "self_hash_hex": "cc" * 32,
-                    "causal_binding": self.seen_draft["causal_context"],
-                    "parent_receipts": [
-                        {
-                            "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent-1/receipt",
-                            "receipt_hash_hex": "aa" * 32,
-                        }
-                    ],
-                    "cleanup_complete": True,
-                },
+                "admission_receipt": admission,
+                "terminal_receipt": terminal,
                 "error": None,
             },
             separators=(",", ":"),
@@ -645,6 +656,13 @@ def _request_with(
 
 
 def _parent_result_with_receipt() -> InvocationResult:
+    admission, terminal = canonical_runtime_receipt_pair("inv-parent-1")
+    terminal.update(
+        {
+            "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent-1/receipt",
+            "self_hash_hex": "aa" * 32,
+        }
+    )
     return InvocationResult.from_json(
         json.dumps(
             {
@@ -661,19 +679,14 @@ def _parent_result_with_receipt() -> InvocationResult:
                     "content_type": "application/json",
                     "args": {},
                 },
+                "invocation_id": "inv-parent-1",
                 "terminal_state": "Completed",
                 "output_content_type": "application/json",
                 "output_base64": "e30=",
                 "output_json": {},
                 "elapsed_ms": 8,
-                "terminal_receipt": {
-                    "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent-1/receipt",
-                    "invocation_id": "inv-parent-1",
-                    "self_hash_hex": (
-                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                    ),
-                },
+                "admission_receipt": admission,
+                "terminal_receipt": terminal,
                 "error": None,
             },
             separators=(",", ":"),

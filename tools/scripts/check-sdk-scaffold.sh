@@ -21,6 +21,7 @@ required=(
   sdk/SDK_PARITY.md
   sdk/CONFORMANCE_SUITE.md
   sdk/conformance/fixture-schema-bindings.json
+  sdk/conformance/python_toolchain.sh
   sdk/conformance/refresh_adapter_report_evidence.py
   sdk/conformance/sdk-parity-matrix.json
   sdk/conformance/runner/README.md
@@ -159,8 +160,8 @@ if duplicates:
     fail("duplicate conformance case ids: " + ", ".join(duplicates))
 
 matrix = load_json(root / "sdk/conformance/sdk-parity-matrix.json")
-if not isinstance(matrix, dict) or matrix.get("schema_version") != 4:
-    fail("SDK parity matrix schema_version must be 4")
+if not isinstance(matrix, dict) or matrix.get("schema_version") != 5:
+    fail("SDK parity matrix schema_version must be 5")
 languages = ["rust", "c_abi", "go", "python", "node", "java", "swift"]
 if matrix.get("languages") != languages:
     fail("SDK parity matrix must declare all seven canonical languages")

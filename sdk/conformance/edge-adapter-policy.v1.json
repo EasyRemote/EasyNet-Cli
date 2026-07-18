@@ -1,0 +1,447 @@
+{
+  "schema_version": 1,
+  "policy_id": "canonical-runtime.released-edge-adapters",
+  "release_policy": {
+    "removal_trigger": "explicit-major-version-cutover",
+    "removal_version": "1.0.0",
+    "version_sources": [
+      {
+        "package_id": "easynet-sdk-go",
+        "path": "VERSION",
+        "format": "plain",
+        "declared_version": "0.96.8"
+      },
+      {
+        "package_id": "easynet-sdk-python",
+        "path": "sdk/python/pyproject.toml",
+        "format": "toml-project-version",
+        "declared_version": "0.91.30"
+      }
+    ]
+  },
+  "frozen_non_canonical_public_surface": {
+    "manifest_path": "sdk/conformance/canonical-public-api.json",
+    "json_pointer": "/non_canonical",
+    "sha256": "587a2eea230511eb17b1a85ca0bb3d1e48e9e49ebbe8586d465cf24e5290e732",
+    "shape_sha256": "3aaac5879c326a8f333e16ac97030a848bc5847c9913af4e843f71d0c5ffe329",
+    "counts": {
+      "languages": {
+        "rust": 0,
+        "c_abi": 64,
+        "go": 70,
+        "python": 23,
+        "node": 0,
+        "java": 0,
+        "swift": 0
+      },
+      "members": {
+        "rust": 0,
+        "c_abi": 0,
+        "go": 87,
+        "python": 70,
+        "node": 0,
+        "java": 0,
+        "swift": 0
+      }
+    }
+  },
+  "adapters": [
+    {
+      "id": "go-runtime-lifecycle-compatibility",
+      "language": "go",
+      "source_path": "sdk/go/daemon_compat.go",
+      "release_removal_version": "1.0.0",
+      "frozen_exports": {
+        "symbols": [
+          "Attach",
+          "AttachOptions",
+          "ConnectLocal",
+          "DaemonConfigInvalid",
+          "DaemonControl",
+          "DaemonControlOnly",
+          "DaemonControlReady",
+          "DaemonCrashLoop",
+          "DaemonDiscovered",
+          "DaemonHandle",
+          "DaemonInvocationDown",
+          "DaemonInvocationReady",
+          "DaemonLifecycleState",
+          "DaemonMode",
+          "DaemonPermissionDenied",
+          "DaemonRunning",
+          "DaemonStartFailed",
+          "DaemonStarting",
+          "DaemonStatus",
+          "DaemonStopped",
+          "DaemonStopping",
+          "DaemonTransport",
+          "DaemonTransportFunc",
+          "DaemonUnknown",
+          "DaemonVersionMismatch",
+          "Discover",
+          "DiscoverOptions",
+          "ModeBoth",
+          "ModeDevice",
+          "ModeHub",
+          "NewDaemonControl",
+          "RuntimeHostDiscoverOptions",
+          "RuntimeHostStartConfig",
+          "RuntimeLifecycle",
+          "RuntimeModeBoth",
+          "RuntimeModeDevice",
+          "RuntimeModeHub",
+          "Start",
+          "StartConfig",
+          "StopOptions"
+        ],
+        "members": [
+          "RuntimeHandle.Stop",
+          "RuntimeHost.Attach",
+          "RuntimeHost.Discover",
+          "RuntimeHost.Start",
+          "RuntimeLifecycle.Attach",
+          "RuntimeLifecycle.ConnectLocal",
+          "RuntimeLifecycle.Discover",
+          "RuntimeLifecycle.Start"
+        ],
+        "shape_sha256": "36812ed6f8687404eb993ed128b690dd31c0a0ba75bcf692c03e0b8497879ddd"
+      },
+      "zero_new_caller_gate": {
+        "tracked_adapter_type": "runtimeLifecycleCompatibilityAdapter",
+        "tracked_old_facade_calls": [
+          "Attach",
+          "ConnectLocal",
+          "Discover",
+          "NewDaemonControl",
+          "Start"
+        ],
+        "allowed_sites": [
+          {
+            "path": "sdk/go/cabi_runtime_test.go",
+            "kind": "old_facade_call",
+            "symbol": "NewDaemonControl",
+            "owner": "TestCABIRuntimeTransportDrivesStreamAndBidiCallbacks",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_compat.go",
+            "kind": "adapter_receiver_definition",
+            "symbol": "runtimeLifecycleCompatibilityAdapter",
+            "owner": "runtimeLifecycleCompatibilityAdapter.AttachRuntime",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_compat.go",
+            "kind": "adapter_receiver_definition",
+            "symbol": "runtimeLifecycleCompatibilityAdapter",
+            "owner": "runtimeLifecycleCompatibilityAdapter.ConnectLocal",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_compat.go",
+            "kind": "adapter_receiver_definition",
+            "symbol": "runtimeLifecycleCompatibilityAdapter",
+            "owner": "runtimeLifecycleCompatibilityAdapter.DiscoverRuntime",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_compat.go",
+            "kind": "adapter_receiver_definition",
+            "symbol": "runtimeLifecycleCompatibilityAdapter",
+            "owner": "runtimeLifecycleCompatibilityAdapter.StartRuntime",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_compat.go",
+            "kind": "adapter_type_definition",
+            "symbol": "runtimeLifecycleCompatibilityAdapter",
+            "owner": "package",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_test.go",
+            "kind": "old_facade_call",
+            "symbol": "Attach",
+            "owner": "TestDaemonAttachRejectsControlOnlyReadiness",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_test.go",
+            "kind": "old_facade_call",
+            "symbol": "ConnectLocal",
+            "owner": "TestConnectLocalAllowsExplicitEndpointOverride",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_test.go",
+            "kind": "old_facade_call",
+            "symbol": "ConnectLocal",
+            "owner": "TestConnectLocalDetachesAfterOpenRuntimeFailure",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_test.go",
+            "kind": "old_facade_call",
+            "symbol": "ConnectLocal",
+            "owner": "TestConnectLocalDiscoversAttachesOpensAndDetaches",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_test.go",
+            "kind": "old_facade_call",
+            "symbol": "ConnectLocal",
+            "owner": "TestConnectLocalRejectsControlOnlyAttach",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_test.go",
+            "kind": "old_facade_call",
+            "symbol": "Discover",
+            "owner": "TestDaemonDiscoverPreservesAdvertisedInvocationEndpoint",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_test.go",
+            "kind": "old_facade_call",
+            "symbol": "NewDaemonControl",
+            "owner": "TestRuntimeHostStartReturnsRuntimeHandleWithDaemonAliases",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_test.go",
+            "kind": "old_facade_call",
+            "symbol": "Start",
+            "owner": "TestDaemonHandleOpenRuntimeRequiresReadyState",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_test.go",
+            "kind": "old_facade_call",
+            "symbol": "Start",
+            "owner": "TestDaemonStartRejectsUnsafeModePolicyBeforeTransport",
+            "occurrences": 2
+          },
+          {
+            "path": "sdk/go/daemon_test.go",
+            "kind": "old_facade_call",
+            "symbol": "Start",
+            "owner": "TestDaemonStartReturnsRuntimeReadyHandle",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/daemon_test.go",
+            "kind": "old_facade_call",
+            "symbol": "Start",
+            "owner": "TestDaemonStopIsIdempotentAndDetachDoesNotStop",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/live_smoke_cabi_test.go",
+            "kind": "old_facade_call",
+            "symbol": "NewDaemonControl",
+            "owner": "TestGoSDKLiveDaemonSmoke",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/runtime_admin.go",
+            "kind": "adapter_construction",
+            "symbol": "runtimeLifecycleCompatibilityAdapter",
+            "owner": "NewRuntimeAdminClient",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/runtime_admin_test.go",
+            "kind": "old_facade_call",
+            "symbol": "NewDaemonControl",
+            "owner": "TestRuntimeAdminReadinessComposesLifecycleAndHealth",
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/go/runtime_admin_test.go",
+            "kind": "old_facade_call",
+            "symbol": "NewDaemonControl",
+            "owner": "TestRuntimeAdminRejectsMissingHandle",
+            "occurrences": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "python-daemon-module-compatibility",
+      "language": "python",
+      "source_path": "sdk/python/easynet_sdk/daemon.py",
+      "release_removal_version": "1.0.0",
+      "frozen_exports": {
+        "symbols": [
+          "AttachOptions",
+          "DaemonControl",
+          "DaemonHandle",
+          "DaemonHandleFacade",
+          "DaemonLifecycleFacade",
+          "DaemonLifecycleState",
+          "DaemonMode",
+          "DaemonStartProjection",
+          "DaemonStatus",
+          "DaemonTransport",
+          "DiscoverOptions",
+          "Endpoints",
+          "RuntimeHandle",
+          "RuntimeHost",
+          "RuntimeHostDiscoverOptions",
+          "RuntimeHostDiscoverRequest",
+          "RuntimeHostHandle",
+          "RuntimeHostRole",
+          "RuntimeHostStartProjection",
+          "RuntimeHostStartRequest",
+          "RuntimeLifecycle",
+          "RuntimeLifecycleState",
+          "RuntimeLifecycleTransport",
+          "RuntimeStatus",
+          "StartConfig",
+          "StopOptions",
+          "attach_daemon",
+          "attach_runtime_host",
+          "connect_local",
+          "connect_runtime_local",
+          "discover_daemon",
+          "discover_runtime_host",
+          "start_daemon",
+          "start_runtime_host"
+        ],
+        "members": [],
+        "shape_sha256": "d9a5369f45c66c4e43245ed3941aba0f58dab5f2cea698e2e02bb68f9de67b50"
+      },
+      "zero_new_caller_gate": {
+        "tracked_module": "easynet_sdk.daemon",
+        "allowed_sites": [
+          {
+            "path": "sdk/python/easynet_sdk/__init__.py",
+            "kind": "import_from",
+            "module": "easynet_sdk.daemon",
+            "owner": "module",
+            "names": [
+              "DaemonControl",
+              "DaemonHandle",
+              "DaemonHandleFacade",
+              "DaemonLifecycleFacade",
+              "DaemonLifecycleState",
+              "DaemonMode",
+              "DaemonStartProjection",
+              "DaemonStatus",
+              "DaemonTransport",
+              "DiscoverOptions",
+              "RuntimeHostRole",
+              "RuntimeHostStartProjection",
+              "StartConfig",
+              "attach_daemon",
+              "connect_local",
+              "discover_daemon",
+              "start_daemon"
+            ],
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/python/tests/test_cabi.py",
+            "kind": "import_legacy_export",
+            "module": "easynet_sdk.daemon",
+            "owner": "module",
+            "names": [
+              "DaemonControl",
+              "DaemonMode",
+              "RuntimeHostRole",
+              "RuntimeLifecycle",
+              "StartConfig"
+            ],
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/python/tests/test_cabi.py",
+            "kind": "legacy_export_call",
+            "module": "easynet_sdk.daemon",
+            "owner": "module.CABITransportTests.test_daemon_handle_has_no_product_profile_factory",
+            "names": [
+              "DaemonControl"
+            ],
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/python/tests/test_cabi.py",
+            "kind": "legacy_export_call",
+            "module": "easynet_sdk.daemon",
+            "owner": "module.CABITransportTests.test_daemon_handle_has_no_product_profile_factory",
+            "names": [
+              "StartConfig"
+            ],
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/python/tests/test_cabi.py",
+            "kind": "legacy_export_call",
+            "module": "easynet_sdk.daemon",
+            "owner": "module.CABITransportTests.test_daemon_runtime_uses_generic_invocation",
+            "names": [
+              "RuntimeLifecycle"
+            ],
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/python/tests/test_cabi.py",
+            "kind": "legacy_export_call",
+            "module": "easynet_sdk.daemon",
+            "owner": "module.CABITransportTests.test_daemon_runtime_uses_generic_invocation",
+            "names": [
+              "StartConfig"
+            ],
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/python/tests/test_runtime_admin.py",
+            "kind": "import_legacy_export",
+            "module": "easynet_sdk.daemon",
+            "owner": "module",
+            "names": [
+              "DaemonControl",
+              "DaemonMode",
+              "RuntimeHandle",
+              "RuntimeHostRole",
+              "RuntimeLifecycle",
+              "RuntimeLifecycleState",
+              "StartConfig"
+            ],
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/python/tests/test_runtime_admin.py",
+            "kind": "legacy_export_call",
+            "module": "easynet_sdk.daemon",
+            "owner": "module.test_runtime_admin_readiness_composes_lifecycle_and_health",
+            "names": [
+              "RuntimeLifecycle"
+            ],
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/python/tests/test_runtime_admin.py",
+            "kind": "legacy_export_call",
+            "module": "easynet_sdk.daemon",
+            "owner": "module.test_runtime_admin_readiness_composes_lifecycle_and_health",
+            "names": [
+              "StartConfig"
+            ],
+            "occurrences": 1
+          },
+          {
+            "path": "sdk/python/tests/test_runtime_admin.py",
+            "kind": "legacy_export_call",
+            "module": "easynet_sdk.daemon",
+            "owner": "module.test_runtime_admin_rejects_missing_handle_and_control",
+            "names": [
+              "RuntimeLifecycle"
+            ],
+            "occurrences": 1
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -14,7 +14,7 @@ if [[ -e src/runtime/hosted_receipt.rs ]]; then
 fi
 
 if rg -n 'pub mod hosted_receipt|crate::runtime::hosted_receipt|runtime::hosted_receipt' src tests -g '*.rs'; then
-  fail "hosted receipt callers must import easynet_axon::invocation::audit directly"
+  fail "hosted receipt callers must import axon_sdk::invocation::audit directly"
 fi
 
 if rg -n 'struct HostedAgentReceiptHeader|enum SigningModel|HostedReceiptError' src -g '*.rs'; then

@@ -11,7 +11,7 @@ from typing import Iterable
 
 
 _RAW_SYMBOL_PREFIX = "easynet" + "_"
-_RAW_AXON_MODULE = "easynet" + "_" + "axon"
+_RAW_AXON_MODULE = "axon" + "_" + "sdk"
 _SDK_MODULE = "easynet" + "_" + "sdk"
 _RAW_ABI_SYMBOL = re.compile(r"\b" + _RAW_SYMBOL_PREFIX + r"(?!sdk\b)[A-Za-z0-9_]+")
 _RAW_FFI_MARKERS = (
@@ -27,6 +27,7 @@ _DEPENDENCY_NAME = re.compile(r"^\s*([A-Za-z0-9_.-]+)")
 _FORBIDDEN_DEPENDENCY_NAMES = {
     "axon",
     "axon-pb2",
+    "axon-sdk",
     "easynet-axon",
     "easynet-run-axon",
     "libeasynet-cli",

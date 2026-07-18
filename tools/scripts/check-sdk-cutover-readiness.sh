@@ -5,6 +5,11 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 CONFORMANCE_REPORTS_SCRIPT="${SDK_CUTOVER_CONFORMANCE_REPORTS_SCRIPT:-$SELF_DIR/check-sdk-conformance-reports.sh}"
 PARITY_MATRIX_SCRIPT="${SDK_CUTOVER_PARITY_MATRIX_SCRIPT:-$SELF_DIR/check-sdk-parity-matrix.sh}"
+PYTHON_BIN="${PYTHON:-python3}"
+
+# Reuse the PrincipalLifecycle E2E root contract. Sourcing defines the resolver
+# without executing the focused E2E.
+source "$SELF_DIR/backend-live-principal-e2e.sh"
 
 run_gate() {
   local name="$1"
@@ -71,7 +76,7 @@ EOF
   cat >"$root/backend/internal/service/forbidden.go" <<'EOF'
 package service
 
-import axonsdk "easynet.run/axon/sdk/go/easynet"
+import axonsdk "axon.run/sdk/go/axon"
 
 var _ = axonsdk.ErrInvalidArgument
 EOF
@@ -86,6 +91,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "backend route-family coverage self-test" bash "$SELF_DIR/check-backend-route-family-coverage.sh" --self-test
   run_gate "SDK completion matrix self-test" bash "$SELF_DIR/check-sdk-completion-audit.sh" --self-test
   run_gate "SDK URA naming self-test" bash "$SELF_DIR/check-sdk-ura-naming.sh" --self-test
+  run_gate "released edge-adapter policy self-test" "$PYTHON_BIN" "$REPO_ROOT/sdk/conformance/edge_adapter_policy.py" --self-test
   run_gate "canonical runtime convergence V2 self-test" bash "$SELF_DIR/check-canonical-runtime-convergence-v2.sh" --self-test
   run_gate "SDK product-neutrality syntax" bash -n "$SELF_DIR/check-sdk-product-neutrality.sh"
   run_gate "SDK conformance reports self-test" bash "$SELF_DIR/check-sdk-conformance-reports.sh" --self-test
@@ -167,7 +173,8 @@ EOF
 fi
 
 EASYREMOTE_ROOT="${EASYNET_EASYREMOTE_ROOT:-$REPO_ROOT/../EasyRemote}"
-BACKEND_ROOT="${EASYNET_BACKEND_ROOT:-$REPO_ROOT/../EasyNet}"
+BACKEND_INPUT_ROOT="${EASYNET_BACKEND_ROOT:-$REPO_ROOT/../EasyNet}"
+BACKEND_MODULE_ROOT="$(principal_lifecycle_resolve_backend_module_root "$BACKEND_INPUT_ROOT")"
 CUTOVER_LIVE_RESULTS_DIR="$(allocate_live_results_dir)"
 
 status=0
@@ -176,6 +183,7 @@ run_gate "SDK scaffold" bash "$SELF_DIR/check-sdk-scaffold.sh" || status=1
 run_gate "SDK parity matrix" bash "$SELF_DIR/check-sdk-parity-matrix.sh" --self-test || status=1
 run_gate "SDK completion matrix" bash "$SELF_DIR/check-sdk-completion-audit.sh" --matrix-only || status=1
 run_gate "SDK canonical public API" bash "$SELF_DIR/check-sdk-canonical-public-api.sh" || status=1
+run_gate "released edge-adapter policy" "$PYTHON_BIN" "$REPO_ROOT/sdk/conformance/edge_adapter_policy.py" || status=1
 run_gate "SDK product neutrality" bash "$SELF_DIR/check-sdk-product-neutrality.sh" || status=1
 run_sdk_conformance_live_gates "$CUTOVER_LIVE_RESULTS_DIR" || status=1
 run_gate "generic FFI ABI v5 exact surface" bash "$SELF_DIR/check-ffi-abi-v5-header.sh" || status=1
@@ -189,13 +197,13 @@ run_gate "daemon Invocation migration" bash "$SELF_DIR/check-daemon-invocation-m
 run_gate "release package contract" bash "$SELF_DIR/check-release-package-contract.sh" || status=1
 run_gate "EasyRemote SDK boundary" bash "$SELF_DIR/check-easyremote-sdk-boundary.sh" "$EASYREMOTE_ROOT" || status=1
 run_gate "backend route-family coverage" bash "$SELF_DIR/check-backend-route-family-coverage.sh" || status=1
-run_gate "backend SDK-only boundary" bash "$SELF_DIR/check-backend-sdk-only-boundary.sh" "$BACKEND_ROOT" || status=1
-run_gate "downstream SDK consumer cutover" bash "$SELF_DIR/check-downstream-sdk-consumer-cutover.sh" "$BACKEND_ROOT" "$EASYREMOTE_ROOT" || status=1
-run_gate "product key-custody boundary" bash "$SELF_DIR/check-product-key-custody-boundary.sh" "$BACKEND_ROOT" "$EASYREMOTE_ROOT" || status=1
-run_gate "product smokes" bash "$SELF_DIR/check-sdk-product-smokes.sh" || status=1
-run_gate "runtime events cross-repo gate" bash "$SELF_DIR/runtime-events-cross-repo-e2e.sh" || status=1
+run_gate "backend SDK-only boundary" bash "$SELF_DIR/check-backend-sdk-only-boundary.sh" "$BACKEND_MODULE_ROOT" || status=1
+run_gate "downstream SDK consumer cutover" bash "$SELF_DIR/check-downstream-sdk-consumer-cutover.sh" "$BACKEND_MODULE_ROOT" "$EASYREMOTE_ROOT" || status=1
+run_gate "product key-custody boundary" bash "$SELF_DIR/check-product-key-custody-boundary.sh" "$BACKEND_MODULE_ROOT" "$EASYREMOTE_ROOT" || status=1
+run_gate "product smokes" env EASYNET_BACKEND_ROOT="$BACKEND_MODULE_ROOT" bash "$SELF_DIR/check-sdk-product-smokes.sh" || status=1
+run_gate "runtime events cross-repo gate" env EASYNET_BACKEND_ROOT="$BACKEND_MODULE_ROOT" bash "$SELF_DIR/runtime-events-cross-repo-e2e.sh" || status=1
 run_gate "runtime events live daemon E2E" bash "$SELF_DIR/runtime-events-live-daemon-e2e.sh" || status=1
-run_gate "standalone Hub PrincipalLifecycle E2E" bash "$SELF_DIR/standalone-hub-principal-lifecycle-e2e.sh" || status=1
+run_gate "standalone Hub PrincipalLifecycle E2E" env EASYNET_BACKEND_ROOT="$BACKEND_MODULE_ROOT" bash "$SELF_DIR/standalone-hub-principal-lifecycle-e2e.sh" || status=1
 run_gate "Python SDK live smoke" bash "$SELF_DIR/python-sdk-live-smoke.sh" || status=1
 run_gate "Go SDK live smoke" bash "$SELF_DIR/go-sdk-live-smoke.sh" || status=1
 

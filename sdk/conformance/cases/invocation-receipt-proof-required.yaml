@@ -3,8 +3,6 @@ profile: runtime_core
 required_for:
   - go
   - python
-lifecycle_actions:
-  - terminal_receipt
 description: Required runtime receipt constructors reject omitted descriptor, authority, proof, signature, hash and parent-receipt binding facts.
 steps:
   - action: decode_complete_receipt_with_proof_facts

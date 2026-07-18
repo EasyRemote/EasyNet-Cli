@@ -54,7 +54,7 @@ func connectNativeRuntime(ctx context.Context, transport RuntimeLifecycleTranspo
 	if runtimeEndpoint == "" {
 		return nil, nil, nil, invalidRuntimePayload("invocation_endpoint is required", nil)
 	}
-	handle, err := host.Attach(ctx, RuntimeHostAttachOptions{
+	handle, err := host.AttachRuntime(ctx, RuntimeHostAttachOptions{
 		ControlEndpoint:    endpoints.ControlEndpoint,
 		InvocationEndpoint: runtimeEndpoint,
 		ControlPath:        options.ControlPath,

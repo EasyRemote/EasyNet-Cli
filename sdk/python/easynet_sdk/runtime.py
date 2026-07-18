@@ -2,9 +2,26 @@
 
 from __future__ import annotations
 
+import base64
 import json
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from typing import Any, Mapping, Optional, Protocol, cast, runtime_checkable
+
+from axon_sdk.invocation import (
+    AgentIdentity as _AxonAgentIdentity,
+    AuthorityBinding as _AxonAuthorityBinding,
+    AxonError as _AxonError,
+    BootstrapAuthorityBody as _AxonBootstrapAuthorityBody,
+    CalleeSignature as _AxonCalleeSignature,
+    DelegationProofBody as _AxonDelegationProofBody,
+    EntityRef as _AxonEntityRef,
+    EntityRefKind as _AxonEntityRefKind,
+    InvocationAuthorityProof as _AxonInvocationAuthorityProof,
+    ReceiptProofFacts as _AxonReceiptProofFacts,
+    ReceiptRef as _AxonReceiptRef,
+    SessionAuthorityBody as _AxonSessionAuthorityBody,
+    UraProfile as _AxonUraProfile,
+)
 
 from .errors import ErrorCode, RetryHint, SDKError
 from .bidi import BidiSession, BidiStreamDescriptor, BidiTransport
@@ -386,11 +403,52 @@ class RuntimeReceiptRef:
 class RuntimeReceiptAuthorityProof:
     proof_type: str = ""
     binding_kind: str = ""
+    binding: Optional[Mapping[str, object]] = None
     proof_payload_base64: str = ""
     proof_hash_hex: str = ""
     issuer: Optional[RuntimeReceiptAgentBinding] = None
     signature: Optional[RuntimeReceiptSignature] = None
     admission_hook: str = ""
+
+
+@dataclass(frozen=True)
+class _DecodedRuntimeReceipt:
+    receipt_id: str = ""
+    receipt_ura: str = ""
+    invocation_id: str = ""
+    receipt_type: str = ""
+    state: str = ""
+    index: int = 0
+    timestamp_unix_ms: int = 0
+    prev_receipt_hash_hex: str = ""
+    self_hash_hex: str = ""
+    cleanup_complete: Optional[bool] = None
+    reason: str = ""
+    child_invocation_id: str = ""
+    payload_base64: str = ""
+    caller_binding: Optional[RuntimeReceiptAgentBinding] = None
+    callee_binding: Optional[RuntimeReceiptAgentBinding] = None
+    subject_binding: Optional[RuntimeReceiptSubjectBinding] = None
+    invocation_nonce_base64: str = ""
+    causal_binding_kind: str = ""
+    causal_binding: Optional[Mapping[str, object]] = None
+    callee_signature: Optional[RuntimeReceiptSignature] = None
+    signer_binding: Optional[RuntimeReceiptAgentBinding] = None
+    host_attestation_base64: str = ""
+    authority_binding_kind: str = ""
+    authority_binding: Optional[Mapping[str, object]] = None
+    ability_binding: str = ""
+    failure: Optional[RuntimeReceiptFailure] = None
+    usage: Optional[RuntimeReceiptUsage] = None
+    subject_ref: Optional[RuntimeReceiptEntityRef] = None
+    descriptor_version: str = ""
+    schema_hash_hex: str = ""
+    impl_hash_hex: str = ""
+    runtime_env: str = ""
+    authority_proof: Optional[RuntimeReceiptAuthorityProof] = None
+    input_hash_hex: str = ""
+    output_hash_hex: str = ""
+    parent_receipts: tuple[RuntimeReceiptRef, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -435,133 +493,41 @@ class RuntimeReceipt:
     output_hash_hex: str = ""
     parent_receipts: tuple[RuntimeReceiptRef, ...] = field(default_factory=tuple)
 
+    def __post_init__(self) -> None:
+        decoded = _decode_runtime_receipt_mapping(self.raw)
+        for decoded_field in fields(_DecodedRuntimeReceipt):
+            name = decoded_field.name
+            if getattr(self, name) != getattr(decoded, name):
+                raise _invalid_runtime(
+                    f"runtime receipt {name} does not match its raw projection"
+                )
+        self.validate_summary()
+
     @classmethod
     def from_mapping(cls, decoded: Mapping[str, object]) -> "RuntimeReceipt":
-        return cls(
-            raw=dict(decoded),
-            receipt_id=_optional_string(decoded.get("receipt_id"), "receipt_id") or "",
-            receipt_ura=_optional_string(decoded.get("receipt_ura"), "receipt_ura")
-            or "",
-            invocation_id=_optional_string(
-                decoded.get("invocation_id"), "invocation_id"
-            )
-            or "",
-            receipt_type=_optional_runtime_summary_text(
-                decoded.get("receipt_type"), "receipt_type"
-            )
-            or "",
-            state=_optional_runtime_summary_text(decoded.get("state"), "state") or "",
-            index=_optional_non_negative_int(decoded.get("index"), "index"),
-            timestamp_unix_ms=_optional_non_negative_int(
-                decoded.get("timestamp_unix_ms"), "timestamp_unix_ms"
-            ),
-            prev_receipt_hash_hex=_optional_string(
-                decoded.get("prev_receipt_hash_hex"), "prev_receipt_hash_hex"
-            )
-            or "",
-            self_hash_hex=_optional_string(
-                decoded.get("self_hash_hex"), "self_hash_hex"
-            )
-            or "",
-            cleanup_complete=_optional_bool(
-                decoded.get("cleanup_complete"), "cleanup_complete"
-            ),
-            reason=_optional_string(decoded.get("reason"), "reason") or "",
-            child_invocation_id=_optional_string(
-                decoded.get("child_invocation_id"), "child_invocation_id"
-            )
-            or "",
-            payload_base64=_optional_string(
-                decoded.get("payload_base64"), "payload_base64"
-            )
-            or "",
-            caller_binding=_receipt_agent_binding(
-                decoded.get("caller_binding"), "caller_binding"
-            ),
-            callee_binding=_receipt_agent_binding(
-                decoded.get("callee_binding"), "callee_binding"
-            ),
-            subject_binding=_receipt_subject_binding(
-                decoded.get("subject_binding"), "subject_binding"
-            ),
-            invocation_nonce_base64=_optional_string(
-                decoded.get("invocation_nonce_base64"), "invocation_nonce_base64"
-            )
-            or "",
-            causal_binding_kind=_optional_string(
-                decoded.get("causal_binding_kind"), "causal_binding_kind"
-            )
-            or "",
-            causal_binding=_optional_mapping(
-                decoded.get("causal_binding"), "causal_binding"
-            ),
-            callee_signature=_receipt_signature(
-                decoded.get("callee_signature"), "callee_signature"
-            ),
-            signer_binding=_receipt_agent_binding(
-                decoded.get("signer_binding"), "signer_binding"
-            ),
-            host_attestation_base64=_optional_string(
-                decoded.get("host_attestation_base64"), "host_attestation_base64"
-            )
-            or "",
-            authority_binding_kind=_optional_string(
-                decoded.get("authority_binding_kind"), "authority_binding_kind"
-            )
-            or "",
-            authority_binding=_optional_mapping(
-                decoded.get("authority_binding"), "authority_binding"
-            ),
-            ability_binding=_optional_string(
-                decoded.get("ability_binding"), "ability_binding"
-            )
-            or "",
-            failure=_receipt_failure(decoded.get("failure"), "failure"),
-            usage=_receipt_usage(decoded.get("usage"), "usage"),
-            subject_ref=_receipt_entity_ref(decoded.get("subject_ref"), "subject_ref"),
-            descriptor_version=_optional_string(
-                decoded.get("descriptor_version"), "descriptor_version"
-            )
-            or "",
-            schema_hash_hex=_optional_string(
-                decoded.get("schema_hash_hex"), "schema_hash_hex"
-            )
-            or "",
-            impl_hash_hex=_optional_string(
-                decoded.get("impl_hash_hex"), "impl_hash_hex"
-            )
-            or "",
-            runtime_env=_optional_string(decoded.get("runtime_env"), "runtime_env")
-            or "",
-            authority_proof=_receipt_authority_proof(
-                decoded.get("authority_proof"), "authority_proof"
-            ),
-            input_hash_hex=_optional_string(
-                decoded.get("input_hash_hex"), "input_hash_hex"
-            )
-            or "",
-            output_hash_hex=_optional_string(
-                decoded.get("output_hash_hex"), "output_hash_hex"
-            )
-            or "",
-            parent_receipts=_receipt_refs(decoded.get("parent_receipts")),
-        )
+        """Decode the only accepted canonical runtime receipt projection."""
+
+        projection = _decode_runtime_receipt_mapping(decoded)
+        return cls(raw=dict(decoded), **vars(projection))
 
     @classmethod
     def from_required_mapping(cls, decoded: Mapping[str, object]) -> "RuntimeReceipt":
-        """Decode and validate a complete daemon runtime receipt summary."""
+        """Decode a complete receipt through the canonical strict constructor."""
 
-        if not isinstance(decoded, Mapping):
-            raise _invalid_runtime("runtime receipt summary must be an object")
-        receipt = cls.from_mapping(decoded)
-        if not receipt.invocation_id:
+        return cls.from_mapping(decoded)
+
+    def validate_summary(self) -> None:
+        """Validate required identity, lifecycle, hash, and proof facts."""
+
+        if not self.invocation_id:
             raise _invalid_runtime("runtime receipt summary is missing invocation_id")
-        if not receipt.receipt_type:
+        if not self.receipt_type:
             raise _invalid_runtime("runtime receipt summary is missing receipt_type")
-        receipt.prev_receipt_hash()
-        receipt.self_receipt_hash()
-        receipt.validate_proof_facts()
-        return receipt
+        if not self.state:
+            raise _invalid_runtime("runtime receipt summary is missing state")
+        self.prev_receipt_hash()
+        self.self_receipt_hash()
+        self.validate_proof_facts()
 
     def has_causal_anchor(self) -> bool:
         """Return whether daemon/Axon supplied enough facts for causal linkage."""
@@ -572,7 +538,9 @@ class RuntimeReceipt:
         """Return the validated previous receipt hash bytes."""
 
         return _runtime_receipt_hash(
-            self.prev_receipt_hash_hex, "prev_receipt_hash_hex"
+            self.prev_receipt_hash_hex,
+            "prev_receipt_hash_hex",
+            allow_zero=True,
         )
 
     def self_receipt_hash(self) -> bytes:
@@ -586,47 +554,39 @@ class RuntimeReceipt:
         _required_receipt_agent_binding(self.caller_binding, "caller_binding")
         _required_receipt_agent_binding(self.callee_binding, "callee_binding")
         _required_receipt_subject_binding(self.subject_binding, "subject_binding")
-        _required_receipt_text(self.invocation_nonce_base64, "invocation_nonce_base64")
+        _runtime_receipt_base64(
+            self.invocation_nonce_base64,
+            "invocation_nonce_base64",
+            expected_length=16,
+        )
         _required_receipt_text(self.causal_binding_kind, "causal_binding_kind")
         if self.causal_binding is None:
             raise _invalid_runtime("runtime receipt summary is missing causal_binding")
+        _validate_runtime_receipt_causal_binding(
+            self.causal_binding_kind,
+            self.causal_binding,
+        )
         _required_receipt_signature(self.callee_signature, "callee_signature")
+        assert self.callee_signature is not None
+        _runtime_receipt_base64(
+            self.callee_signature.signature_base64,
+            "callee_signature.signature_base64",
+        )
         _required_receipt_agent_binding(self.signer_binding, "signer_binding")
+        _validate_runtime_receipt_signing_model(self)
         _required_receipt_text(self.authority_binding_kind, "authority_binding_kind")
         if self.authority_binding is None:
             raise _invalid_runtime(
                 "runtime receipt summary is missing authority_binding"
             )
         _required_receipt_text(self.ability_binding, "ability_binding")
-        _required_receipt_text(self.descriptor_version, "descriptor_version")
-        _runtime_receipt_hash(self.schema_hash_hex, "schema_hash_hex")
-        _runtime_receipt_hash(self.impl_hash_hex, "impl_hash_hex")
-        _required_receipt_text(self.runtime_env, "runtime_env")
+        if self.subject_ref is None:
+            raise _invalid_runtime("runtime receipt summary is missing subject_ref")
         if self.authority_proof is None:
             raise _invalid_runtime("runtime receipt summary is missing authority_proof")
-        _required_receipt_text(
-            self.authority_proof.proof_type, "authority_proof.proof_type"
-        )
-        _required_receipt_text(
-            self.authority_proof.binding_kind, "authority_proof.binding_kind"
-        )
-        _required_receipt_text(
-            self.authority_proof.proof_payload_base64,
-            "authority_proof.proof_payload_base64",
-        )
-        _runtime_receipt_hash(
-            self.authority_proof.proof_hash_hex, "authority_proof.proof_hash_hex"
-        )
-        _required_receipt_agent_binding(
-            self.authority_proof.issuer, "authority_proof.issuer"
-        )
-        _required_receipt_signature(
-            self.authority_proof.signature, "authority_proof.signature"
-        )
-        _runtime_receipt_hash(self.input_hash_hex, "input_hash_hex")
-        _runtime_receipt_hash(self.output_hash_hex, "output_hash_hex")
         if "parent_receipts" not in self.raw:
             raise _invalid_runtime("runtime receipt summary is missing parent_receipts")
+        _validate_runtime_receipt_canonical_proof_facts(self)
 
     def to_json_dict(self) -> dict[str, object]:
         return dict(self.raw)
@@ -650,6 +610,42 @@ class InvocationResult:
     admission_receipt_summary: Optional[RuntimeReceipt] = None
     terminal_receipt: Optional[Mapping[str, object]] = None
     terminal_receipt_summary: Optional[RuntimeReceipt] = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.tuple, InvocationDraft):
+            raise _invalid_runtime("invocation result tuple must be an InvocationDraft")
+        _required_text(self.terminal_state, "terminal_state")
+        if self.elapsed_ms < 0:
+            raise _invalid_runtime("elapsed_ms must be non-negative")
+        if self.ok and self.error is not None:
+            raise _invalid_runtime("ok result must not include error")
+        if not self.ok and self.error is None:
+            raise _invalid_runtime("failed result must include error")
+        if (self.admission_receipt is None) != (self.admission_receipt_summary is None):
+            raise _invalid_runtime(
+                "admission_receipt and admission_receipt_summary must be projected together"
+            )
+        if (self.terminal_receipt is None) != (self.terminal_receipt_summary is None):
+            raise _invalid_runtime(
+                "terminal_receipt and terminal_receipt_summary must be projected together"
+            )
+        admission = _validated_result_receipt_projection(
+            self.admission_receipt,
+            self.admission_receipt_summary,
+            "admission_receipt",
+        )
+        terminal = _validated_result_receipt_projection(
+            self.terminal_receipt,
+            self.terminal_receipt_summary,
+            "terminal_receipt",
+        )
+        _validate_invocation_result_receipt_topology(
+            ok=self.ok,
+            terminal_state=self.terminal_state,
+            failure=self.error,
+            admission=admission,
+            terminal=terminal,
+        )
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "InvocationResult":
@@ -681,12 +677,25 @@ class InvocationResult:
         )
         admission_receipt_summary = (
             RuntimeReceipt.from_mapping(admission_receipt)
-            if admission_receipt
+            if admission_receipt is not None
             else None
         )
         terminal_receipt_summary = (
-            RuntimeReceipt.from_mapping(terminal_receipt) if terminal_receipt else None
+            RuntimeReceipt.from_mapping(terminal_receipt)
+            if terminal_receipt is not None
+            else None
         )
+        invocation_id = (
+            _optional_string(decoded.get("invocation_id"), "invocation_id") or ""
+        )
+        if (
+            invocation_id
+            and terminal_receipt_summary is not None
+            and invocation_id != terminal_receipt_summary.invocation_id
+        ):
+            raise _invalid_runtime(
+                "invocation result id does not match canonical receipt checkpoints"
+            )
         return cls(
             ok=ok,
             tuple=draft,
@@ -714,6 +723,133 @@ class InvocationResult:
             admission_receipt_summary=admission_receipt_summary,
             terminal_receipt=terminal_receipt,
             terminal_receipt_summary=terminal_receipt_summary,
+        )
+
+
+_PRE_ADMISSION_FAILURE_STAGES = frozenset(
+    {
+        "global_admission",
+        "caller_authentication",
+        "authority_validation",
+        "bootstrap_authorization",
+        "quota",
+        "ability_resolution",
+        "ability_policy",
+        "request_validation",
+    }
+)
+_ADMISSION_RECEIPT_STATES = frozenset({"admitted"})
+_TERMINAL_RECEIPT_STATES = frozenset({"completed", "failed", "timedout", "cancelled"})
+
+
+def _validated_result_receipt_projection(
+    raw: Optional[Mapping[str, object]],
+    summary: Optional[RuntimeReceipt],
+    field_name: str,
+) -> Optional[RuntimeReceipt]:
+    if raw is None:
+        return None
+    if summary is None:
+        raise _invalid_runtime(f"{field_name} summary is required")
+    canonical = RuntimeReceipt.from_mapping(raw)
+    if canonical != summary:
+        raise _invalid_runtime(
+            f"{field_name} summary does not match its raw projection"
+        )
+    return canonical
+
+
+def _validate_invocation_result_receipt_topology(
+    *,
+    ok: bool,
+    terminal_state: str,
+    failure: Optional[InvocationFailure],
+    admission: Optional[RuntimeReceipt],
+    terminal: Optional[RuntimeReceipt],
+) -> None:
+    if (admission is None) != (terminal is None):
+        raise _invalid_runtime(
+            "invocation result must carry both admission_receipt and "
+            "terminal_receipt or neither"
+        )
+    normalized_terminal_state = _normalized_receipt_state(terminal_state)
+    if admission is None:
+        if (
+            ok
+            or normalized_terminal_state != "failed"
+            or failure is None
+            or failure.stage not in _PRE_ADMISSION_FAILURE_STAGES
+        ):
+            raise _invalid_runtime(
+                "receipt-free invocation result requires a typed pre-admission "
+                "Failed outcome"
+            )
+        return
+
+    assert terminal is not None
+    if _normalized_receipt_state(admission.state) not in _ADMISSION_RECEIPT_STATES:
+        raise _invalid_runtime(
+            "admission_receipt does not carry a canonical admission state"
+        )
+    if _normalized_receipt_state(admission.receipt_type) != "admitted":
+        raise _invalid_runtime(
+            "admission_receipt does not carry canonical receipt_type admitted"
+        )
+    if admission.cleanup_complete is not False:
+        raise _invalid_runtime("admission_receipt cleanup_complete must be false")
+    terminal_receipt_state = _normalized_receipt_state(terminal.state)
+    if terminal_receipt_state not in _TERMINAL_RECEIPT_STATES:
+        raise _invalid_runtime(
+            "terminal_receipt does not carry a canonical terminal state"
+        )
+    if _normalized_receipt_state(terminal.receipt_type) != terminal_receipt_state:
+        raise _invalid_runtime(
+            "terminal_receipt receipt_type does not match its terminal state"
+        )
+    if terminal_receipt_state != normalized_terminal_state:
+        raise _invalid_runtime(
+            "terminal_receipt state does not match invocation terminal_state"
+        )
+    if ok != (terminal_receipt_state == "completed"):
+        raise _invalid_runtime(
+            "invocation result ok flag does not match terminal receipt state"
+        )
+    if terminal.cleanup_complete is not True:
+        raise _invalid_runtime("terminal_receipt cleanup_complete must be true")
+    if terminal.index <= admission.index:
+        raise _invalid_runtime(
+            "terminal_receipt index must follow admission_receipt index"
+        )
+    if admission.invocation_id != terminal.invocation_id:
+        raise _invalid_runtime(
+            "admission_receipt and terminal_receipt bind different invocations"
+        )
+    if terminal.timestamp_unix_ms < admission.timestamp_unix_ms:
+        raise _invalid_runtime("terminal_receipt timestamp precedes admission_receipt")
+    binding_pairs = (
+        (admission.caller_binding, terminal.caller_binding),
+        (admission.callee_binding, terminal.callee_binding),
+        (admission.subject_binding, terminal.subject_binding),
+        (admission.invocation_nonce_base64, terminal.invocation_nonce_base64),
+        (admission.causal_binding_kind, terminal.causal_binding_kind),
+        (admission.causal_binding, terminal.causal_binding),
+        (admission.signer_binding, terminal.signer_binding),
+        (admission.host_attestation_base64, terminal.host_attestation_base64),
+        (admission.authority_binding_kind, terminal.authority_binding_kind),
+        (admission.authority_binding, terminal.authority_binding),
+        (admission.ability_binding, terminal.ability_binding),
+        (admission.subject_ref, terminal.subject_ref),
+        (admission.descriptor_version, terminal.descriptor_version),
+        (admission.schema_hash_hex, terminal.schema_hash_hex),
+        (admission.impl_hash_hex, terminal.impl_hash_hex),
+        (admission.runtime_env, terminal.runtime_env),
+        (admission.authority_proof, terminal.authority_proof),
+        (admission.input_hash_hex, terminal.input_hash_hex),
+        (admission.parent_receipts, terminal.parent_receipts),
+    )
+    if any(left != right for left, right in binding_pairs):
+        raise _invalid_runtime(
+            "canonical receipt checkpoints contain conflicting invocation bindings"
         )
 
 
@@ -1164,7 +1300,115 @@ def _optional_runtime_summary_text(value: object, field_name: str) -> Optional[s
     raise _invalid_runtime(f"{field_name} must be a string, integer, or null")
 
 
-def _runtime_receipt_hash(value: object, field_name: str) -> bytes:
+def _decode_runtime_receipt_mapping(
+    decoded: Mapping[str, object],
+) -> _DecodedRuntimeReceipt:
+    if not isinstance(decoded, Mapping):
+        raise _invalid_runtime("runtime receipt summary must be an object")
+    return _DecodedRuntimeReceipt(
+        receipt_id=_optional_string(decoded.get("receipt_id"), "receipt_id") or "",
+        receipt_ura=_optional_string(decoded.get("receipt_ura"), "receipt_ura") or "",
+        invocation_id=_optional_string(decoded.get("invocation_id"), "invocation_id")
+        or "",
+        receipt_type=_optional_runtime_summary_text(
+            decoded.get("receipt_type"), "receipt_type"
+        )
+        or "",
+        state=_optional_runtime_summary_text(decoded.get("state"), "state") or "",
+        index=_optional_non_negative_int(decoded.get("index"), "index"),
+        timestamp_unix_ms=_optional_non_negative_int(
+            decoded.get("timestamp_unix_ms"), "timestamp_unix_ms"
+        ),
+        prev_receipt_hash_hex=_optional_string(
+            decoded.get("prev_receipt_hash_hex"), "prev_receipt_hash_hex"
+        )
+        or "",
+        self_hash_hex=_optional_string(decoded.get("self_hash_hex"), "self_hash_hex")
+        or "",
+        cleanup_complete=_optional_bool(
+            decoded.get("cleanup_complete"), "cleanup_complete"
+        ),
+        reason=_optional_string(decoded.get("reason"), "reason") or "",
+        child_invocation_id=_optional_string(
+            decoded.get("child_invocation_id"), "child_invocation_id"
+        )
+        or "",
+        payload_base64=_optional_string(decoded.get("payload_base64"), "payload_base64")
+        or "",
+        caller_binding=_receipt_agent_binding(
+            decoded.get("caller_binding"), "caller_binding"
+        ),
+        callee_binding=_receipt_agent_binding(
+            decoded.get("callee_binding"), "callee_binding"
+        ),
+        subject_binding=_receipt_subject_binding(
+            decoded.get("subject_binding"), "subject_binding"
+        ),
+        invocation_nonce_base64=_optional_string(
+            decoded.get("invocation_nonce_base64"), "invocation_nonce_base64"
+        )
+        or "",
+        causal_binding_kind=_optional_string(
+            decoded.get("causal_binding_kind"), "causal_binding_kind"
+        )
+        or "",
+        causal_binding=_optional_mapping(
+            decoded.get("causal_binding"), "causal_binding"
+        ),
+        callee_signature=_receipt_signature(
+            decoded.get("callee_signature"), "callee_signature"
+        ),
+        signer_binding=_receipt_agent_binding(
+            decoded.get("signer_binding"), "signer_binding"
+        ),
+        host_attestation_base64=_optional_string(
+            decoded.get("host_attestation_base64"), "host_attestation_base64"
+        )
+        or "",
+        authority_binding_kind=_optional_string(
+            decoded.get("authority_binding_kind"), "authority_binding_kind"
+        )
+        or "",
+        authority_binding=_optional_mapping(
+            decoded.get("authority_binding"), "authority_binding"
+        ),
+        ability_binding=_optional_string(
+            decoded.get("ability_binding"), "ability_binding"
+        )
+        or "",
+        failure=_receipt_failure(decoded.get("failure"), "failure"),
+        usage=_receipt_usage(decoded.get("usage"), "usage"),
+        subject_ref=_receipt_entity_ref(decoded.get("subject_ref"), "subject_ref"),
+        descriptor_version=_optional_string(
+            decoded.get("descriptor_version"), "descriptor_version"
+        )
+        or "",
+        schema_hash_hex=_optional_string(
+            decoded.get("schema_hash_hex"), "schema_hash_hex"
+        )
+        or "",
+        impl_hash_hex=_optional_string(decoded.get("impl_hash_hex"), "impl_hash_hex")
+        or "",
+        runtime_env=_optional_string(decoded.get("runtime_env"), "runtime_env") or "",
+        authority_proof=_receipt_authority_proof(
+            decoded.get("authority_proof"), "authority_proof"
+        ),
+        input_hash_hex=_optional_string(decoded.get("input_hash_hex"), "input_hash_hex")
+        or "",
+        output_hash_hex=_optional_string(
+            decoded.get("output_hash_hex"), "output_hash_hex"
+        )
+        or "",
+        parent_receipts=_receipt_refs(decoded.get("parent_receipts")),
+    )
+
+
+def _runtime_receipt_hash(
+    value: object,
+    field_name: str,
+    *,
+    allow_zero: bool = False,
+) -> bytes:
     if not isinstance(value, str) or not value:
         raise _invalid_runtime(f"{field_name} is required")
     try:
@@ -1173,7 +1417,446 @@ def _runtime_receipt_hash(value: object, field_name: str) -> bytes:
         raise _invalid_runtime(f"{field_name} must be hexadecimal", error) from error
     if len(decoded) != 32:
         raise _invalid_runtime(f"{field_name} must be exactly 32 bytes")
+    if not allow_zero and not any(decoded):
+        raise _invalid_runtime(f"{field_name} must not be all-zero")
     return decoded
+
+
+def _runtime_receipt_base64(
+    value: object,
+    field_name: str,
+    *,
+    expected_length: Optional[int] = None,
+    allow_empty: bool = False,
+) -> bytes:
+    if not isinstance(value, str):
+        raise _invalid_runtime(f"{field_name} must be a base64 string")
+    text = value.strip()
+    if not text and not allow_empty:
+        raise _invalid_runtime(f"{field_name} is required")
+    try:
+        decoded = base64.b64decode(text, validate=True)
+    except (ValueError, TypeError) as error:
+        raise _invalid_runtime(f"{field_name} must be valid base64", error) from error
+    if not decoded and not allow_empty:
+        raise _invalid_runtime(f"{field_name} must decode to non-empty bytes")
+    if expected_length is not None and len(decoded) != expected_length:
+        raise _invalid_runtime(
+            f"{field_name} must decode to exactly {expected_length} bytes"
+        )
+    return decoded
+
+
+def _normalized_receipt_state(value: str) -> str:
+    return value.strip().replace("_", "").lower()
+
+
+def _validate_runtime_receipt_ref(
+    value: object,
+    field_name: str,
+) -> None:
+    decoded = _receipt_mapping(value, field_name)
+    if decoded is None:
+        raise _invalid_runtime(f"{field_name} must be an object")
+    _runtime_receipt_hash(
+        decoded.get("receipt_hash_hex"),
+        f"{field_name}.receipt_hash_hex",
+    )
+    _required_receipt_text(
+        decoded.get("receipt_ura"),
+        f"{field_name}.receipt_ura",
+    )
+
+
+def _validate_runtime_receipt_causal_binding(
+    binding_kind: str,
+    binding: Mapping[str, object],
+) -> None:
+    form = _required_receipt_text(binding.get("form"), "causal_binding.form")
+    if form != binding_kind:
+        raise _invalid_runtime(
+            "runtime receipt causal_binding form does not match causal_binding_kind"
+        )
+    if form == "none":
+        return
+    if form == "scalar":
+        _validate_runtime_receipt_ref(
+            binding.get("receipt"),
+            "causal_binding.receipt",
+        )
+        return
+    if form == "list":
+        prior = binding.get("prior")
+        if not isinstance(prior, list) or not prior:
+            raise _invalid_runtime("causal_binding.prior must be a non-empty array")
+        for index, receipt in enumerate(prior):
+            _validate_runtime_receipt_ref(
+                receipt,
+                f"causal_binding.prior[{index}]",
+            )
+        return
+    if form == "merkle":
+        _runtime_receipt_hash(
+            binding.get("root_hex"),
+            "causal_binding.root_hex",
+        )
+        _required_receipt_text(
+            binding.get("proof_ura"),
+            "causal_binding.proof_ura",
+        )
+        return
+    raise _invalid_runtime(f"unsupported causal_binding form {form!r}")
+
+
+def _validate_runtime_receipt_signing_model(receipt: RuntimeReceipt) -> None:
+    assert receipt.callee_binding is not None
+    assert receipt.signer_binding is not None
+    signer_ura = receipt.signer_binding.ura.strip()
+    callee_ura = receipt.callee_binding.ura.strip()
+    if signer_ura == callee_ura:
+        if receipt.host_attestation_base64.strip():
+            raise _invalid_runtime(
+                "self-signed runtime receipt must not carry "
+                "host_attestation_base64"
+            )
+        return
+    if not receipt.host_attestation_base64.strip():
+        raise _invalid_runtime(
+            "hosted runtime receipt is missing host_attestation_base64"
+        )
+    _runtime_receipt_base64(
+        receipt.host_attestation_base64,
+        "host_attestation_base64",
+        expected_length=64,
+    )
+
+
+def _validate_runtime_receipt_canonical_proof_facts(
+    receipt: RuntimeReceipt,
+) -> None:
+    assert receipt.caller_binding is not None
+    assert receipt.callee_binding is not None
+    assert receipt.subject_binding is not None
+    assert receipt.signer_binding is not None
+    assert receipt.authority_binding is not None
+    assert receipt.subject_ref is not None
+    assert receipt.authority_proof is not None
+
+    for field_name, binding in (
+        ("caller_binding", receipt.caller_binding),
+        ("callee_binding", receipt.callee_binding),
+        ("subject_binding", receipt.subject_binding),
+        ("signer_binding", receipt.signer_binding),
+    ):
+        _runtime_receipt_ura_profile(binding.profile, f"{field_name}.profile")
+
+    authority = _runtime_receipt_authority_binding(
+        receipt.authority_binding,
+        "authority_binding",
+    )
+    authority_kind = _required_receipt_text(
+        receipt.authority_binding.get("kind"),
+        "authority_binding.kind",
+    )
+    if authority_kind != receipt.authority_binding_kind:
+        raise _invalid_runtime(
+            "runtime receipt authority_binding kind does not match "
+            "authority_binding_kind"
+        )
+
+    proof = receipt.authority_proof
+    _required_receipt_text(proof.proof_type, "authority_proof.proof_type")
+    proof_kind = _required_receipt_text(
+        proof.binding_kind,
+        "authority_proof.binding_kind",
+    )
+    if proof_kind != receipt.authority_binding_kind:
+        raise _invalid_runtime(
+            "runtime receipt authority_proof binding_kind does not match "
+            "authority_binding_kind"
+        )
+    proof_binding = _runtime_receipt_authority_binding(
+        proof.binding,
+        "authority_proof.binding",
+    )
+    if proof_binding != authority:
+        raise _invalid_runtime(
+            "runtime receipt authority_proof binding does not match "
+            "authority_binding"
+        )
+
+    _required_receipt_agent_binding(proof.issuer, "authority_proof.issuer")
+    assert proof.issuer is not None
+    issuer_profile = _runtime_receipt_ura_profile(
+        proof.issuer.profile,
+        "authority_proof.issuer.profile",
+    )
+    callee_profile = _runtime_receipt_ura_profile(
+        receipt.callee_binding.profile,
+        "callee_binding.profile",
+    )
+    issuer = _AxonAgentIdentity(proof.issuer.ura, issuer_profile)
+    callee = _AxonAgentIdentity(receipt.callee_binding.ura, callee_profile)
+    if issuer != callee:
+        raise _invalid_runtime(
+            "runtime receipt authority_proof issuer does not match callee_binding"
+        )
+
+    proof_signature = None
+    if proof.signature is not None:
+        _required_receipt_signature(
+            proof.signature,
+            "authority_proof.signature",
+        )
+        proof_signature = _AxonCalleeSignature(
+            proof.signature.algorithm,
+            _runtime_receipt_base64(
+                proof.signature.signature_base64,
+                "authority_proof.signature.signature_base64",
+            ),
+            proof.signature.key_id_hint,
+        )
+
+    subject_kind = {
+        1: _AxonEntityRefKind.RESOURCE,
+        2: _AxonEntityRefKind.AGENT,
+        3: _AxonEntityRefKind.ABILITY,
+        4: _AxonEntityRefKind.SESSION,
+        5: _AxonEntityRefKind.CONTINUATION,
+        6: _AxonEntityRefKind.STATE_OBJECT,
+        7: _AxonEntityRefKind.DEVICE,
+    }.get(receipt.subject_ref.kind)
+    if subject_kind is None:
+        raise _invalid_runtime("subject_ref.kind is not a canonical EntityRef kind")
+    subject_ref = _AxonEntityRef(
+        kind=subject_kind,
+        ura=_required_receipt_text(receipt.subject_ref.ura, "subject_ref.ura"),
+        profile=_runtime_receipt_ura_profile(
+            receipt.subject_ref.profile,
+            "subject_ref.profile",
+        ),
+    )
+
+    parent_receipts = tuple(
+        _AxonReceiptRef(
+            receipt_hash=_runtime_receipt_hash(
+                parent.receipt_hash_hex,
+                f"parent_receipts[{index}].receipt_hash_hex",
+            ),
+            receipt_ura=_required_receipt_text(
+                parent.receipt_ura,
+                f"parent_receipts[{index}].receipt_ura",
+            ),
+        )
+        for index, parent in enumerate(receipt.parent_receipts)
+    )
+    try:
+        authority_proof = _AxonInvocationAuthorityProof(
+            proof_type=proof.proof_type,
+            binding=proof_binding,
+            proof_payload=_runtime_receipt_base64(
+                proof.proof_payload_base64,
+                "authority_proof.proof_payload_base64",
+                allow_empty=True,
+            ),
+            proof_hash=_runtime_receipt_hash(
+                proof.proof_hash_hex,
+                "authority_proof.proof_hash_hex",
+            ),
+            issuer=issuer,
+            signature=proof_signature,
+            admission_hook=_required_receipt_text(
+                proof.admission_hook,
+                "authority_proof.admission_hook",
+            ),
+        )
+        _AxonReceiptProofFacts(
+            subject_ref=subject_ref,
+            descriptor_version=_required_receipt_text(
+                receipt.descriptor_version,
+                "descriptor_version",
+            ),
+            schema_hash=_runtime_receipt_hash(
+                receipt.schema_hash_hex,
+                "schema_hash_hex",
+            ),
+            impl_hash=_runtime_receipt_hash(
+                receipt.impl_hash_hex,
+                "impl_hash_hex",
+            ),
+            runtime_env=_required_receipt_text(
+                receipt.runtime_env,
+                "runtime_env",
+            ),
+            authority_proof=authority_proof,
+            input_hash=_runtime_receipt_hash(
+                receipt.input_hash_hex,
+                "input_hash_hex",
+            ),
+            output_hash=_runtime_receipt_hash(
+                receipt.output_hash_hex,
+                "output_hash_hex",
+            ),
+            parent_receipts=parent_receipts,
+        )
+    except _AxonError as error:
+        raise _invalid_runtime(
+            f"runtime receipt proof facts are not canonical: {error}",
+            error,
+        ) from error
+
+
+def _runtime_receipt_authority_binding(
+    value: Optional[Mapping[str, object]],
+    field_name: str,
+) -> _AxonAuthorityBinding:
+    if value is None:
+        raise _invalid_runtime(f"runtime receipt summary is missing {field_name}")
+    kind = _required_receipt_text(value.get("kind"), f"{field_name}.kind")
+    if kind == "self":
+        return _AxonAuthorityBinding.self_(
+            _required_receipt_text(
+                value.get("principal_ura"),
+                f"{field_name}.principal_ura",
+            )
+        )
+    if kind == "delegation":
+        return _AxonAuthorityBinding.delegated(
+            _AxonDelegationProofBody(
+                issuer_ura=_required_receipt_text(
+                    value.get("issuer_ura"),
+                    f"{field_name}.issuer_ura",
+                ),
+                subject_ura=_required_receipt_text(
+                    value.get("subject_ura"),
+                    f"{field_name}.subject_ura",
+                ),
+                caller_ura=_required_receipt_text(
+                    value.get("caller_ura"),
+                    f"{field_name}.caller_ura",
+                ),
+                audience=_required_receipt_text(
+                    value.get("audience"),
+                    f"{field_name}.audience",
+                ),
+                scopes=_runtime_receipt_text_tuple(
+                    value.get("scopes"),
+                    f"{field_name}.scopes",
+                ),
+                issued_at_ms=_runtime_receipt_required_non_negative_int(
+                    value.get("issued_at_ms"),
+                    f"{field_name}.issued_at_ms",
+                ),
+                expires_at_ms=_runtime_receipt_required_non_negative_int(
+                    value.get("expires_at_ms"),
+                    f"{field_name}.expires_at_ms",
+                ),
+                signature=_runtime_receipt_base64(
+                    value.get("signature_base64"),
+                    f"{field_name}.signature_base64",
+                    expected_length=64,
+                ),
+            )
+        )
+    if kind == "capability":
+        return _AxonAuthorityBinding.capability(
+            _required_receipt_text(
+                value.get("capability_ura"),
+                f"{field_name}.capability_ura",
+            )
+        )
+    if kind == "policy":
+        return _AxonAuthorityBinding.policy(
+            _required_receipt_text(
+                value.get("policy_ura"),
+                f"{field_name}.policy_ura",
+            )
+        )
+    if kind == "session":
+        return _AxonAuthorityBinding.session(
+            _AxonSessionAuthorityBody(
+                backend_ura=_required_receipt_text(
+                    value.get("backend_ura"),
+                    f"{field_name}.backend_ura",
+                ),
+                user_ura=_required_receipt_text(
+                    value.get("user_ura"),
+                    f"{field_name}.user_ura",
+                ),
+                session_id=_required_receipt_text(
+                    value.get("session_id"),
+                    f"{field_name}.session_id",
+                ),
+                scopes=_runtime_receipt_text_tuple(
+                    value.get("scopes"),
+                    f"{field_name}.scopes",
+                ),
+                audiences=_runtime_receipt_text_tuple(
+                    value.get("audiences"),
+                    f"{field_name}.audiences",
+                ),
+                issued_at_ms=_runtime_receipt_required_non_negative_int(
+                    value.get("issued_at_ms"),
+                    f"{field_name}.issued_at_ms",
+                ),
+                expires_at_ms=_runtime_receipt_required_non_negative_int(
+                    value.get("expires_at_ms"),
+                    f"{field_name}.expires_at_ms",
+                ),
+                signature=_runtime_receipt_base64(
+                    value.get("signature_base64"),
+                    f"{field_name}.signature_base64",
+                    expected_length=64,
+                ),
+            )
+        )
+    if kind == "bootstrap":
+        return _AxonAuthorityBinding.bootstrap(
+            _AxonBootstrapAuthorityBody(
+                principal_ura=_required_receipt_text(
+                    value.get("principal_ura"),
+                    f"{field_name}.principal_ura",
+                ),
+                realm=_required_receipt_text(
+                    value.get("realm"),
+                    f"{field_name}.realm",
+                ),
+                ability=_required_receipt_text(
+                    value.get("ability"),
+                    f"{field_name}.ability",
+                ),
+            )
+        )
+    raise _invalid_runtime(f"{field_name}.kind is not canonical: {kind!r}")
+
+
+def _runtime_receipt_ura_profile(value: object, field_name: str) -> _AxonUraProfile:
+    text = _required_receipt_text(value, field_name)
+    try:
+        return _AxonUraProfile.parse(text)
+    except _AxonError as error:
+        raise _invalid_runtime(f"{field_name} is not canonical: {error}", error) from error
+
+
+def _runtime_receipt_text_tuple(
+    value: object,
+    field_name: str,
+) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)) or not value:
+        raise _invalid_runtime(f"{field_name} must be a non-empty array")
+    return tuple(
+        _required_receipt_text(item, f"{field_name}[{index}]")
+        for index, item in enumerate(value)
+    )
+
+
+def _runtime_receipt_required_non_negative_int(
+    value: object,
+    field_name: str,
+) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise _invalid_runtime(f"{field_name} must be a non-negative integer")
+    return value
 
 
 def _required_receipt_text(value: object, field_name: str) -> str:
@@ -1335,10 +2018,8 @@ def _receipt_ref(value: object, field_name: str) -> RuntimeReceiptRef:
 
 
 def _receipt_refs(value: object) -> tuple[RuntimeReceiptRef, ...]:
-    if value is None:
-        return ()
     if not isinstance(value, list):
-        raise _invalid_runtime("parent_receipts must be an array or null")
+        raise _invalid_runtime("parent_receipts must be an array")
     return tuple(
         _receipt_ref(item, f"parent_receipts[{index}]")
         for index, item in enumerate(value)
@@ -1360,6 +2041,10 @@ def _receipt_authority_proof(
             decoded.get("binding_kind"), f"{field_name}.binding_kind"
         )
         or "",
+        binding=_optional_mapping(
+            decoded.get("binding"),
+            f"{field_name}.binding",
+        ),
         proof_payload_base64=_optional_string(
             decoded.get("proof_payload_base64"),
             f"{field_name}.proof_payload_base64",

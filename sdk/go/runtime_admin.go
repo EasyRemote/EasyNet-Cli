@@ -133,11 +133,20 @@ func (c *RuntimeAdminAbilityClient) RevokeDevice(ctx context.Context, request Ru
 }
 
 type RuntimeAdminClient struct {
-	lifecycle RuntimeLifecycle
+	lifecycle RuntimeHostLifecycle
 	health    *HealthClient
 }
 
 func NewRuntimeAdminClient(lifecycle RuntimeLifecycle, health *HealthClient) (*RuntimeAdminClient, error) {
+	if lifecycle == nil {
+		return nil, invalidRuntimeClient("runtime lifecycle is required")
+	}
+	return NewRuntimeHostAdminClient(runtimeLifecycleCompatibilityAdapter{lifecycle}, health)
+}
+
+// NewRuntimeHostAdminClient creates a provider-neutral runtime administration
+// facade over the canonical runtime-host lifecycle.
+func NewRuntimeHostAdminClient(lifecycle RuntimeHostLifecycle, health *HealthClient) (*RuntimeAdminClient, error) {
 	if lifecycle == nil {
 		return nil, invalidRuntimeClient("runtime lifecycle is required")
 	}
@@ -149,7 +158,7 @@ func (c *RuntimeAdminClient) Discover(ctx context.Context, opts RuntimeHostDisco
 	if err != nil {
 		return RuntimeHostEndpoints{}, err
 	}
-	return control.Discover(ctx, opts)
+	return control.DiscoverRuntime(ctx, opts)
 }
 
 func (c *RuntimeAdminClient) Start(ctx context.Context, cfg RuntimeHostStartConfig) (*RuntimeHandle, error) {
@@ -157,7 +166,7 @@ func (c *RuntimeAdminClient) Start(ctx context.Context, cfg RuntimeHostStartConf
 	if err != nil {
 		return nil, err
 	}
-	return control.Start(ctx, cfg)
+	return control.StartRuntime(ctx, cfg)
 }
 
 func (c *RuntimeAdminClient) Attach(ctx context.Context, opts RuntimeHostAttachOptions) (*RuntimeHandle, error) {
@@ -165,7 +174,7 @@ func (c *RuntimeAdminClient) Attach(ctx context.Context, opts RuntimeHostAttachO
 	if err != nil {
 		return nil, err
 	}
-	return control.Attach(ctx, opts)
+	return control.AttachRuntime(ctx, opts)
 }
 
 func (c *RuntimeAdminClient) Status(ctx context.Context, handle *RuntimeHandle) (RuntimeHostStatus, error) {
@@ -195,7 +204,7 @@ func (c *RuntimeAdminClient) Stop(ctx context.Context, handle *RuntimeHandle, op
 	if handle == nil {
 		return invalidRuntimeClient("runtime handle is required")
 	}
-	return handle.Stop(ctx, opts)
+	return handle.StopRuntime(ctx, opts)
 }
 
 func (c *RuntimeAdminClient) Detach(ctx context.Context, handle *RuntimeHandle) error {
@@ -254,7 +263,7 @@ func (c *RuntimeAdminClient) Readiness(ctx context.Context, handle *RuntimeHandl
 	}, nil
 }
 
-func (c *RuntimeAdminClient) requireControl(ctx context.Context) (RuntimeLifecycle, error) {
+func (c *RuntimeAdminClient) requireControl(ctx context.Context) (RuntimeHostLifecycle, error) {
 	if c == nil || c.lifecycle == nil {
 		return nil, invalidRuntimeClient("runtime admin client is not initialized")
 	}

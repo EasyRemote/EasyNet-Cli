@@ -12,6 +12,14 @@
 set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+
+# The Backend-present half of this composite gate owns one root contract.
+# Source the resolver without executing the focused E2E.
+source "$SELF_DIR/backend-live-principal-e2e.sh"
+
+BACKEND_INPUT_ROOT="${EASYNET_BACKEND_ROOT:-$REPO_ROOT/../EasyNet}"
+BACKEND_MODULE_ROOT="$(principal_lifecycle_resolve_backend_module_root "$BACKEND_INPUT_ROOT")"
 
 if [[ "${1:-}" == "--self-test" ]]; then
   bash -n "$0"
@@ -19,8 +27,10 @@ if [[ "${1:-}" == "--self-test" ]]; then
   grep -q "backend-live-principal-e2e.sh" "$0"
   grep -q "backend-live-http-daemon-e2e.sh" "$0"
   bash "$SELF_DIR/standalone-hub-recovery-e2e.sh" --self-test
-  bash "$SELF_DIR/backend-live-principal-e2e.sh" --self-test
-  bash "$SELF_DIR/backend-live-http-daemon-e2e.sh" --self-test
+  EASYNET_BACKEND_ROOT="$BACKEND_MODULE_ROOT" \
+    bash "$SELF_DIR/backend-live-principal-e2e.sh" --self-test
+  EASYNET_BACKEND_ROOT="$BACKEND_MODULE_ROOT" \
+    bash "$SELF_DIR/backend-live-http-daemon-e2e.sh" --self-test
   echo "standalone-hub-principal-lifecycle-e2e self-test ok"
   exit 0
 fi
@@ -29,9 +39,11 @@ echo "[standalone-hub-principal-lifecycle-e2e] running backend-free standalone H
 bash "$SELF_DIR/standalone-hub-recovery-e2e.sh"
 
 echo "[standalone-hub-principal-lifecycle-e2e] running Backend-present PrincipalLifecycle E2E..."
-bash "$SELF_DIR/backend-live-principal-e2e.sh"
+EASYNET_BACKEND_ROOT="$BACKEND_MODULE_ROOT" \
+  bash "$SELF_DIR/backend-live-principal-e2e.sh"
 
 echo "[standalone-hub-principal-lifecycle-e2e] running browser HTTP to live daemon E2E..."
-bash "$SELF_DIR/backend-live-http-daemon-e2e.sh"
+EASYNET_BACKEND_ROOT="$BACKEND_MODULE_ROOT" \
+  bash "$SELF_DIR/backend-live-http-daemon-e2e.sh"
 
 echo "[standalone-hub-principal-lifecycle-e2e] PASS"

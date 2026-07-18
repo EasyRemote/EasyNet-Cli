@@ -9,12 +9,18 @@ import easynet_sdk.direct_runtime as direct_runtime
 
 
 class ImportBoundaryTests(unittest.TestCase):
-    def test_public_python_sdk_does_not_import_forbidden_runtime_boundaries(self) -> None:
+    def test_public_python_sdk_does_not_import_forbidden_runtime_boundaries(
+        self,
+    ) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"
         private_cabi = root / "_cabi.py"
+        provider_root = root / "providers"
         axon_addressing = root / "axon_addressing.py"
+        direct_runtime_path = root / "direct_runtime.py"
         directory = root / "directory.py"
         receipt = root / "receipt.py"
+        runtime = root / "runtime.py"
+        axon_adapters = {axon_addressing, direct_runtime_path, receipt, runtime}
         forbidden = [
             "import ctypes",
             "from ctypes",
@@ -31,6 +37,8 @@ class ImportBoundaryTests(unittest.TestCase):
         for path in root.rglob("*.py"):
             if path == private_cabi:
                 continue
+            if path.is_relative_to(provider_root):
+                continue
             body = path.read_text()
             for needle in forbidden:
                 if (
@@ -38,21 +46,28 @@ class ImportBoundaryTests(unittest.TestCase):
                     and needle == "easynet_"
                 ):
                     continue
+                if path in axon_adapters and needle in {"import axon", "from axon"}:
+                    continue
                 self.assertNotIn(needle, body, f"{path} contains {needle!r}")
 
         addressing_body = axon_addressing.read_text()
-        self.assertIn("from easynet_axon", addressing_body)
+        self.assertIn("from axon_sdk", addressing_body)
         self.assertNotIn("service_locator", addressing_body)
         self.assertNotIn("open_cabi", addressing_body)
 
         receipt_body = receipt.read_text()
-        self.assertIn("from easynet_axon.invocation import", receipt_body)
+        self.assertIn("from axon_sdk.invocation import", receipt_body)
         self.assertIn("parse_invocation_ledger_record", receipt_body)
         self.assertIn("parse_invocation_trace_graph", receipt_body)
         self.assertIn("verify_receipt_chain", receipt_body)
         self.assertNotIn("_axon_pb", receipt_body)
         self.assertNotIn("direct_runtime", receipt_body)
         self.assertNotIn("_cabi", receipt_body)
+
+        direct_runtime_body = direct_runtime_path.read_text()
+        self.assertIn("from axon_sdk.invocation import", direct_runtime_body)
+        self.assertIn("_AxonDescriptorBoundEnvelope", direct_runtime_body)
+        self.assertIn("_AxonDescriptorBoundInvocationRequest", direct_runtime_body)
 
     def test_raw_cabi_is_confined_to_private_transport_adapter(self) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"
@@ -94,7 +109,7 @@ class ImportBoundaryTests(unittest.TestCase):
 import json
 import easynet_sdk
 exported = set(getattr(easynet_sdk, "__all__", ()))
-allowed_metadata = {"annotations"}
+allowed_metadata = {"annotations", "direct_runtime", "providers"}
 leaked = sorted(
     name
     for name in dir(easynet_sdk)
@@ -157,7 +172,9 @@ print(json.dumps(leaked))
             for needle in forbidden:
                 self.assertNotIn(needle, body, f"{path} contains {needle!r}")
 
-    def test_descriptor_ref_public_helper_delegates_to_addressing_projection(self) -> None:
+    def test_descriptor_ref_public_helper_delegates_to_addressing_projection(
+        self,
+    ) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"
         body = (root / "ability_descriptor.py").read_text()
         self.assertIn(".axon_addressing", body)

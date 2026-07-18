@@ -1,7 +1,10 @@
+import base64
+import hashlib
 import json
 import unittest
-from dataclasses import fields
+from dataclasses import fields, replace
 
+from axon_sdk.invocation import AuthorityBinding, authority_binding_proof_hash
 from easynet_sdk import (
     BidiStreamDescriptor,
     ErrorCode,
@@ -45,10 +48,13 @@ class MemoryRuntimeTransport:
 
     def invoke(self, draft_json: bytes) -> bytes:
         self.seen_draft = json.loads(draft_json.decode("utf-8"))
+        admission, terminal = canonical_runtime_receipt_pair("inv-runtime-1")
+        terminal["receipt_id"] = "receipt-1"
         return json.dumps(
             {
                 "ok": True,
                 "tuple": self.seen_draft,
+                "invocation_id": "inv-runtime-1",
                 "terminal_state": "Completed",
                 "output_content_type": "application/json",
                 "output_base64": "eyJyZWFkeSI6dHJ1ZX0=",
@@ -56,7 +62,8 @@ class MemoryRuntimeTransport:
                 "selected_node_id": "node-a",
                 "scheduling_reason": "direct",
                 "elapsed_ms": 12,
-                "terminal_receipt": {"receipt_id": "receipt-1"},
+                "admission_receipt": admission,
+                "terminal_receipt": terminal,
                 "error": None,
             },
             separators=(",", ":"),
@@ -135,16 +142,19 @@ class MemoryRuntimeTransport:
     def await_handle(self, control) -> bytes:
         self.seen_await_id = control._adapter_handle_id()
         draft = self.seen_draft or complete_draft().to_json_dict()
+        admission, terminal = canonical_runtime_receipt_pair("inv-await-1")
         return json.dumps(
             {
                 "ok": True,
                 "tuple": draft,
+                "invocation_id": "inv-await-1",
                 "terminal_state": "Completed",
                 "output_content_type": "application/json",
                 "output_base64": "e30=",
                 "output_json": {},
                 "elapsed_ms": 8,
-                "terminal_receipt": None,
+                "admission_receipt": admission,
+                "terminal_receipt": terminal,
                 "error": None,
             },
             separators=(",", ":"),
@@ -191,6 +201,114 @@ def complete_draft():
         .with_content_type("application/json")
         .build()
     )
+
+
+def canonical_runtime_receipt(
+    invocation_id: str,
+    receipt_type: str,
+    state: str,
+    index: int,
+) -> dict[str, object]:
+    proof_payload = b"canonical-runtime-test-proof"
+    return {
+        "receipt_ura": (
+            "easynet:///r/example/resource/runtime/"
+            f"invocation/{invocation_id}/receipt/{index}"
+        ),
+        "invocation_id": invocation_id,
+        "receipt_type": receipt_type,
+        "state": state,
+        "index": index,
+        "timestamp_unix_ms": 1_783_100_000_000 + index,
+        "prev_receipt_hash_hex": "00" * 32,
+        "self_hash_hex": f"{index + 1:064x}",
+        "cleanup_complete": state.lower() != "admitted",
+        "caller_binding": {
+            "ura": "easynet:///r/example/agent/alice.sdk",
+            "profile": "easynet-strict-v2",
+        },
+        "callee_binding": {
+            "ura": "easynet:///r/example/device/dev-a",
+            "profile": "easynet-strict-v2",
+        },
+        "subject_binding": {
+            "ura": "easynet:///r/example/device/dev-a",
+            "profile": "easynet-strict-v2",
+        },
+        "invocation_nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+        "causal_binding_kind": "none",
+        "causal_binding": {"form": "none"},
+        "callee_signature": {
+            "algorithm": "ed25519",
+            "signature_base64": base64.b64encode(bytes([0x71]) * 64).decode(),
+        },
+        "signer_binding": {
+            "ura": "easynet:///r/example/device/dev-a",
+            "profile": "easynet-strict-v2",
+        },
+        "authority_binding_kind": "self",
+        "authority_binding": {
+            "kind": "self",
+            "principal_ura": "easynet:///r/example/device/dev-a",
+        },
+        "ability_binding": (
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+        ),
+        "subject_ref": {
+            "kind": 1,
+            "ura": "easynet:///r/example/device/dev-a",
+            "profile": "easynet-strict-v2",
+        },
+        "descriptor_version": "1.0.0",
+        "schema_hash_hex": "11" * 32,
+        "impl_hash_hex": "22" * 32,
+        "runtime_env": "python-test",
+        "authority_proof": {
+            "proof_type": "self",
+            "binding_kind": "self",
+            "binding": {
+                "kind": "self",
+                "principal_ura": "easynet:///r/example/device/dev-a",
+            },
+            "proof_payload_base64": base64.b64encode(proof_payload).decode(),
+            "proof_hash_hex": hashlib.sha256(proof_payload).hexdigest(),
+            "issuer": {
+                "ura": "easynet:///r/example/device/dev-a",
+                "profile": "easynet-strict-v2",
+            },
+            "signature": {
+                "algorithm": "ed25519",
+                "signature_base64": base64.b64encode(bytes([0x72]) * 64).decode(),
+            },
+            "admission_hook": "test.runtime.admission",
+        },
+        "input_hash_hex": "33" * 32,
+        "output_hash_hex": "44" * 32,
+        "parent_receipts": [],
+    }
+
+
+def canonical_runtime_receipt_pair(
+    invocation_id: str,
+    terminal_state: str = "Completed",
+) -> tuple[dict[str, object], dict[str, object]]:
+    terminal_types = {
+        "completed": "completed",
+        "failed": "failed",
+        "timedout": "timed_out",
+        "cancelled": "cancelled",
+    }
+    normalized_state = terminal_state.strip().replace("_", "").lower()
+    terminal_type = terminal_types[normalized_state]
+    admission = canonical_runtime_receipt(invocation_id, "admitted", "Admitted", 0)
+    terminal = canonical_runtime_receipt(
+        invocation_id,
+        terminal_type,
+        terminal_state,
+        1,
+    )
+    terminal["prev_receipt_hash_hex"] = admission["self_hash_hex"]
+    return admission, terminal
 
 
 def signed_fixture():
@@ -248,30 +366,27 @@ class RuntimeTests(unittest.TestCase):
         )
 
     def test_invocation_result_projects_runtime_receipt_summary(self) -> None:
+        admission, terminal = canonical_runtime_receipt_pair("inv-1")
+        terminal.update(
+            {
+                "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/opaque/receipt",
+                "self_hash_hex": "aa" * 32,
+                "extra": {"daemon": "axon"},
+            }
+        )
         result = InvocationResult.from_json(
             json.dumps(
                 {
                     "ok": True,
                     "tuple": complete_draft().to_json_dict(),
+                    "invocation_id": "inv-1",
                     "terminal_state": "Completed",
                     "output_content_type": "application/json",
                     "output_base64": "e30=",
                     "output_json": {},
                     "elapsed_ms": 8,
-                    "terminal_receipt": {
-                        "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/opaque/receipt",
-                        "invocation_id": "inv-1",
-                        "receipt_type": "terminal",
-                        "state": "completed",
-                        "index": 1,
-                        "timestamp_unix_ms": 1783100000123,
-                        "prev_receipt_hash_hex": "",
-                        "self_hash_hex": "00" * 32,
-                        "cleanup_complete": True,
-                        "reason": "",
-                        "child_invocation_id": "",
-                        "extra": {"daemon": "axon"},
-                    },
+                    "admission_receipt": admission,
+                    "terminal_receipt": terminal,
                     "error": None,
                 },
                 separators=(",", ":"),
@@ -292,20 +407,22 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(hasattr(result, "receipt_summary"))
 
     def test_invocation_result_separates_admission_and_terminal_receipts(self) -> None:
+        admission, terminal = canonical_runtime_receipt_pair("inv-1")
         payload = {
             "ok": True,
             "tuple": complete_draft().to_json_dict(),
+            "invocation_id": "inv-1",
             "terminal_state": "Completed",
-            "admission_receipt": {"index": 0, "state": "Admitted"},
-            "terminal_receipt": {"index": 1, "state": "Completed"},
+            "admission_receipt": admission,
+            "terminal_receipt": terminal,
             "error": None,
         }
         result = InvocationResult.from_json(json.dumps(payload))
 
-        self.assertEqual(result.admission_receipt, {"index": 0, "state": "Admitted"})
+        self.assertEqual(result.admission_receipt, admission)
         assert result.terminal_receipt_summary is not None
         self.assertEqual(result.terminal_receipt_summary.index, 1)
-        self.assertEqual(result.terminal_receipt, {"index": 1, "state": "Completed"})
+        self.assertEqual(result.terminal_receipt, terminal)
 
         payload.pop("terminal_receipt")
         payload["receipt"] = {"index": 1, "state": "Completed"}
@@ -313,6 +430,209 @@ class RuntimeTests(unittest.TestCase):
             InvocationResult.from_json(json.dumps(payload))
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_invocation_result_allows_only_receipt_free_pre_admission_failure(
+        self,
+    ) -> None:
+        for stage in (
+            "global_admission",
+            "caller_authentication",
+            "authority_validation",
+            "bootstrap_authorization",
+            "quota",
+            "ability_resolution",
+            "ability_policy",
+            "request_validation",
+        ):
+            with self.subTest(stage=stage):
+                result = InvocationResult.from_json(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "tuple": complete_draft().to_json_dict(),
+                            "terminal_state": "Failed",
+                            "admission_receipt": None,
+                            "terminal_receipt": None,
+                            "error": {
+                                "code": "ADMISSION_DENIED",
+                                "stage": stage,
+                                "message": "rejected before admission",
+                                "retryable": False,
+                            },
+                        }
+                    )
+                )
+                self.assertFalse(result.ok)
+                self.assertIsNone(result.admission_receipt_summary)
+                self.assertIsNone(result.terminal_receipt_summary)
+
+    def test_invocation_result_rejects_conflicting_receipt_topology(self) -> None:
+        mutations = (
+            ("admission state", "state", "Running"),
+            ("admission receipt type", "receipt_type", "completed"),
+            ("terminal state", "state", "Failed"),
+            ("terminal receipt type", "receipt_type", "failed"),
+            ("terminal index", "index", 0),
+            ("terminal cleanup", "cleanup_complete", False),
+            ("terminal timestamp", "timestamp_unix_ms", 0),
+            ("invocation binding", "invocation_id", "other"),
+            (
+                "caller binding",
+                "caller_binding",
+                {"ura": "easynet:///r/example/agent/other"},
+            ),
+            (
+                "host attestation",
+                "host_attestation_base64",
+                base64.b64encode(b"other-host").decode(),
+            ),
+        )
+        for name, field_name, value in mutations:
+            admission, terminal = canonical_runtime_receipt_pair("inv-1")
+            target = admission if name.startswith("admission") else terminal
+            target[field_name] = value
+            with self.subTest(case=name):
+                with self.assertRaises(SDKError) as caught:
+                    InvocationResult.from_json(
+                        json.dumps(
+                            {
+                                "ok": True,
+                                "tuple": complete_draft().to_json_dict(),
+                                "invocation_id": "inv-1",
+                                "terminal_state": "Completed",
+                                "admission_receipt": admission,
+                                "terminal_receipt": terminal,
+                                "error": None,
+                            }
+                        )
+                    )
+                self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_invocation_result_accepts_non_adjacent_finalization_checkpoints(
+        self,
+    ) -> None:
+        admission, terminal = canonical_runtime_receipt_pair("inv-checkpoints")
+        admission["index"] = 1
+        admission["prev_receipt_hash_hex"] = "aa" * 32
+        terminal["index"] = 7
+        terminal["prev_receipt_hash_hex"] = "bb" * 32
+
+        result = InvocationResult.from_json(
+            json.dumps(
+                {
+                    "ok": True,
+                    "tuple": complete_draft().to_json_dict(),
+                    "invocation_id": "inv-checkpoints",
+                    "terminal_state": "Completed",
+                    "admission_receipt": admission,
+                    "terminal_receipt": terminal,
+                    "error": None,
+                }
+            )
+        )
+        assert result.admission_receipt_summary is not None
+        assert result.terminal_receipt_summary is not None
+        self.assertEqual(result.admission_receipt_summary.index, 1)
+        self.assertEqual(result.terminal_receipt_summary.index, 7)
+
+    def test_runtime_receipt_rejects_malformed_canonical_proof_facts(self) -> None:
+        cases = {
+            "invalid nonce": (
+                "invocation_nonce_base64",
+                "not-base64",
+            ),
+            "missing parent binding": ("parent_receipts", None),
+            "malformed parent hash": (
+                "parent_receipts",
+                [
+                    {
+                        "receipt_hash_hex": "aa",
+                        "receipt_ura": "easynet:///r/example/resource/parent",
+                    }
+                ],
+            ),
+        }
+        for name, (field_name, value) in cases.items():
+            receipt = canonical_runtime_receipt("inv-1", "terminal", "Completed", 1)
+            receipt[field_name] = value
+            with self.subTest(case=name):
+                with self.assertRaises(SDKError):
+                    RuntimeReceipt.from_mapping(receipt)
+
+        receipt = canonical_runtime_receipt("inv-1", "terminal", "Completed", 1)
+        proof = receipt["authority_proof"]
+        assert isinstance(proof, dict)
+        proof["proof_hash_hex"] = "ff" * 32
+        with self.assertRaises(SDKError, msg="mismatched proof hash"):
+            RuntimeReceipt.from_mapping(receipt)
+
+        receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+        proof = receipt["authority_proof"]
+        assert isinstance(proof, dict)
+        proof["binding_kind"] = "delegation"
+        with self.assertRaises(SDKError, msg="mismatched authority kind"):
+            RuntimeReceipt.from_mapping(receipt)
+
+        mutations = (
+            ("missing proof binding", lambda value: value.pop("binding")),
+            (
+                "mismatched proof binding",
+                lambda value: value.update(
+                    {
+                        "binding": {
+                            "kind": "self",
+                            "principal_ura": "easynet:///r/example/device/other",
+                        }
+                    }
+                ),
+            ),
+            ("missing admission hook", lambda value: value.pop("admission_hook")),
+            (
+                "issuer does not match callee",
+                lambda value: value.update(
+                    {
+                        "issuer": {
+                            "ura": "easynet:///r/example/device/other",
+                            "profile": "easynet-strict-v2",
+                        }
+                    }
+                ),
+            ),
+        )
+        for name, mutate in mutations:
+            receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+            proof = receipt["authority_proof"]
+            assert isinstance(proof, dict)
+            mutate(proof)
+            with self.subTest(case=name):
+                with self.assertRaises(SDKError):
+                    RuntimeReceipt.from_mapping(receipt)
+
+        receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+        caller = receipt["caller_binding"]
+        assert isinstance(caller, dict)
+        caller["profile"] = "test"
+        with self.assertRaises(SDKError, msg="invalid identity profile"):
+            RuntimeReceipt.from_mapping(receipt)
+
+        receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+        receipt["signer_binding"] = {
+            "ura": "easynet:///r/example/device/runtime-host",
+            "profile": "easynet-strict-v2",
+        }
+        with self.assertRaises(SDKError, msg="hosted signer without attestation"):
+            RuntimeReceipt.from_mapping(receipt)
+
+        receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+        receipt["host_attestation_base64"] = base64.b64encode(bytes([0x73]) * 64).decode()
+        with self.assertRaises(SDKError, msg="self signer with attestation"):
+            RuntimeReceipt.from_mapping(receipt)
+
+        canonical = RuntimeReceipt.from_mapping(
+            canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
+        )
+        with self.assertRaises(SDKError, msg="raw projection mismatch"):
+            replace(canonical, raw={})
 
     def test_invocation_result_preserves_stable_positional_field_prefix(self) -> None:
         self.assertEqual(
@@ -333,16 +653,53 @@ class RuntimeTests(unittest.TestCase):
             ],
         )
 
+    def test_invocation_result_direct_constructor_enforces_receipt_topology(
+        self,
+    ) -> None:
+        with self.assertRaises(SDKError):
+            InvocationResult(
+                ok=True,
+                tuple=complete_draft(),
+                terminal_state="Completed",
+            )
+
+        admission, terminal = canonical_runtime_receipt_pair("inv-direct")
+        result = InvocationResult(
+            ok=True,
+            tuple=complete_draft(),
+            terminal_state="Completed",
+            admission_receipt=admission,
+            admission_receipt_summary=RuntimeReceipt.from_mapping(admission),
+            terminal_receipt=terminal,
+            terminal_receipt_summary=RuntimeReceipt.from_mapping(terminal),
+        )
+        self.assertTrue(result.ok)
+
+        with self.assertRaises(SDKError):
+            InvocationResult(
+                ok=True,
+                tuple=complete_draft(),
+                terminal_state="Completed",
+                admission_receipt={},
+                admission_receipt_summary=RuntimeReceipt.from_mapping(admission),
+                terminal_receipt=terminal,
+                terminal_receipt_summary=RuntimeReceipt.from_mapping(terminal),
+            )
+
     def test_invocation_result_rejects_malformed_runtime_receipt_fields(self) -> None:
+        admission, terminal = canonical_runtime_receipt_pair("inv-1")
+        terminal["cleanup_complete"] = "yes"
         result = {
             "ok": True,
             "tuple": complete_draft().to_json_dict(),
+            "invocation_id": "inv-1",
             "terminal_state": "Completed",
             "output_content_type": "application/json",
             "output_base64": "e30=",
             "output_json": {},
             "elapsed_ms": 8,
-            "terminal_receipt": {"cleanup_complete": "yes"},
+            "admission_receipt": admission,
+            "terminal_receipt": terminal,
             "error": None,
         }
 
@@ -352,60 +709,9 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_runtime_receipt_proof_facts_required(self) -> None:
-        receipt = RuntimeReceipt.from_required_mapping(
-            {
-                "index": 1,
-                "invocation_id": "inv-1",
-                "receipt_type": 1,
-                "state": 2,
-                "timestamp_unix_ms": 1_700_000_000_000,
-                "prev_receipt_hash_hex": "00" * 32,
-                "self_hash_hex": "aa" * 32,
-                "caller_binding": {"ura": "easynet:///r/local/agent/caller"},
-                "callee_binding": {"ura": "easynet:///r/local/agent/callee"},
-                "subject_binding": {"ura": "easynet:///r/local/resource/subject"},
-                "invocation_nonce_base64": "bm9uY2U=",
-                "causal_binding_kind": "scalar",
-                "causal_binding": {
-                    "form": "scalar",
-                    "receipt": {
-                        "receipt_hash_hex": "77" * 32,
-                        "receipt_ura": "easynet:///r/local/resource/subject/invocation/root/receipt",
-                    },
-                },
-                "callee_signature": {
-                    "algorithm": "ed25519",
-                    "signature_base64": "Y2FsbGVlLXNpZw==",
-                },
-                "signer_binding": {"ura": "easynet:///r/local/agent/signer"},
-                "authority_binding_kind": "delegation",
-                "authority_binding": {
-                    "kind": "delegation",
-                    "issuer_ura": "easynet:///r/local/agent/issuer",
-                    "subject_ura": "easynet:///r/local/resource/subject",
-                    "caller_ura": "easynet:///r/local/agent/caller",
-                },
-                "ability_binding": "easynet:///r/local/ability/example.run",
-                "descriptor_version": "1.0.0",
-                "schema_hash_hex": "11" * 32,
-                "impl_hash_hex": "22" * 32,
-                "runtime_env": "native",
-                "authority_proof": {
-                    "proof_type": "admission",
-                    "binding_kind": "delegation",
-                    "proof_payload_base64": "cHJvb2Y=",
-                    "proof_hash_hex": "33" * 32,
-                    "issuer": {"ura": "easynet:///r/local/agent/issuer"},
-                    "signature": {
-                        "algorithm": "ed25519",
-                        "signature_base64": "cHJvb2ZzaWc=",
-                    },
-                },
-                "input_hash_hex": "44" * 32,
-                "output_hash_hex": "55" * 32,
-                "parent_receipts": [],
-            }
-        )
+        complete = canonical_runtime_receipt("inv-1", "1", "2", 1)
+        complete["self_hash_hex"] = "aa" * 32
+        receipt = RuntimeReceipt.from_required_mapping(complete)
 
         self.assertEqual(receipt.receipt_type, "1")
         self.assertEqual(receipt.state, "2")
@@ -413,31 +719,44 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(receipt.self_receipt_hash(), b"\xaa" * 32)
 
         with self.assertRaises(SDKError) as caught:
-            RuntimeReceipt.from_required_mapping(
-                {
-                    "index": 1,
-                    "invocation_id": "inv-1",
-                    "receipt_type": "completed",
-                    "state": "completed",
-                    "timestamp_unix_ms": 1_700_000_000_000,
-                    "prev_receipt_hash_hex": "00" * 32,
-                    "self_hash_hex": "aa" * 32,
-                }
-            )
+            incomplete = canonical_runtime_receipt("inv-1", "completed", "completed", 1)
+            incomplete.pop("authority_proof")
+            RuntimeReceipt.from_required_mapping(incomplete)
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_runtime_receipt_projects_complete_typed_facts(self) -> None:
-        receipt = RuntimeReceipt.from_mapping(
+        complete = canonical_runtime_receipt("inv-typed", "completed", "completed", 1)
+        proof_payload = b"typed-proof"
+        delegation_signature = base64.b64encode(bytes([0x73]) * 64).decode()
+        strict_profile = "easynet-strict-v2"
+        delegation_binding = {
+            "kind": "delegation",
+            "issuer_ura": "easynet:///r/local/agent/issuer",
+            "subject_ura": "easynet:///r/local/resource/subject",
+            "caller_ura": "easynet:///r/local/agent/caller",
+            "audience": "runtime",
+            "scopes": ["invoke"],
+            "issued_at_ms": 1,
+            "expires_at_ms": 2,
+            "signature_base64": delegation_signature,
+        }
+        complete.update(
             {
                 "payload_base64": "cGF5bG9hZA==",
-                "caller_binding": {"ura": "easynet:///r/local/agent/caller"},
-                "callee_binding": {"ura": "easynet:///r/local/agent/callee"},
-                "subject_binding": {
-                    "ura": "easynet:///r/local/user/owner",
-                    "profile": "owner",
+                "caller_binding": {
+                    "ura": "easynet:///r/local/agent/caller",
+                    "profile": strict_profile,
                 },
-                "invocation_nonce_base64": "bm9uY2U=",
+                "callee_binding": {
+                    "ura": "easynet:///r/local/agent/callee",
+                    "profile": strict_profile,
+                },
+                "subject_binding": {
+                    "ura": "easynet:///r/local/resource/subject",
+                    "profile": strict_profile,
+                },
+                "invocation_nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_binding_kind": "scalar",
                 "causal_binding": {
                     "form": "scalar",
@@ -451,20 +770,15 @@ class RuntimeTests(unittest.TestCase):
                     "signature_base64": "c2ln",
                     "key_id_hint": "key-1",
                 },
-                "signer_binding": {"ura": "easynet:///r/local/agent/signer"},
-                "host_attestation_base64": "YXR0ZXN0YXRpb24=",
-                "authority_binding_kind": "delegation",
-                "authority_binding": {
-                    "kind": "delegation",
-                    "issuer_ura": "easynet:///r/local/agent/issuer",
-                    "subject_ura": "easynet:///r/local/user/owner",
-                    "caller_ura": "easynet:///r/local/agent/caller",
-                    "audience": "runtime",
-                    "scopes": ["invoke"],
-                    "issued_at_ms": 1,
-                    "expires_at_ms": 2,
-                    "signature_base64": "ZGVsZWdhdGlvbg==",
+                "signer_binding": {
+                    "ura": "easynet:///r/local/agent/signer",
+                    "profile": strict_profile,
                 },
+                "host_attestation_base64": base64.b64encode(
+                    bytes([0x74]) * 64
+                ).decode(),
+                "authority_binding_kind": "delegation",
+                "authority_binding": delegation_binding,
                 "ability_binding": "easynet:///r/local/ability/example.run",
                 "failure": {
                     "code": "DENIED",
@@ -480,8 +794,9 @@ class RuntimeTests(unittest.TestCase):
                     "external_calls": 1,
                 },
                 "subject_ref": {
-                    "kind": 4,
+                    "kind": 1,
                     "ura": "easynet:///r/local/resource/subject",
+                    "profile": strict_profile,
                 },
                 "descriptor_version": "1.0.0",
                 "schema_hash_hex": "11" * 32,
@@ -489,13 +804,13 @@ class RuntimeTests(unittest.TestCase):
                 "runtime_env": "native",
                 "authority_proof": {
                     "proof_type": "admission",
-                    "binding_kind": "delegated",
-                    "proof_payload_base64": "cHJvb2Y=",
-                    "proof_hash_hex": "33" * 32,
-                    "issuer": {"ura": "easynet:///r/local/agent/issuer"},
-                    "signature": {
-                        "algorithm": "ed25519",
-                        "signature_base64": "cHJvb2ZzaWc=",
+                    "binding_kind": "delegation",
+                    "binding": delegation_binding,
+                    "proof_payload_base64": base64.b64encode(proof_payload).decode(),
+                    "proof_hash_hex": hashlib.sha256(proof_payload).hexdigest(),
+                    "issuer": {
+                        "ura": "easynet:///r/local/agent/callee",
+                        "profile": strict_profile,
                     },
                     "admission_hook": "policy.check",
                 },
@@ -512,6 +827,7 @@ class RuntimeTests(unittest.TestCase):
                 ],
             }
         )
+        receipt = RuntimeReceipt.from_mapping(complete)
 
         assert receipt.caller_binding is not None
         assert receipt.subject_binding is not None
@@ -522,7 +838,7 @@ class RuntimeTests(unittest.TestCase):
         assert receipt.authority_proof is not None
         assert receipt.authority_proof.issuer is not None
         self.assertEqual(receipt.caller_binding.ura, "easynet:///r/local/agent/caller")
-        self.assertEqual(receipt.subject_binding.profile, "owner")
+        self.assertEqual(receipt.subject_binding.profile, strict_profile)
         self.assertEqual(receipt.callee_signature.algorithm, "ed25519")
         self.assertEqual(receipt.causal_binding_kind, "scalar")
         assert receipt.causal_binding is not None
@@ -533,25 +849,36 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(receipt.authority_binding["scopes"], ["invoke"])
         self.assertEqual(receipt.failure.code, "DENIED")
         self.assertEqual(receipt.usage.tokens_out, 20)
-        self.assertEqual(receipt.subject_ref.kind, 4)
+        self.assertEqual(receipt.subject_ref.kind, 1)
         self.assertEqual(
             receipt.authority_proof.issuer.ura,
-            "easynet:///r/local/agent/issuer",
+            "easynet:///r/local/agent/callee",
         )
         self.assertEqual(receipt.parent_receipts[0].receipt_hash_hex, "66" * 32)
 
+    def test_runtime_receipt_accepts_binding_hash_proof_without_payload_or_signature(
+        self,
+    ) -> None:
+        complete = canonical_runtime_receipt("inv-empty-proof", "completed", "completed", 1)
+        proof = complete["authority_proof"]
+        assert isinstance(proof, dict)
+        proof["proof_payload_base64"] = ""
+        proof["proof_hash_hex"] = authority_binding_proof_hash(
+            AuthorityBinding.self_("easynet:///r/example/device/dev-a")
+        ).hex()
+        proof.pop("signature")
+
+        receipt = RuntimeReceipt.from_mapping(complete)
+
+        assert receipt.authority_proof is not None
+        self.assertEqual(receipt.authority_proof.proof_payload_base64, "")
+        self.assertIsNone(receipt.authority_proof.signature)
+
     def test_runtime_receipt_required_summary_rejects_malformed_hash(self) -> None:
+        malformed = canonical_runtime_receipt("inv-1", "completed", "completed", 1)
+        malformed["self_hash_hex"] = "aa"
         with self.assertRaises(SDKError) as caught:
-            RuntimeReceipt.from_required_mapping(
-                {
-                    "index": 1,
-                    "invocation_id": "inv-1",
-                    "receipt_type": "completed",
-                    "timestamp_unix_ms": 1_700_000_000_000,
-                    "prev_receipt_hash_hex": "00" * 32,
-                    "self_hash_hex": "aa",
-                }
-            )
+            RuntimeReceipt.from_required_mapping(malformed)
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 

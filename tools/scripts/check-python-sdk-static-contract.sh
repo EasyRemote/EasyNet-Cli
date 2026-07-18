@@ -2,10 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PYTHON_BIN="${PYTHON:-python}"
-RUFF_BIN="${RUFF:-ruff}"
-MYPY_BIN="${MYPY:-mypy}"
+PYTHON_BIN="${PYTHON:-python3}"
 CONTRACT="$ROOT/sdk/conformance/python_sdk_type_contract.py"
+source "$ROOT/sdk/conformance/python_toolchain.sh"
 
 export PYTHONPATH="$ROOT/sdk/python:$ROOT/../EasyNet-Axon/sdk/python${PYTHONPATH:+:$PYTHONPATH}"
 
@@ -16,21 +15,15 @@ if [[ "${1:-}" == "--self-test" ]]; then
   exit 0
 fi
 
-command -v "$RUFF_BIN" >/dev/null 2>&1 || {
-  echo "python-sdk-static-contract: ruff tool not found: $RUFF_BIN" >&2
-  exit 1
-}
-command -v "$MYPY_BIN" >/dev/null 2>&1 || {
-  echo "python-sdk-static-contract: mypy tool not found: $MYPY_BIN" >&2
-  exit 1
-}
+resolve_sdk_python_toolchain "$ROOT" ruff mypy
+PYTHON_BIN="$SDK_CONFORMANCE_PYTHON"
 
-"$RUFF_BIN" check \
+"$PYTHON_BIN" -m ruff check \
   "$ROOT/sdk/python/easynet_sdk" \
   "$ROOT/sdk/python/tests" \
   "$CONTRACT"
 
-"$MYPY_BIN" \
+"$PYTHON_BIN" -m mypy \
   --strict \
   --python-version 3.12 \
   --config-file "$ROOT/sdk/python/pyproject.toml" \

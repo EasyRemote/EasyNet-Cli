@@ -10,7 +10,7 @@ validate_matrix_completion() {
 import json, sys
 from pathlib import Path
 matrix = json.loads(Path(sys.argv[1]).read_text())
-if matrix.get("schema_version") != 4:
+if matrix.get("schema_version") != 5:
     raise SystemExit("completion_audit: invalid_schema")
 if matrix.get("status_order") != ["unsupported", "seam", "provider-backed", "cutover-ready"]:
     raise SystemExit("completion_audit: invalid_status_order")

@@ -23,7 +23,13 @@ if not package.is_dir():
 else:
     if (package / "_sdk_profiles.py").exists():
         violations.append("retired_profile_bridge")
-    forbidden_imports = {"easynet_axon", "grpc", "ctypes", "subprocess"}
+    forbidden_imports = {
+        "axon_sdk",
+        "easynet_axon",
+        "grpc",
+        "ctypes",
+        "subprocess",
+    }
     forbidden_attrs = ("MissionClient", "AdminClient", "DirectoryClient", "ReceiptClient", "DaemonProfileBridge")
     for path in sorted(package.rglob("*.py")):
         try:

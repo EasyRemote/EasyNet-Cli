@@ -300,7 +300,7 @@
     {
       "language": "go",
       "case_id": "invocation/canonical_material",
-      "selector": "TestCanonicalInvocationBytesUsesStableAxonEncoding",
+      "selector": "TestDescriptorBoundInvocationBytesUseStableAxonEncoding",
       "evidence": [
         "sdk/go/invocation_canonical_test.go"
       ]
@@ -428,7 +428,7 @@
     {
       "language": "go",
       "case_id": "runtime/ability_restart_recover",
-      "selector": "TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces",
+      "selector": "TestRuntimeAbilityClientRestartRecoverDelegatesToProvider",
       "evidence": [
         "sdk/go/runtime_ability_test.go"
       ]

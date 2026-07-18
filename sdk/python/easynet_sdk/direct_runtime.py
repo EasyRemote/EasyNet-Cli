@@ -13,10 +13,24 @@ import json
 import queue
 import secrets
 import threading
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
 
 import grpc  # type: ignore[import-untyped]
+from axon_sdk.invocation import (
+    AgentIdentity as _AxonAgentIdentity,
+    AxonError as _AxonError,
+    CallerSignature as _AxonCallerSignature,
+    CausalContext as _AxonCausalContext,
+    DescriptorBoundEnvelope as _AxonDescriptorBoundEnvelope,
+    DescriptorBoundInvocationRequest as _AxonDescriptorBoundInvocationRequest,
+    InvocationEnvelope as _AxonInvocationEnvelope,
+    SubjectIdentity as _AxonSubjectIdentity,
+    UraProfile as _AxonUraProfile,
+    causal_from_json as _axon_causal_from_json,
+    invocation_receipt_from_json as _axon_invocation_receipt_from_json,
+    sha256 as _axon_sha256,
+)
 
 from ._axon_pb.axon.v1 import (
     invoke_pb2 as _invoke_pb2,
@@ -42,21 +56,30 @@ DEFAULT_DIAL_TIMEOUT_SECONDS = 3.0
 DEFAULT_INVOKE_TIMEOUT_SECONDS = 60.0
 DEFAULT_DIRECT_STREAM_QUEUE_EVENTS = 1024
 DEFAULT_DIRECT_BIDI_QUEUE_FRAMES = 1024
-SIGNED_DESCRIPTOR_REF_METADATA_KEY = "x-easynet-signed-descriptor-ref"
 _DIRECT_BIDI_EOF = object()
+_TERMINAL_INVOCATION_STATES = frozenset(
+    {"Completed", "Failed", "TimedOut", "Cancelled"}
+)
+_PRE_ADMISSION_ERROR_STAGES = frozenset(
+    {
+        _types_pb2.ERROR_STAGE_GLOBAL_ADMISSION,
+        _types_pb2.ERROR_STAGE_CALLER_AUTHENTICATION,
+        _types_pb2.ERROR_STAGE_AUTHORITY_VALIDATION,
+        _types_pb2.ERROR_STAGE_BOOTSTRAP_AUTHORIZATION,
+        _types_pb2.ERROR_STAGE_QUOTA,
+        _types_pb2.ERROR_STAGE_ABILITY_RESOLUTION,
+        _types_pb2.ERROR_STAGE_ABILITY_POLICY,
+        _types_pb2.ERROR_STAGE_REQUEST_VALIDATION,
+    }
+)
 
 
 class DirectRuntimeIdentityProjector(Protocol):
     """Identity facade required by direct runtime descriptor projection."""
 
-    def ability_ura_from_descriptor_ref(self, descriptor_ref: str) -> str:
-        ...
+    def ability_ura_from_descriptor_ref(self, descriptor_ref: str) -> str: ...
 
-    def project_ability_ura(self, ability_ura: str) -> AddressingProjection:
-        ...
-
-    def descriptor_bound_resource_subject_ura(self, owner_ura: str, path: str) -> str:
-        ...
+    def project_ability_ura(self, ability_ura: str) -> AddressingProjection: ...
 
 
 @dataclass
@@ -84,7 +107,11 @@ class DirectRuntimeConnector:
             "endpoint": endpoint,
             "control_path": control_path,
         }
-        for option_name in ("dial_timeout_ms", "invoke_timeout_ms", "max_message_bytes"):
+        for option_name in (
+            "dial_timeout_ms",
+            "invoke_timeout_ms",
+            "max_message_bytes",
+        ):
             if option_name in options:
                 facts[option_name] = _optional_non_negative_int(
                     options.get(option_name),
@@ -211,7 +238,9 @@ class DirectRuntimeConnector:
 
     def _require_open(self) -> None:
         if self._closed:
-            raise _direct_error("runtime connector is closed", code=ErrorCode.INVALID_HANDLE)
+            raise _direct_error(
+                "runtime connector is closed", code=ErrorCode.INVALID_HANDLE
+            )
 
 
 class DirectRuntimeTransport:
@@ -301,7 +330,9 @@ class DirectRuntimeTransport:
         self._require_open()
         try:
             draft = InvocationDraft.from_json(draft_json)
-            projected_draft, request = _draft_to_invoke_request(draft, self._require_identity())
+            projected_draft, request = _draft_to_invoke_request(
+                draft, self._require_identity()
+            )
             response = self._stub.Invoke(
                 request,
                 timeout=self._invoke_timeout_seconds,
@@ -355,12 +386,16 @@ class DirectRuntimeTransport:
                 cause=exc,
             ) from exc
 
-    def open_bidi(self, draft_json: bytes, streams_json: bytes) -> tuple[BidiTransport, bytes]:
+    def open_bidi(
+        self, draft_json: bytes, streams_json: bytes
+    ) -> tuple[BidiTransport, bytes]:
         self._require_open()
         try:
             draft = InvocationDraft.from_json(draft_json)
             streams = _bidi_stream_descriptors(streams_json)
-            open_frame = _draft_to_bidi_open_frame(draft, streams, self._require_identity())
+            open_frame = _draft_to_bidi_open_frame(
+                draft, streams, self._require_identity()
+            )
             transport = DirectRuntimeBidiTransport(endpoint=self._endpoint)
             transport.start(
                 self._stub,
@@ -391,9 +426,9 @@ class DirectRuntimeTransport:
     def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
         handle_transport = self._require_handle_transport()
         draft = InvocationDraft.from_json(draft_json)
-        projected_draft = _direct_executable_draft(draft, self._require_identity())
+        _AxonDescriptorBoundDraft.from_sdk_draft(draft, self._require_identity())
         return handle_transport.prepare(
-            projected_draft.to_json().encode("utf-8"),
+            draft.to_json().encode("utf-8"),
             options_json,
         )
 
@@ -403,9 +438,7 @@ class DirectRuntimeTransport:
     def await_handle(self, control: InvocationControlCapability) -> bytes:
         return self._require_handle_transport().await_handle(control)
 
-    def cancel_handle(
-        self, control: InvocationControlCapability, reason: str
-    ) -> bytes:
+    def cancel_handle(self, control: InvocationControlCapability, reason: str) -> bytes:
         return self._require_handle_transport().cancel_handle(control, reason)
 
     def handle_events(self, control: InvocationControlCapability) -> bytes:
@@ -449,7 +482,9 @@ class DirectRuntimeTransport:
 
     def _require_open(self) -> None:
         if self._closed:
-            raise _direct_error("runtime transport is closed", code=ErrorCode.INVALID_HANDLE)
+            raise _direct_error(
+                "runtime transport is closed", code=ErrorCode.INVALID_HANDLE
+            )
 
     def _require_handle_transport(self) -> RuntimeTransport:
         self._require_open()
@@ -544,7 +579,10 @@ class DirectRuntimeStreamTransport:
                         "runtime stream ended without a terminal frame",
                         code=ErrorCode.PROTOCOL,
                         retry=RetryHint.NEVER,
-                        details={"endpoint": self._endpoint, "stream_id": self.stream_id},
+                        details={
+                            "endpoint": self._endpoint,
+                            "stream_id": self.stream_id,
+                        },
                     )
                 )
         except SDKError as exc:
@@ -560,7 +598,10 @@ class DirectRuntimeStreamTransport:
                         f"runtime stream recv failed: {exc}",
                         code=ErrorCode.ROUTE_UNAVAILABLE,
                         retry=RetryHint.UNKNOWN,
-                        details={"endpoint": self._endpoint, "stream_id": self.stream_id},
+                        details={
+                            "endpoint": self._endpoint,
+                            "stream_id": self.stream_id,
+                        },
                         cause=exc,
                     )
                 )
@@ -576,7 +617,9 @@ class DirectRuntimeStreamTransport:
 
     def _require_open(self) -> None:
         if self._closed:
-            raise _direct_error("stream transport is closed", code=ErrorCode.INVALID_HANDLE)
+            raise _direct_error(
+                "stream transport is closed", code=ErrorCode.INVALID_HANDLE
+            )
 
 
 class DirectRuntimeBidiTransport:
@@ -705,6 +748,7 @@ class DirectRuntimeBidiTransport:
         try:
             for frame in self._call:
                 if _bidi_down_is_internal_admission(frame):
+                    _canonical_receipt_projection(frame.receipt)
                     continue
                 raw = _bidi_down_json(frame)
                 if not self._put_inbound(raw):
@@ -718,7 +762,10 @@ class DirectRuntimeBidiTransport:
                         "runtime bidi ended without a terminal frame",
                         code=ErrorCode.PROTOCOL,
                         retry=RetryHint.NEVER,
-                        details={"endpoint": self._endpoint, "session_id": self.session_id},
+                        details={
+                            "endpoint": self._endpoint,
+                            "session_id": self.session_id,
+                        },
                     )
                 )
         except SDKError as exc:
@@ -734,7 +781,10 @@ class DirectRuntimeBidiTransport:
                         f"runtime bidi recv failed: {exc}",
                         code=ErrorCode.ROUTE_UNAVAILABLE,
                         retry=RetryHint.UNKNOWN,
-                        details={"endpoint": self._endpoint, "session_id": self.session_id},
+                        details={
+                            "endpoint": self._endpoint,
+                            "session_id": self.session_id,
+                        },
                         cause=exc,
                     )
                 )
@@ -747,7 +797,9 @@ class DirectRuntimeBidiTransport:
             except queue.Full:
                 continue
         if item is not _DIRECT_BIDI_EOF:
-            raise _direct_error("bidi transport is closed", code=ErrorCode.INVALID_HANDLE)
+            raise _direct_error(
+                "bidi transport is closed", code=ErrorCode.INVALID_HANDLE
+            )
 
     def _put_inbound(self, item: bytes | SDKError) -> bool:
         while not self._closed:
@@ -760,7 +812,9 @@ class DirectRuntimeBidiTransport:
 
     def _require_open(self) -> None:
         if self._closed:
-            raise _direct_error("bidi transport is closed", code=ErrorCode.INVALID_HANDLE)
+            raise _direct_error(
+                "bidi transport is closed", code=ErrorCode.INVALID_HANDLE
+            )
 
     def _require_send_open(self) -> None:
         self._require_open()
@@ -779,12 +833,9 @@ def _cancel_stream_iterator(iterator: Any) -> None:
 
 
 def _stream_chunk_terminal(chunk: Any) -> bool:
-    return bool(chunk.terminal) or _state_name(chunk.state) in {
-        "Completed",
-        "Failed",
-        "TimedOut",
-        "Cancelled",
-    }
+    return (
+        bool(chunk.terminal) or _state_name(chunk.state) in _TERMINAL_INVOCATION_STATES
+    )
 
 
 @dataclass(frozen=True)
@@ -794,27 +845,223 @@ class _DirectAbilityProjection:
 
 
 @dataclass(frozen=True)
-class _DirectInvocationFields:
-    draft: InvocationDraft
+class _AxonDescriptorBoundDraft:
+    """Validated descriptor-bound draft before caller-signature admission."""
+
+    sdk_draft: InvocationDraft
+    descriptor_bound: _AxonDescriptorBoundEnvelope
+    signature: _AxonCallerSignature | None
+    payload: bytes
     ability: _DirectAbilityProjection
+    metadata: Mapping[str, str]
+
+    @classmethod
+    def from_sdk_draft(
+        cls,
+        draft: InvocationDraft,
+        identity: DirectRuntimeIdentityProjector,
+    ) -> "_AxonDescriptorBoundDraft":
+        payload = _arguments(draft)
+        ability = _direct_ability_projection(draft, identity)
+        signature = _axon_caller_signature(draft)
+        try:
+            profile = _AxonUraProfile.parse(DEFAULT_URA_PROFILE)
+            descriptor_bound = _AxonDescriptorBoundEnvelope(
+                _AxonInvocationEnvelope(
+                    caller=_AxonAgentIdentity(draft.caller_ura, profile),
+                    callee=_AxonAgentIdentity(draft.callee_ura, profile),
+                    subject=_AxonSubjectIdentity(draft.subject_ura, profile),
+                    ability=draft.descriptor_ref,
+                    args_digest=_axon_sha256(payload),
+                    invocation_nonce=_base64_decode(
+                        draft.nonce_base64,
+                        "nonce_base64",
+                    ),
+                    causal_context=_axon_causal_context(draft.causal_context),
+                )
+            )
+        except SDKError:
+            raise
+        except (_AxonError, TypeError, ValueError) as exc:
+            raise _direct_error(
+                f"build Axon descriptor-bound invocation: {exc}",
+                code=ErrorCode.INVALID_INVOCATION,
+                retry=RetryHint.NEVER,
+                details={"descriptor_ref": draft.descriptor_ref},
+                cause=exc,
+            ) from exc
+        return cls(
+            sdk_draft=draft,
+            descriptor_bound=descriptor_bound,
+            signature=signature,
+            payload=payload,
+            ability=ability,
+            metadata=_metadata(draft),
+        )
+
+    def bind_caller_signature(self) -> _AxonDescriptorBoundInvocationRequest:
+        if self.signature is None:
+            raise _direct_error(
+                "direct runtime dispatch requires caller_signature",
+                code=ErrorCode.INVALID_INVOCATION,
+                retry=RetryHint.NEVER,
+                details={"descriptor_ref": self.sdk_draft.descriptor_ref},
+            )
+        try:
+            return _AxonDescriptorBoundInvocationRequest(
+                envelope=self.descriptor_bound,
+                signature=self.signature,
+                payload=self.payload,
+            )
+        except (_AxonError, TypeError, ValueError) as exc:
+            raise _direct_error(
+                f"bind Axon caller signature: {exc}",
+                code=ErrorCode.INVALID_INVOCATION,
+                retry=RetryHint.NEVER,
+                details={"descriptor_ref": self.sdk_draft.descriptor_ref},
+                cause=exc,
+            ) from exc
+
+
+@dataclass(frozen=True)
+class _AxonGrpcInvocation:
+    """Signed descriptor-bound request projected onto the canonical gRPC carrier."""
+
+    draft: _AxonDescriptorBoundDraft
+    request: _AxonDescriptorBoundInvocationRequest
+
+    @classmethod
+    def from_sdk_draft(
+        cls,
+        draft: InvocationDraft,
+        identity: DirectRuntimeIdentityProjector,
+    ) -> "_AxonGrpcInvocation":
+        descriptor_draft = _AxonDescriptorBoundDraft.from_sdk_draft(draft, identity)
+        return cls(
+            draft=descriptor_draft,
+            request=descriptor_draft.bind_caller_signature(),
+        )
+
+    def invoke_request(self) -> Any:
+        return _invoke_pb2.InvokeRequest(**self._request_fields())
+
+    def stream_request(self) -> Any:
+        return _invoke_pb2.InvokeServerStreamRequest(**self._request_fields())
+
+    def bidi_open_frame(self, streams: list[Any]) -> Any:
+        fields = self._request_fields()
+        return _invoke_pb2.InvokeBidiUp(
+            sequence=0,
+            mac=self.request.signature.signature,
+            envelope_open=_invoke_pb2.EnvelopeOpen(
+                envelope=fields["envelope"],
+                target=fields["target"],
+                initial_args=fields["arguments"],
+                args_content_type=fields["content_type"],
+                streams=streams,
+                metadata=fields["metadata"],
+                content_envelope=fields["content_envelope"],
+            ),
+        )
+
+    def _request_fields(self) -> dict[str, object]:
+        envelope = self.request.envelope.envelope
+        content_type = self.draft.sdk_draft.content_type
+        target = _types_pb2.InvocationTarget(
+            ability_name=self.draft.sdk_draft.descriptor_ref,
+            ability=_types_pb2.AbilityTarget(
+                ability_name=self.draft.sdk_draft.descriptor_ref,
+                function_name=self.draft.ability.public_name,
+            ),
+        )
+        return {
+            "envelope": _types_pb2.Envelope(
+                request_id=f"req-{secrets.token_hex(16)}",
+                caller=_types_pb2.AgentIdentity(
+                    ura=envelope.caller.ura,
+                    profile=envelope.caller.profile.value,
+                ),
+                callee=_types_pb2.AgentIdentity(
+                    ura=envelope.callee.ura,
+                    profile=envelope.callee.profile.value,
+                ),
+                subject=_types_pb2.SubjectIdentity(
+                    ura=envelope.subject.ura,
+                    profile=envelope.subject.profile.value,
+                ),
+                invocation_nonce=envelope.invocation_nonce,
+                causal_context=self._causal_context_to_wire(envelope.causal_context),
+                caller_signature=self._caller_signature_to_wire(),
+            ),
+            "target": target,
+            "function_name": self.draft.ability.public_name,
+            "arguments": self.request.payload,
+            "content_type": content_type,
+            "metadata": dict(self.draft.metadata),
+            "content_envelope": _types_pb2.ContentEnvelope(
+                content_type=content_type,
+                encoding="identity",
+            ),
+        }
+
+    def _caller_signature_to_wire(self) -> Any:
+        signature = self.request.signature
+        return _types_pb2.CallerSignature(
+            algorithm=signature.algorithm,
+            signature=signature.signature,
+            key_id_hint=signature.key_id_hint,
+        )
+
+    @staticmethod
+    def _causal_context_to_wire(context: _AxonCausalContext) -> Any:
+        if context.is_none():
+            return _types_pb2.CausalContext(none=_types_pb2.Empty())
+        scalar = context.as_scalar()
+        if scalar is not None:
+            return _types_pb2.CausalContext(
+                scalar=_types_pb2.ReceiptRef(
+                    receipt_hash=scalar.receipt_hash,
+                    receipt_ura=scalar.receipt_ura,
+                )
+            )
+        prior = context.as_list()
+        if prior is not None:
+            return _types_pb2.CausalContext(
+                list=_types_pb2.ReceiptList(
+                    prior=[
+                        _types_pb2.ReceiptRef(
+                            receipt_hash=receipt.receipt_hash,
+                            receipt_ura=receipt.receipt_ura,
+                        )
+                        for receipt in prior
+                    ]
+                )
+            )
+        merkle = context.as_merkle()
+        if merkle is not None:
+            root, proof_ura = merkle
+            return _types_pb2.CausalContext(
+                merkle=_types_pb2.MerkleRoot(
+                    root=root,
+                    proof_ura=proof_ura,
+                )
+            )
+        raise _invalid_causal_context("Axon causal context has no canonical form")
 
 
 def _draft_to_invoke_request(
     draft: InvocationDraft,
     identity: DirectRuntimeIdentityProjector,
 ) -> tuple[InvocationDraft, Any]:
-    invocation = _direct_invocation_fields(draft, identity)
-    fields = _invoke_request_fields(invocation)
-    return invocation.draft, _invoke_pb2.InvokeRequest(**fields)
+    invocation = _AxonGrpcInvocation.from_sdk_draft(draft, identity)
+    return draft, invocation.invoke_request()
 
 
 def _draft_to_stream_request(
     draft: InvocationDraft,
     identity: DirectRuntimeIdentityProjector,
 ) -> Any:
-    invocation = _direct_invocation_fields(draft, identity)
-    fields = _invoke_request_fields(invocation)
-    return _invoke_pb2.InvokeServerStreamRequest(**fields)
+    return _AxonGrpcInvocation.from_sdk_draft(draft, identity).stream_request()
 
 
 def _draft_to_bidi_open_frame(
@@ -822,21 +1069,10 @@ def _draft_to_bidi_open_frame(
     streams: list[Any],
     identity: DirectRuntimeIdentityProjector,
 ) -> Any:
-    invocation = _direct_invocation_fields(draft, identity)
-    fields = _invoke_request_fields(invocation)
-    return _invoke_pb2.InvokeBidiUp(
-        sequence=0,
-        mac=_bidi_open_mac(invocation.draft),
-        envelope_open=_invoke_pb2.EnvelopeOpen(
-            envelope=fields["envelope"],
-            target=fields["target"],
-            initial_args=fields["arguments"],
-            args_content_type=fields["content_type"],
-            streams=streams,
-            metadata=fields["metadata"],
-            content_envelope=fields["content_envelope"],
-        ),
-    )
+    return _AxonGrpcInvocation.from_sdk_draft(
+        draft,
+        identity,
+    ).bidi_open_frame(streams)
 
 
 def _validate_bidi_open_frame(open_frame: Any) -> None:
@@ -859,59 +1095,6 @@ def _validate_bidi_open_frame(open_frame: Any) -> None:
             code=ErrorCode.INVALID_ARGUMENT,
             retry=RetryHint.NEVER,
         )
-
-
-def _direct_executable_draft(
-    draft: InvocationDraft,
-    identity: DirectRuntimeIdentityProjector,
-) -> InvocationDraft:
-    return _direct_invocation_fields(draft, identity).draft
-
-
-def _direct_invocation_fields(
-    draft: InvocationDraft,
-    identity: DirectRuntimeIdentityProjector,
-) -> _DirectInvocationFields:
-    ability = _direct_ability_projection(draft, identity)
-    subject_ura = _descriptor_bound_subject_ura(
-        identity,
-        draft.subject_ura,
-        ability.public_name,
-    )
-    if subject_ura != draft.subject_ura:
-        draft = replace(draft, subject_ura=subject_ura)
-    return _DirectInvocationFields(draft=draft, ability=ability)
-
-
-def _invoke_request_fields(
-    invocation: _DirectInvocationFields,
-) -> dict[str, object]:
-    draft = invocation.draft
-    content_type = draft.content_type
-    ability = invocation.ability
-    return {
-        "envelope": _types_pb2.Envelope(
-            request_id=f"req-{secrets.token_hex(16)}",
-            caller=_agent_identity(draft.caller_ura),
-            callee=_agent_identity(draft.callee_ura),
-            subject=_types_pb2.SubjectIdentity(
-                ura=draft.subject_ura,
-                profile=DEFAULT_URA_PROFILE,
-            ),
-            invocation_nonce=_base64_decode(draft.nonce_base64, "nonce_base64"),
-            causal_context=_causal_context(draft.causal_context),
-            caller_signature=_caller_signature(draft),
-        ),
-        "target": _invocation_target(ability.public_name),
-        "function_name": ability.public_name,
-        "arguments": _arguments(draft),
-        "content_type": content_type,
-        "metadata": _metadata(draft),
-        "content_envelope": _types_pb2.ContentEnvelope(
-            content_type=content_type,
-            encoding="identity",
-        ),
-    }
 
 
 def _direct_ability_projection(
@@ -945,58 +1128,6 @@ def _direct_ability_projection(
     return _DirectAbilityProjection(
         ability_ura=ability_ura,
         public_name=projection.public_name,
-    )
-
-
-def _descriptor_bound_subject_ura(
-    identity: DirectRuntimeIdentityProjector,
-    subject_ura: str,
-    ability_name: str,
-) -> str:
-    subject_kind = _ura_kind(subject_ura)
-    if subject_kind in {"agent", "ability", "device", "resource"}:
-        return subject_ura
-    if subject_kind not in {"hub", "user"}:
-        raise _direct_error(
-            "subject_ura kind is not supported by direct runtime",
-            code=ErrorCode.INVALID_ARGUMENT,
-            retry=RetryHint.NEVER,
-            details={"subject_ura": subject_ura, "subject_kind": subject_kind},
-        )
-    try:
-        return identity.descriptor_bound_resource_subject_ura(
-            subject_ura,
-            f"invoke/{ability_name}",
-        )
-    except SDKError:
-        raise
-    except Exception as exc:
-        raise _direct_error(
-            f"project descriptor-bound subject: {exc}",
-            code=ErrorCode.INVALID_ARGUMENT,
-            retry=RetryHint.NEVER,
-            details={"subject_ura": subject_ura, "ability_name": ability_name},
-            cause=exc,
-        ) from exc
-
-
-def _ura_kind(ura: str) -> str:
-    marker = "easynet:///r/"
-    if not ura.startswith(marker):
-        return ""
-    parts = ura[len(marker) :].split("/")
-    if len(parts) < 2:
-        return ""
-    return parts[1]
-
-
-def _invocation_target(ability_name: str) -> Any:
-    return _types_pb2.InvocationTarget(
-        ability_name=ability_name,
-        ability=_types_pb2.AbilityTarget(
-            ability_name=ability_name,
-            function_name=ability_name,
-        ),
     )
 
 
@@ -1055,16 +1186,6 @@ def _bidi_stream_descriptors(streams_json: bytes) -> list[Any]:
     return result
 
 
-def _bidi_open_mac(draft: InvocationDraft) -> bytes:
-    signature = draft.caller_signature
-    if signature is None:
-        return b""
-    return _base64_decode(
-        signature.signature_base64,
-        "caller_signature.signature_base64",
-    )
-
-
 def _invoke_response_json(
     draft: InvocationDraft,
     response: Any,
@@ -1073,15 +1194,9 @@ def _invoke_response_json(
     output_content_type = response.result_content_type
     output_base64 = base64.b64encode(response.result).decode("ascii")
     error = _response_failure(response, terminal_state)
-    admission_receipt = (
-        _receipt(response.admission_receipt)
-        if response.HasField("admission_receipt")
-        else None
-    )
-    terminal_receipt = (
-        _receipt(response.terminal_receipt)
-        if response.HasField("terminal_receipt")
-        else None
+    checkpoints = _UnaryOutcomeCheckpoints.from_response(
+        response,
+        terminal_state=terminal_state,
     )
     result: dict[str, object] = {
         "ok": error is None,
@@ -1093,11 +1208,127 @@ def _invoke_response_json(
         "selected_node_id": response.selected_node_id,
         "scheduling_reason": response.scheduling_reason,
         "elapsed_ms": response.elapsed_ms,
-        "admission_receipt": admission_receipt,
-        "terminal_receipt": terminal_receipt,
+        "admission_receipt": checkpoints.admission,
+        "terminal_receipt": checkpoints.terminal,
         "error": error,
     }
     return _json_bytes(result)
+
+
+@dataclass(frozen=True)
+class _UnaryOutcomeCheckpoints:
+    """Canonical unary proof projection after outcome-shape validation."""
+
+    admission: dict[str, object] | None
+    terminal: dict[str, object] | None
+
+    @classmethod
+    def from_response(
+        cls,
+        response: Any,
+        *,
+        terminal_state: str,
+    ) -> "_UnaryOutcomeCheckpoints":
+        has_admission = response.HasField("admission_receipt")
+        has_terminal = response.HasField("terminal_receipt")
+        has_proof_error = response.HasField("proof_error")
+
+        if not has_admission and not has_terminal:
+            if cls._is_receipt_free_pre_admission_failure(
+                response,
+                terminal_state=terminal_state,
+                has_proof_error=has_proof_error,
+            ):
+                return cls(admission=None, terminal=None)
+            raise _direct_error(
+                "runtime unary outcome requires admission_receipt and terminal_receipt",
+                code=ErrorCode.PROTOCOL,
+                retry=RetryHint.NEVER,
+            )
+
+        if has_admission != has_terminal:
+            raise _direct_error(
+                "runtime unary outcome contains a partial checkpoint pair",
+                code=ErrorCode.PROTOCOL,
+                retry=RetryHint.NEVER,
+            )
+        if has_proof_error:
+            raise _direct_error(
+                "runtime unary finalized outcome conflicts with proof_error",
+                code=ErrorCode.PROTOCOL,
+                retry=RetryHint.NEVER,
+            )
+
+        admission = _canonical_receipt_projection(response.admission_receipt)
+        terminal = _canonical_receipt_projection(response.terminal_receipt)
+        cls._validate_pair(
+            admission,
+            terminal,
+            terminal_state=terminal_state,
+        )
+        return cls(admission=admission, terminal=terminal)
+
+    @staticmethod
+    def _is_receipt_free_pre_admission_failure(
+        response: Any,
+        *,
+        terminal_state: str,
+        has_proof_error: bool,
+    ) -> bool:
+        return (
+            terminal_state == "Failed"
+            and response.HasField("error")
+            and int(response.error.stage) in _PRE_ADMISSION_ERROR_STAGES
+            and not has_proof_error
+        )
+
+    @staticmethod
+    def _validate_pair(
+        admission: Mapping[str, object],
+        terminal: Mapping[str, object],
+        *,
+        terminal_state: str,
+    ) -> None:
+        if admission["state"] != "Admitted":
+            raise _direct_error(
+                "runtime unary admission checkpoint is not Admitted",
+                code=ErrorCode.PROTOCOL,
+                retry=RetryHint.NEVER,
+            )
+        if (
+            terminal["state"] not in _TERMINAL_INVOCATION_STATES
+            or terminal["state"] != terminal_state
+        ):
+            raise _direct_error(
+                "runtime unary terminal checkpoint does not match outcome state",
+                code=ErrorCode.PROTOCOL,
+                retry=RetryHint.NEVER,
+            )
+        if int(terminal["index"]) <= int(admission["index"]):
+            raise _direct_error(
+                "runtime unary terminal checkpoint does not follow admission",
+                code=ErrorCode.PROTOCOL,
+                retry=RetryHint.NEVER,
+            )
+
+        binding_fields = (
+            "invocation_id",
+            "caller_binding",
+            "callee_binding",
+            "subject_binding",
+            "invocation_nonce_base64",
+            "causal_binding",
+            "ability_binding",
+            "authority_binding",
+            "signer_binding",
+            "host_attestation_base64",
+        )
+        if any(admission[field] != terminal[field] for field in binding_fields):
+            raise _direct_error(
+                "runtime unary checkpoint invocation binding mismatch",
+                code=ErrorCode.PROTOCOL,
+                retry=RetryHint.NEVER,
+            )
 
 
 def _stream_chunk_json(chunk: Any) -> bytes:
@@ -1121,8 +1352,20 @@ def _stream_chunk_json(chunk: Any) -> bytes:
         event["scheduling_reason"] = chunk.scheduling_reason
     if chunk.elapsed_ms:
         event["elapsed_ms"] = chunk.elapsed_ms
+    if chunk.HasField("admission_receipt"):
+        event["admission_receipt"] = _canonical_receipt_projection(
+            chunk.admission_receipt
+        )
     if chunk.HasField("terminal_receipt"):
-        event["terminal_receipt"] = _receipt(chunk.terminal_receipt)
+        event["terminal_receipt"] = _canonical_receipt_projection(
+            chunk.terminal_receipt
+        )
+    elif _stream_chunk_terminal(chunk):
+        raise _direct_error(
+            "runtime stream terminal frame omitted terminal_receipt",
+            code=ErrorCode.PROTOCOL,
+            retry=RetryHint.NEVER,
+        )
     return _json_bytes(event)
 
 
@@ -1217,7 +1460,7 @@ def _bidi_down_json(frame: Any) -> bytes:
         event["stream_id"] = int(chunk.stream_id)
         event["payload_base64"] = base64.b64encode(chunk.data).decode("ascii")
     elif payload == "receipt":
-        receipt = _receipt(frame.receipt)
+        receipt = _canonical_receipt_projection(frame.receipt)
         if _bidi_receipt_terminal(frame.receipt):
             event["terminal_receipt"] = receipt
         else:
@@ -1271,12 +1514,10 @@ def _bidi_down_is_internal_admission(frame: Any) -> bool:
 
 
 def _bidi_receipt_terminal(receipt: Any) -> bool:
-    return bool(receipt.cleanup_complete) or _state_name(receipt.state) in {
-        "Completed",
-        "Failed",
-        "TimedOut",
-        "Cancelled",
-    }
+    return (
+        bool(receipt.cleanup_complete)
+        or _state_name(receipt.state) in _TERMINAL_INVOCATION_STATES
+    )
 
 
 def _bidi_control_json(control: Any) -> dict[str, object]:
@@ -1284,7 +1525,12 @@ def _bidi_control_json(control: Any) -> dict[str, object]:
     if variant == "eof":
         return {"eof": True}
     if variant == "pty_resize":
-        return {"pty_resize": {"cols": control.pty_resize.cols, "rows": control.pty_resize.rows}}
+        return {
+            "pty_resize": {
+                "cols": control.pty_resize.cols,
+                "rows": control.pty_resize.rows,
+            }
+        }
     if variant == "pty_signal":
         return {"pty_signal": {"signal": control.pty_signal.signal}}
     if variant == "media_pts":
@@ -1315,23 +1561,21 @@ def _stream_chunk_error(chunk: Any) -> dict[str, object] | None:
 def _axon_failure(error: Any, stage: str) -> dict[str, object]:
     code = _response_error_code(error.code)
     return {
-        "code": code.value,
+        "code": _failure_code_value(code),
         "stage": stage,
         "message": error.message,
         "retryable": error.retryable,
     }
 
 
-def _agent_identity(ura: str) -> Any:
-    return _types_pb2.AgentIdentity(ura=ura, profile=DEFAULT_URA_PROFILE)
-
-
-def _caller_signature(draft: InvocationDraft) -> Any:
+def _axon_caller_signature(
+    draft: InvocationDraft,
+) -> _AxonCallerSignature | None:
     signature = draft.caller_signature
     if signature is None:
         return None
     key_id_hint = signature.key_id_hint or signature.signer_public_key_base64 or ""
-    return _types_pb2.CallerSignature(
+    return _AxonCallerSignature(
         algorithm=signature.algorithm,
         signature=_base64_decode(
             signature.signature_base64,
@@ -1339,6 +1583,15 @@ def _caller_signature(draft: InvocationDraft) -> Any:
         ),
         key_id_hint=key_id_hint,
     )
+
+
+def _axon_causal_context(
+    value: Mapping[str, object],
+) -> _AxonCausalContext:
+    try:
+        return _axon_causal_from_json(dict(value))
+    except (_AxonError, KeyError, TypeError, ValueError) as exc:
+        raise _invalid_causal_context(f"invalid Axon causal context: {exc}") from exc
 
 
 def _arguments(draft: InvocationDraft) -> bytes:
@@ -1360,7 +1613,6 @@ def _metadata(draft: InvocationDraft) -> dict[str, str]:
         projected = _metadata_value(value)
         if projected is not None:
             result[key] = projected
-    result[SIGNED_DESCRIPTOR_REF_METADATA_KEY] = draft.descriptor_ref
     return result
 
 
@@ -1376,59 +1628,180 @@ def _metadata_value(value: object) -> str | None:
     return json.dumps(value, separators=(",", ":"), sort_keys=True)
 
 
-def _causal_context(value: Mapping[str, object]) -> Any:
-    form = _optional_string(value.get("form"), "causal_context.form") or _optional_string(
-        value.get("kind"), "causal_context.kind"
+def _canonical_receipt_projection(receipt: Any) -> dict[str, object]:
+    try:
+        canonical = _canonical_receipt_document(receipt)
+        _axon_invocation_receipt_from_json(canonical)
+    except SDKError:
+        raise
+    except (_AxonError, KeyError, TypeError, ValueError) as exc:
+        raise _receipt_protocol_error(f"invalid canonical proof facts: {exc}") from exc
+
+    signer = (
+        receipt.signer_binding
+        if receipt.HasField("signer_binding")
+        else receipt.callee_binding
     )
-    if form in (None, "", "none", "empty", "null"):
-        return _types_pb2.CausalContext(none=_types_pb2.Empty())
-    if form == "scalar":
-        return _types_pb2.CausalContext(scalar=_receipt_ref(value))
-    if form == "list":
-        prior = value.get("prior", [])
-        if not isinstance(prior, list):
-            raise _invalid_causal_context("causal_context.prior must be an array")
-        return _types_pb2.CausalContext(
-            list=_types_pb2.ReceiptList(prior=[_receipt_ref(item) for item in prior])
-        )
-    if form == "merkle":
-        root_hex = _required_string(value, "root_hex")
-        return _types_pb2.CausalContext(
-            merkle=_types_pb2.MerkleRoot(
-                root=_hex_decode(root_hex, "root_hex"),
-                proof_ura=_required_string(value, "proof_ura"),
-            )
-        )
-    raise _invalid_causal_context(f"unknown causal_context form: {form}")
-
-
-def _receipt_ref(value: object) -> Any:
-    if not isinstance(value, Mapping):
-        raise _invalid_causal_context("causal receipt ref must be an object")
-    receipt_hash_hex = _required_string(value, "receipt_hash_hex")
-    return _types_pb2.ReceiptRef(
-        receipt_hash=_hex_decode(receipt_hash_hex, "receipt_hash_hex"),
-        receipt_ura=_required_string(value, "receipt_ura"),
-    )
-
-
-def _receipt(receipt: Any) -> dict[str, object]:
-    return {
-        "index": receipt.index,
+    proof = receipt.authority_proof
+    causal_kind, causal = _causal_binding_projection(receipt.causal_binding)
+    authority_kind = _authority_binding_kind(receipt.authority_binding)
+    authority = _facade_authority_binding_projection(receipt.authority_binding)
+    proof_binding_kind = _authority_binding_kind(proof.binding)
+    proof_binding = _facade_authority_binding_projection(proof.binding)
+    projection: dict[str, object] = {
+        "index": int(receipt.index),
         "invocation_id": receipt.invocation_id,
         "receipt_type": receipt.receipt_type,
         "state": _state_name(receipt.state),
-        "timestamp_unix_ms": receipt.timestamp_unix_ms,
+        "timestamp_unix_ms": int(receipt.timestamp_unix_ms),
         "prev_receipt_hash_hex": receipt.prev_receipt_hash.hex(),
         "self_hash_hex": receipt.self_hash.hex(),
+        "payload_base64": base64.b64encode(receipt.payload).decode("ascii"),
+        "payload_sha256_hex": _axon_sha256(receipt.payload).hex(),
         "payload_content_type": receipt.payload_content_type,
-        "causal_binding_kind": _causal_binding_kind(receipt.causal_binding),
-        "causal_binding": _causal_binding_projection(receipt.causal_binding),
-        "authority_binding_kind": _authority_binding_kind(receipt.authority_binding),
-        "authority_binding": _authority_binding_projection(receipt.authority_binding),
-        "cleanup_complete": receipt.cleanup_complete,
+        "cleanup_complete": bool(receipt.cleanup_complete),
         "reason": receipt.reason,
         "child_invocation_id": receipt.child_invocation_id,
+        "caller_binding": _identity_projection(receipt.caller_binding),
+        "callee_binding": _identity_projection(receipt.callee_binding),
+        "subject_binding": _identity_projection(receipt.subject_binding),
+        "invocation_nonce_base64": base64.b64encode(receipt.invocation_nonce).decode(
+            "ascii"
+        ),
+        "causal_binding_kind": causal_kind,
+        "causal_binding": _facade_causal_binding_projection(causal_kind, causal),
+        "callee_signature": _signature_projection(receipt.callee_signature),
+        "signer_binding": _identity_projection(signer),
+        "host_attestation_base64": base64.b64encode(receipt.host_attestation).decode(
+            "ascii"
+        ),
+        "authority_binding_kind": authority_kind,
+        "authority_binding": authority,
+        "ability_binding": receipt.ability_binding,
+        "usage": {
+            "tokens_in": int(receipt.usage.tokens_in),
+            "tokens_out": int(receipt.usage.tokens_out),
+            "duration_ms": int(receipt.usage.duration_ms),
+            "external_calls": int(receipt.usage.external_calls),
+        },
+        "subject_ref": {
+            "kind": int(receipt.subject_ref.kind),
+            "ura": receipt.subject_ref.ura,
+            "profile": receipt.subject_ref.profile,
+        },
+        "descriptor_version": receipt.descriptor_version,
+        "schema_hash_hex": receipt.schema_hash.hex(),
+        "impl_hash_hex": receipt.impl_hash.hex(),
+        "runtime_env": receipt.runtime_env,
+        "authority_proof": {
+            "proof_type": proof.proof_type,
+            "binding_kind": proof_binding_kind,
+            "binding": proof_binding,
+            "proof_payload_base64": base64.b64encode(proof.proof_payload).decode(
+                "ascii"
+            ),
+            "proof_hash_hex": proof.proof_hash.hex(),
+            "issuer": _identity_projection(proof.issuer),
+            "signature": _signature_projection(proof.signature),
+            "admission_hook": proof.admission_hook,
+        },
+        "input_hash_hex": receipt.input_hash.hex(),
+        "output_hash_hex": receipt.output_hash.hex(),
+        "parent_receipts": [
+            _receipt_ref_projection(parent) for parent in receipt.parent_receipts
+        ],
+    }
+    if receipt.HasField("failure"):
+        projection["failure"] = {
+            "code": receipt.failure.code,
+            "message": receipt.failure.message,
+            "retryable": bool(receipt.failure.retryable),
+            "stage": int(receipt.failure.stage),
+            "security_class": int(receipt.failure.security_class),
+        }
+    return projection
+
+
+def _canonical_receipt_document(receipt: Any) -> dict[str, object]:
+    _require_receipt_text(receipt.invocation_id, "invocation_id")
+    _require_receipt_text(receipt.receipt_type, "receipt_type")
+    if _state_name(receipt.state) == "Unspecified":
+        raise _receipt_protocol_error("state is unspecified")
+    _require_receipt_hash(receipt.prev_receipt_hash, "prev_receipt_hash", zero=True)
+    if int(receipt.index) > 0 and not any(receipt.prev_receipt_hash):
+        raise _receipt_protocol_error("prev_receipt_hash is zero after index 0")
+    _require_receipt_hash(receipt.self_hash, "self_hash")
+    _require_receipt_message(receipt, "caller_binding")
+    _require_receipt_message(receipt, "callee_binding")
+    _require_receipt_message(receipt, "subject_binding")
+    _require_receipt_bytes(receipt.invocation_nonce, "invocation_nonce", 16)
+    _require_receipt_message(receipt, "causal_binding")
+    _require_receipt_message(receipt, "callee_signature")
+    _require_receipt_signature(receipt.callee_signature, "callee_signature")
+    _require_receipt_message(receipt, "authority_binding")
+    _require_receipt_text(receipt.ability_binding, "ability_binding")
+    _require_receipt_message(receipt, "usage")
+    _require_receipt_message(receipt, "subject_ref")
+    _require_receipt_text(receipt.descriptor_version, "descriptor_version")
+    _require_receipt_hash(receipt.schema_hash, "schema_hash")
+    _require_receipt_hash(receipt.impl_hash, "impl_hash")
+    _require_receipt_text(receipt.runtime_env, "runtime_env")
+    _require_receipt_message(receipt, "authority_proof")
+    _require_receipt_hash(receipt.input_hash, "input_hash")
+    _require_receipt_hash(receipt.output_hash, "output_hash")
+    _validate_receipt_signer(receipt)
+    for index, parent in enumerate(receipt.parent_receipts):
+        _validate_receipt_ref(parent, f"parent_receipts[{index}]")
+
+    causal_kind, causal = _causal_binding_projection(receipt.causal_binding)
+    if not causal_kind:
+        raise _receipt_protocol_error("causal_binding has no canonical form")
+    authority = _canonical_authority_binding_projection(receipt.authority_binding)
+    proof = _canonical_authority_proof_projection(receipt.authority_proof)
+    if authority != proof["binding"]:
+        raise _receipt_protocol_error(
+            "authority_proof.binding does not match authority_binding"
+        )
+    return {
+        "index": str(int(receipt.index)),
+        "invocation_id": receipt.invocation_id,
+        "receipt_type": receipt.receipt_type,
+        "state": _canonical_receipt_state(receipt.state),
+        "timestamp_unix_ms": str(int(receipt.timestamp_unix_ms)),
+        "prev_receipt_hash_hex": receipt.prev_receipt_hash.hex(),
+        "self_hash_hex": receipt.self_hash.hex(),
+        "payload_hex": receipt.payload.hex(),
+        "payload_sha256_hex": _axon_sha256(receipt.payload).hex(),
+        "payload_content_type": receipt.payload_content_type,
+        "cleanup_complete": bool(receipt.cleanup_complete),
+        "reason": receipt.reason,
+        "child_invocation_id": receipt.child_invocation_id,
+        "caller_binding": _identity_projection(receipt.caller_binding),
+        "callee_binding": _identity_projection(receipt.callee_binding),
+        "subject_binding": _identity_projection(receipt.subject_binding),
+        "invocation_nonce_hex": receipt.invocation_nonce.hex(),
+        "causal_binding": causal,
+        "callee_signature_hex": receipt.callee_signature.signature.hex(),
+        "callee_signature_alg": receipt.callee_signature.algorithm,
+        "callee_signature_key_id_hint": receipt.callee_signature.key_id_hint,
+        "authority_binding": authority,
+        "ability_binding": receipt.ability_binding,
+        "usage_tokens_in": str(int(receipt.usage.tokens_in)),
+        "usage_tokens_out": str(int(receipt.usage.tokens_out)),
+        "usage_duration_ms": str(int(receipt.usage.duration_ms)),
+        "usage_external_calls": str(int(receipt.usage.external_calls)),
+        "subject_ref": _canonical_entity_ref_projection(receipt.subject_ref),
+        "descriptor_version": receipt.descriptor_version,
+        "schema_hash_hex": receipt.schema_hash.hex(),
+        "impl_hash_hex": receipt.impl_hash.hex(),
+        "runtime_env": receipt.runtime_env,
+        "authority_proof": proof,
+        "input_hash_hex": receipt.input_hash.hex(),
+        "output_hash_hex": receipt.output_hash.hex(),
+        "parent_receipts": [
+            _receipt_ref_projection(parent) for parent in receipt.parent_receipts
+        ],
+        **_canonical_hosted_signer_projection(receipt),
     }
 
 
@@ -1439,48 +1812,86 @@ def _receipt_ref_projection(receipt: Any) -> dict[str, object]:
     }
 
 
-def _causal_binding_projection(context: Any) -> dict[str, object] | None:
+def _causal_binding_projection(context: Any) -> tuple[str, dict[str, object]]:
     form = context.WhichOneof("form")
     if form == "none":
-        return {"form": "none"}
+        return "none", {"form": "none"}
     if form == "scalar":
-        return {"form": "scalar", "receipt": _receipt_ref_projection(context.scalar)}
+        _validate_receipt_ref(context.scalar, "causal_binding.scalar")
+        return "scalar", {
+            "form": "scalar",
+            **_receipt_ref_projection(context.scalar),
+        }
     if form == "list":
-        return {
+        for index, receipt in enumerate(context.list.prior):
+            _validate_receipt_ref(receipt, f"causal_binding.list[{index}]")
+        return "list", {
             "form": "list",
-            "prior": [_receipt_ref_projection(receipt) for receipt in context.list.prior],
+            "prior": [
+                _receipt_ref_projection(receipt) for receipt in context.list.prior
+            ],
         }
     if form == "merkle":
-        return {
+        _require_receipt_hash(context.merkle.root, "causal_binding.merkle.root")
+        _require_receipt_text(
+            context.merkle.proof_ura,
+            "causal_binding.merkle.proof_ura",
+        )
+        return "merkle", {
             "form": "merkle",
             "root_hex": context.merkle.root.hex(),
             "proof_ura": context.merkle.proof_ura,
         }
-    return None
+    return "", {}
 
 
-def _causal_binding_kind(context: Any) -> str:
-    form = context.WhichOneof("form")
-    if form == "none":
-        return "none"
-    if form == "scalar":
-        return "scalar"
-    if form == "list":
-        return "list"
-    if form == "merkle":
-        return "merkle"
-    return ""
+def _facade_causal_binding_projection(
+    kind: str,
+    canonical: Mapping[str, object],
+) -> dict[str, object]:
+    if kind != "scalar":
+        return dict(canonical)
+    return {
+        "form": "scalar",
+        "receipt": {
+            "receipt_hash_hex": canonical["receipt_hash_hex"],
+            "receipt_ura": canonical["receipt_ura"],
+        },
+    }
 
 
-def _authority_binding_projection(binding: Any) -> dict[str, object] | None:
+def _facade_authority_binding_projection(binding: Any) -> dict[str, object]:
     authority = binding.WhichOneof("authority")
     if authority == "self_authority":
+        _require_receipt_text(
+            binding.self_authority.principal_ura,
+            "authority_binding.self_authority.principal_ura",
+        )
         return {
             "kind": "self",
             "principal_ura": binding.self_authority.principal_ura,
         }
     if authority == "delegated_authority":
         value = binding.delegated_authority
+        for field_name in (
+            "issuer_ura",
+            "subject_ura",
+            "caller_ura",
+            "audience",
+        ):
+            _require_receipt_text(
+                getattr(value, field_name),
+                f"authority_binding.delegated_authority.{field_name}",
+            )
+        _require_receipt_text_list(
+            value.scopes,
+            "authority_binding.delegated_authority.scopes",
+        )
+        _require_receipt_bytes(
+            value.signature,
+            "authority_binding.delegated_authority.signature",
+            64,
+        )
         return {
             "kind": "delegation",
             "issuer_ura": value.issuer_ura,
@@ -1493,17 +1904,43 @@ def _authority_binding_projection(binding: Any) -> dict[str, object] | None:
             "signature_base64": base64.b64encode(value.signature).decode("ascii"),
         }
     if authority == "capability_grant":
+        _require_receipt_text(
+            binding.capability_grant.capability_ura,
+            "authority_binding.capability_grant.capability_ura",
+        )
         return {
             "kind": "capability",
             "capability_ura": binding.capability_grant.capability_ura,
         }
     if authority == "policy_grant":
+        _require_receipt_text(
+            binding.policy_grant.policy_ura,
+            "authority_binding.policy_grant.policy_ura",
+        )
         return {
             "kind": "policy",
             "policy_ura": binding.policy_grant.policy_ura,
         }
     if authority == "session_authority":
         value = binding.session_authority
+        for field_name in ("backend_ura", "user_ura", "session_id"):
+            _require_receipt_text(
+                getattr(value, field_name),
+                f"authority_binding.session_authority.{field_name}",
+            )
+        _require_receipt_text_list(
+            value.scopes,
+            "authority_binding.session_authority.scopes",
+        )
+        _require_receipt_text_list(
+            value.audiences,
+            "authority_binding.session_authority.audiences",
+        )
+        _require_receipt_bytes(
+            value.signature,
+            "authority_binding.session_authority.signature",
+            64,
+        )
         return {
             "kind": "session",
             "backend_ura": value.backend_ura,
@@ -1516,13 +1953,40 @@ def _authority_binding_projection(binding: Any) -> dict[str, object] | None:
             "signature_base64": base64.b64encode(value.signature).decode("ascii"),
         }
     if authority == "bootstrap_authority":
+        value = binding.bootstrap_authority
+        for field_name in ("principal_ura", "realm", "ability"):
+            _require_receipt_text(
+                getattr(value, field_name),
+                f"authority_binding.bootstrap_authority.{field_name}",
+            )
         return {
             "kind": "bootstrap",
-            "principal_ura": binding.bootstrap_authority.principal_ura,
-            "realm": binding.bootstrap_authority.realm,
-            "ability": binding.bootstrap_authority.ability,
+            "principal_ura": value.principal_ura,
+            "realm": value.realm,
+            "ability": value.ability,
         }
-    return None
+    raise _receipt_protocol_error("authority_binding has no canonical authority")
+
+
+def _canonical_authority_binding_projection(binding: Any) -> dict[str, object]:
+    facade = _facade_authority_binding_projection(binding)
+    kind = str(facade["kind"])
+    projection = dict(facade)
+    projection.pop("kind")
+    projection["form"] = {
+        "self": "self_",
+        "delegation": "delegated",
+    }.get(kind, kind)
+    if "issued_at_ms" in projection:
+        projection["issued_at_ms"] = str(projection["issued_at_ms"])
+    if "expires_at_ms" in projection:
+        projection["expires_at_ms"] = str(projection["expires_at_ms"])
+    if "signature_base64" in projection:
+        projection["signature_hex"] = base64.b64decode(
+            str(projection.pop("signature_base64")),
+            validate=True,
+        ).hex()
+    return projection
 
 
 def _authority_binding_kind(binding: Any) -> str:
@@ -1539,7 +2003,160 @@ def _authority_binding_kind(binding: Any) -> str:
         return "session"
     if authority == "bootstrap_authority":
         return "bootstrap"
-    return ""
+    raise _receipt_protocol_error("authority_binding has no canonical authority")
+
+
+def _canonical_authority_proof_projection(proof: Any) -> dict[str, object]:
+    _require_receipt_text(proof.proof_type, "authority_proof.proof_type")
+    _require_receipt_message(proof, "binding", prefix="authority_proof")
+    _require_receipt_bytes(
+        proof.proof_payload,
+        "authority_proof.proof_payload",
+    )
+    _require_receipt_hash(proof.proof_hash, "authority_proof.proof_hash")
+    _require_receipt_message(proof, "issuer", prefix="authority_proof")
+    _require_receipt_message(proof, "signature", prefix="authority_proof")
+    _require_receipt_signature(proof.signature, "authority_proof.signature")
+    _require_receipt_text(proof.admission_hook, "authority_proof.admission_hook")
+    return {
+        "proof_type": proof.proof_type,
+        "binding": _canonical_authority_binding_projection(proof.binding),
+        "proof_payload_hex": proof.proof_payload.hex(),
+        "proof_hash_hex": proof.proof_hash.hex(),
+        "issuer": _identity_projection(proof.issuer),
+        "signature_hex": proof.signature.signature.hex(),
+        "signature_alg": proof.signature.algorithm,
+        "signature_key_id_hint": proof.signature.key_id_hint,
+        "admission_hook": proof.admission_hook,
+    }
+
+
+def _identity_projection(identity: Any) -> dict[str, str]:
+    _require_receipt_text(identity.ura, "identity.ura")
+    _require_receipt_text(identity.profile, "identity.profile")
+    return {"ura": identity.ura, "profile": identity.profile}
+
+
+def _signature_projection(signature: Any) -> dict[str, object]:
+    return {
+        "algorithm": signature.algorithm,
+        "signature_base64": base64.b64encode(signature.signature).decode("ascii"),
+        "key_id_hint": signature.key_id_hint,
+    }
+
+
+def _canonical_entity_ref_projection(entity: Any) -> dict[str, object]:
+    try:
+        name = _types_pb2.EntityRefKind.Name(entity.kind)
+    except ValueError as exc:
+        raise _receipt_protocol_error(
+            f"subject_ref kind is invalid: {entity.kind}"
+        ) from exc
+    kind = name.removeprefix("ENTITY_REF_KIND_").lower()
+    if kind == "unspecified":
+        raise _receipt_protocol_error("subject_ref kind is unspecified")
+    _require_receipt_text(entity.ura, "subject_ref.ura")
+    _require_receipt_text(entity.profile, "subject_ref.profile")
+    return {"kind": kind, "ura": entity.ura, "profile": entity.profile}
+
+
+def _canonical_hosted_signer_projection(receipt: Any) -> dict[str, object]:
+    if not receipt.HasField("signer_binding"):
+        return {}
+    return {
+        "signer_binding": _identity_projection(receipt.signer_binding),
+        "host_attestation_hex": receipt.host_attestation.hex(),
+    }
+
+
+def _validate_receipt_signer(receipt: Any) -> None:
+    if receipt.HasField("signer_binding"):
+        signer = _identity_projection(receipt.signer_binding)
+        callee = _identity_projection(receipt.callee_binding)
+        hosted = signer["ura"] != callee["ura"]
+        if hosted:
+            _require_receipt_bytes(
+                receipt.host_attestation,
+                "host_attestation",
+                64,
+            )
+        elif receipt.host_attestation:
+            raise _receipt_protocol_error(
+                "self-signed receipt carries host_attestation"
+            )
+    elif receipt.host_attestation:
+        raise _receipt_protocol_error(
+            "host_attestation is present without signer_binding"
+        )
+
+
+def _validate_receipt_ref(receipt: Any, field_name: str) -> None:
+    _require_receipt_hash(receipt.receipt_hash, f"{field_name}.receipt_hash")
+    _require_receipt_text(receipt.receipt_ura, f"{field_name}.receipt_ura")
+
+
+def _require_receipt_message(
+    message: Any,
+    field_name: str,
+    *,
+    prefix: str = "",
+) -> None:
+    if not message.HasField(field_name):
+        qualified = f"{prefix}.{field_name}" if prefix else field_name
+        raise _receipt_protocol_error(f"{qualified} is missing")
+
+
+def _require_receipt_signature(signature: Any, field_name: str) -> None:
+    _require_receipt_text(signature.algorithm, f"{field_name}.algorithm")
+    _require_receipt_bytes(
+        signature.signature,
+        f"{field_name}.signature",
+        64,
+    )
+
+
+def _require_receipt_hash(
+    value: bytes,
+    field_name: str,
+    *,
+    zero: bool = False,
+) -> None:
+    _require_receipt_bytes(value, field_name, 32, zero=zero)
+
+
+def _require_receipt_bytes(
+    value: bytes,
+    field_name: str,
+    length: int | None = None,
+    *,
+    zero: bool = False,
+) -> None:
+    if not value:
+        raise _receipt_protocol_error(f"{field_name} is missing")
+    if length is not None and len(value) != length:
+        raise _receipt_protocol_error(f"{field_name} must contain {length} bytes")
+    if not zero and not any(value):
+        raise _receipt_protocol_error(f"{field_name} is all-zero")
+
+
+def _require_receipt_text(value: str, field_name: str) -> None:
+    if not value.strip():
+        raise _receipt_protocol_error(f"{field_name} is missing")
+
+
+def _require_receipt_text_list(values: Any, field_name: str) -> None:
+    if not values:
+        raise _receipt_protocol_error(f"{field_name} is missing")
+    for index, value in enumerate(values):
+        _require_receipt_text(value, f"{field_name}[{index}]")
+
+
+def _receipt_protocol_error(message: str) -> SDKError:
+    return _direct_error(
+        f"canonical receipt rejected: {message}",
+        code=ErrorCode.PROTOCOL,
+        retry=RetryHint.NEVER,
+    )
 
 
 def _response_failure(
@@ -1550,7 +2167,7 @@ def _response_failure(
         error = response.error
         code = _response_error_code(error.code)
         return {
-            "code": code.value,
+            "code": _failure_code_value(code),
             "stage": _error_stage(error.stage),
             "message": error.message,
             "retryable": error.retryable,
@@ -1566,10 +2183,14 @@ def _response_failure(
     }
 
 
-def _response_error_code(code: str) -> ErrorCode:
+def _response_error_code(code: str) -> ErrorCode | str:
     if code:
         return canonical_failure_code(code)
     return ErrorCode.ADMISSION_DENIED
+
+
+def _failure_code_value(code: ErrorCode | str) -> str:
+    return code.value if isinstance(code, ErrorCode) else code
 
 
 def _state_name(value: int) -> str:
@@ -1584,6 +2205,23 @@ def _state_name(value: int) -> str:
         _types_pb2.INVOCATION_STATE_CANCELLED: "Cancelled",
     }
     return names.get(value, "Unspecified")
+
+
+def _canonical_receipt_state(value: int) -> str:
+    names = {
+        _types_pb2.INVOCATION_STATE_ACCEPTED: "ACCEPTED",
+        _types_pb2.INVOCATION_STATE_ADMITTED: "ADMITTED",
+        _types_pb2.INVOCATION_STATE_DISPATCHED: "DISPATCHED",
+        _types_pb2.INVOCATION_STATE_RUNNING: "RUNNING",
+        _types_pb2.INVOCATION_STATE_COMPLETED: "COMPLETED",
+        _types_pb2.INVOCATION_STATE_FAILED: "FAILED",
+        _types_pb2.INVOCATION_STATE_TIMED_OUT: "TIMED_OUT",
+        _types_pb2.INVOCATION_STATE_CANCELLED: "CANCELLED",
+    }
+    state = names.get(value)
+    if state is None:
+        raise _receipt_protocol_error("state is unspecified")
+    return state
 
 
 def _error_stage(value: int) -> str:
@@ -1635,7 +2273,9 @@ def _close_runtime_transport(
         )
 
 
-def _close_identity_projector(identity: DirectRuntimeIdentityProjector) -> SDKError | None:
+def _close_identity_projector(
+    identity: DirectRuntimeIdentityProjector,
+) -> SDKError | None:
     close = getattr(identity, "close", None)
     if close is None:
         return None

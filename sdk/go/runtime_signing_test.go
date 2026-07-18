@@ -6,6 +6,23 @@ import (
 	"testing"
 )
 
+func runtimeSigningResult(draft map[string]any, invocationID string) []byte {
+	admission, terminal := canonicalRuntimeReceiptPairFixture(invocationID, "Completed")
+	return mustJSON(map[string]any{
+		"ok":                  true,
+		"tuple":               draft,
+		"invocation_id":       invocationID,
+		"terminal_state":      "Completed",
+		"output_content_type": "application/json",
+		"output_base64":       "e30=",
+		"output_json":         map[string]any{},
+		"elapsed_ms":          1,
+		"admission_receipt":   admission,
+		"terminal_receipt":    terminal,
+		"error":               nil,
+	})
+}
+
 func TestRuntimeSigningTransportSignsUnsignedInvokeDraft(t *testing.T) {
 	provider := &memorySignatureProvider{}
 	signer, err := NewSigner(signerHandle(""), provider)
@@ -19,26 +36,7 @@ func TestRuntimeSigningTransportSignsUnsignedInvokeDraft(t *testing.T) {
 			if err := json.Unmarshal(draftJSON, &seen); err != nil {
 				t.Fatalf("decode signed draft: %v", err)
 			}
-			return []byte(`{
-				"ok": true,
-				"tuple": {
-					"caller_ura": "easynet:///r/example/agent/alice.sdk",
-					"callee_ura": "easynet:///r/example/device/dev-a",
-					"descriptor_ref": "` + runtimeTestDescriptorRef + `",
-					"subject_ura": "easynet:///r/example/device/dev-a",
-					"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
-					"causal_context": {"form": "none"},
-					"args": {},
-					"content_type": "application/json"
-				},
-				"terminal_state": "Completed",
-				"output_content_type": "application/json",
-				"output_base64": "e30=",
-				"output_json": {},
-				"elapsed_ms": 1,
-				"terminal_receipt": null,
-				"error": null
-			}`), nil
+			return runtimeSigningResult(seen, "inv-signing-1"), nil
 		},
 	}, signer)
 	if err != nil {
@@ -64,6 +62,9 @@ func TestRuntimeSigningTransportSignsUnsignedInvokeDraft(t *testing.T) {
 	}
 	if provider.material.CanonicalBytesBase64() == "" {
 		t.Fatal("provider did not receive canonical bytes")
+	}
+	if provider.material.CanonicalHashHex() == "" {
+		t.Fatal("provider did not receive canonical commitment")
 	}
 }
 
@@ -94,26 +95,7 @@ func TestRuntimeSigningTransportPreservesPresignedDraft(t *testing.T) {
 			if err := json.Unmarshal(draftJSON, &seen); err != nil {
 				t.Fatalf("decode signed draft: %v", err)
 			}
-			return []byte(`{
-				"ok": true,
-				"tuple": {
-					"caller_ura": "easynet:///r/example/agent/alice.sdk",
-					"callee_ura": "easynet:///r/example/device/dev-a",
-					"descriptor_ref": "` + runtimeTestDescriptorRef + `",
-					"subject_ura": "easynet:///r/example/device/dev-a",
-					"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
-					"causal_context": {"form": "none"},
-					"args": {},
-					"content_type": "application/json"
-				},
-				"terminal_state": "Completed",
-				"output_content_type": "application/json",
-				"output_base64": "e30=",
-				"output_json": {},
-				"elapsed_ms": 1,
-				"terminal_receipt": null,
-				"error": null
-			}`), nil
+			return runtimeSigningResult(seen, "inv-signing-2"), nil
 		},
 	}, signer)
 	if err != nil {

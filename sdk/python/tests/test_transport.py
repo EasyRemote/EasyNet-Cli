@@ -29,7 +29,11 @@ from easynet_sdk._cabi import CLILibrary
 from easynet_sdk.connection import ConnectOptions, RuntimeConnection
 
 from test_cabi import FakeRawCABI
-from test_runtime import MemoryRuntimeTransport, complete_draft
+from test_runtime import (
+    MemoryRuntimeTransport,
+    canonical_runtime_receipt_pair,
+    complete_draft,
+)
 from test_signing import signer_handle
 
 
@@ -68,8 +72,6 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                         "selected_node_id": "dev-a",
                         "scheduling_reason": "direct",
                         "elapsed_ms": 12,
-                        "admission_receipt": {"invocation_id": "inv-1"},
-                        "terminal_receipt": {"invocation_id": "inv-1"},
                     }
                 )
                 return json.dumps(
@@ -92,8 +94,9 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(result["selected_node_id"], "dev-a")
         self.assertEqual(result["scheduling_reason"], "direct")
         self.assertEqual(result["elapsed_ms"], 12)
-        self.assertEqual(result["admission_receipt"], {"invocation_id": "inv-1"})
-        self.assertEqual(result["terminal_receipt"], {"invocation_id": "inv-1"})
+        self.assertEqual(result["admission_receipt"]["invocation_id"], "inv-runtime-1")
+        self.assertEqual(result["terminal_receipt"]["invocation_id"], "inv-runtime-1")
+        self.assertIn("authority_proof", result["terminal_receipt"])
         self.assertEqual(result["sdk_runtime_result"]["terminal_state"], "Completed")
 
     def test_invocation_result_adapter_context_manager_uses_transport_lifecycle(
@@ -154,13 +157,11 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         class ReceiptRuntimeTransport(MemoryRuntimeTransport):
             def invoke(self, draft_json: bytes) -> bytes:
                 result = json.loads(super().invoke(draft_json).decode("utf-8"))
-                result["terminal_receipt"] = {
-                    "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/opaque/receipt",
-                    "invocation_id": "inv-1",
-                    "state": "completed",
-                    "self_hash_hex": "00" * 32,
-                    "cleanup_complete": True,
-                }
+                result["terminal_receipt"]["receipt_ura"] = (
+                    "easynet:///r/example/resource/agent.alice.sdk/"
+                    "invocation/opaque/receipt"
+                )
+                result["terminal_receipt"]["self_hash_hex"] = "55" * 32
                 return json.dumps(result, separators=(",", ":"), sort_keys=True).encode(
                     "utf-8"
                 )
@@ -174,19 +175,27 @@ class DaemonInvocationTransportTests(unittest.TestCase):
 
         self.assertNotIn("receipt", result)
         self.assertNotIn("receipt_summary", result)
-        self.assertEqual(result["terminal_receipt"]["invocation_id"], "inv-1")
-        self.assertEqual(result["terminal_receipt_summary"]["invocation_id"], "inv-1")
+        self.assertEqual(result["terminal_receipt"]["invocation_id"], "inv-runtime-1")
+        self.assertEqual(
+            result["terminal_receipt_summary"]["invocation_id"], "inv-runtime-1"
+        )
         self.assertTrue(result["terminal_receipt_summary"]["has_causal_anchor"])
 
     def test_invocation_result_adapter_raises_on_non_ok_runtime_result(self) -> None:
         class FailedRuntimeTransport(MemoryRuntimeTransport):
             def invoke(self, draft_json: bytes) -> bytes:
                 draft = json.loads(draft_json.decode("utf-8"))
+                admission, terminal = canonical_runtime_receipt_pair(
+                    "inv-failed", "Failed"
+                )
                 return json.dumps(
                     {
                         "ok": False,
                         "tuple": draft,
+                        "invocation_id": "inv-failed",
                         "terminal_state": "Failed",
+                        "admission_receipt": admission,
+                        "terminal_receipt": terminal,
                         "error": {
                             "code": "ABILITY_FAILED",
                             "stage": "runtime",
@@ -212,11 +221,17 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         class FailedRuntimeTransport(MemoryRuntimeTransport):
             def invoke(self, draft_json: bytes) -> bytes:
                 draft = json.loads(draft_json.decode("utf-8"))
+                admission, terminal = canonical_runtime_receipt_pair(
+                    "inv-membership", "Failed"
+                )
                 return json.dumps(
                     {
                         "ok": False,
                         "tuple": draft,
+                        "invocation_id": "inv-membership",
                         "terminal_state": "Failed",
+                        "admission_receipt": admission,
+                        "terminal_receipt": terminal,
                         "error": {
                             "code": "AXON_MEMBERSHIP_REQUIRED",
                             "stage": "runtime",
@@ -398,7 +413,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                 return_value=object(),
             ),
             patch(
-                "easynet_sdk.transport.RuntimeConnection",
+                "easynet_sdk.providers.easynet.transport.RuntimeConnection",
                 return_value=connection,
             ),
             self.assertRaises(RuntimeError) as caught,
@@ -419,7 +434,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                 return_value=object(),
             ),
             patch(
-                "easynet_sdk.transport.RuntimeConnection",
+                "easynet_sdk.providers.easynet.transport.RuntimeConnection",
                 return_value=connection,
             ),
             self.assertRaises(RuntimeError) as caught,

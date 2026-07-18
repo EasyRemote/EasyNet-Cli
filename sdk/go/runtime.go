@@ -2,12 +2,16 @@ package easynet
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
+
+	axoninv "axon.run/sdk/go/axon/invocation"
 )
 
 // InvocationControlCapability is the opaque authority for controlling a
@@ -819,6 +823,7 @@ type RuntimeReceiptRef struct {
 type RuntimeReceiptAuthorityProof struct {
 	ProofType          string                      `json:"proof_type,omitempty"`
 	BindingKind        string                      `json:"binding_kind,omitempty"`
+	Binding            map[string]any              `json:"binding,omitempty"`
 	ProofPayloadBase64 string                      `json:"proof_payload_base64,omitempty"`
 	ProofHashHex       string                      `json:"proof_hash_hex,omitempty"`
 	Issuer             *RuntimeReceiptAgentBinding `json:"issuer,omitempty"`
@@ -827,7 +832,7 @@ type RuntimeReceiptAuthorityProof struct {
 }
 
 func NewRuntimeReceiptFromJSON(raw []byte) (RuntimeReceipt, error) {
-	receipt, err := newRuntimeReceiptProjectionFromJSON(raw)
+	receipt, err := decodeRuntimeReceiptProjectionFromJSON(raw)
 	if err != nil {
 		return RuntimeReceipt{}, err
 	}
@@ -837,7 +842,7 @@ func NewRuntimeReceiptFromJSON(raw []byte) (RuntimeReceipt, error) {
 	return receipt, nil
 }
 
-func newRuntimeReceiptProjectionFromJSON(raw []byte) (RuntimeReceipt, error) {
+func decodeRuntimeReceiptProjectionFromJSON(raw []byte) (RuntimeReceipt, error) {
 	var dto struct {
 		ReceiptID             string                        `json:"receipt_id"`
 		ReceiptURA            string                        `json:"receipt_ura"`
@@ -932,11 +937,31 @@ func (r RuntimeReceipt) HasCausalAnchor() bool {
 }
 
 func (r RuntimeReceipt) ValidateSummary() error {
+	if r.Raw == nil {
+		return invalidRuntimePayload("runtime receipt summary is missing raw proof projection", nil)
+	}
+	raw, err := json.Marshal(r.Raw)
+	if err != nil {
+		return invalidRuntimePayload("encode runtime receipt raw projection", err)
+	}
+	canonical, err := decodeRuntimeReceiptProjectionFromJSON(raw)
+	if err != nil {
+		return err
+	}
+	projected := r
+	projected.Raw = nil
+	canonical.Raw = nil
+	if !reflect.DeepEqual(projected, canonical) {
+		return invalidRuntimePayload("runtime receipt typed fields do not match raw projection", nil)
+	}
 	if strings.TrimSpace(r.InvocationID) == "" {
 		return invalidRuntimePayload("runtime receipt summary is missing invocation_id", nil)
 	}
 	if strings.TrimSpace(r.ReceiptType) == "" {
 		return invalidRuntimePayload("runtime receipt summary is missing receipt_type", nil)
+	}
+	if strings.TrimSpace(r.State) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing state", nil)
 	}
 	if _, err := r.PrevReceiptHash(); err != nil {
 		return err
@@ -959,23 +984,42 @@ func (r RuntimeReceipt) ValidateProofFacts() error {
 	if r.SubjectBinding == nil || strings.TrimSpace(r.SubjectBinding.URA) == "" {
 		return invalidRuntimePayload("runtime receipt summary is missing subject_binding.ura", nil)
 	}
-	if strings.TrimSpace(r.InvocationNonceBase64) == "" {
-		return invalidRuntimePayload("runtime receipt summary is missing invocation_nonce_base64", nil)
+	if _, err := runtimeReceiptBase64(r.InvocationNonceBase64, "invocation_nonce_base64", 16, false); err != nil {
+		return err
 	}
 	if strings.TrimSpace(r.CausalBindingKind) == "" || r.CausalBinding == nil {
 		return invalidRuntimePayload("runtime receipt summary is missing causal binding", nil)
 	}
+	if err := validateRuntimeReceiptCausalBinding(r.CausalBindingKind, r.CausalBinding); err != nil {
+		return err
+	}
 	if err := requireRuntimeReceiptSignature(r.CalleeSignature, "callee_signature"); err != nil {
+		return err
+	}
+	if _, err := runtimeReceiptBase64(r.CalleeSignature.SignatureBase64, "callee_signature.signature_base64", 0, false); err != nil {
 		return err
 	}
 	if err := requireRuntimeReceiptAgentBinding(r.SignerBinding, "signer_binding"); err != nil {
 		return err
 	}
+	if err := validateRuntimeReceiptSigningModel(r); err != nil {
+		return err
+	}
 	if strings.TrimSpace(r.AuthorityBindingKind) == "" || r.AuthorityBinding == nil {
 		return invalidRuntimePayload("runtime receipt summary is missing authority binding", nil)
 	}
+	authorityKind, ok := runtimeReceiptObjectText(r.AuthorityBinding, "kind")
+	if !ok {
+		return invalidRuntimePayload("runtime receipt summary is missing authority_binding.kind", nil)
+	}
+	if authorityKind != r.AuthorityBindingKind {
+		return invalidRuntimePayload("runtime receipt authority_binding kind does not match authority_binding_kind", nil)
+	}
 	if strings.TrimSpace(r.AbilityBinding) == "" {
 		return invalidRuntimePayload("runtime receipt summary is missing ability_binding", nil)
+	}
+	if r.SubjectRef == nil || strings.TrimSpace(r.SubjectRef.URA) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing subject_ref.ura", nil)
 	}
 	if strings.TrimSpace(r.DescriptorVersion) == "" {
 		return invalidRuntimePayload("runtime receipt summary is missing descriptor_version", nil)
@@ -992,41 +1036,50 @@ func (r RuntimeReceipt) ValidateProofFacts() error {
 	if r.AuthorityProof == nil {
 		return invalidRuntimePayload("runtime receipt summary is missing authority_proof", nil)
 	}
-	if strings.TrimSpace(r.AuthorityProof.ProofType) == "" {
-		return invalidRuntimePayload("runtime receipt summary is missing authority_proof.proof_type", nil)
-	}
-	if strings.TrimSpace(r.AuthorityProof.BindingKind) == "" {
-		return invalidRuntimePayload("runtime receipt summary is missing authority_proof.binding_kind", nil)
-	}
-	if strings.TrimSpace(r.AuthorityProof.ProofPayloadBase64) == "" {
-		return invalidRuntimePayload("runtime receipt summary is missing authority_proof.proof_payload_base64", nil)
-	}
-	if _, err := runtimeReceiptHash(r.AuthorityProof.ProofHashHex, "authority_proof.proof_hash_hex"); err != nil {
-		return err
-	}
-	if err := requireRuntimeReceiptAgentBinding(r.AuthorityProof.Issuer, "authority_proof.issuer"); err != nil {
-		return err
-	}
-	if err := requireRuntimeReceiptSignature(r.AuthorityProof.Signature, "authority_proof.signature"); err != nil {
-		return err
-	}
-	if _, err := runtimeReceiptHash(r.InputHashHex, "input_hash_hex"); err != nil {
-		return err
-	}
-	if _, err := runtimeReceiptHash(r.OutputHashHex, "output_hash_hex"); err != nil {
-		return err
-	}
-	if r.Raw == nil {
-		return invalidRuntimePayload("runtime receipt summary is missing raw proof projection", nil)
-	}
-	if _, ok := r.Raw["parent_receipts"]; !ok {
+	rawParents, ok := r.Raw["parent_receipts"]
+	if !ok {
 		return invalidRuntimePayload("runtime receipt summary is missing parent_receipts", nil)
 	}
-	return nil
+	if _, ok := rawParents.([]any); !ok {
+		return invalidRuntimePayload("parent_receipts must be an array", nil)
+	}
+	return validateRuntimeReceiptCanonicalProofFacts(r)
+}
+
+func validateRuntimeReceiptSigningModel(r RuntimeReceipt) error {
+	signerURA := strings.TrimSpace(r.SignerBinding.URA)
+	calleeURA := strings.TrimSpace(r.CalleeBinding.URA)
+	hostAttestation := strings.TrimSpace(r.HostAttestationBase64)
+	if signerURA == calleeURA {
+		if hostAttestation != "" {
+			return invalidRuntimePayload(
+				"self-signed runtime receipt must not carry host_attestation_base64",
+				nil,
+			)
+		}
+		return nil
+	}
+	if hostAttestation == "" {
+		return invalidRuntimePayload(
+			"hosted runtime receipt is missing host_attestation_base64",
+			nil,
+		)
+	}
+	_, err := runtimeReceiptBase64(
+		hostAttestation,
+		"host_attestation_base64",
+		64,
+		false,
+	)
+	return err
 }
 
 func (r RuntimeReceipt) PrevReceiptHash() ([]byte, error) {
-	return runtimeReceiptHash(r.PrevReceiptHashHex, "prev_receipt_hash_hex")
+	return runtimeReceiptHashValue(
+		r.PrevReceiptHashHex,
+		"prev_receipt_hash_hex",
+		true,
+	)
 }
 
 func (r RuntimeReceipt) SelfReceiptHash() ([]byte, error) {
@@ -1046,6 +1099,10 @@ func (r RuntimeReceipt) RawProjection() map[string]any {
 }
 
 func runtimeReceiptHash(value string, field string) ([]byte, error) {
+	return runtimeReceiptHashValue(value, field, false)
+}
+
+func runtimeReceiptHashValue(value string, field string, allowZero bool) ([]byte, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return nil, invalidRuntimePayload(field+" is required", nil)
@@ -1057,7 +1114,531 @@ func runtimeReceiptHash(value string, field string) ([]byte, error) {
 	if len(hash) != 32 {
 		return nil, invalidRuntimePayload(field+" must be exactly 32 bytes", nil)
 	}
+	if !allowZero {
+		allZero := true
+		for _, value := range hash {
+			allZero = allZero && value == 0
+		}
+		if allZero {
+			return nil, invalidRuntimePayload(field+" must not be all-zero", nil)
+		}
+	}
 	return hash, nil
+}
+
+func runtimeReceiptBase64(value string, field string, expectedLength int, allowEmpty bool) ([]byte, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		if allowEmpty {
+			return []byte{}, nil
+		}
+		return nil, invalidRuntimePayload(field+" is required", nil)
+	}
+	decoded, err := base64.StdEncoding.Strict().DecodeString(value)
+	if err != nil {
+		return nil, invalidRuntimePayload(field+" must be valid base64", err)
+	}
+	if len(decoded) == 0 && !allowEmpty {
+		return nil, invalidRuntimePayload(field+" must decode to non-empty bytes", nil)
+	}
+	if expectedLength > 0 && len(decoded) != expectedLength {
+		return nil, invalidRuntimePayload(
+			fmt.Sprintf("%s must decode to exactly %d bytes", field, expectedLength),
+			nil,
+		)
+	}
+	return decoded, nil
+}
+
+func runtimeReceiptObjectText(value map[string]any, field string) (string, bool) {
+	text, ok := value[field].(string)
+	text = strings.TrimSpace(text)
+	return text, ok && text != ""
+}
+
+func validateRuntimeReceiptRef(value any, field string) error {
+	decoded, ok := value.(map[string]any)
+	if !ok {
+		return invalidRuntimePayload(field+" must be an object", nil)
+	}
+	hash, ok := decoded["receipt_hash_hex"].(string)
+	if !ok {
+		return invalidRuntimePayload(field+".receipt_hash_hex is required", nil)
+	}
+	if _, err := runtimeReceiptHash(hash, field+".receipt_hash_hex"); err != nil {
+		return err
+	}
+	ura, ok := decoded["receipt_ura"].(string)
+	if !ok || strings.TrimSpace(ura) == "" {
+		return invalidRuntimePayload(field+".receipt_ura is required", nil)
+	}
+	return nil
+}
+
+func validateRuntimeReceiptCausalBinding(kind string, binding map[string]any) error {
+	form, ok := runtimeReceiptObjectText(binding, "form")
+	if !ok {
+		return invalidRuntimePayload("runtime receipt summary is missing causal_binding.form", nil)
+	}
+	if form != kind {
+		return invalidRuntimePayload(
+			"runtime receipt causal_binding form does not match causal_binding_kind",
+			nil,
+		)
+	}
+	switch form {
+	case "none":
+		return nil
+	case "scalar":
+		return validateRuntimeReceiptRef(binding["receipt"], "causal_binding.receipt")
+	case "list":
+		prior, ok := binding["prior"].([]any)
+		if !ok || len(prior) == 0 {
+			return invalidRuntimePayload("causal_binding.prior must be a non-empty array", nil)
+		}
+		for index, receipt := range prior {
+			if err := validateRuntimeReceiptRef(
+				receipt,
+				fmt.Sprintf("causal_binding.prior[%d]", index),
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	case "merkle":
+		root, ok := binding["root_hex"].(string)
+		if !ok {
+			return invalidRuntimePayload("causal_binding.root_hex is required", nil)
+		}
+		if _, err := runtimeReceiptHash(root, "causal_binding.root_hex"); err != nil {
+			return err
+		}
+		proofURA, ok := binding["proof_ura"].(string)
+		if !ok || strings.TrimSpace(proofURA) == "" {
+			return invalidRuntimePayload("causal_binding.proof_ura is required", nil)
+		}
+		return nil
+	default:
+		return invalidRuntimePayload("unsupported causal_binding form "+form, nil)
+	}
+}
+
+func validateRuntimeReceiptCanonicalProofFacts(r RuntimeReceipt) error {
+	for _, binding := range []struct {
+		field   string
+		ura     string
+		profile string
+	}{
+		{field: "caller_binding", ura: r.CallerBinding.URA, profile: r.CallerBinding.Profile},
+		{field: "callee_binding", ura: r.CalleeBinding.URA, profile: r.CalleeBinding.Profile},
+		{field: "subject_binding", ura: r.SubjectBinding.URA, profile: r.SubjectBinding.Profile},
+		{field: "signer_binding", ura: r.SignerBinding.URA, profile: r.SignerBinding.Profile},
+	} {
+		if strings.TrimSpace(binding.ura) == "" {
+			return invalidRuntimePayload("runtime receipt summary is missing "+binding.field+".ura", nil)
+		}
+		if _, err := runtimeReceiptURAProfile(binding.profile, binding.field+".profile"); err != nil {
+			return err
+		}
+	}
+
+	authority, err := runtimeReceiptAuthorityBinding(r.AuthorityBinding, "authority_binding")
+	if err != nil {
+		return err
+	}
+	proof := r.AuthorityProof
+	if strings.TrimSpace(proof.ProofType) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing authority_proof.proof_type", nil)
+	}
+	if strings.TrimSpace(proof.BindingKind) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing authority_proof.binding_kind", nil)
+	}
+	if proof.BindingKind != r.AuthorityBindingKind {
+		return invalidRuntimePayload(
+			"runtime receipt authority_proof binding_kind does not match authority_binding_kind",
+			nil,
+		)
+	}
+	proofBinding, err := runtimeReceiptAuthorityBinding(proof.Binding, "authority_proof.binding")
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(proofBinding, authority) {
+		return invalidRuntimePayload(
+			"runtime receipt authority_proof binding does not match authority_binding",
+			nil,
+		)
+	}
+
+	if err := requireRuntimeReceiptAgentBinding(proof.Issuer, "authority_proof.issuer"); err != nil {
+		return err
+	}
+	issuerProfile, err := runtimeReceiptURAProfile(
+		proof.Issuer.Profile,
+		"authority_proof.issuer.profile",
+	)
+	if err != nil {
+		return err
+	}
+	calleeProfile, err := runtimeReceiptURAProfile(
+		r.CalleeBinding.Profile,
+		"callee_binding.profile",
+	)
+	if err != nil {
+		return err
+	}
+	issuer := axoninv.NewAgentIdentity(proof.Issuer.URA, issuerProfile)
+	callee := axoninv.NewAgentIdentity(r.CalleeBinding.URA, calleeProfile)
+	if issuer != callee {
+		return invalidRuntimePayload(
+			"runtime receipt authority_proof issuer does not match callee_binding",
+			nil,
+		)
+	}
+
+	var proofSignature *axoninv.CalleeSignature
+	if proof.Signature != nil {
+		if err := requireRuntimeReceiptSignature(proof.Signature, "authority_proof.signature"); err != nil {
+			return err
+		}
+		signature, err := runtimeReceiptBase64(
+			proof.Signature.SignatureBase64,
+			"authority_proof.signature.signature_base64",
+			0,
+			false,
+		)
+		if err != nil {
+			return err
+		}
+		proofSignature = &axoninv.CalleeSignature{
+			Algorithm: strings.TrimSpace(proof.Signature.Algorithm),
+			Signature: signature,
+			KeyIDHint: proof.Signature.KeyIDHint,
+		}
+	}
+
+	if r.SubjectRef.Kind < int32(axoninv.EntityRefResource) ||
+		r.SubjectRef.Kind > int32(axoninv.EntityRefDevice) {
+		return invalidRuntimePayload("subject_ref.kind is not a canonical EntityRef kind", nil)
+	}
+	subjectProfile, err := runtimeReceiptURAProfile(r.SubjectRef.Profile, "subject_ref.profile")
+	if err != nil {
+		return err
+	}
+	subjectRef := &axoninv.EntityRef{
+		Kind:    axoninv.EntityRefKind(r.SubjectRef.Kind),
+		URA:     strings.TrimSpace(r.SubjectRef.URA),
+		Profile: subjectProfile,
+	}
+
+	proofPayload, err := runtimeReceiptBase64(
+		proof.ProofPayloadBase64,
+		"authority_proof.proof_payload_base64",
+		0,
+		true,
+	)
+	if err != nil {
+		return err
+	}
+	proofHash, err := runtimeReceiptHash32(
+		proof.ProofHashHex,
+		"authority_proof.proof_hash_hex",
+	)
+	if err != nil {
+		return err
+	}
+	schemaHash, err := runtimeReceiptHash32(r.SchemaHashHex, "schema_hash_hex")
+	if err != nil {
+		return err
+	}
+	implHash, err := runtimeReceiptHash32(r.ImplHashHex, "impl_hash_hex")
+	if err != nil {
+		return err
+	}
+	inputHash, err := runtimeReceiptHash32(r.InputHashHex, "input_hash_hex")
+	if err != nil {
+		return err
+	}
+	outputHash, err := runtimeReceiptHash32(r.OutputHashHex, "output_hash_hex")
+	if err != nil {
+		return err
+	}
+	parentReceipts := make([]axoninv.ReceiptRef, 0, len(r.ParentReceipts))
+	for index, parent := range r.ParentReceipts {
+		parentHash, err := runtimeReceiptHash32(
+			parent.ReceiptHashHex,
+			fmt.Sprintf("parent_receipts[%d].receipt_hash_hex", index),
+		)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(parent.ReceiptURA) == "" {
+			return invalidRuntimePayload(
+				fmt.Sprintf("runtime receipt summary is missing parent_receipts[%d].receipt_ura", index),
+				nil,
+			)
+		}
+		parentReceipts = append(parentReceipts, axoninv.ReceiptRef{
+			ReceiptHash: parentHash,
+			ReceiptURA:  strings.TrimSpace(parent.ReceiptURA),
+		})
+	}
+
+	_, err = axoninv.TryNewReceiptProofFacts(
+		subjectRef,
+		strings.TrimSpace(r.DescriptorVersion),
+		schemaHash,
+		implHash,
+		strings.TrimSpace(r.RuntimeEnv),
+		axoninv.InvocationAuthorityProof{
+			ProofType:     strings.TrimSpace(proof.ProofType),
+			Binding:       &proofBinding,
+			ProofPayload:  proofPayload,
+			ProofHash:     proofHash,
+			Issuer:        &issuer,
+			Signature:     proofSignature,
+			AdmissionHook: strings.TrimSpace(proof.AdmissionHook),
+		},
+		inputHash,
+		outputHash,
+		parentReceipts,
+	)
+	if err != nil {
+		return invalidRuntimePayload(
+			fmt.Sprintf("runtime receipt proof facts are not canonical: %v", err),
+			err,
+		)
+	}
+	return nil
+}
+
+func runtimeReceiptAuthorityBinding(value map[string]any, field string) (axoninv.AuthorityBinding, error) {
+	if value == nil {
+		return axoninv.AuthorityBinding{}, invalidRuntimePayload(
+			"runtime receipt summary is missing "+field,
+			nil,
+		)
+	}
+	kind, err := requiredRuntimeReceiptObjectText(value, "kind", field+".kind")
+	if err != nil {
+		return axoninv.AuthorityBinding{}, err
+	}
+	switch kind {
+	case "self":
+		principal, err := requiredRuntimeReceiptObjectText(value, "principal_ura", field+".principal_ura")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		return axoninv.SelfAuthority(principal), nil
+	case "delegation":
+		issuer, err := requiredRuntimeReceiptObjectText(value, "issuer_ura", field+".issuer_ura")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		subject, err := requiredRuntimeReceiptObjectText(value, "subject_ura", field+".subject_ura")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		caller, err := requiredRuntimeReceiptObjectText(value, "caller_ura", field+".caller_ura")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		audience, err := requiredRuntimeReceiptObjectText(value, "audience", field+".audience")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		scopes, err := runtimeReceiptTextList(value["scopes"], field+".scopes")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		issuedAt, err := runtimeReceiptNonNegativeInt64(value["issued_at_ms"], field+".issued_at_ms")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		expiresAt, err := runtimeReceiptNonNegativeInt64(value["expires_at_ms"], field+".expires_at_ms")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		signatureText, err := requiredRuntimeReceiptObjectText(value, "signature_base64", field+".signature_base64")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		signature, err := runtimeReceiptBase64(signatureText, field+".signature_base64", 64, false)
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		return axoninv.DelegatedAuthority(axoninv.DelegationProof{
+			IssuerURA:   issuer,
+			SubjectURA:  subject,
+			CallerURA:   caller,
+			Audience:    audience,
+			Scopes:      scopes,
+			IssuedAtMs:  issuedAt,
+			ExpiresAtMs: expiresAt,
+			Signature:   signature,
+		}), nil
+	case "capability":
+		capability, err := requiredRuntimeReceiptObjectText(value, "capability_ura", field+".capability_ura")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		return axoninv.CapabilityAuthority(capability), nil
+	case "policy":
+		policy, err := requiredRuntimeReceiptObjectText(value, "policy_ura", field+".policy_ura")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		return axoninv.PolicyAuthority(policy), nil
+	case "session":
+		backend, err := requiredRuntimeReceiptObjectText(value, "backend_ura", field+".backend_ura")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		user, err := requiredRuntimeReceiptObjectText(value, "user_ura", field+".user_ura")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		sessionID, err := requiredRuntimeReceiptObjectText(value, "session_id", field+".session_id")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		scopes, err := runtimeReceiptTextList(value["scopes"], field+".scopes")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		audiences, err := runtimeReceiptTextList(value["audiences"], field+".audiences")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		issuedAt, err := runtimeReceiptNonNegativeInt64(value["issued_at_ms"], field+".issued_at_ms")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		expiresAt, err := runtimeReceiptNonNegativeInt64(value["expires_at_ms"], field+".expires_at_ms")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		signatureText, err := requiredRuntimeReceiptObjectText(value, "signature_base64", field+".signature_base64")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		signature, err := runtimeReceiptBase64(signatureText, field+".signature_base64", 64, false)
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		return axoninv.SessionAuthority(axoninv.SessionAuthorityBody{
+			BackendURA:  backend,
+			UserURA:     user,
+			SessionID:   sessionID,
+			Scopes:      scopes,
+			Audiences:   audiences,
+			IssuedAtMs:  issuedAt,
+			ExpiresAtMs: expiresAt,
+			Signature:   signature,
+		}), nil
+	case "bootstrap":
+		principal, err := requiredRuntimeReceiptObjectText(value, "principal_ura", field+".principal_ura")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		realm, err := requiredRuntimeReceiptObjectText(value, "realm", field+".realm")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		ability, err := requiredRuntimeReceiptObjectText(value, "ability", field+".ability")
+		if err != nil {
+			return axoninv.AuthorityBinding{}, err
+		}
+		return axoninv.BootstrapAuthority(principal, realm, ability), nil
+	default:
+		return axoninv.AuthorityBinding{}, invalidRuntimePayload(
+			fmt.Sprintf("%s is not canonical: %q", field+".kind", kind),
+			nil,
+		)
+	}
+}
+
+func runtimeReceiptURAProfile(value string, field string) (axoninv.UraProfile, error) {
+	profile, err := axoninv.ParseUraProfile(strings.TrimSpace(value))
+	if err != nil {
+		return "", invalidRuntimePayload(field+" is not canonical", err)
+	}
+	return profile, nil
+}
+
+func runtimeReceiptHash32(value string, field string) ([32]byte, error) {
+	decoded, err := runtimeReceiptHash(value, field)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	var hash [32]byte
+	copy(hash[:], decoded)
+	return hash, nil
+}
+
+func requiredRuntimeReceiptObjectText(value map[string]any, key string, field string) (string, error) {
+	text, ok := runtimeReceiptObjectText(value, key)
+	if !ok {
+		return "", invalidRuntimePayload("runtime receipt summary is missing "+field, nil)
+	}
+	return text, nil
+}
+
+func runtimeReceiptTextList(value any, field string) ([]string, error) {
+	var values []string
+	switch items := value.(type) {
+	case []string:
+		values = append(values, items...)
+	case []any:
+		values = make([]string, 0, len(items))
+		for index, item := range items {
+			text, ok := item.(string)
+			if !ok || strings.TrimSpace(text) == "" {
+				return nil, invalidRuntimePayload(
+					fmt.Sprintf("%s[%d] must be a non-empty string", field, index),
+					nil,
+				)
+			}
+			values = append(values, strings.TrimSpace(text))
+		}
+	default:
+		return nil, invalidRuntimePayload(field+" must be a non-empty array", nil)
+	}
+	if len(values) == 0 {
+		return nil, invalidRuntimePayload(field+" must be a non-empty array", nil)
+	}
+	for index, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return nil, invalidRuntimePayload(
+				fmt.Sprintf("%s[%d] must be a non-empty string", field, index),
+				nil,
+			)
+		}
+		values[index] = strings.TrimSpace(value)
+	}
+	return values, nil
+}
+
+func runtimeReceiptNonNegativeInt64(value any, field string) (int64, error) {
+	switch number := value.(type) {
+	case int:
+		if number >= 0 {
+			return int64(number), nil
+		}
+	case int64:
+		if number >= 0 {
+			return number, nil
+		}
+	case uint64:
+		if number <= uint64(^uint64(0)>>1) {
+			return int64(number), nil
+		}
+	case float64:
+		if number >= 0 && number <= float64(^uint64(0)>>1) && number == float64(int64(number)) {
+			return int64(number), nil
+		}
+	}
+	return 0, invalidRuntimePayload(field+" must be a non-negative integer", nil)
 }
 
 func requireRuntimeReceiptAgentBinding(binding *RuntimeReceiptAgentBinding, field string) error {
@@ -1218,12 +1799,31 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 		return InvocationResult{}, invalidRuntimePayload("failed result must include error", nil)
 	}
 	terminalReceipt := cloneOptionalJSON(dto.TerminalReceipt)
-	admissionReceiptSummary, err := decodeRuntimeReceiptSummary(dto.AdmissionReceipt)
+	admissionReceipt := cloneOptionalJSON(dto.AdmissionReceipt)
+	if err := validateInvocationResultReceiptPresence(
+		*dto.OK,
+		dto.TerminalState,
+		failure,
+		admissionReceipt,
+		terminalReceipt,
+	); err != nil {
+		return InvocationResult{}, err
+	}
+	admissionReceiptSummary, err := decodeRuntimeReceiptSummary(admissionReceipt)
 	if err != nil {
 		return InvocationResult{}, err
 	}
 	terminalReceiptSummary, err := decodeRuntimeReceiptSummary(terminalReceipt)
 	if err != nil {
+		return InvocationResult{}, err
+	}
+	if err := validateInvocationResultReceiptTopology(
+		*dto.OK,
+		dto.TerminalState,
+		dto.InvocationID,
+		admissionReceiptSummary,
+		terminalReceiptSummary,
+	); err != nil {
 		return InvocationResult{}, err
 	}
 	return InvocationResult{
@@ -1237,7 +1837,7 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 		selectedNodeID:          dto.SelectedNodeID,
 		schedulingReason:        dto.SchedulingReason,
 		elapsedMS:               dto.ElapsedMS,
-		admissionReceipt:        cloneOptionalJSON(dto.AdmissionReceipt),
+		admissionReceipt:        admissionReceipt,
 		terminalReceipt:         terminalReceipt,
 		admissionReceiptSummary: admissionReceiptSummary,
 		terminalReceiptSummary:  terminalReceiptSummary,
@@ -1245,12 +1845,185 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 	}, nil
 }
 
+func validateInvocationResultReceiptPresence(
+	ok bool,
+	terminalState string,
+	failure *InvocationFailure,
+	admissionReceipt json.RawMessage,
+	terminalReceipt json.RawMessage,
+) error {
+	hasAdmission := len(admissionReceipt) != 0
+	hasTerminal := len(terminalReceipt) != 0
+	if hasAdmission != hasTerminal {
+		return invalidRuntimePayload(
+			"invocation result must carry both admission_receipt and terminal_receipt or neither",
+			nil,
+		)
+	}
+	if hasAdmission {
+		return nil
+	}
+	if ok {
+		return invalidRuntimePayload("successful invocation result requires canonical receipt checkpoints", nil)
+	}
+	if normalizeRuntimeReceiptState(terminalState) != "failed" {
+		return invalidRuntimePayload("receipt-free invocation result must use terminal_state Failed", nil)
+	}
+	if failure == nil || !isCanonicalPreAdmissionErrorStage(failure.stage) {
+		return invalidRuntimePayload(
+			"receipt-free invocation result requires a typed pre-admission error stage",
+			nil,
+		)
+	}
+	return nil
+}
+
+func isCanonicalPreAdmissionErrorStage(stage string) bool {
+	switch stage {
+	case "global_admission",
+		"caller_authentication",
+		"authority_validation",
+		"bootstrap_authorization",
+		"quota",
+		"ability_resolution",
+		"ability_policy",
+		"request_validation":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateInvocationResultReceiptTopology(
+	ok bool,
+	terminalState string,
+	invocationID string,
+	admission *RuntimeReceipt,
+	terminal *RuntimeReceipt,
+) error {
+	if admission == nil && terminal == nil {
+		return nil
+	}
+	if admission == nil || terminal == nil {
+		return invalidRuntimePayload(
+			"invocation result must carry both admission_receipt and terminal_receipt or neither",
+			nil,
+		)
+	}
+	admissionState := normalizeRuntimeReceiptState(admission.State)
+	if admissionState != "admitted" {
+		return invalidRuntimePayload(
+			"admission_receipt does not carry a canonical admission state",
+			nil,
+		)
+	}
+	if normalizeRuntimeReceiptState(admission.ReceiptType) != "admitted" {
+		return invalidRuntimePayload(
+			"admission_receipt does not carry canonical receipt_type admitted",
+			nil,
+		)
+	}
+	if admission.CleanupComplete == nil || *admission.CleanupComplete {
+		return invalidRuntimePayload(
+			"admission_receipt cleanup_complete must be false",
+			nil,
+		)
+	}
+	terminalReceiptState := normalizeRuntimeReceiptState(terminal.State)
+	switch terminalReceiptState {
+	case "completed", "failed", "timedout", "cancelled":
+	default:
+		return invalidRuntimePayload(
+			"terminal_receipt does not carry a canonical terminal state",
+			nil,
+		)
+	}
+	if normalizeRuntimeReceiptState(terminal.ReceiptType) != terminalReceiptState {
+		return invalidRuntimePayload(
+			"terminal_receipt receipt_type does not match its terminal state",
+			nil,
+		)
+	}
+	if terminalReceiptState != normalizeRuntimeReceiptState(terminalState) {
+		return invalidRuntimePayload(
+			"terminal_receipt state does not match invocation terminal_state",
+			nil,
+		)
+	}
+	if ok != (terminalReceiptState == "completed") {
+		return invalidRuntimePayload(
+			"invocation result ok flag does not match terminal receipt state",
+			nil,
+		)
+	}
+	if terminal.CleanupComplete == nil || !*terminal.CleanupComplete {
+		return invalidRuntimePayload(
+			"terminal_receipt cleanup_complete must be true",
+			nil,
+		)
+	}
+	if terminal.Index <= admission.Index {
+		return invalidRuntimePayload(
+			"terminal_receipt index must follow admission_receipt index",
+			nil,
+		)
+	}
+	if admission.InvocationID != terminal.InvocationID {
+		return invalidRuntimePayload(
+			"admission_receipt and terminal_receipt bind different invocations",
+			nil,
+		)
+	}
+	if terminal.TimestampUnixMS < admission.TimestampUnixMS {
+		return invalidRuntimePayload(
+			"terminal_receipt timestamp precedes admission_receipt",
+			nil,
+		)
+	}
+	if strings.TrimSpace(invocationID) != "" && invocationID != terminal.InvocationID {
+		return invalidRuntimePayload(
+			"invocation result id does not match canonical receipt checkpoints",
+			nil,
+		)
+	}
+	bindingsMatch := reflect.DeepEqual(admission.CallerBinding, terminal.CallerBinding) &&
+		reflect.DeepEqual(admission.CalleeBinding, terminal.CalleeBinding) &&
+		reflect.DeepEqual(admission.SubjectBinding, terminal.SubjectBinding) &&
+		admission.InvocationNonceBase64 == terminal.InvocationNonceBase64 &&
+		admission.CausalBindingKind == terminal.CausalBindingKind &&
+		reflect.DeepEqual(admission.CausalBinding, terminal.CausalBinding) &&
+		reflect.DeepEqual(admission.SignerBinding, terminal.SignerBinding) &&
+		admission.HostAttestationBase64 == terminal.HostAttestationBase64 &&
+		admission.AuthorityBindingKind == terminal.AuthorityBindingKind &&
+		reflect.DeepEqual(admission.AuthorityBinding, terminal.AuthorityBinding) &&
+		admission.AbilityBinding == terminal.AbilityBinding &&
+		reflect.DeepEqual(admission.SubjectRef, terminal.SubjectRef) &&
+		admission.DescriptorVersion == terminal.DescriptorVersion &&
+		admission.SchemaHashHex == terminal.SchemaHashHex &&
+		admission.ImplHashHex == terminal.ImplHashHex &&
+		admission.RuntimeEnv == terminal.RuntimeEnv &&
+		reflect.DeepEqual(admission.AuthorityProof, terminal.AuthorityProof) &&
+		admission.InputHashHex == terminal.InputHashHex &&
+		reflect.DeepEqual(admission.ParentReceipts, terminal.ParentReceipts)
+	if !bindingsMatch {
+		return invalidRuntimePayload(
+			"canonical receipt checkpoints contain conflicting invocation bindings",
+			nil,
+		)
+	}
+	return nil
+}
+
+func normalizeRuntimeReceiptState(state string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(state), "_", ""))
+}
+
 func decodeRuntimeReceiptSummary(raw json.RawMessage) (*RuntimeReceipt, error) {
 	raw = cloneOptionalJSON(raw)
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	receipt, err := newRuntimeReceiptProjectionFromJSON(raw)
+	receipt, err := NewRuntimeReceiptFromJSON(raw)
 	if err != nil {
 		return nil, err
 	}

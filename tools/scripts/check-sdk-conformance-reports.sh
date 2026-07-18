@@ -4,6 +4,7 @@ set -euo pipefail
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 REPO_ROOT="$SOURCE_ROOT"
+source "$SOURCE_ROOT/sdk/conformance/python_toolchain.sh"
 CARGO_BIN="${CARGO:-cargo}"
 REPORT_BUILD_TIMEOUT_SECONDS="${SDK_CONFORMANCE_REPORT_BUILD_TIMEOUT_SECONDS:-300}"
 REPORT_TIMEOUT_SECONDS="${SDK_CONFORMANCE_REPORT_TIMEOUT_SECONDS:-900}"
@@ -588,6 +589,49 @@ EOF
   )
 
   (
+    fake_python="$tmp/python-with-pytest"
+    cat >"$fake_python" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "-m" && "${2:-}" == "pytest" && "${3:-}" == "--version" ]]; then
+  printf 'pytest fixture\n'
+  exit 0
+fi
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'Python fixture\n'
+  exit 0
+fi
+exit 1
+EOF
+    chmod +x "$fake_python"
+    SDK_CONFORMANCE_PYTHON="$fake_python"
+    resolve_sdk_python_toolchain "$SOURCE_ROOT" pytest
+    [[ "$SDK_CONFORMANCE_PYTHON" == "$fake_python" ]]
+  )
+
+  (
+    fake_python="$tmp/python-from-public-config"
+    cat >"$fake_python" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "-m" && "${2:-}" == "pytest" && "${3:-}" == "--version" ]]; then
+  printf 'pytest fixture\n'
+  exit 0
+fi
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'Python fixture\n'
+  exit 0
+fi
+exit 1
+EOF
+    chmod +x "$fake_python"
+    unset SDK_CONFORMANCE_PYTHON
+    PYTHON="$fake_python"
+    resolve_sdk_python_toolchain "$SOURCE_ROOT" pytest
+    [[ "$SDK_CONFORMANCE_PYTHON" == "$fake_python" ]]
+  )
+
+  (
     language_reports=("rust:rust-report" "go:go-report")
     REQUESTED_LANGUAGES=""
     selected_count=0
@@ -619,6 +663,9 @@ fi
 
 rm -rf "$RESULT_DIR"
 check_adapter_report_evidence
+if [[ -z "$REQUESTED_LANGUAGES" || ",$REQUESTED_LANGUAGES," == *",python,"* ]]; then
+  resolve_sdk_python_toolchain "$SOURCE_ROOT" pytest
+fi
 create_source_snapshot
 write_source_attestation_manifest
 ensure_run_nonce

@@ -3,8 +3,6 @@ profile: runtime_core
 required_for:
   - go
   - python
-lifecycle_actions:
-  - deadline
 description: Runtime Core unary providers own invocation deadlines as bounded lifecycle transitions that surface typed timeout outcomes without fabricating terminal success.
 steps:
   - action: dispatch_with_deadline

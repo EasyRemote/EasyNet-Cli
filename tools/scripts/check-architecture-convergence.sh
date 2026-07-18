@@ -240,8 +240,8 @@ families = {
 }
 family_anchors = {
     "EAL": re.compile(
-        r"invoke_(?:local|remote)[A-Za-z0-9_]*\s*\(|"
-        r"(?:DaemonInvocation|DescriptorBoundInvocation|InvocationClient)"
+        r"\bMissionInvocationGateway\b|"
+        r"\.invoke_step\s*\("
     ),
     "Mission": re.compile(r"register_(?:rpc|stream|bidi)[A-Za-z0-9_]*\s*\("),
     "Chat": re.compile(r"register_(?:rpc|stream|bidi)[A-Za-z0-9_]*\s*\("),
@@ -1301,7 +1301,7 @@ for path in production_files(cli_root / "src", {".rs"}):
                 detail,
             )
 
-# Rule 16: exact daemon unary and server-stream routes must enter Axon
+# Rule 16: exact daemon unary, server-stream, and bidi routes must enter Axon
 # LocalRuntime through one adapter owner. The tonic service may classify
 # transport ingress, and dispatchers may own product behavior behind provider
 # objects, but neither may reintroduce a direct exact-route execution table
@@ -1312,6 +1312,29 @@ stream_dispatcher = cli_root / "src/daemon/invocation/streams/stream_dispatcher.
 bidi_dispatcher = cli_root / "src/daemon/invocation/bidi/bidi_dispatcher.rs"
 daemon_route_runtime = cli_root / "src/daemon/invocation/dispatch/daemon_route_runtime.rs"
 boot_invocation_routes = cli_root / "src/daemon/boot/invocation/mod.rs"
+dispatch_shim = cli_root / "src/daemon/axon_bridge/dispatch_shim.rs"
+runtime_admin_contracts = (
+    cli_root / "src/daemon/ability/catalog/runtime_admin_contracts.rs"
+)
+ability_catalog_dispatch = cli_root / "src/daemon/ability/dispatch.rs"
+session_open_envelope = (
+    cli_root / "src/daemon/invocation/bidi/session_initiator/envelope.rs"
+)
+legacy_transport_admission_roots = (
+    "verify_invoke(",
+    "verify_invoke_stream(",
+    "verify_envelope_for_bidi(",
+)
+for path in production_files(cli_root / "src/daemon/invocation", {".rs"}):
+    text = source(path)
+    for token in legacy_transport_admission_roots:
+        if token in text:
+            add(
+                "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+                path,
+                line_number(text, text.find(token)),
+                f"legacy outer transport admission root remains: `{token}`",
+            )
 if daemon_service.exists():
     service_text = source(daemon_service)
     service_requirements = (
@@ -1322,10 +1345,6 @@ if daemon_service.exists():
         (
             "DaemonRouteRuntimeAdapter::new",
             "exact route registration must construct the runtime adapter",
-        ),
-        (
-            ".register(owner_ura",
-            "exact route registration must install routes into LocalRuntime",
         ),
         (
             ".dispatch_daemon_route_runtime(",
@@ -1351,10 +1370,32 @@ if daemon_service.exists():
             "DAEMON_INVOCATION_BIDI_ROUTES",
             "daemon Invocation route inventory must include bidi routes",
         ),
+        (
+            "register_daemon_bidi_routes",
+            "daemon service must expose exact bidi route registration",
+        ),
+        (
+            ".register_bidis(owner_ura",
+            "exact bidi route registration must install provider-bound routes into LocalRuntime",
+        ),
+        (
+            ".dispatch_daemon_route_runtime(route, envelope_open, up)",
+            "tonic exact bidi dispatch must open the descriptor-bound runtime route",
+        ),
     )
     for token, detail in service_requirements:
         if token not in service_text:
             add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", daemon_service, 1, detail)
+    if not any(
+        token in service_text
+        for token in (".register(owner_ura", ".register_for_owners(")
+    ):
+        add(
+            "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+            daemon_service,
+            1,
+            "exact route registration must install every authority root into LocalRuntime",
+        )
     direct_stream_calls = (
         "dispatch_subscribe_directory_initial(",
         "dispatch_subscribe_directory_v2(",
@@ -1380,8 +1421,40 @@ if bidi_dispatcher.exists():
             "BidiDispatcher exact-route classification must use the typed daemon bidi route owner",
         ),
         (
-            "Some(DaemonBidiRoute::SessionOpen)",
-            "session.open must be classified as a typed daemon bidi route",
+            "DaemonBidiRoute::SessionOpen =>",
+            "the exact bidi provider must exhaustively own session.open product behavior",
+        ),
+        (
+            "pub(crate) struct DaemonBidiRouteProvider",
+            "exact bidi inventory must be behind a route provider object",
+        ),
+        (
+            "fn dispatch_daemon_route_runtime",
+            "BidiDispatcher must expose only the daemon bidi route runtime adapter path",
+        ),
+        (
+            ".open_bidi(route, envelope_open, up)",
+            "BidiDispatcher exact route path must open through the runtime adapter",
+        ),
+        (
+            "struct SessionOpenProvider",
+            "session.open must have a cohesive product lifecycle provider",
+        ),
+        (
+            "impl SessionOpenProvider",
+            "the session.open lifecycle must be implemented by its product provider",
+        ),
+        (
+            "struct SessionOpenPolicy",
+            "session.open product policy must have an explicit provider-owned boundary",
+        ),
+        (
+            "policy: SessionOpenPolicy",
+            "SessionOpenProvider must depend on the narrow session policy boundary",
+        ),
+        (
+            "DaemonBidiRoute::SessionOpen => self.session_open.invoke(context).await",
+            "the exact route provider must delegate session.open to its product owner",
         ),
     )
     for token, detail in dispatcher_requirements:
@@ -1393,7 +1466,46 @@ if bidi_dispatcher.exists():
             bidi_dispatcher,
             line_number(dispatcher_text, dispatcher_text.find("match ability_name")),
             "BidiDispatcher must not hand-match exact ability names outside the typed route owner",
-        )
+            )
+    session_provider_start = dispatcher_text.find("struct SessionOpenProvider {")
+    session_provider_end = dispatcher_text.find("}\n", session_provider_start)
+    if session_provider_start >= 0 and session_provider_end >= 0:
+        session_provider_block = dispatcher_text[
+            session_provider_start:session_provider_end
+        ]
+        for token, detail in (
+            (
+                "AdmissionFacade",
+                "SessionOpenProvider must not retain the transport admission facade",
+            ),
+            (
+                "session_realm:",
+                "SessionOpenProvider must delegate realm admission to SessionOpenPolicy",
+            ),
+        ):
+            if token in session_provider_block:
+                add(
+                    "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+                    bidi_dispatcher,
+                    line_number(
+                        dispatcher_text,
+                        session_provider_start + session_provider_block.find(token),
+                    ),
+                    detail,
+                )
+    for token in (
+        "dispatch_self_session_accept",
+        "self.dispatcher.run_session_open",
+        "register_many(",
+        "register_daemon_bidi_routes(",
+    ):
+        if token in dispatcher_text:
+            add(
+                "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+                bidi_dispatcher,
+                line_number(dispatcher_text, dispatcher_text.find(token)),
+                f"bidi product provider must not retain direct or dynamic registration path `{token}`",
+            )
 
 if unary_dispatcher.exists():
     dispatcher_text = source(unary_dispatcher)
@@ -1427,7 +1539,7 @@ if stream_dispatcher.exists():
             "StreamDispatcher exact route path must construct the runtime adapter",
         ),
         (
-            ".open_stream(route, request, local_self_admitted)",
+            ".open_stream(route, request, local_system_ingress)",
             "StreamDispatcher exact route path must open streams through the runtime adapter",
         ),
         (
@@ -1479,6 +1591,22 @@ if daemon_route_runtime.exists():
             "open_stream_admitted",
             "exact stream route adapter must open Axon's admitted stream path",
         ),
+        (
+            "register_bidis",
+            "exact route adapter must install bidi route registrations",
+        ),
+        (
+            "AbilityOptions::bidi()",
+            "exact bidi routes must use canonical bounded Bidi registration options",
+        ),
+        (
+            "open_bidi_external_signed",
+            "exact bidi transport must construct an externally signed runtime request",
+        ),
+        (
+            "project_finalized_bidi_receipt",
+            "exact bidi transport must project Axon's terminal receipt",
+        ),
     )
     for token, detail in adapter_requirements:
         if token not in adapter_text:
@@ -1502,6 +1630,10 @@ if boot_invocation_routes.exists():
             "register_daemon_stream_routes(daemon_route_owner)",
             "boot must register exact stream routes before exposing listeners",
         ),
+        (
+            "register_daemon_bidi_routes(daemon_route_owner)",
+            "Hub boot must register exact bidi routes before exposing listeners",
+        ),
     )
     for token, detail in boot_requirements:
         if token not in boot_text:
@@ -1514,17 +1646,98 @@ if boot_invocation_routes.exists():
     stream_registration_offset = boot_text.find(
         "register_daemon_stream_routes(daemon_route_owner)"
     )
-    if (
-        listener_offsets
-        and stream_registration_offset >= 0
-        and stream_registration_offset > min(listener_offsets)
+    bidi_registration_offset = boot_text.find(
+        "register_daemon_bidi_routes(daemon_route_owner)"
+    )
+    for registration_offset, family in (
+        (stream_registration_offset, "stream"),
+        (bidi_registration_offset, "bidi"),
     ):
+        if (
+            listener_offsets
+            and registration_offset >= 0
+            and registration_offset > min(listener_offsets)
+        ):
+            add(
+                "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+                boot_invocation_routes,
+                line_number(boot_text, registration_offset),
+                f"exact {family} routes must be registered before invocation listeners are spawned",
+            )
+
+if dispatch_shim.exists():
+    shim_text = source(dispatch_shim)
+    for token, detail in (
+        (
+            "pub async fn open_bidi_external_signed",
+            "the route adapter requires one externally signed bidi ingress seam",
+        ),
+        (
+            "invoke_descriptor_bound_bidi_request_async",
+            "the bidi ingress seam must open Axon's descriptor-bound runtime request",
+        ),
+    ):
+        if token not in shim_text:
+            add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", dispatch_shim, 1, detail)
+
+if runtime_admin_contracts.exists():
+    contract_text = source(runtime_admin_contracts)
+    for token, detail in (
+        (
+            "register_control_plane_descriptor_with_owner",
+            "session.open must use an explicit canonical owner registration",
+        ),
+        (
+            "&OwnerKind::Hub",
+            "session.open descriptor ownership must converge on the realm Hub",
+        ),
+    ):
+        if token not in contract_text:
+            add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", runtime_admin_contracts, 1, detail)
+    if "SESSION_OPEN_TEMPLATE_DEVICE_URA" in contract_text:
         add(
             "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
-            boot_invocation_routes,
-            line_number(boot_text, stream_registration_offset),
-            "exact stream routes must be registered before invocation listeners are spawned",
+            runtime_admin_contracts,
+            line_number(contract_text, contract_text.find("SESSION_OPEN_TEMPLATE_DEVICE_URA")),
+            "session.open must not retain a Device-owned template authority",
         )
+
+if ability_catalog_dispatch.exists():
+    catalog_text = source(ability_catalog_dispatch)
+    obsolete_scope_registration = "register_control_plane_descriptor_with_scope"
+    if obsolete_scope_registration in catalog_text:
+        add(
+            "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+            ability_catalog_dispatch,
+            line_number(
+                catalog_text,
+                catalog_text.find(obsolete_scope_registration),
+            ),
+            "descriptor-only contracts must resolve their canonical owner instead of accepting an explicit authority scope",
+        )
+
+if session_open_envelope.exists():
+    envelope_text = source(session_open_envelope)
+    for token, detail in (
+        (
+            "let hub_ura = crate::core::ura::hub_ura",
+            "session.open must derive its canonical Hub callee from the caller realm",
+        ),
+        (
+            "ProtoEnvelope::from_target(",
+            "session.open signed tuple must use the canonical envelope builder",
+        ),
+        (
+            "&hub_ura",
+            "session.open signed descriptor reference must be Hub-owned",
+        ),
+        (
+            "signed_descriptor_ref_invoke_request_with_signer(",
+            "session.open must use the descriptor-bound canonical signing path",
+        ),
+    ):
+        if token not in envelope_text:
+            add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", session_open_envelope, 1, detail)
 
 # Rule 16b: local daemon loopback request construction is daemon Invocation
 # wire ownership, not support-layer transport ownership. The support adapter
@@ -1588,20 +1801,29 @@ if invocation_wire.exists():
             "local loopback owner must build the Axon envelope projection",
         ),
         (
-            "pub(crate) fn with_causal_context",
-            "local loopback owner must preserve causal-context projection",
+            "derivation_policy: InvocationDerivationPolicy",
+            "local loopback owner must require an explicit canonical derivation policy",
         ),
         (
             "pub(crate) fn with_trace_id",
             "local loopback owner must preserve trace-id projection",
         ),
         (
-            "ProtoEnvelope::targeted(",
+            "ProtoEnvelope::from_target(",
             "local loopback owner must use the daemon Invocation wire envelope builder",
         ),
     ):
         if token not in wire_text:
             add("R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK", invocation_wire, 1, detail)
+    forbidden_policy_mutator = "pub(crate) fn with_causal_context"
+    offset = wire_text.find(forbidden_policy_mutator)
+    if offset >= 0:
+        add(
+            "R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK",
+            invocation_wire,
+            line_number(wire_text, offset),
+            "causal derivation policy must be selected once at construction, not overwritten later",
+        )
 
 # Rule 16c: daemon-local system invocation construction has one named issuer.
 # Transport shims may resolve descriptor refs and select call mode, but they
@@ -1651,21 +1873,37 @@ if wire_descriptor.exists():
     wire_descriptor_text = source(wire_descriptor)
     for token, detail in (
         (
-            "wire envelope missing caller",
-            "wire reassembly must require an explicit caller",
+            "require_descriptor_ref_for_wire",
+            "wire adapter must resolve the product route to one canonical descriptor ref",
         ),
         (
-            "wire envelope missing subject",
-            "wire reassembly must require an explicit subject",
-        ),
-        (
-            "wire::try_invocation_nonce(envelope.invocation_nonce)?",
-            "wire reassembly must require a valid explicit nonce",
+            "wire::try_descriptor_bound_envelope_from_wire_parts",
+            "Axon must own complete wire tuple reassembly and validation",
         ),
     ):
         if token not in wire_descriptor_text:
             add("R16C_SYSTEM_INVOCATION_ISSUER_FORK", wire_descriptor, 1, detail)
     for token, detail in (
+        (
+            "DescriptorBoundEnvelopeParts",
+            "CLI wire adapter must not reconstruct canonical envelope parts",
+        ),
+        (
+            "wire::try_agent_identity_from_wire",
+            "CLI wire adapter must not parse canonical caller/callee identities independently",
+        ),
+        (
+            "wire::try_subject_identity_from_wire",
+            "CLI wire adapter must not parse the canonical subject independently",
+        ),
+        (
+            "wire::try_invocation_nonce",
+            "CLI wire adapter must not parse canonical freshness independently",
+        ),
+        (
+            "wire::causal_context_from_wire",
+            "CLI wire adapter must not parse canonical causal context independently",
+        ),
         (
             "WireCallerIdentity",
             "wire reassembly must not select a caller-synthesis policy",
@@ -1745,12 +1983,12 @@ if dispatch_shim.exists():
 
 if kernel_runtime.exists():
     kernel_text = source(kernel_runtime)
-    if "SystemInvocationIssuer::request_for_complete_envelope" not in kernel_text:
+    if "SystemInvocationIssuer::request_for_descriptor_ref" not in kernel_text:
         add(
             "R16C_SYSTEM_INVOCATION_ISSUER_FORK",
             kernel_runtime,
             1,
-            "kernel local-system dispatch must enter through SystemInvocationIssuer",
+            "kernel local-system request preparation must enter through SystemInvocationIssuer",
         )
 
 for path in production_files(cli_root / "src", {".rs"}):
@@ -1799,6 +2037,39 @@ if local_runtime_invoker.exists():
                 detail,
             )
 
+# Rule 16d: Axon is the sole canonical Invocation tuple assembler. Product
+# adapters may select typed values and transport metadata, but production CLI
+# code must not restate protobuf or domain envelope fields as literals or call
+# the low-level parts constructor.
+manual_tuple_patterns = (
+    (
+        re.compile(r"(?:=\s*|Some\(\s*|return\s+)(?:[A-Za-z_][A-Za-z0-9_]*::)*Envelope\s*\{"),
+        "production daemon code manually assembles a protobuf Invocation envelope",
+    ),
+    (
+        re.compile(r"\bInvocationEnvelope\s*\{"),
+        "production daemon code manually assembles a canonical Invocation tuple",
+    ),
+    (
+        re.compile(r"\bDescriptorBoundEnvelope::from_parts\s*\("),
+        "production daemon code bypasses Axon's canonical envelope builder",
+    ),
+    (
+        re.compile(r"\bDescriptorBoundEnvelopeParts\b"),
+        "production daemon code owns canonical descriptor-bound envelope parts",
+    ),
+)
+for path in production_files(cli_root / "src/daemon", {".rs"}):
+    text = source(path)
+    for pattern, detail in manual_tuple_patterns:
+        for match in pattern.finditer(text):
+            add(
+                "R16D_CANONICAL_ENVELOPE_OWNER_FORK",
+                path,
+                line_number(text, match.start()),
+                detail,
+            )
+
 # Rule 23: CLI command modules may not own target-owned remote system ability
 # routing. They map user input into payloads; the CLI daemon-client facade owns
 # remote device/hub selector projection and caller identity selection. The
@@ -1807,6 +2078,7 @@ if local_runtime_invoker.exists():
 remote_system_ability_facade = (
     cli_root / "src/cli/daemon_client/remote_system_ability.rs"
 )
+descriptor_bound_remote_invoke_command = cli_root / "src/cli/commands/invoke.rs"
 cli_remote_system_fork_patterns = (
     re.compile(r"RemoteAbilityInvocationTarget::for_target_owned_selector"),
     re.compile(r"remote_invoke::invoke_remote_target\s*\("),
@@ -1815,7 +2087,10 @@ cli_remote_system_fork_patterns = (
 cli_root_dir = cli_root / "src/cli"
 if cli_root_dir.exists():
     for path in production_files(cli_root_dir, {".rs"}):
-        if path == remote_system_ability_facade:
+        if path in (
+            remote_system_ability_facade,
+            descriptor_bound_remote_invoke_command,
+        ):
             continue
         text = source(path)
         for pattern in cli_remote_system_fork_patterns:
@@ -2859,7 +3134,10 @@ for path, first_test, second_test, detail in sdk_cancel_tests:
 cancel_domain = cli_root / "src/daemon/invocation/dispatch/cancellation.rs"
 request_model = cli_root / "src/daemon/invocation/dispatch/request.rs"
 runtime_client = cli_root / "src/daemon/invocation/dispatch/client.rs"
-admission_facade = cli_root / "src/daemon/invocation/admission/admission_facade.rs"
+unary_admission_tests = (
+    cli_root
+    / "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
+)
 
 if cancel_domain.exists():
     text = source(cancel_domain)
@@ -2998,7 +3276,7 @@ if runtime_client.exists():
                 "request_cancel_signed must independently sign the cancel command",
             ),
             (
-                "signed_cancel.into_daemon_invocation()",
+                ".invoke(signed_cancel)",
                 "request_cancel_signed must submit the signed cancel command",
             ),
         )
@@ -3018,15 +3296,22 @@ if runtime_client.exists():
                 "request_cancel_signed must not replay the original signed invocation",
             )
 
-if admission_facade.exists():
-    raw_text = admission_facade.read_text(encoding="utf-8", errors="replace")
+if unary_admission_tests.exists():
+    raw_text = unary_admission_tests.read_text(encoding="utf-8", errors="replace")
     if "signed_invocation_cancel_command_replay_is_rejected" not in raw_text:
         add(
             "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
-            admission_facade,
+            unary_admission_tests,
             1,
-            "admission tests must prove signed cancel command replay rejection",
+            "LocalRuntime admission tests must prove signed cancel command replay rejection",
         )
+else:
+    add(
+        "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
+        unary_admission_tests,
+        1,
+        "LocalRuntime unary admission tests are required",
+    )
 
 # Rule 22: Agent lifecycle owns paired durable projections through one
 # lifecycle projection store. Start/stop/purge recovery may advance lifecycle
@@ -3628,10 +3913,6 @@ if mission_gateway.exists():
 
 hosted_name_surfaces = (
     (
-        cli_root / "src/support/platform/local_daemon_grpc.rs",
-        "local daemon hosted delegation callee resolution",
-    ),
-    (
         cli_root / "src/cli/commands/teach.rs",
         "CLI teach learner resolution",
     ),
@@ -3670,6 +3951,39 @@ for hosted_name_surface, surface_label in hosted_name_surfaces:
     ):
         if token in production_text:
             add("R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK", hosted_name_surface, 1, detail)
+
+local_daemon_grpc = cli_root / "src/support/platform/local_daemon_grpc.rs"
+if local_daemon_grpc.exists():
+    text = source(local_daemon_grpc)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "hosted_agent_ura: &str",
+            "local daemon hosted delegation must require an explicit canonical Agent URA",
+        ),
+        (
+            "HostedAgentDelegationRequest::new(hosted_agent_ura)",
+            "local daemon hosted delegation must validate the supplied canonical Agent URA",
+        ),
+    ):
+        if token not in production_text:
+            add("R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK", local_daemon_grpc, 1, detail)
+    for token, detail in (
+        (
+            "AgentAggregateRepository",
+            "local daemon transport must not load product Agent state to resolve a callee",
+        ),
+        (
+            "hosted_agent_ura_by_name(",
+            "local daemon transport must not resolve hosted Agent display names",
+        ),
+        (
+            "HostedAgentNameLookupError",
+            "local daemon transport must not own hosted Agent lookup error policy",
+        ),
+    ):
+        if token in production_text:
+            add("R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK", local_daemon_grpc, 1, detail)
 
 governance_teach = cli_root / "src/daemon/ability/builtins/governance/teach.rs"
 if governance_teach.exists():
@@ -4764,25 +5078,45 @@ if governance_teach.exists():
 
 # Rule 56: KernelApi is a daemon entry boundary, not a second invocation
 # lifecycle owner. Runtime-admitted calls must consume Axon's finalized proof
-# projection instead of deriving terminal state from an event snapshot.
+# directly instead of deriving or projecting a daemon receipt.
 kernel_module = cli_root / "src/daemon/boot/kernel/mod.rs"
+kernel_api = cli_root / "src/daemon/boot/kernel/api.rs"
 if kernel_module.exists():
     text = source(kernel_module)
     production_text = text.split("#[cfg(test)]", 1)[0]
     for token, detail in (
         (".finalized()", "kernel runtime dispatch must consume Axon finalized invocation proof"),
-        ("terminal_receipt_hash: Some", "kernel receipt projection must cite the canonical terminal receipt hash"),
-        ("callee_signature: finalized", "kernel receipt projection must carry the canonical callee signature"),
+        (
+            "anyhow::Result<FinalizedInvocation>",
+            "kernel must return Axon's finalized invocation proof directly",
+        ),
     ):
         if token not in production_text:
             add("R56_KERNEL_CANONICAL_TERMINAL_PROJECTION_FORK", kernel_module, 1, detail)
     for token, detail in (
         ("KernelDispatchTerminal", "kernel must not maintain a parallel terminal state enum"),
+        ("KernelDispatchOutcome", "kernel must not maintain a parallel receipt outcome"),
+        ("TerminalState::", "kernel must not project Axon's terminal state into a CLI enum"),
+        ("terminal_receipt_hash:", "kernel must not project Axon's canonical receipt into a CLI receipt"),
         ("handle.wait().await", "kernel must not infer terminal state by waiting outside Axon finalization"),
         ("events.iter().rev().find(|e| e.state.is_terminal())", "kernel must not derive terminality from an event snapshot"),
     ):
         if token in production_text:
             add("R56_KERNEL_CANONICAL_TERMINAL_PROJECTION_FORK", kernel_module, 1, detail)
+if kernel_api.exists():
+    api_text = source(kernel_api)
+    for token, detail in (
+        (
+            "DescriptorBoundInvocationRequest",
+            "KernelApi must accept Axon's canonical descriptor-bound request",
+        ),
+        (
+            "FinalizedInvocation",
+            "KernelApi must return Axon's canonical finalization",
+        ),
+    ):
+        if token not in api_text:
+            add("R56_KERNEL_CANONICAL_TERMINAL_PROJECTION_FORK", kernel_api, 1, detail)
 
 # Rule 57: daemon-local RPC dispatch is a terminal presentation adapter, not
 # an alternate lifecycle owner. It must consume Axon's finalized proof instead
@@ -4820,43 +5154,43 @@ if local_runtime_invoker.exists():
                     detail,
                 )
 
-# Rule 58: daemon receipt projection must preserve every Axon terminal state.
-# A timeout is a canonical terminal fact, not a product-level handler failure.
+# Rule 58: daemon runtime consumers must use Axon's canonical terminal state
+# and finalized receipt directly. A CLI receipt or terminal-state projection is
+# a second authority even when it preserves all variants.
 runtime_record = cli_root / "src/daemon/invocation/receipts/runtime_record.rs"
 loop_instance = cli_root / "src/daemon/execution/loop_instance/mod.rs"
 if runtime_record.exists():
-    text = source(runtime_record)
-    production_text = text.split("#[cfg(test)]", 1)[0]
-    terminal_state = brace_function_body(production_text, r"pub\s+enum\s+TerminalState\s*")
-    if terminal_state is None or "TimedOut { reason: String }" not in production_text:
-        add(
-            "R58_TERMINAL_TIMEOUT_PROJECTION_FORK",
-            runtime_record,
-            1,
-            "daemon TerminalState must expose a distinct timed-out terminal projection",
-        )
-    for token, detail in (
-        ("Self::TimedOut { .. } => InvocationState::TimedOut", "daemon timeout projection must map back to Axon TimedOut"),
-        ("InvocationState::TimedOut => Self::TimedOut", "Axon TimedOut must project without collapsing into Failed"),
-    ):
-        if token not in production_text:
-            add("R58_TERMINAL_TIMEOUT_PROJECTION_FORK", runtime_record, 1, detail)
-    if "InvocationState::TimedOut => Self::Failed" in production_text:
-        add(
-            "R58_TERMINAL_TIMEOUT_PROJECTION_FORK",
-            runtime_record,
-            1,
-            "daemon timeout projection must not collapse into Failed",
-        )
+    add(
+        "R58_TERMINAL_TIMEOUT_PROJECTION_FORK",
+        runtime_record,
+        1,
+        "obsolete CLI runtime invocation/receipt authority remains; consume Axon finalized receipts directly",
+    )
 if loop_instance.exists():
     text = source(loop_instance)
     production_text = text.split("#[cfg(test)]", 1)[0]
-    if "TerminalState::TimedOut { reason }" not in production_text:
+    for token, detail in (
+        (
+            "InvocationState::TimedOut",
+            "loop terminal consumer must handle Axon timeout distinctly",
+        ),
+        (
+            "InvocationState::Failed",
+            "loop terminal consumer must handle Axon failure distinctly",
+        ),
+        (
+            "finalized.terminal_receipt.reason()",
+            "loop terminal diagnostics must come from the canonical terminal receipt",
+        ),
+    ):
+        if token not in production_text:
+            add("R58_TERMINAL_TIMEOUT_PROJECTION_FORK", loop_instance, 1, detail)
+    if "TerminalState::" in production_text:
         add(
             "R58_TERMINAL_TIMEOUT_PROJECTION_FORK",
             loop_instance,
-            1,
-            "loop terminal consumer must handle timeout distinctly from failure",
+            line_number(production_text, production_text.find("TerminalState::")),
+            "loop must not consume a CLI terminal-state projection",
         )
 
 # Rule 59: Go and Python RuntimeAbility facades share one descriptor binding
@@ -5692,7 +6026,7 @@ if eal_executor.exists():
             "EAL executor must materialize one effective timeout",
         ),
         (
-            "mission_run_opts(parent_invocation, effective_timeout)",
+            "mission_run_opts(effective_timeout)",
             "EAL executor must pass the effective timeout into mission opts",
         ),
         (
@@ -5710,7 +6044,7 @@ if mission_orchestration.exists():
             "MissionRunOpts must expose a run-level timeout for manifest executors",
         ),
         (
-            "execute_with_endpoint_for_trace_with_timeout",
+            "execute_with_gateway_for_trace_with_timeout",
             "canonical mission runner must pass run timeout into the interpreter",
         ),
         (
@@ -5756,6 +6090,145 @@ if eal_retry.exists():
     ):
         if token not in text:
             add("R63_EAL_EXEC_RUN_TIMEOUT_FORK", eal_retry, 1, detail)
+
+# Rule 64: session dispatch has one canonical invocation carrier. The JSON
+# session envelope owns daemon control and bidi input only; protobuf
+# DispatchCall/DispatchResult owns invocation open, progress, and completion.
+# Stream/bidi lifecycle terminal frames are projected only from Axon's
+# FinalizedInvocation and therefore always carry a terminal receipt.
+session_wire = cli_root / "src/daemon/invocation/bidi/session_wire.rs"
+local_session_dispatcher = (
+    cli_root / "src/daemon/invocation/dispatch/local_session_dispatcher.rs"
+)
+bidi_dispatcher = cli_root / "src/daemon/invocation/bidi/bidi_dispatcher.rs"
+if session_wire.exists():
+    text = session_wire.read_text(encoding="utf-8", errors="replace")
+    for pattern, detail in (
+        (
+            r"\bBidiOpen\s*\{",
+            "JSON SessionDispatch must not own canonical bidi open",
+        ),
+        (
+            r"\bResult\s*\{",
+            "JSON SessionDispatch must not own invocation result or terminal state",
+        ),
+    ):
+        match = re.search(pattern, text)
+        if match:
+            add(
+                "R64_SESSION_CANONICAL_CARRIER_FORK",
+                session_wire,
+                line_number(text, match.start()),
+                detail,
+            )
+if local_session_dispatcher.exists():
+    text = local_session_dispatcher.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "SessionDispatch::Result",
+            "local session dispatch must not emit the retired JSON invocation result",
+        ),
+        (
+            "SessionDispatch::BidiOpen",
+            "local session dispatch must not accept the retired JSON bidi open",
+        ),
+        (
+            "session_error_result",
+            "session control failure must not synthesize an invocation terminal result",
+        ),
+        (
+            "send_bidi_result",
+            "bidi output must use explicit admission, progress, control-failure, and terminal projections",
+        ),
+    ):
+        if token in text:
+            add("R64_SESSION_CANONICAL_CARRIER_FORK", local_session_dispatcher, 1, detail)
+
+    control_failure = rust_method_body(text, "carrier_v1_control_failure")
+    if control_failure is None:
+        add(
+            "R64_SESSION_CANONICAL_CARRIER_FORK",
+            local_session_dispatcher,
+            1,
+            "canonical session control failures need one named non-terminal projection",
+        )
+    else:
+        offset, body = control_failure
+        if "terminal: false" not in body or "terminal_receipt" in body:
+            add(
+                "R64_SESSION_CANONICAL_CARRIER_FORK",
+                local_session_dispatcher,
+                line_number(text, offset),
+                "session control failure must be non-terminal and receipt-free",
+            )
+
+    terminal_projection = rust_method_body(text, "send_bidi_terminal")
+    if terminal_projection is None:
+        add(
+            "R64_SESSION_CANONICAL_CARRIER_FORK",
+            local_session_dispatcher,
+            1,
+            "canonical bidi terminal projection is missing",
+        )
+    else:
+        offset, body = terminal_projection
+        signature = text[offset : text.find("{", offset)]
+        for token, detail in (
+            (
+                "FinalizedInvocation",
+                "bidi terminal projection must consume Axon's FinalizedInvocation",
+            ),
+            (
+                "terminal: true",
+                "bidi terminal projection must explicitly close the carrier lifecycle",
+            ),
+            (
+                "terminal_receipt: Some(receipt_to_session_wire(",
+                "bidi terminal projection must carry the canonical terminal receipt",
+            ),
+        ):
+            haystack = signature if token == "FinalizedInvocation" else body
+            if token not in haystack:
+                add(
+                    "R64_SESSION_CANONICAL_CARRIER_FORK",
+                    local_session_dispatcher,
+                    line_number(text, offset),
+                    detail,
+                )
+if bidi_dispatcher.exists():
+    text = bidi_dispatcher.read_text(encoding="utf-8", errors="replace")
+    if "SessionDispatch::Result" in text:
+        add(
+            "R64_SESSION_CANONICAL_CARRIER_FORK",
+            bidi_dispatcher,
+            1,
+            "hub dispatch must not dual-read the retired JSON invocation result",
+        )
+    if "fn classify_carrier_v1_result" not in text:
+        add(
+            "R64_SESSION_CANONICAL_CARRIER_FORK",
+            bidi_dispatcher,
+            1,
+            "hub dispatch must retain one canonical result classifier",
+        )
+    else:
+        for token, detail in (
+            (
+                "if result.terminal_receipt.is_none()",
+                "stream terminal classification must reject a missing terminal receipt",
+            ),
+            (
+                "CANONICAL_TERMINAL_RECEIPT_REQUIRED",
+                "receiptless stream terminal rejection must remain a typed protocol failure",
+            ),
+        ):
+            if token not in text:
+                add(
+                    "R64_SESSION_CANONICAL_CARRIER_FORK",
+                    bidi_dispatcher,
+                    1,
+                    detail,
+                )
 
 
 if violations:

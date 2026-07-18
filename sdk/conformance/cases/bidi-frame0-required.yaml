@@ -3,8 +3,6 @@ profile: runtime_core
 required_for:
   - go
   - python
-lifecycle_actions:
-  - bidi_open
 description: Runtime Core bidi open rejects a missing or non-EnvelopeOpen frame0 before entering a runtime session.
 steps:
   - action: open_bidi_without_frame0

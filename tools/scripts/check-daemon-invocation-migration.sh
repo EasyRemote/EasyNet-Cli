@@ -10,8 +10,8 @@
 #   * `control.sock` remains boot/status only.
 #   * product callers build `DaemonInvocation` through the complete
 #     tuple builder instead of direct struct construction.
-#   * `daemon::invocation::receipts::runtime_record` remains a daemon-local adapter
-#     over Axon canonical bytes, not a second canonical Invocation model.
+#   * Kernel producers and consumers use Axon's descriptor-bound request and
+#     finalized receipt objects directly; no CLI runtime model remains.
 #
 # Historical docs are intentionally out of scope. They may cite
 # retired frame names or old canonical formulas while explaining why
@@ -115,26 +115,133 @@ bad_daemon_invocation_constructors="$(
 if [[ -n "$bad_daemon_invocation_constructors" ]]; then
     record_violation "DaemonInvocation is directly constructed outside src/daemon/invocation/dispatch/request.rs" \
         "$bad_daemon_invocation_constructors
-Use DaemonInvocation::builder(caller, callee, ability, subject) so caller/callee/ability/subject/nonce/causal_context stay complete and inspectable."
+Use DaemonInvocation::builder(caller, callee, ability, subject, derivation_policy) so caller/callee/ability/subject/nonce/causal_context stay complete and inspectable."
 fi
 
-if require_file "src/daemon/invocation/receipts/runtime_record.rs"; then
-    bad_runtime_semantics="$(
-        awk '
-            /^[[:space:]]*\/\// { next }
-            /^[[:space:]]*(pub[[:space:]]+)?fn[[:space:]]+canonical_bytes[[:space:]]*\(/ ||
-            /(^|[^[:alnum:]_])invocation_id_of([^[:alnum:]_]|$)/ ||
-            /^[[:space:]]*pub[[:space:]]+struct[[:space:]]+Invocation([^[:alnum:]_]|$)/ ||
-            /^[[:space:]]*pub[[:space:]]+enum[[:space:]]+CausalContext([^[:alnum:]_]|$)/ {
-                print FILENAME ":" NR ":" $0
-            }
-        ' src/daemon/invocation/receipts/runtime_record.rs
+if require_file "src/daemon/invocation/dispatch/request.rs"; then
+    bad_builder_state="$(
+        python3 - "src/daemon/invocation/dispatch/request.rs" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+
+
+def block(signature: str):
+    start = text.find(signature)
+    if start < 0:
+        return None
+    opening = text.find("{", start + len(signature))
+    if opening < 0:
+        return None
+    depth = 0
+    for index in range(opening, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[opening + 1:index]
+    return None
+
+
+violations: list[str] = []
+required_tokens = (
+    "pub struct DaemonInvocationBuilder<ArgsState = InvocationArgsUnset>",
+    "args_state: PhantomData<ArgsState>",
+    "pub struct InvocationArgsUnset",
+    "pub struct InvocationArgsSet",
+    "derivation_policy: axon_sdk::invocation::InvocationDerivationPolicy",
+)
+for token in required_tokens:
+    if token not in text:
+        violations.append(f"missing builder type-state token: {token}")
+
+unset = block("impl DaemonInvocationBuilder<InvocationArgsUnset>")
+generic = block("impl<ArgsState> DaemonInvocationBuilder<ArgsState>")
+complete = block("impl DaemonInvocationBuilder<InvocationArgsSet>")
+for name, value in (("unset", unset), ("generic", generic), ("complete", complete)):
+    if value is None:
+        violations.append(f"missing {name} builder state implementation")
+
+if "args_set: bool" in text:
+    violations.append("runtime args_set boolean reintroduces an incomplete mutable builder state")
+for token in (
+    "pub fn nonce(mut self",
+    "pub fn causal_context(mut self",
+    "axon_sdk::invocation::fresh_nonce()",
+):
+    if token in text:
+        violations.append(
+            f"public ingress may not override or silently derive freshness/causality: {token}"
+        )
+if unset is not None and (
+    "derivation_policy: axon_sdk::invocation::InvocationDerivationPolicy" not in unset
+):
+    violations.append("InvocationArgsUnset constructor must require an explicit derivation policy")
+if generic is not None:
+    if "Result<DaemonInvocationBuilder<InvocationArgsSet>>" not in generic:
+        violations.append("argument setters must transition to InvocationArgsSet")
+    for method in ("pub fn inspect", "pub fn build_draft", "pub fn build"):
+        if method in generic:
+            violations.append(f"generic builder state exposes completion method: {method}")
+if unset is not None:
+    for method in ("pub fn inspect", "pub fn build_draft", "pub fn build"):
+        if method in unset:
+            violations.append(f"InvocationArgsUnset exposes completion method: {method}")
+if complete is not None:
+    for method in ("pub fn inspect", "pub fn build_draft", "pub fn build"):
+        if method not in complete:
+            violations.append(f"InvocationArgsSet is missing completion method: {method}")
+
+print("\n".join(violations))
+PY
     )"
-    if [[ -n "$bad_runtime_semantics" ]]; then
-        record_violation "daemon::invocation::receipts::runtime_record reintroduces CLI-owned Invocation semantics" \
-            "$bad_runtime_semantics
-Keep RuntimeInvocation as an adapter over easynet_axon descriptor-bound canonical bytes."
+    if [[ -n "$bad_builder_state" ]]; then
+        record_violation "DaemonInvocationBuilder does not enforce a complete public tuple" \
+            "$bad_builder_state
+Use the InvocationArgsUnset -> InvocationArgsSet type-state transition; only the complete state may inspect or build an Invocation."
     fi
+fi
+
+if [[ -e "src/daemon/invocation/receipts/runtime_record.rs" ]]; then
+    record_violation "obsolete daemon runtime-record authority remains" \
+        "src/daemon/invocation/receipts/runtime_record.rs
+Delete the CLI-owned runtime model; KernelApi must consume DescriptorBoundInvocationRequest and return FinalizedInvocation."
+fi
+
+bad_kernel_runtime_model="$(
+    python3 - <<'PY'
+from pathlib import Path
+import re
+
+root = Path("src")
+for path in sorted(root.rglob("*.rs")):
+    text = path.read_text(encoding="utf-8")
+    production = text.split("#[cfg(test)]", 1)[0]
+    for token in ("RuntimeInvocation", "RuntimeCausalContext", "runtime_invocation_id"):
+        match = re.search(rf"\b{token}\b", production)
+        if match:
+            line = production.count("\n", 0, match.start()) + 1
+            print(f"{path}:{line}:{token}")
+PY
+)"
+if [[ -n "$bad_kernel_runtime_model" ]]; then
+    record_violation "CLI-owned production runtime model reintroduced" \
+        "$bad_kernel_runtime_model
+Use Axon DescriptorBoundInvocationRequest, InvocationState, FinalizedInvocation, and SignedInvocationReceipt directly."
+fi
+
+if require_file "src/daemon/boot/kernel/api.rs"; then
+    kernel_api="$(cat src/daemon/boot/kernel/api.rs)"
+    for required in "DescriptorBoundInvocationRequest" "FinalizedInvocation"; do
+        if [[ "$kernel_api" != *"$required"* ]]; then
+            record_violation "KernelApi canonical runtime boundary is incomplete" \
+                "src/daemon/boot/kernel/api.rs is missing $required"
+        fi
+    done
 fi
 
 bad_remote_bidi_alias_language="$(

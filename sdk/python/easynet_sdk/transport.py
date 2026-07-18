@@ -1,10 +1,4 @@
-"""Public daemon Invocation transport facade.
-
-This module is the migration surface for product code that wants JSON-friendly
-daemon Invocation calls without owning C ABI loading. It wraps Runtime Core
-objects; it does not implement Invocation, stream, bidi, URA, or receipt
-semantics itself.
-"""
+"""Provider-neutral Invocation transport adapters and lifecycle state machines."""
 
 from __future__ import annotations
 
@@ -20,7 +14,6 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, cast
 from .bidi import BidiFrame, BidiOutcome, BidiSession, BidiState, BidiStreamDescriptor
 from .connection import (
     ConnectOptions,
-    ControlDiscoveryRuntimeConnector,
     RuntimeConnection,
 )
 from .errors import ErrorCode, RetryHint, SDKError, canonical_failure_code
@@ -37,7 +30,7 @@ from .signing import Signer
 from .stream import StreamCancel, StreamEvent, StreamHandle
 
 
-class _DaemonTransportState(Enum):
+class _RuntimeInvocationTransportState(Enum):
     OPEN = "open"
     CLOSING = "closing"
     CLOSE_RETRYABLE = "close_retryable"
@@ -45,7 +38,7 @@ class _DaemonTransportState(Enum):
     CLOSED = "closed"
 
 
-class _DaemonUseLease:
+class _RuntimeUseLease:
     def __init__(
         self,
         runtime: RuntimeClient,
@@ -71,14 +64,14 @@ class _DaemonUseLease:
 
 
 @dataclass
-class DaemonInvocationTransport:
-    """JSON-friendly facade over the SDK Runtime Core client."""
+class RuntimeInvocationTransport:
+    """JSON-friendly facade over one canonical RuntimeClient."""
 
     runtime: RuntimeClient
     connection: RuntimeConnection | None = None
     _closed: bool = False
-    _state: _DaemonTransportState = field(
-        default=_DaemonTransportState.OPEN,
+    _state: _RuntimeInvocationTransportState = field(
+        default=_RuntimeInvocationTransportState.OPEN,
         init=False,
         repr=False,
     )
@@ -96,7 +89,9 @@ class DaemonInvocationTransport:
     )
 
     @classmethod
-    def from_runtime_client(cls, runtime: RuntimeClient) -> "DaemonInvocationTransport":
+    def from_runtime_client(
+        cls, runtime: RuntimeClient
+    ) -> "RuntimeInvocationTransport":
         """Wrap an existing Runtime Core client."""
 
         return cls(runtime)
@@ -108,28 +103,15 @@ class DaemonInvocationTransport:
         control_path: str = "",
         library_path: str | None = None,
         options: ConnectOptions = ConnectOptions(),
-    ) -> "DaemonInvocationTransport":
-        """Open a stateful SDK-owned Runtime Core session."""
+    ) -> "RuntimeInvocationTransport":
+        """REQ-LANG-5 delegate to the explicit EasyNet C ABI provider."""
 
-        from . import _cabi
+        from .providers.easynet.transport import connect_invocation_transport
 
-        control_path = options.control_path or control_path
-        connection = RuntimeConnection(
-            ControlDiscoveryRuntimeConnector(
-                _cabi.open_cabi_runtime_connector(library_path=library_path),
-                control_path=control_path,
-            )
-        )
-        return _open_daemon_transport(
-            connection,
-            ConnectOptions(
-                endpoint=options.endpoint,
-                control_path=control_path,
-                dial_timeout_ms=options.dial_timeout_ms,
-                invoke_timeout_ms=options.invoke_timeout_ms,
-                max_message_bytes=options.max_message_bytes,
-                reconnect=options.reconnect,
-            ),
+        return connect_invocation_transport(
+            control_path=control_path,
+            library_path=library_path,
+            options=options,
         )
 
     @classmethod
@@ -140,41 +122,16 @@ class DaemonInvocationTransport:
         library_path: str | None = None,
         options: ConnectOptions = ConnectOptions(),
         identity: Any | None = None,
-    ) -> "DaemonInvocationTransport":
-        """Open a direct Axon gRPC-over-UDS Runtime Core session."""
+    ) -> "RuntimeInvocationTransport":
+        """REQ-LANG-5 delegate to the explicit EasyNet direct provider."""
 
-        from .direct_runtime import DirectRuntimeConnector
+        from .providers.easynet.transport import connect_direct_invocation_transport
 
-        control_path = options.control_path or control_path
-        if identity is None:
-            raise SDKError(
-                code=ErrorCode.NOT_IMPLEMENTED,
-                stage="sdk",
-                retry=RetryHint.NEVER,
-                retryable=False,
-                message=(
-                    "direct runtime requires an explicit Addressing provider; "
-                    "generic C ABI v5 does not export identity grammar"
-                ),
-            )
-        _ = library_path
-        connection = RuntimeConnection(
-            DirectRuntimeConnector(
-                control_path=control_path,
-                identity=identity,
-                close_identity=False,
-            )
-        )
-        return _open_daemon_transport(
-            connection,
-            ConnectOptions(
-                endpoint=options.endpoint,
-                control_path=control_path,
-                dial_timeout_ms=options.dial_timeout_ms,
-                invoke_timeout_ms=options.invoke_timeout_ms,
-                max_message_bytes=options.max_message_bytes,
-                reconnect=options.reconnect,
-            ),
+        return connect_direct_invocation_transport(
+            control_path=control_path,
+            library_path=library_path,
+            options=options,
+            identity=identity,
         )
 
     def invoke(
@@ -217,18 +174,18 @@ class DaemonInvocationTransport:
 
     def stream(
         self, invocation: Mapping[str, object] | InvocationDraft
-    ) -> "DaemonFrameStream":
+    ) -> "RuntimeFrameStream":
         """Open a server-stream Invocation."""
 
         with self._acquire_runtime_use() as runtime:
             handle = runtime.invoke_stream(_coerce_draft(invocation))
-        return DaemonFrameStream(handle)
+        return RuntimeFrameStream(handle)
 
     def bidi(
         self,
         invocation: Mapping[str, object] | InvocationDraft,
         streams: Iterable[Mapping[str, object] | BidiStreamDescriptor] = (),
-    ) -> "DaemonBidiChannel":
+    ) -> "RuntimeBidiChannel":
         """Open a bidirectional Invocation session."""
 
         with self._acquire_runtime_use() as runtime:
@@ -236,20 +193,20 @@ class DaemonInvocationTransport:
                 _coerce_draft(invocation),
                 tuple(_coerce_stream_descriptor(stream) for stream in streams),
             )
-        return DaemonBidiChannel(session)
+        return RuntimeBidiChannel(session)
 
     def close(self) -> None:
         while True:
             with self._lifecycle:
-                if self._state is _DaemonTransportState.CLOSED:
+                if self._state is _RuntimeInvocationTransportState.CLOSED:
                     return
-                if self._state is _DaemonTransportState.CLOSE_FAILED:
+                if self._state is _RuntimeInvocationTransportState.CLOSE_FAILED:
                     assert self._close_error is not None
                     raise self._close_error
-                if self._state is _DaemonTransportState.CLOSING:
+                if self._state is _RuntimeInvocationTransportState.CLOSING:
                     self._lifecycle.wait()
                     continue
-                self._state = _DaemonTransportState.CLOSING
+                self._state = _RuntimeInvocationTransportState.CLOSING
                 while self._active_uses:
                     self._lifecycle.wait()
                 break
@@ -273,12 +230,12 @@ class DaemonInvocationTransport:
             raise
 
         with self._lifecycle:
-            self._state = _DaemonTransportState.CLOSED
+            self._state = _RuntimeInvocationTransportState.CLOSED
             self._closed = True
             self._close_error = None
             self._lifecycle.notify_all()
 
-    def __enter__(self) -> "DaemonInvocationTransport":
+    def __enter__(self) -> "RuntimeInvocationTransport":
         with self._lifecycle:
             self._require_open_locked()
         return self
@@ -286,11 +243,11 @@ class DaemonInvocationTransport:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
-    def _acquire_runtime_use(self) -> _DaemonUseLease:
+    def _acquire_runtime_use(self) -> _RuntimeUseLease:
         with self._lifecycle:
             self._require_open_locked()
             self._active_uses += 1
-        return _DaemonUseLease(self.runtime, self._release_runtime_use)
+        return _RuntimeUseLease(self.runtime, self._release_runtime_use)
 
     def _release_runtime_use(self) -> None:
         with self._lifecycle:
@@ -343,21 +300,21 @@ class DaemonInvocationTransport:
         with self._lifecycle:
             self._close_error = error
             self._state = (
-                _DaemonTransportState.CLOSE_RETRYABLE
+                _RuntimeInvocationTransportState.CLOSE_RETRYABLE
                 if retryable
-                else _DaemonTransportState.CLOSE_FAILED
+                else _RuntimeInvocationTransportState.CLOSE_FAILED
             )
             self._lifecycle.notify_all()
 
     def _require_open_locked(self) -> None:
-        if self._state is not _DaemonTransportState.OPEN:
+        if self._state is not _RuntimeInvocationTransportState.OPEN:
             raise _closed_transport("daemon invocation transport is closing or closed")
 
 
-def _open_daemon_transport(
+def _open_runtime_invocation_transport(
     connection: RuntimeConnection,
     options: ConnectOptions,
-) -> DaemonInvocationTransport:
+) -> RuntimeInvocationTransport:
     try:
         connection.connect(options)
         runtime = connection.runtime_client()
@@ -367,18 +324,18 @@ def _open_daemon_transport(
         except BaseException as cleanup_error:
             raise acquisition_error from cleanup_error
         raise
-    return DaemonInvocationTransport(runtime=runtime, connection=connection)
+    return RuntimeInvocationTransport(runtime=runtime, connection=connection)
 
 
 @dataclass
 class InvocationResultAdapter:
-    """Runtime result adapter over the SDK daemon Invocation transport."""
+    """Runtime result adapter over the canonical Invocation transport."""
 
-    transport: DaemonInvocationTransport
+    transport: RuntimeInvocationTransport
 
     @classmethod
     def from_runtime_client(cls, runtime: RuntimeClient) -> "InvocationResultAdapter":
-        return cls(DaemonInvocationTransport.from_runtime_client(runtime))
+        return cls(RuntimeInvocationTransport.from_runtime_client(runtime))
 
     @classmethod
     def connect(
@@ -389,7 +346,7 @@ class InvocationResultAdapter:
         options: ConnectOptions = ConnectOptions(),
     ) -> "InvocationResultAdapter":
         return cls(
-            DaemonInvocationTransport.connect(
+            RuntimeInvocationTransport.connect(
                 control_path=control_path,
                 library_path=library_path,
                 options=options,
@@ -418,14 +375,14 @@ class InvocationResultAdapter:
 
     def stream(
         self, invocation: Mapping[str, object] | InvocationDraft
-    ) -> "DaemonFrameStream":
+    ) -> "RuntimeFrameStream":
         return self.transport.stream(invocation)
 
     def bidi(
         self,
         invocation: Mapping[str, object] | InvocationDraft,
         streams: Iterable[Mapping[str, object] | BidiStreamDescriptor] = (),
-    ) -> "DaemonBidiChannel":
+    ) -> "RuntimeBidiChannel":
         return self.transport.bidi(invocation, streams)
 
     def close(self) -> None:
@@ -1262,8 +1219,8 @@ class BidiSessionAdapter:
 
 
 @dataclass
-class DaemonFrameStream:
-    """JSON-friendly server-stream wrapper over `StreamHandle`."""
+class RuntimeFrameStream:
+    """JSON-friendly canonical server-stream wrapper over ``StreamHandle``."""
 
     handle: StreamHandle
 
@@ -1283,7 +1240,7 @@ class DaemonFrameStream:
             if event.get("terminal") is True:
                 return
 
-    def __enter__(self) -> "DaemonFrameStream":
+    def __enter__(self) -> "RuntimeFrameStream":
         return self
 
     def __exit__(self, *exc_info: object) -> None:
@@ -1291,8 +1248,8 @@ class DaemonFrameStream:
 
 
 @dataclass
-class DaemonBidiChannel:
-    """JSON-friendly bidi wrapper over `BidiSession`."""
+class RuntimeBidiChannel:
+    """JSON-friendly canonical bidi wrapper over ``BidiSession``."""
 
     session: BidiSession
 
@@ -1314,7 +1271,7 @@ class DaemonBidiChannel:
     def close(self) -> None:
         self.session.close()
 
-    def __enter__(self) -> "DaemonBidiChannel":
+    def __enter__(self) -> "RuntimeBidiChannel":
         return self
 
     def __exit__(self, *exc_info: object) -> None:
@@ -1575,7 +1532,7 @@ def _remote_wire_error(error: object, *, stage: str = "stream") -> SDKError:
     kind_text = kind if isinstance(kind, str) else ""
     reason_text = reason if isinstance(reason, str) else ""
     message_text = message if isinstance(message, str) else ""
-    code = (
+    code: ErrorCode | str | None = (
         _REMOTE_ERROR_CODES.get(kind_text) if kind_text else ErrorCode.PROTOCOL_MISMATCH
     )
     if code is None:
@@ -1658,3 +1615,10 @@ def _closed_transport(message: str) -> SDKError:
         retryable=False,
         message=message,
     )
+
+
+# REQ-LANG-5 exact aliases. All behavior and state live in the canonical
+# Runtime* classes above; EasyNet connection lowering lives in providers/easynet.
+DaemonInvocationTransport = RuntimeInvocationTransport
+DaemonFrameStream = RuntimeFrameStream
+DaemonBidiChannel = RuntimeBidiChannel

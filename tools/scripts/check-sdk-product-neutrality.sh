@@ -5,7 +5,8 @@ ROOT="${SDK_PRODUCT_NEUTRALITY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 cd "$ROOT"
 CONCEPTS="${SDK_CONCEPT_MANIFEST:-$ROOT/sdk/conformance/canonical-public-api.json}"
 CONCEPT_VALIDATOR="$ROOT/sdk/conformance/sdk_concepts.py"
-PYTHON_BIN="${PYTHON:-python}"
+EDGE_ADAPTER_POLICY="$ROOT/sdk/conformance/edge_adapter_policy.py"
+PYTHON_BIN="${PYTHON:-python3}"
 
 fail() {
   echo "sdk-product-neutrality: $*" >&2
@@ -44,6 +45,8 @@ for root in "${canonical_roots[@]}"; do
 done
 
 if [[ "${1:-}" == "--self-test" ]]; then
+  "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --self-test >/dev/null \
+    || fail "released edge-adapter policy self-test failed"
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
   for root in "${canonical_roots[@]}"; do
@@ -138,6 +141,9 @@ PY
   exit 0
 fi
 
+"$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$CONCEPTS" >/dev/null \
+  || fail "released edge-adapter policy validation failed"
+
 for path in \
   sdk/go/profiles.go \
   sdk/go/admin.go \
@@ -211,7 +217,12 @@ for path in sdk/go/runtime_events.go sdk/python/easynet_sdk/runtime_events.py; d
   fi
 done
 
-if rg -n 'easynet.run/cli/sdk/go/provider/easynet' sdk/go --glob '*.go' --glob '!**/*_test.go' --glob '!**/runtime_events_compat.go'; then
+if rg -n 'easynet.run/cli/sdk/go/provider/easynet' sdk/go \
+  --glob '*.go' \
+  --glob '!**/provider/**' \
+  --glob '!**/*_test.go' \
+  --glob '!**/daemon_compat.go' \
+  --glob '!**/runtime_events_compat.go'; then
   fail "canonical Go implementation imports the EasyNet provider facade"
 fi
 
@@ -239,9 +250,6 @@ if route_lowering_violations "${canonical_core_sources[@]}"; then
 fi
 
 for path in \
-  sdk/go/provider/easynet \
-  sdk/python/easynet_sdk/providers/easynet \
-  sdk/python/easynet_sdk/providers \
   sdk/conformance/easynet-provider-routes.json \
   tools/sdk-api-inventory/provider-routes
 do

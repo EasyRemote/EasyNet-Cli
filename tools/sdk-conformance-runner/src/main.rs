@@ -862,6 +862,8 @@ fn execution_key(binding: &ExecutionBinding) -> (String, String) {
     (binding.language.clone(), binding.case_id.clone())
 }
 
+const GO_CONFORMANCE_BUILD_TAGS: &str = "easynet_direct_runtime";
+
 fn execute_go_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterExecution> {
     let pattern = format!("^{}$", regex::escape(&binding.selector));
     let collect = run_adapter_command(
@@ -869,7 +871,14 @@ fn execute_go_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterExe
         "go",
         "collection",
         "sdk/go",
-        &["go", "test", "-list", &pattern, "./..."],
+        &[
+            "go",
+            "test",
+            &format!("-tags={GO_CONFORMANCE_BUILD_TAGS}"),
+            "-list",
+            &pattern,
+            "./...",
+        ],
     )?;
     let collected = collect
         .output
@@ -882,7 +891,16 @@ fn execute_go_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterExe
         "go",
         "execution",
         "sdk/go",
-        &["go", "test", "-json", "-run", &pattern, "-count=1", "./..."],
+        &[
+            "go",
+            "test",
+            &format!("-tags={GO_CONFORMANCE_BUILD_TAGS}"),
+            "-json",
+            "-run",
+            &pattern,
+            "-count=1",
+            "./...",
+        ],
     )?;
     let passed = execute
         .output
@@ -907,7 +925,14 @@ fn execute_go_cases(
         "go",
         "collection",
         "sdk/go",
-        &["go", "test", "-list", ".", "./..."],
+        &[
+            "go",
+            "test",
+            &format!("-tags={GO_CONFORMANCE_BUILD_TAGS}"),
+            "-list",
+            ".",
+            "./...",
+        ],
     )?;
     let listed = collect
         .output
@@ -928,7 +953,16 @@ fn execute_go_cases(
             "go",
             "execution",
             "sdk/go",
-            &["go", "test", "-json", "-run", &pattern, "-count=1", "./..."],
+            &[
+                "go",
+                "test",
+                &format!("-tags={GO_CONFORMANCE_BUILD_TAGS}"),
+                "-json",
+                "-run",
+                &pattern,
+                "-count=1",
+                "./...",
+            ],
         )?;
         let passed = execute
             .output
@@ -1120,35 +1154,50 @@ fn execute_node_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterE
         "node",
         "collection",
         ".",
-        &["node", "--test", "--test-name-pattern", &pattern, evidence],
+        &[
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-name-pattern",
+            &pattern,
+            evidence,
+        ],
     )?;
-    let count = collect
-        .output
-        .lines()
-        .filter(|line| {
-            line.trim_start().starts_with("ok ")
-                && line.contains(&format!("- {}", binding.selector))
-        })
-        .count();
+    let count = node_tap_selector_pass_count(&collect.output, &binding.selector);
     let execute = run_adapter_command(
         root,
         "node",
         "execution",
         ".",
-        &["node", "--test", "--test-name-pattern", &pattern, evidence],
+        &[
+            "node",
+            "--test",
+            "--test-reporter=tap",
+            "--test-name-pattern",
+            &pattern,
+            evidence,
+        ],
     )?;
-    let passed = execute.success
-        && execute.output.lines().any(|line| {
-            line.trim_start().starts_with("ok ")
-                && line.contains(&format!("- {}", binding.selector))
-                && !line.contains("# SKIP")
-        });
+    let passed =
+        execute.success && node_tap_selector_pass_count(&execute.output, &binding.selector) == 1;
     finish_case_execution(
         binding,
         std::iter::repeat_n(binding.selector.clone(), count).collect(),
         vec![collect, execute],
         passed,
     )
+}
+
+fn node_tap_selector_pass_count(output: &str, selector: &str) -> usize {
+    output
+        .lines()
+        .filter(|line| {
+            line.trim_start()
+                .strip_prefix("ok ")
+                .and_then(|result| result.split_once(" - "))
+                .is_some_and(|(_, name)| name == selector)
+        })
+        .count()
 }
 
 fn execute_java_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterExecution> {
@@ -1770,10 +1819,11 @@ fn git_inventory_paths(output: &[u8]) -> Vec<&[u8]> {
 }
 
 fn toolchain_sha256(root: &Path, language: &str) -> Result<(String, String)> {
+    let python = std::env::var("SDK_CONFORMANCE_PYTHON").unwrap_or_else(|_| "python".to_string());
     let (program, arguments): (&str, &[&str]) = match language {
         "rust" | "c_abi" => ("rustc", &["--version"]),
         "go" => ("go", &["version"]),
-        "python" => ("python", &["--version"]),
+        "python" => (python.as_str(), &["--version"]),
         "node" => ("node", &["--version"]),
         "java" => ("java", &["-version"]),
         "swift" => ("swift", &["--version"]),
@@ -1806,13 +1856,26 @@ fn toolchain_sha256(root: &Path, language: &str) -> Result<(String, String)> {
 }
 
 fn axon_revision(root: &Path) -> Result<String> {
-    let output = Command::new("git")
-        .args(["-C", "../EasyNet-Axon", "rev-parse", "HEAD"])
-        .current_dir(root)
+    let repository = std::env::var_os("EASYNET_AXON_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("../EasyNet-Axon"));
+    let python = std::env::var("SDK_CONFORMANCE_PYTHON").unwrap_or_else(|_| "python3".to_string());
+    let output = Command::new(python)
+        .arg(root.join("sdk/conformance/source_revision.py"))
+        .arg("--repository")
+        .arg(repository)
+        .args([
+            "--root",
+            "sdk",
+            "--root",
+            "core/proto",
+            "--root",
+            "core/runtime-rs/dendrite-bridge/include",
+        ])
         .output()
-        .context("read sibling EasyNet-Axon revision")?;
+        .context("read canonical Axon source revision")?;
     if !output.status.success() {
-        anyhow::bail!("sibling EasyNet-Axon checkout is required for attestation");
+        anyhow::bail!("canonical Axon source revision command failed");
     }
     Ok(String::from_utf8(output.stdout)?.trim().to_string())
 }
@@ -3177,6 +3240,27 @@ expect:
             .as_deref()
             .unwrap()
             .contains("not collected exactly once"));
+    }
+
+    #[test]
+    fn node_tap_selector_parser_requires_one_exact_non_skipped_pass() {
+        let selector = "conformance version compatible accepts exact ABI";
+        let output = format!(
+            "TAP version 13\n\
+             # Subtest: {selector}\n\
+             ok 1 - {selector}\n\
+             ok 2 - {selector} extended # SKIP test name does not match pattern\n\
+             ok 3 - unrelated # SKIP test name does not match pattern\n\
+             1..3\n"
+        );
+        assert_eq!(node_tap_selector_pass_count(&output, selector), 1);
+        assert_eq!(
+            node_tap_selector_pass_count(
+                &format!("ok 1 - {selector} # SKIP disabled by policy\n"),
+                selector
+            ),
+            0
+        );
     }
 
     #[test]

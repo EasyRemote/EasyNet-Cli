@@ -115,13 +115,23 @@ func (e *SdkEnvironment) DiscoverRuntime(ctx context.Context, opts RuntimeHostDi
 	if err != nil {
 		return RuntimeHostEndpoints{}, err
 	}
-	return host.Discover(ctx, mergeDiscoverOptions(e.options.Discover, opts))
+	return host.DiscoverRuntime(ctx, mergeDiscoverOptions(e.options.Discover, opts))
 }
 
 // DiscoverDaemon discovers daemon endpoints using environment defaults plus
 // per-call overrides.
 func (e *SdkEnvironment) DiscoverDaemon(ctx context.Context, opts DiscoverOptions) (Endpoints, error) {
-	return e.DiscoverRuntime(ctx, opts)
+	_, host, err := e.requireOpen(ctx)
+	if err != nil {
+		return Endpoints{}, err
+	}
+	if opts.ControlEndpoint == "" {
+		opts.ControlEndpoint = e.options.Discover.ControlEndpoint
+	}
+	if opts.ControlPath == "" {
+		opts.ControlPath = e.options.Discover.ControlPath
+	}
+	return host.Discover(ctx, opts)
 }
 
 // ConnectLocal opens a RuntimeClient through the explicit runtime lifecycle

@@ -12,7 +12,7 @@ import (
 func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 	forbidden := []string{
 		`import "C"`,
-		`easynet.run/axon`,
+		`axon.run/sdk/go`,
 		`easynet.run/cli/sdk/go/internal/axonpb`,
 		`github.com/easynet/axon`,
 		`google.golang.org/grpc`,
@@ -41,7 +41,7 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 					allowedTaggedDirectRuntimeProvider(path, text) {
 					continue
 				}
-				if needle == `easynet.run/axon` && allowedDelegatedAxonFacade(path) {
+				if needle == `axon.run/sdk/go` && allowedDelegatedAxonFacade(path) {
 					continue
 				}
 				if needle == `google.golang.org/grpc` && allowedPrivateAxonAdapter(path) {
@@ -92,7 +92,7 @@ func TestPublicGoSDKDoesNotOwnURAGrammar(t *testing.T) {
 		t.Fatalf("read ura.go: %v", err)
 	}
 	text := string(body)
-	if !strings.Contains(text, `axonsdk "easynet.run/axon/sdk/go/easynet"`) {
+	if !strings.Contains(text, `axonsdk "axon.run/sdk/go/axon"`) {
 		t.Fatalf("ura.go must delegate URA grammar to the Axon Go SDK")
 	}
 	for _, needle := range []string{
@@ -204,11 +204,17 @@ func gitRepositoryRoot(t *testing.T) string {
 
 func allowedTaggedDirectRuntimeProvider(path, text string) bool {
 	base := filepath.Base(path)
-	if base != "direct_runtime.go" {
+	if !strings.Contains(text, "//go:build easynet_direct_runtime") {
 		return false
 	}
-	return strings.Contains(text, "//go:build easynet_direct_runtime") &&
-		strings.Contains(text, "type DirectRuntimeTransport struct")
+	switch base {
+	case "direct_runtime.go":
+		return strings.Contains(text, "type DirectRuntimeTransport struct")
+	case "direct_runtime_codec.go":
+		return strings.Contains(text, "type directDescriptorBoundCodec struct")
+	default:
+		return false
+	}
 }
 
 func allowedPrivateAxonAdapter(path string) bool {
@@ -217,7 +223,7 @@ func allowedPrivateAxonAdapter(path string) bool {
 
 func allowedDelegatedAxonFacade(path string) bool {
 	switch filepath.ToSlash(path) {
-	case "ability_descriptor_axon.go", "authority_axon.go", "directory.go", "invocation_canonical.go", "receipt.go", "ura.go":
+	case "ability_descriptor_axon.go", "authority_axon.go", "direct_runtime.go", "direct_runtime_codec.go", "directory.go", "invocation_canonical.go", "receipt.go", "resource_namespace.go", "runtime.go", "ura.go":
 		return true
 	default:
 		return false

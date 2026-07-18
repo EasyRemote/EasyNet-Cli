@@ -5,18 +5,18 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "easynet-sdk"
 version = "0.91.30"
-description = "Python facade for the EasyNet-Cli Daemon SDK."
+description = "Python implementation of the canonical runtime SDK with explicit provider integrations."
 requires-python = ">=3.11"
 license = {text = "Apache-2.0"}
 dependencies = [
     "cryptography>=41",
-    "easynet-run-axon>=0.129.23",
+    "axon-sdk>=0.129.23",
     "grpcio>=1.60",
     "protobuf>=4.25",
 ]
 
 [tool.uv.sources]
-easynet-run-axon = { path = "../../../EasyNet-Axon/sdk/python", editable = true }
+axon-sdk = { path = "../../../EasyNet-Axon/sdk/python", editable = true }
 
 [tool.setuptools.packages.find]
 where = ["."]

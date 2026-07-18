@@ -6,14 +6,16 @@ REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 VALIDATOR="$REPO_ROOT/sdk/conformance/sdk_matrix.py"
 MATRIX="${1:-$REPO_ROOT/sdk/conformance/sdk-parity-matrix.json}"
 REQUESTED_LANGUAGES="${EASYNET_SDK_PARITY_LANGUAGES:-}"
+source "$REPO_ROOT/sdk/conformance/python_toolchain.sh"
 
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
+resolve_sdk_python_toolchain "$REPO_ROOT" pytest
 
 if [[ "${1:-}" == "--self-test" ]]; then
   mkdir -p "$REPO_ROOT/target"
   tmp="$(mktemp -d "$REPO_ROOT/target/sdk-parity-self-test.XXXXXX")"
   trap 'rm -rf "$tmp"' EXIT
-  python3 "$VALIDATOR" --self-test --tmp "$tmp"
+  "$SDK_CONFORMANCE_PYTHON" "$VALIDATOR" --self-test --tmp "$tmp"
   if EASYNET_SDK_PARITY_LANGUAGES=go,go \
     EASYNET_SDK_PARITY_RESULTS_DIR="$tmp/missing-results" \
     bash "$0" >"$tmp/duplicate.out" 2>&1; then
@@ -64,7 +66,7 @@ if [[ -n "$REQUESTED_LANGUAGES" ]]; then
   validator_mode=(--validate-slice "${requested_language_list[@]}")
 fi
 
-python3 "$VALIDATOR" \
+"$SDK_CONFORMANCE_PYTHON" "$VALIDATOR" \
   "${validator_mode[@]}" \
   --matrix "$MATRIX" \
   --results-dir "$EASYNET_SDK_PARITY_RESULTS_DIR" \

@@ -172,9 +172,10 @@ func TestBidiCloseSendDiffersFromCancel(t *testing.T) {
 	}
 }
 
-func TestBidiRemoteCloseThenLocalCloseSendReachesTerminal(t *testing.T) {
+func TestBidiRemoteAndLocalHalfCloseWaitForTerminalReceipt(t *testing.T) {
 	transport := &memoryBidiTransport{recvFrames: []string{
 		`{"sequence":1,"kind":"remote_close_send","stream_id":1}`,
+		`{"sequence":2,"kind":"terminal","stream_id":1,"terminal":true,"terminal_receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}`,
 	}}
 	session := newTestBidiSession(t, transport)
 
@@ -189,8 +190,18 @@ func TestBidiRemoteCloseThenLocalCloseSendReachesTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CloseSend: %v", err)
 	}
-	if outcome.State() != BidiTerminal || !outcome.Terminal() || session.State() != BidiTerminal {
-		t.Fatalf("unexpected close-send terminal: outcome=%#v state=%s", outcome, session.State())
+	if outcome.State() != BidiHalfClosedLocal || outcome.Terminal() || session.State() != BidiHalfClosedLocal {
+		t.Fatalf("half-close claimed canonical terminal: outcome=%#v state=%s", outcome, session.State())
+	}
+	if _, err := session.TerminalFrame(); err == nil {
+		t.Fatal("half-closed session exposed terminal frame without receipt")
+	}
+	terminal, err := session.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("Receive terminal receipt: %v", err)
+	}
+	if !terminal.Terminal() || len(terminal.TerminalReceiptJSON()) == 0 || session.State() != BidiTerminal {
+		t.Fatalf("receipt-backed terminal not observed: frame=%#v state=%s", terminal, session.State())
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)

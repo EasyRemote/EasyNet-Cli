@@ -98,11 +98,9 @@ type InvocationClient interface {
 	Invoke(ctx context.Context, in *InvokeRequest, opts ...grpc.CallOption) (*InvokeResponse, error)
 	// Server-stream invocation (control / receipt streaming only).
 	InvokeStream(ctx context.Context, in *InvokeServerStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[InvokeStreamChunk], error)
-	// Bidirectional invocation (P5-rewrite-15) — realtime multimodal
-	// sessions. PTY uses the session-as-subject pattern: unary
-	// `device.terminal.create` mints the session URA, then a single
-	// InvokeBidi against `device.terminal.attach` carries the
-	// bidirectional binary stream until close.
+	// Bidirectional invocation for realtime multimodal sessions.
+	// Product session creation and attachment are provider abilities built on
+	// this generic stream primitive.
 	InvokeBidi(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[InvokeBidiUp, InvokeBidiDown], error)
 }
 
@@ -205,11 +203,9 @@ type InvocationServer interface {
 	Invoke(context.Context, *InvokeRequest) (*InvokeResponse, error)
 	// Server-stream invocation (control / receipt streaming only).
 	InvokeStream(*InvokeServerStreamRequest, grpc.ServerStreamingServer[InvokeStreamChunk]) error
-	// Bidirectional invocation (P5-rewrite-15) — realtime multimodal
-	// sessions. PTY uses the session-as-subject pattern: unary
-	// `device.terminal.create` mints the session URA, then a single
-	// InvokeBidi against `device.terminal.attach` carries the
-	// bidirectional binary stream until close.
+	// Bidirectional invocation for realtime multimodal sessions.
+	// Product session creation and attachment are provider abilities built on
+	// this generic stream primitive.
 	InvokeBidi(grpc.BidiStreamingServer[InvokeBidiUp, InvokeBidiDown]) error
 	mustEmbedUnimplementedInvocationServer()
 }

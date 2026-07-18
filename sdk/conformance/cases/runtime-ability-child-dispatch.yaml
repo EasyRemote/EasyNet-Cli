@@ -3,8 +3,6 @@ profile: runtime_core
 required_for:
   - go
   - python
-lifecycle_actions:
-  - child_dispatch
 description: Runtime ability facades derive child Invocation causality from a parent terminal receipt and dispatch the child through Runtime Core.
 steps:
   - action: derive_child_causal_context_from_parent_receipt

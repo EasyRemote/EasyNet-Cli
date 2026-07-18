@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Protocol, Sequence, cast
 
-from easynet_axon import parse_ura as _parse_ura
-from easynet_axon.invocation import (
+from axon_sdk import parse_ura as _parse_ura
+from axon_sdk.invocation import (
     ChainCheckResult,
     CausalContext as _AxonCausalContext,
     InvocationCausalLink,
@@ -31,6 +31,7 @@ from ._receipt_routes import (
     _RECEIPT_HISTORY_LIST,
     _RECEIPT_TRACE_GET,
 )
+from .runtime import RuntimeReceipt
 from .runtime_ability import RuntimeAbilityClient, RuntimeCallContext
 
 __all__ = [
@@ -177,6 +178,8 @@ class ReceiptReference:
     def from_runtime_receipt(cls, receipt: object) -> "ReceiptReference":
         """Build a causal reference from a daemon runtime receipt summary."""
 
+        if isinstance(receipt, RuntimeReceipt):
+            receipt.validate_summary()
         receipt_ura = _summary_value(receipt, "receipt_ura")
         self_hash_hex = _summary_value(receipt, "self_hash_hex")
         if not receipt_ura:

@@ -7,9 +7,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, NoReturn, Protocol, TypeVar, cast
 
-from easynet_axon.addressing import CanonicalAddressing
-from easynet_axon.invocation.axiom import AbilityDescriptorRef
-from easynet_axon.ura import ParsedURA, ParseError, display_id
+from axon_sdk.addressing import CanonicalAddressing
+from axon_sdk.invocation.axiom import AbilityDescriptorRef
+from axon_sdk.ura import ParsedURA, ParseError, display_id
 
 from .errors import ErrorCode, RetryHint, SDKError
 
@@ -271,7 +271,7 @@ class AxonAddressingTransport:
     """JSON adapter over Axon's typed canonical Addressing provider.
 
     This class owns only language-SDK DTO projection. URA and descriptor
-    parsing/building stay entirely in ``easynet_axon``; no product profile,
+    parsing/building stay entirely in ``axon_sdk``; no product profile,
     service locator, C ABI, or signing material is involved.
     """
 
@@ -517,7 +517,7 @@ def _json_bytes(value: Mapping[str, object]) -> bytes:
 
 
 def _metadata() -> dict[str, object]:
-    return {"grammar_owner": "axon", "source": "easynet_axon"}
+    return {"grammar_owner": "axon", "source": "axon_sdk"}
 
 
 def _invalid_addressing(

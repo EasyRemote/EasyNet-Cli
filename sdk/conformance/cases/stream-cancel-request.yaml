@@ -3,8 +3,6 @@ profile: runtime_core
 required_for:
   - go
   - python
-lifecycle_actions:
-  - cancel
 description: Runtime Core stream cancellation is an explicit non-terminal request acknowledgement; terminal cancellation facts must arrive through runtime terminal events.
 steps:
   - action: open_stream

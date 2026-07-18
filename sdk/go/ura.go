@@ -3,7 +3,7 @@ package easynet
 import (
 	"strings"
 
-	axonsdk "easynet.run/axon/sdk/go/easynet"
+	axonsdk "axon.run/sdk/go/axon"
 )
 
 // URA helpers are Go SDK facades over Axon-owned grammar.
@@ -82,7 +82,7 @@ const (
 )
 
 func IsResourceNamespace(namespace string) bool {
-	return axonsdk.IsResourceNamespace(namespace)
+	return isProductResourceNamespace(namespace)
 }
 
 func ParseURA(raw string) (URA, error) {
@@ -178,7 +178,7 @@ func ResourceDotURA(realm, ownerID, path string) string {
 }
 
 func ResourceURA(realm, userID, namespace, path string) string {
-	return axonsdk.ResourceURA(realm, userID, namespace, path)
+	return productResourceURA(realm, userID, namespace, path)
 }
 
 // RuntimeResourceURA builds a resource rooted at a runtime-owned identifier.
@@ -216,7 +216,14 @@ func RealmResourcePrefix(realm string) string {
 }
 
 func DeviceNodeIDInRealm(raw, realm string) (string, bool) {
-	return axonsdk.DeviceNodeIDInRealm(raw, realm)
+	if raw == "" || realm == "" {
+		return "", false
+	}
+	parts, err := axonsdk.ParseURAParts(raw)
+	if err != nil || parts.Realm != realm || parts.Kind != axonsdk.URAKindDevice {
+		return "", false
+	}
+	return parts.DeviceID, parts.DeviceID != ""
 }
 
 func DisplayID(raw string) string {
@@ -244,6 +251,7 @@ func ParseURAParts(raw string) (ParsedURA, error) {
 }
 
 func parsedURAFromAxon(parts axonsdk.ParsedURA) ParsedURA {
+	resourceNamespace, resourcePath := projectProductResourcePath(parts.Kind, parts.Path)
 	return ParsedURA{
 		Raw:               parts.Raw,
 		Realm:             parts.Realm,
@@ -256,8 +264,8 @@ func parsedURAFromAxon(parts axonsdk.ParsedURA) ParsedURA {
 		AbilityNamespace:  parts.AbilityNamespace,
 		AbilityLocalName:  parts.AbilityLocalName,
 		OwnerID:           parts.OwnerID,
-		ResourceNamespace: ResourceNamespace(string(parts.ResourceNamespace)),
-		Path:              parts.Path,
+		ResourceNamespace: resourceNamespace,
+		Path:              resourcePath,
 	}
 }
 

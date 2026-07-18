@@ -8,9 +8,6 @@ required_for:
   - node
   - java
   - swift
-lifecycle_actions:
-  - bidi_open
-  - terminal_receipt
 description: Runtime Core bidi close-send is a local half-close, not cancellation, and keeps the receive side alive until a terminal frame or close.
 steps:
   - action: open_bidi

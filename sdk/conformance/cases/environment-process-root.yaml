@@ -3,8 +3,6 @@ profile: runtime_core
 required_for:
   - go
   - python
-lifecycle_actions:
-  - start
 description: SdkEnvironment is the process-level SDK root for feature discovery, ABI checks, runtime lifecycle facade access, local runtime connection, and idempotent cleanup.
 steps:
   - action: create_environment

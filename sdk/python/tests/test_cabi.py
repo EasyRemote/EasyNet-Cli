@@ -26,7 +26,7 @@ from easynet_sdk._cabi import (
     _project_cabi_ordered_event,
 )
 
-from test_runtime import complete_draft
+from test_runtime import canonical_runtime_receipt_pair, complete_draft
 
 
 class FakeSymbol:
@@ -145,33 +145,23 @@ class FakeRawCABI:
         self.easynet_invocation_submit_signed_handle = FakeSymbol(
             self._invocation_submit_signed_handle
         )
-        self.easynet_invocation_handle_await = FakeSymbol(
-            self._invocation_handle_await
-        )
+        self.easynet_invocation_handle_await = FakeSymbol(self._invocation_handle_await)
         self.easynet_invocation_handle_cancel = FakeSymbol(
             self._invocation_handle_cancel
         )
         self.easynet_invocation_handle_events = FakeSymbol(
             self._invocation_handle_events
         )
-        self.easynet_invocation_handle_free = FakeSymbol(
-            self._invocation_handle_free
-        )
+        self.easynet_invocation_handle_free = FakeSymbol(self._invocation_handle_free)
         self.easynet_prepared_invocation_free = FakeSymbol(
             self._prepared_invocation_free
         )
-        self.easynet_signed_invocation_free = FakeSymbol(
-            self._signed_invocation_free
-        )
-        self.easynet_invocation_stream_open = FakeSymbol(
-            self._invocation_stream_open
-        )
+        self.easynet_signed_invocation_free = FakeSymbol(self._signed_invocation_free)
+        self.easynet_invocation_stream_open = FakeSymbol(self._invocation_stream_open)
         self.easynet_invocation_stream_cancel = FakeSymbol(
             self._invocation_stream_cancel
         )
-        self.easynet_invocation_stream_close = FakeSymbol(
-            self._invocation_stream_close
-        )
+        self.easynet_invocation_stream_close = FakeSymbol(self._invocation_stream_close)
         self.easynet_invocation_bidi_open = FakeSymbol(self._invocation_bidi_open)
         self.easynet_invocation_bidi_send = FakeSymbol(self._invocation_bidi_send)
         self.easynet_invocation_bidi_close_send = FakeSymbol(
@@ -296,14 +286,18 @@ class FakeRawCABI:
     def _invocation_invoke(self, handle, raw, out_ptr) -> int:
         draft = json.loads(raw.value.decode("utf-8"))
         self.runtime_requests.append(("invoke", draft))
+        admission, terminal = canonical_runtime_receipt_pair("inv-cabi")
         return self._write(
             out_ptr,
             json.dumps(
                 {
                     "ok": True,
                     "tuple": draft,
+                    "invocation_id": "inv-cabi",
                     "terminal_state": "Completed",
                     "output_json": {"ready": True},
+                    "admission_receipt": admission,
+                    "terminal_receipt": terminal,
                 },
                 separators=(",", ":"),
                 sort_keys=True,
@@ -369,8 +363,7 @@ class FakeRawCABI:
         _ = handle, invocation_handle_id
         return self._write(
             out_ptr,
-            b'{"ok":true,"terminal_state":"Completed",'
-            b'"output_json":{"ready":true}}',
+            b'{"ok":true,"terminal_state":"Completed","output_json":{"ready":true}}',
         )
 
     def _invocation_handle_cancel(
@@ -581,7 +574,9 @@ class CABITransportTests(unittest.TestCase):
 
     def test_cabi_stream_and_bidi_cancel_are_non_terminal_requests(self) -> None:
         raw = FakeRawCABI()
-        runtime = RuntimeClient(CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False))
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+        )
 
         stream = runtime.invoke_stream(complete_draft())
         stream_cancel = stream.cancel("client stop")

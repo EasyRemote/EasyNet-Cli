@@ -3,15 +3,20 @@
 package easynet
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	axoninv "axon.run/sdk/go/axon/invocation"
 	"easynet.run/cli/sdk/go/internal/axonpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -21,6 +26,8 @@ import (
 type directRuntimeFakeDaemon struct {
 	axonpb.UnimplementedInvocationServer
 	t *testing.T
+
+	timingMu sync.RWMutex
 
 	seenInvoke *axonpb.InvokeRequest
 	seenStream *axonpb.InvokeServerStreamRequest
@@ -36,16 +43,18 @@ type directRuntimeFakeDaemon struct {
 
 func (d *directRuntimeFakeDaemon) Invoke(ctx context.Context, req *axonpb.InvokeRequest) (*axonpb.InvokeResponse, error) {
 	d.seenInvoke = req
-	if d.invokeStarted != nil {
-		close(d.invokeStarted)
+	delay, started := d.invokeTiming()
+	if started != nil {
+		close(started)
 	}
-	if d.invokeDelay > 0 {
+	if delay > 0 {
 		select {
-		case <-time.After(d.invokeDelay):
+		case <-time.After(delay):
 		case <-ctx.Done():
 			return nil, status.Error(codes.DeadlineExceeded, "deadline elapsed")
 		}
 	}
+	admissionReceipt, terminalReceipt := canonicalDirectRuntimeReceiptPair("inv-1")
 	return &axonpb.InvokeResponse{
 		State:             axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
 		SelectedNodeId:    "node-a",
@@ -53,16 +62,105 @@ func (d *directRuntimeFakeDaemon) Invoke(ctx context.Context, req *axonpb.Invoke
 		Result:            []byte(`{"ok":true}`),
 		ResultContentType: "application/json",
 		ElapsedMs:         7,
-		TerminalReceipt: &axonpb.InvocationReceipt{
-			Index:           1,
-			InvocationId:    "inv-1",
-			ReceiptType:     "completed",
-			State:           axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
-			TimestampUnixMs: 42,
-			SelfHash:        []byte{1, 2, 3},
-			CleanupComplete: true,
-		},
+		AdmissionReceipt:  admissionReceipt,
+		TerminalReceipt:   terminalReceipt,
 	}, nil
+}
+
+func canonicalDirectRuntimeReceiptPair(invocationID string) (*axonpb.InvocationReceipt, *axonpb.InvocationReceipt) {
+	const (
+		callerURA = "easynet:///r/example/agent/alice.sdk"
+		calleeURA = "easynet:///r/example/device/dev-a"
+		profile   = "easynet-strict-v2"
+	)
+	proofPayload := []byte("canonical-direct-runtime-test-proof")
+	proofHash := sha256.Sum256(proofPayload)
+	binding := func() *axonpb.AuthorityBinding {
+		return &axonpb.AuthorityBinding{
+			Authority: &axonpb.AuthorityBinding_SelfAuthority{
+				SelfAuthority: &axonpb.SelfAuthority{PrincipalUra: callerURA},
+			},
+		}
+	}
+	receipt := func(
+		index uint64,
+		receiptType string,
+		state axonpb.InvocationState,
+		previousHash []byte,
+		selfHashByte byte,
+		cleanupComplete bool,
+	) *axonpb.InvocationReceipt {
+		return &axonpb.InvocationReceipt{
+			Index:             index,
+			InvocationId:      invocationID,
+			ReceiptType:       receiptType,
+			State:             state,
+			TimestampUnixMs:   1_783_100_000_000 + int64(index),
+			PrevReceiptHash:   bytes.Repeat(previousHash, 32),
+			SelfHash:          bytes.Repeat([]byte{selfHashByte}, 32),
+			CleanupComplete:   cleanupComplete,
+			CallerBinding:     &axonpb.AgentIdentity{Ura: callerURA, Profile: profile},
+			CalleeBinding:     &axonpb.AgentIdentity{Ura: calleeURA, Profile: profile},
+			SubjectBinding:    &axonpb.SubjectIdentity{Ura: calleeURA, Profile: profile},
+			InvocationNonce:   []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+			CausalBinding:     &axonpb.CausalContext{Form: &axonpb.CausalContext_None{None: &axonpb.Empty{}}},
+			CalleeSignature:   &axonpb.CalleeSignature{Algorithm: "ed25519", Signature: bytes.Repeat([]byte{0x71}, 64)},
+			AuthorityBinding:  binding(),
+			AbilityBinding:    runtimeTestDescriptorRef,
+			Usage:             &axonpb.InvocationUsage{},
+			SubjectRef:        &axonpb.EntityRef{Kind: axonpb.EntityRefKind_ENTITY_REF_KIND_DEVICE, Ura: calleeURA, Profile: profile},
+			DescriptorVersion: "1.0.0",
+			SchemaHash:        bytes.Repeat([]byte{0x11}, 32),
+			ImplHash:          bytes.Repeat([]byte{0x22}, 32),
+			RuntimeEnv:        "go-direct-runtime-test",
+			AuthorityProof: &axonpb.InvocationAuthorityProof{
+				ProofType:     "self",
+				Binding:       binding(),
+				ProofPayload:  append([]byte(nil), proofPayload...),
+				ProofHash:     append([]byte(nil), proofHash[:]...),
+				Issuer:        &axonpb.AgentIdentity{Ura: calleeURA, Profile: profile},
+				Signature:     &axonpb.CalleeSignature{Algorithm: "ed25519", Signature: bytes.Repeat([]byte{0x72}, 64)},
+				AdmissionHook: "test.direct_runtime.admission",
+			},
+			InputHash:  bytes.Repeat([]byte{0x33}, 32),
+			OutputHash: bytes.Repeat([]byte{0x44}, 32),
+		}
+	}
+	admission := receipt(
+		1,
+		"admitted",
+		axonpb.InvocationState_INVOCATION_STATE_ADMITTED,
+		[]byte{0},
+		0x51,
+		false,
+	)
+	terminal := receipt(
+		7,
+		"completed",
+		axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
+		[]byte{0x61},
+		0x71,
+		true,
+	)
+	return admission, terminal
+}
+
+func (d *directRuntimeFakeDaemon) configureInvokeTiming(delay time.Duration) <-chan struct{} {
+	d.timingMu.Lock()
+	defer d.timingMu.Unlock()
+	d.invokeDelay = delay
+	if delay <= 0 {
+		d.invokeStarted = nil
+		return nil
+	}
+	d.invokeStarted = make(chan struct{})
+	return d.invokeStarted
+}
+
+func (d *directRuntimeFakeDaemon) invokeTiming() (time.Duration, chan struct{}) {
+	d.timingMu.RLock()
+	defer d.timingMu.RUnlock()
+	return d.invokeDelay, d.invokeStarted
 }
 
 func TestDirectRuntimeInvokeDeadlineIsTypedTimeout(t *testing.T) {
@@ -71,8 +169,7 @@ func TestDirectRuntimeInvokeDeadlineIsTypedTimeout(t *testing.T) {
 		InvokeTimeoutMS: 50,
 	})
 	defer cleanup()
-	daemon.invokeDelay = time.Second
-	daemon.invokeStarted = make(chan struct{})
+	invokeStarted := daemon.configureInvokeTiming(time.Second)
 
 	client, err := NewRuntimeClient(transport)
 	if err != nil {
@@ -86,7 +183,7 @@ func TestDirectRuntimeInvokeDeadlineIsTypedTimeout(t *testing.T) {
 	}()
 
 	select {
-	case <-daemon.invokeStarted:
+	case <-invokeStarted:
 	case <-time.After(time.Second):
 		t.Fatalf("deadline test did not dispatch the runtime invocation")
 	}
@@ -112,12 +209,13 @@ func TestDirectRuntimeInvokeDeadlineIsTypedTimeout(t *testing.T) {
 
 func (d *directRuntimeFakeDaemon) InvokeStream(req *axonpb.InvokeServerStreamRequest, stream grpc.ServerStreamingServer[axonpb.InvokeStreamChunk]) error {
 	d.seenStream = req
-	if d.streamStarted != nil {
-		close(d.streamStarted)
+	delay, started := d.streamTiming()
+	if started != nil {
+		close(started)
 	}
-	if d.streamDelay > 0 {
+	if delay > 0 {
 		select {
-		case <-time.After(d.streamDelay):
+		case <-time.After(delay):
 		case <-stream.Context().Done():
 			return status.Error(codes.DeadlineExceeded, "deadline elapsed")
 		}
@@ -129,6 +227,12 @@ func (d *directRuntimeFakeDaemon) InvokeStream(req *axonpb.InvokeServerStreamReq
 		SchedulingReason: "direct-stream",
 		Payload:          []byte(`{"delta":1}`),
 		ContentType:      "application/json",
+		AdmissionReceipt: &axonpb.InvocationReceipt{
+			Index:        0,
+			InvocationId: "inv-stream",
+			ReceiptType:  "admitted",
+			State:        axonpb.InvocationState_INVOCATION_STATE_ADMITTED,
+		},
 	}); err != nil {
 		return err
 	}
@@ -149,18 +253,37 @@ func (d *directRuntimeFakeDaemon) InvokeStream(req *axonpb.InvokeServerStreamReq
 	})
 }
 
+func (d *directRuntimeFakeDaemon) configureStreamTiming(delay time.Duration) <-chan struct{} {
+	d.timingMu.Lock()
+	defer d.timingMu.Unlock()
+	d.streamDelay = delay
+	if delay <= 0 {
+		d.streamStarted = nil
+		return nil
+	}
+	d.streamStarted = make(chan struct{})
+	return d.streamStarted
+}
+
+func (d *directRuntimeFakeDaemon) streamTiming() (time.Duration, chan struct{}) {
+	d.timingMu.RLock()
+	defer d.timingMu.RUnlock()
+	return d.streamDelay, d.streamStarted
+}
+
 func (d *directRuntimeFakeDaemon) InvokeBidi(stream grpc.BidiStreamingServer[axonpb.InvokeBidiUp, axonpb.InvokeBidiDown]) error {
 	open, err := stream.Recv()
 	if err != nil {
 		return err
 	}
 	d.seenBidi = append(d.seenBidi, open)
-	if d.bidiStarted != nil {
-		close(d.bidiStarted)
+	delay, started := d.bidiTiming()
+	if started != nil {
+		close(started)
 	}
-	if d.bidiDelay > 0 {
+	if delay > 0 {
 		select {
-		case <-time.After(d.bidiDelay):
+		case <-time.After(delay):
 		case <-stream.Context().Done():
 			return status.Error(codes.DeadlineExceeded, "deadline elapsed")
 		}
@@ -204,6 +327,24 @@ func (d *directRuntimeFakeDaemon) InvokeBidi(stream grpc.BidiStreamingServer[axo
 	})
 }
 
+func (d *directRuntimeFakeDaemon) configureBidiTiming(delay time.Duration) <-chan struct{} {
+	d.timingMu.Lock()
+	defer d.timingMu.Unlock()
+	d.bidiDelay = delay
+	if delay <= 0 {
+		d.bidiStarted = nil
+		return nil
+	}
+	d.bidiStarted = make(chan struct{})
+	return d.bidiStarted
+}
+
+func (d *directRuntimeFakeDaemon) bidiTiming() (time.Duration, chan struct{}) {
+	d.timingMu.RLock()
+	defer d.timingMu.RUnlock()
+	return d.bidiDelay, d.bidiStarted
+}
+
 func TestDirectRuntimeTransportInvokesOverUnixSocket(t *testing.T) {
 	transport, daemon, cleanup := openDirectRuntimeTestTransport(t)
 	defer cleanup()
@@ -228,8 +369,8 @@ func TestDirectRuntimeTransportInvokesOverUnixSocket(t *testing.T) {
 	if daemon.seenInvoke.GetFunctionName() != "er.weather" {
 		t.Fatalf("function name = %q, want er.weather", daemon.seenInvoke.GetFunctionName())
 	}
-	if got := daemon.seenInvoke.GetMetadata()[directSignedDescriptorRefMetadata]; got != directRuntimeDraft(t).DescriptorRef() {
-		t.Fatalf("signed descriptor metadata = %q", got)
+	if got := daemon.seenInvoke.GetTarget().GetAbility().GetAbilityName(); got != directRuntimeDraft(t).DescriptorRef() {
+		t.Fatalf("descriptor-bound target = %q", got)
 	}
 	if got := string(daemon.seenInvoke.GetArguments()); got != `{"city":"Singapore"}` {
 		t.Fatalf("arguments = %s", got)
@@ -269,9 +410,6 @@ func TestDirectRuntimeTransportStringifiesTypedMetadata(t *testing.T) {
 	}
 	if _, ok := metadata["empty_value"]; ok {
 		t.Fatalf("nil metadata value should be omitted: %#v", metadata)
-	}
-	if got := metadata[directSignedDescriptorRefMetadata]; got != directRuntimeDraft(t).DescriptorRef() {
-		t.Fatalf("signed descriptor metadata = %q", got)
 	}
 }
 
@@ -326,11 +464,9 @@ func TestDirectRuntimeGRPCErrorClassifiesHTTP2ProtocolReset(t *testing.T) {
 	}
 }
 
-func TestDirectRuntimeTransportProjectsDescriptorRefThroughAddressing(t *testing.T) {
-	addressing := NewCanonicalAddressing()
+func TestDirectRuntimeTransportUsesAxonCanonicalPublicRoute(t *testing.T) {
 	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
 		DialTimeoutMS: 3000,
-		Addressing:    addressing,
 	})
 	defer cleanup()
 
@@ -346,32 +482,25 @@ func TestDirectRuntimeTransportProjectsDescriptorRefThroughAddressing(t *testing
 	}
 }
 
-func TestDirectRuntimeTransportPrepareProjectsSignedUserSubject(t *testing.T) {
-	identity := directRuntimeUserSubjectIdentity(t)
+func TestDirectRuntimeTransportRejectsUnprojectedUserSubject(t *testing.T) {
 	handle := &directRuntimeFakeHandleTransport{}
 	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
 		DialTimeoutMS:   3000,
-		Addressing:      identity,
 		HandleTransport: handle,
 	})
 	defer cleanup()
 	draft := directRuntimeUserSubjectDraft(t)
 
-	if _, err := transport.Prepare(context.Background(), mustMarshalDirectRuntimeDraft(t, draft), []byte(`{"expires_in_ms":60000}`)); err != nil {
-		t.Fatalf("Prepare: %v", err)
+	_, err := transport.Prepare(
+		context.Background(),
+		mustMarshalDirectRuntimeDraft(t, draft),
+		[]byte(`{"expires_in_ms":60000}`),
+	)
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("Prepare unprojected subject error = %v, want %s", err, ErrInvalidArgument)
 	}
-	prepared, err := NewInvocationDraftFromJSON(handle.preparedDraft)
-	if err != nil {
-		t.Fatalf("NewInvocationDraftFromJSON: %v", err)
-	}
-	if got := prepared.SubjectURA(); got != directRuntimeUserSubjectResourceURA {
-		t.Fatalf("delegated draft subject = %q, want %q", got, directRuntimeUserSubjectResourceURA)
-	}
-	if draft.SubjectURA() == prepared.SubjectURA() {
-		t.Fatalf("prepare did not project user subject: %q", draft.SubjectURA())
-	}
-	if handle.prepareCalls != 1 {
-		t.Fatalf("prepare delegation calls = %d, want 1", handle.prepareCalls)
+	if handle.prepareCalls != 0 || len(handle.preparedDraft) != 0 {
+		t.Fatalf("invalid tuple reached handle transport: calls=%d draft=%s", handle.prepareCalls, handle.preparedDraft)
 	}
 }
 
@@ -395,13 +524,27 @@ func TestDirectRuntimeTransportSubmitSignedDelegatesWithoutDirectDispatch(t *tes
 	}
 }
 
-func TestDirectRuntimeTransportRejectsDescriptorProjectionWithoutIdentity(t *testing.T) {
-	_, err := directLocalAbilityName(context.Background(), nil, directRuntimeDraft(t))
-	if err == nil {
-		t.Fatalf("directLocalAbilityName accepted descriptor_ref without identity projection")
+func TestDirectRuntimeTransportRejectsDescriptorOwnedByDifferentCallee(t *testing.T) {
+	var fields map[string]any
+	if err := json.Unmarshal(mustMarshalDirectRuntimeDraft(t, directRuntimeDraft(t)), &fields); err != nil {
+		t.Fatalf("decode draft: %v", err)
 	}
-	if !IsCode(err, ErrInvalidArgument) {
-		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	fields["callee_ura"] = "easynet:///r/example/device/dev-b"
+	fields["subject_ura"] = "easynet:///r/example/device/dev-b"
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatalf("encode mismatched draft: %v", err)
+	}
+	draft, err := NewInvocationDraftFromJSON(raw)
+	if err != nil {
+		t.Fatalf("NewInvocationDraftFromJSON: %v", err)
+	}
+	codec, err := newDirectDescriptorBoundCodec(time.Second)
+	if err != nil {
+		t.Fatalf("newDirectDescriptorBoundCodec: %v", err)
+	}
+	if _, err := codec.build(context.Background(), draft, axoninv.CallModeRPC); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("descriptor owner mismatch error = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 
@@ -434,6 +577,13 @@ func TestDirectRuntimeTransportStreamsOverUnixSocket(t *testing.T) {
 	if !terminal.Terminal() || stream.State() != StreamTerminalFrameSeen {
 		t.Fatalf("terminal = %v state %s", terminal.Terminal(), stream.State())
 	}
+	if len(terminal.AdmissionReceiptJSON()) == 0 || len(terminal.TerminalReceiptJSON()) == 0 {
+		t.Fatalf(
+			"terminal stream checkpoints = admission:%s terminal:%s",
+			terminal.AdmissionReceiptJSON(),
+			terminal.TerminalReceiptJSON(),
+		)
+	}
 	if daemon.seenStream == nil || daemon.seenStream.GetFunctionName() != "er.weather" {
 		t.Fatalf("daemon did not receive stream request")
 	}
@@ -448,8 +598,7 @@ func TestDirectRuntimeStreamDeadlineIsTypedTimeout(t *testing.T) {
 		InvokeTimeoutMS: 50,
 	})
 	defer cleanup()
-	daemon.streamDelay = time.Second
-	daemon.streamStarted = make(chan struct{})
+	streamStarted := daemon.configureStreamTiming(time.Second)
 
 	client, err := NewRuntimeClient(transport)
 	if err != nil {
@@ -460,7 +609,7 @@ func TestDirectRuntimeStreamDeadlineIsTypedTimeout(t *testing.T) {
 		t.Fatalf("InvokeStream open before deadline observation: %v", err)
 	}
 	select {
-	case <-daemon.streamStarted:
+	case <-streamStarted:
 	case <-time.After(time.Second):
 		t.Fatalf("deadline test did not dispatch the runtime stream")
 	}
@@ -472,8 +621,7 @@ func TestDirectRuntimeStreamDeadlineIsTypedTimeout(t *testing.T) {
 		t.Fatalf("deadline test did not dispatch the runtime stream")
 	}
 
-	daemon.streamDelay = 0
-	daemon.streamStarted = nil
+	daemon.configureStreamTiming(0)
 	retry, err := client.InvokeStream(context.Background(), directRuntimeDraft(t))
 	if err != nil {
 		t.Fatalf("retry stream after deadline cleanup: %v", err)
@@ -553,6 +701,9 @@ func TestDirectRuntimeTransportBidiOverUnixSocket(t *testing.T) {
 	if !terminal.Terminal() || session.State() != BidiTerminal {
 		t.Fatalf("terminal = %v state %s", terminal.Terminal(), session.State())
 	}
+	if len(terminal.AdmissionReceiptJSON()) == 0 {
+		t.Fatal("terminal bidi frame omitted cached admission receipt")
+	}
 	terminalFrame, err := session.TerminalFrame()
 	if err != nil {
 		t.Fatalf("TerminalFrame: %v", err)
@@ -569,8 +720,8 @@ func TestDirectRuntimeTransportBidiOverUnixSocket(t *testing.T) {
 	if len(daemon.seenBidi) < 2 || daemon.seenBidi[0].GetEnvelopeOpen() == nil {
 		t.Fatalf("daemon did not receive bidi open and data frames")
 	}
-	if got := daemon.seenBidi[0].GetEnvelopeOpen().GetMetadata()[directSignedDescriptorRefMetadata]; got != directRuntimeDraft(t).DescriptorRef() {
-		t.Fatalf("signed descriptor metadata = %q", got)
+	if got := daemon.seenBidi[0].GetEnvelopeOpen().GetTarget().GetAbility().GetAbilityName(); got != directRuntimeDraft(t).DescriptorRef() {
+		t.Fatalf("descriptor-bound target = %q", got)
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("Close bidi: %v", err)
@@ -583,8 +734,7 @@ func TestDirectRuntimeBidiDeadlineIsTypedTimeout(t *testing.T) {
 		InvokeTimeoutMS: 50,
 	})
 	defer cleanup()
-	daemon.bidiDelay = time.Second
-	daemon.bidiStarted = make(chan struct{})
+	bidiStarted := daemon.configureBidiTiming(time.Second)
 
 	client, err := NewRuntimeClient(transport)
 	if err != nil {
@@ -595,7 +745,7 @@ func TestDirectRuntimeBidiDeadlineIsTypedTimeout(t *testing.T) {
 		t.Fatalf("OpenBidi before deadline observation: %v", err)
 	}
 	select {
-	case <-daemon.bidiStarted:
+	case <-bidiStarted:
 	case <-time.After(time.Second):
 		t.Fatalf("deadline test did not dispatch the runtime bidi open")
 	}
@@ -607,8 +757,7 @@ func TestDirectRuntimeBidiDeadlineIsTypedTimeout(t *testing.T) {
 		t.Fatalf("deadline test did not dispatch the runtime bidi open")
 	}
 
-	daemon.bidiDelay = 0
-	daemon.bidiStarted = nil
+	daemon.configureBidiTiming(0)
 	retry, err := client.OpenBidi(context.Background(), directRuntimeDraft(t), []BidiStreamDescriptor{{StreamID: 1, ContentType: "text/plain"}})
 	if err != nil {
 		t.Fatalf("retry bidi after deadline cleanup: %v", err)
@@ -693,7 +842,6 @@ func TestDirectRuntimeTransportDelegatesHandleOperations(t *testing.T) {
 		DialTimeoutMS:        3000,
 		HandleTransport:      handle,
 		CloseHandleTransport: true,
-		Addressing:           NewCanonicalAddressing(),
 	})
 	defer cleanup()
 
@@ -816,7 +964,6 @@ func TestDirectRuntimeConnectorProjectsHandleCapabilities(t *testing.T) {
 			return ControlDiscovery{InvocationEndpoint: endpoint}, nil
 		}),
 		HandleTransport:      handle,
-		Addressing:           directRuntimeIdentityClient(t),
 		CloseHandleTransport: true,
 	})
 	connection, err := NewRuntimeConnection(connector)
@@ -893,9 +1040,6 @@ func openDirectRuntimeTestTransportWithOptions(t *testing.T, options DirectRunti
 	}()
 	if options.DialTimeoutMS == 0 {
 		options.DialTimeoutMS = 3000
-	}
-	if options.Addressing == nil {
-		options.Addressing = directRuntimeIdentityClient(t)
 	}
 	transport, err := OpenDirectRuntimeTransport(context.Background(), socket, options)
 	if err != nil {
@@ -981,17 +1125,43 @@ func directRuntimeDraft(t *testing.T) InvocationDraft {
 
 func directRuntimeDraftWithMetadata(t *testing.T, metadata map[string]any) InvocationDraft {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{
+	return directRuntimeDraftWithMetadataAndSignature(t, metadata, true)
+}
+
+func directRuntimeUnsignedDraft(t *testing.T) InvocationDraft {
+	t.Helper()
+	return directRuntimeDraftWithMetadataAndSignature(
+		t,
+		map[string]any{"trace_id": "direct-unsigned-test"},
+		false,
+	)
+}
+
+func directRuntimeDraftWithMetadataAndSignature(
+	t *testing.T,
+	metadata map[string]any,
+	withSignature bool,
+) InvocationDraft {
+	t.Helper()
+	fields := map[string]any{
 		"caller_ura":     "easynet:///r/example/agent/alice",
 		"callee_ura":     "easynet:///r/example/device/dev-a",
-		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
+		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"subject_ura":    "easynet:///r/example/device/dev-a",
 		"nonce_base64":   "AQIDBAUGBwgJCgsMDQ4PEA==",
 		"causal_context": map[string]any{"form": "none"},
 		"args":           map[string]any{"city": "Singapore"},
 		"content_type":   "application/json",
 		"metadata":       metadata,
-	})
+	}
+	if withSignature {
+		fields["caller_signature"] = map[string]any{
+			"algorithm":        "ed25519",
+			"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x5a}, 64)),
+			"key_id_hint":      "direct-test-key",
+		}
+	}
+	raw, err := json.Marshal(fields)
 	if err != nil {
 		t.Fatalf("marshal draft: %v", err)
 	}
@@ -1007,7 +1177,7 @@ func directRuntimeUserSubjectDraft(t *testing.T) InvocationDraft {
 	raw, err := json.Marshal(map[string]any{
 		"caller_ura":     "easynet:///r/example/user/alice",
 		"callee_ura":     "easynet:///r/example/device/dev-a",
-		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0",
+		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"subject_ura":    "easynet:///r/example/user/alice",
 		"nonce_base64":   "AQIDBAUGBwgJCgsMDQ4PEA==",
 		"causal_context": map[string]any{"form": "none"},
@@ -1032,54 +1202,4 @@ func mustMarshalDirectRuntimeDraft(t *testing.T, draft InvocationDraft) []byte {
 		t.Fatalf("marshal draft: %v", err)
 	}
 	return raw
-}
-
-func directRuntimeIdentityClient(t *testing.T) Addressing {
-	t.Helper()
-	return NewCanonicalAddressing()
-}
-
-func directRuntimeUserSubjectIdentity(t *testing.T) Addressing {
-	t.Helper()
-	return NewCanonicalAddressing()
-}
-
-const directRuntimeUserSubjectResourceURA = "easynet:///r/example/resource/user.alice/invoke/meta.list_resources"
-const directRuntimeUserSubjectPubkeyBase64 = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
-
-const directRuntimeDescriptorProjectionJSON = `{
-  "kind":"descriptor_ref",
-  "valid":true,
-  "descriptor_ref":"easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
-  "ability_ura":"easynet:///r/example/ability/device.dev-a.er.weather",
-  "descriptor_version":"1.0.0",
-  "profile":"easynet-strict-v2",
-  "components":{"owner_ura":"easynet:///r/example/device/dev-a"},
-  "metadata":{"grammar_owner":"axon"}
-}`
-
-const directRuntimeMetaListResourcesDescriptorProjectionJSON = `{
-  "kind":"descriptor_ref",
-  "valid":true,
-  "descriptor_ref":"easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0",
-  "ability_ura":"easynet:///r/example/ability/device.dev-a.meta.list_resources",
-  "descriptor_version":"1.0.0",
-  "profile":"easynet-strict-v2",
-  "components":{"owner_ura":"easynet:///r/example/device/dev-a"},
-  "metadata":{"grammar_owner":"axon"}
-}`
-
-func directRuntimeProjectedSubjectJSON(ura string) string {
-	raw, err := json.Marshal(map[string]any{
-		"kind":       "resource",
-		"valid":      true,
-		"ura":        ura,
-		"profile":    "addressing",
-		"components": map[string]any{"owner_ura": "easynet:///r/example/user/alice"},
-		"metadata":   map[string]any{"source": "direct-runtime-test"},
-	})
-	if err != nil {
-		panic(err)
-	}
-	return string(raw)
 }

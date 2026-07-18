@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	axonsdk "easynet.run/axon/sdk/go/easynet"
 	directorycore "easynet.run/cli/sdk/go/directorycore"
 )
 
@@ -14,11 +13,6 @@ const (
 	MaxDirectoryPageLimit     uint32 = 500
 	maxDirectoryCursorLen            = 4096
 )
-
-type DirectoryEntry = axonsdk.DirectoryEntry
-type DirectoryEvent = axonsdk.DirectoryEvent
-type DirectoryAgentSummary = axonsdk.DirectoryAgentSummary
-type DirectorySigningAuthority = axonsdk.DirectorySigningAuthority
 
 type DirectoryResolveKind = directorycore.ResolveKind
 
@@ -190,7 +184,7 @@ func (s *DirectorySubscription) Next(ctx context.Context) (DirectoryEventEnvelop
 		s.state = DirectorySubscriptionClosed
 		return DirectoryEventEnvelope{Cursor: s.cursor, Terminal: true}, nil
 	}
-	projection, err := axonsdk.ParseDirectoryEvent(event.PayloadJSON())
+	projection, err := ParseDirectoryEvent(event.PayloadJSON())
 	if err != nil {
 		s.state = DirectorySubscriptionFailed
 		return DirectoryEventEnvelope{}, invalidDirectory("decode Axon Directory event", err)

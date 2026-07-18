@@ -3,11 +3,16 @@ package easynet
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
+
+	axoninv "axon.run/sdk/go/axon/invocation"
 )
 
 func completeDraftForRuntimeTest(t *testing.T) InvocationDraft {
@@ -29,6 +34,89 @@ func completeDraftForRuntimeTest(t *testing.T) InvocationDraft {
 }
 
 const runtimeTestDescriptorRef = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+
+func canonicalRuntimeReceiptFixture(
+	invocationID string,
+	receiptType string,
+	state string,
+	index uint64,
+) map[string]any {
+	proofPayload := []byte("canonical-runtime-test-proof")
+	proofHash := sha256.Sum256(proofPayload)
+	return map[string]any{
+		"receipt_ura":             fmt.Sprintf("easynet:///r/example/resource/runtime/invocation/%s/receipt/%d", invocationID, index),
+		"invocation_id":           invocationID,
+		"receipt_type":            receiptType,
+		"state":                   state,
+		"index":                   index,
+		"timestamp_unix_ms":       1_783_100_000_000 + index,
+		"prev_receipt_hash_hex":   strings.Repeat("00", 32),
+		"self_hash_hex":           fmt.Sprintf("%064x", index+1),
+		"cleanup_complete":        normalizeRuntimeReceiptState(state) != "admitted",
+		"caller_binding":          map[string]any{"ura": "easynet:///r/example/agent/alice.sdk", "profile": "easynet-strict-v2"},
+		"callee_binding":          map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "easynet-strict-v2"},
+		"subject_binding":         map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "easynet-strict-v2"},
+		"invocation_nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+		"causal_binding_kind":     "none",
+		"causal_binding":          map[string]any{"form": "none"},
+		"callee_signature": map[string]any{
+			"algorithm":        "ed25519",
+			"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x71}, 64)),
+		},
+		"signer_binding":         map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "easynet-strict-v2"},
+		"authority_binding_kind": "self",
+		"authority_binding": map[string]any{
+			"kind":          "self",
+			"principal_ura": "easynet:///r/example/device/dev-a",
+		},
+		"ability_binding": runtimeTestDescriptorRef,
+		"subject_ref": map[string]any{
+			"kind":    1,
+			"ura":     "easynet:///r/example/device/dev-a",
+			"profile": "easynet-strict-v2",
+		},
+		"descriptor_version": "1.0.0",
+		"schema_hash_hex":    strings.Repeat("11", 32),
+		"impl_hash_hex":      strings.Repeat("22", 32),
+		"runtime_env":        "go-test",
+		"authority_proof": map[string]any{
+			"proof_type":   "self",
+			"binding_kind": "self",
+			"binding": map[string]any{
+				"kind":          "self",
+				"principal_ura": "easynet:///r/example/device/dev-a",
+			},
+			"proof_payload_base64": base64.StdEncoding.EncodeToString(proofPayload),
+			"proof_hash_hex":       fmt.Sprintf("%x", proofHash),
+			"issuer":               map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "easynet-strict-v2"},
+			"signature": map[string]any{
+				"algorithm":        "ed25519",
+				"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x72}, 64)),
+			},
+			"admission_hook": "test.runtime.admission",
+		},
+		"input_hash_hex":  strings.Repeat("33", 32),
+		"output_hash_hex": strings.Repeat("44", 32),
+		"parent_receipts": []any{},
+	}
+}
+
+func canonicalRuntimeReceiptPairFixture(invocationID, terminalState string) (map[string]any, map[string]any) {
+	terminalTypes := map[string]string{
+		"completed": "completed",
+		"failed":    "failed",
+		"timedout":  "timed_out",
+		"cancelled": "cancelled",
+	}
+	terminalType, ok := terminalTypes[normalizeRuntimeReceiptState(terminalState)]
+	if !ok {
+		panic("unsupported terminal fixture state " + terminalState)
+	}
+	admission := canonicalRuntimeReceiptFixture(invocationID, "admitted", "Admitted", 0)
+	terminal := canonicalRuntimeReceiptFixture(invocationID, terminalType, terminalState, 1)
+	terminal["prev_receipt_hash_hex"] = admission["self_hash_hex"]
+	return admission, terminal
+}
 
 func signedForRuntimeTest(t *testing.T) SignedInvocation {
 	t.Helper()
@@ -236,12 +324,18 @@ func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
 
 func TestRuntimeClientPrepareSigningMaterialUsesStatelessTransportContract(t *testing.T) {
 	var seenOptions map[string]any
+	statelessFixture := strings.Replace(
+		preparedFixture,
+		`  "prepared_id": "prepared-example-1",`,
+		`  "canonical_hash_hex": "87de60e0170dac6e11364521ccda53e9e2b8deaec4d0fa209b85f7a12c5260af",`,
+		1,
+	)
 	client, err := NewRuntimeClient(RuntimeTransportFunc{
 		PrepareFunc: func(_ context.Context, _ []byte, optionsJSON []byte) ([]byte, error) {
 			if err := json.Unmarshal(optionsJSON, &seenOptions); err != nil {
 				t.Fatalf("options JSON: %v", err)
 			}
-			return []byte(strings.Replace(preparedFixture, "  \"prepared_id\": \"prepared-example-1\",\n", "", 1)), nil
+			return []byte(statelessFixture), nil
 		},
 	})
 	if err != nil {
@@ -258,7 +352,10 @@ func TestRuntimeClientPrepareSigningMaterialUsesStatelessTransportContract(t *te
 	if material.CanonicalBytesBase64() == "" {
 		t.Fatal("canonical signing material is missing")
 	}
-	if _, err := NewPreparedInvocationFromJSON([]byte(strings.Replace(preparedFixture, "  \"prepared_id\": \"prepared-example-1\",\n", "", 1))); err == nil {
+	if material.CanonicalHashHex() != "87de60e0170dac6e11364521ccda53e9e2b8deaec4d0fa209b85f7a12c5260af" {
+		t.Fatalf("canonical hash = %q", material.CanonicalHashHex())
+	}
+	if _, err := NewPreparedInvocationFromJSON([]byte(statelessFixture)); err == nil {
 		t.Fatal("retained prepared decoder accepted a material-only response")
 	}
 	if seenOptions["material_only"] != true ||
@@ -268,61 +365,43 @@ func TestRuntimeClientPrepareSigningMaterialUsesStatelessTransportContract(t *te
 	}
 }
 
+func TestRuntimeClientPrepareSigningMaterialRejectsCanonicalCommitmentMismatch(t *testing.T) {
+	mismatched := strings.Replace(
+		preparedFixture,
+		`  "prepared_id": "prepared-example-1",`,
+		`  "canonical_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",`,
+		1,
+	)
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		PrepareFunc: func(context.Context, []byte, []byte) ([]byte, error) {
+			return []byte(mismatched), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	if _, err := client.PrepareSigningMaterial(
+		context.Background(),
+		completeDraftForRuntimeTest(t),
+		PrepareOptions{ExpiresInMS: 60_000},
+	); !IsCode(err, ErrInvalidArgument) ||
+		!strings.Contains(err.Error(), "canonical_hash_hex does not match canonical_bytes_base64") {
+		t.Fatalf("canonical commitment mismatch error = %v, want canonical hash mismatch", err)
+	}
+}
+
 func TestRuntimeReceiptProofFactsRequired(t *testing.T) {
-	receipt, err := NewRuntimeReceiptFromJSON([]byte(`{
-		"index": 1,
-		"invocation_id": "inv-1",
-		"receipt_type": "completed",
-		"state": "completed",
-		"timestamp_unix_ms": 1700000000000,
-		"prev_receipt_hash_hex": "` + strings.Repeat("00", 32) + `",
-		"self_hash_hex": "` + strings.Repeat("aa", 32) + `",
-		"causal_binding_kind": "scalar",
-		"causal_binding": {
-			"form": "scalar",
-			"receipt": {
-				"receipt_hash_hex": "` + strings.Repeat("bb", 32) + `",
-				"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/root/receipt"
-			}
+	fixture := canonicalRuntimeReceiptFixture("inv-1", "terminal", "Completed", 1)
+	fixture["self_hash_hex"] = strings.Repeat("aa", 32)
+	fixture["causal_binding_kind"] = "scalar"
+	fixture["causal_binding"] = map[string]any{
+		"form": "scalar",
+		"receipt": map[string]any{
+			"receipt_hash_hex": strings.Repeat("bb", 32),
+			"receipt_ura":      "easynet:///r/example/resource/agent.alice.sdk/invocation/root/receipt",
 		},
-		"caller_binding": {"ura": "easynet:///r/example/agent/alice.sdk"},
-		"callee_binding": {"ura": "easynet:///r/example/device/dev-a"},
-		"subject_binding": {"ura": "easynet:///r/example/device/dev-a"},
-		"invocation_nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
-		"callee_signature": {
-			"algorithm": "ed25519",
-			"signature_base64": "Y2FsbGVlLXNpZw=="
-		},
-		"signer_binding": {"ura": "easynet:///r/example/agent/dev-a.signer"},
-		"authority_binding_kind": "delegation",
-		"authority_binding": {
-			"kind": "delegation",
-			"issuer_ura": "easynet:///r/example/agent/issuer",
-			"subject_ura": "easynet:///r/example/resource/subject",
-			"caller_ura": "easynet:///r/example/agent/alice.sdk",
-			"audience": "runtime",
-			"scopes": ["invoke"]
-		},
-		"ability_binding": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
-		"descriptor_version": "1.0.0",
-		"schema_hash_hex": "` + strings.Repeat("11", 32) + `",
-		"impl_hash_hex": "` + strings.Repeat("22", 32) + `",
-		"runtime_env": "native",
-		"authority_proof": {
-			"proof_type": "admission",
-			"binding_kind": "delegation",
-			"proof_payload_base64": "cHJvb2Y=",
-			"proof_hash_hex": "` + strings.Repeat("33", 32) + `",
-			"issuer": {"ura": "easynet:///r/example/agent/issuer"},
-			"signature": {
-				"algorithm": "ed25519",
-				"signature_base64": "cHJvb2Ytc2ln"
-			}
-		},
-		"input_hash_hex": "` + strings.Repeat("44", 32) + `",
-		"output_hash_hex": "` + strings.Repeat("55", 32) + `",
-		"parent_receipts": []
-	}`))
+	}
+	receipt, err := NewRuntimeReceiptFromJSON(mustJSON(fixture))
 	if err != nil {
 		t.Fatalf("NewRuntimeReceiptFromJSON: %v", err)
 	}
@@ -339,33 +418,128 @@ func TestRuntimeReceiptProofFactsRequired(t *testing.T) {
 	if receipt.CausalBindingKind != "scalar" || receipt.CausalBinding["form"] != "scalar" {
 		t.Fatalf("causal binding not decoded: %#v", receipt.CausalBinding)
 	}
-	if receipt.AuthorityBindingKind != "delegation" || receipt.AuthorityBinding["kind"] != "delegation" {
+	if receipt.AuthorityBindingKind != "self" || receipt.AuthorityBinding["kind"] != "self" {
 		t.Fatalf("authority binding not decoded: %#v", receipt.AuthorityBinding)
 	}
 
-	if _, err := NewRuntimeReceiptFromJSON([]byte(`{
-		"index": 1,
-		"invocation_id": "inv-1",
-		"receipt_type": "completed",
-		"state": "completed",
-		"timestamp_unix_ms": 1700000000000,
-		"prev_receipt_hash_hex": "` + strings.Repeat("00", 32) + `",
-		"self_hash_hex": "` + strings.Repeat("aa", 32) + `"
-	}`)); err == nil {
+	incomplete := canonicalRuntimeReceiptFixture("inv-1", "terminal", "Completed", 1)
+	delete(incomplete, "authority_proof")
+	if _, err := NewRuntimeReceiptFromJSON(mustJSON(incomplete)); err == nil {
 		t.Fatal("NewRuntimeReceiptFromJSON accepted receipt without proof facts")
 	}
 }
 
 func TestRuntimeReceiptRejectsMalformedSummaryHash(t *testing.T) {
-	if _, err := NewRuntimeReceiptFromJSON([]byte(`{
-		"index": 1,
-		"invocation_id": "inv-1",
-		"receipt_type": "completed",
-		"timestamp_unix_ms": 1700000000000,
-		"prev_receipt_hash_hex": "` + strings.Repeat("00", 32) + `",
-		"self_hash_hex": "aa"
-	}`)); err == nil {
+	fixture := canonicalRuntimeReceiptFixture("inv-1", "terminal", "Completed", 1)
+	fixture["self_hash_hex"] = "aa"
+	if _, err := NewRuntimeReceiptFromJSON(mustJSON(fixture)); err == nil {
 		t.Fatal("NewRuntimeReceiptFromJSON accepted short self hash")
+	}
+}
+
+func TestRuntimeReceiptRejectsMalformedCanonicalProofFacts(t *testing.T) {
+	tests := map[string]func(map[string]any){
+		"invalid nonce": func(receipt map[string]any) {
+			receipt["invocation_nonce_base64"] = "not-base64"
+		},
+		"missing parent binding": func(receipt map[string]any) {
+			receipt["parent_receipts"] = nil
+		},
+		"malformed parent hash": func(receipt map[string]any) {
+			receipt["parent_receipts"] = []any{map[string]any{
+				"receipt_hash_hex": "aa",
+				"receipt_ura":      "easynet:///r/example/resource/parent",
+			}}
+		},
+		"mismatched proof hash": func(receipt map[string]any) {
+			proof := receipt["authority_proof"].(map[string]any)
+			proof["proof_hash_hex"] = strings.Repeat("ff", 32)
+		},
+		"mismatched authority kind": func(receipt map[string]any) {
+			proof := receipt["authority_proof"].(map[string]any)
+			proof["binding_kind"] = "delegation"
+		},
+		"missing proof binding": func(receipt map[string]any) {
+			proof := receipt["authority_proof"].(map[string]any)
+			delete(proof, "binding")
+		},
+		"mismatched proof binding": func(receipt map[string]any) {
+			proof := receipt["authority_proof"].(map[string]any)
+			proof["binding"] = map[string]any{
+				"kind":          "self",
+				"principal_ura": "easynet:///r/example/device/other",
+			}
+		},
+		"missing admission hook": func(receipt map[string]any) {
+			proof := receipt["authority_proof"].(map[string]any)
+			delete(proof, "admission_hook")
+		},
+		"issuer does not match callee": func(receipt map[string]any) {
+			proof := receipt["authority_proof"].(map[string]any)
+			proof["issuer"] = map[string]any{
+				"ura":     "easynet:///r/example/device/other",
+				"profile": "easynet-strict-v2",
+			}
+		},
+		"invalid identity profile": func(receipt map[string]any) {
+			receipt["caller_binding"].(map[string]any)["profile"] = "test"
+		},
+		"hosted signer without attestation": func(receipt map[string]any) {
+			receipt["signer_binding"] = map[string]any{
+				"ura":     "easynet:///r/example/device/runtime-host",
+				"profile": "easynet-strict-v2",
+			}
+		},
+		"self signer with attestation": func(receipt map[string]any) {
+			receipt["host_attestation_base64"] = base64.StdEncoding.EncodeToString(
+				bytes.Repeat([]byte{0x73}, 64),
+			)
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			fixture := canonicalRuntimeReceiptFixture("inv-1", "terminal", "Completed", 1)
+			mutate(fixture)
+			if _, err := NewRuntimeReceiptFromJSON(mustJSON(fixture)); !IsCode(err, ErrInvalidArgument) {
+				t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+			}
+		})
+	}
+}
+
+func TestRuntimeReceiptRejectsTypedProjectionThatDiffersFromRaw(t *testing.T) {
+	receipt, err := NewRuntimeReceiptFromJSON(
+		mustJSON(canonicalRuntimeReceiptFixture("inv-raw", "completed", "Completed", 1)),
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeReceiptFromJSON: %v", err)
+	}
+	receipt.State = "Failed"
+
+	if err := receipt.ValidateSummary(); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("ValidateSummary error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestRuntimeReceiptAcceptsBindingHashProofWithoutPayloadOrSignature(t *testing.T) {
+	fixture := canonicalRuntimeReceiptFixture("inv-empty-proof", "completed", "Completed", 1)
+	proof := fixture["authority_proof"].(map[string]any)
+	proof["proof_payload_base64"] = ""
+	proofHash := axoninv.AuthorityBindingProofHash(
+		axoninv.SelfAuthority("easynet:///r/example/device/dev-a"),
+	)
+	proof["proof_hash_hex"] = hex.EncodeToString(proofHash[:])
+	delete(proof, "signature")
+
+	receipt, err := NewRuntimeReceiptFromJSON(mustJSON(fixture))
+	if err != nil {
+		t.Fatalf("NewRuntimeReceiptFromJSON: %v", err)
+	}
+	if receipt.AuthorityProof == nil || receipt.AuthorityProof.ProofPayloadBase64 != "" {
+		t.Fatalf("unexpected authority proof projection: %#v", receipt.AuthorityProof)
+	}
+	if receipt.AuthorityProof.Signature != nil {
+		t.Fatalf("optional authority proof signature was synthesized: %#v", receipt.AuthorityProof.Signature)
 	}
 }
 
@@ -536,20 +710,24 @@ func TestRuntimeClientInvokeReturnsTypedResult(t *testing.T) {
 			if err := json.Unmarshal(draftJSON, &seenDraft); err != nil {
 				t.Fatalf("draft JSON: %v", err)
 			}
-			return []byte(fmt.Sprintf(`{
-				"ok": true,
-				"tuple": %s,
-				"invocation_id": "inv-runtime-1",
-				"terminal_state": "Completed",
+			admission, terminal := canonicalRuntimeReceiptPairFixture("inv-runtime-1", "Completed")
+			admission["receipt_id"] = "receipt-1-admission"
+			terminal["receipt_id"] = "receipt-1"
+			return mustJSON(map[string]any{
+				"ok":                  true,
+				"tuple":               seenDraft,
+				"invocation_id":       "inv-runtime-1",
+				"terminal_state":      "Completed",
 				"output_content_type": "application/json",
-				"output_base64": "eyJyZWFkeSI6dHJ1ZX0=",
-				"output_json": {"ready": true},
-					"selected_node_id": "node-a",
-					"scheduling_reason": "direct",
-					"elapsed_ms": 12,
-					"terminal_receipt": {"receipt_id": "receipt-1"},
-					"error": null
-				}`, draftJSON)), nil
+				"output_base64":       "eyJyZWFkeSI6dHJ1ZX0=",
+				"output_json":         map[string]any{"ready": true},
+				"selected_node_id":    "node-a",
+				"scheduling_reason":   "direct",
+				"elapsed_ms":          12,
+				"admission_receipt":   admission,
+				"terminal_receipt":    terminal,
+				"error":               nil,
+			}), nil
 		},
 		PrepareFunc: func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
 			t.Fatalf("Prepare should not be called")
@@ -580,24 +758,22 @@ func TestRuntimeClientInvokeReturnsTypedResult(t *testing.T) {
 	if seenDraft["descriptor_ref"] == "" {
 		t.Fatalf("draft not sent to transport: %#v", seenDraft)
 	}
-	if string(result.OutputJSON()) != `{"ready": true}` {
+	if string(result.OutputJSON()) != `{"ready":true}` {
 		t.Fatalf("output JSON not preserved: %s", result.OutputJSON())
 	}
 }
 
 func TestInvocationResultSeparatesAdmissionAndTerminalReceipts(t *testing.T) {
-	draftJSON, err := json.Marshal(completeDraftForRuntimeTest(t))
-	if err != nil {
-		t.Fatalf("marshal draft: %v", err)
-	}
-	raw := []byte(fmt.Sprintf(`{
-			"ok":true,
-			"tuple":%s,
-			"terminal_state":"Completed",
-			"admission_receipt":{"index":0,"state":"Admitted"},
-			"terminal_receipt":{"index":1,"state":"Completed"},
-			"error":null
-	}`, draftJSON))
+	admission, terminal := canonicalRuntimeReceiptPairFixture("inv-1", "Completed")
+	raw := mustJSON(map[string]any{
+		"ok":                true,
+		"tuple":             completeDraftForRuntimeTest(t),
+		"invocation_id":     "inv-1",
+		"terminal_state":    "Completed",
+		"admission_receipt": admission,
+		"terminal_receipt":  terminal,
+		"error":             nil,
+	})
 	result, err := NewInvocationResultFromJSON(raw)
 	if err != nil {
 		t.Fatalf("NewInvocationResultFromJSON: %v", err)
@@ -615,9 +791,200 @@ func TestInvocationResultSeparatesAdmissionAndTerminalReceipts(t *testing.T) {
 		t.Fatalf("admission receipt summary = %#v", summary)
 	}
 
-	legacyOnly := bytes.Replace(raw, []byte(`"terminal_receipt":{"index":1,"state":"Completed"}`), []byte(`"receipt":{"index":1,"state":"Completed"}`), 1)
+	var legacy map[string]any
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	legacy["receipt"] = legacy["terminal_receipt"]
+	delete(legacy, "terminal_receipt")
+	legacyOnly := mustJSON(legacy)
 	if _, err := NewInvocationResultFromJSON(legacyOnly); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("legacy receipt-only field error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestInvocationResultAllowsOnlyTypedReceiptFreePreAdmissionFailure(t *testing.T) {
+	draftJSON, err := json.Marshal(completeDraftForRuntimeTest(t))
+	if err != nil {
+		t.Fatalf("marshal draft: %v", err)
+	}
+	allowed := []string{
+		"global_admission",
+		"caller_authentication",
+		"authority_validation",
+		"bootstrap_authorization",
+		"quota",
+		"ability_resolution",
+		"ability_policy",
+		"request_validation",
+	}
+	for _, stage := range allowed {
+		raw := []byte(fmt.Sprintf(`{
+			"ok": false,
+			"tuple": %s,
+			"terminal_state": "Failed",
+			"admission_receipt": null,
+			"terminal_receipt": null,
+			"error": {
+				"code": "ADMISSION_DENIED",
+				"stage": %q,
+				"message": "rejected before admission",
+				"retryable": false
+			}
+		}`, draftJSON, stage))
+		result, err := NewInvocationResultFromJSON(raw)
+		if err != nil {
+			t.Fatalf("stage %q: %v", stage, err)
+		}
+		if result.OK() || result.TerminalState() != "Failed" ||
+			result.AdmissionReceipt() != nil || result.TerminalReceipt() != nil {
+			t.Fatalf("stage %q decoded invalid result: %#v", stage, result)
+		}
+	}
+}
+
+func TestInvocationResultRejectsNonCanonicalReceiptTopology(t *testing.T) {
+	draftJSON, err := json.Marshal(completeDraftForRuntimeTest(t))
+	if err != nil {
+		t.Fatalf("marshal draft: %v", err)
+	}
+	failure := `"error":{
+		"code":"ADMISSION_DENIED",
+		"stage":"global_admission",
+		"message":"rejected",
+		"retryable":false
+	}`
+	tests := map[string]string{
+		"successful receipt free": fmt.Sprintf(`{
+			"ok":true,
+			"tuple":%s,
+			"terminal_state":"Completed",
+			"admission_receipt":null,
+			"terminal_receipt":null,
+			"error":null
+		}`, draftJSON),
+		"wrong receipt free state": fmt.Sprintf(`{
+			"ok":false,
+			"tuple":%s,
+			"terminal_state":"Cancelled",
+			"admission_receipt":null,
+			"terminal_receipt":null,
+			%s
+		}`, draftJSON, failure),
+		"admission only": fmt.Sprintf(`{
+			"ok":false,
+			"tuple":%s,
+			"terminal_state":"Failed",
+			"admission_receipt":{"index":1,"state":"Admitted"},
+			"terminal_receipt":null,
+			%s
+		}`, draftJSON, failure),
+		"terminal only": fmt.Sprintf(`{
+			"ok":true,
+			"tuple":%s,
+			"terminal_state":"Completed",
+			"admission_receipt":null,
+			"terminal_receipt":{"index":2,"state":"Completed"},
+			"error":null
+		}`, draftJSON),
+	}
+	for _, stage := range []string{"execution", "transport", "unspecified", "Execution", ""} {
+		tests["receipt free stage "+stage] = fmt.Sprintf(`{
+			"ok":false,
+			"tuple":%s,
+			"terminal_state":"Failed",
+			"admission_receipt":null,
+			"terminal_receipt":null,
+			"error":{
+				"code":"ADMISSION_DENIED",
+				"stage":%q,
+				"message":"rejected",
+				"retryable":false
+			}
+		}`, draftJSON, stage)
+	}
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewInvocationResultFromJSON([]byte(raw)); !IsCode(err, ErrInvalidArgument) {
+				t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+			}
+		})
+	}
+}
+
+func TestInvocationResultRejectsConflictingCanonicalReceiptBindings(t *testing.T) {
+	tests := map[string]func(map[string]any, map[string]any){
+		"admission state": func(admission, _ map[string]any) {
+			admission["state"] = "Running"
+		},
+		"admission receipt type": func(admission, _ map[string]any) {
+			admission["receipt_type"] = "completed"
+		},
+		"terminal state": func(_, terminal map[string]any) {
+			terminal["state"] = "Failed"
+		},
+		"terminal receipt type": func(_, terminal map[string]any) {
+			terminal["receipt_type"] = "failed"
+		},
+		"terminal index": func(_, terminal map[string]any) {
+			terminal["index"] = 0
+		},
+		"terminal cleanup": func(_, terminal map[string]any) {
+			terminal["cleanup_complete"] = false
+		},
+		"terminal timestamp": func(_, terminal map[string]any) {
+			terminal["timestamp_unix_ms"] = 0
+		},
+		"invocation binding": func(_, terminal map[string]any) {
+			terminal["invocation_id"] = "other"
+		},
+		"caller binding": func(_, terminal map[string]any) {
+			terminal["caller_binding"] = map[string]any{
+				"ura": "easynet:///r/example/agent/other",
+			}
+		},
+		"host attestation": func(_, terminal map[string]any) {
+			terminal["host_attestation_base64"] = base64.StdEncoding.EncodeToString([]byte("other-host"))
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			admission, terminal := canonicalRuntimeReceiptPairFixture("inv-1", "Completed")
+			mutate(admission, terminal)
+			raw := mustJSON(map[string]any{
+				"ok":                true,
+				"tuple":             completeDraftForRuntimeTest(t),
+				"invocation_id":     "inv-1",
+				"terminal_state":    "Completed",
+				"admission_receipt": admission,
+				"terminal_receipt":  terminal,
+				"error":             nil,
+			})
+			if _, err := NewInvocationResultFromJSON(raw); !IsCode(err, ErrInvalidArgument) {
+				t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+			}
+		})
+	}
+}
+
+func TestInvocationResultAcceptsNonAdjacentFinalizationCheckpoints(t *testing.T) {
+	admission, terminal := canonicalRuntimeReceiptPairFixture("inv-checkpoints", "Completed")
+	admission["index"] = uint64(1)
+	admission["prev_receipt_hash_hex"] = strings.Repeat("aa", 32)
+	terminal["index"] = uint64(7)
+	terminal["prev_receipt_hash_hex"] = strings.Repeat("bb", 32)
+
+	raw := mustJSON(map[string]any{
+		"ok":                true,
+		"tuple":             completeDraftForRuntimeTest(t),
+		"invocation_id":     "inv-checkpoints",
+		"terminal_state":    "Completed",
+		"admission_receipt": admission,
+		"terminal_receipt":  terminal,
+		"error":             nil,
+	})
+	if _, err := NewInvocationResultFromJSON(raw); err != nil {
+		t.Fatalf("non-adjacent canonical finalization checkpoints: %v", err)
 	}
 }
 
@@ -740,17 +1107,24 @@ func TestRuntimeClientHandleObservationDelegatesToTransport(t *testing.T) {
 		},
 		AwaitHandleFunc: func(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
 			seenAwaitID = control.adapterHandleID()
-			return []byte(fmt.Sprintf(`{
-				"ok": true,
-				"tuple": %s,
-				"terminal_state": "Completed",
+			var draft map[string]any
+			if err := json.Unmarshal(draftJSON, &draft); err != nil {
+				return nil, err
+			}
+			admission, terminal := canonicalRuntimeReceiptPairFixture("inv-await-1", "Completed")
+			return mustJSON(map[string]any{
+				"ok":                  true,
+				"tuple":               draft,
+				"invocation_id":       "inv-await-1",
+				"terminal_state":      "Completed",
 				"output_content_type": "application/json",
-				"output_base64": "e30=",
-				"output_json": {},
-				"elapsed_ms": 8,
-				"terminal_receipt": null,
-				"error": null
-			}`, draftJSON)), nil
+				"output_base64":       "e30=",
+				"output_json":         map[string]any{},
+				"elapsed_ms":          8,
+				"admission_receipt":   admission,
+				"terminal_receipt":    terminal,
+				"error":               nil,
+			}), nil
 		},
 		CancelHandleFunc: func(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error) {
 			if control.adapterHandleID() != 7 {

@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	axonsdk "easynet.run/axon/sdk/go/easynet"
-	axoninv "easynet.run/axon/sdk/go/easynet/invocation"
+	axonsdk "axon.run/sdk/go/axon"
+	axoninv "axon.run/sdk/go/axon/invocation"
 )
 
 const (
@@ -259,15 +259,26 @@ func (c *ReceiptClient) Trace(ctx context.Context, request ReceiptTraceRequest) 
 	return c.provider.Trace(ctx, request)
 }
 
-func (c *ReceiptClient) Verify(receipt *axoninv.InvocationReceipt, resolver axoninv.KeyResolver) (axoninv.VerifiedReceipt, error) {
+func (c *ReceiptClient) Verify(receipt *axoninv.SignedInvocationReceipt, resolver axoninv.KeyResolver) (axoninv.VerifiedReceipt, error) {
 	if receipt == nil || resolver == nil {
 		return axoninv.VerifiedReceipt{}, invalidReceipt("receipt and key resolver are required", nil)
 	}
 	return receipt.Verify(resolver)
 }
 
-func (c *ReceiptClient) VerifyChain(receipts []*axoninv.InvocationReceipt) axoninv.ChainCheckResult {
-	return axoninv.VerifyReceiptChain(receipts)
+func (c *ReceiptClient) VerifyChain(receipts []*axoninv.SignedInvocationReceipt) axoninv.ChainCheckResult {
+	verified := make([]axoninv.SignedInvocationReceipt, 0, len(receipts))
+	for index, receipt := range receipts {
+		if receipt == nil {
+			return axoninv.ChainCheckResult{
+				OK:          false,
+				BrokenIndex: int64(index),
+				Detail:      "nil signed receipt",
+			}
+		}
+		verified = append(verified, *receipt)
+	}
+	return axoninv.VerifyReceiptChain(verified)
 }
 
 type RuntimeReceiptProvider struct {

@@ -7,15 +7,15 @@ from enum import StrEnum
 from typing import Mapping
 
 from .connection import ConnectOptions
-from .daemon import (
+from .runtime_lifecycle import (
     AttachOptions,
-    DiscoverOptions,
     Endpoints,
     RuntimeHandle,
+    RuntimeHostDiscoverOptions,
+    RuntimeHostStartRequest,
     RuntimeLifecycle,
     RuntimeLifecycleState,
     RuntimeStatus,
-    StartConfig,
     StopOptions,
 )
 from .errors import ErrorCode, RetryHint, SDKError
@@ -121,10 +121,12 @@ class RuntimeAdminClient:
         self._lifecycle = lifecycle
         self._health = health
 
-    def discover(self, options: DiscoverOptions = DiscoverOptions()) -> Endpoints:
+    def discover(
+        self, options: RuntimeHostDiscoverOptions = RuntimeHostDiscoverOptions()
+    ) -> Endpoints:
         return self._lifecycle.discover(options)
 
-    def start(self, config: StartConfig) -> RuntimeHandle:
+    def start(self, config: RuntimeHostStartRequest) -> RuntimeHandle:
         return self._lifecycle.start(config)
 
     def attach(self, options: AttachOptions = AttachOptions()) -> RuntimeHandle:

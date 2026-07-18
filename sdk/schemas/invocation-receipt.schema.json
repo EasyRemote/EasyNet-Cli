@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://axon.run/sdk/schemas/invocation-receipt.schema.json",
+  "title": "InvocationReceipt",
+  "description": "A canonical invocation receipt with complete descriptor, authority, proof, hash, and causal binding facts.",
+  "type": "object",
+  "required": [
+    "invocation_id",
+    "receipt_type",
+    "prev_receipt_hash_hex",
+    "self_hash_hex",
+    "caller_binding",
+    "callee_binding",
+    "subject_binding",
+    "invocation_nonce_base64",
+    "causal_binding_kind",
+    "causal_binding",
+    "callee_signature",
+    "signer_binding",
+    "authority_binding_kind",
+    "authority_binding",
+    "ability_binding",
+    "descriptor_version",
+    "schema_hash_hex",
+    "impl_hash_hex",
+    "runtime_env",
+    "authority_proof",
+    "input_hash_hex",
+    "output_hash_hex",
+    "parent_receipts"
+  ],
+  "properties": {
+    "invocation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "receipt_type": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "integer",
+          "minimum": 0
+        }
+      ]
+    },
+    "prev_receipt_hash_hex": {
+      "$ref": "#/$defs/hash"
+    },
+    "self_hash_hex": {
+      "$ref": "#/$defs/hash"
+    },
+    "caller_binding": {
+      "$ref": "#/$defs/agentBinding"
+    },
+    "callee_binding": {
+      "$ref": "#/$defs/agentBinding"
+    },
+    "subject_binding": {
+      "$ref": "#/$defs/subjectBinding"
+    },
+    "invocation_nonce_base64": {
+      "type": "string",
+      "minLength": 1
+    },
+    "causal_binding_kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "causal_binding": {
+      "type": "object"
+    },
+    "callee_signature": {
+      "$ref": "#/$defs/signature"
+    },
+    "signer_binding": {
+      "$ref": "#/$defs/agentBinding"
+    },
+    "authority_binding_kind": {
+      "type": "string",
+      "minLength": 1
+    },
+    "authority_binding": {
+      "type": "object"
+    },
+    "ability_binding": {
+      "type": "string",
+      "minLength": 1
+    },
+    "descriptor_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_hash_hex": {
+      "$ref": "#/$defs/hash"
+    },
+    "impl_hash_hex": {
+      "$ref": "#/$defs/hash"
+    },
+    "runtime_env": {
+      "type": "string",
+      "minLength": 1
+    },
+    "authority_proof": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "proof_type",
+        "binding_kind",
+        "proof_payload_base64",
+        "proof_hash_hex",
+        "issuer",
+        "signature"
+      ],
+      "properties": {
+        "proof_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "binding_kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "proof_payload_base64": {
+          "type": "string",
+          "minLength": 1
+        },
+        "proof_hash_hex": {
+          "$ref": "#/$defs/hash"
+        },
+        "issuer": {
+          "$ref": "#/$defs/agentBinding"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "input_hash_hex": {
+      "$ref": "#/$defs/hash"
+    },
+    "output_hash_hex": {
+      "$ref": "#/$defs/hash"
+    },
+    "parent_receipts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "receipt_hash_hex": {
+            "$ref": "#/$defs/hash"
+          },
+          "receipt_ura": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "receipt_hash_hex"
+            ]
+          },
+          {
+            "required": [
+              "receipt_ura"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "agentBinding": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "ura"
+      ],
+      "properties": {
+        "ura": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile": {
+          "type": "string"
+        }
+      }
+    },
+    "subjectBinding": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "ura"
+      ],
+      "properties": {
+        "ura": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile": {
+          "type": "string"
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "algorithm",
+        "signature_base64"
+      ],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signature_base64": {
+          "type": "string",
+          "minLength": 1
+        },
+        "key_id_hint": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

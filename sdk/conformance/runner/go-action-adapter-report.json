@@ -30,7 +30,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_test.go",
-          "sha256": "98844ab1376dfe87c2662a714567c4fac1e0fde029f4df9e129a0ee03686f5c7"
+          "sha256": "fd452e3a7bf857555e793c21b5cd4bcb1eb9f72b5ae48b86ab332b97a661dfbe"
         }
       ],
       "profile": "runtime_core"
@@ -41,7 +41,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/conformance_test.go",
-          "sha256": "82e0320f3cb27098b50cbe61205991a360424ed50ef664f89343f45ccef20da2"
+          "sha256": "a435f5c596b0bbb14bc6c2725b866c2f7e121330ef4831191aad6b8915358905"
         }
       ],
       "profile": "conformance"
@@ -63,7 +63,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_ability_test.go",
-          "sha256": "836e1e0b5e3e811e77f6d1dea81cad7a9d778aa33755ed1a5a2d574bd9500198"
+          "sha256": "3daf154e18282bfba4954ae04a2988f301a99146603d6e37fead05dbf1e8b265"
         }
       ],
       "profile": "runtime_core"
@@ -96,7 +96,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/conformance_test.go",
-          "sha256": "82e0320f3cb27098b50cbe61205991a360424ed50ef664f89343f45ccef20da2"
+          "sha256": "a435f5c596b0bbb14bc6c2725b866c2f7e121330ef4831191aad6b8915358905"
         }
       ],
       "profile": "backend_cutover"
@@ -107,7 +107,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/conformance_test.go",
-          "sha256": "82e0320f3cb27098b50cbe61205991a360424ed50ef664f89343f45ccef20da2"
+          "sha256": "a435f5c596b0bbb14bc6c2725b866c2f7e121330ef4831191aad6b8915358905"
         }
       ],
       "profile": "backend_cutover"
@@ -118,7 +118,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/bidi_test.go",
-          "sha256": "8872508013b93b53213fbea2fa39471d907cc8092c5873af557a209fe2e47cfb"
+          "sha256": "927ed6f03cea569a60e65f5e8c74930d589af1b77331dc584800ce5e66659b8e"
         }
       ],
       "profile": "runtime_core"
@@ -217,7 +217,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/invocation_canonical_test.go",
-          "sha256": "6ed6c2f1e0bf3769fc4b086590cad5712d83d3457b9ebfda804a3b56c0bcdc87"
+          "sha256": "4c1c8fdddc8a2d80b30569d53ca8163b2cfec7cffc5467f2eadef76bc5a7ef32"
         }
       ],
       "profile": "runtime_core"
@@ -239,7 +239,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/signing_test.go",
-          "sha256": "0ec6bf5efb437da2bbcd6c94889bc7aace984615640edbf04859ce63213e6d3d"
+          "sha256": "4b1c0572580ce5c7963db28c37d8a2a9b256a2856e38772f93f6b46931a947ec"
         }
       ],
       "profile": "runtime_core"
@@ -305,7 +305,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_admin_test.go",
-          "sha256": "200862a5eaead3677de8613cadf0f95ab824ae7134083ee11144dca2a2e95024"
+          "sha256": "cf21ad4cd6e864a362624bff392ad5a5f981015516e15d7167ec595677c9496f"
         }
       ],
       "profile": "runtime_administration"
@@ -327,7 +327,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/signing_test.go",
-          "sha256": "0ec6bf5efb437da2bbcd6c94889bc7aace984615640edbf04859ce63213e6d3d"
+          "sha256": "4b1c0572580ce5c7963db28c37d8a2a9b256a2856e38772f93f6b46931a947ec"
         }
       ],
       "profile": "runtime_core"
@@ -338,7 +338,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_test.go",
-          "sha256": "98844ab1376dfe87c2662a714567c4fac1e0fde029f4df9e129a0ee03686f5c7"
+          "sha256": "fd452e3a7bf857555e793c21b5cd4bcb1eb9f72b5ae48b86ab332b97a661dfbe"
         }
       ],
       "profile": "runtime_core"
@@ -371,7 +371,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/conformance_test.go",
-          "sha256": "82e0320f3cb27098b50cbe61205991a360424ed50ef664f89343f45ccef20da2"
+          "sha256": "a435f5c596b0bbb14bc6c2725b866c2f7e121330ef4831191aad6b8915358905"
         }
       ],
       "profile": "sdk_parity"
@@ -382,7 +382,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/conformance_test.go",
-          "sha256": "82e0320f3cb27098b50cbe61205991a360424ed50ef664f89343f45ccef20da2"
+          "sha256": "a435f5c596b0bbb14bc6c2725b866c2f7e121330ef4831191aad6b8915358905"
         }
       ],
       "profile": "runtime_core"
@@ -419,6 +419,171 @@
         }
       ],
       "profile": "runtime_core"
+    },
+    {
+      "case_id": "bidi/cancel_request",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go",
+          "sha256": "a435f5c596b0bbb14bc6c2725b866c2f7e121330ef4831191aad6b8915358905"
+        }
+      ]
+    },
+    {
+      "case_id": "bidi/deadline_owner",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/direct_runtime_test.go",
+          "sha256": "ee47994beadabb1061057bd49c98adc0028a01f56ed7edb4f22de2ed2dc6228e"
+        }
+      ]
+    },
+    {
+      "case_id": "bidi/dispatch_provider",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/direct_runtime_test.go",
+          "sha256": "ee47994beadabb1061057bd49c98adc0028a01f56ed7edb4f22de2ed2dc6228e"
+        }
+      ]
+    },
+    {
+      "case_id": "bidi/frame0_required",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/direct_runtime_test.go",
+          "sha256": "ee47994beadabb1061057bd49c98adc0028a01f56ed7edb4f22de2ed2dc6228e"
+        }
+      ]
+    },
+    {
+      "case_id": "invocation/receipt_proof_required",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_test.go",
+          "sha256": "fd452e3a7bf857555e793c21b5cd4bcb1eb9f72b5ae48b86ab332b97a661dfbe"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_child_dispatch",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_ability_test.go",
+          "sha256": "3daf154e18282bfba4954ae04a2988f301a99146603d6e37fead05dbf1e8b265"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_deadline_owner",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_ability_direct_test.go",
+          "sha256": "c9a9d79cd38b4ad7fe1c7d16a23f81c247ddfa9c19b9efed1e94df3a1940faaf"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_provider_lifecycle",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_ability_test.go",
+          "sha256": "3daf154e18282bfba4954ae04a2988f301a99146603d6e37fead05dbf1e8b265"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_restart_recover",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_ability_test.go",
+          "sha256": "3daf154e18282bfba4954ae04a2988f301a99146603d6e37fead05dbf1e8b265"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_start_provider",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/native_runtime_test.go",
+          "sha256": "25aad9f5e10b2a90c243cb1a268238ff526b09bc5b55048eccd5f58705eff8ec"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/deadline_owner",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/direct_runtime_test.go",
+          "sha256": "ee47994beadabb1061057bd49c98adc0028a01f56ed7edb4f22de2ed2dc6228e"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/restart_recovery",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_test.go",
+          "sha256": "fd452e3a7bf857555e793c21b5cd4bcb1eb9f72b5ae48b86ab332b97a661dfbe"
+        }
+      ]
+    },
+    {
+      "case_id": "stream/cancel_request",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go",
+          "sha256": "a435f5c596b0bbb14bc6c2725b866c2f7e121330ef4831191aad6b8915358905"
+        }
+      ]
+    },
+    {
+      "case_id": "stream/deadline_owner",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/direct_runtime_test.go",
+          "sha256": "ee47994beadabb1061057bd49c98adc0028a01f56ed7edb4f22de2ed2dc6228e"
+        }
+      ]
+    },
+    {
+      "case_id": "stream/dispatch_provider",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/direct_runtime_test.go",
+          "sha256": "ee47994beadabb1061057bd49c98adc0028a01f56ed7edb4f22de2ed2dc6228e"
+        }
+      ]
     }
   ],
   "schema_version": 2

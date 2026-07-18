@@ -7,30 +7,14 @@ import (
 	"fmt"
 )
 
-// RuntimeMode is the local runtime deployment role.
+// RuntimeMode is an opaque provider-reported runtime host role.
 type RuntimeMode string
 
-// DaemonMode is kept as a source-compatible alias for runtime lifecycle code.
-type DaemonMode = RuntimeMode
-
-// RuntimeHostMode names the runtime-host deployment role in the canonical SDK model.
+// RuntimeHostMode is the canonical runtime-host role projection.
 type RuntimeHostMode = RuntimeMode
-
-const (
-	RuntimeModeDevice RuntimeMode = "device"
-	RuntimeModeHub    RuntimeMode = "hub"
-	RuntimeModeBoth   RuntimeMode = "both"
-
-	ModeDevice = RuntimeModeDevice
-	ModeHub    = RuntimeModeHub
-	ModeBoth   = RuntimeModeBoth
-)
 
 // RuntimeLifecycleState is the SDK runtime lifecycle state projection.
 type RuntimeLifecycleState string
-
-// DaemonLifecycleState is kept as a source-compatible alias.
-type DaemonLifecycleState = RuntimeLifecycleState
 
 const (
 	RuntimeUnknown          RuntimeLifecycleState = "Unknown"
@@ -48,74 +32,42 @@ const (
 	RuntimeInvocationDown   RuntimeLifecycleState = "InvocationDown"
 	RuntimeStartFailed      RuntimeLifecycleState = "StartFailed"
 	RuntimeCrashLoop        RuntimeLifecycleState = "CrashLoop"
-
-	DaemonUnknown          = RuntimeUnknown
-	DaemonDiscovered       = RuntimeDiscovered
-	DaemonStarting         = RuntimeStarting
-	DaemonControlReady     = RuntimeControlReady
-	DaemonInvocationReady  = RuntimeInvocationReady
-	DaemonRunning          = RuntimeRunning
-	DaemonStopping         = RuntimeStopping
-	DaemonStopped          = RuntimeStopped
-	DaemonConfigInvalid    = RuntimeConfigInvalid
-	DaemonPermissionDenied = RuntimePermissionDenied
-	DaemonVersionMismatch  = RuntimeVersionMismatch
-	DaemonControlOnly      = RuntimeControlOnly
-	DaemonInvocationDown   = RuntimeInvocationDown
-	DaemonStartFailed      = RuntimeStartFailed
-	DaemonCrashLoop        = RuntimeCrashLoop
 )
 
-// StartConfig describes daemon lifecycle start policy.
-type StartConfig struct {
-	Mode        RuntimeMode       `json:"mode"`
-	Realm       string            `json:"realm,omitempty"`
-	DeviceID    string            `json:"device_id,omitempty"`
-	HomeDir     string            `json:"home_dir,omitempty"`
-	DaemonBin   string            `json:"daemon_bin,omitempty"`
-	WorkingDir  string            `json:"working_dir,omitempty"`
-	LogPath     string            `json:"log_path,omitempty"`
-	Detached    bool              `json:"detached,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
-	UDSPath     string            `json:"uds_path,omitempty"`
-	ListenTCP   string            `json:"listen_tcp,omitempty"`
-	TLSCertPath string            `json:"tls_cert_path,omitempty"`
-	TLSKeyPath  string            `json:"tls_key_path,omitempty"`
-	HubEndpoint string            `json:"hub_endpoint,omitempty"`
-	TrustPath   string            `json:"trust_path,omitempty"`
+// RuntimeHostStartRequest is a provider-owned, validated runtime-host start
+// request. The canonical lifecycle owns state transitions, not process policy.
+type RuntimeHostStartRequest interface {
+	Validate() error
+	RuntimeHostStartPayload() ([]byte, error)
 }
 
-// RuntimeHostStartConfig is the canonical runtime-host start policy shape.
-type RuntimeHostStartConfig = StartConfig
+// RuntimeHostDiscoverRequest is a provider-owned runtime-host discovery
+// request. Product directory roots remain outside the canonical lifecycle.
+type RuntimeHostDiscoverRequest interface {
+	RuntimeHostDiscoverPayload() ([]byte, error)
+}
 
-// AttachOptions describes an existing daemon attachment request.
-type AttachOptions struct {
+type runtimeEndpointDiscoveryRequest struct {
+	ControlEndpoint string `json:"control_endpoint,omitempty"`
+	ControlPath     string `json:"control_path,omitempty"`
+}
+
+func (o runtimeEndpointDiscoveryRequest) RuntimeHostDiscoverPayload() ([]byte, error) {
+	return json.Marshal(o)
+}
+
+// RuntimeHostAttachOptions identifies an existing runtime host.
+type RuntimeHostAttachOptions struct {
 	ControlEndpoint    string `json:"control_endpoint,omitempty"`
 	InvocationEndpoint string `json:"invocation_endpoint,omitempty"`
 	ControlPath        string `json:"control_path,omitempty"`
 }
 
-// RuntimeHostAttachOptions is the canonical runtime-host attachment request shape.
-type RuntimeHostAttachOptions = AttachOptions
-
-// DiscoverOptions describes daemon endpoint discovery knobs.
-type DiscoverOptions struct {
-	ControlEndpoint string `json:"control_endpoint,omitempty"`
-	ControlPath     string `json:"control_path,omitempty"`
-	HomeDir         string `json:"home_dir,omitempty"`
-}
-
-// RuntimeHostDiscoverOptions is the canonical runtime-host discovery request shape.
-type RuntimeHostDiscoverOptions = DiscoverOptions
-
-// StopOptions describes daemon stop policy.
-type StopOptions struct {
+// RuntimeHostStopOptions controls runtime-host shutdown.
+type RuntimeHostStopOptions struct {
 	GracefulTimeoutMS int64 `json:"graceful_timeout_ms,omitempty"`
 	Force             bool  `json:"force,omitempty"`
 }
-
-// RuntimeHostStopOptions is the canonical runtime-host stop policy shape.
-type RuntimeHostStopOptions = StopOptions
 
 // Endpoints are daemon control and Invocation transport locators.
 type Endpoints struct {
@@ -139,9 +91,6 @@ type RuntimeLifecycleStatus struct {
 	Diagnostics []string              `json:"diagnostics,omitempty"`
 }
 
-// DaemonStatus is kept as a source-compatible alias.
-type DaemonStatus = RuntimeLifecycleStatus
-
 // RuntimeHostStatus is the canonical runtime-host status projection.
 type RuntimeHostStatus = RuntimeLifecycleStatus
 
@@ -156,9 +105,6 @@ type RuntimeLifecycleTransport interface {
 	Detach(ctx context.Context, handleID string) error
 }
 
-// DaemonTransport is kept as a source-compatible alias.
-type DaemonTransport = RuntimeLifecycleTransport
-
 // RuntimeLifecycleTransportFunc adapts functions into a RuntimeLifecycleTransport.
 type RuntimeLifecycleTransportFunc struct {
 	DiscoverFunc    func(ctx context.Context, optionsJSON []byte) ([]byte, error)
@@ -169,9 +115,6 @@ type RuntimeLifecycleTransportFunc struct {
 	StopFunc        func(ctx context.Context, handleID string, optionsJSON []byte) ([]byte, error)
 	DetachFunc      func(ctx context.Context, handleID string) error
 }
-
-// DaemonTransportFunc is kept as a source-compatible alias.
-type DaemonTransportFunc = RuntimeLifecycleTransportFunc
 
 func (f RuntimeLifecycleTransportFunc) Discover(ctx context.Context, optionsJSON []byte) ([]byte, error) {
 	if f.DiscoverFunc == nil {
@@ -222,11 +165,11 @@ func (f RuntimeLifecycleTransportFunc) Detach(ctx context.Context, handleID stri
 	return f.DetachFunc(ctx, handleID)
 }
 
-// RuntimeLifecycle is the lifecycle facade exposed by a runtime host.
-type RuntimeLifecycle interface {
-	Discover(ctx context.Context, opts DiscoverOptions) (Endpoints, error)
-	Start(ctx context.Context, cfg StartConfig) (*RuntimeHandle, error)
-	Attach(ctx context.Context, opts AttachOptions) (*RuntimeHandle, error)
+// RuntimeHostLifecycle is the provider-neutral lifecycle facade.
+type RuntimeHostLifecycle interface {
+	DiscoverRuntime(ctx context.Context, request RuntimeHostDiscoverRequest) (Endpoints, error)
+	StartRuntime(ctx context.Context, request RuntimeHostStartRequest) (*RuntimeHandle, error)
+	AttachRuntime(ctx context.Context, opts RuntimeHostAttachOptions) (*RuntimeHandle, error)
 	ConnectLocal(ctx context.Context, opts ConnectOptions) (*RuntimeClient, error)
 }
 
@@ -234,9 +177,6 @@ type RuntimeLifecycle interface {
 type RuntimeHost struct {
 	transport RuntimeLifecycleTransport
 }
-
-// DaemonControl is kept as a source-compatible alias.
-type DaemonControl = RuntimeHost
 
 // NewRuntimeHost creates a runtime lifecycle facade over a transport seam.
 func NewRuntimeHost(transport RuntimeLifecycleTransport) (*RuntimeHost, error) {
@@ -246,20 +186,18 @@ func NewRuntimeHost(transport RuntimeLifecycleTransport) (*RuntimeHost, error) {
 	return &RuntimeHost{transport: transport}, nil
 }
 
-// NewDaemonControl creates a daemon lifecycle facade over a transport seam.
-func NewDaemonControl(transport DaemonTransport) (*DaemonControl, error) {
-	return NewRuntimeHost(transport)
-}
-
-// Discover returns daemon-advertised endpoints without hard-coded fallbacks.
-func (h *RuntimeHost) Discover(ctx context.Context, opts DiscoverOptions) (Endpoints, error) {
+// DiscoverRuntime returns provider-advertised endpoints without hard-coded fallbacks.
+func (h *RuntimeHost) DiscoverRuntime(ctx context.Context, request RuntimeHostDiscoverRequest) (Endpoints, error) {
 	if h == nil || h.transport == nil {
 		return Endpoints{}, invalidRuntimeClient("daemon control is not initialized")
 	}
 	if ctx == nil {
 		return Endpoints{}, invalidRuntimeClient("context is required")
 	}
-	optionsJSON, err := json.Marshal(opts)
+	if request == nil {
+		return Endpoints{}, invalidRuntimeClient("runtime host discover request is required")
+	}
+	optionsJSON, err := request.RuntimeHostDiscoverPayload()
 	if err != nil {
 		return Endpoints{}, invalidRuntimePayload(fmt.Sprintf("encode discover options: %v", err), err)
 	}
@@ -270,18 +208,21 @@ func (h *RuntimeHost) Discover(ctx context.Context, opts DiscoverOptions) (Endpo
 	return NewEndpointsFromJSON(raw, true)
 }
 
-// Start starts or adopts a daemon lifecycle handle once runtime traffic is ready.
-func (h *RuntimeHost) Start(ctx context.Context, cfg StartConfig) (*RuntimeHandle, error) {
+// StartRuntime starts or adopts a runtime lifecycle handle once runtime traffic is ready.
+func (h *RuntimeHost) StartRuntime(ctx context.Context, request RuntimeHostStartRequest) (*RuntimeHandle, error) {
 	if h == nil || h.transport == nil {
 		return nil, invalidRuntimeClient("daemon control is not initialized")
 	}
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
 	}
-	if err := validateStartConfig(cfg); err != nil {
+	if request == nil {
+		return nil, invalidRuntimeClient("runtime host start request is required")
+	}
+	if err := request.Validate(); err != nil {
 		return nil, err
 	}
-	configJSON, err := json.Marshal(cfg)
+	configJSON, err := request.RuntimeHostStartPayload()
 	if err != nil {
 		return nil, invalidRuntimePayload(fmt.Sprintf("encode start config: %v", err), err)
 	}
@@ -299,8 +240,8 @@ func (h *RuntimeHost) Start(ctx context.Context, cfg StartConfig) (*RuntimeHandl
 	return newRuntimeHandle(h.transport, status)
 }
 
-// Attach attaches to an existing daemon only when Invocation traffic is ready.
-func (h *RuntimeHost) Attach(ctx context.Context, opts AttachOptions) (*RuntimeHandle, error) {
+// AttachRuntime attaches to an existing runtime host only when Invocation traffic is ready.
+func (h *RuntimeHost) AttachRuntime(ctx context.Context, opts RuntimeHostAttachOptions) (*RuntimeHandle, error) {
 	if h == nil || h.transport == nil {
 		return nil, invalidRuntimeClient("daemon control is not initialized")
 	}
@@ -334,7 +275,7 @@ func (h *RuntimeHost) ConnectLocal(ctx context.Context, opts ConnectOptions) (*R
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
 	}
-	endpoints, err := h.Discover(ctx, DiscoverOptions{ControlPath: opts.ControlPath})
+	endpoints, err := h.DiscoverRuntime(ctx, runtimeEndpointDiscoveryRequest{ControlPath: opts.ControlPath})
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +286,7 @@ func (h *RuntimeHost) ConnectLocal(ctx context.Context, opts ConnectOptions) (*R
 	if runtimeEndpoint == "" {
 		return nil, invalidRuntimePayload("invocation_endpoint is required", nil)
 	}
-	handle, err := h.Attach(ctx, AttachOptions{
+	handle, err := h.AttachRuntime(ctx, RuntimeHostAttachOptions{
 		ControlEndpoint:    endpoints.ControlEndpoint,
 		InvocationEndpoint: runtimeEndpoint,
 		ControlPath:        opts.ControlPath,
@@ -373,9 +314,6 @@ type RuntimeHandle struct {
 	status    RuntimeLifecycleStatus
 	detached  bool
 }
-
-// DaemonHandle is kept as a source-compatible alias.
-type DaemonHandle = RuntimeHandle
 
 func newRuntimeHandle(transport RuntimeLifecycleTransport, status RuntimeLifecycleStatus) (*RuntimeHandle, error) {
 	if status.HandleID == "" {
@@ -441,7 +379,7 @@ func (h *RuntimeHandle) OpenRuntime(ctx context.Context, opts ConnectOptions) (*
 	return NewRuntimeClient(transport)
 }
 
-func (h *RuntimeHandle) Stop(ctx context.Context, opts StopOptions) error {
+func (h *RuntimeHandle) StopRuntime(ctx context.Context, opts RuntimeHostStopOptions) error {
 	if err := h.requireAttached(); err != nil {
 		return err
 	}
@@ -517,23 +455,13 @@ func (h *RuntimeHandle) requireAttached() error {
 	return nil
 }
 
-// Start starts a daemon through an explicit lifecycle transport seam.
-func Start(ctx context.Context, transport RuntimeLifecycleTransport, cfg StartConfig) (*RuntimeHandle, error) {
-	return StartRuntimeHost(ctx, transport, cfg)
-}
-
 // StartRuntimeHost starts a runtime host through an explicit lifecycle transport seam.
-func StartRuntimeHost(ctx context.Context, transport RuntimeLifecycleTransport, cfg RuntimeHostStartConfig) (*RuntimeHandle, error) {
+func StartRuntimeHost(ctx context.Context, transport RuntimeLifecycleTransport, request RuntimeHostStartRequest) (*RuntimeHandle, error) {
 	control, err := NewRuntimeHost(transport)
 	if err != nil {
 		return nil, err
 	}
-	return control.Start(ctx, cfg)
-}
-
-// Attach attaches to an existing daemon through an explicit lifecycle transport seam.
-func Attach(ctx context.Context, transport RuntimeLifecycleTransport, opts AttachOptions) (*RuntimeHandle, error) {
-	return AttachRuntimeHost(ctx, transport, opts)
+	return control.StartRuntime(ctx, request)
 }
 
 // AttachRuntimeHost attaches to an existing runtime host through an explicit lifecycle transport seam.
@@ -542,26 +470,16 @@ func AttachRuntimeHost(ctx context.Context, transport RuntimeLifecycleTransport,
 	if err != nil {
 		return nil, err
 	}
-	return control.Attach(ctx, opts)
-}
-
-// Discover returns daemon-advertised endpoints through an explicit transport seam.
-func Discover(ctx context.Context, transport RuntimeLifecycleTransport, opts DiscoverOptions) (Endpoints, error) {
-	return DiscoverRuntimeHost(ctx, transport, opts)
+	return control.AttachRuntime(ctx, opts)
 }
 
 // DiscoverRuntimeHost returns runtime-host-advertised endpoints through an explicit transport seam.
-func DiscoverRuntimeHost(ctx context.Context, transport RuntimeLifecycleTransport, opts RuntimeHostDiscoverOptions) (RuntimeHostEndpoints, error) {
+func DiscoverRuntimeHost(ctx context.Context, transport RuntimeLifecycleTransport, request RuntimeHostDiscoverRequest) (RuntimeHostEndpoints, error) {
 	control, err := NewRuntimeHost(transport)
 	if err != nil {
 		return Endpoints{}, err
 	}
-	return control.Discover(ctx, opts)
-}
-
-// ConnectLocal discovers, attaches, opens, and detaches a local daemon runtime.
-func ConnectLocal(ctx context.Context, transport RuntimeLifecycleTransport, opts ConnectOptions) (*RuntimeClient, error) {
-	return ConnectLocalRuntimeHost(ctx, transport, opts)
+	return control.DiscoverRuntime(ctx, request)
 }
 
 // ConnectLocalRuntimeHost discovers, attaches, opens, and detaches a local runtime host.
@@ -571,22 +489,6 @@ func ConnectLocalRuntimeHost(ctx context.Context, transport RuntimeLifecycleTran
 		return nil, err
 	}
 	return control.ConnectLocal(ctx, opts)
-}
-
-func validateStartConfig(cfg StartConfig) error {
-	switch cfg.Mode {
-	case ModeDevice:
-		if cfg.ListenTCP != "" {
-			return invalidRuntimePayload("device mode must not accept a public TCP listener", nil)
-		}
-	case ModeHub, ModeBoth:
-		if cfg.ListenTCP != "" && (cfg.TLSCertPath == "" || cfg.TLSKeyPath == "") {
-			return invalidRuntimePayload("public TCP listener requires TLS material", nil)
-		}
-	default:
-		return invalidRuntimePayload("mode must be device, hub, or both", nil)
-	}
-	return nil
 }
 
 func requireRuntimeLifecycleReady(status RuntimeLifecycleStatus) error {

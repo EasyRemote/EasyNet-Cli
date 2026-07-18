@@ -3,8 +3,6 @@ profile: runtime_core
 required_for:
   - go
   - python
-lifecycle_actions:
-  - dispatch
 description: Runtime Core stream providers enter dispatch through the shared runtime provider and expose non-terminal runtime selection before the terminal receipt.
 steps:
   - action: dispatch_stream_draft

@@ -50,6 +50,7 @@ func (p SignerPolicy) ExpiresAtUnixMS() int64 {
 type SigningMaterial struct {
 	algorithm            string
 	canonicalBytesBase64 string
+	canonicalHashHex     string
 	argsDigestHex        string
 	descriptorRef        string
 	nonceBase64          string
@@ -64,6 +65,12 @@ func (m SigningMaterial) Algorithm() string {
 
 func (m SigningMaterial) CanonicalBytesBase64() string {
 	return m.canonicalBytesBase64
+}
+
+// CanonicalHashHex returns the SDK-validated SHA-256 commitment supplied with
+// the canonical signing bytes.
+func (m SigningMaterial) CanonicalHashHex() string {
+	return m.canonicalHashHex
 }
 
 func (m SigningMaterial) ArgsDigestHex() string {
@@ -164,12 +171,15 @@ func decodePreparedInvocation(raw []byte, requirePreparedID bool) (PreparedInvoc
 	if prepared.descriptorRef == "" {
 		return PreparedInvocation{}, invalidInvocation("descriptor_ref is required", nil)
 	}
-	if err := validateCanonicalMaterialHash(
+	canonicalHashHex, err := validatedCanonicalMaterialHash(
 		prepared.signingMaterial.CanonicalBytesBase64(),
 		prepared.canonicalHashHex,
-	); err != nil {
+	)
+	if err != nil {
 		return PreparedInvocation{}, err
 	}
+	prepared.canonicalHashHex = canonicalHashHex
+	prepared.signingMaterial.canonicalHashHex = canonicalHashHex
 	return prepared, nil
 }
 
@@ -366,34 +376,21 @@ func (s Signer) signInvocationDraft(draft InvocationDraft) (InvocationDraft, err
 // canonical material callers sign. The byte layout is delegated to the Axon
 // canonical facade; this helper owns only DTO validation and projection.
 func signingMaterialForInvocationDraft(draft InvocationDraft) (SigningMaterial, error) {
-	nonce, err := decodeBase64Field(draft.NonceBase64(), "nonce_base64")
+	bound, err := descriptorBoundInvocationDraft(draft)
 	if err != nil {
 		return SigningMaterial{}, err
 	}
-	envelope := Envelope{
-		Caller:        AgentRef{URA: draft.CallerURA()},
-		Callee:        AgentRef{URA: draft.CalleeURA()},
-		Subject:       SubjectRef{URA: draft.SubjectURA()},
-		Nonce:         nonce,
-		CausalContext: CausalNullWithReason(""),
-	}
-	causal, err := causalContextForInvocationDraft(draft.CausalContext())
+	canonical, err := bound.CanonicalBytes()
 	if err != nil {
 		return SigningMaterial{}, err
 	}
-	envelope.CausalContext = causal
-	args, err := invocationDraftArgumentBytes(draft)
-	if err != nil {
-		return SigningMaterial{}, err
-	}
-	canonical, err := CanonicalInvocationBytes(envelope, draft.DescriptorRef(), args)
-	if err != nil {
-		return SigningMaterial{}, err
-	}
+	args := bound.Payload()
 	digest := sha256.Sum256(args)
+	canonicalHash := sha256.Sum256(canonical)
 	return SigningMaterial{
 		algorithm:            "ed25519",
 		canonicalBytesBase64: base64.StdEncoding.EncodeToString(canonical),
+		canonicalHashHex:     hex.EncodeToString(canonicalHash[:]),
 		argsDigestHex:        hex.EncodeToString(digest[:]),
 		descriptorRef:        draft.DescriptorRef(),
 		nonceBase64:          draft.NonceBase64(),
@@ -536,23 +533,26 @@ func optionalSignerPolicy(fields map[string]json.RawMessage, name string) *Signe
 	}
 }
 
-func validateCanonicalMaterialHash(canonicalBytesBase64 string, canonicalHashHex string) error {
+func validatedCanonicalMaterialHash(
+	canonicalBytesBase64 string,
+	canonicalHashHex string,
+) (string, error) {
 	if canonicalHashHex == "" {
-		return nil
+		return "", nil
 	}
 	canonicalHash, err := normalizeSHA256Hex(canonicalHashHex, "canonical_hash_hex")
 	if err != nil {
-		return err
+		return "", err
 	}
 	canonicalBytes, err := decodeCanonicalBytesBase64(canonicalBytesBase64)
 	if err != nil {
-		return err
+		return "", err
 	}
 	actual := sha256.Sum256(canonicalBytes)
 	if hex.EncodeToString(actual[:]) != canonicalHash {
-		return invalidInvocation("canonical_hash_hex does not match canonical_bytes_base64", nil)
+		return "", invalidInvocation("canonical_hash_hex does not match canonical_bytes_base64", nil)
 	}
-	return nil
+	return canonicalHash, nil
 }
 
 func normalizeSHA256Hex(value string, fieldName string) (string, error) {

@@ -15,7 +15,7 @@ from .connection import (
     RuntimeConnection,
 )
 from .control_ipc import ControlIpcClient, default_control_path
-from .daemon import RuntimeLifecycle
+from .runtime_lifecycle import RuntimeLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .health import HealthClient
 from .axon_addressing import AddressingClient

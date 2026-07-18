@@ -541,8 +541,8 @@ type InvokeServerStreamRequest struct {
 	ContentType     string                 `protobuf:"bytes,5,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
 	TimeoutSeconds  int32                  `protobuf:"varint,6,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	Metadata        map[string]string      `protobuf:"bytes,7,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	PayloadRef      *PayloadRef            `protobuf:"bytes,8,opt,name=payload_ref,json=payloadRef,proto3" json:"payload_ref,omitempty"`                // large/multimedia payload reference
-	ContentEnvelope *ContentEnvelope       `protobuf:"bytes,9,opt,name=content_envelope,json=contentEnvelope,proto3" json:"content_envelope,omitempty"` // Field 11 is reserved.
+	PayloadRef      *PayloadRef            `protobuf:"bytes,8,opt,name=payload_ref,json=payloadRef,proto3" json:"payload_ref,omitempty"` // large/multimedia payload reference
+	ContentEnvelope *ContentEnvelope       `protobuf:"bytes,9,opt,name=content_envelope,json=contentEnvelope,proto3" json:"content_envelope,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -2140,9 +2140,8 @@ type InvocationReceipt struct {
 	// (excluding callee_signature itself).
 	CalleeSignature *CalleeSignature `protobuf:"bytes,25,opt,name=callee_signature,json=calleeSignature,proto3" json:"callee_signature,omitempty"`
 	// ── RFC 001 §A12 hosted-Agent attestation (26..27) ───
-	// For hosted Agents (Plan §1.3 Model B — consent / policy / mcp /
-	// llm sub-agents that have no key of their own), the signing
-	// authority is the hosting device-profile, not the callee Agent
+	// For hosted Agents (Plan §1.3 Model B) that have no key of their own,
+	// the signing authority is the hosting device-profile, not the callee Agent
 	// itself. The two fields below let an offline verifier check that
 	// a receipt attributed to a hosted callee was actually signed by
 	// a host that legitimately hosts that callee.

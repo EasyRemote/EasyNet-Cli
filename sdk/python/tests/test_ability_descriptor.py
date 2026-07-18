@@ -15,6 +15,8 @@ from easynet_sdk.errors import ErrorCode, SDKError, is_code
 from easynet_sdk.runtime import RuntimeClient
 from easynet_sdk.runtime_ability import RuntimeAbilityClient, RuntimeCallContext
 
+from test_runtime import canonical_runtime_receipt_pair
+
 
 class RuntimeTransportFake:
     def __init__(self) -> None:
@@ -34,6 +36,7 @@ class RuntimeTransportFake:
 
     def invoke(self, draft_json: bytes) -> bytes:
         self.seen = json.loads(draft_json)
+        admission, terminal = canonical_runtime_receipt_pair("inv-1")
         return json.dumps(
             {
                 "ok": True,
@@ -43,6 +46,8 @@ class RuntimeTransportFake:
                 "output_content_type": "application/json",
                 "output_json": self.output_json,
                 "elapsed_ms": 1,
+                "admission_receipt": admission,
+                "terminal_receipt": terminal,
                 "error": None,
             }
         ).encode()

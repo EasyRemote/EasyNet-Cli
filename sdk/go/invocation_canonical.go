@@ -1,60 +1,90 @@
 package easynet
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 
-	axoninv "easynet.run/axon/sdk/go/easynet/invocation"
+	axoninv "axon.run/sdk/go/axon/invocation"
 )
 
 // UraProfileEasynetStrictV2 is the URA profile pinned by the EasyNet daemon
 // admission path for signed Invocation material.
 const UraProfileEasynetStrictV2 = "easynet-strict-v2"
 
-// CanonicalInvocationBytes returns the descriptor-bound AXIOM
-// caller-signature byte sequence for an SDK Invocation envelope. The byte
-// layout is owned by Axon; this facade owns only SDK DTO validation and
-// projection into Axon's canonical descriptor-bound encoder.
-func CanonicalInvocationBytes(envelope Envelope, ability string, args []byte) ([]byte, error) {
+// canonicalDescriptorBoundInvocationBytes projects the facade DTO into Axon's
+// descriptor-bound proof model. It is internal signing infrastructure, not an
+// alternate public proof API.
+func canonicalDescriptorBoundInvocationBytes(envelope Envelope, ability string, args []byte) ([]byte, error) {
+	bound, err := descriptorBoundInvocationEnvelope(envelope, ability, args)
+	if err != nil {
+		return nil, err
+	}
+	return bound.CanonicalBytes()
+}
+
+func descriptorBoundInvocationDraft(draft InvocationDraft) (axoninv.DescriptorBoundInvocationDraft, error) {
+	nonce, err := decodeBase64Field(draft.NonceBase64(), "nonce_base64")
+	if err != nil {
+		return axoninv.DescriptorBoundInvocationDraft{}, err
+	}
+	causal, err := causalContextForInvocationDraft(draft.CausalContext())
+	if err != nil {
+		return axoninv.DescriptorBoundInvocationDraft{}, err
+	}
+	args, err := invocationDraftArgumentBytes(draft)
+	if err != nil {
+		return axoninv.DescriptorBoundInvocationDraft{}, err
+	}
+	return descriptorBoundInvocationEnvelope(Envelope{
+		Caller:        AgentRef{URA: draft.CallerURA()},
+		Callee:        AgentRef{URA: draft.CalleeURA()},
+		Subject:       SubjectRef{URA: draft.SubjectURA()},
+		Nonce:         nonce,
+		CausalContext: causal,
+	}, draft.DescriptorRef(), args)
+}
+
+func descriptorBoundInvocationEnvelope(
+	envelope Envelope,
+	ability string,
+	args []byte,
+) (axoninv.DescriptorBoundInvocationDraft, error) {
 	if envelope.Caller.URA == "" {
-		return nil, errors.New("canonical: empty Caller.URA")
+		return axoninv.DescriptorBoundInvocationDraft{}, errors.New("canonical: empty Caller.URA")
 	}
 	if envelope.Callee.URA == "" {
-		return nil, errors.New("canonical: empty Callee.URA")
+		return axoninv.DescriptorBoundInvocationDraft{}, errors.New("canonical: empty Callee.URA")
 	}
 	if envelope.Subject.URA == "" {
-		return nil, errors.New("canonical: empty Subject.URA")
+		return axoninv.DescriptorBoundInvocationDraft{}, errors.New("canonical: empty Subject.URA")
 	}
 	if ability == "" {
-		return nil, errors.New("canonical: empty ability")
+		return axoninv.DescriptorBoundInvocationDraft{}, errors.New("canonical: empty ability")
 	}
 	if len(envelope.Nonce) != 16 {
-		return nil, fmt.Errorf("canonical: nonce must be 16 bytes, got %d", len(envelope.Nonce))
+		return axoninv.DescriptorBoundInvocationDraft{}, fmt.Errorf("canonical: nonce must be 16 bytes, got %d", len(envelope.Nonce))
 	}
 
-	digest := sha256.Sum256(args)
 	var nonce [16]byte
 	copy(nonce[:], envelope.Nonce)
 	causalContext, err := canonicalCausalContext(envelope.CausalContext)
 	if err != nil {
-		return nil, fmt.Errorf("canonical: causal context: %w", err)
+		return axoninv.DescriptorBoundInvocationDraft{}, fmt.Errorf("canonical: causal context: %w", err)
 	}
-	env := axoninv.InvocationEnvelope{
-		Caller:          axoninv.NewAgentIdentity(envelope.Caller.URA, axoninv.ProfileEasynetStrictV2),
-		Callee:          axoninv.NewAgentIdentity(envelope.Callee.URA, axoninv.ProfileEasynetStrictV2),
-		Subject:         axoninv.NewSubjectIdentity(envelope.Subject.URA, axoninv.ProfileEasynetStrictV2),
-		Ability:         ability,
-		ArgsDigest:      digest,
-		InvocationNonce: nonce,
-		CausalContext:   causalContext,
-	}
-	bound, err := axoninv.NewDescriptorBoundEnvelope(env)
+	bound, err := axoninv.NewDescriptorBoundInvocationBuilder().
+		WithCaller(axoninv.NewAgentIdentity(envelope.Caller.URA, axoninv.ProfileStrictV2)).
+		WithCallee(axoninv.NewAgentIdentity(envelope.Callee.URA, axoninv.ProfileStrictV2)).
+		WithSubject(axoninv.NewSubjectIdentity(envelope.Subject.URA, axoninv.ProfileStrictV2)).
+		WithDescriptorRef(ability).
+		WithNonce(nonce).
+		WithCausalContext(causalContext).
+		WithPayload(args).
+		Build()
 	if err != nil {
-		return nil, fmt.Errorf("descriptor-bound canonical: %w", err)
+		return axoninv.DescriptorBoundInvocationDraft{}, fmt.Errorf("descriptor-bound canonical: %w", err)
 	}
-	return axoninv.CanonicalDescriptorBoundInvocationBytes(bound)
+	return bound, nil
 }
 
 func canonicalCausalContext(cc CausalContext) (axoninv.CausalContext, error) {

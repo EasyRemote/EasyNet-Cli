@@ -3,6 +3,7 @@
 package easynet
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -18,18 +19,42 @@ func (t directRuntimeAbilityTransport) ResolveDescriptorRef(ctx context.Context,
 	return t.resolve(ctx, requestJSON)
 }
 
+type signedDirectRuntimeAbilityTransport struct {
+	*RuntimeSigningTransport
+	resolve func(context.Context, []byte) ([]byte, error)
+}
+
+func (t signedDirectRuntimeAbilityTransport) ResolveDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	return t.resolve(ctx, requestJSON)
+}
+
 func TestRuntimeAbilityClientDeadlineIsProviderOwned(t *testing.T) {
 	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
 		DialTimeoutMS:   3000,
 		InvokeTimeoutMS: 50,
 	})
 	defer cleanup()
-	daemon.invokeDelay = time.Second
-	daemon.invokeStarted = make(chan struct{})
+	invokeStarted := daemon.configureInvokeTiming(time.Second)
 
-	runtime, err := NewRuntimeClient(directRuntimeAbilityTransport{
+	base := directRuntimeAbilityTransport{
 		DirectRuntimeTransport: transport,
 		resolve:                testResolveDescriptorRef(t),
+	}
+	seed := bytes.Repeat([]byte{0x42}, 32)
+	signer, err := NewSigner(
+		signerHandle(ed25519PublicKeyBase64(seed)),
+		newTestEd25519SignatureProvider(seed),
+	)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	signing, err := NewRuntimeSigningTransport(base, signer)
+	if err != nil {
+		t.Fatalf("NewRuntimeSigningTransport: %v", err)
+	}
+	runtime, err := NewRuntimeClient(signedDirectRuntimeAbilityTransport{
+		RuntimeSigningTransport: signing,
+		resolve:                 base.resolve,
 	})
 	if err != nil {
 		t.Fatalf("NewRuntimeClient: %v", err)
@@ -46,7 +71,7 @@ func TestRuntimeAbilityClientDeadlineIsProviderOwned(t *testing.T) {
 	}()
 
 	select {
-	case <-daemon.invokeStarted:
+	case <-invokeStarted:
 	case <-time.After(time.Second):
 		t.Fatalf("ability deadline test did not dispatch the runtime invocation")
 	}
@@ -63,8 +88,7 @@ func TestRuntimeAbilityClientDeadlineIsProviderOwned(t *testing.T) {
 		t.Fatalf("ability deadline classification = stage %q retry %s retryable %v", sdkErr.Stage, sdkErr.Retry, sdkErr.Retryable)
 	}
 
-	daemon.invokeDelay = 0
-	daemon.invokeStarted = nil
+	daemon.configureInvokeTiming(0)
 	output, err := client.Invoke(context.Background(), directRuntimeAbilityCallContext(), "er.weather", map[string]any{"city": "Singapore"})
 	if err != nil {
 		t.Fatalf("retry ability Invoke after deadline cleanup: %v", err)
@@ -76,7 +100,7 @@ func TestRuntimeAbilityClientDeadlineIsProviderOwned(t *testing.T) {
 
 func directRuntimeAbilityCallContext() RuntimeCallContext {
 	return RuntimeCallContext{
-		CallerURA:     "easynet:///r/example/agent/alice",
+		CallerURA:     "easynet:///r/example/agent/alice.sdk",
 		CalleeURA:     "easynet:///r/example/device/dev-a",
 		SubjectURA:    "easynet:///r/example/device/dev-a",
 		NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",

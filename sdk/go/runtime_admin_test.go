@@ -293,16 +293,23 @@ func (c *runtimeAdminInvokeCapture) Invoke(_ context.Context, draftJSON []byte) 
 	if err := json.Unmarshal(draftJSON, &c.draft); err != nil {
 		return nil, err
 	}
-	return []byte(fmt.Sprintf(`{
-		"ok": true,
-		"tuple": %s,
-		"invocation_id": "inv-admin-test",
-		"terminal_state": "Completed",
+	var output any
+	if err := json.Unmarshal([]byte(c.outputJSON), &output); err != nil {
+		return nil, err
+	}
+	admission, terminal := canonicalRuntimeReceiptPairFixture("inv-admin-test", "Completed")
+	return mustJSON(map[string]any{
+		"ok":                  true,
+		"tuple":               c.draft,
+		"invocation_id":       "inv-admin-test",
+		"terminal_state":      "Completed",
 		"output_content_type": "application/json",
-		"output_json": %s,
-		"elapsed_ms": 1,
-		"error": null
-	}`, draftJSON, c.outputJSON)), nil
+		"output_json":         output,
+		"elapsed_ms":          1,
+		"admission_receipt":   admission,
+		"terminal_receipt":    terminal,
+		"error":               nil,
+	}), nil
 }
 
 func (c *runtimeAdminInvokeCapture) args(t *testing.T) map[string]any {

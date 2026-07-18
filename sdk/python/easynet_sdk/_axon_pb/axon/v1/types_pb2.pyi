@@ -593,8 +593,6 @@ class _InvocationTargetKindEnumTypeWrapper(google.protobuf.internal.enum_type_wr
     INVOCATION_TARGET_KIND_UNSPECIFIED: _InvocationTargetKind.ValueType  # 0
     INVOCATION_TARGET_KIND_ABILITY: _InvocationTargetKind.ValueType  # 1
     """Native Axon ability"""
-    INVOCATION_TARGET_KIND_A2A_SKILL: _InvocationTargetKind.ValueType  # 3
-    """A2A skill (resolves via skill binding)"""
 
 class InvocationTargetKind(_InvocationTargetKind, metaclass=_InvocationTargetKindEnumTypeWrapper):
     """Distinguishes the semantic kind of invocation target at the protocol level,
@@ -605,8 +603,6 @@ class InvocationTargetKind(_InvocationTargetKind, metaclass=_InvocationTargetKin
 INVOCATION_TARGET_KIND_UNSPECIFIED: InvocationTargetKind.ValueType  # 0
 INVOCATION_TARGET_KIND_ABILITY: InvocationTargetKind.ValueType  # 1
 """Native Axon ability"""
-INVOCATION_TARGET_KIND_A2A_SKILL: InvocationTargetKind.ValueType  # 3
-"""A2A skill (resolves via skill binding)"""
 global___InvocationTargetKind = InvocationTargetKind
 
 class _StreamFrameType:
@@ -2309,7 +2305,6 @@ class NodeDescriptor(google.protobuf.message.Message):
     OWNER_ID_FIELD_NUMBER: builtins.int
     DEVICE_GROUP_FIELD_NUMBER: builtins.int
     DEVICE_FIELD_NUMBER: builtins.int
-    A2A_CARD_FIELD_NUMBER: builtins.int
     ONLINE_FIELD_NUMBER: builtins.int
     LAST_SEEN_UNIX_MS_FIELD_NUMBER: builtins.int
     ROLE_FIELD_NUMBER: builtins.int
@@ -2350,11 +2345,6 @@ class NodeDescriptor(google.protobuf.message.Message):
           the prefix into the key with a dot (`kubernetes.io.hostname`) or
           omit it. Max 64 labels per node, 63 chars per key, 4096 per value.
         Reserved prefixes with protocol semantics:
-          "a2a.*"  — opt-in A2A discovery enrollment. Setting any a2a.* label
-                     causes the runtime to materialize an A2AAgentCard for the
-                     node. `a2a.url` (when set) MUST be an http(s) absolute
-                     URL with a host. `a2a.enabled=false` is the explicit
-                     opt-out even if other a2a.* labels are present.
           "axon.*" — reserved for internal metadata; do not set manually.
         """
 
@@ -2363,19 +2353,6 @@ class NodeDescriptor(google.protobuf.message.Message):
     @property
     def device(self) -> global___DeviceMeta:
         """device hardware/OS metadata"""
-
-    @property
-    def a2a_card(self) -> global___A2AAgentCard:
-        """─── Protocol exposure ────────────────────────────────
-        At most one A2AAgentCard per node. If the node hosts multiple
-        A2A-exposed abilities, they are aggregated as skills on this single
-        card (see A2AAgentCard.skills). Callers that need distinct personas
-        per ability should register separate logical nodes.
-
-        Populated automatically during RegisterNode from `labels["a2a.*"]`
-        and later enriched with A2ASkillSpec entries from activated abilities.
-        if set, node is discoverable as an A2A agent
-        """
 
     def __init__(
         self,
@@ -2394,13 +2371,12 @@ class NodeDescriptor(google.protobuf.message.Message):
         owner_id: builtins.str = ...,
         device_group: builtins.str = ...,
         device: global___DeviceMeta | None = ...,
-        a2a_card: global___A2AAgentCard | None = ...,
         online: builtins.bool = ...,
         last_seen_unix_ms: builtins.int = ...,
         role: global___NodeRole.ValueType = ...,
     ) -> None: ...
-    def HasField(self, field_name: typing.Literal["a2a_card", b"a2a_card", "device", b"device", "resources", b"resources"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["a2a_card", b"a2a_card", "abilities", b"abilities", "device", b"device", "device_group", b"device_group", "display_name", b"display_name", "functions", b"functions", "labels", b"labels", "last_heartbeat_unix_ms", b"last_heartbeat_unix_ms", "last_seen_unix_ms", b"last_seen_unix_ms", "node_id", b"node_id", "online", b"online", "owner_id", b"owner_id", "registered_at_unix_ms", b"registered_at_unix_ms", "resources", b"resources", "role", b"role", "state", b"state", "tenant_id", b"tenant_id", "trust_level", b"trust_level"]) -> None: ...
+    def HasField(self, field_name: typing.Literal["device", b"device", "resources", b"resources"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["abilities", b"abilities", "device", b"device", "device_group", b"device_group", "display_name", b"display_name", "functions", b"functions", "labels", b"labels", "last_heartbeat_unix_ms", b"last_heartbeat_unix_ms", "last_seen_unix_ms", b"last_seen_unix_ms", "node_id", b"node_id", "online", b"online", "owner_id", b"owner_id", "registered_at_unix_ms", b"registered_at_unix_ms", "resources", b"resources", "role", b"role", "state", b"state", "tenant_id", b"tenant_id", "trust_level", b"trust_level"]) -> None: ...
 
 global___NodeDescriptor = NodeDescriptor
 
@@ -2455,7 +2431,6 @@ class CapabilityDescriptor(google.protobuf.message.Message):
     SIGNATURE_FIELD_NUMBER: builtins.int
     PUBLISHER_ID_FIELD_NUMBER: builtins.int
     PUBLISHED_AT_UNIX_MS_FIELD_NUMBER: builtins.int
-    A2A_SKILL_FIELD_NUMBER: builtins.int
     ability_id: builtins.str
     name: builtins.str
     version: builtins.str
@@ -2471,10 +2446,6 @@ class CapabilityDescriptor(google.protobuf.message.Message):
     def requirements(self) -> google.protobuf.internal.containers.ScalarMap[builtins.str, builtins.str]:
         """"gpu": "required", "os": "linux" """
 
-    @property
-    def a2a_skill(self) -> global___A2ASkillSpec:
-        """explicit A2A exposure derived from a2a.* metadata"""
-
     def __init__(
         self,
         *,
@@ -2486,10 +2457,8 @@ class CapabilityDescriptor(google.protobuf.message.Message):
         signature: builtins.bytes = ...,
         publisher_id: builtins.str = ...,
         published_at_unix_ms: builtins.int = ...,
-        a2a_skill: global___A2ASkillSpec | None = ...,
     ) -> None: ...
-    def HasField(self, field_name: typing.Literal["a2a_skill", b"a2a_skill"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["a2a_skill", b"a2a_skill", "ability_id", b"ability_id", "name", b"name", "published_at_unix_ms", b"published_at_unix_ms", "publisher_id", b"publisher_id", "requirements", b"requirements", "signature", b"signature", "tags", b"tags", "version", b"version"]) -> None: ...
+    def ClearField(self, field_name: typing.Literal["ability_id", b"ability_id", "name", b"name", "published_at_unix_ms", b"published_at_unix_ms", "publisher_id", b"publisher_id", "requirements", b"requirements", "signature", b"signature", "tags", b"tags", "version", b"version"]) -> None: ...
 
 global___CapabilityDescriptor = CapabilityDescriptor
 
@@ -2512,24 +2481,6 @@ class AbilityTarget(google.protobuf.message.Message):
 global___AbilityTarget = AbilityTarget
 
 @typing.final
-class A2aSkillTarget(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    TARGET_AGENT_ID_FIELD_NUMBER: builtins.int
-    SKILL_ID_FIELD_NUMBER: builtins.int
-    target_agent_id: builtins.str
-    skill_id: builtins.str
-    def __init__(
-        self,
-        *,
-        target_agent_id: builtins.str = ...,
-        skill_id: builtins.str = ...,
-    ) -> None: ...
-    def ClearField(self, field_name: typing.Literal["skill_id", b"skill_id", "target_agent_id", b"target_agent_id"]) -> None: ...
-
-global___A2aSkillTarget = A2aSkillTarget
-
-@typing.final
 class InvocationTarget(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
@@ -2540,7 +2491,6 @@ class InvocationTarget(google.protobuf.message.Message):
     REQUIRED_TAGS_FIELD_NUMBER: builtins.int
     MIN_TRUST_LEVEL_FIELD_NUMBER: builtins.int
     ABILITY_FIELD_NUMBER: builtins.int
-    A2A_SKILL_FIELD_NUMBER: builtins.int
     strategy: global___RoutingStrategy.ValueType
     node_id: builtins.str
     """required for DIRECT"""
@@ -2554,8 +2504,6 @@ class InvocationTarget(google.protobuf.message.Message):
     def required_tags(self) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.str]: ...
     @property
     def ability(self) -> global___AbilityTarget: ...
-    @property
-    def a2a_skill(self) -> global___A2aSkillTarget: ...
     def __init__(
         self,
         *,
@@ -2566,11 +2514,10 @@ class InvocationTarget(google.protobuf.message.Message):
         required_tags: collections.abc.Iterable[builtins.str] | None = ...,
         min_trust_level: global___TrustLevel.ValueType = ...,
         ability: global___AbilityTarget | None = ...,
-        a2a_skill: global___A2aSkillTarget | None = ...,
     ) -> None: ...
-    def HasField(self, field_name: typing.Literal["a2a_skill", b"a2a_skill", "ability", b"ability", "typed_target", b"typed_target"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["a2a_skill", b"a2a_skill", "ability", b"ability", "ability_name", b"ability_name", "function_name", b"function_name", "min_trust_level", b"min_trust_level", "node_id", b"node_id", "required_tags", b"required_tags", "strategy", b"strategy", "typed_target", b"typed_target"]) -> None: ...
-    def WhichOneof(self, oneof_group: typing.Literal["typed_target", b"typed_target"]) -> typing.Literal["ability", "a2a_skill"] | None: ...
+    def HasField(self, field_name: typing.Literal["ability", b"ability", "typed_target", b"typed_target"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["ability", b"ability", "ability_name", b"ability_name", "function_name", b"function_name", "min_trust_level", b"min_trust_level", "node_id", b"node_id", "required_tags", b"required_tags", "strategy", b"strategy", "typed_target", b"typed_target"]) -> None: ...
+    def WhichOneof(self, oneof_group: typing.Literal["typed_target", b"typed_target"]) -> typing.Literal["ability"] | None: ...
 
 global___InvocationTarget = InvocationTarget
 
@@ -2765,128 +2712,3 @@ class PayloadRef(google.protobuf.message.Message):
     def ClearField(self, field_name: typing.Literal["content", b"content", "digest", b"digest", "expires_at_unix_ms", b"expires_at_unix_ms", "labels", b"labels", "size_bytes", b"size_bytes", "ura", b"ura"]) -> None: ...
 
 global___PayloadRef = PayloadRef
-
-@typing.final
-class A2ASkillSpec(google.protobuf.message.Message):
-    """─── Protocol Exposure: A2A (Agent-to-Agent) ────────────
-
-    Axon natively understands A2A. When an ability declares
-    an A2ASkillSpec, it is exposed as a skill on the node's
-    A2A agent card. When a node declares an A2AAgentCard, it
-    is discoverable by other agents.
-
-    Relationship:
-      Axon Node (device) → A2AAgentCard (agent identity)
-      Axon Ability → A2ASkillSpec (agent skill)
-      SendA2ATask → resolves to Invoke → result as A2A task output
-    """
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    SKILL_ID_FIELD_NUMBER: builtins.int
-    NAME_FIELD_NUMBER: builtins.int
-    DESCRIPTION_FIELD_NUMBER: builtins.int
-    TAGS_FIELD_NUMBER: builtins.int
-    INPUT_SCHEMA_FIELD_NUMBER: builtins.int
-    OUTPUT_SCHEMA_FIELD_NUMBER: builtins.int
-    EXAMPLES_FIELD_NUMBER: builtins.int
-    skill_id: builtins.str
-    name: builtins.str
-    """human-readable skill name"""
-    description: builtins.str
-    """what this skill does (for agent discovery)"""
-    input_schema: builtins.bytes
-    """JSON Schema"""
-    output_schema: builtins.bytes
-    """JSON Schema"""
-    @property
-    def tags(self) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.str]:
-        """skill tags for filtering"""
-
-    @property
-    def examples(self) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.str]:
-        """example natural language queries"""
-
-    def __init__(
-        self,
-        *,
-        skill_id: builtins.str = ...,
-        name: builtins.str = ...,
-        description: builtins.str = ...,
-        tags: collections.abc.Iterable[builtins.str] | None = ...,
-        input_schema: builtins.bytes = ...,
-        output_schema: builtins.bytes = ...,
-        examples: collections.abc.Iterable[builtins.str] | None = ...,
-    ) -> None: ...
-    def ClearField(self, field_name: typing.Literal["description", b"description", "examples", b"examples", "input_schema", b"input_schema", "name", b"name", "output_schema", b"output_schema", "skill_id", b"skill_id", "tags", b"tags"]) -> None: ...
-
-global___A2ASkillSpec = A2ASkillSpec
-
-@typing.final
-class A2AAgentCard(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    @typing.final
-    class AuthenticationEntry(google.protobuf.message.Message):
-        DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-        KEY_FIELD_NUMBER: builtins.int
-        VALUE_FIELD_NUMBER: builtins.int
-        key: builtins.str
-        value: builtins.str
-        def __init__(
-            self,
-            *,
-            key: builtins.str = ...,
-            value: builtins.str = ...,
-        ) -> None: ...
-        def ClearField(self, field_name: typing.Literal["key", b"key", "value", b"value"]) -> None: ...
-
-    NAME_FIELD_NUMBER: builtins.int
-    DESCRIPTION_FIELD_NUMBER: builtins.int
-    URL_FIELD_NUMBER: builtins.int
-    PROVIDER_FIELD_NUMBER: builtins.int
-    VERSION_FIELD_NUMBER: builtins.int
-    SKILLS_FIELD_NUMBER: builtins.int
-    SUPPORTS_STREAMING_FIELD_NUMBER: builtins.int
-    SUPPORTS_PUSH_NOTIFICATIONS_FIELD_NUMBER: builtins.int
-    AUTHENTICATION_FIELD_NUMBER: builtins.int
-    name: builtins.str
-    """agent display name"""
-    description: builtins.str
-    """what this agent does"""
-    url: builtins.str
-    """A2A endpoint URL (auto-generated from Axon gateway)"""
-    provider: builtins.str
-    """organization/person providing this agent"""
-    version: builtins.str
-    supports_streaming: builtins.bool
-    """A2A protocol capabilities
-    maps to Axon InvokeStream
-    """
-    supports_push_notifications: builtins.bool
-    """maps to A2A push notification transport"""
-    @property
-    def skills(self) -> google.protobuf.internal.containers.RepeatedCompositeFieldContainer[global___A2ASkillSpec]:
-        """auto-populated from abilities with a2a_skill"""
-
-    @property
-    def authentication(self) -> google.protobuf.internal.containers.ScalarMap[builtins.str, builtins.str]:
-        """supported auth schemes"""
-
-    def __init__(
-        self,
-        *,
-        name: builtins.str = ...,
-        description: builtins.str = ...,
-        url: builtins.str = ...,
-        provider: builtins.str = ...,
-        version: builtins.str = ...,
-        skills: collections.abc.Iterable[global___A2ASkillSpec] | None = ...,
-        supports_streaming: builtins.bool = ...,
-        supports_push_notifications: builtins.bool = ...,
-        authentication: collections.abc.Mapping[builtins.str, builtins.str] | None = ...,
-    ) -> None: ...
-    def ClearField(self, field_name: typing.Literal["authentication", b"authentication", "description", b"description", "name", b"name", "provider", b"provider", "skills", b"skills", "supports_push_notifications", b"supports_push_notifications", "supports_streaming", b"supports_streaming", "url", b"url", "version", b"version"]) -> None: ...
-
-global___A2AAgentCard = A2AAgentCard

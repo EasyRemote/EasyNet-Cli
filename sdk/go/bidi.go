@@ -89,15 +89,17 @@ func (f BidiTransportFunc) Cancel(ctx context.Context, reason string) ([]byte, e
 
 // BidiSession is the public bidirectional session lifecycle object.
 type BidiSession struct {
-	sessionID      string
-	transport      BidiTransport
-	state          BidiState
-	sentFrames     []BidiFrame
-	receivedFrames []BidiFrame
-	lastSendSeq    uint64
-	lastRecvSeq    uint64
-	terminalFrame  *BidiTerminalFrame
-	maxBuffered    int
+	sessionID       string
+	transport       BidiTransport
+	state           BidiState
+	sentFrames      []BidiFrame
+	receivedFrames  []BidiFrame
+	lastSendSeq     uint64
+	lastRecvSeq     uint64
+	terminalFrame   *BidiTerminalFrame
+	maxBuffered     int
+	localHalfClose  bool
+	remoteHalfClose bool
 }
 
 // BidiFrame is an SDK bidi frame projection.
@@ -234,7 +236,7 @@ func (s *BidiSession) Send(ctx context.Context, frame BidiFrame) (BidiFrame, err
 			Message:   "bidi send path is closed",
 		}
 	}
-	if s.state != BidiOpen {
+	if s.state != BidiOpen && s.state != BidiHalfClosedRemote {
 		return BidiFrame{}, invalidRuntimePayload("bidi send path is closed", nil)
 	}
 	if s.maxBuffered > 0 && len(s.sentFrames) >= s.maxBuffered {
@@ -322,17 +324,12 @@ func (s *BidiSession) CloseSend(ctx context.Context) (BidiOutcome, error) {
 		s.state = BidiFailed
 		return BidiOutcome{}, err
 	}
-	if s.state == BidiHalfClosedRemote {
-		s.state = BidiTerminal
-		return BidiOutcome{
-			sessionID: outcome.sessionID,
-			state:     BidiTerminal,
-			terminal:  true,
-			reason:    outcome.reason,
-		}, nil
-	} else {
-		s.state = outcome.state
+	if outcome.terminal {
+		s.state = BidiFailed
+		return BidiOutcome{}, invalidRuntimePayload("bidi close-send transport must not claim canonical terminality", nil)
 	}
+	s.localHalfClose = true
+	s.state = BidiHalfClosedLocal
 	return outcome, nil
 }
 
@@ -438,9 +435,8 @@ func (s *BidiSession) applyReceivedState(frame BidiFrame) error {
 	case frame.transportTerminal:
 		s.state = BidiFailed
 	case frame.kind == "remote_close_send":
-		if s.state == BidiHalfClosedLocal {
-			s.state = BidiTerminal
-		} else {
+		s.remoteHalfClose = true
+		if !s.localHalfClose {
 			s.state = BidiHalfClosedRemote
 		}
 	case s.state == BidiOpening:

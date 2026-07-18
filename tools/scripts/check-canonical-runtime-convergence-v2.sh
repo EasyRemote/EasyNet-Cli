@@ -3,9 +3,11 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AXON_ROOT="${EASYNET_AXON_ROOT:-$ROOT/../EasyNet-Axon}"
+CANONICAL_LIFECYCLE_AXON_ROOT="$AXON_ROOT"
 PYTHON_BIN="${PYTHON:-python3}"
 MANIFEST="$ROOT/sdk/conformance/canonical-public-api.json"
 MATRIX="$ROOT/sdk/conformance/sdk-parity-matrix.json"
+EDGE_ADAPTER_POLICY="$ROOT/sdk/conformance/edge_adapter_policy.py"
 
 fail() {
   echo "canonical-runtime-convergence-v2: $*" >&2
@@ -13,99 +15,78 @@ fail() {
 }
 
 check_manifest_contract() {
-  "$PYTHON_BIN" - "$MANIFEST" "$MATRIX" <<'PY'
+  "$PYTHON_BIN" - \
+    "$MANIFEST" \
+    "$MATRIX" \
+    "$AXON_ROOT/sdk/conformance/lifecycle/capability-matrix.v1.json" \
+    "$AXON_ROOT/sdk/conformance/lifecycle/lifecycle-vectors.v1.json" <<'PY'
+import hashlib
 import json
 import sys
 from pathlib import Path
 
 manifest = json.loads(Path(sys.argv[1]).read_text())
 matrix = json.loads(Path(sys.argv[2]).read_text())
+axon_matrix_path = Path(sys.argv[3])
+axon_vectors_path = Path(sys.argv[4])
+axon_matrix = json.loads(axon_matrix_path.read_text())
+axon_vectors = json.loads(axon_vectors_path.read_text())
 expected_status_names = {
     "unsupported": "Unsupported",
     "seam": "Seam",
     "provider-backed": "ProviderBacked",
     "cutover-ready": "CutoverReady",
 }
-expected_actions = [
-    "bidi_open",
-    "cancel",
-    "child_dispatch",
-    "deadline",
-    "dispatch",
-    "restart_recover",
-    "start",
-    "stream_open",
-    "terminal_receipt",
-]
+matrix_contract = axon_matrix.get("provider_contract")
+vector_contract = axon_vectors.get("provider_contract")
+if (
+    not isinstance(matrix_contract, dict)
+    or not isinstance(vector_contract, dict)
+    or {
+        "id": matrix_contract.get("id"),
+        "version": matrix_contract.get("version"),
+    } != vector_contract
+):
+    raise SystemExit("axon:canonical_lifecycle_provider_contract")
+expected_reference = {
+    "owner_repository": "EasyNet-Axon",
+    "provider_contract": vector_contract,
+    "capability_matrix": {
+        "path": "sdk/conformance/lifecycle/capability-matrix.v1.json",
+        "sha256": hashlib.sha256(axon_matrix_path.read_bytes()).hexdigest(),
+    },
+    "transition_vectors": {
+        "path": "sdk/conformance/lifecycle/lifecycle-vectors.v1.json",
+        "sha256": hashlib.sha256(axon_vectors_path.read_bytes()).hexdigest(),
+    },
+}
 for name, document in (("manifest", manifest), ("matrix", matrix)):
+    if document.get("schema_version") != 5:
+        raise SystemExit(f"{name}:schema_version")
     if document.get("status_canonical_names") != expected_status_names:
         raise SystemExit(f"{name}:status_canonical_names")
-    if document.get("lifecycle_actions") != expected_actions:
-        raise SystemExit(f"{name}:lifecycle_actions")
-    contract = document.get("lifecycle_transition_contract")
-    if not isinstance(contract, dict) or sorted(contract) != expected_actions:
-        raise SystemExit(f"{name}:lifecycle_transition_contract")
-    for action, entry in contract.items():
-        required = {
-            "allowed_source_states",
-            "transition",
-            "deadline_owner",
-            "child_deadline_propagation",
-            "cancellation_authority",
-            "cancellation_ack",
-            "idempotent_replay_result",
-            "queue_concurrency_limits",
-            "cleanup_responsibility",
-            "receipt_event_observability",
-        }
-        if not isinstance(entry, dict) or set(entry) != required:
-            raise SystemExit(f"{name}:lifecycle_transition_contract:{action}")
-        if not isinstance(entry["allowed_source_states"], list) or not entry["allowed_source_states"]:
-            raise SystemExit(f"{name}:lifecycle_transition_sources:{action}")
-        transition = entry["transition"]
-        if (
-            not isinstance(transition, dict)
-            or set(transition) != {"kind", "state"}
-            or transition["kind"] not in {"next", "terminal"}
-            or not isinstance(transition["state"], str)
-            or not transition["state"]
-        ):
-            raise SystemExit(f"{name}:lifecycle_transition_target:{action}")
-        for field in required - {"allowed_source_states", "transition"}:
-            if not isinstance(entry[field], str) or not entry[field].strip():
-                raise SystemExit(f"{name}:lifecycle_transition_metadata:{action}:{field}")
-if manifest.get("lifecycle_transition_contract") != matrix.get("lifecycle_transition_contract"):
-    raise SystemExit("matrix:lifecycle_transition_contract_drift")
-expected_action_set = set(expected_actions)
+    if document.get("canonical_lifecycle_contract") != expected_reference:
+        raise SystemExit(f"{name}:canonical_lifecycle_contract")
+    if "lifecycle_actions" in document or "lifecycle_transition_contract" in document:
+        raise SystemExit(f"{name}:duplicate_lifecycle_contract")
 for cell in matrix.get("cells", []):
     capability_id = cell.get("capability_id")
     language = cell.get("language")
-    actions = cell.get("lifecycle_vector_actions")
-    missing = cell.get("missing_lifecycle_vector_actions")
-    evidence = cell.get("lifecycle_vector_evidence")
-    if not isinstance(actions, list) or actions != sorted(set(actions)):
-        raise SystemExit(f"matrix:lifecycle_vector_actions:{capability_id}:{language}")
-    if not isinstance(missing, list) or missing != sorted(set(missing)):
-        raise SystemExit(f"matrix:missing_lifecycle_vector_actions:{capability_id}:{language}")
-    if set(actions) | set(missing) != expected_action_set or set(actions) & set(missing):
-        raise SystemExit(f"matrix:lifecycle_vector_partition:{capability_id}:{language}")
-    if not isinstance(evidence, list):
-        raise SystemExit(f"matrix:lifecycle_vector_evidence:{capability_id}:{language}")
-    for item in evidence:
-        if (
-            not isinstance(item, dict)
-            or set(item) != {"case_id", "action"}
-            or item["action"] not in actions
-            or not isinstance(item["case_id"], str)
-            or not item["case_id"]
-        ):
-            raise SystemExit(f"matrix:lifecycle_vector_evidence:{capability_id}:{language}")
-    if (
-        cell.get("status") == "cutover-ready"
-        and cell.get("profile") == "runtime_core"
-        and missing
-    ):
-        raise SystemExit(f"matrix:cutover_lifecycle_vectors_not_closed:{capability_id}:{language}")
+    duplicate = sorted(key for key in cell if key.startswith("lifecycle_"))
+    if duplicate:
+        raise SystemExit(
+            f"matrix:duplicate_lifecycle_claim:{capability_id}:{language}:{','.join(duplicate)}"
+        )
+actions = matrix_contract.get("actions")
+if not isinstance(actions, list) or set(actions) != set(axon_vectors.get("action_contracts", {})):
+    raise SystemExit("axon:canonical_lifecycle_actions")
+for action in actions:
+    capability = axon_matrix.get("capabilities", {}).get(action)
+    if not isinstance(capability, dict):
+        raise SystemExit(f"axon:missing_lifecycle_capability:{action}")
+    for language, row in capability.get("languages", {}).items():
+        if row.get("state") != "CutoverReady":
+            raise SystemExit(f"axon:lifecycle_not_cutover_ready:{action}:{language}")
 
 plain_helpers = {
     "canonical_invocation_bytes",
@@ -168,6 +149,14 @@ for section in ("languages", "members"):
 PY
 }
 
+check_lifecycle_evidence_freshness_contract() {
+  local checker="$AXON_ROOT/scripts/checks/check_lifecycle_convergence_contract.sh"
+  if [[ ! -x "$checker" ]]; then
+    fail "Axon lifecycle freshness checker is missing or not executable: $checker"
+  fi
+  bash "$checker" --require-cutover-ready >/dev/null
+}
+
 check_active_source_contract() {
   if rg -n 'default_auth_for_subject' "$ROOT/src" "$ROOT/sdk" "$ROOT/include" \
     --glob '!sdk/node/node_modules/**' \
@@ -192,12 +181,27 @@ check_sdk_product_neutrality_contract() {
   bash "$ROOT/tools/scripts/check-sdk-product-neutrality.sh" >/dev/null
 }
 
+check_edge_adapter_policy_contract() {
+  "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$MANIFEST" >/dev/null
+}
+
 check_daemon_tuple_route_contract() {
   bash "$ROOT/tools/scripts/check-daemon-invocation-migration.sh" >/dev/null
 }
 
 check_daemon_runtime_route_inventory_contract() {
   bash "$ROOT/tools/scripts/check-architecture-convergence.sh" >/dev/null
+}
+
+check_daemon_runtime_assembly_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local runtime_binding="$cli_root/src/daemon/invocation/dispatch/deps.rs"
+  local invocation_service="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
+
+  if rg -n 'CanonicalOnly|pub fn with_local_runtime\s*\(' \
+    "$runtime_binding" "$invocation_service"; then
+    fail "daemon Invocation transport retains a bare LocalRuntime construction path"
+  fi
 }
 
 check_key_custody_boundary_contract() {
@@ -228,14 +232,15 @@ check_axon_product_protocol_boundary_contract() {
     sdk/rust/src/mcp.rs \
     sdk/rust/src/voice.rs \
     sdk/rust/src/remote_desktop.rs \
+    sdk/rust/src/federation_directory.rs \
     sdk/go/easynet/audio.go \
     sdk/go/easynet/audio_stub.go \
     sdk/go/easynet/tool_adapter.go \
     sdk/go/easynet/mcp/server.go \
-    sdk/python/easynet_axon/audio.py \
-    sdk/python/easynet_axon/tool_adapter.py \
-    sdk/python/easynet_axon/mcp/server.py \
-    sdk/python/easynet_axon/presets/remote_control/descriptor.py \
+    sdk/python/axon_sdk/audio.py \
+    sdk/python/axon_sdk/tool_adapter.py \
+    sdk/python/axon_sdk/mcp/server.py \
+    sdk/python/axon_sdk/presets/remote_control/descriptor.py \
     sdk/node/src/audio.ts \
     sdk/node/src/tool_adapter.ts \
     sdk/node/src/mcp/server.ts \
@@ -308,7 +313,7 @@ check_axon_product_protocol_boundary_contract() {
 
   local rust_lib="$AXON_ROOT/sdk/rust/src/lib.rs"
   if [[ -f "$rust_lib" ]] \
-    && grep -Eq 'pub (mod|use) (audio|mcp|voice|remote_desktop|presets|tool_adapter)\b' "$rust_lib"; then
+    && grep -Eq 'pub (mod|use) (audio|mcp|voice|remote_desktop|presets|tool_adapter|federation_directory)\b|DeviceJoinCredentialEnvelope|DirectoryAgentSummary|ListUserDevices(Request|Response)' "$rust_lib"; then
     fail "Rust SDK exports a product-owned module"
   fi
 
@@ -364,7 +369,7 @@ check_axon_product_protocol_boundary_contract() {
   fi
   local sdk_parity="$AXON_ROOT/sdk/SDK_PARITY.md"
   if [[ -f "$sdk_parity" ]]; then
-    grep -q 'Product-Owned Surfaces' "$sdk_parity" \
+    grep -q '^## Product Boundary$' "$sdk_parity" \
       || fail "SDK parity does not declare the product ownership boundary"
   fi
 }
@@ -373,6 +378,7 @@ check_axon_plain_proof_public_boundary_contract() {
   if [[ ! -d "$AXON_ROOT" ]]; then
     fail "EasyNet-Axon root not found for plain proof boundary contract: $AXON_ROOT"
   fi
+  local cli_root="${CLI_ROOT:-$ROOT}"
 
   local active_text_paths=()
   for path in \
@@ -380,10 +386,10 @@ check_axon_plain_proof_public_boundary_contract() {
     "$AXON_ROOT/document/rfcs/001-pr2-acceptance-checklist.md" \
     "$AXON_ROOT/sdk/conformance/cases/axiom/axiom-admission-pipeline.json" \
     "$AXON_ROOT/sdk/conformance/cases/axiom/axiom-worked-example-authenticated.json" \
-    "$AXON_ROOT/sdk/go/easynet/dendrite_bridge_signed_invoke_cgo.go" \
-    "$AXON_ROOT/sdk/go/easynet/invocation/axiom.go" \
-    "$AXON_ROOT/sdk/java/src/test/java/run/easynet/axon/invocation/AxiomWorkedExampleTest.java" \
-    "$AXON_ROOT/sdk/python/easynet_axon/invocation/axiom.py"
+    "$AXON_ROOT/sdk/go/axon/dendrite_bridge_signed_invoke_cgo.go" \
+    "$AXON_ROOT/sdk/go/axon/invocation/axiom.go" \
+    "$AXON_ROOT/sdk/java/src/test/java/run/axon/sdk/invocation/AxiomWorkedExampleTest.java" \
+    "$AXON_ROOT/sdk/python/axon_sdk/invocation/axiom.py"
   do
     [[ -f "$path" ]] && active_text_paths+=("$path")
   done
@@ -402,7 +408,7 @@ check_axon_plain_proof_public_boundary_contract() {
     fail "Axon Rust invocation source preserves retired plain proof/admission helper names"
   fi
 
-  local python_invocation="$AXON_ROOT/sdk/python/easynet_axon/invocation"
+  local python_invocation="$AXON_ROOT/sdk/python/axon_sdk/invocation"
   if [[ -d "$python_invocation" ]] \
     && rg -n '^def (canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|run_admission)\b|from \.axiom import \([^)]*\b(canonical_invocation_bytes|sign_invocation|verify_invocation_signature)\b|from \.admission import \([^)]*\b(verify_signature|run_admission)\b|"(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|run_admission)"' "$python_invocation"; then
     fail "Axon Python exposes plain proof/admission helpers"
@@ -413,10 +419,11 @@ check_axon_plain_proof_public_boundary_contract() {
     fail "Axon Python source preserves retired plain proof/admission helper names"
   fi
 
-  local go_invocation="$AXON_ROOT/sdk/go/easynet/invocation"
+  local go_invocation="$AXON_ROOT/sdk/go/axon/invocation"
   local go_plain_paths=()
   [[ -d "$go_invocation" ]] && go_plain_paths+=("$go_invocation")
   [[ -f "$AXON_ROOT/sdk/API_MAPPING.md" ]] && go_plain_paths+=("$AXON_ROOT/sdk/API_MAPPING.md")
+  [[ -d "$cli_root/sdk/go" ]] && go_plain_paths+=("$cli_root/sdk/go")
   if ((${#go_plain_paths[@]} > 0)) \
     && rg -n '^func (CanonicalInvocationBytes|SignInvocation|VerifyInvocationSignature|VerifySignature|RunAdmission)\b|\b(CanonicalInvocationBytes|SignInvocation|VerifyInvocationSignature|VerifySignature|RunAdmission)\b' "${go_plain_paths[@]}"; then
     fail "Axon Go exposes plain proof/admission helpers"
@@ -459,7 +466,7 @@ check_axon_plain_proof_public_boundary_contract() {
     fail "Axon Node SDK preserves legacy plain proof/admission helper names"
   fi
 
-  local java_invocation="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation"
+  local java_invocation="$AXON_ROOT/sdk/java/src/main/java/run/axon/sdk/invocation"
   if [[ -d "$java_invocation" ]] \
     && rg -n 'public static [^{;=]+ (canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b' "$java_invocation"; then
     fail "Axon Java exposes plain proof/admission helpers"
@@ -469,7 +476,7 @@ check_axon_plain_proof_public_boundary_contract() {
     fail "Axon Java production invocation source preserves legacy plain proof/admission helpers"
   fi
 
-  local swift_invocation="$AXON_ROOT/sdk/swift/Sources/EasyNetAxon/Invocation"
+  local swift_invocation="$AXON_ROOT/sdk/swift/Sources/AxonSDK/Invocation"
   local swift_plain_paths=()
   [[ -d "$swift_invocation" ]] && swift_plain_paths+=("$swift_invocation")
   [[ -f "$AXON_ROOT/sdk/swift/README.md" ]] && swift_plain_paths+=("$AXON_ROOT/sdk/swift/README.md")
@@ -517,8 +524,13 @@ check_axon_process_local_signer_fallback_contract() {
   local fallback_paths=()
   for path in \
     "$AXON_ROOT/core/runtime-rs/client-sdk/src" \
-    "$AXON_ROOT/sdk" \
-    "$AXON_ROOT/core/runtime-rs/src"
+    "$AXON_ROOT/core/runtime-rs/src" \
+    "$AXON_ROOT/sdk/rust/src" \
+    "$AXON_ROOT/sdk/go/axon" \
+    "$AXON_ROOT/sdk/python/axon_sdk" \
+    "$AXON_ROOT/sdk/node/src" \
+    "$AXON_ROOT/sdk/java/src/main/java/run/axon" \
+    "$AXON_ROOT/sdk/swift/Sources/AxonSDK"
   do
     [[ -e "$path" ]] && fallback_paths+=("$path")
   done
@@ -550,14 +562,100 @@ check_cli_rust_local_fast_signer_boundary_contract() {
   fi
 }
 
+check_cli_signed_submission_boundary_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local client="$cli_root/src/daemon/invocation/dispatch/client.rs"
+  local request="$cli_root/src/daemon/invocation/dispatch/request.rs"
+  local ffi="$cli_root/src/ffi/invocation/mod.rs"
+
+  [[ -f "$client" ]] || fail "CLI signed submission client is missing: $client"
+  [[ -f "$request" ]] || fail "CLI signed submission request model is missing: $request"
+  [[ -f "$ffi" ]] || fail "CLI signed submission FFI adapter is missing: $ffi"
+
+  "$PYTHON_BIN" - "$client" "$request" "$ffi" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+client = Path(sys.argv[1]).read_text()
+request = Path(sys.argv[2]).read_text()
+ffi = Path(sys.argv[3]).read_text()
+
+for method in ("invoke", "invoke_stream", "invoke_bidi"):
+    signature = re.search(
+        rf"pub\s+async\s+fn\s+{method}\s*\((?P<args>.*?)\)\s*->",
+        client,
+        re.DOTALL,
+    )
+    if signature is None:
+        raise SystemExit(f"missing_daemon_client_method:{method}")
+    args = signature.group("args")
+    if not re.search(r"\bsigned\s*:\s*SignedInvocation\b", args):
+        raise SystemExit(f"unsigned_daemon_client_submission:{method}")
+    if re.search(r"\bDaemonInvocation\b", args):
+        raise SystemExit(f"raw_daemon_invocation_submission:{method}")
+
+if "fn signed_envelope(&self) -> Result<axon_sdk::pb::axon::v1::Envelope>" not in request:
+    raise SystemExit("missing_signed_wire_envelope_gate")
+signed_envelope = request.split("fn signed_envelope", 1)[1].split("fn content_envelope", 1)[0]
+if "SignedInvocation state" not in signed_envelope:
+    raise SystemExit("unsigned_wire_submission_not_rejected")
+if "unwrap_or_default()" in request.split("fn into_bidi_open_frame", 1)[1].split("/// Builder", 1)[0]:
+    raise SystemExit("bidi_signature_mac_fallback")
+
+bind = re.search(
+    r"async\s+fn\s+bind\s*\(.*?\)\s*->\s*"
+    r"crate::daemon::Result<crate::daemon::SignedInvocation>",
+    ffi,
+    re.DOTALL,
+)
+if bind is None:
+    raise SystemExit("session_authority_does_not_return_signed_state")
+
+for pattern, label in (
+    (r"\bclient\.invoke\s*\(\s*invocation\s*\)", "ffi_unary_raw_submission"),
+    (r"\bclient\.invoke_stream\s*\(\s*invocation\s*\)", "ffi_stream_raw_submission"),
+    (r"\bclient\.invoke_bidi\s*\(\s*invocation\s*,", "ffi_bidi_raw_submission"),
+):
+    if re.search(pattern, ffi):
+        raise SystemExit(label)
+
+diagnostics = ffi.split("fn runtime_meta_descriptor_catalog_entries", 1)[1].split(
+    "fn descriptor_catalog_entry_from_descriptor", 1
+)[0]
+if ".bind(invocation)" not in diagnostics or ".invoke(signed)" not in diagnostics:
+    raise SystemExit("diagnostics_bypasses_session_invocation_authority")
+PY
+}
+
+find_active_rfc_documents() {
+  local root="$1"
+  [[ -d "$root" ]] || return 0
+
+  while IFS= read -r -d '' path; do
+    if ! sed -n '1,20p' "$path" | grep -Fqi 'Historical status'; then
+      printf '%s\0' "$path"
+    fi
+  done < <(
+    find "$root" \
+      -type f \( -name '*.md' -o -name '*.tex' -o -name '*.txt' \) -print0
+  )
+}
+
 check_ura_vocabulary_contract() {
-  # This gate intentionally delegates SDK surface scanning to the canonical
-  # SDK naming script, then adds active SPEC coverage for the V2 document.
+  # SDK naming owns public package surfaces. The shared active-token
+  # classifier below owns normative prose and distinguishes transport-library
+  # `Uri` types from the canonical runtime's URA vocabulary.
   bash "$ROOT/tools/scripts/check-sdk-ura-naming.sh" >/dev/null
-  if rg -n '\bU(RI|ri|ri)\b|[[:lower:][:digit:]]U(RI|ri)\b|_uri\b' \
-    "$ROOT/docs/spec/canonical-runtime-convergence-v2.md"; then
-    fail "canonical-runtime-convergence-v2 SPEC uses retired address terminology"
+
+  local docs=("$ROOT/docs/spec/canonical-runtime-convergence-v2.md")
+  if [[ -d "$ROOT/docs/rfc" ]]; then
+    while IFS= read -r -d '' path; do
+      docs+=("$path")
+    done < <(find_active_rfc_documents "$ROOT/docs/rfc")
   fi
+
+  check_active_ura_transport_classification_contract "${docs[@]}"
 }
 
 check_axon_protocol_pack_ura_vector_contract() {
@@ -592,8 +690,13 @@ check_axon_normative_ura_document_contract() {
     done < <(
       find "$AXON_ROOT/document" \
         \( -path '*/target/*' -o -path '*/node_modules/*' \) -prune \
-        -o -type f \( -name '*.md' -o -name '*.tex' \) -print0
+        -o -type f \( -name '*.md' -o -name '*.tex' -o -name '*.txt' \) -print0
     )
+  fi
+  if [[ -d "$AXON_ROOT/docs/rfc" ]]; then
+    while IFS= read -r -d '' path; do
+      docs+=("$path")
+    done < <(find_active_rfc_documents "$AXON_ROOT/docs/rfc")
   fi
   for path in \
     "$AXON_ROOT/sdk/SDK_INTERFACE_SPEC.md" \
@@ -606,9 +709,7 @@ check_axon_normative_ura_document_contract() {
   if ((${#docs[@]} == 0)); then
     return
   fi
-  if rg -n '\bURI \+ profile\b|\bURIs\b|\bURI\b|<uri>|\b(subject|caller|callee) URI\b|\b(caller|callee|subject|caller_binding|callee_binding|subject_binding|axiom_binding\.caller|envelope\.caller)\.uri\b|\bstring uri\b|\bAgentUri\b|\bpeer_uri\b|find_peer_by_uri|uri_profile|resolver\.resolve\(uri\)|canonical URI format|"(uri)"|"\buri\b"\s*:' "${docs[@]}"; then
-    fail "Axon active normative documents preserve URI terminology for URA identity data"
-  fi
+  check_active_ura_transport_classification_contract "${docs[@]}"
 }
 
 check_axon_proto_ura_vocabulary_contract() {
@@ -639,10 +740,10 @@ check_axon_sdk_product_neutral_ura_error_contract() {
 
   local sdk_paths=()
   for path in \
-    "$AXON_ROOT/sdk/go/easynet" \
+    "$AXON_ROOT/sdk/go/axon" \
     "$AXON_ROOT/sdk/java/src/main/java" \
     "$AXON_ROOT/sdk/node/src" \
-    "$AXON_ROOT/sdk/python/easynet_axon" \
+    "$AXON_ROOT/sdk/python/axon_sdk" \
     "$AXON_ROOT/sdk/rust/src" \
     "$AXON_ROOT/sdk/swift/Sources" \
     "$AXON_ROOT/sdk/react/src"
@@ -674,8 +775,8 @@ check_axon_active_ura_source_test_contract() {
     "$AXON_ROOT/scripts" \
     "$AXON_ROOT/packaging" \
     "$AXON_ROOT/core/runtime-rs/dendrite-bridge/docs/AUTHENTICATED_INVOCATION.md" \
-    "$AXON_ROOT/sdk/go/easynet/signed_invoke_request_test.go" \
-    "$AXON_ROOT/sdk/go/easynet/ability_lifecycle_server_test.go"
+    "$AXON_ROOT/sdk/go/axon/signed_invoke_request_test.go" \
+    "$AXON_ROOT/sdk/go/axon/ability_lifecycle_server_test.go"
   do
     [[ -e "$path" ]] && paths+=("$path")
   done
@@ -702,9 +803,11 @@ retired = re.compile(
 transport = re.compile(
     r"\b(?:hyper::Uri|http::Uri|tonic::transport::Uri|url::Url)\b"
     r"|\b(?:hyper|http)::uri::[A-Za-z0-9_]+\b"
+    r"|\bbase-uri\b"
     r"|use\s+(?:hyper|tonic::transport)::\{[^}]*\bUri\b[^}]*\}"
     r"|\bconnect_with_connector\b"
     r"|\btower::service_fn\(move \|_:\s*Uri\|"
+    r"|\breq\.uri\b"
     r"|\breq\.uri\(\)"
     r"|\.uri\("
 )
@@ -718,9 +821,13 @@ semantic = re.compile(
 ura = re.compile(r"ura", re.IGNORECASE)
 skip_parts = {
     ".git",
+    ".gradle",
+    ".mypy_cache",
     ".pytest_cache",
+    ".ruff_cache",
     ".venv",
     ".venv-test",
+    ".build",
     "target",
     "build",
     "dist",
@@ -778,67 +885,81 @@ if violations:
 PY
 }
 
+run_ura_vocabulary_self_test() {
+  local fixture_root="$1"
+  mkdir -p "$fixture_root/active-rfc-text"
+
+  printf '%s\n' \
+    'use tonic::transport::{Channel, Endpoint, Uri};' \
+    'let _ = endpoint.connect_with_connector(tower::service_fn(move |_: Uri| async {}));' \
+    'let path = req.uri().path().to_string();' \
+    'let request = hyper::Request::builder().uri("/v1/models");' \
+    'let target_uri: hyper::Uri = "http://127.0.0.1/mcp".parse().unwrap();' \
+    "let policy = \"default-src 'self'; base-uri 'none'\";" \
+    > "$fixture_root/transport-uri.rs"
+  printf '%s\n' \
+    'const caller_uri: &str = "easynet:///r/example/agent/alice";' \
+    'fn rejects_empty_callee_URI() {}' \
+    > "$fixture_root/semantic-uri.rs"
+
+  check_active_ura_transport_classification_contract "$fixture_root/transport-uri.rs"
+  if check_active_ura_transport_classification_contract "$fixture_root/semantic-uri.rs" >/dev/null 2>&1; then
+    fail "self-test expected semantic URI terminology to fail"
+  fi
+
+  printf 'Rule 1 - hosted URI persistence\n' \
+    > "$fixture_root/active-rfc-text/active-baseline.txt"
+  printf 'Historical status: archived terminology fixture\nhosted URI persistence\n' \
+    > "$fixture_root/active-rfc-text/historical-baseline.txt"
+  local active_text_docs=()
+  while IFS= read -r -d '' path; do
+    active_text_docs+=("$path")
+  done < <(find_active_rfc_documents "$fixture_root/active-rfc-text")
+  if check_active_ura_transport_classification_contract "${active_text_docs[@]}" >/dev/null 2>&1; then
+    fail "self-test expected active RFC .txt semantic URI terminology to fail"
+  fi
+
+  printf 'HTTP transport uses http::Uri and base-uri policy directives.\n' \
+    > "$fixture_root/active-rfc-text/active-baseline.txt"
+  active_text_docs=()
+  while IFS= read -r -d '' path; do
+    active_text_docs+=("$path")
+  done < <(find_active_rfc_documents "$fixture_root/active-rfc-text")
+  check_active_ura_transport_classification_contract "${active_text_docs[@]}"
+}
+
 check_schema_source_derivation_contract() {
   if [[ ! -d "$AXON_ROOT" ]]; then
     fail "EasyNet-Axon root not found for schema-source derivation contract: $AXON_ROOT"
   fi
 
-  local syncer="$AXON_ROOT/scripts/proto/sync_axon_v1.sh"
-  if [[ ! -f "$syncer" ]]; then
-    fail "Axon proto source derivation gate is missing: ${syncer#$AXON_ROOT/}"
+  local checker="$AXON_ROOT/scripts/checks/check_proto_derivation.sh"
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  if [[ ! -f "$checker" ]]; then
+    fail "Axon proto source derivation gate is missing: ${checker#$AXON_ROOT/}"
   fi
 
-  if ! bash "$syncer" --check >/dev/null; then
+  if ! EASYNET_CLI_ROOT="$cli_root" \
+    AXON_PROTO_DERIVATION_ROOT="$AXON_ROOT" \
+    bash "$checker" --check >/dev/null; then
     fail "Axon proto mirrors diverged from canonical core/proto source"
   fi
 }
 
-check_axon_benchmark_baseline_coverage_contract() {
+check_axon_benchmark_baseline_contract() {
   if [[ ! -d "$AXON_ROOT" ]]; then
-    fail "EasyNet-Axon root not found for benchmark baseline coverage contract: $AXON_ROOT"
+    fail "EasyNet-Axon root not found for benchmark baseline contract: $AXON_ROOT"
   fi
 
-  local local_runtime_bench="$AXON_ROOT/sdk/rust/benches/local_runtime.rs"
-  local allocation_bench="$AXON_ROOT/sdk/rust/benches/local_runtime_allocations.rs"
-  local baseline_doc="$AXON_ROOT/sdk/rust/benches/BASELINE.md"
-  local readme_doc="$AXON_ROOT/sdk/rust/benches/README.md"
-  for path in "$local_runtime_bench" "$allocation_bench" "$baseline_doc" "$readme_doc"; do
-    [[ -f "$path" ]] || fail "Axon benchmark baseline coverage file is missing: ${path#$AXON_ROOT/}"
-  done
+  local checker="$AXON_ROOT/scripts/checks/check_benchmark_baselines.py"
+  local baseline="$AXON_ROOT/sdk/rust/benches/baseline-v2.json"
+  [[ -f "$checker" ]] || fail "Axon benchmark baseline checker is missing: ${checker#$AXON_ROOT/}"
+  [[ -f "$baseline" ]] || fail "Axon benchmark baseline is missing: ${baseline#$AXON_ROOT/}"
 
-  local scenario
-  for scenario in \
-    "invoke_async/noop/single" \
-    "invoke_async/noop/parallel" \
-    "invoke_stream/two_frames" \
-    "invoke_bidi/echo_round_trip" \
-    "cancel/cooperative_cleanup"
-  do
-    if ! grep -q "$scenario" "$local_runtime_bench"; then
-      fail "Axon local_runtime benchmark harness is missing V2 scenario: $scenario"
-    fi
-    if ! grep -q "$scenario" "$baseline_doc"; then
-      fail "Axon local_runtime baseline document is missing V2 scenario: $scenario"
-    fi
-  done
-
-  for scenario in \
-    "allocation/unary_invoke" \
-    "allocation/stream_two_frames" \
-    "allocation/bidi_echo_round_trip" \
-    "allocation/cancel_cleanup" \
-    "allocation/bounded_concurrency_n16"
-  do
-    if ! grep -q "$scenario" "$allocation_bench"; then
-      fail "Axon local_runtime allocation benchmark is missing V2 scenario: $scenario"
-    fi
-    if ! grep -q "$scenario" "$baseline_doc"; then
-      fail "Axon local_runtime baseline document is missing V2 allocation scenario: $scenario"
-    fi
-  done
-
-  if ! grep -q "local_runtime_allocations.rs" "$readme_doc"; then
-    fail "Axon benchmark README must name the allocation baseline harness"
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 "$checker" \
+    --root "$AXON_ROOT" \
+    --baseline "$baseline" >/dev/null; then
+    fail "Axon canonical LocalRuntime V2 benchmark baseline is invalid"
   fi
 }
 
@@ -847,34 +968,26 @@ check_receipt_proof_fact_contract() {
     fail "EasyNet-Axon root not found for receipt proof-fact contract: $AXON_ROOT"
   fi
 
-  local java_axiom="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
-  local java_bundle="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation/Bundle.java"
-  local java_local_runtime="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation/LocalRuntime.java"
+  local java_axiom="$AXON_ROOT/sdk/java/src/main/java/run/axon/sdk/invocation/Axiom.java"
+  local java_bundle="$AXON_ROOT/sdk/java/src/main/java/run/axon/sdk/invocation/Bundle.java"
+  local java_local_runtime="$AXON_ROOT/sdk/java/src/main/java/run/axon/sdk/invocation/LocalRuntime.java"
   local java_receipt_paths=()
-  local python_axiom="$AXON_ROOT/sdk/python/easynet_axon/invocation/axiom.py"
-  local python_local_runtime="$AXON_ROOT/sdk/python/easynet_axon/invocation/local_runtime.py"
+  local python_axiom="$AXON_ROOT/sdk/python/axon_sdk/invocation/axiom.py"
   local python_receipt_paths=()
   local node_invocation="$AXON_ROOT/sdk/node/src/invocation"
   local node_local_runtime="$AXON_ROOT/sdk/node/src/invocation/local-runtime.ts"
   local node_receipt_paths=()
-  local swift_invocation="$AXON_ROOT/sdk/swift/Sources/EasyNetAxon/Invocation"
+  local swift_invocation="$AXON_ROOT/sdk/swift/Sources/AxonSDK/Invocation"
   local swift_receipt_paths=()
-  local go_invocation="$AXON_ROOT/sdk/go/easynet/invocation"
-  local go_local_runtime="$AXON_ROOT/sdk/go/easynet/invocation/local_runtime.go"
+  local go_invocation="$AXON_ROOT/sdk/go/axon/invocation"
+  local go_local_runtime="$AXON_ROOT/sdk/go/axon/invocation/local_runtime.go"
   local rust_invocation="$AXON_ROOT/sdk/rust/src/invocation"
   local rust_axiom="$AXON_ROOT/sdk/rust/src/invocation/axiom.rs"
   local runtime_client_admission="$AXON_ROOT/core/runtime-rs/client-sdk/src/domain/admission.rs"
-  [[ -d "$AXON_ROOT/sdk/java/src/main/java" ]] && java_receipt_paths+=("$AXON_ROOT/sdk/java/src/main/java")
-  [[ -d "$AXON_ROOT/sdk/java/src/test/java" ]] && java_receipt_paths+=("$AXON_ROOT/sdk/java/src/test/java")
-  [[ -d "$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/examples" ]] && java_receipt_paths+=("$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/examples")
-  [[ -d "$AXON_ROOT/sdk/python/easynet_axon" ]] && python_receipt_paths+=("$AXON_ROOT/sdk/python/easynet_axon")
-  [[ -d "$AXON_ROOT/sdk/python/tests" ]] && python_receipt_paths+=("$AXON_ROOT/sdk/python/tests")
-  [[ -d "$AXON_ROOT/sdk/python/examples" ]] && python_receipt_paths+=("$AXON_ROOT/sdk/python/examples")
+  [[ -d "$AXON_ROOT/sdk/java/src/main/java/run/axon" ]] && java_receipt_paths+=("$AXON_ROOT/sdk/java/src/main/java/run/axon")
+  [[ -d "$AXON_ROOT/sdk/python/axon_sdk" ]] && python_receipt_paths+=("$AXON_ROOT/sdk/python/axon_sdk")
   [[ -d "$AXON_ROOT/sdk/node/src" ]] && node_receipt_paths+=("$AXON_ROOT/sdk/node/src")
-  [[ -d "$AXON_ROOT/sdk/node/tests" ]] && node_receipt_paths+=("$AXON_ROOT/sdk/node/tests")
   [[ -d "$swift_invocation" ]] && swift_receipt_paths+=("$swift_invocation")
-  [[ -d "$AXON_ROOT/sdk/swift/Examples" ]] && swift_receipt_paths+=("$AXON_ROOT/sdk/swift/Examples")
-  [[ -d "$AXON_ROOT/sdk/swift/Tests" ]] && swift_receipt_paths+=("$AXON_ROOT/sdk/swift/Tests")
 
   if rg -n 'AuthorityBinding\.self\(callerBinding\.ura\)|ReceiptProofFacts\.empty\(\)\);' "$java_axiom" "$java_bundle"; then
     fail "Java receipt construction/parsing still synthesizes authority or proof facts"
@@ -889,7 +1002,7 @@ check_receipt_proof_fact_contract() {
     fail "Java SDK/tests/examples still expose or use empty authority proof facts"
   fi
 
-  if rg -n 'field\(default_factory=ReceiptProofFacts\)|AuthorityBinding\.self_\(r\.caller_binding\.ura\)|proof_facts if .*else .*ReceiptProofFacts\(\)' "$python_axiom" "$AXON_ROOT/sdk/python/easynet_axon/invocation/audit.py"; then
+  if rg -n 'field\(default_factory=ReceiptProofFacts\)|AuthorityBinding\.self_\(r\.caller_binding\.ura\)|proof_facts if .*else .*ReceiptProofFacts\(\)' "$python_axiom" "$AXON_ROOT/sdk/python/axon_sdk/invocation/audit.py"; then
     fail "Python receipt construction still defaults authority or proof facts"
   fi
 
@@ -1038,65 +1151,70 @@ PY
   fi
 }
 
+if [[ "${1:-}" == "--ura-only" ]]; then
+  check_ura_vocabulary_contract
+  check_axon_protocol_pack_ura_vector_contract
+  check_axon_normative_ura_document_contract
+  check_axon_proto_ura_vocabulary_contract
+  check_axon_sdk_product_neutral_ura_error_contract
+  check_axon_active_ura_source_test_contract
+  check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
+  echo "canonical-runtime-convergence-v2 URA gate ok"
+  exit 0
+fi
+
+if [[ "${1:-}" == "--self-test-ura" ]]; then
+  tmp="$(mktemp -d "$ROOT/target/canonical-runtime-convergence-v2-ura.XXXXXX")"
+  trap 'rm -rf "$tmp"' EXIT
+  run_ura_vocabulary_self_test "$tmp"
+  echo "canonical-runtime-convergence-v2 URA self-test ok"
+  exit 0
+fi
+
 if [[ "${1:-}" == "--self-test" ]]; then
   tmp="$(mktemp -d "$ROOT/target/canonical-runtime-convergence-v2.XXXXXX")"
   trap 'rm -rf "$tmp"' EXIT
+  "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --self-test >/dev/null
   cp "$MANIFEST" "$tmp/manifest.json"
   cp "$MATRIX" "$tmp/matrix.json"
-  cp "$MATRIX" "$tmp/lifecycle-matrix-missing.json"
-  "$PYTHON_BIN" - "$tmp/lifecycle-matrix-missing.json" <<'PY'
+  cp "$MATRIX" "$tmp/lifecycle-reference-drift.json"
+  "$PYTHON_BIN" - "$tmp/lifecycle-reference-drift.json" <<'PY'
 import json
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 data = json.loads(path.read_text())
-del data["lifecycle_transition_contract"]["cancel"]["cleanup_responsibility"]
+data["canonical_lifecycle_contract"]["transition_vectors"]["sha256"] = "0" * 64
 path.write_text(json.dumps(data))
 PY
-  if ( MATRIX="$tmp/lifecycle-matrix-missing.json"; check_manifest_contract ) >/dev/null 2>&1; then
-    fail "self-test expected lifecycle transition contract field gate to fail"
+  if ( MATRIX="$tmp/lifecycle-reference-drift.json"; check_manifest_contract ) >/dev/null 2>&1; then
+    fail "self-test expected canonical lifecycle reference drift gate to fail"
   fi
-  cp "$MATRIX" "$tmp/lifecycle-matrix-drift.json"
-  "$PYTHON_BIN" - "$tmp/lifecycle-matrix-drift.json" <<'PY'
+  cp "$MATRIX" "$tmp/duplicate-lifecycle-contract.json"
+  "$PYTHON_BIN" - "$tmp/duplicate-lifecycle-contract.json" <<'PY'
 import json
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 data = json.loads(path.read_text())
-data["lifecycle_transition_contract"]["dispatch"]["transition"]["state"] = "running"
+data["lifecycle_transition_contract"] = {}
 path.write_text(json.dumps(data))
 PY
-  if ( MATRIX="$tmp/lifecycle-matrix-drift.json"; check_manifest_contract ) >/dev/null 2>&1; then
-    fail "self-test expected lifecycle transition contract drift gate to fail"
+  if ( MATRIX="$tmp/duplicate-lifecycle-contract.json"; check_manifest_contract ) >/dev/null 2>&1; then
+    fail "self-test expected duplicate lifecycle contract gate to fail"
   fi
-  cp "$MATRIX" "$tmp/lifecycle-vector-missing.json"
-  "$PYTHON_BIN" - "$tmp/lifecycle-vector-missing.json" <<'PY'
+  cp "$MATRIX" "$tmp/duplicate-lifecycle-cell.json"
+  "$PYTHON_BIN" - "$tmp/duplicate-lifecycle-cell.json" <<'PY'
 import json
 import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 data = json.loads(path.read_text())
-del data["cells"][0]["lifecycle_vector_actions"]
+data["cells"][0]["lifecycle_vector_actions"] = []
 path.write_text(json.dumps(data))
 PY
-  if ( MATRIX="$tmp/lifecycle-vector-missing.json"; check_manifest_contract ) >/dev/null 2>&1; then
-    fail "self-test expected lifecycle vector field gate to fail"
-  fi
-  cp "$MATRIX" "$tmp/lifecycle-cutover-incomplete.json"
-  "$PYTHON_BIN" - "$tmp/lifecycle-cutover-incomplete.json" <<'PY'
-import json
-import sys
-from pathlib import Path
-path = Path(sys.argv[1])
-data = json.loads(path.read_text())
-for cell in data["cells"]:
-    if cell["profile"] == "runtime_core" and cell["missing_lifecycle_vector_actions"]:
-        cell["status"] = "cutover-ready"
-        break
-path.write_text(json.dumps(data))
-PY
-  if ( MATRIX="$tmp/lifecycle-cutover-incomplete.json"; check_manifest_contract ) >/dev/null 2>&1; then
-    fail "self-test expected lifecycle cutover vector closure gate to fail"
+  if ( MATRIX="$tmp/duplicate-lifecycle-cell.json"; check_manifest_contract ) >/dev/null 2>&1; then
+    fail "self-test expected duplicate lifecycle cell claim gate to fail"
   fi
   "$PYTHON_BIN" - "$tmp/manifest.json" <<'PY'
 import json
@@ -1167,17 +1285,17 @@ PY
     fail "self-test expected fallback signer leak to fail"
   fi
   mkdir -p "$tmp/axon/sdk/node/src/invocation"
-  mkdir -p "$tmp/axon/sdk/java/src/main/java/run/easynet/axon/invocation"
-  mkdir -p "$tmp/axon/sdk/python/easynet_axon/invocation"
-  mkdir -p "$tmp/axon/sdk/swift/Sources/EasyNetAxon/Invocation"
-  mkdir -p "$tmp/axon/sdk/go/easynet/invocation"
+  mkdir -p "$tmp/axon/sdk/java/src/main/java/run/axon/sdk/invocation"
+  mkdir -p "$tmp/axon/sdk/python/axon_sdk/invocation"
+  mkdir -p "$tmp/axon/sdk/swift/Sources/AxonSDK/Invocation"
+  mkdir -p "$tmp/axon/sdk/go/axon/invocation"
   mkdir -p "$tmp/axon/core/proto/axon/v1"
   mkdir -p "$tmp/axon/core/runtime-rs/client-sdk/proto/axon/v1"
   mkdir -p "$tmp/axon/sdk/rust/proto/axon/v1"
   mkdir -p "$tmp/axon/sdk/rust/src"
   mkdir -p "$tmp/axon/sdk/rust/src/invocation/local_runtime"
-  mkdir -p "$tmp/axon/sdk/go/easynet"
-  mkdir -p "$tmp/axon/sdk/python/easynet_axon"
+  mkdir -p "$tmp/axon/sdk/go/axon"
+  mkdir -p "$tmp/axon/sdk/python/axon_sdk"
   mkdir -p "$tmp/axon/core/runtime-rs" "$tmp/axon/core/runtime-rs/client-sdk/src/domain"
   printf '[package]\nname = "axon-rust-test"\nversion = "0.0.0"\n\n[features]\n' \
     > "$tmp/axon/sdk/rust/Cargo.toml"
@@ -1190,17 +1308,17 @@ PY
   printf 'const CANONICAL_AXON_PROTO_FILES: &[&str] = &[];\n' > "$tmp/axon/sdk/rust/build.rs"
   mkdir -p "$tmp/axon/document/rfcs" "$tmp/axon/sdk"
   printf 'Withdrawn from Axon canonical protocol\n' > "$tmp/axon/document/rfcs/004-mcp-binding.md"
-  printf '## Product-Owned Surfaces\n' > "$tmp/axon/sdk/SDK_PARITY.md"
-  touch "$tmp/axon/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
-  touch "$tmp/axon/sdk/java/src/main/java/run/easynet/axon/invocation/Bundle.java"
-  touch "$tmp/axon/sdk/java/src/main/java/run/easynet/axon/invocation/LocalRuntime.java"
-  touch "$tmp/axon/sdk/python/easynet_axon/invocation/axiom.py"
-  touch "$tmp/axon/sdk/python/easynet_axon/invocation/audit.py"
-  touch "$tmp/axon/sdk/python/easynet_axon/invocation/local_runtime.py"
+  printf '## Product Boundary\n' > "$tmp/axon/sdk/SDK_PARITY.md"
+  touch "$tmp/axon/sdk/java/src/main/java/run/axon/sdk/invocation/Axiom.java"
+  touch "$tmp/axon/sdk/java/src/main/java/run/axon/sdk/invocation/Bundle.java"
+  touch "$tmp/axon/sdk/java/src/main/java/run/axon/sdk/invocation/LocalRuntime.java"
+  touch "$tmp/axon/sdk/python/axon_sdk/invocation/axiom.py"
+  touch "$tmp/axon/sdk/python/axon_sdk/invocation/audit.py"
+  touch "$tmp/axon/sdk/python/axon_sdk/invocation/local_runtime.py"
   touch "$tmp/axon/sdk/node/src/invocation/local-runtime.ts"
-  touch "$tmp/axon/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
-  touch "$tmp/axon/sdk/go/easynet/invocation/axiom.go"
-  touch "$tmp/axon/sdk/go/easynet/invocation/local_runtime.go"
+  touch "$tmp/axon/sdk/swift/Sources/AxonSDK/Invocation/Axiom.swift"
+  touch "$tmp/axon/sdk/go/axon/invocation/axiom.go"
+  touch "$tmp/axon/sdk/go/axon/invocation/local_runtime.go"
   printf 'export interface ReceiptBody { readonly proofFacts?: ReceiptProofFacts; }\n' \
     > "$tmp/axon/sdk/node/src/invocation/axiom.d.ts"
   if ! rg -n 'proofFacts\?: ReceiptProofFacts' "$tmp/axon/sdk/node/src/invocation" >/dev/null; then
@@ -1209,39 +1327,31 @@ PY
   printf '' > "$tmp/axon/sdk/node/src/invocation/axiom.d.ts"
   cp -R "$tmp/axon" "$tmp/axon-receipt-runtime"
   printf 'class LocalRuntime { void emit() { Axiom.ReceiptProofFacts.empty(); } }\n' \
-    > "$tmp/axon-receipt-runtime/sdk/java/src/main/java/run/easynet/axon/invocation/LocalRuntime.java"
+    > "$tmp/axon-receipt-runtime/sdk/java/src/main/java/run/axon/sdk/invocation/LocalRuntime.java"
   if ( AXON_ROOT="$tmp/axon-receipt-runtime"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java LocalRuntime empty proof facts gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-java-authority-helper"
   printf 'class Axiom { static class InvocationAuthorityProof { static InvocationAuthorityProof empty() { return null; } } }\n' \
-    > "$tmp/axon-java-authority-helper/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
+    > "$tmp/axon-java-authority-helper/sdk/java/src/main/java/run/axon/sdk/invocation/Axiom.java"
   if ( AXON_ROOT="$tmp/axon-java-authority-helper"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java empty authority proof helper gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-python-receipt-runtime"
   printf 'binding = AxiomBinding(proof_facts=ReceiptProofFacts())\n' \
-    > "$tmp/axon-python-receipt-runtime/sdk/python/easynet_axon/invocation/local_runtime.py"
+    > "$tmp/axon-python-receipt-runtime/sdk/python/axon_sdk/invocation/local_runtime.py"
   if ( AXON_ROOT="$tmp/axon-python-receipt-runtime"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Python LocalRuntime empty proof facts gate to fail"
   fi
-  cp -R "$tmp/axon" "$tmp/axon-python-receipt-test-helper"
-  mkdir -p "$tmp/axon-python-receipt-test-helper/sdk/python/tests"
-  printf 'facts = ReceiptProofFacts()\n' \
-    > "$tmp/axon-python-receipt-test-helper/sdk/python/tests/test_empty_receipt_facts.py"
-  if ( AXON_ROOT="$tmp/axon-python-receipt-test-helper"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
-    fail "self-test expected Python SDK/test empty proof facts gate to fail"
-  fi
   cp -R "$tmp/axon" "$tmp/axon-python-authority-default-class"
   printf 'class InvocationAuthorityProof:\n    proof_type: str = ""\n    proof_hash: bytes = b"0" * 32\n' \
-    > "$tmp/axon-python-authority-default-class/sdk/python/easynet_axon/invocation/axiom.py"
+    > "$tmp/axon-python-authority-default-class/sdk/python/axon_sdk/invocation/axiom.py"
   if ( AXON_ROOT="$tmp/axon-python-authority-default-class"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Python authority proof dataclass default gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-python-authority-partial-call"
-  mkdir -p "$tmp/axon-python-authority-partial-call/sdk/python/tests"
   printf 'proof = InvocationAuthorityProof(proof_hash=b"0" * 32)\n' \
-    > "$tmp/axon-python-authority-partial-call/sdk/python/tests/test_partial_authority_proof.py"
+    > "$tmp/axon-python-authority-partial-call/sdk/python/axon_sdk/invocation/partial_authority.py"
   if ( AXON_ROOT="$tmp/axon-python-authority-partial-call"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Python partial authority proof call gate to fail"
   fi
@@ -1265,43 +1375,43 @@ PY
   fi
   cp -R "$tmp/axon" "$tmp/axon-go-receipt-runtime"
   printf 'binding := AxiomBinding{ProofFacts: EmptyReceiptProofFacts()}\n' \
-    > "$tmp/axon-go-receipt-runtime/sdk/go/easynet/invocation/local_runtime.go"
+    > "$tmp/axon-go-receipt-runtime/sdk/go/axon/invocation/local_runtime.go"
   if ( AXON_ROOT="$tmp/axon-go-receipt-runtime"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Go LocalRuntime empty proof facts gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-go-receipt-helper"
   printf 'func EmptyReceiptProofFacts() ReceiptProofFacts { return ReceiptProofFacts{} }\n' \
-    > "$tmp/axon-go-receipt-helper/sdk/go/easynet/invocation/axiom.go"
+    > "$tmp/axon-go-receipt-helper/sdk/go/axon/invocation/axiom.go"
   if ( AXON_ROOT="$tmp/axon-go-receipt-helper"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Go empty proof facts helper gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-go-authority-zero"
   printf 'func f() { _ = InvocationAuthorityProof{} }\n' \
-    > "$tmp/axon-go-authority-zero/sdk/go/easynet/invocation/authority_anchor_test.go"
+    > "$tmp/axon-go-authority-zero/sdk/go/axon/invocation/authority_anchor_test.go"
   if ( AXON_ROOT="$tmp/axon-go-authority-zero"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Go zero authority proof gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-swift-receipt-empty"
   printf 'public struct ReceiptProofFacts { public static let empty = ReceiptProofFacts() }\nlet binding = AxiomBinding(proofFacts: .empty)\n' \
-    > "$tmp/axon-swift-receipt-empty/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
+    > "$tmp/axon-swift-receipt-empty/sdk/swift/Sources/AxonSDK/Invocation/Axiom.swift"
   if ( AXON_ROOT="$tmp/axon-swift-receipt-empty"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Swift empty proof facts helper gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-swift-authority-empty"
   printf 'public struct InvocationAuthorityProof { public static let empty = InvocationAuthorityProof() }\nlet facts = ReceiptProofFacts(authorityProof: .empty)\n' \
-    > "$tmp/axon-swift-authority-empty/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
+    > "$tmp/axon-swift-authority-empty/sdk/swift/Sources/AxonSDK/Invocation/Axiom.swift"
   if ( AXON_ROOT="$tmp/axon-swift-authority-empty"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Swift empty authority proof gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-swift-authority-default-init"
   printf 'public init(proofType: String = "", binding: AuthorityBinding? = nil, proofPayload: Data = Data(), proofHash: Data = Data(repeating: 0, count: 32), signature: CalleeSignature? = nil, admissionHook: String = "") {}\n' \
-    > "$tmp/axon-swift-authority-default-init/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
+    > "$tmp/axon-swift-authority-default-init/sdk/swift/Sources/AxonSDK/Invocation/Axiom.swift"
   if ( AXON_ROOT="$tmp/axon-swift-authority-default-init"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Swift authority proof default initializer gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-swift-receipt-default-init"
   printf 'let facts = try ReceiptProofFacts()\n' \
-    > "$tmp/axon-swift-receipt-default-init/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
+    > "$tmp/axon-swift-receipt-default-init/sdk/swift/Sources/AxonSDK/Invocation/Axiom.swift"
   if ( AXON_ROOT="$tmp/axon-swift-receipt-default-init"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Swift empty proof facts constructor gate to fail"
   fi
@@ -1337,220 +1447,120 @@ PY
   fi
   make_schema_fixture() {
     local root="$1"
-    local syncer="$AXON_ROOT/scripts/proto/sync_axon_v1.sh"
-    if [[ ! -f "$syncer" ]]; then
-      fail "self-test requires real Axon proto syncer: ${syncer#$AXON_ROOT/}"
+    local cli_root="$2"
+    local checker="$AXON_ROOT/scripts/checks/check_proto_derivation.sh"
+    if [[ ! -f "$checker" ]]; then
+      fail "self-test requires real Axon proto derivation gate: ${checker#$AXON_ROOT/}"
     fi
 
-    mkdir -p "$root/scripts/proto" \
+    mkdir -p "$root/scripts/checks" \
       "$root/core/proto/axon/v1" \
-      "$root/core/runtime-rs/client-sdk/proto/axon/v1" \
       "$root/sdk/rust/proto/axon/v1" \
-      "$root/core/runtime-rs/client-sdk" \
-      "$root/core/runtime-rs/dendrite-bridge" \
-      "$root/sdk/rust"
-    cp "$syncer" "$root/scripts/proto/sync_axon_v1.sh"
+      "$root/core/runtime-rs/client-sdk/src" \
+      "$cli_root/sdk/go/internal/axonpb" \
+      "$cli_root/sdk/python/easynet_sdk/_axon_pb/axon/v1"
+    cp "$checker" "$root/scripts/checks/check_proto_derivation.sh"
+    touch \
+      "$cli_root/sdk/python/easynet_sdk/_axon_pb/__init__.py" \
+      "$cli_root/sdk/python/easynet_sdk/_axon_pb/axon/__init__.py" \
+      "$cli_root/sdk/python/easynet_sdk/_axon_pb/axon/v1/__init__.py"
 
-    local files=(
-      admin.proto
-      capability.proto
-      control.proto
-      federation.proto
-      identity.proto
-      invoke.proto
-      namespace.proto
-      observe.proto
-      policy.proto
-      state_sync.proto
-      stream.proto
-      transfer.proto
-      types.proto
-    )
-    local proto
-    for proto in "${files[@]}"; do
-      printf 'syntax = "proto3";\npackage axon.v1;\n' \
-        > "$root/core/proto/axon/v1/$proto"
-    done
+    cp \
+      "$AXON_ROOT/core/proto/axon/v1/types.proto" \
+      "$AXON_ROOT/core/proto/axon/v1/invoke.proto" \
+      "$root/core/proto/axon/v1/"
 
-    cat > "$root/core/proto/axon/v1/invoke.proto" <<'PROTO'
-syntax = "proto3";
-package axon.v1;
-
-message InvocationRequest {}
-message InvocationResponse {}
-message StreamRequest {}
-message StreamResponse {}
-message BidiRequest {}
-message BidiResponse {}
-
-service Invocation {
-  rpc Invoke(InvocationRequest) returns (InvocationResponse);
-  rpc InvokeStream(StreamRequest) returns (stream StreamResponse);
-  rpc InvokeBidi(stream BidiRequest) returns (stream BidiResponse);
-}
-PROTO
-    cat > "$root/core/proto/axon/v1/namespace.proto" <<'PROTO'
-syntax = "proto3";
-package axon.v1;
-
-message ResolveRequest {}
-message ResolveResponse {}
-
-service Namespace {
-  rpc Resolve(ResolveRequest) returns (ResolveResponse);
-}
-PROTO
-    cat > "$root/core/proto/axon/v1/transfer.proto" <<'PROTO'
-syntax = "proto3";
-package axon.v1;
-
-message DeletePayloadRequest {}
-message DeletePayloadResponse {}
-message DownloadPayloadRequest {}
-message DownloadPayloadResponse {}
-message GetPayloadMetaRequest {}
-message GetPayloadMetaResponse {}
-message UploadPayloadRequest {}
-message UploadPayloadResponse {}
-
-service PayloadTransfer {
-  rpc DeletePayload(DeletePayloadRequest) returns (DeletePayloadResponse);
-  rpc DownloadPayload(DownloadPayloadRequest) returns (DownloadPayloadResponse);
-  rpc GetPayloadMeta(GetPayloadMetaRequest) returns (GetPayloadMetaResponse);
-  rpc UploadPayload(UploadPayloadRequest) returns (UploadPayloadResponse);
-}
-PROTO
-
-    bash "$root/scripts/proto/sync_axon_v1.sh" --write >/dev/null
-
-    cat > "$root/core/runtime-rs/dendrite-bridge/protocol_catalog.json" <<'JSON'
-[
-  {"service":"Invocation","rpc":"Invoke"},
-  {"service":"Invocation","rpc":"InvokeBidi"},
-  {"service":"Invocation","rpc":"InvokeStream"},
-  {"service":"Namespace","rpc":"Resolve"},
-  {"service":"PayloadTransfer","rpc":"DeletePayload"},
-  {"service":"PayloadTransfer","rpc":"DownloadPayload"},
-  {"service":"PayloadTransfer","rpc":"GetPayloadMeta"},
-  {"service":"PayloadTransfer","rpc":"UploadPayload"}
-]
-JSON
-    for manifest in "$root/core/runtime-rs/client-sdk/Cargo.toml" "$root/sdk/rust/Cargo.toml"; do
-      cat > "$manifest" <<'TOML'
-[package]
-name = "axon-schema-fixture"
-version = "0.0.0"
-
-[dependencies]
-prost = "0.13"
-prost-types = "0.13"
-tonic = "0.12"
-TOML
-    done
-    for lockfile in "$root/core/runtime-rs/client-sdk/Cargo.lock" "$root/sdk/rust/Cargo.lock"; do
-      cat > "$lockfile" <<'LOCK'
-[[package]]
-name = "prost"
-version = "0.13.0"
-
-[[package]]
-name = "prost-types"
-version = "0.13.0"
-
-[[package]]
-name = "tonic"
-version = "0.12.0"
-LOCK
-    done
+    EASYNET_CLI_ROOT="$cli_root" \
+      AXON_PROTO_DERIVATION_ROOT="$root" \
+      bash "$root/scripts/checks/check_proto_derivation.sh" --derive >/dev/null
   }
 
-  make_schema_fixture "$tmp/axon-schema-good"
-  if ! ( AXON_ROOT="$tmp/axon-schema-good"; check_schema_source_derivation_contract ) >/dev/null 2>&1; then
+  make_schema_fixture "$tmp/axon-schema-good" "$tmp/cli-schema-good"
+  if ! (
+    AXON_ROOT="$tmp/axon-schema-good"
+    CLI_ROOT="$tmp/cli-schema-good"
+    check_schema_source_derivation_contract
+  ) >/dev/null 2>&1; then
     fail "self-test expected schema-source derivation fixture to pass"
   fi
   cp -R "$tmp/axon-schema-good" "$tmp/axon-schema-mirror-bad"
   printf '\n// mirror drift\n' \
     >> "$tmp/axon-schema-mirror-bad/sdk/rust/proto/axon/v1/invoke.proto"
-  if ( AXON_ROOT="$tmp/axon-schema-mirror-bad"; check_schema_source_derivation_contract ) >/dev/null 2>&1; then
+  if (
+    AXON_ROOT="$tmp/axon-schema-mirror-bad"
+    CLI_ROOT="$tmp/cli-schema-good"
+    check_schema_source_derivation_contract
+  ) >/dev/null 2>&1; then
     fail "self-test expected schema-source mirror drift gate to fail"
   fi
-  cp -R "$tmp/axon-schema-good" "$tmp/axon-schema-product-bad"
-  printf '\nmessage VoiceSession {}\n' \
-    >> "$tmp/axon-schema-product-bad/core/proto/axon/v1/admin.proto"
-  if ( AXON_ROOT="$tmp/axon-schema-product-bad"; check_schema_source_derivation_contract ) >/dev/null 2>&1; then
-    fail "self-test expected schema-source product proto gate to fail"
+  cp -R "$tmp/axon-schema-good" "$tmp/axon-schema-third-root-bad"
+  mkdir -p "$tmp/axon-schema-third-root-bad/product/proto"
+  cp "$tmp/axon-schema-third-root-bad/core/proto/axon/v1/types.proto" \
+    "$tmp/axon-schema-third-root-bad/product/proto/product.proto"
+  if (
+    AXON_ROOT="$tmp/axon-schema-third-root-bad"
+    CLI_ROOT="$tmp/cli-schema-good"
+    check_schema_source_derivation_contract
+  ) >/dev/null 2>&1; then
+    fail "self-test expected undeclared third proto root gate to fail"
   fi
-  cp -R "$tmp/axon-schema-good" "$tmp/axon-schema-catalog-bad"
-  cat > "$tmp/axon-schema-catalog-bad/core/runtime-rs/dendrite-bridge/protocol_catalog.json" <<'JSON'
-[
-  {"service":"Invocation","rpc":"Invoke"}
-]
-JSON
-  if ( AXON_ROOT="$tmp/axon-schema-catalog-bad"; check_schema_source_derivation_contract ) >/dev/null 2>&1; then
-    fail "self-test expected schema-source Dendrite catalog parity gate to fail"
+  cp -R "$tmp/axon-schema-good" "$tmp/axon-schema-client-proto-bad"
+  mkdir -p "$tmp/axon-schema-client-proto-bad/core/runtime-rs/client-sdk/proto/axon/v1"
+  cp "$tmp/axon-schema-client-proto-bad/core/proto/axon/v1/types.proto" \
+    "$tmp/axon-schema-client-proto-bad/core/runtime-rs/client-sdk/proto/axon/v1/types.proto"
+  if (
+    AXON_ROOT="$tmp/axon-schema-client-proto-bad"
+    CLI_ROOT="$tmp/cli-schema-good"
+    check_schema_source_derivation_contract
+  ) >/dev/null 2>&1; then
+    fail "self-test expected transport-client proto authority gate to fail"
   fi
-  cp -R "$tmp/axon-schema-good" "$tmp/axon-schema-codegen-bad"
-  perl -0pi -e 's/prost = "0\.13"/prost = "0.12"/' \
-    "$tmp/axon-schema-codegen-bad/sdk/rust/Cargo.toml"
-  if ( AXON_ROOT="$tmp/axon-schema-codegen-bad"; check_schema_source_derivation_contract ) >/dev/null 2>&1; then
-    fail "self-test expected schema-source codegen version parity gate to fail"
+  cp -R "$tmp/axon-schema-good" "$tmp/axon-schema-reverse-import-bad"
+  printf '\nimport "product/voice.proto";\n' \
+    >> "$tmp/axon-schema-reverse-import-bad/core/proto/axon/v1/invoke.proto"
+  cp "$tmp/axon-schema-reverse-import-bad/core/proto/axon/v1/invoke.proto" \
+    "$tmp/axon-schema-reverse-import-bad/sdk/rust/proto/axon/v1/invoke.proto"
+  if (
+    AXON_ROOT="$tmp/axon-schema-reverse-import-bad"
+    CLI_ROOT="$tmp/cli-schema-good"
+    check_schema_source_derivation_contract
+  ) >/dev/null 2>&1; then
+    fail "self-test expected reverse product import gate to fail"
   fi
   make_benchmark_fixture() {
     local root="$1"
-    mkdir -p "$root/sdk/rust/benches"
-    cat > "$root/sdk/rust/benches/local_runtime.rs" <<'RS'
-fn bench() {
-    let _ = "invoke_async/noop/single";
-    let _ = "invoke_async/noop/parallel";
-    let _ = "invoke_stream/two_frames";
-    let _ = "invoke_bidi/echo_round_trip";
-    let _ = "cancel/cooperative_cleanup";
-}
-RS
-    cat > "$root/sdk/rust/benches/local_runtime_allocations.rs" <<'RS'
-fn bench() {
-    let _ = "allocation/unary_invoke";
-    let _ = "allocation/stream_two_frames";
-    let _ = "allocation/bidi_echo_round_trip";
-    let _ = "allocation/cancel_cleanup";
-    let _ = "allocation/bounded_concurrency_n16";
-}
-RS
-    cat > "$root/sdk/rust/benches/BASELINE.md" <<'MD'
-# Baseline benchmark numbers
+    mkdir -p "$root/scripts/checks" "$root/sdk/rust/benches"
+    cat > "$root/scripts/checks/check_benchmark_baselines.py" <<'PY'
+#!/usr/bin/env python3
+import argparse
+import json
 
-| Scenario | Median |
-|---|---|
-| `invoke_async/noop/single` | 1 us |
-| `invoke_async/noop/parallel` | 2 us |
-| `invoke_stream/two_frames` | 3 us |
-| `invoke_bidi/echo_round_trip` | 4 us |
-| `cancel/cooperative_cleanup` | 5 us |
-
-| Scenario | Allocations | Bytes |
-|---|---:|---:|
-| `allocation/unary_invoke` | 1 | 1 |
-| `allocation/stream_two_frames` | 2 | 2 |
-| `allocation/bidi_echo_round_trip` | 3 | 3 |
-| `allocation/cancel_cleanup` | 4 | 4 |
-| `allocation/bounded_concurrency_n16` | 5 | 5 |
-MD
-    cat > "$root/sdk/rust/benches/README.md" <<'MD'
-# Benchmarks
-
-`local_runtime_allocations.rs` owns allocation baselines.
-MD
+parser = argparse.ArgumentParser()
+parser.add_argument("--root", required=True)
+parser.add_argument("--baseline", required=True)
+arguments = parser.parse_args()
+with open(arguments.baseline, encoding="utf-8") as baseline:
+    document = json.load(baseline)
+raise SystemExit(0 if document == {"fixture_valid": True} else 1)
+PY
+    printf '{"fixture_valid":true}\n' \
+      > "$root/sdk/rust/benches/baseline-v2.json"
   }
 
   make_benchmark_fixture "$tmp/axon-benchmark-good"
-  if ! ( AXON_ROOT="$tmp/axon-benchmark-good"; check_axon_benchmark_baseline_coverage_contract ) >/dev/null 2>&1; then
+  if ! ( AXON_ROOT="$tmp/axon-benchmark-good"; check_axon_benchmark_baseline_contract ) >/dev/null 2>&1; then
     fail "self-test expected benchmark baseline coverage fixture to pass"
   fi
   cp -R "$tmp/axon-benchmark-good" "$tmp/axon-benchmark-bad"
-  perl -0pi -e 's/\| `allocation\/bidi_echo_round_trip` \| 3 \| 3 \|\n//' \
-    "$tmp/axon-benchmark-bad/sdk/rust/benches/BASELINE.md"
-  if ( AXON_ROOT="$tmp/axon-benchmark-bad"; check_axon_benchmark_baseline_coverage_contract ) >/dev/null 2>&1; then
+  printf '{"fixture_valid":false}\n' \
+    > "$tmp/axon-benchmark-bad/sdk/rust/benches/baseline-v2.json"
+  if ( AXON_ROOT="$tmp/axon-benchmark-bad"; check_axon_benchmark_baseline_contract ) >/dev/null 2>&1; then
     fail "self-test expected benchmark baseline coverage gate to fail"
+  fi
+  cp -R "$tmp/axon-benchmark-good" "$tmp/axon-benchmark-missing"
+  rm "$tmp/axon-benchmark-missing/sdk/rust/benches/baseline-v2.json"
+  if ( AXON_ROOT="$tmp/axon-benchmark-missing"; check_axon_benchmark_baseline_contract ) >/dev/null 2>&1; then
+    fail "self-test expected missing benchmark baseline gate to fail"
   fi
   mkdir -p "$tmp/axon-product/sdk/rust/src"
   cp -R "$tmp/axon/core" "$tmp/axon-product/core"
@@ -1561,8 +1571,8 @@ MD
   touch "$tmp/axon-product/sdk/rust/src/audio.rs"
   mkdir -p "$tmp/axon-product/sdk/go/easynet/mcp"
   touch "$tmp/axon-product/sdk/go/easynet/tool_adapter.go"
-  mkdir -p "$tmp/axon-product/sdk/python/easynet_axon/presets/remote_control"
-  touch "$tmp/axon-product/sdk/python/easynet_axon/audio.py"
+  mkdir -p "$tmp/axon-product/sdk/python/axon_sdk/presets/remote_control"
+  touch "$tmp/axon-product/sdk/python/axon_sdk/audio.py"
   mkdir -p "$tmp/axon-product/sdk/node/src/mcp"
   touch "$tmp/axon-product/sdk/node/src/tool_adapter.ts"
   mkdir -p "$tmp/axon-product/sdk/react/src"
@@ -1580,7 +1590,7 @@ MD
   printf 'pub(crate) fn canonical_invocation_bytes() {}\n' \
     > "$tmp/axon-plain-proof/sdk/rust/src/invocation/axiom.rs"
   printf 'def canonical_invocation_bytes(env):\n  return b""\n' \
-    > "$tmp/axon-plain-proof/sdk/python/easynet_axon/invocation/axiom.py"
+    > "$tmp/axon-plain-proof/sdk/python/axon_sdk/invocation/axiom.py"
   if ( AXON_ROOT="$tmp/axon-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon plain proof boundary gate to fail"
   fi
@@ -1602,34 +1612,40 @@ MD
   fi
   cp -R "$tmp/axon" "$tmp/axon-python-private-plain-proof"
   printf 'def _canonical_invocation_bytes(env):\n  return b""\n' \
-    > "$tmp/axon-python-private-plain-proof/sdk/python/easynet_axon/invocation/axiom.py"
+    > "$tmp/axon-python-private-plain-proof/sdk/python/axon_sdk/invocation/axiom.py"
   if ( AXON_ROOT="$tmp/axon-python-private-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Python private plain proof boundary gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-python-legacy-plain-proof"
   printf 'def _legacy_plain_invocation_bytes(env):\n  return b""\ndef _run_legacy_plain_admission(env, sig, resolver, replay, now_ms):\n  return None\n' \
-    > "$tmp/axon-python-legacy-plain-proof/sdk/python/easynet_axon/invocation/axiom.py"
+    > "$tmp/axon-python-legacy-plain-proof/sdk/python/axon_sdk/invocation/axiom.py"
   if ( AXON_ROOT="$tmp/axon-python-legacy-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Python legacy plain proof boundary gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-go-plain-proof"
-  mkdir -p "$tmp/axon-go-plain-proof/sdk/go/easynet/invocation"
+  mkdir -p "$tmp/axon-go-plain-proof/sdk/go/axon/invocation"
   printf 'package invocation\nfunc CanonicalInvocationBytes() []byte { return nil }\nfunc canonicalInvocationBytes() []byte { return nil }\n' \
-    > "$tmp/axon-go-plain-proof/sdk/go/easynet/invocation/axiom.go"
+    > "$tmp/axon-go-plain-proof/sdk/go/axon/invocation/axiom.go"
   if ( AXON_ROOT="$tmp/axon-go-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Go plain proof boundary gate to fail"
   fi
+  mkdir -p "$tmp/cli-go-plain-proof/sdk/go"
+  printf 'package easynet\nfunc CanonicalInvocationBytes() []byte { return nil }\n' \
+    > "$tmp/cli-go-plain-proof/sdk/go/invocation_canonical.go"
+  if ( AXON_ROOT="$tmp/axon" CLI_ROOT="$tmp/cli-go-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected CLI Go plain proof boundary gate to fail"
+  fi
   cp -R "$tmp/axon" "$tmp/axon-go-legacy-plain-proof"
-  mkdir -p "$tmp/axon-go-legacy-plain-proof/sdk/go/easynet/invocation"
+  mkdir -p "$tmp/axon-go-legacy-plain-proof/sdk/go/axon/invocation"
   printf 'package invocation\nfunc legacyPlainInvocationBytes() []byte { return nil }\n' \
-    > "$tmp/axon-go-legacy-plain-proof/sdk/go/easynet/invocation/axiom.go"
+    > "$tmp/axon-go-legacy-plain-proof/sdk/go/axon/invocation/axiom.go"
   if ( AXON_ROOT="$tmp/axon-go-legacy-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Go legacy plain proof boundary gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-go-legacy-plain-test-fixture"
-  mkdir -p "$tmp/axon-go-legacy-plain-test-fixture/sdk/go/easynet/invocation"
+  mkdir -p "$tmp/axon-go-legacy-plain-test-fixture/sdk/go/axon/invocation"
   printf 'package invocation\nfunc legacyPlainInvocationBytes() []byte { return nil }\n' \
-    > "$tmp/axon-go-legacy-plain-test-fixture/sdk/go/easynet/invocation/legacy_plain_fixtures_test.go"
+    > "$tmp/axon-go-legacy-plain-test-fixture/sdk/go/axon/invocation/legacy_plain_fixtures_test.go"
   if ( AXON_ROOT="$tmp/axon-go-legacy-plain-test-fixture"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Go legacy plain proof test fixture gate to fail"
   fi
@@ -1655,30 +1671,30 @@ MD
     fail "self-test expected Axon Node legacy plain proof script gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-java-plain-proof"
-  mkdir -p "$tmp/axon-java-plain-proof/sdk/java/src/main/java/run/easynet/axon/invocation"
-  printf 'package run.easynet.axon.invocation; public final class Axiom { public static byte[] canonicalInvocationBytes(Object env) { return new byte[0]; } }\n' \
-    > "$tmp/axon-java-plain-proof/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
+  mkdir -p "$tmp/axon-java-plain-proof/sdk/java/src/main/java/run/axon/sdk/invocation"
+  printf 'package run.axon.sdk.invocation; public final class Axiom { public static byte[] canonicalInvocationBytes(Object env) { return new byte[0]; } }\n' \
+    > "$tmp/axon-java-plain-proof/sdk/java/src/main/java/run/axon/sdk/invocation/Axiom.java"
   if ( AXON_ROOT="$tmp/axon-java-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Java plain proof boundary gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-java-legacy-plain-proof"
-  mkdir -p "$tmp/axon-java-legacy-plain-proof/sdk/java/src/main/java/run/easynet/axon/invocation"
-  printf 'package run.easynet.axon.invocation; final class Axiom { static byte[] legacyPlainInvocationBytes(Object env) { return new byte[0]; } }\n' \
-    > "$tmp/axon-java-legacy-plain-proof/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
+  mkdir -p "$tmp/axon-java-legacy-plain-proof/sdk/java/src/main/java/run/axon/sdk/invocation"
+  printf 'package run.axon.sdk.invocation; final class Axiom { static byte[] legacyPlainInvocationBytes(Object env) { return new byte[0]; } }\n' \
+    > "$tmp/axon-java-legacy-plain-proof/sdk/java/src/main/java/run/axon/sdk/invocation/Axiom.java"
   if ( AXON_ROOT="$tmp/axon-java-legacy-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Java legacy plain proof boundary gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-swift-plain-proof"
-  mkdir -p "$tmp/axon-swift-plain-proof/sdk/swift/Sources/EasyNetAxon/Invocation"
+  mkdir -p "$tmp/axon-swift-plain-proof/sdk/swift/Sources/AxonSDK/Invocation"
   printf 'import Foundation\npublic func canonicalInvocationBytes(_ env: Any) -> Data { Data() }\n' \
-    > "$tmp/axon-swift-plain-proof/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
+    > "$tmp/axon-swift-plain-proof/sdk/swift/Sources/AxonSDK/Invocation/Axiom.swift"
   if ( AXON_ROOT="$tmp/axon-swift-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Swift plain proof boundary gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-swift-legacy-plain-proof"
-  mkdir -p "$tmp/axon-swift-legacy-plain-proof/sdk/swift/Sources/EasyNetAxon/Invocation"
+  mkdir -p "$tmp/axon-swift-legacy-plain-proof/sdk/swift/Sources/AxonSDK/Invocation"
   printf 'import Foundation\nfunc legacyPlainInvocationBytes(_ env: Any) -> Data { Data() }\n' \
-    > "$tmp/axon-swift-legacy-plain-proof/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
+    > "$tmp/axon-swift-legacy-plain-proof/sdk/swift/Sources/AxonSDK/Invocation/Axiom.swift"
   if ( AXON_ROOT="$tmp/axon-swift-legacy-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Swift legacy plain proof boundary gate to fail"
   fi
@@ -1699,28 +1715,42 @@ MD
     fail "self-test expected Axon process-local signer fallback gate to fail"
   fi
   mkdir -p "$tmp/cli-local-fast/src"
-  printf '[features]\nlocal-fast-probes = ["easynet-axon/local-fast-probes"]\n' \
+  printf '[features]\nlocal-fast-probes = ["axon-sdk/local-fast-probes"]\n' \
     > "$tmp/cli-local-fast/Cargo.toml"
   printf 'let runtime = LocalRuntime::new_local_fast();\n' \
     > "$tmp/cli-local-fast/src/probe.rs"
   if ( CLI_ROOT="$tmp/cli-local-fast"; check_cli_rust_local_fast_signer_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected CLI Rust local-fast signer consumer gate to fail"
   fi
-  printf '%s\n' \
-    'use tonic::transport::{Channel, Endpoint, Uri};' \
-    'let _ = endpoint.connect_with_connector(tower::service_fn(move |_: Uri| async {}));' \
-    'let path = req.uri().path().to_string();' \
-    'let request = hyper::Request::builder().uri("/v1/models");' \
-    'let target_uri: hyper::Uri = "http://127.0.0.1/mcp".parse().unwrap();' \
-    > "$tmp/transport-uri.rs"
-  printf '%s\n' \
-    'const caller_uri: &str = "easynet:///r/example/agent/alice";' \
-    'fn rejects_empty_callee_URI() {}' \
-    > "$tmp/semantic-uri.rs"
-  check_active_ura_transport_classification_contract "$tmp/transport-uri.rs"
-  if check_active_ura_transport_classification_contract "$tmp/semantic-uri.rs" >/dev/null 2>&1; then
-    fail "self-test expected semantic URI terminology to fail"
+  mkdir -p "$tmp/cli-unsigned-submit/src/daemon/invocation/dispatch" \
+    "$tmp/cli-unsigned-submit/src/ffi/invocation"
+  cat > "$tmp/cli-unsigned-submit/src/daemon/invocation/dispatch/client.rs" <<'EOF'
+pub async fn invoke(&self, invocation: DaemonInvocation) -> Result<Response> {}
+pub async fn invoke_stream(&self, invocation: DaemonInvocation) -> Result<Stream> {}
+pub async fn invoke_bidi(&self, invocation: DaemonInvocation, streams: Vec<Stream>) -> Result<Bidi> {}
+EOF
+  cat > "$tmp/cli-unsigned-submit/src/daemon/invocation/dispatch/request.rs" <<'EOF'
+fn envelope(&self) -> axon_sdk::pb::axon::v1::Envelope {}
+fn into_bidi_open_frame(self) { let mac = signature.unwrap_or_default(); }
+/// Builder
+EOF
+  cat > "$tmp/cli-unsigned-submit/src/ffi/invocation/mod.rs" <<'EOF'
+async fn bind(&self, invocation: DaemonInvocation) -> Result<DaemonInvocation> { invocation }
+fn runtime_meta_descriptor_catalog_entries() { client.invoke(invocation); }
+fn descriptor_catalog_entry_from_descriptor() {}
+EOF
+  if ( CLI_ROOT="$tmp/cli-unsigned-submit"; check_cli_signed_submission_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected unsigned CLI submission boundary gate to fail"
   fi
+  mkdir -p "$tmp/cli-bare-runtime/src/daemon/invocation/dispatch"
+  printf 'enum RuntimeBinding { CanonicalOnly(LocalRuntime), Daemon(DaemonRuntimeAssembly) }\n' \
+    > "$tmp/cli-bare-runtime/src/daemon/invocation/dispatch/deps.rs"
+  printf 'pub fn with_local_runtime(self, runtime: LocalRuntime) -> Self { self }\n' \
+    > "$tmp/cli-bare-runtime/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
+  if ( CLI_ROOT="$tmp/cli-bare-runtime"; check_daemon_runtime_assembly_contract ) >/dev/null 2>&1; then
+    fail "self-test expected bare daemon LocalRuntime construction gate to fail"
+  fi
+  run_ura_vocabulary_self_test "$tmp/ura-vocabulary"
   cp -R "$tmp/axon" "$tmp/axon-uri-vector"
   mkdir -p "$tmp/axon-uri-vector/packaging/protocol-pack/conformance-vectors"
   printf '{"description":"Cross-language URI canonicalization vectors","vectors":[{"input_uri":"easynet:///r/example/agent/a","canonical_uri":"easynet:///r/example/agent/a"}]}\n' \
@@ -1789,11 +1819,14 @@ MD
     fail "self-test expected Axon active source/test URI terminology gate to fail"
   fi
   AXON_ROOT="$tmp/axon"
-  check_manifest_contract
+  ( AXON_ROOT="$CANONICAL_LIFECYCLE_AXON_ROOT"; check_lifecycle_evidence_freshness_contract )
+  ( AXON_ROOT="$CANONICAL_LIFECYCLE_AXON_ROOT"; check_manifest_contract )
   check_active_source_contract
+  check_edge_adapter_policy_contract
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
   check_daemon_runtime_route_inventory_contract
+  check_daemon_runtime_assembly_contract
   check_key_custody_boundary_contract
   check_daemon_mission_eal_boundary_contract
   check_ura_vocabulary_contract
@@ -1804,22 +1837,26 @@ MD
   check_axon_active_ura_source_test_contract
   check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
   ( AXON_ROOT="$tmp/axon-schema-good"; check_schema_source_derivation_contract )
-  ( AXON_ROOT="$tmp/axon-benchmark-good"; check_axon_benchmark_baseline_coverage_contract )
+  ( AXON_ROOT="$tmp/axon-benchmark-good"; check_axon_benchmark_baseline_contract )
   check_axon_product_protocol_boundary_contract
   check_axon_plain_proof_public_boundary_contract
   check_axon_rust_local_fast_signer_boundary_contract
   check_axon_process_local_signer_fallback_contract
   check_cli_rust_local_fast_signer_boundary_contract
+  check_cli_signed_submission_boundary_contract
   check_receipt_proof_fact_contract
   echo "canonical-runtime-convergence-v2 self-test ok"
   exit 0
 fi
 
+check_lifecycle_evidence_freshness_contract
 check_manifest_contract
 check_active_source_contract
+check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
 check_daemon_runtime_route_inventory_contract
+check_daemon_runtime_assembly_contract
 check_key_custody_boundary_contract
 check_daemon_mission_eal_boundary_contract
 check_ura_vocabulary_contract
@@ -1830,11 +1867,12 @@ check_axon_sdk_product_neutral_ura_error_contract
 check_axon_active_ura_source_test_contract
 check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
 check_schema_source_derivation_contract
-check_axon_benchmark_baseline_coverage_contract
+check_axon_benchmark_baseline_contract
 check_axon_product_protocol_boundary_contract
 check_axon_plain_proof_public_boundary_contract
 check_axon_rust_local_fast_signer_boundary_contract
 check_axon_process_local_signer_fallback_contract
 check_cli_rust_local_fast_signer_boundary_contract
+check_cli_signed_submission_boundary_contract
 check_receipt_proof_fact_contract
 echo "canonical-runtime-convergence-v2: OK"

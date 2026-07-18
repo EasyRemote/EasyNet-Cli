@@ -367,9 +367,7 @@ class InvokeServerStreamRequest(google.protobuf.message.Message):
         """large/multimedia payload reference"""
 
     @property
-    def content_envelope(self) -> types_pb2.ContentEnvelope:
-        """Field 11 is reserved."""
-
+    def content_envelope(self) -> types_pb2.ContentEnvelope: ...
     def __init__(
         self,
         *,
@@ -1231,9 +1229,8 @@ class InvocationReceipt(google.protobuf.message.Message):
     @property
     def signer_binding(self) -> types_pb2.AgentIdentity:
         """── RFC 001 §A12 hosted-Agent attestation (26..27) ───
-        For hosted Agents (Plan §1.3 Model B — consent / policy / mcp /
-        llm sub-agents that have no key of their own), the signing
-        authority is the hosting device-profile, not the callee Agent
+        For hosted Agents (Plan §1.3 Model B) that have no key of their own,
+        the signing authority is the hosting device-profile, not the callee Agent
         itself. The two fields below let an offline verifier check that
         a receipt attributed to a hosted callee was actually signed by
         a host that legitimately hosts that callee.

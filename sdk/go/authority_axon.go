@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	axonsdk "easynet.run/axon/sdk/go/easynet"
+	axonsdk "axon.run/sdk/go/axon"
 )
 
 // DelegationProofRaw is the SDK facade for Axon's canonical raw

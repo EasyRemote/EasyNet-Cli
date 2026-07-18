@@ -3,8 +3,6 @@ profile: runtime_core
 required_for:
   - go
   - python
-lifecycle_actions:
-  - restart_recover
 description: Runtime ability facades expose restart recovery only as a Runtime Core provider delegation and do not implement product-specific recovery policy.
 steps:
   - action: submit_ability_recovery_request

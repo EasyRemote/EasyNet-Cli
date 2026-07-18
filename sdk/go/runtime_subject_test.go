@@ -25,7 +25,7 @@ func TestDescriptorBoundSubjectURAProjectsUserSubjectBeforeSigning(t *testing.T)
 		t.Fatalf("subject = %q, want %q", subjectURA, want)
 	}
 
-	_, err = CanonicalInvocationBytes(Envelope{
+	_, err = canonicalDescriptorBoundInvocationBytes(Envelope{
 		Caller:        AgentRef{URA: "easynet:///r/example/agent/backend.sdk"},
 		Callee:        AgentRef{URA: "easynet:///r/example/device/dev-a"},
 		Subject:       SubjectRef{URA: subjectURA},
@@ -33,12 +33,12 @@ func TestDescriptorBoundSubjectURAProjectsUserSubjectBeforeSigning(t *testing.T)
 		CausalContext: CausalNullWithReason(""),
 	}, runtimeSubjectDescriptorRef, []byte(`{}`))
 	if err != nil {
-		t.Fatalf("CanonicalInvocationBytes(projected subject): %v", err)
+		t.Fatalf("canonicalDescriptorBoundInvocationBytes(projected subject): %v", err)
 	}
 }
 
-func TestCanonicalInvocationBytesRejectsUnprojectedUserSubject(t *testing.T) {
-	_, err := CanonicalInvocationBytes(Envelope{
+func TestDescriptorBoundInvocationBytesRejectUnprojectedUserSubject(t *testing.T) {
+	_, err := canonicalDescriptorBoundInvocationBytes(Envelope{
 		Caller:        AgentRef{URA: "easynet:///r/example/agent/backend.sdk"},
 		Callee:        AgentRef{URA: "easynet:///r/example/device/dev-a"},
 		Subject:       SubjectRef{URA: "easynet:///r/example/user/alice"},
@@ -46,7 +46,7 @@ func TestCanonicalInvocationBytesRejectsUnprojectedUserSubject(t *testing.T) {
 		CausalContext: CausalNullWithReason(""),
 	}, runtimeSubjectDescriptorRef, []byte(`{}`))
 	if err == nil {
-		t.Fatal("CanonicalInvocationBytes accepted an unprojected user subject")
+		t.Fatal("canonicalDescriptorBoundInvocationBytes accepted an unprojected user subject")
 	}
 	if !strings.Contains(err.Error(), "subject_ref_kind_unsupported:user") {
 		t.Fatalf("unexpected error: %v", err)

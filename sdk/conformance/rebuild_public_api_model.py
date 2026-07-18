@@ -10,13 +10,22 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from edge_adapter_policy import (
+    DEFAULT_POLICY as EDGE_ADAPTER_POLICY,
+    load_json as load_edge_adapter_policy,
+    validate_policy as validate_edge_adapter_policy,
+)
 from sdk_public_surface_policy import (
     DOWNSTREAM_ITEMS,
     PRODUCT_NEUTRAL_CUTOVER_REF,
     canonical_quarantine_reason,
     public_root,
 )
-from sdk_concepts import LIFECYCLE_ACTIONS, STATUS_CANONICAL_NAMES, STATUSES
+from sdk_concepts import (
+    STATUS_CANONICAL_NAMES,
+    STATUSES,
+    canonical_lifecycle_reference,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL = ROOT / "sdk/conformance/canonical-public-api.json"
@@ -26,9 +35,18 @@ LANGUAGES = ["rust", "c_abi", "go", "python", "node", "java", "swift"]
 # Ordered semantic rules are deliberately narrow. An item matching no rule is an
 # inventory failure, not an implicit public/canonical assumption.
 SEMANTIC_RULES: list[tuple[str, str]] = [
-    (r"(abilitydispatch|abilitypackage|deployability|deploypackage|deploytonode|exportability|uninstallability|buildabilitypackage)", "ability_invocation_facade"),
-    (r"(mcptool|tooladapter|toolhandler|toolspec|progresssink|reportoutcome|^mcp$)", "unary_invoke"),
-    (r"(phasereceipt|receiptphase|newreceipt|deploytrace|phasestatus|^phase$|^receipt$)", "terminal_receipt_facts"),
+    (
+        r"(abilitydispatch|abilitypackage|deployability|deploypackage|deploytonode|exportability|uninstallability|buildabilitypackage)",
+        "ability_invocation_facade",
+    ),
+    (
+        r"(mcptool|tooladapter|toolhandler|toolspec|progresssink|reportoutcome|^mcp$)",
+        "unary_invoke",
+    ),
+    (
+        r"(phasereceipt|receiptphase|newreceipt|deploytrace|phasestatus|^phase$|^receipt$)",
+        "terminal_receipt_facts",
+    ),
     (r"(capturemode|mediacapture)", "stream"),
     (r"(^modespec$)", "stream"),
     (r"(canonicalserialise)", "terminal_receipt_facts"),
@@ -40,40 +58,103 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
     (r"(^ability$)", "ability_invocation_facade"),
     (r"(^presets$)", "runtime_connection"),
     (r"(^utils$)", "typed_errors"),
-    (r"(abilitydescriptor|descriptorref|descriptorprojection|abilityschema)", "ability_descriptor_projection"),
-    (r"(accesscontrol|admission|grantactive|grantrevoked|noncereplay)", "access_control"),
-    (r"(delegation|sessionauthority|authority|proofbinding|hostedattestation|hostattestation|subjectauth|privateagentauth|privatehubauth)", "authority_metadata"),
-    (r"(canonicaladdress|abilityaddress|addressing|abilityura|agentura|entityura|receiptura|\bura\b|urabuilder|easynetaxonura)", "canonical_addressing"),
+    (
+        r"(abilitydescriptor|descriptorref|descriptorprojection|abilityschema)",
+        "ability_descriptor_projection",
+    ),
+    (
+        r"(accesscontrol|admission|grantactive|grantrevoked|noncereplay)",
+        "access_control",
+    ),
+    (
+        r"(delegation|sessionauthority|authority|proofbinding|hostedattestation|hostattestation|subjectauth|privateagentauth|privatehubauth)",
+        "authority_metadata",
+    ),
+    (
+        r"(canonicaladdress|abilityaddress|addressing|abilityura|agentura|entityura|receiptura|\bura\b|urabuilder|easynetaxonura|axonsdkura)",
+        "canonical_addressing",
+    ),
     (r"(bidi|duplex)", "bidi"),
-    (r"(stream)", "stream"),
-    (r"(receiptchain|verifyreceipt|verifiedreceipt|unverifiedreceipt|chaincheck|receiptverifier|finalizationcheckpoint|computereceipthash|verifyphase|verifyhostattestation)", "receipt_verification"),
-    (r"(receipthistory|receiptlist|receiptget|receiptquery|receiptanchor|receiptref|tracegraph|traceedge|ledgerrecord|invocationindex|persistentlog|causallink)", "receipt_history"),
-    (r"(terminalreceipt|runtimereceipt|receiptfacts|receiptbody|receipttype|receiptjson|receiptproof|hostedagentreceipt|canonicalreceipt)", "terminal_receipt_facts"),
-    (r"(prepared|invocationprepare|signingmaterial|signedinvocation|signatureprovider|signerhandle|\bsigner\b)", "prepare_sign_submit"),
-    (r"(invocationdraft|invocationtuple|invocationbuilder|causal|agentref|agentidentity|subjectref|subjectidentity|entityref|invocationenvelope|invocationjson|canonicaljson|descriptorbound|freshnonce|privateagentsubject|privatehubsubject|validateenvelope|tojcs)", "complete_invocation_draft"),
+    (
+        r"(stream|contentchunk|contentsegment|contentprovider|contentsession|segmenter)",
+        "stream",
+    ),
+    (
+        r"(receiptchain|verifyreceipt|verifiedreceipt|unverifiedreceipt|chaincheck|receiptverifier|finalizationcheckpoint|computereceipthash|verifyphase|verifyhostattestation)",
+        "receipt_verification",
+    ),
+    (
+        r"(receipthistory|receiptlist|receiptget|receiptquery|receiptanchor|receiptref|tracegraph|traceedge|ledgerrecord|invocationindex|persistentlog|causallink)",
+        "receipt_history",
+    ),
+    (
+        r"(terminalreceipt|runtimereceipt|boundreceipt|receiptfacts|receiptbody|receipttype|receiptjson|receiptproof|receiptprovider|hostedagentreceipt|canonicalreceipt|registeredimplementation|resolveddescriptor|receiptsigningauthority)",
+        "terminal_receipt_facts",
+    ),
+    (
+        r"(prepared|invocationprepare|signingmaterial|signedinvocation|signatureprovider|signerhandle|\bsigner\b)",
+        "prepare_sign_submit",
+    ),
+    (
+        r"(invocationdraft|invocationtuple|invocationbuilder|canonicalenvelope|wireenvelope|derivationpolicy|causal|agentref|agentidentity|subjectref|subjectidentity|entityref|invocationenvelope|invocationjson|canonicaljson|descriptorbound|freshnonce|privateagentsubject|privatehubsubject|validateenvelope|tojcs)",
+        "complete_invocation_draft",
+    ),
     (r"(managedsign|keyservice)", "managed_signing"),
-    (r"(runtimerecovery|restartrecover|recoverruntime|runtimerecover)", "runtime_lifecycle"),
+    (
+        r"(runtimerecovery|invocationrecovery|restartrecover|recoverruntime|runtimerecover|recoveryphase|recoverysupervisor|recoverycontinuation|recoveryfn)",
+        "runtime_lifecycle",
+    ),
     (r"(principal.*recovery|recoverypolicy)", "principal_recovery"),
     (r"(principal.*enroll|enrollment)", "principal_enrollment"),
-    (r"(publickeybinding|principal.*key|bindprincipal|rotateprincipal|revokeprincipalkey)", "principal_public_key_bindings"),
+    (
+        r"(publickeybinding|principal.*key|bindprincipal|rotateprincipal|revokeprincipalkey)",
+        "principal_public_key_bindings",
+    ),
     (r"(authorizationgrant|issuegrant|revokegrant)", "principal_authorization_grants"),
     (r"(principal)", "principal_lifecycle"),
-    (r"(directory|discoverrequest|discoverresponse|resolveagent|resolvekey|resolver|federat|devicejoin|listuserdevices)", "directory_resolution"),
+    (
+        r"(directory|discoverrequest|discoverresponse|resolveagent|resolvekey|resolver|federat|devicejoin|listuserdevices)",
+        "directory_resolution",
+    ),
     (r"(runtimeevent|abilitychangeevent|directoryevent)", "runtime_events"),
-    (r"(runtimeidentity|runtimecredential|selfidentity|identityjson)", "runtime_identity"),
+    (
+        r"(runtimeidentity|runtimecredential|selfidentity|identityjson)",
+        "runtime_identity",
+    ),
     (r"(sdkenvironment|processroot|environment)", "runtime_environment"),
     (r"(runtimehealth|healthclient|healthtransport|diagnostic)", "runtime_health"),
     (r"(runtimeadmin|administration)", "runtime_administration"),
     (r"(controlipc|controlframe|controljson|controlendpoint)", "control_ipc"),
     (r"(nativeruntime|cabiruntime|dendritebridge|nativebridge)", "native_runtime"),
-    (r"(feature|abiversion|sdkversion|requireabi|version$|versioninfo)", "abi_version_discovery"),
+    (
+        r"(feature|abiversion|sdkversion|requireabi|version$|versioninfo)",
+        "abi_version_discovery",
+    ),
     (r"(runtimeconnection|reconnect|connection|connectoptions)", "runtime_connection"),
-    (r"(runtimehost|serverconfig|serverhandle|startserver|attach|detach|runtimehandle|runtimemode|lifecycle|daemon|processhandle|supervisor|resource(limit|exhausted)|shutdown|easynetinit|stringfree|easynethandle|reaporphans|nowms)", "runtime_lifecycle"),
-    (r"(abilitycall|abilitytarget|childcontext|invocationobjectadapter|wireprojector|makeability)", "ability_invocation_facade"),
-    (r"(invocationhandle|invocationresult|invocationcancel|invocationterminalstate|finalizedinvocation|invocationsnapshot|invocationlimits|invocationusage|runtimeclient|invoke|callmode|localruntime|abilityregistry|abilitycontext|invocationcore|invocationstate|invocationcontrol|invocationevent|invocation.*tool|messageinbox|messageack|inboundmessage|inboxfull|toolschema|emitextras|terminalstates|valideventtypes|newinvocationid|handle$|messaging|easynetaxoninvocation|^invocation$)", "unary_invoke"),
-    (r"(sdkerror|axonerror|errorcode|errorclass|retryhint|failure|errorstage|err[a-z]|mapprotocode)", "typed_errors"),
-    (r"(runtimeability|abilityoptions|abilityregistration|abilityframe|abilityfn|abilityraw|abilitysigned|publishcapability|childinvocation|abilityproof)", "ability_invocation_facade"),
-    (r"(backpressure|credit|tts|phrase|drain|producer|resumepolicy|loopback)", "stream"),
+    (
+        r"(runtimehost|serverconfig|serverhandle|startserver|attach|detach|runtimehandle|runtimemode|lifecycle|daemon|processhandle|supervisor|resource(limit|exhausted)|shutdown|easynetinit|stringfree|easynethandle|reaporphans|nowms)",
+        "runtime_lifecycle",
+    ),
+    (
+        r"(abilitycall|abilitytarget|childcontext|invocationobjectadapter|wireprojector|makeability)",
+        "ability_invocation_facade",
+    ),
+    (
+        r"(invocationhandle|invocationresult|invocationcancel|invocationterminalstate|finalizedinvocation|invocationsnapshot|invocationlimits|invocationusage|runtimeclient|invoke|callmode|localruntime|abilityregistry|abilitycontext|invocationcore|invocationstate|invocationcontrol|invocationevent|invocation.*tool|messageinbox|messageack|inboundmessage|inboxfull|toolschema|emitextras|terminalstates|valideventtypes|newinvocationid|handle$|messaging|easynetaxoninvocation|axonsdkinvocation|^invocation$)",
+        "unary_invoke",
+    ),
+    (
+        r"(sdkerror|axonerror|errorcode|errorclass|retryhint|failure|errorstage|err[a-z]|mapprotocode)",
+        "typed_errors",
+    ),
+    (
+        r"(runtimeability|abilityoptions|abilityregistration|abilityframe|abilityfn|abilityraw|abilitysigned|publishcapability|childinvocation|abilityproof)",
+        "ability_invocation_facade",
+    ),
+    (
+        r"(backpressure|credit|tts|phrase|drain|producer|resumepolicy|loopback)",
+        "stream",
+    ),
     (r"(jsonvalue|jsonreader|jsonwriter|serialization)", "complete_invocation_draft"),
     (r"(default|max|zero|reason|securityclass|result$)", "typed_errors"),
     (r"(sign|keyresolver|pubkey|sha256)", "prepare_sign_submit"),
@@ -81,9 +162,10 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
     (r"(axiom|bundle)", "complete_invocation_draft"),
     (r"(asynciteration|receiveoptions)", "stream"),
     (r"(profile)", "typed_errors"),
-    (r"(^easynetaxon$)", "runtime_connection"),
+    (r"(^easynetaxon$|^axonsdk$)", "runtime_connection"),
     (r"(runtime|server)", "native_runtime"),
 ]
+
 
 def quarantine_replacement(
     language: str,
@@ -99,7 +181,9 @@ def quarantine_replacement(
         capability = classify(language, item, exact, aliases)
     except ValueError:
         key = normalize(item)
-        if any(token in key for token in ("runtime", "mode", "startconfig", "lifecycle")):
+        if any(
+            token in key for token in ("runtime", "mode", "startconfig", "lifecycle")
+        ):
             capability = "runtime_lifecycle"
         elif any(token in key for token in ("directory", "listuser", "hubendpoint")):
             capability = "directory_resolution"
@@ -158,7 +242,9 @@ def support_parent(item: str, classified: str) -> str:
     return classified
 
 
-def owner_maps(model: dict[str, Any]) -> tuple[dict[tuple[str, str], str], dict[str, set[str]]]:
+def owner_maps(
+    model: dict[str, Any],
+) -> tuple[dict[tuple[str, str], str], dict[str, set[str]]]:
     exact: dict[tuple[str, str], str] = {}
     aliases: dict[str, set[str]] = {}
     for capability, projection in model["capability_inventory"].items():
@@ -171,7 +257,12 @@ def owner_maps(model: dict[str, Any]) -> tuple[dict[tuple[str, str], str], dict[
     return exact, aliases
 
 
-def classify(language: str, item: str, exact: dict[tuple[str, str], str], aliases: dict[str, set[str]]) -> str:
+def classify(
+    language: str,
+    item: str,
+    exact: dict[tuple[str, str], str],
+    aliases: dict[str, set[str]],
+) -> str:
     if (language, item) in exact:
         return exact[(language, item)]
     key = normalize(item)
@@ -187,12 +278,20 @@ def classify(language: str, item: str, exact: dict[tuple[str, str], str], aliase
 def inventory(language: str, cache: Path) -> dict[str, Any]:
     path = cache / f"{language}-api.json"
     subprocess.run(
-        [sys.executable, str(ROOT / "sdk/conformance/public_api_inventory.py"), language, "--output", str(path)],
+        [
+            sys.executable,
+            str(ROOT / "sdk/conformance/public_api_inventory.py"),
+            language,
+            "--output",
+            str(path),
+        ],
         cwd=ROOT,
         check=True,
     )
     value = json.loads(path.read_text(encoding="utf-8"))
-    if value["symbols"] != sorted(set(value["symbols"])) or value["members"] != sorted(set(value["members"])):
+    if value["symbols"] != sorted(set(value["symbols"])) or value["members"] != sorted(
+        set(value["members"])
+    ):
         raise ValueError(f"inventory is not canonical: {language}")
     return value
 
@@ -200,13 +299,18 @@ def inventory(language: str, cache: Path) -> dict[str, Any]:
 def package_manifest() -> dict[str, list[dict[str, str]]]:
     go_output = subprocess.run(
         ["go", "list", "-f", "{{.Dir}}", "./..."],
-        cwd=ROOT / "sdk/go", check=True, capture_output=True, text=True,
+        cwd=ROOT / "sdk/go",
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.splitlines()
     go_categories = {
         "sdk/go": "public_facade",
         "sdk/go/directorycore": "provider_neutral_core",
         "sdk/go/internal/axonpb": "generated_wire",
         "sdk/go/internal/runtimeevents": "provider_neutral_core",
+        "sdk/go/provider/easynet": "easynet_provider",
+        "sdk/go/provider/easynet/contract": "easynet_provider",
         "sdk/go/runtimeevents": "provider_neutral_core",
     }
     go_paths = sorted(str(Path(path).resolve().relative_to(ROOT)) for path in go_output)
@@ -225,7 +329,7 @@ def package_manifest() -> dict[str, list[dict[str, str]]]:
     python_categories: dict[str, str] = {}
     for path in python_paths:
         if "/providers/easynet" in path:
-            raise ValueError(f"retired EasyNet provider package root: {path}")
+            category = "easynet_provider"
         elif "/providers" in path:
             category = "provider_registry"
         elif "/core" in path:
@@ -238,19 +342,69 @@ def package_manifest() -> dict[str, list[dict[str, str]]]:
             category = "public_facade"
         python_categories[path] = category
     return {
-        "rust": [{"path": "../EasyNet-Axon/sdk/rust", "category": "canonical_axon_sdk"}],
+        "rust": [
+            {"path": "../EasyNet-Axon/sdk/rust", "category": "canonical_axon_sdk"}
+        ],
         "c_abi": [{"path": "include/easynet_cli.h", "category": "public_abi"}],
         "go": [{"path": path, "category": go_categories[path]} for path in go_paths],
-        "python": [{"path": path, "category": python_categories[path]} for path in python_paths],
+        "python": [
+            {"path": path, "category": python_categories[path]} for path in python_paths
+        ],
         "node": [{"path": "sdk/node/index.d.ts", "category": "public_facade"}],
-        "java": [{"path": "sdk/java/src/main/java/run/easynet/daemon", "category": "easynet_provider"}],
-        "swift": [{"path": "sdk/swift/Sources/EasyNetDaemonSDK", "category": "easynet_provider"}],
+        "java": [
+            {
+                "path": "sdk/java/src/main/java/run/easynet/daemon",
+                "category": "easynet_provider",
+            }
+        ],
+        "swift": [
+            {
+                "path": "sdk/swift/Sources/EasyNetDaemonSDK",
+                "category": "easynet_provider",
+            }
+        ],
     }
+
+
+def refresh_provider_proof_implementations(model: dict[str, Any]) -> None:
+    proofs = model.get("provider_proofs")
+    implementations = model.get("provider_implementations")
+    if not isinstance(proofs, dict) or not isinstance(implementations, list):
+        raise ValueError("provider proofs and implementations are required")
+
+    for capability_id, languages in proofs.items():
+        if not isinstance(languages, dict):
+            raise ValueError(f"invalid provider proof set: {capability_id}")
+        for language, proof in languages.items():
+            if not isinstance(proof, dict):
+                raise ValueError(f"invalid provider proof: {capability_id}:{language}")
+            matches = [
+                implementation
+                for implementation in implementations
+                if implementation["language"] == language
+                and capability_id in implementation["capability_ids"]
+            ]
+            if len(matches) != 1:
+                raise ValueError(
+                    "provider proof must resolve to one registered implementation: "
+                    f"{capability_id}:{language}"
+                )
+            implementation = matches[0]
+            proof["implementation"] = {
+                "identity": implementation["identity"],
+                "owner_path": implementation["owner_path"],
+                "path": implementation["path"],
+                "sha256": implementation["sha256"],
+                "interface": implementation["interface"],
+                "revision": implementation["axon_revision"],
+            }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cache", type=Path, default=ROOT / "target/sdk-public-api-inventory")
+    parser.add_argument(
+        "--cache", type=Path, default=ROOT / "target/sdk-public-api-inventory"
+    )
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args()
     args.cache.mkdir(parents=True, exist_ok=True)
@@ -267,11 +421,15 @@ def main() -> int:
                 f"expected={axon_revision}:actual={inventories[language].get('source_revision')}"
             )
 
-    model["schema_version"] = 4
+    model["schema_version"] = 5
     model["status_order"] = STATUSES
     model["status_canonical_names"] = STATUS_CANONICAL_NAMES
-    model["lifecycle_actions"] = sorted(LIFECYCLE_ACTIONS)
-    model["inventory_parsers"] = {language: inventories[language]["parser"] for language in LANGUAGES}
+    model.pop("lifecycle_actions", None)
+    model.pop("lifecycle_transition_contract", None)
+    model["canonical_lifecycle_contract"] = canonical_lifecycle_reference()
+    model["inventory_parsers"] = {
+        language: inventories[language]["parser"] for language in LANGUAGES
+    }
     model["inventory_source_revisions"] = {
         language: inventories[language].get("source_revision", "current_checkout")
         for language in LANGUAGES
@@ -290,7 +448,10 @@ def main() -> int:
     for language, found in inventories.items():
         model["languages"][language] = []
         model["members"][language] = []
-        for section, source_items in (("languages", found["symbols"]), ("members", found["members"])):
+        for section, source_items in (
+            ("languages", found["symbols"]),
+            ("members", found["members"]),
+        ):
             for item in source_items:
                 reason = canonical_quarantine_reason(item)
                 if reason is None:
@@ -298,7 +459,9 @@ def main() -> int:
                     continue
                 model["non_canonical"][section][language].append(item)
                 model["legacy_quarantine"][section][language][item] = {
-                    "canonical_replacement": quarantine_replacement(language, item, exact, aliases),
+                    "canonical_replacement": quarantine_replacement(
+                        language, item, exact, aliases
+                    ),
                     "consumer_cutover_ref": PRODUCT_NEUTRAL_CUTOVER_REF,
                     "removal_phase": "quarantined",
                     "reason": reason,
@@ -327,54 +490,86 @@ def main() -> int:
 
     for language in LANGUAGES:
         for section in ("symbols", "members"):
-            for item in model["languages" if section == "symbols" else "members"][language]:
+            for item in model["languages" if section == "symbols" else "members"][
+                language
+            ]:
                 capability = classify(language, item, exact, aliases)
                 support_role = support_lookup.get((language, item))
                 if support_role:
                     capability = support_parent(item, capability)
-                    support_items.append({
-                        "language": language,
-                        "section": section,
-                        "item": item,
-                        "parent_capability": capability,
-                        "role": support_role,
-                        "shape_sha256": model["shape_sha256"][language][item],
-                        "shape_group": support_shape_group(item, support_role),
-                    })
+                    support_items.append(
+                        {
+                            "language": language,
+                            "section": section,
+                            "item": item,
+                            "parent_capability": capability,
+                            "role": support_role,
+                            "shape_sha256": model["shape_sha256"][language][item],
+                            "shape_group": support_shape_group(item, support_role),
+                        }
+                    )
                 else:
-                    model["capability_inventory"][capability][language][section].append(item)
+                    model["capability_inventory"][capability][language][section].append(
+                        item
+                    )
     for projection in model["capability_inventory"].values():
         for language in LANGUAGES:
             projection[language]["symbols"].sort()
             projection[language]["members"].sort()
-    model["supporting_items"] = sorted(support_items, key=lambda item: (item["language"], item["section"], item["item"]))
+    model["supporting_items"] = sorted(
+        support_items,
+        key=lambda item: (item["language"], item["section"], item["item"]),
+    )
     grouped_support: dict[str, dict[str, Any]] = {}
     for item in model["supporting_items"]:
-        group = grouped_support.setdefault(item["shape_group"], {
-            "parent_capability": item["parent_capability"],
-            "role": item["role"],
-            "members": [],
-        })
-        if group["parent_capability"] != item["parent_capability"] or group["role"] != item["role"]:
-            raise ValueError(f"support shape group crosses semantic owners: {item['shape_group']}")
-        group["members"].append({
-            "language": item["language"],
-            "section": item["section"],
-            "item": item["item"],
-            "shape_sha256": item["shape_sha256"],
-        })
+        group = grouped_support.setdefault(
+            item["shape_group"],
+            {
+                "parent_capability": item["parent_capability"],
+                "role": item["role"],
+                "members": [],
+            },
+        )
+        if (
+            group["parent_capability"] != item["parent_capability"]
+            or group["role"] != item["role"]
+        ):
+            raise ValueError(
+                f"support shape group crosses semantic owners: {item['shape_group']}"
+            )
+        group["members"].append(
+            {
+                "language": item["language"],
+                "section": item["section"],
+                "item": item["item"],
+                "shape_sha256": item["shape_sha256"],
+            }
+        )
     model["support_shape_groups"] = {
         name: {
             **group,
-            "members": sorted(group["members"], key=lambda member: (member["language"], member["section"], member["item"])),
-            "present_languages": sorted({member["language"] for member in group["members"]}, key=LANGUAGES.index),
-            "missing_languages": [language for language in LANGUAGES if language not in {member["language"] for member in group["members"]}],
+            "members": sorted(
+                group["members"],
+                key=lambda member: (
+                    member["language"],
+                    member["section"],
+                    member["item"],
+                ),
+            ),
+            "present_languages": sorted(
+                {member["language"] for member in group["members"]}, key=LANGUAGES.index
+            ),
+            "missing_languages": [
+                language
+                for language in LANGUAGES
+                if language not in {member["language"] for member in group["members"]}
+            ],
         }
         for name, group in sorted(grouped_support.items())
     }
     model["canonical_packages"] = package_manifest()
-    model["dependency_revisions"] = {"easynet_axon": axon_revision}
-    revision = model["dependency_revisions"]["easynet_axon"]
+    model["dependency_revisions"] = {"axon_sdk": axon_revision}
+    revision = model["dependency_revisions"]["axon_sdk"]
     runtime_provider_capabilities = [
         "native_runtime",
         "runtime_environment",
@@ -387,30 +582,78 @@ def main() -> int:
     ]
     ability_provider_capabilities = ["ability_invocation_facade"]
     provider_specs = [
-        ("go", "direct_runtime_provider", "sdk/go/", "sdk/go/direct_runtime.go", "RuntimeConnector", "sdk/go/connection.go", runtime_provider_capabilities),
-        ("python", "direct_runtime_provider", "sdk/python/easynet_sdk/", "sdk/python/easynet_sdk/direct_runtime.py", "RuntimeConnector", "sdk/python/easynet_sdk/connection.py", runtime_provider_capabilities),
-        ("go", "runtime_ability_facade", "sdk/go/", "sdk/go/runtime_ability.go", "RuntimeAbilityClient", "sdk/go/runtime_ability.go", ability_provider_capabilities),
-        ("python", "ability_invocation_facade", "sdk/python/easynet_sdk/", "sdk/python/easynet_sdk/ability_invocation.py", "AbilityInvocationClient", "sdk/python/easynet_sdk/ability_invocation.py", ability_provider_capabilities),
+        (
+            "go",
+            "direct_runtime_provider",
+            "sdk/go/",
+            "sdk/go/direct_runtime.go",
+            "RuntimeConnector",
+            "sdk/go/connection.go",
+            runtime_provider_capabilities,
+        ),
+        (
+            "python",
+            "direct_runtime_provider",
+            "sdk/python/easynet_sdk/",
+            "sdk/python/easynet_sdk/direct_runtime.py",
+            "RuntimeConnector",
+            "sdk/python/easynet_sdk/connection.py",
+            runtime_provider_capabilities,
+        ),
+        (
+            "go",
+            "runtime_ability_facade",
+            "sdk/go/",
+            "sdk/go/runtime_ability.go",
+            "RuntimeAbilityClient",
+            "sdk/go/runtime_ability.go",
+            ability_provider_capabilities,
+        ),
+        (
+            "python",
+            "ability_invocation_facade",
+            "sdk/python/easynet_sdk/",
+            "sdk/python/easynet_sdk/ability_invocation.py",
+            "AbilityInvocationClient",
+            "sdk/python/easynet_sdk/ability_invocation.py",
+            ability_provider_capabilities,
+        ),
     ]
     model["provider_implementations"] = []
-    for language, identity, owner_path, path, interface, interface_path, capabilities in provider_specs:
+    for (
+        language,
+        identity,
+        owner_path,
+        path,
+        interface,
+        interface_path,
+        capabilities,
+    ) in provider_specs:
         source = ROOT / path
         interface_source = ROOT / interface_path
-        model["provider_implementations"].append({
-            "language": language,
-            "identity": identity,
-            "production_owner": "EasyNet daemon provider",
-            "owner_path": owner_path,
-            "path": path,
-            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-            "interface": interface,
-            "interface_path": interface_path,
-            "interface_sha256": hashlib.sha256(interface_source.read_bytes()).hexdigest(),
-            "capability_ids": capabilities,
-            "axon_revision": revision,
-            "proof_state": "behavior_attestation_incomplete",
-            "debt": "A01/A13 physical package migration remains open; provider identity is explicit and cannot certify canonical neutrality.",
-        })
+        model["provider_implementations"].append(
+            {
+                "language": language,
+                "identity": identity,
+                "production_owner": "EasyNet daemon provider",
+                "owner_path": owner_path,
+                "path": path,
+                "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "interface": interface,
+                "interface_path": interface_path,
+                "interface_sha256": hashlib.sha256(
+                    interface_source.read_bytes()
+                ).hexdigest(),
+                "capability_ids": capabilities,
+                "axon_revision": revision,
+            }
+        )
+    refresh_provider_proof_implementations(model)
+    validate_edge_adapter_policy(
+        load_edge_adapter_policy(EDGE_ADAPTER_POLICY),
+        model,
+        root=ROOT,
+    )
     encoded = json.dumps(model, indent=2, sort_keys=False) + "\n"
     if args.write:
         MODEL.write_text(encoded, encoding="utf-8")
@@ -428,6 +671,11 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (OSError, ValueError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+    except (
+        OSError,
+        ValueError,
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+    ) as error:
         print(f"rebuild_public_api_model: {error}", file=sys.stderr)
         raise SystemExit(1)

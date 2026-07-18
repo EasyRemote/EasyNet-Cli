@@ -1,6 +1,6 @@
 package easynet
 
-import axonsdk "easynet.run/axon/sdk/go/easynet"
+import axonsdk "axon.run/sdk/go/axon"
 
 // ParseAbilityDescriptorRef projects a DescriptorRef through Axon's canonical
 // parser. SDK paths that can reach a Runtime should use

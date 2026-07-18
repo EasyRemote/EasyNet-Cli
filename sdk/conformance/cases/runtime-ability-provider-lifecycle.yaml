@@ -3,12 +3,6 @@ profile: runtime_core
 required_for:
   - go
   - python
-lifecycle_actions:
-  - bidi_open
-  - cancel
-  - dispatch
-  - stream_open
-  - terminal_receipt
 description: Runtime ability facades lower generic ability calls once and delegate provider lifecycle operations to Runtime Core.
 steps:
   - action: dispatch_unary_invocation_through_runtime

@@ -167,11 +167,9 @@ class InvocationServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def InvokeBidi(self, request_iterator, context):
-        """Bidirectional invocation (P5-rewrite-15) — realtime multimodal
-        sessions. PTY uses the session-as-subject pattern: unary
-        `device.terminal.create` mints the session URA, then a single
-        InvokeBidi against `device.terminal.attach` carries the
-        bidirectional binary stream until close.
+        """Bidirectional invocation for realtime multimodal sessions.
+        Product session creation and attachment are provider abilities built on
+        this generic stream primitive.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')

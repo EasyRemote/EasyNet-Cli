@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://axon.run/sdk/schemas/invocation-result.schema.json",
+  "title": "InvocationResult",
+  "description": "The generic unary terminal projection returned by Runtime Core.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "tuple",
+    "terminal_state"
+  ],
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "tuple": {
+      "$ref": "invocation.schema.json"
+    },
+    "invocation_id": {
+      "type": "string"
+    },
+    "terminal_state": {
+      "type": "string",
+      "minLength": 1
+    },
+    "output_content_type": {
+      "type": "string"
+    },
+    "output_base64": {
+      "type": "string"
+    },
+    "output_json": true,
+    "selected_node_id": {
+      "type": "string"
+    },
+    "scheduling_reason": {
+      "type": "string"
+    },
+    "elapsed_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "admission_receipt": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "terminal_receipt": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "error": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "ok": {
+            "const": true
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "then": {
+        "properties": {
+          "error": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  ]
+}
