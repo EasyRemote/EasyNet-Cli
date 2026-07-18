@@ -1619,7 +1619,7 @@ impl DaemonRouteRuntimeAdapter {
 
     async fn open_bidi(&self, route: DaemonBidiRoute, request: &EnvelopeOpen) {
         open_bidi_external_signed(&self.runtime, route, request).await;
-        project_finalized_bidi_receipt(receiver).await;
+        project_registered_finalized_bidi_receipt(lifecycle).await;
     }
 }
 EOF
@@ -1897,6 +1897,21 @@ pub fn invocation_lifecycle_hash(envelope: &DescriptorBoundEnvelope) -> String {
     hex::encode(Sha256::digest(envelope.canonical_bytes()))
 }
 
+struct RegisteredInvocationLifecycle;
+
+impl RegisteredInvocationLifecycle {
+    pub(crate) async fn finalized(&self) -> Result<FinalizedInvocation> {
+        todo!()
+    }
+
+    pub(crate) async fn cancel_and_finalize(
+        &self,
+        reason: impl Into<String>,
+    ) -> Result<FinalizedInvocation> {
+        todo!()
+    }
+}
+
 struct RegistryState {
     terminal_order: VecDeque<String>,
 }
@@ -2099,10 +2114,13 @@ impl RuntimeClient {
         signed: SignedInvocation,
         reason: String,
     ) -> Result<InvocationHandle> {
-        let caller_ura = signed.prepared().tuple().caller_ura;
+        let authority = self.cancellation_authority.as_ref().ok_or_else(|| {
+            DaemonError::InvalidInvocation(
+                "invocation.cancel requires an explicit authority".to_string(),
+            )
+        })?;
         let prepared = signed.prepare_cancel_command(reason)?;
-        let signer = RuntimeSigningIdentity::load_default(caller_ura)?;
-        let signed_cancel = prepared.sign_with_canonical_signer(&signer).await?;
+        let signed_cancel = authority.sign(prepared).await?;
         let response = self.inner.invoke(signed_cancel).await?;
         Ok(InvocationHandle::from_response(response))
     }
@@ -2214,8 +2232,11 @@ EOF
 ## Ownership state machines
 
 - stream cancel and bidi cancel are cancel-request operations at this provider
-  boundary; they release local callback/reader resources and must not claim
-  lifecycle terminality without a canonical terminal receipt.
+  boundary. Each registered resource submits at most one independently signed
+  canonical invocation.cancel command, memoizes acceptance or rejection, and
+  keeps the callback/reader path draining. Duplicate requests never submit a
+  second command and must not claim lifecycle terminality without a canonical
+  terminal receipt.
 - stream close and bidi close are local resource release operations. Bidi
   close-send is a non-terminal local half-close.
 EOF
@@ -2326,8 +2347,8 @@ func TestBidiCancelIsNonTerminalRequest(t *testing.T) {}
 func TestBidiCancelRejectsTerminalOutcome(t *testing.T) {}
 EOF
   cat >"$CLI/sdk/go/direct_runtime_test.go" <<'EOF'
-func TestDirectRuntimeStreamCancelProjectsNonTerminalRequest(t *testing.T) {}
-func TestDirectRuntimeBidiCancelProjectsNonTerminalRequest(t *testing.T) {}
+func TestDirectRuntimeStreamCancelIsExplicitlyUnsupported(t *testing.T) {}
+func TestDirectRuntimeBidiCancelIsExplicitlyUnsupported(t *testing.T) {}
 EOF
   cat >"$CLI/sdk/python/tests/test_stream.py" <<'EOF'
 def test_stream_cancel_is_non_terminal_request() -> None:
@@ -2344,10 +2365,10 @@ def test_cancel_rejects_terminal_outcome() -> None:
     pass
 EOF
   cat >"$CLI/sdk/python/tests/test_direct_runtime.py" <<'EOF'
-def test_direct_runtime_stream_cancel_projects_non_terminal_request() -> None:
+def test_direct_runtime_stream_cancel_is_explicitly_unsupported() -> None:
     pass
 
-def test_direct_runtime_bidi_cancel_projects_non_terminal_request() -> None:
+def test_direct_runtime_bidi_cancel_is_explicitly_unsupported() -> None:
     pass
 EOF
 
@@ -4354,6 +4375,62 @@ EOF
 expect_fail \
   "unary cancel signed command fork" \
   "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/dispatch/client.rs" <<'EOF'
+impl RuntimeClient {
+    pub async fn request_cancel_signed(
+        &self,
+        signed: SignedInvocation,
+        reason: String,
+    ) -> Result<InvocationHandle> {
+        let caller_ura = signed.prepared().tuple().caller_ura;
+        let prepared = signed.prepare_cancel_command(reason)?;
+        let signer = RuntimeSigningIdentity::load_default(caller_ura)?;
+        let signed_cancel = prepared.sign_with_canonical_signer(&signer).await?;
+        let response = self.inner.invoke(signed_cancel).await?;
+        Ok(InvocationHandle::from_response(response))
+    }
+}
+EOF
+expect_fail \
+  "runtime client default cancellation signer fallback" \
+  "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK"
+
+make_good_fixture
+cat >>"$CLI/src/daemon/invocation/dispatch/cancellation.rs" <<'EOF'
+impl InvocationCancellationRegistry {
+    pub fn register(
+        &self,
+        envelope: &DescriptorBoundEnvelope,
+        handle: InvocationHandle,
+    ) -> Result<String> {
+        todo!()
+    }
+}
+EOF
+expect_fail \
+  "raw lifecycle registry mutation re-exposed" \
+  "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK"
+
+make_good_fixture
+cat >>"$CLI/sdk/go/cabi_runtime.go" <<'EOF'
+func cabiCallbackBackpressureFailure() []byte {
+    return []byte(`{"terminal":true,"transport_terminal":true}`)
+}
+EOF
+expect_fail \
+  "Go callback overflow claims canonical terminality" \
+  "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK"
+
+make_good_fixture
+cat >>"$CLI/sdk/python/easynet_sdk/_cabi.py" <<'EOF'
+def _callback_backpressure_failure() -> bytes:
+    return _json_bytes({"terminal": True, "transport_terminal": True})
+EOF
+expect_fail \
+  "Python callback overflow claims canonical terminality" \
+  "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/invocation/bidi/session_initiator/prelude.rs" <<'EOF'

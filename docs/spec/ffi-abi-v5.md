@@ -34,8 +34,12 @@ failures. Earlier ABI documentation is historical and is not a release input.
 - submit-handle returns `EasynetInvocationHandleId`; await/cancel/events observe
   it and handle-free releases it.
 - stream cancel and bidi cancel are cancel-request operations at this provider
-  boundary; they release local callback/reader resources and must not claim
-  lifecycle terminality without a canonical terminal receipt.
+  boundary. Each registered resource submits at most one independently signed
+  canonical `invocation.cancel` command, memoizes its acceptance or rejection,
+  and keeps the callback/reader path draining. A duplicate request observes the
+  memoized result and never submits another command. Cancellation must not claim
+  lifecycle terminality without the original invocation's canonical terminal
+  receipt.
 - stream close and bidi close are local resource release operations. Bidi
   close-send is a non-terminal local half-close.
 

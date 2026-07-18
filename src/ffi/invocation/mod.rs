@@ -27,6 +27,7 @@ use rand::{rngs::OsRng, RngCore};
 use std::os::raw::{c_char, c_void};
 #[cfg(feature = "axon-pb")]
 use std::path::PathBuf;
+#[cfg(feature = "axon-pb")]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "axon-pb")]
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
@@ -108,6 +109,8 @@ pub type InvocationBidiCallback =
 const STREAM_CALLBACK_QUEUE_CAPACITY: usize = 64;
 #[cfg(feature = "axon-pb")]
 const BIDI_CALLBACK_QUEUE_CAPACITY: usize = 64;
+#[cfg(feature = "axon-pb")]
+const PROVIDER_CANCEL_REASON: &str = "consumer_request";
 
 fn record_invocation_error(code: i32, message: impl Into<String>) -> i32 {
     set_last_error_code(code, message);
@@ -1052,9 +1055,9 @@ pub extern "C" fn easynet_signed_invocation_free(signed_id: SignedInvocationId) 
 /// `invocation_json` has the same shape as `easynet_invocation_invoke`.
 /// Each daemon `InvokeStreamChunk` is delivered to `on_chunk` as a
 /// JSON summary. The returned `stream_id` may be passed to
-/// `easynet_invocation_stream_cancel`; cancellation drops the local
-/// gRPC stream and lets the daemon observe normal transport
-/// cancellation. No JSON-control `Cancel` frame is emitted.
+/// `easynet_invocation_stream_cancel`; cancellation submits a signed
+/// canonical `invocation.cancel` command while the original stream
+/// remains registered and draining toward its receipt-backed terminal.
 ///
 /// # Safety
 /// - `handle` must be a valid handle from `easynet_init`.
@@ -1155,7 +1158,7 @@ pub unsafe extern "C" fn easynet_invocation_stream_cancel(
 
     #[cfg(feature = "axon-pb")]
     {
-        release_stream_with_reader_cancel(
+        request_stream_cancellation(
             session.binding(handle),
             stream_id,
             "easynet_invocation_stream_cancel",
@@ -1401,15 +1404,17 @@ pub unsafe extern "C" fn easynet_invocation_bidi_close(
     }
 }
 
-/// Cancel an InvokeBidi session locally.
+/// Request canonical cancellation of an InvokeBidi session.
 ///
-/// Cancellation drops the local reader and up-direction sender
-/// without sending protocol EOF. Unknown ids are treated as already
-/// closed and return `EASYNET_OK`.
+/// Cancellation submits a signed `invocation.cancel` command and keeps
+/// the local session registered so its reader can drain the canonical
+/// receipt-backed terminal. Unknown ids are treated as already closed
+/// and return `EASYNET_OK`.
 ///
 /// # Safety
-/// `handle` must be a live handle returned by this FFI and not
-/// used concurrently from another thread during this call.
+/// `handle` must be a live handle returned by this FFI. Concurrent
+/// cancellation requests for the same session are serialized and
+/// deduplicated by the provider cancellation state machine.
 #[no_mangle]
 pub unsafe extern "C" fn easynet_invocation_bidi_cancel(
     handle: EasynetHandle,
@@ -1433,23 +1438,11 @@ pub unsafe extern "C" fn easynet_invocation_bidi_cancel(
 
     #[cfg(feature = "axon-pb")]
     {
-        match remove_bidi_for_handle(session.binding(handle), bidi_id) {
-            Ok(Some(session)) => {
-                session.cancel.cancel();
-                clear_last_error();
-                EASYNET_OK
-            }
-            Ok(None) => {
-                clear_last_error();
-                EASYNET_OK
-            }
-            Err(RegistryOwnerMismatch) => record_invocation_error(
-                ERR_INVALID_HANDLE,
-                format!(
-                    "easynet_invocation_bidi_cancel: bidi session {bidi_id} does not belong to handle {handle}"
-                ),
-            ),
-        }
+        request_bidi_cancellation(
+            session.binding(handle),
+            bidi_id,
+            "easynet_invocation_bidi_cancel",
+        )
     }
 }
 
@@ -1591,46 +1584,125 @@ impl<'a> SessionInvocationAuthority<'a> {
         Self { session }
     }
 
+    fn owner_ura(&self) -> crate::daemon::Result<String> {
+        runtime_owner_ura_from_session(self.session).map_err(|error| {
+            crate::daemon::DaemonError::InvalidInvocation(format!(
+                "resolve native runtime session owner: {error}"
+            ))
+        })
+    }
+
+    async fn load_owner_signer(
+        owner_ura: String,
+    ) -> crate::daemon::Result<Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>>
+    {
+        let signer_owner_ura = owner_ura.clone();
+        let signer = tokio::task::spawn_blocking(move || {
+            crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(
+                signer_owner_ura.clone(),
+            )
+            .map_err(|error| {
+                crate::daemon::DaemonError::InvalidInvocation(format!(
+                    "bind daemon KeyService signer for session owner `{signer_owner_ura}`: {error}"
+                ))
+            })
+        })
+        .await
+        .map_err(|error| {
+            crate::daemon::DaemonError::InvalidInvocation(format!(
+                "bind daemon KeyService signer task failed: {error}"
+            ))
+        })??;
+        Ok(Arc::new(signer))
+    }
+
+    async fn owner_signer(
+        &self,
+        caller_ura: &str,
+    ) -> crate::daemon::Result<Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>>
+    {
+        let owner_ura = self.owner_ura()?;
+        if caller_ura != owner_ura {
+            return Err(crate::daemon::DaemonError::InvalidInvocation(format!(
+                "native runtime invocation caller `{caller_ura}` does not match session owner `{owner_ura}`"
+            )));
+        }
+        Self::load_owner_signer(owner_ura).await
+    }
+
+    async fn cancellation_authority_for_signed(
+        &self,
+        signed: &crate::daemon::SignedInvocation,
+    ) -> crate::daemon::Result<Option<crate::daemon::InvocationCancellationAuthority>> {
+        let owner_ura = match self.owner_ura() {
+            Ok(owner_ura) => owner_ura,
+            Err(_) => return Ok(None),
+        };
+        if signed.prepared().tuple().caller_ura != owner_ura {
+            return Ok(None);
+        }
+        let signer = Self::load_owner_signer(owner_ura).await?;
+        Ok(Some(crate::daemon::InvocationCancellationAuthority::new(
+            signer,
+        )))
+    }
+
+    async fn bind_with_owner_signer(
+        invocation: crate::daemon::DaemonInvocation,
+        signer: Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>,
+    ) -> crate::daemon::Result<crate::daemon::SignedInvocation> {
+        if let Some(signature) = invocation.caller_signature().cloned() {
+            return Self::bind_caller_signature(invocation, signature);
+        }
+
+        invocation
+            .into_draft()
+            .prepare(crate::daemon::PrepareOptions::default())?
+            .sign_with_canonical_signer(signer.as_ref())
+            .await
+    }
+
     async fn bind(
         &self,
         invocation: crate::daemon::DaemonInvocation,
     ) -> crate::daemon::Result<crate::daemon::SignedInvocation> {
         if let Some(signature) = invocation.caller_signature().cloned() {
-            return invocation
-                .into_draft()
-                .prepare(crate::daemon::PrepareOptions::default())?
-                .sign_with_caller_signature(crate::daemon::CallerSignatureMaterial::new(
-                    signature.algorithm,
-                    signature.signature,
-                    signature.key_id_hint,
-                ));
+            return Self::bind_caller_signature(invocation, signature);
         }
 
-        let owner_ura = runtime_owner_ura_from_session(self.session).map_err(|error| {
-            crate::daemon::DaemonError::InvalidInvocation(format!(
-                "resolve native runtime session owner: {error}"
-            ))
-        })?;
-        if invocation.caller_ura() != owner_ura {
-            return Err(crate::daemon::DaemonError::InvalidInvocation(format!(
-                "unsigned native runtime invocation caller `{}` does not match session owner `{owner_ura}`",
-                invocation.caller_ura()
-            )));
-        }
+        let caller_ura = invocation.caller_ura().to_string();
+        let signer = self.owner_signer(&caller_ura).await?;
+        Self::bind_with_owner_signer(invocation, signer).await
+    }
 
-        let signer = crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(
-            owner_ura.clone(),
-        )
-        .map_err(|error| {
-            crate::daemon::DaemonError::InvalidInvocation(format!(
-                "bind daemon KeyService signer for session owner `{owner_ura}`: {error}"
-            ))
-        })?;
+    async fn bind_cancellable(
+        &self,
+        invocation: crate::daemon::DaemonInvocation,
+    ) -> crate::daemon::Result<(
+        crate::daemon::SignedInvocation,
+        crate::daemon::InvocationCancellationAuthority,
+    )> {
+        let caller_ura = invocation.caller_ura().to_string();
+        let signer = self.owner_signer(&caller_ura).await?;
+        let signed = Self::bind_with_owner_signer(invocation, Arc::clone(&signer)).await?;
+        Ok((
+            signed,
+            crate::daemon::InvocationCancellationAuthority::new(signer),
+        ))
+    }
+
+    fn bind_caller_signature(
+        invocation: crate::daemon::DaemonInvocation,
+        signature: axon_sdk::pb::axon::v1::CallerSignature,
+    ) -> crate::daemon::Result<crate::daemon::SignedInvocation> {
         invocation
             .into_draft()
             .prepare(crate::daemon::PrepareOptions::default())?
-            .sign_with_canonical_signer(&signer)
-            .await
+            .sign_with_caller_signature(crate::daemon::CallerSignatureMaterial::new(
+                signature.algorithm,
+                signature.signature,
+                signature.key_id_hint,
+            ))
     }
 }
 
@@ -2442,6 +2514,15 @@ fn submit_signed_handle_with_axon_pb(
             );
         }
     };
+    let cancellation_authority = match rt.block_on(
+        SessionInvocationAuthority::new(session.as_ref())
+            .cancellation_authority_for_signed(&signed),
+    ) {
+        Ok(authority) => authority,
+        Err(err) => {
+            return ffi_daemon_error("easynet_invocation_submit_signed_handle", err);
+        }
+    };
 
     let tuple_json = invocation_json(signed.prepared().draft().invocation());
     let owner_binding = registration.binding();
@@ -2470,6 +2551,7 @@ fn submit_signed_handle_with_axon_pb(
     rt.spawn(run_invocation_handle_task(
         endpoint,
         signed,
+        cancellation_authority,
         shared,
         cancel_requests,
     ));
@@ -2621,6 +2703,7 @@ fn invocation_handle_events_with_axon_pb(
 async fn run_invocation_handle_task(
     endpoint: PathBuf,
     signed: crate::daemon::SignedInvocation,
+    cancellation_authority: Option<crate::daemon::InvocationCancellationAuthority>,
     shared: Arc<InvocationHandleShared>,
     mut cancel_requests: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) {
@@ -2630,6 +2713,10 @@ async fn run_invocation_handle_task(
             shared.mark_observation_failed(invocation_observation_failure(&err));
             return;
         }
+    };
+    let client = match cancellation_authority {
+        Some(authority) => client.with_cancellation_authority(authority),
+        None => client,
     };
     let mut submission = Box::pin(client.submit_signed(signed.clone()));
     let mut cancel_request = None;
@@ -2732,16 +2819,23 @@ fn stream_open_with_axon_pb(
         }
     };
 
-    let stream = match rt.block_on(async {
-        let signed = SessionInvocationAuthority::new(session.as_ref())
-            .bind(invocation)
+    let (stream, cancellation) = match rt.block_on(async {
+        let (signed, cancellation_authority) = SessionInvocationAuthority::new(session.as_ref())
+            .bind_cancellable(invocation)
             .await?;
-        let client = crate::daemon::DaemonClient::connect(invocation_endpoint_for_session(
-            session.as_ref(),
-        )?)?;
-        client.invoke_stream(signed).await
+        let endpoint = invocation_endpoint_for_session(session.as_ref())?;
+        let client = crate::daemon::DaemonClient::connect(endpoint.clone())?;
+        let stream = client.invoke_stream(signed.clone()).await?;
+        Ok::<_, crate::daemon::DaemonError>((
+            stream,
+            Arc::new(ProviderCancellationControl::runtime(
+                endpoint,
+                signed,
+                cancellation_authority,
+            )),
+        ))
     }) {
-        Ok(stream) => stream,
+        Ok(opened) => opened,
         Err(err) => return ffi_daemon_error("easynet_invocation_stream_open", err),
     };
 
@@ -2761,7 +2855,8 @@ fn stream_open_with_axon_pb(
     let owner = registration.binding();
     let stream_id = insert_stream(ActiveInvocationStream {
         owner,
-        cancel: cancel.clone(),
+        reader_cancel: cancel.clone(),
+        cancellation,
     });
     rt.spawn(run_stream_reader(stream_id, stream, cancel, tx));
     drop(registration);
@@ -2826,16 +2921,23 @@ fn bidi_open_with_axon_pb(
         }
     };
 
-    let session = match rt.block_on(async {
-        let signed = SessionInvocationAuthority::new(session.as_ref())
-            .bind(invocation)
+    let (session, cancellation) = match rt.block_on(async {
+        let (signed, cancellation_authority) = SessionInvocationAuthority::new(session.as_ref())
+            .bind_cancellable(invocation)
             .await?;
-        let client = crate::daemon::DaemonClient::connect(invocation_endpoint_for_session(
-            session.as_ref(),
-        )?)?;
-        client.invoke_bidi(signed, streams).await
+        let endpoint = invocation_endpoint_for_session(session.as_ref())?;
+        let client = crate::daemon::DaemonClient::connect(endpoint.clone())?;
+        let bidi = client.invoke_bidi(signed.clone(), streams).await?;
+        Ok::<_, crate::daemon::DaemonError>((
+            bidi,
+            Arc::new(ProviderCancellationControl::runtime(
+                endpoint,
+                signed,
+                cancellation_authority,
+            )),
+        ))
     }) {
-        Ok(session) => session,
+        Ok(opened) => opened,
         Err(err) => return ffi_daemon_error("easynet_invocation_bidi_open", err),
     };
 
@@ -2860,6 +2962,7 @@ fn bidi_open_with_axon_pb(
         ability,
         up_tx,
         cancel.clone(),
+        cancellation,
     ));
     rt.spawn(run_bidi_down_reader(bidi_id, down, cancel, callback_tx));
     drop(registration);
@@ -2953,6 +3056,20 @@ fn stream_close_with_axon_pb(handle: EasynetHandle, stream_id: InvocationStreamI
 }
 
 #[cfg(feature = "axon-pb")]
+fn request_stream_cancellation(
+    owner: ClientSessionBinding,
+    stream_id: InvocationStreamId,
+    function: &str,
+) -> i32 {
+    request_registered_provider_cancellation(
+        get_stream_for_handle(owner, stream_id),
+        function,
+        "stream",
+        stream_id,
+    )
+}
+
+#[cfg(feature = "axon-pb")]
 fn release_stream_with_reader_cancel(
     owner: ClientSessionBinding,
     stream_id: InvocationStreamId,
@@ -2960,7 +3077,7 @@ fn release_stream_with_reader_cancel(
 ) -> i32 {
     match remove_stream_for_handle(owner, stream_id) {
         Ok(Some(stream)) => {
-            stream.cancel.cancel();
+            stream.reader_cancel.cancel();
             clear_last_error();
             EASYNET_OK
         }
@@ -2975,6 +3092,53 @@ fn release_stream_with_reader_cancel(
                 owner.handle
             ),
         ),
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn request_bidi_cancellation(
+    owner: ClientSessionBinding,
+    bidi_id: InvocationBidiId,
+    function: &str,
+) -> i32 {
+    request_registered_provider_cancellation(
+        get_bidi_for_handle(owner, bidi_id),
+        function,
+        "bidi session",
+        bidi_id,
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+fn request_registered_provider_cancellation<T>(
+    resource: Result<Option<Arc<T>>, RegistryOwnerMismatch>,
+    function: &str,
+    resource_kind: &str,
+    resource_id: u64,
+) -> i32
+where
+    T: ProviderCancellableResource,
+{
+    let resource = match resource {
+        Ok(Some(resource)) => resource,
+        Ok(None) => {
+            clear_last_error();
+            return EASYNET_OK;
+        }
+        Err(RegistryOwnerMismatch) => {
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("{function}: {resource_kind} {resource_id} does not belong to this handle"),
+            );
+        }
+    };
+
+    match resource.cancellation().request() {
+        Ok(()) => {
+            clear_last_error();
+            EASYNET_OK
+        }
+        Err(error) => ffi_provider_cancellation_error(function, error),
     }
 }
 
@@ -3060,6 +3224,7 @@ fn bidi_close_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId) -> 
     let rt = match lib_runtime() {
         Ok(rt) => rt,
         Err(err) => {
+            session.reader_cancel.cancel();
             return record_invocation_error(
                 ERR_GENERIC,
                 format!("easynet_invocation_bidi_close: {err}"),
@@ -3067,22 +3232,21 @@ fn bidi_close_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId) -> 
         }
     };
 
-    let Some(up_frame) = session.reserve_close_send_frame() else {
-        clear_last_error();
-        return EASYNET_OK;
+    let send_code = match session.reserve_close_send_frame() {
+        Some(up_frame) => send_bidi_up_frame(
+            rt,
+            "easynet_invocation_bidi_close",
+            bidi_id,
+            &session,
+            up_frame,
+        ),
+        None => EASYNET_OK,
     };
-    let send_code = send_bidi_up_frame(
-        rt,
-        "easynet_invocation_bidi_close",
-        bidi_id,
-        &session,
-        up_frame,
-    );
-    if send_code != EASYNET_OK {
-        return send_code;
+    session.reader_cancel.cancel();
+    if send_code == EASYNET_OK {
+        clear_last_error();
     }
-    clear_last_error();
-    EASYNET_OK
+    send_code
 }
 
 #[cfg(feature = "axon-pb")]
@@ -3121,9 +3285,230 @@ impl CallbackUserData {
 }
 
 #[cfg(feature = "axon-pb")]
+trait CanonicalCancellationCommandSubmitter: Send + Sync {
+    fn submit(&self, reason: &str) -> Result<(), ProviderCancellationError>;
+}
+
+#[cfg(feature = "axon-pb")]
+struct RuntimeCancellationCommandSubmitter {
+    endpoint: PathBuf,
+    signed_invocation: crate::daemon::SignedInvocation,
+    authority: crate::daemon::InvocationCancellationAuthority,
+}
+
+#[cfg(feature = "axon-pb")]
+impl CanonicalCancellationCommandSubmitter for RuntimeCancellationCommandSubmitter {
+    fn submit(&self, reason: &str) -> Result<(), ProviderCancellationError> {
+        let runtime = lib_runtime()
+            .map_err(|error| ProviderCancellationError::RuntimeUnavailable(error.to_string()))?;
+        let handle = runtime
+            .block_on(async {
+                let client = crate::daemon::RuntimeClient::connect(self.endpoint.clone())?
+                    .with_cancellation_authority(self.authority.clone());
+                client
+                    .request_cancel_signed(self.signed_invocation.clone(), reason.to_string())
+                    .await
+            })
+            .map_err(ProviderCancellationError::from_daemon)?;
+        let result = handle.result();
+        if let Some(error) = &result.error {
+            return Err(ProviderCancellationError::CommandRejected(format!(
+                "{} at {}: {}",
+                error.code, error.stage, error.message
+            )));
+        }
+        if result.terminal_state != "Completed" {
+            return Err(ProviderCancellationError::CommandRejected(format!(
+                "invocation.cancel completed in terminal state {}",
+                result.terminal_state
+            )));
+        }
+        let acknowledgement: ProviderCancellationAcknowledgement =
+            serde_json::from_slice(&result.output).map_err(|error| {
+                ProviderCancellationError::InvalidAcknowledgement(format!(
+                    "decode invocation.cancel acknowledgement: {error}"
+                ))
+            })?;
+        if !acknowledgement.accepted {
+            return Err(ProviderCancellationError::CommandRejected(
+                "invocation.cancel acknowledgement was not accepted".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(serde::Deserialize)]
+struct ProviderCancellationAcknowledgement {
+    accepted: bool,
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Clone, Debug)]
+enum ProviderCancellationError {
+    RuntimeUnavailable(String),
+    Daemon { code: i32, message: String },
+    CommandRejected(String),
+    InvalidAcknowledgement(String),
+}
+
+#[cfg(feature = "axon-pb")]
+impl ProviderCancellationError {
+    fn from_daemon(error: crate::daemon::DaemonError) -> Self {
+        Self::Daemon {
+            code: ffi_code_for_daemon_error(&error),
+            message: error.to_string(),
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderCancellationPhase {
+    Ready,
+    Submitting,
+    Accepted,
+    Rejected,
+}
+
+#[cfg(feature = "axon-pb")]
+struct ProviderCancellationState {
+    phase: ProviderCancellationPhase,
+    rejection: Option<ProviderCancellationError>,
+    waiting_callers: usize,
+}
+
+#[cfg(feature = "axon-pb")]
+struct ProviderCancellationControl {
+    submitter: Arc<dyn CanonicalCancellationCommandSubmitter>,
+    state: Mutex<ProviderCancellationState>,
+    state_changed: Condvar,
+}
+
+#[cfg(feature = "axon-pb")]
+impl ProviderCancellationControl {
+    fn runtime(
+        endpoint: PathBuf,
+        signed_invocation: crate::daemon::SignedInvocation,
+        authority: crate::daemon::InvocationCancellationAuthority,
+    ) -> Self {
+        Self::with_submitter(Arc::new(RuntimeCancellationCommandSubmitter {
+            endpoint,
+            signed_invocation,
+            authority,
+        }))
+    }
+
+    fn with_submitter(submitter: Arc<dyn CanonicalCancellationCommandSubmitter>) -> Self {
+        Self {
+            submitter,
+            state: Mutex::new(ProviderCancellationState {
+                phase: ProviderCancellationPhase::Ready,
+                rejection: None,
+                waiting_callers: 0,
+            }),
+            state_changed: Condvar::new(),
+        }
+    }
+
+    fn request(&self) -> Result<(), ProviderCancellationError> {
+        loop {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match state.phase {
+                ProviderCancellationPhase::Accepted => return Ok(()),
+                ProviderCancellationPhase::Rejected => {
+                    return Err(state
+                        .rejection
+                        .clone()
+                        .expect("rejected cancellation must retain its failure"));
+                }
+                ProviderCancellationPhase::Ready => {
+                    state.phase = ProviderCancellationPhase::Submitting;
+                    drop(state);
+
+                    let result = self.submitter.submit(PROVIDER_CANCEL_REASON);
+                    let mut state = self
+                        .state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    match &result {
+                        Ok(()) => state.phase = ProviderCancellationPhase::Accepted,
+                        Err(error) => {
+                            state.phase = ProviderCancellationPhase::Rejected;
+                            state.rejection = Some(error.clone());
+                        }
+                    }
+                    self.state_changed.notify_all();
+                    return result;
+                }
+                ProviderCancellationPhase::Submitting => {
+                    state.waiting_callers += 1;
+                    self.state_changed.notify_all();
+                    state = self
+                        .state_changed
+                        .wait(state)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    state.waiting_callers -= 1;
+                    self.state_changed.notify_all();
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn wait_for_waiting_callers(&self, expected: usize) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while state.waiting_callers < expected {
+            state = self
+                .state_changed
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn ffi_provider_cancellation_error(function: &str, error: ProviderCancellationError) -> i32 {
+    match error {
+        ProviderCancellationError::RuntimeUnavailable(message) => {
+            record_invocation_error(ERR_GENERIC, format!("{function}: {message}"))
+        }
+        ProviderCancellationError::Daemon { code, message } => {
+            record_invocation_error(code, format!("{function}: {message}"))
+        }
+        ProviderCancellationError::CommandRejected(message) => {
+            record_invocation_error(ERR_ABILITY_FAILED, format!("{function}: {message}"))
+        }
+        ProviderCancellationError::InvalidAcknowledgement(message) => {
+            record_invocation_error(ERR_PROTOCOL, format!("{function}: {message}"))
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+trait ProviderCancellableResource {
+    fn cancellation(&self) -> &ProviderCancellationControl;
+}
+
+#[cfg(feature = "axon-pb")]
 struct ActiveInvocationStream {
     owner: ClientSessionBinding,
-    cancel: tokio_util::sync::CancellationToken,
+    reader_cancel: tokio_util::sync::CancellationToken,
+    cancellation: Arc<ProviderCancellationControl>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl ProviderCancellableResource for ActiveInvocationStream {
+    fn cancellation(&self) -> &ProviderCancellationControl {
+        self.cancellation.as_ref()
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -3506,7 +3891,8 @@ struct ActiveInvocationBidi {
     owner: ClientSessionBinding,
     ability: String,
     up_tx: tokio::sync::mpsc::Sender<axon_sdk::pb::axon::v1::InvokeBidiUp>,
-    cancel: tokio_util::sync::CancellationToken,
+    reader_cancel: tokio_util::sync::CancellationToken,
+    cancellation: Arc<ProviderCancellationControl>,
     local_send: Mutex<BidiLocalSendState>,
 }
 
@@ -3516,13 +3902,15 @@ impl ActiveInvocationBidi {
         owner: ClientSessionBinding,
         ability: String,
         up_tx: tokio::sync::mpsc::Sender<axon_sdk::pb::axon::v1::InvokeBidiUp>,
-        cancel: tokio_util::sync::CancellationToken,
+        reader_cancel: tokio_util::sync::CancellationToken,
+        cancellation: Arc<ProviderCancellationControl>,
     ) -> Self {
         Self {
             owner,
             ability,
             up_tx,
-            cancel,
+            reader_cancel,
+            cancellation,
             local_send: Mutex::new(BidiLocalSendState::new()),
         }
     }
@@ -3560,6 +3948,13 @@ impl ActiveInvocationBidi {
         }
         state.half_close_local();
         Some(bidi_eof_up_frame(state.next_sequence()))
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl ProviderCancellableResource for ActiveInvocationBidi {
+    fn cancellation(&self) -> &ProviderCancellationControl {
+        self.cancellation.as_ref()
     }
 }
 
@@ -3611,7 +4006,7 @@ struct RegistryOwnerMismatch;
 #[cfg(feature = "axon-pb")]
 struct StreamRegistry {
     next: AtomicU64,
-    entries: Mutex<std::collections::HashMap<InvocationStreamId, ActiveInvocationStream>>,
+    entries: Mutex<std::collections::HashMap<InvocationStreamId, Arc<ActiveInvocationStream>>>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -3700,7 +4095,7 @@ fn signed_registry() -> &'static SignedRegistry {
 #[cfg(feature = "axon-pb")]
 fn lock_stream_entries(
     registry: &StreamRegistry,
-) -> MutexGuard<'_, std::collections::HashMap<InvocationStreamId, ActiveInvocationStream>> {
+) -> MutexGuard<'_, std::collections::HashMap<InvocationStreamId, Arc<ActiveInvocationStream>>> {
     registry
         .entries
         .lock()
@@ -3765,7 +4160,7 @@ fn lock_signed_entries(
 fn insert_stream(stream: ActiveInvocationStream) -> InvocationStreamId {
     let registry = stream_registry();
     let stream_id = registry.next.fetch_add(1, Ordering::Relaxed);
-    lock_stream_entries(registry).insert(stream_id, stream);
+    lock_stream_entries(registry).insert(stream_id, Arc::new(stream));
     stream_id
 }
 
@@ -3938,7 +4333,7 @@ fn remove_invocation_handle_for_owner(
 }
 
 #[cfg(feature = "axon-pb")]
-fn remove_stream(stream_id: InvocationStreamId) -> Option<ActiveInvocationStream> {
+fn remove_stream(stream_id: InvocationStreamId) -> Option<Arc<ActiveInvocationStream>> {
     if stream_id == 0 {
         return None;
     }
@@ -3946,10 +4341,30 @@ fn remove_stream(stream_id: InvocationStreamId) -> Option<ActiveInvocationStream
 }
 
 #[cfg(feature = "axon-pb")]
+fn get_stream_for_handle(
+    owner: ClientSessionBinding,
+    stream_id: InvocationStreamId,
+) -> Result<Option<Arc<ActiveInvocationStream>>, RegistryOwnerMismatch> {
+    if stream_id == 0 {
+        return Ok(None);
+    }
+    let stream = lock_stream_entries(stream_registry())
+        .get(&stream_id)
+        .cloned();
+    let Some(stream) = stream else {
+        return Ok(None);
+    };
+    if stream.owner != owner {
+        return Err(RegistryOwnerMismatch);
+    }
+    Ok(Some(stream))
+}
+
+#[cfg(feature = "axon-pb")]
 fn remove_stream_for_handle(
     owner: ClientSessionBinding,
     stream_id: InvocationStreamId,
-) -> Result<Option<ActiveInvocationStream>, RegistryOwnerMismatch> {
+) -> Result<Option<Arc<ActiveInvocationStream>>, RegistryOwnerMismatch> {
     if stream_id == 0 {
         return Ok(None);
     }
@@ -3995,7 +4410,7 @@ pub(crate) fn cancel_invocations_for_binding(owner: ClientSessionBinding) {
             .collect::<Vec<_>>()
     };
     for stream in streams {
-        stream.cancel.cancel();
+        stream.reader_cancel.cancel();
     }
 
     let bidis = {
@@ -4011,7 +4426,7 @@ pub(crate) fn cancel_invocations_for_binding(owner: ClientSessionBinding) {
             .collect::<Vec<_>>()
     };
     for session in bidis {
-        session.cancel.cancel();
+        session.reader_cancel.cancel();
     }
 }
 
@@ -5747,9 +6162,92 @@ mod tests {
     use super::*;
     use crate::ffi::client::handle::{alloc, test_session};
     use std::ffi::{c_void, CStr, CString};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering as AtomicOrdering},
+        Arc, Barrier,
+    };
 
     unsafe extern "C" fn ignore_stream_chunk(_: *mut c_void, _: *const c_char) {}
     unsafe extern "C" fn ignore_bidi_frame(_: *mut c_void, _: *const c_char) {}
+
+    struct AcceptingCancellationCommandSubmitter;
+
+    impl CanonicalCancellationCommandSubmitter for AcceptingCancellationCommandSubmitter {
+        fn submit(&self, _reason: &str) -> Result<(), ProviderCancellationError> {
+            Ok(())
+        }
+    }
+
+    struct BlockingCancellationCommandSubmitter {
+        calls: AtomicUsize,
+        entered: Barrier,
+        release: Barrier,
+    }
+
+    impl BlockingCancellationCommandSubmitter {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                entered: Barrier::new(2),
+                release: Barrier::new(2),
+            }
+        }
+    }
+
+    impl CanonicalCancellationCommandSubmitter for BlockingCancellationCommandSubmitter {
+        fn submit(&self, _reason: &str) -> Result<(), ProviderCancellationError> {
+            self.calls.fetch_add(1, AtomicOrdering::SeqCst);
+            self.entered.wait();
+            self.release.wait();
+            Ok(())
+        }
+    }
+
+    struct CountingCancellationCommandSubmitter {
+        calls: AtomicUsize,
+    }
+
+    impl CountingCancellationCommandSubmitter {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl CanonicalCancellationCommandSubmitter for CountingCancellationCommandSubmitter {
+        fn submit(&self, _reason: &str) -> Result<(), ProviderCancellationError> {
+            self.calls.fetch_add(1, AtomicOrdering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct RejectingCancellationCommandSubmitter {
+        calls: AtomicUsize,
+    }
+
+    impl RejectingCancellationCommandSubmitter {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl CanonicalCancellationCommandSubmitter for RejectingCancellationCommandSubmitter {
+        fn submit(&self, _reason: &str) -> Result<(), ProviderCancellationError> {
+            self.calls.fetch_add(1, AtomicOrdering::SeqCst);
+            Err(ProviderCancellationError::CommandRejected(
+                "canonical cancellation rejected".to_string(),
+            ))
+        }
+    }
+
+    fn test_cancellation_control() -> Arc<ProviderCancellationControl> {
+        Arc::new(ProviderCancellationControl::with_submitter(Arc::new(
+            AcceptingCancellationCommandSubmitter,
+        )))
+    }
 
     fn registry_owner(handle: EasynetHandle, incarnation: u64) -> ClientSessionBinding {
         ClientSessionBinding {
@@ -5980,10 +6478,14 @@ mod tests {
                 .canonical_bytes()
                 .to_vec();
 
-            let bound = lib_runtime()
+            let (bound, cancellation_authority) = lib_runtime()
                 .expect("library runtime")
-                .block_on(SessionInvocationAuthority::new(&session).bind(invocation))
+                .block_on(SessionInvocationAuthority::new(&session).bind_cancellable(invocation))
                 .expect("session owner invocation must bind");
+            assert_eq!(
+                cancellation_authority.owner_ura(),
+                "easynet:///r/acme/device/dev-a"
+            );
             let signature = bound.signature();
             assert_eq!(signature.algorithm, "ed25519");
             assert_eq!(signature.key_id_hint, runtime_public_key_b64);
@@ -6047,6 +6549,40 @@ mod tests {
         assert_eq!(signature.algorithm, "ed25519");
         assert_eq!(signature.signature, vec![7; 64]);
         assert_eq!(signature.key_id_hint, "explicit-caller-key");
+    }
+
+    #[test]
+    fn session_invocation_authority_rejects_foreign_cancellation_authority() {
+        let directory = tempfile::tempdir().expect("runtime discovery directory");
+        let control_path =
+            write_runtime_discovery(directory.path(), "device", "acme", Some("dev-a"));
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            control_path.display().to_string(),
+            None,
+        );
+        let invocation = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
+            "caller_ura": "easynet:///r/acme/device/dev-b",
+            "caller_signature": {
+                "algorithm": "ed25519",
+                "signature_base64": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==",
+                "key_id_hint": "external-caller-key"
+            }
+        })))
+        .expect("parse externally signed invocation")
+        .into_daemon_invocation()
+        .expect("build daemon invocation");
+
+        let error = lib_runtime()
+            .expect("library runtime")
+            .block_on(SessionInvocationAuthority::new(&session).bind_cancellable(invocation))
+            .expect_err("foreign caller must not inherit the session cancellation authority");
+
+        assert!(
+            error
+                .to_string()
+                .contains("does not match session owner `easynet:///r/acme/device/dev-a`"),
+            "unexpected cancellation authority error: {error}"
+        );
     }
 
     fn new_signed_invocation_id() -> SignedInvocationId {
@@ -6318,6 +6854,18 @@ mod tests {
         tokio::sync::mpsc::Receiver<axon_sdk::pb::axon::v1::InvokeBidiUp>,
         tokio_util::sync::CancellationToken,
     ) {
+        active_bidi_session_with_cancellation(owner, capacity, test_cancellation_control())
+    }
+
+    fn active_bidi_session_with_cancellation(
+        owner: ClientSessionBinding,
+        capacity: usize,
+        cancellation: Arc<ProviderCancellationControl>,
+    ) -> (
+        ActiveInvocationBidi,
+        tokio::sync::mpsc::Receiver<axon_sdk::pb::axon::v1::InvokeBidiUp>,
+        tokio_util::sync::CancellationToken,
+    ) {
         let (up_tx, up_rx) = tokio::sync::mpsc::channel(capacity);
         let cancel = tokio_util::sync::CancellationToken::new();
         (
@@ -6326,6 +6874,7 @@ mod tests {
                 "device.pty.attach".to_string(),
                 up_tx,
                 cancel.clone(),
+                cancellation,
             ),
             up_rx,
             cancel,
@@ -7390,10 +7939,16 @@ mod tests {
             .unwrap()
             .is_some());
 
+        let runtime_directory =
+            tempfile::tempdir().expect("isolated provider-authority runtime directory");
+        let missing_control = runtime_directory
+            .path()
+            .join(crate::daemon::control::discovery::CONTROL_JSON_FILENAME);
+        let missing_daemon = runtime_directory.path().join("missing-daemon.sock");
         let (owner_handle, owner_session) = alloc(
             crate::ffi::client::handle::ClientSession::with_control_path_only(
-                "/tmp/easynet-control.json".to_string(),
-                Some("/tmp/easynet-missing-daemon.sock".to_string()),
+                missing_control.display().to_string(),
+                Some(missing_daemon.display().to_string()),
             ),
         );
         let (other_handle, _) = alloc(test_session());
@@ -8067,6 +8622,137 @@ mod tests {
     }
 
     #[test]
+    fn invocation_stream_cancel_waits_for_canonical_acceptance_without_releasing_reader() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let submitter = Arc::new(BlockingCancellationCommandSubmitter::new());
+        let cancellation = Arc::new(ProviderCancellationControl::with_submitter(
+            submitter.clone(),
+        ));
+        let reader_cancel = tokio_util::sync::CancellationToken::new();
+        let stream_id = insert_stream(ActiveInvocationStream {
+            owner,
+            reader_cancel: reader_cancel.clone(),
+            cancellation: cancellation.clone(),
+        });
+
+        let first = std::thread::spawn(move || unsafe {
+            easynet_invocation_stream_cancel(handle, stream_id)
+        });
+        submitter.entered.wait();
+        assert!(
+            get_stream_for_handle(owner, stream_id).unwrap().is_some(),
+            "canonical cancel submission must not remove the stream"
+        );
+        assert!(
+            !reader_cancel.is_cancelled(),
+            "canonical cancel submission must leave the reader draining"
+        );
+
+        let second = std::thread::spawn(move || unsafe {
+            easynet_invocation_stream_cancel(handle, stream_id)
+        });
+        cancellation.wait_for_waiting_callers(1);
+        assert_eq!(
+            submitter.calls.load(AtomicOrdering::SeqCst),
+            1,
+            "a duplicate request must wait for the in-flight canonical command"
+        );
+        assert!(get_stream_for_handle(owner, stream_id).unwrap().is_some());
+        assert!(!reader_cancel.is_cancelled());
+
+        submitter.release.wait();
+        assert_eq!(first.join().expect("first cancel thread"), EASYNET_OK);
+        assert_eq!(second.join().expect("duplicate cancel thread"), EASYNET_OK);
+        assert_eq!(submitter.calls.load(AtomicOrdering::SeqCst), 1);
+        assert!(get_stream_for_handle(owner, stream_id).unwrap().is_some());
+        assert!(!reader_cancel.is_cancelled());
+
+        assert_eq!(
+            unsafe { easynet_invocation_stream_close(handle, stream_id) },
+            EASYNET_OK
+        );
+        assert!(reader_cancel.is_cancelled());
+        assert!(get_stream_for_handle(owner, stream_id).unwrap().is_none());
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn invocation_bidi_cancel_is_idempotent_and_preserves_reader_until_local_close() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let submitter = Arc::new(CountingCancellationCommandSubmitter::new());
+        let cancellation = Arc::new(ProviderCancellationControl::with_submitter(
+            submitter.clone(),
+        ));
+        let (session, mut up_rx, reader_cancel) =
+            active_bidi_session_with_cancellation(owner, 1, cancellation);
+        let bidi_id = insert_bidi(session);
+
+        assert_eq!(
+            unsafe { easynet_invocation_bidi_cancel(handle, bidi_id) },
+            EASYNET_OK
+        );
+        assert_eq!(
+            unsafe { easynet_invocation_bidi_cancel(handle, bidi_id) },
+            EASYNET_OK
+        );
+        assert_eq!(submitter.calls.load(AtomicOrdering::SeqCst), 1);
+        assert!(get_bidi_for_handle(owner, bidi_id).unwrap().is_some());
+        assert!(
+            !reader_cancel.is_cancelled(),
+            "accepted cancellation must preserve the terminal drain path"
+        );
+
+        assert_eq!(
+            unsafe { easynet_invocation_bidi_close(handle, bidi_id) },
+            EASYNET_OK
+        );
+        assert_bidi_eof_frame(up_rx.try_recv().expect("local close EOF"), 1);
+        assert!(reader_cancel.is_cancelled());
+        assert!(get_bidi_for_handle(owner, bidi_id).unwrap().is_none());
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
+    fn invocation_stream_cancel_memoizes_rejection_without_resubmission() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let submitter = Arc::new(RejectingCancellationCommandSubmitter::new());
+        let cancellation = Arc::new(ProviderCancellationControl::with_submitter(
+            submitter.clone(),
+        ));
+        let reader_cancel = tokio_util::sync::CancellationToken::new();
+        let stream_id = insert_stream(ActiveInvocationStream {
+            owner,
+            reader_cancel: reader_cancel.clone(),
+            cancellation,
+        });
+
+        assert_eq!(
+            unsafe { easynet_invocation_stream_cancel(handle, stream_id) },
+            ERR_ABILITY_FAILED
+        );
+        assert_eq!(
+            unsafe { easynet_invocation_stream_cancel(handle, stream_id) },
+            ERR_ABILITY_FAILED
+        );
+        assert_eq!(
+            submitter.calls.load(AtomicOrdering::SeqCst),
+            1,
+            "a rejected canonical cancellation must not sign and submit a second command"
+        );
+        assert!(get_stream_for_handle(owner, stream_id).unwrap().is_some());
+        assert!(!reader_cancel.is_cancelled());
+
+        assert_eq!(
+            unsafe { easynet_invocation_stream_close(handle, stream_id) },
+            EASYNET_OK
+        );
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
     fn invocation_stream_close_is_idempotent_for_unknown_stream() {
         let (handle, _) = alloc(test_session());
         let code = unsafe { easynet_invocation_stream_close(handle, 9_999_999) };
@@ -8082,7 +8768,8 @@ mod tests {
         let cancel = tokio_util::sync::CancellationToken::new();
         let stream_id = insert_stream(ActiveInvocationStream {
             owner: owner_binding,
-            cancel: cancel.clone(),
+            reader_cancel: cancel.clone(),
+            cancellation: test_cancellation_control(),
         });
 
         let code = unsafe { easynet_invocation_stream_close(other, stream_id) };
@@ -8121,7 +8808,7 @@ mod tests {
             .unwrap()
             .is_some());
         assert_eq!(
-            unsafe { easynet_invocation_bidi_cancel(owner, bidi_id) },
+            unsafe { easynet_invocation_bidi_close(owner, bidi_id) },
             EASYNET_OK
         );
         crate::ffi::client::handle::release(owner);
@@ -8214,10 +8901,11 @@ mod tests {
         let cancel = tokio_util::sync::CancellationToken::new();
         let stream_id = insert_stream(ActiveInvocationStream {
             owner: registry_owner(41, 4100),
-            cancel: cancel.clone(),
+            reader_cancel: cancel.clone(),
+            cancellation: test_cancellation_control(),
         });
         let stream = remove_stream(stream_id).expect("registered stream should be removable");
-        stream.cancel.cancel();
+        stream.reader_cancel.cancel();
         assert!(cancel.is_cancelled());
         assert!(
             remove_stream(stream_id).is_none(),
@@ -8230,7 +8918,7 @@ mod tests {
         let (session, _up_rx, cancel) = active_bidi_session(registry_owner(41, 4100), 1);
         let bidi_id = insert_bidi(session);
         let session = remove_bidi(bidi_id).expect("registered bidi session should be removable");
-        session.cancel.cancel();
+        session.reader_cancel.cancel();
         assert!(cancel.is_cancelled());
         assert!(
             remove_bidi(bidi_id).is_none(),
@@ -8248,11 +8936,13 @@ mod tests {
         let other_stream_cancel = tokio_util::sync::CancellationToken::new();
         let owned_stream_id = insert_stream(ActiveInvocationStream {
             owner: owned,
-            cancel: owned_stream_cancel.clone(),
+            reader_cancel: owned_stream_cancel.clone(),
+            cancellation: test_cancellation_control(),
         });
         let other_stream_id = insert_stream(ActiveInvocationStream {
             owner: other,
-            cancel: other_stream_cancel.clone(),
+            reader_cancel: other_stream_cancel.clone(),
+            cancellation: test_cancellation_control(),
         });
 
         let (owned_bidi, _owned_up_rx, owned_bidi_cancel) = active_bidi_session(owned, 1);
@@ -8280,7 +8970,8 @@ mod tests {
         let cancel = tokio_util::sync::CancellationToken::new();
         let stream_id = insert_stream(ActiveInvocationStream {
             owner: registry_owner(101, 1010),
-            cancel,
+            reader_cancel: cancel,
+            cancellation: test_cancellation_control(),
         });
 
         assert!(matches!(

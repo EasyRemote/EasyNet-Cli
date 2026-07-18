@@ -1604,8 +1604,8 @@ if daemon_route_runtime.exists():
             "exact bidi transport must construct an externally signed runtime request",
         ),
         (
-            "project_finalized_bidi_receipt",
-            "exact bidi transport must project Axon's terminal receipt",
+            "project_registered_finalized_bidi_receipt",
+            "exact bidi transport must project Axon's terminal receipt through the registered lifecycle owner",
         ),
     )
     for token, detail in adapter_requirements:
@@ -2843,10 +2843,11 @@ if voice_handler.exists():
         )
 
 
-# Rule 20: stream/bidi cancellation at the C ABI provider boundary is a
-# transport/resource cancel request until a canonical terminal receipt is
-# observed. Language SDK adapters may expose the request state, but must not
-# synthesize lifecycle terminality for local stream or bidi cancellation.
+# Rule 20: stream/bidi cancellation at the C ABI provider boundary submits one
+# independently signed canonical lifecycle-control command and retains the
+# original reader until a canonical terminal receipt is observed. Language SDK
+# adapters may expose the request state, but must not synthesize lifecycle
+# terminality for local stream or bidi cancellation.
 ffi_v5_spec = cli_root / "docs/spec/ffi-abi-v5.md"
 ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
 go_cabi_runtime = cli_root / "sdk/go/cabi_runtime.go"
@@ -2881,6 +2882,20 @@ if ffi_v5_spec.exists():
             1,
             "ABI v5 contract must forbid local cancel from claiming runtime terminality",
         )
+    if not re.search(r"submits\s+at\s+most\s+one\s+independently\s+signed", text):
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            ffi_v5_spec,
+            1,
+            "ABI v5 contract must require one-shot independently signed canonical cancellation",
+        )
+    if not re.search(r"keeps\s+the\s+callback/reader\s+path\s+draining", text):
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            ffi_v5_spec,
+            1,
+            "ABI v5 contract must preserve the original terminal drain path",
+        )
     legacy_terminal_claim = re.search(
         r"stream\s+cancel/close\s+and\s+bidi\s+cancel/close\s+are\s+terminal",
         text,
@@ -2905,12 +2920,20 @@ if ffi_invocation.exists():
     text = source(ffi_invocation)
     ffi_requirements = (
         (
-            "release_stream_with_reader_cancel(",
-            "stream cancel must remain a local reader/resource release until lifecycle control exists",
+            "request_stream_cancellation(",
+            "stream cancel must submit through the provider cancellation authority",
         ),
         (
-            "session.cancel.cancel()",
-            "bidi cancel must remain an explicit local session cancellation request",
+            "request_bidi_cancellation(",
+            "bidi cancel must submit through the provider cancellation authority",
+        ),
+        (
+            "request_cancel_signed(",
+            "provider cancellation must build and sign a canonical lifecycle-control command",
+        ),
+        (
+            "ProviderCancellationPhase::Rejected",
+            "provider cancellation must memoize rejection instead of resubmitting",
         ),
     )
     for token, detail in ffi_requirements:
@@ -2934,6 +2957,13 @@ if ffi_invocation.exists():
             line_number(text, stream_cancel.start()),
             "C ABI stream cancel must not synthesize lifecycle terminality",
         )
+    if stream_cancel and "release_stream_with_reader_cancel(" in stream_cancel.group(0):
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            ffi_invocation,
+            line_number(text, stream_cancel.start()),
+            "C ABI stream cancel must not release the terminal drain path",
+        )
     bidi_cancel = re.search(
         r"fn\s+easynet_invocation_bidi_cancel\b.*?\n}\n",
         text,
@@ -2945,6 +2975,13 @@ if ffi_invocation.exists():
             ffi_invocation,
             line_number(text, bidi_cancel.start()),
             "C ABI bidi cancel must not synthesize lifecycle terminality",
+        )
+    if bidi_cancel and re.search(r"remove_bidi_for_handle|reader_cancel\.cancel\(\)", bidi_cancel.group(0)):
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            ffi_invocation,
+            line_number(text, bidi_cancel.start()),
+            "C ABI bidi cancel must not release the terminal drain path",
         )
 
 if go_cabi_runtime.exists():
@@ -2967,6 +3004,37 @@ if go_cabi_runtime.exists():
                 1,
                 detail,
             )
+    go_backpressure = re.search(
+        r"func\s+cabiCallbackBackpressureFailure\s*\(\s*\)\s*\[\]byte\s*\{.*?\n\}",
+        text,
+        flags=re.S,
+    )
+    if "type cabiCallbackInbox struct" in text and go_backpressure is None:
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            go_cabi_runtime,
+            1,
+            "Go callback inbox must own a transport-failure projection without terminal authority",
+        )
+    if "cabiCallbackBackpressureTerminal" in text:
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            go_cabi_runtime,
+            1,
+            "Go callback backpressure must not retain obsolete terminal-authority naming",
+        )
+    if go_backpressure and (
+        not re.search(r'"terminal"\s*:\s*false', go_backpressure.group(0))
+        or not re.search(
+            r'"transport_terminal"\s*:\s*true', go_backpressure.group(0)
+        )
+    ):
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            go_cabi_runtime,
+            line_number(text, go_backpressure.start()),
+            "Go callback backpressure must be a transport failure and must not claim receipt-backed terminality",
+        )
 
 if python_cabi_runtime.exists():
     text = source(python_cabi_runtime)
@@ -2988,6 +3056,37 @@ if python_cabi_runtime.exists():
                 1,
                 detail,
             )
+    python_backpressure = re.search(
+        r"def\s+_callback_backpressure_failure\s*\(\s*\)\s*->\s*bytes\s*:.*?(?=\n\ndef\s+|\Z)",
+        text,
+        flags=re.S,
+    )
+    if "class _CallbackInbox" in text and python_backpressure is None:
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            python_cabi_runtime,
+            1,
+            "Python callback inbox must own a transport-failure projection without terminal authority",
+        )
+    if "_callback_backpressure_terminal" in text:
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            python_cabi_runtime,
+            1,
+            "Python callback backpressure must not retain obsolete terminal-authority naming",
+        )
+    if python_backpressure and (
+        not re.search(r'"terminal"\s*:\s*False', python_backpressure.group(0))
+        or not re.search(
+            r'"transport_terminal"\s*:\s*True', python_backpressure.group(0)
+        )
+    ):
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            python_cabi_runtime,
+            line_number(text, python_backpressure.start()),
+            "Python callback backpressure must be a transport failure and must not claim receipt-backed terminality",
+        )
 
 if go_direct_runtime.exists():
     text = source(go_direct_runtime)
@@ -3214,6 +3313,18 @@ if cancel_domain.exists():
             "invocation_lifecycle_hash(envelope: &DescriptorBoundEnvelope)",
             "target lifecycle hash must derive from descriptor-bound canonical bytes",
         ),
+        (
+            "struct RegisteredInvocationLifecycle",
+            "daemon adapters must share one lifecycle registration owner",
+        ),
+        (
+            "pub(crate) async fn finalized(&self)",
+            "lifecycle registration owner must bind canonical finalization to terminal retention",
+        ),
+        (
+            "pub(crate) async fn cancel_and_finalize(",
+            "lifecycle registration owner must bind cancellation to canonical finalization",
+        ),
     )
     raw_text = cancel_domain.read_text(encoding="utf-8", errors="replace")
     for token, detail in cancel_domain_requirements:
@@ -3225,6 +3336,18 @@ if cancel_domain.exists():
                 1,
                 detail,
             )
+    raw_registry_mutation = re.search(
+        r"\bpub(?:\(crate\))?\s+fn\s+register\s*\(\s*&self,\s*envelope:"
+        r"|\bpub(?:\(crate\))?\s+fn\s+mark_terminal\s*\(\s*&self,\s*key:",
+        text,
+    )
+    if raw_registry_mutation:
+        add(
+            "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
+            cancel_domain,
+            line_number(text, raw_registry_mutation.start()),
+            "raw lifecycle registration and terminal mutation must remain private to RegisteredInvocationLifecycle",
+        )
 else:
     add(
         "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
@@ -3324,8 +3447,12 @@ if runtime_client.exists():
                 "request_cancel_signed must prepare an independent cancel command",
             ),
             (
-                "sign_with_canonical_signer(&signer).await?",
-                "request_cancel_signed must independently sign the cancel command",
+                "self.cancellation_authority.as_ref()",
+                "request_cancel_signed must require an explicitly bound cancellation authority",
+            ),
+            (
+                "authority.sign(prepared).await?",
+                "request_cancel_signed must sign through the bound owner authority",
             ),
             (
                 ".invoke(signed_cancel)",
@@ -3346,6 +3473,16 @@ if runtime_client.exists():
                 runtime_client,
                 line_number(text, request_cancel.start()),
                 "request_cancel_signed must not replay the original signed invocation",
+            )
+        if (
+            "RuntimeSigningIdentity::load_default" in body
+            or "KeyringClient::default_path" in body
+        ):
+            add(
+                "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
+                runtime_client,
+                line_number(text, request_cancel.start()),
+                "RuntimeClient must not infer a default signer; ingress must bind an explicit caller or daemon KeyService authority",
             )
 
 if unary_admission_tests.exists():

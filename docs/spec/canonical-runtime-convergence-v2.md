@@ -2,7 +2,8 @@
 
 Status: Normative for new cross-repository convergence work.
 
-Implementation status: RF-1 through RF-9 closed on 2026-07-18; see Section 12.
+Implementation status: convergence is in progress. Section 12 records the
+live audit state and must not be treated as closure evidence.
 
 This specification consolidates the architecture-convergence objective and the
 2026-07-17 EasyNet-Cli/EasyNet-Axon code-graph audit. It is the clean target
@@ -245,24 +246,23 @@ Completion requires all of the following, not a partial green build:
 
 ## 12. Audit Status
 
-RF-1 through RF-9 are closed as of 2026-07-18. Closure means callers migrated,
-the replaced implementation was deleted, negative gates reject
-reintroduction, and the required cross-language or cross-repository evidence
-passed. The audit observations retained in Section 3 are historical inputs,
-not current-tree findings.
+No root fork is accepted as closed from a mechanical gate alone. Closure
+requires caller migration, deletion of the replaced authority, a negative gate
+that rejects reintroduction, and revision-pinned cross-language or
+cross-repository evidence. The 2026-07-18 closure report was withdrawn after
+its claims were found not to describe the accepted checkout.
 
-| ID | Status | Accepted closure |
+| ID | Status | Live audit state |
 | --- | --- | --- |
-| RF-1 | Closed | Axon canonical packages expose generic runtime concepts only. Product protocols, presets, facades, and package identities moved downstream; package, public-surface, product-boundary, and CLI product-neutrality gates reject reintroduction. |
-| RF-2 | Closed | Axon no longer contains Mission schema, state, service, runtime, or SDK authority. EasyNet-Cli owns Mission/EAL and emits complete descriptor-bound child Invocations through the canonical runtime. |
-| RF-3 | Closed | `DescriptorBoundInvocationRequest` is the sole public admission model. Plain proof/admission exports and duplicate Rust authority were deleted; public-surface, Dendrite ABI, and single-authority gates pass. |
-| RF-4 | Closed | One machine-readable lifecycle contract and transition suite drives Rust, Go, Python, Node, Java, and Swift. All 72 transition/recovery cases pass at `CutoverReady` against semantic contract SHA-256 `6c6578861ba793be819b5ec8f97de9257900eb91b020883aab24d04c838d79e7`. |
-| RF-5 | Closed | Authenticated invocation requires an explicit signer or daemon `KeyService`; process-local generated or cached signing fallback paths were deleted and custody gates pass. |
-| RF-6 | Closed | Canonical receipt construction requires complete authority and proof facts in every language. Empty/default compatibility constructors were deleted; receipt surface gates and all 23 verifier tests pass. |
-| RF-7 | Closed | CLI route inventory covers unary, stream, bidi, loopback, and exact ability routes, and requires descriptor-bound entry through `LocalRuntime`. Daemon migration gates and live-daemon E2E pass. |
-| RF-8 | Closed | The complete seven-field Invocation tuple is explicit at SDK, FFI, daemon, and downstream ingress. Defaulting paths were removed; latest-input, canonical V2, and downstream cutover gates pass. |
-| RF-9 | Closed | Active architecture vocabulary is URA-only. Axon is the single editable proto source; deterministic generation and byte-for-byte derivation gates pass in both repositories. |
+| RF-1 | Open | Axon still contains product protocol and lifecycle authority, and product-named provider/package surfaces remain in canonical SDK roots. |
+| RF-2 | Revalidation required | Mission schema and runtime removal exists in the current Axon history, but final closure requires the post-RF-1/RF-3 revision and downstream child-invocation evidence. |
+| RF-3 | Open | Axon core still owns a second admission flow beside `DescriptorBoundInvocationRequest`; callers and Dendrite entry points must migrate before that authority is deleted. |
+| RF-4 | In progress | The shared lifecycle contract exists, but provider-backed Go/Python stream and bidi behavior and final revision-pinned multi-language evidence are still being converged. |
+| RF-5 | Revalidation required | Process-local signer fallback removal exists in the current history; final custody evidence must be regenerated from the accepted source revisions. |
+| RF-6 | In progress | Java receipt facts remain mutable or defaultable and must become mandatory, immutable, and fail-closed before the receipt surface can be accepted. |
+| RF-7 | In progress | CLI route ownership is being converged on one registered descriptor-bound lifecycle owner; final route inventory and live-daemon evidence are pending. |
+| RF-8 | Open | EasyNet and EasyRemote public ingress still derive members of the seven-field Invocation tuple, and backend directory forwarding still bypasses canonical tuple ownership. |
+| RF-9 | Revalidation required | URA and deterministic schema-source gates exist, but final evidence must be regenerated after protocol extraction and accepted revision pinning. |
 
-The accepted source revisions, measured test results, benchmark provenance, and
-formal cutover gate are recorded in
-`docs/reviews/canonical-runtime-convergence-v2-closure-2026-07-18.md`.
+`docs/reviews/canonical-runtime-convergence-v2-closure-2026-07-18.md` is a
+withdrawn historical closure attempt. It is not acceptance evidence.

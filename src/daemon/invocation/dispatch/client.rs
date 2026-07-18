@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::support::platform::local_daemon_grpc;
@@ -9,6 +10,7 @@ use super::{
     SignedInvocation,
 };
 use crate::daemon::boot::DaemonEndpoints;
+use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::{DaemonError, Result};
 
 #[cfg(feature = "axon-pb")]
@@ -212,10 +214,64 @@ impl ClientConnectionState {
 ///
 /// What this type is not: it is not a daemon lifecycle handle and
 /// does not expose gRPC, UDS, or Axon protobuf types.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RuntimeClient {
     inner: DaemonClient,
     state: ClientConnectionState,
+    cancellation_authority: Option<InvocationCancellationAuthority>,
+}
+
+impl std::fmt::Debug for RuntimeClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeClient")
+            .field("inner", &self.inner)
+            .field("state", &self.state)
+            .field(
+                "cancellation_authority_owner",
+                &self
+                    .cancellation_authority
+                    .as_ref()
+                    .map(InvocationCancellationAuthority::owner_ura),
+            )
+            .finish()
+    }
+}
+
+/// Owner-bound authority for signing canonical lifecycle-control commands.
+///
+/// The capability contains no private key material. Production signers delegate
+/// to the daemon KeyService; explicit caller signers may provide the same
+/// narrow [`CanonicalSigner`] port. Keeping this dependency separate from the
+/// transport prevents `RuntimeClient` from selecting or minting authority.
+#[derive(Clone)]
+pub struct InvocationCancellationAuthority {
+    signer: Arc<dyn CanonicalSigner>,
+}
+
+impl InvocationCancellationAuthority {
+    pub fn new(signer: Arc<dyn CanonicalSigner>) -> Self {
+        Self { signer }
+    }
+
+    pub fn owner_ura(&self) -> &str {
+        self.signer.owner_ura()
+    }
+
+    async fn sign(&self, prepared: PreparedInvocation) -> Result<SignedInvocation> {
+        prepared
+            .sign_with_canonical_signer(self.signer.as_ref())
+            .await
+    }
+}
+
+impl std::fmt::Debug for InvocationCancellationAuthority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InvocationCancellationAuthority")
+            .field("owner_ura", &self.owner_ura())
+            .finish_non_exhaustive()
+    }
 }
 
 impl RuntimeClient {
@@ -225,6 +281,7 @@ impl RuntimeClient {
         Ok(Self {
             inner,
             state: ClientConnectionState::Ready,
+            cancellation_authority: None,
         })
     }
 
@@ -241,6 +298,19 @@ impl RuntimeClient {
     /// Endpoint this runtime client dials.
     pub fn endpoint(&self) -> &Path {
         self.inner.endpoint()
+    }
+
+    /// Bind the explicit owner authority used for lifecycle-control commands.
+    ///
+    /// Connection creation deliberately does not infer an identity. Callers
+    /// that need cancellation must provide either their signer capability or a
+    /// daemon-KeyService-backed capability bound at their ingress boundary.
+    pub fn with_cancellation_authority(
+        mut self,
+        authority: InvocationCancellationAuthority,
+    ) -> Self {
+        self.cancellation_authority = Some(authority);
+        self
     }
 
     /// Start an SDK invocation builder.
@@ -306,23 +376,14 @@ impl RuntimeClient {
                 endpoint: self.inner.endpoint().to_path_buf(),
             });
         }
-        let caller_ura = signed.prepared().tuple().caller_ura;
-        let prepared = signed.prepare_cancel_command(reason)?;
-        let signer = tokio::task::spawn_blocking(move || {
-            crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(caller_ura)
-        })
-        .await
-        .map_err(|error| {
-            DaemonError::InvalidInvocation(format!(
-                "load invocation.cancel authority signer task failed: {error}"
-            ))
-        })?
-        .map_err(|error| {
-            DaemonError::InvalidInvocation(format!(
-                "load invocation.cancel authority signer failed: {error}"
-            ))
+        let authority = self.cancellation_authority.as_ref().ok_or_else(|| {
+            DaemonError::InvalidInvocation(
+                "invocation.cancel requires an explicit caller signer or daemon KeyService authority"
+                    .to_string(),
+            )
         })?;
-        let signed_cancel = prepared.sign_with_canonical_signer(&signer).await?;
+        let prepared = signed.prepare_cancel_command(reason)?;
+        let signed_cancel = authority.sign(prepared).await?;
         let tuple = signed_cancel.prepared().tuple();
         let response = self.inner.invoke(signed_cancel).await?;
         let outcome = InvocationOutcome::from_invoke_response(

@@ -748,7 +748,13 @@ if frontend.exists():
     require_boundary_pattern(
         backend.parent,
         "Frontend/src/lib/api/easynet-abilities.ts",
-        r"descriptor_ref:\s*signed\.prepared\.descriptor_ref",
+        r"(?:const\s+descriptorRef\s*=\s*signed\.prepared\.descriptor_ref|descriptor_ref:\s*signed\.prepared\.descriptor_ref)",
+        "Frontend signed submission must source descriptor_ref from the prepare response",
+    )
+    require_boundary_pattern(
+        backend.parent,
+        "Frontend/src/lib/api/easynet-abilities.ts",
+        r"descriptor_ref:\s*(?:signed\.prepared\.descriptor_ref|descriptorRef)",
         "Frontend signed submission must carry the prepare-time descriptor_ref",
     )
 

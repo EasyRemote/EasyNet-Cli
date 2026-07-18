@@ -2,18 +2,25 @@
 
 Date: 2026-07-18
 
-Status: Accepted. RF-1 through RF-9 are closed.
+Status: Withdrawn. This report is not acceptance evidence.
 
 Normative scope:
 `docs/spec/canonical-runtime-convergence-v2.md`.
 
-This report records the accepted implementation and its evidence. A root fork
-is closed only when callers use the canonical path, the replaced authority is
-deleted, automated gates reject reintroduction, and cross-language or
-cross-repository behavior is verified. Adding a preferred path beside a legacy
-path is not closure.
+This report records a failed closure attempt. Its source revisions, test
+counts, and root-fork claims were invalidated by inspection of the checkout:
+product protocol authority and a duplicate admission model remained in Axon,
+Java receipts still permitted mutable/default proof facts, downstream public
+ingress still derived Invocation tuple members, and the recorded source
+revisions were stale. Everything below is retained as rejected historical
+evidence only.
 
-## Accepted Architecture
+A root fork is closed only when callers use the canonical path, the replaced
+authority is deleted, automated gates reject reintroduction, and
+revision-pinned cross-language or cross-repository behavior is verified.
+Adding a preferred path beside a legacy path is not closure.
+
+## Target Architecture
 
 Axon owns the generic canonical runtime model:
 
@@ -35,7 +42,7 @@ EasyNet-Cli owns downstream product and host policy:
 The backend and EasyRemote consume the SDK through downstream provider
 boundaries. They do not own proof, lifecycle, receipt, or canonical wire models.
 
-## Root-Fork Closure
+## Rejected Closure Claims
 
 | ID | Closure evidence |
 | --- | --- |
@@ -49,9 +56,9 @@ boundaries. They do not own proof, lifecycle, receipt, or canonical wire models.
 | RF-8 | Caller, callee, ability, subject, nonce, causal context, and args are explicit at SDK, FFI, daemon, and backend boundaries. Public-ingress defaulting was removed and complete-tuple gates pass. |
 | RF-9 | Active source and normative text use URA. Axon owns the only editable proto source; generated copies are deterministic and byte-for-byte checked in both repositories. |
 
-## Source Evidence
+## Stale Source Evidence
 
-Accepted Axon source revision:
+Previously claimed Axon source revision:
 `43cec35329fe51a300f1eb0b7476eb78d62d698b`.
 
 Principal Axon commits:
@@ -87,7 +94,7 @@ The source revision is the most recent commit touching the bounded Axon
 cannot invalidate source evidence. Dirty bounded roots are attested by a
 deterministic content hash and cannot reuse committed evidence.
 
-## Verification Evidence
+## Stale Verification Evidence
 
 Axon:
 
@@ -133,7 +140,7 @@ zero active invocations.
 
 No percentage performance claim is used as acceptance evidence.
 
-## Compatibility Boundary
+## Claimed Compatibility Boundary
 
 Public behavior remains compatible only through the released Go and Python
 edge adapters enumerated by
@@ -144,8 +151,7 @@ and do not retain proof, signer, lifecycle, or receipt authority.
 
 ## Historical Records
 
-`architecture-convergence-audit-2026-07-14.md` and
-`open-fix-delegation-spec-2026-07-17.md` are frozen historical records. Their
-captured "Open", "current", dirty-file, and failed-test statements do not
-describe this accepted checkout. Tasks outside normative RF-1 through RF-9
-remain independent backlog and do not expand or invalidate this closure.
+`architecture-convergence-audit-2026-07-14.md`,
+`open-fix-delegation-spec-2026-07-17.md`, and this report are historical
+records. None describes an accepted closure checkout. Live status is maintained
+in Section 12 of `docs/spec/canonical-runtime-convergence-v2.md`.
