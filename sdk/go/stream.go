@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 const MaxStreamBufferedEvents = 1024
@@ -60,6 +61,7 @@ func (f StreamTransportFunc) Close(ctx context.Context) error {
 
 // StreamHandle is the public ordered stream event state object.
 type StreamHandle struct {
+	mu            sync.Mutex
 	streamID      string
 	transport     StreamTransport
 	state         StreamState
@@ -68,6 +70,7 @@ type StreamHandle struct {
 	terminalSeen  bool
 	terminalEvent *StreamTerminalEvent
 	maxBuffered   int
+	receiving     bool
 }
 
 // StreamEvent is an SDK stream event projection.
@@ -158,6 +161,8 @@ func (s *StreamHandle) State() StreamState {
 	if s == nil {
 		return StreamFailed
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.state
 }
 
@@ -165,6 +170,8 @@ func (s *StreamHandle) Events() []StreamEvent {
 	if s == nil {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return append([]StreamEvent(nil), s.events...)
 }
 
@@ -172,6 +179,8 @@ func (s *StreamHandle) MaxBufferedEvents() int {
 	if s == nil {
 		return 0
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.maxBuffered
 }
 
@@ -179,6 +188,8 @@ func (s *StreamHandle) TerminalEvent() (StreamTerminalEvent, error) {
 	if s == nil {
 		return StreamTerminalEvent{}, invalidRuntimeClient("stream handle is not initialized")
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.terminalEvent == nil {
 		return StreamTerminalEvent{}, invalidRuntimePayload("stream terminal event has not been seen", nil)
 	}
@@ -186,21 +197,39 @@ func (s *StreamHandle) TerminalEvent() (StreamTerminalEvent, error) {
 }
 
 func (s *StreamHandle) Next(ctx context.Context) (StreamEvent, error) {
-	if s == nil || s.transport == nil {
+	if s == nil {
 		return StreamEvent{}, invalidRuntimeClient("stream handle is not initialized")
 	}
 	if ctx == nil {
 		return StreamEvent{}, invalidRuntimeClient("context is required")
 	}
-	if s.isTerminal() {
+	s.mu.Lock()
+	if s.transport == nil {
+		s.mu.Unlock()
+		return StreamEvent{}, invalidRuntimeClient("stream handle is not initialized")
+	}
+	if s.isTerminalLocked() {
+		s.mu.Unlock()
 		return StreamEvent{}, invalidRuntimePayload("stream is terminal", nil)
 	}
 	if s.state == StreamTerminalFrameSeen || s.state == StreamDraining {
+		s.mu.Unlock()
 		return StreamEvent{}, invalidRuntimePayload("stream terminal event already seen", nil)
 	}
-	raw, err := s.transport.Recv(ctx)
+	if s.receiving {
+		s.mu.Unlock()
+		return StreamEvent{}, invalidRuntimePayload("stream recv is already in progress", nil)
+	}
+	s.receiving = true
+	transport := s.transport
+	s.mu.Unlock()
+
+	raw, err := transport.Recv(ctx)
 	if err != nil {
+		s.mu.Lock()
+		s.receiving = false
 		s.state = StreamFailed
+		s.mu.Unlock()
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
 			return StreamEvent{}, sdkErr
@@ -208,29 +237,45 @@ func (s *StreamHandle) Next(ctx context.Context) (StreamEvent, error) {
 		return StreamEvent{}, transportRuntimeError("stream recv transport failed", err)
 	}
 	event, err := NewStreamEventFromJSON(raw)
+	s.mu.Lock()
+	s.receiving = false
 	if err != nil {
 		s.state = StreamFailed
+		s.mu.Unlock()
 		return StreamEvent{}, err
 	}
-	if err := s.applyEvent(event); err != nil {
+	if err := s.applyEventLocked(event); err != nil {
+		s.mu.Unlock()
 		return StreamEvent{}, err
 	}
+	s.mu.Unlock()
 	return event, nil
 }
 
 func (s *StreamHandle) Cancel(ctx context.Context, reason string) (StreamCancel, error) {
-	if s == nil || s.transport == nil {
+	if s == nil {
 		return StreamCancel{}, invalidRuntimeClient("stream handle is not initialized")
 	}
 	if ctx == nil {
 		return StreamCancel{}, invalidRuntimeClient("context is required")
 	}
-	if s.isTerminal() {
+	s.mu.Lock()
+	if s.transport == nil {
+		s.mu.Unlock()
+		return StreamCancel{}, invalidRuntimeClient("stream handle is not initialized")
+	}
+	if s.isTerminalLocked() || s.state == StreamTerminalFrameSeen || s.state == StreamDraining {
+		s.mu.Unlock()
 		return StreamCancel{}, invalidRuntimePayload("stream is terminal", nil)
 	}
-	raw, err := s.transport.Cancel(ctx, reason)
+	transport := s.transport
+	s.mu.Unlock()
+
+	raw, err := transport.Cancel(ctx, reason)
 	if err != nil {
+		s.mu.Lock()
 		s.state = StreamFailed
+		s.mu.Unlock()
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
 			return StreamCancel{}, sdkErr
@@ -239,43 +284,71 @@ func (s *StreamHandle) Cancel(ctx context.Context, reason string) (StreamCancel,
 	}
 	cancel, err := NewStreamCancelFromJSON(raw)
 	if err != nil {
+		s.mu.Lock()
 		s.state = StreamFailed
+		s.mu.Unlock()
 		return StreamCancel{}, err
 	}
 	if cancel.state != StreamCancelRequested || cancel.terminal || cancel.cancelled {
+		s.mu.Lock()
 		s.state = StreamFailed
+		s.mu.Unlock()
 		return StreamCancel{}, invalidRuntimePayload("stream cancel transport must return CancelRequested with terminal=false", nil)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == StreamTerminalFrameSeen || s.state == StreamDraining || s.state == StreamClosed {
+		return cancel, nil
+	}
+	if s.state == StreamFailed {
+		return StreamCancel{}, invalidRuntimePayload("stream failed while cancellation was in flight", nil)
 	}
 	s.state = cancel.state
 	return cancel, nil
 }
 
 func (s *StreamHandle) Close(ctx context.Context) error {
-	if s == nil || s.transport == nil {
+	if s == nil {
 		return invalidRuntimeClient("stream handle is not initialized")
 	}
 	if ctx == nil {
 		return invalidRuntimeClient("context is required")
 	}
+	s.mu.Lock()
+	if s.transport == nil {
+		s.mu.Unlock()
+		return invalidRuntimeClient("stream handle is not initialized")
+	}
 	if s.state == StreamClosed {
+		s.mu.Unlock()
 		return nil
 	}
 	if s.state == StreamTerminalFrameSeen {
 		s.state = StreamDraining
 	}
-	if err := s.transport.Close(ctx); err != nil {
+	transport := s.transport
+	s.mu.Unlock()
+
+	if err := transport.Close(ctx); err != nil {
+		s.mu.Lock()
 		s.state = StreamFailed
+		s.mu.Unlock()
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
 			return sdkErr
 		}
 		return transportRuntimeError("stream close transport failed", err)
 	}
+	s.mu.Lock()
 	s.state = StreamClosed
+	s.mu.Unlock()
 	return nil
 }
 
-func (s *StreamHandle) applyEvent(event StreamEvent) error {
+func (s *StreamHandle) applyEventLocked(event StreamEvent) error {
+	if s.isTerminalLocked() {
+		return invalidRuntimePayload("stream is terminal", nil)
+	}
 	if event.sequence == 0 {
 		s.state = StreamFailed
 		return invalidRuntimePayload("stream event sequence is required", nil)
@@ -312,7 +385,7 @@ func (s *StreamHandle) applyEvent(event StreamEvent) error {
 	return nil
 }
 
-func (s *StreamHandle) isTerminal() bool {
+func (s *StreamHandle) isTerminalLocked() bool {
 	return s.state == StreamClosed || s.state == StreamCancelled || s.state == StreamFailed
 }
 

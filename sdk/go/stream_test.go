@@ -3,7 +3,9 @@ package easynet
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
+	"time"
 )
 
 type memoryStreamTransport struct {
@@ -11,6 +13,43 @@ type memoryStreamTransport struct {
 	closed       bool
 	cancelReason string
 	cancelReply  string
+}
+
+type concurrentCancelStreamTransport struct {
+	recvStarted  chan struct{}
+	terminal     chan []byte
+	cancelReason chan string
+	startOnce    sync.Once
+}
+
+func newConcurrentCancelStreamTransport() *concurrentCancelStreamTransport {
+	return &concurrentCancelStreamTransport{
+		recvStarted:  make(chan struct{}),
+		terminal:     make(chan []byte, 1),
+		cancelReason: make(chan string, 1),
+	}
+}
+
+func (t *concurrentCancelStreamTransport) Recv(ctx context.Context) ([]byte, error) {
+	t.startOnce.Do(func() {
+		close(t.recvStarted)
+	})
+	select {
+	case raw := <-t.terminal:
+		return raw, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (t *concurrentCancelStreamTransport) Cancel(_ context.Context, reason string) ([]byte, error) {
+	t.cancelReason <- reason
+	t.terminal <- []byte(`{"sequence":1,"kind":"terminal","state":"Cancelled","terminal":true,"terminal_receipt":{"receipt_id":"cancelled-1"}}`)
+	return []byte(`{"stream_id":"stream-1","cancelled":false,"state":"CancelRequested","terminal":false}`), nil
+}
+
+func (*concurrentCancelStreamTransport) Close(context.Context) error {
+	return nil
 }
 
 func (m *memoryStreamTransport) Recv(ctx context.Context) ([]byte, error) {
@@ -198,6 +237,100 @@ func TestStreamHandleCancelIsNonTerminalRequest(t *testing.T) {
 	}
 	if transport.cancelReason != "client stop" {
 		t.Fatalf("reason = %q", transport.cancelReason)
+	}
+}
+
+func TestStreamHandleCancelWhileReceivingWaitsForCanonicalTerminal(t *testing.T) {
+	transport := newConcurrentCancelStreamTransport()
+	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-1","state":"Open","max_buffered_events":4}`))
+	if err != nil {
+		t.Fatalf("NewStreamHandleFromJSON: %v", err)
+	}
+
+	nextResult := make(chan StreamEvent, 1)
+	nextErr := make(chan error, 1)
+	go func() {
+		event, nextError := stream.Next(context.Background())
+		nextResult <- event
+		nextErr <- nextError
+	}()
+
+	select {
+	case <-transport.recvStarted:
+	case <-time.After(time.Second):
+		t.Fatal("stream receive did not start")
+	}
+
+	cancel, err := stream.Cancel(context.Background(), "client disconnected")
+	if err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if cancel.State() != StreamCancelRequested || cancel.Terminal() || cancel.Cancelled() {
+		t.Fatalf("cancel request = %#v", cancel)
+	}
+
+	select {
+	case event := <-nextResult:
+		if err := <-nextErr; err != nil {
+			t.Fatalf("Next terminal: %v", err)
+		}
+		if !event.Terminal() {
+			t.Fatalf("event = %#v, want canonical terminal", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stream did not deliver the canonical terminal")
+	}
+	if stream.State() != StreamTerminalFrameSeen {
+		t.Fatalf("state = %s, want %s", stream.State(), StreamTerminalFrameSeen)
+	}
+	terminal, err := stream.TerminalEvent()
+	if err != nil {
+		t.Fatalf("TerminalEvent: %v", err)
+	}
+	if got := string(terminal.TerminalReceiptJSON()); got != `{"receipt_id":"cancelled-1"}` {
+		t.Fatalf("terminal receipt = %s", got)
+	}
+	if got := <-transport.cancelReason; got != "client disconnected" {
+		t.Fatalf("cancel reason = %q", got)
+	}
+}
+
+func TestStreamHandleRejectsSecondConcurrentReceiver(t *testing.T) {
+	transport := newConcurrentCancelStreamTransport()
+	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-1","state":"Open","max_buffered_events":4}`))
+	if err != nil {
+		t.Fatalf("NewStreamHandleFromJSON: %v", err)
+	}
+
+	firstResult := make(chan StreamEvent, 1)
+	firstErr := make(chan error, 1)
+	go func() {
+		event, nextErr := stream.Next(context.Background())
+		firstResult <- event
+		firstErr <- nextErr
+	}()
+
+	select {
+	case <-transport.recvStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first stream receive did not start")
+	}
+
+	if _, err := stream.Next(context.Background()); err == nil {
+		t.Fatal("second concurrent stream receiver was accepted")
+	}
+	transport.terminal <- []byte(`{"sequence":1,"kind":"terminal","state":"Completed","terminal":true,"terminal_receipt":{"receipt_id":"completed-1"}}`)
+
+	select {
+	case event := <-firstResult:
+		if err := <-firstErr; err != nil {
+			t.Fatalf("first receiver terminal: %v", err)
+		}
+		if !event.Terminal() {
+			t.Fatalf("first receiver event = %#v, want canonical terminal", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first receiver did not retain stream ownership")
 	}
 }
 

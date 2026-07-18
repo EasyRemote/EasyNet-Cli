@@ -2,6 +2,8 @@
 
 Status: Normative for new cross-repository convergence work.
 
+Implementation status: RF-1 through RF-9 closed on 2026-07-18; see Section 12.
+
 This specification consolidates the architecture-convergence objective and the
 2026-07-17 EasyNet-Cli/EasyNet-Axon code-graph audit. It is the clean target
 for changes that touch Axon protocol/runtime/SDK, the EasyNet-Cli daemon, or
@@ -65,7 +67,11 @@ must be explicit test fixtures behind test configuration.
 Each row is a single convergence slice. A slice ends only after callers migrate
 and the replaced path is deleted.
 
-| ID | Severity | Root fork | Clean target | Current evidence |
+The final column records the audit input captured on 2026-07-17. It is retained
+to explain why each slice existed; it is not a statement about the accepted
+checkout. Section 12 is the current implementation status.
+
+| ID | Severity | Root fork | Clean target | Audit evidence captured 2026-07-17 |
 | --- | --- | --- | --- | --- |
 | RF-1 | P0 | Product features in SDK | Generic runtime primitives only; product features move to providers or daemon plugins | `audio`, `mcp`, `tool_adapter`, `presets/remote_control`, `presets/ability_dispatch`, and product federation presets remain in non-Rust SDK surfaces. |
 | RF-2 | P0 | Mission state in Axon core | Mission/EAL is a daemon-owned composite `AbilityImpl`; every remote step is a child Invocation | `core/proto/axon/v1/mission.proto`, `MissionState`, and runtime mission state remain in Axon. |
@@ -239,8 +245,24 @@ Completion requires all of the following, not a partial green build:
 
 ## 12. Audit Status
 
-The current branch has already improved CLI agent/workspace directory ownership
-and added descriptor-bound paths, runtime route work, durable voice providers,
-and cross-language conformance evidence. Those are foundations, not completion
-of RF-1 through RF-9. A newly added correct path does not close a fork while its
-legacy authority or public entry point remains live.
+RF-1 through RF-9 are closed as of 2026-07-18. Closure means callers migrated,
+the replaced implementation was deleted, negative gates reject
+reintroduction, and the required cross-language or cross-repository evidence
+passed. The audit observations retained in Section 3 are historical inputs,
+not current-tree findings.
+
+| ID | Status | Accepted closure |
+| --- | --- | --- |
+| RF-1 | Closed | Axon canonical packages expose generic runtime concepts only. Product protocols, presets, facades, and package identities moved downstream; package, public-surface, product-boundary, and CLI product-neutrality gates reject reintroduction. |
+| RF-2 | Closed | Axon no longer contains Mission schema, state, service, runtime, or SDK authority. EasyNet-Cli owns Mission/EAL and emits complete descriptor-bound child Invocations through the canonical runtime. |
+| RF-3 | Closed | `DescriptorBoundInvocationRequest` is the sole public admission model. Plain proof/admission exports and duplicate Rust authority were deleted; public-surface, Dendrite ABI, and single-authority gates pass. |
+| RF-4 | Closed | One machine-readable lifecycle contract and transition suite drives Rust, Go, Python, Node, Java, and Swift. All 72 transition/recovery cases pass at `CutoverReady` against semantic contract SHA-256 `6c6578861ba793be819b5ec8f97de9257900eb91b020883aab24d04c838d79e7`. |
+| RF-5 | Closed | Authenticated invocation requires an explicit signer or daemon `KeyService`; process-local generated or cached signing fallback paths were deleted and custody gates pass. |
+| RF-6 | Closed | Canonical receipt construction requires complete authority and proof facts in every language. Empty/default compatibility constructors were deleted; receipt surface gates and all 23 verifier tests pass. |
+| RF-7 | Closed | CLI route inventory covers unary, stream, bidi, loopback, and exact ability routes, and requires descriptor-bound entry through `LocalRuntime`. Daemon migration gates and live-daemon E2E pass. |
+| RF-8 | Closed | The complete seven-field Invocation tuple is explicit at SDK, FFI, daemon, and downstream ingress. Defaulting paths were removed; latest-input, canonical V2, and downstream cutover gates pass. |
+| RF-9 | Closed | Active architecture vocabulary is URA-only. Axon is the single editable proto source; deterministic generation and byte-for-byte derivation gates pass in both repositories. |
+
+The accepted source revisions, measured test results, benchmark provenance, and
+formal cutover gate are recorded in
+`docs/reviews/canonical-runtime-convergence-v2-closure-2026-07-18.md`.

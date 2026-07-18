@@ -18,6 +18,14 @@
 - Captured-source conformance reports are valid only when every language
   result shares the same run nonce and tree attestation and the parity
   validator is explicitly told to accept snapshot-attested results.
+- A stream receive operation has one explicit owner. `StreamHandle` protects
+  lifecycle projections with one state lock but never holds that lock across
+  provider I/O; this permits cancellation to reach the provider while receive
+  is blocked without allowing a second receiver to reorder events.
+- Cancellation acknowledgement remains a non-terminal `CancelRequested`
+  observation. If a canonical terminal frame wins the race, the acknowledgement
+  is returned to its caller without rewriting `TerminalFrameSeen`; only the
+  receipt-backed event owns terminal state.
 
 ## 2026-07-17
 

@@ -29,6 +29,18 @@
 - [x] Close RF-1 through RF-9 acceptance gates for the checked-out CLI/Axon
       source state.
 
+## Go Stream Concurrent Cancellation Closure
+
+- [x] Identify unsynchronized `StreamHandle` lifecycle state as the root cause
+      of receive/cancel races.
+- [x] Serialize state projection while keeping blocking provider I/O outside
+      the state lock.
+- [x] Reject concurrent receive ownership instead of allowing two consumers to
+      reorder canonical stream events.
+- [x] Preserve cancel acknowledgement as non-terminal while allowing an
+      in-flight receive to publish the receipt-backed terminal event.
+- [x] Verify the complete Go SDK and Go race suite.
+
 ## Mission Terminal Transition Slice
 
 - [x] Identify mission terminal constructors that encoded lifecycle facts as

@@ -633,13 +633,36 @@ class UniqueTrace:
         clean = git_source_revision(repository, ("sdk",))
         if clean.startswith("working_tree:"):
             raise AssertionError("clean source revision was marked as a working tree")
+        documentation = repository / "docs/evidence.md"
+        documentation.parent.mkdir(parents=True)
+        documentation.write_text("evidence\n", encoding="utf-8")
+        subprocess.run(["git", "add", "docs/evidence.md"], cwd=repository, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "documentation"],
+            cwd=repository,
+            check=True,
+        )
+        after_documentation = git_source_revision(repository, ("sdk",))
+        if after_documentation != clean:
+            raise AssertionError(
+                "documentation-only commit changed the bounded source revision"
+            )
         source.write_text("modified\n", encoding="utf-8")
         modified = git_source_revision(repository, ("sdk",))
         if not modified.startswith("working_tree:") or modified == clean:
             raise AssertionError("modified source revision was not content-attested")
+        subprocess.run(["git", "add", "sdk/example.txt"], cwd=repository, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "source update"],
+            cwd=repository,
+            check=True,
+        )
+        committed_update = git_source_revision(repository, ("sdk",))
+        if committed_update.startswith("working_tree:") or committed_update == clean:
+            raise AssertionError("committed source update did not advance the revision")
         source.unlink()
         deleted = git_source_revision(repository, ("sdk",))
-        if not deleted.startswith("working_tree:") or deleted == modified:
+        if not deleted.startswith("working_tree:") or deleted == committed_update:
             raise AssertionError("deleted source revision was not content-attested")
 
 

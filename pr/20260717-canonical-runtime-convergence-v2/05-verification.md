@@ -35,6 +35,16 @@
 The three Rust ignored tests and four EasyRemote skipped tests remain visible;
 they were not counted as executed evidence.
 
+## Go Stream Concurrent Cancellation Closure
+
+- `go test ./...` under `sdk/go`: passed.
+- `go test -race ./...` under `sdk/go`: passed.
+- `TestStreamHandleCancelWhileReceivingWaitsForCanonicalTerminal`: passed and
+  proves cancel acknowledgement cannot overwrite the terminal-frame state or
+  synthesize terminality without a terminal receipt.
+- The race build emitted only the local Darwin linker `LC_DYSYMTAB` warning;
+  no Go race detector finding occurred.
+
 ## Descriptor Projection Slice
 
 Commands run on 2026-07-17:

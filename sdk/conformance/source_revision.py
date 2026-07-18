@@ -30,7 +30,6 @@ def git_source_revision(repository: Path, roots: Iterable[str]) -> str:
     root_list = tuple(sorted(set(roots)))
     if not root_list:
         raise ValueError("source revision roots must not be empty")
-    head = _run(["git", "-C", str(repository), "rev-parse", "HEAD"]).strip()
     status = _run(
         [
             "git",
@@ -44,7 +43,24 @@ def git_source_revision(repository: Path, roots: Iterable[str]) -> str:
         ]
     )
     if not status:
-        return head
+        revision = _run(
+            [
+                "git",
+                "-C",
+                str(repository),
+                "log",
+                "-1",
+                "--format=%H",
+                "--",
+                *root_list,
+            ]
+        ).strip()
+        if not revision:
+            joined = ", ".join(root_list)
+            raise ValueError(
+                f"source revision roots have no committed history: {joined}"
+            )
+        return revision
 
     listed = subprocess.run(
         [
