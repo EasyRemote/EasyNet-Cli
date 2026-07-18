@@ -638,7 +638,7 @@ func TestDirectRuntimeStreamDeadlineIsTypedTimeout(t *testing.T) {
 	}
 }
 
-func TestDirectRuntimeStreamCancelProjectsNonTerminalRequest(t *testing.T) {
+func TestDirectRuntimeStreamCancelIsExplicitlyUnsupported(t *testing.T) {
 	transport, _, cleanup := openDirectRuntimeTestTransport(t)
 	defer cleanup()
 
@@ -646,22 +646,8 @@ func TestDirectRuntimeStreamCancelProjectsNonTerminalRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
-	raw, err := streamTransport.Cancel(context.Background(), "client stop")
-	if err != nil {
-		t.Fatalf("Cancel stream: %v", err)
-	}
-
-	var cancel struct {
-		State     StreamState `json:"state"`
-		Terminal  bool        `json:"terminal"`
-		Cancelled bool        `json:"cancelled"`
-		Reason    string      `json:"reason"`
-	}
-	if err := json.Unmarshal(raw, &cancel); err != nil {
-		t.Fatalf("decode stream cancel: %v; raw=%s", err, raw)
-	}
-	if cancel.State != StreamCancelRequested || cancel.Terminal || cancel.Cancelled || cancel.Reason != "client stop" {
-		t.Fatalf("stream cancel = %#v", cancel)
+	if _, err := streamTransport.Cancel(context.Background(), "client stop"); !IsCode(err, ErrNotImplemented) {
+		t.Fatalf("Cancel stream error = %v, want %s", err, ErrNotImplemented)
 	}
 }
 
@@ -782,7 +768,7 @@ func TestDirectRuntimeBidiDeadlineIsTypedTimeout(t *testing.T) {
 	}
 }
 
-func TestDirectRuntimeBidiCancelProjectsNonTerminalRequest(t *testing.T) {
+func TestDirectRuntimeBidiCancelIsExplicitlyUnsupported(t *testing.T) {
 	transport, _, cleanup := openDirectRuntimeTestTransport(t)
 	defer cleanup()
 
@@ -794,21 +780,8 @@ func TestDirectRuntimeBidiCancelProjectsNonTerminalRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenBidi: %v", err)
 	}
-	raw, err := bidiTransport.Cancel(context.Background(), "client stop")
-	if err != nil {
-		t.Fatalf("Cancel bidi: %v", err)
-	}
-
-	var cancel struct {
-		State    BidiState `json:"state"`
-		Terminal bool      `json:"terminal"`
-		Reason   string    `json:"reason"`
-	}
-	if err := json.Unmarshal(raw, &cancel); err != nil {
-		t.Fatalf("decode bidi cancel: %v; raw=%s", err, raw)
-	}
-	if cancel.State != BidiCancelRequested || cancel.Terminal || cancel.Reason != "client stop" {
-		t.Fatalf("bidi cancel = %#v", cancel)
+	if _, err := bidiTransport.Cancel(context.Background(), "client stop"); !IsCode(err, ErrNotImplemented) {
+		t.Fatalf("Cancel bidi error = %v, want %s", err, ErrNotImplemented)
 	}
 }
 

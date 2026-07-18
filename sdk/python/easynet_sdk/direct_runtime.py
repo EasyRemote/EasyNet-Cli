@@ -545,16 +545,11 @@ class DirectRuntimeStreamTransport:
         return item
 
     def cancel(self, reason: str) -> bytes:
-        self.close()
-        return _json_bytes(
-            {
-                "stream_id": self.stream_id,
-                "cancel_requested": True,
-                "cancelled": False,
-                "state": "CancelRequested",
-                "terminal": False,
-                "reason": reason,
-            }
+        del reason
+        raise _unsupported_direct_cancellation(
+            endpoint=self._endpoint,
+            runtime_id=self.stream_id,
+            capability="stream_cancel",
         )
 
     def close(self) -> None:
@@ -717,14 +712,11 @@ class DirectRuntimeBidiTransport:
         )
 
     def cancel(self, reason: str) -> bytes:
-        self.close()
-        return _json_bytes(
-            {
-                "session_id": self.session_id,
-                "state": "CancelRequested",
-                "terminal": False,
-                "reason": reason,
-            }
+        del reason
+        raise _unsupported_direct_cancellation(
+            endpoint=self._endpoint,
+            runtime_id=self.session_id,
+            capability="bidi_cancel",
         )
 
     def close(self) -> None:
@@ -2342,6 +2334,25 @@ def _unsupported(message: str) -> SDKError:
         code=ErrorCode.NOT_IMPLEMENTED,
         retry=RetryHint.NEVER,
         details={"transport": "direct-axon-grpc-uds"},
+    )
+
+
+def _unsupported_direct_cancellation(
+    *,
+    endpoint: str,
+    runtime_id: str,
+    capability: str,
+) -> SDKError:
+    return _direct_error(
+        "direct gRPC cancellation is unsupported because the transport cannot "
+        "submit canonical lifecycle control and deliver its terminal",
+        code=ErrorCode.NOT_IMPLEMENTED,
+        retry=RetryHint.NEVER,
+        details={
+            "endpoint": endpoint,
+            "runtime_id": runtime_id,
+            "capability": capability,
+        },
     )
 
 

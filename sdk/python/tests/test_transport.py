@@ -530,17 +530,20 @@ class DaemonInvocationTransportTests(unittest.TestCase):
 
         ack = channel.send({"sequence": 1, "kind": "data", "stream_id": 1})
         half_closed = channel.close_send()
-        with self.assertRaises(SDKError) as caught:
-            channel.close()
-        cancelled = channel.cancel("client stop")
         channel.close()
+        cancelled_channel = transport.bidi(
+            complete_draft().to_json_dict(),
+            [{"stream_id": 1, "content_type": "application/json"}],
+        )
+        cancelled = cancelled_channel.cancel("client stop")
+        cancelled_channel.close()
 
         self.assertEqual(ack["sequence"], 1)
         self.assertEqual(half_closed["state"], "HalfClosedLocal")
         self.assertFalse(half_closed["terminal"])
-        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
-        self.assertEqual(cancelled["state"], "CancelRequested")
         self.assertEqual(channel.session.state, BidiState.CLOSED)
+        self.assertEqual(cancelled["state"], "CancelRequested")
+        self.assertEqual(cancelled_channel.session.state, BidiState.CLOSED)
 
     def test_bidi_timeout_is_forwarded_without_state_mutation(self) -> None:
         class TimeoutRuntimeTransport(MemoryRuntimeTransport):
@@ -573,15 +576,17 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(runtime.bidi_transport.timeout, 0.01)
         self.assertEqual(channel.session.state, BidiState.OPEN)
 
-    def test_bidi_close_cancels_open_session_before_release(self) -> None:
-        channel = _MemoryBidiChannel(close_requires_terminal=True)
+    def test_bidi_close_releases_open_session_without_claiming_cancellation(
+        self,
+    ) -> None:
+        channel = _MemoryBidiChannel()
         session = BidiSessionAdapter(channel)
 
         session.close()
         session.close()
 
-        self.assertEqual(channel.cancel_reasons, ["client close"])
-        self.assertEqual(channel.close_calls, 2)
+        self.assertEqual(channel.cancel_reasons, [])
+        self.assertEqual(channel.close_calls, 1)
         self.assertTrue(channel.closed)
 
     def test_bidi_close_preserves_unrelated_invalid_argument(self) -> None:
@@ -596,14 +601,26 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(channel.close_calls, 1)
 
     def test_bidi_cancel_does_not_close_transport(self) -> None:
-        channel = _MemoryBidiChannel()
+        channel = _MemoryBidiChannel(
+            frames=[
+                {
+                    "sequence": 1,
+                    "kind": "terminal",
+                    "terminal": True,
+                    "terminal_receipt": {"receipt_ura": "easynet:///r/test/receipt"},
+                }
+            ]
+        )
         session = BidiSessionAdapter(channel)
 
         session.cancel("user stop")
+        terminal = session.recv()
 
         self.assertEqual(channel.cancel_reasons, ["user stop"])
         self.assertEqual(channel.close_calls, 0)
         self.assertFalse(channel.closed)
+        self.assertIsNotNone(terminal)
+        self.assertTrue(terminal["terminal"])
 
     def test_bidi_recv_timeout_is_typed_client_wait(self) -> None:
         channel = _MemoryBidiChannel(timeout=True)
@@ -1846,12 +1863,10 @@ class _MemoryBidiChannel:
         self,
         *,
         frames: list[dict[str, object]] | None = None,
-        close_requires_terminal: bool = False,
         close_error: str = "",
         timeout: bool = False,
     ) -> None:
         self.frames = list(frames or [])
-        self.close_requires_terminal = close_requires_terminal
         self.close_error = close_error
         self.timeout = timeout
         self.sent: list[dict[str, object]] = []
@@ -1884,14 +1899,6 @@ class _MemoryBidiChannel:
                 retry=RetryHint.NEVER,
                 retryable=False,
                 message=self.close_error,
-            )
-        if self.close_requires_terminal and not self.terminal:
-            raise SDKError(
-                code=ErrorCode.INVALID_ARGUMENT,
-                stage="bidi",
-                retry=RetryHint.NEVER,
-                retryable=False,
-                message="bidi session must be terminal before close",
             )
         self.closed = True
 

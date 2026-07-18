@@ -2857,6 +2857,7 @@ go_stream_facade = cli_root / "sdk/go/stream.go"
 go_bidi_facade = cli_root / "sdk/go/bidi.go"
 python_stream_facade = cli_root / "sdk/python/easynet_sdk/stream.py"
 python_bidi_facade = cli_root / "sdk/python/easynet_sdk/bidi.py"
+python_transport_facade = cli_root / "sdk/python/easynet_sdk/transport.py"
 go_stream_tests = cli_root / "sdk/go/stream_test.go"
 go_bidi_tests = cli_root / "sdk/go/bidi_test.go"
 go_direct_runtime_tests = cli_root / "sdk/go/direct_runtime_test.go"
@@ -2992,12 +2993,12 @@ if go_direct_runtime.exists():
     text = source(go_direct_runtime)
     go_direct_cancel_contracts = (
         (
-            r"func\s+\(t\s+\*directRuntimeStreamTransport\)\s+Cancel\b.*?CancelRequested.*?terminal\"\s*:\s*false",
-            "Go direct runtime stream cancel must project CancelRequested with terminal=false",
+            r"func\s+\(t\s+\*directRuntimeStreamTransport\)\s+Cancel\b.*?unsupportedDirectCancellation\(t\.endpoint,\s*t\.streamID,\s*\"stream_cancel\"\)",
+            "Go direct runtime stream cancel must report the capability unsupported",
         ),
         (
-            r"func\s+\(t\s+\*directRuntimeBidiTransport\)\s+Cancel\b.*?CancelRequested.*?terminal\"\s*:\s*false",
-            "Go direct runtime bidi cancel must project CancelRequested with terminal=false",
+            r"func\s+\(t\s+\*directRuntimeBidiTransport\)\s+Cancel\b.*?unsupportedDirectCancellation\(t\.endpoint,\s*t\.sessionID,\s*\"bidi_cancel\"\)",
+            "Go direct runtime bidi cancel must report the capability unsupported",
         ),
     )
     for pattern, detail in go_direct_cancel_contracts:
@@ -3013,12 +3014,12 @@ if python_direct_runtime.exists():
     text = source(python_direct_runtime)
     python_direct_cancel_contracts = (
         (
-            r"class\s+DirectRuntimeStreamTransport\b.*?def\s+cancel\b.*?\"state\"\s*:\s*\"CancelRequested\".*?\"terminal\"\s*:\s*False",
-            "Python direct runtime stream cancel must project CancelRequested with terminal=False",
+            r"class\s+DirectRuntimeStreamTransport\b.*?def\s+cancel\b.*?_unsupported_direct_cancellation\(.*?capability=\"stream_cancel\"",
+            "Python direct runtime stream cancel must report the capability unsupported",
         ),
         (
-            r"class\s+DirectRuntimeBidiTransport\b.*?def\s+cancel\b.*?\"state\"\s*:\s*\"CancelRequested\".*?\"terminal\"\s*:\s*False",
-            "Python direct runtime bidi cancel must project CancelRequested with terminal=False",
+            r"class\s+DirectRuntimeBidiTransport\b.*?def\s+cancel\b.*?_unsupported_direct_cancellation\(.*?capability=\"bidi_cancel\"",
+            "Python direct runtime bidi cancel must report the capability unsupported",
         ),
     )
     for pattern, detail in python_direct_cancel_contracts:
@@ -3070,6 +3071,57 @@ for path, pattern, detail in direct_facade_contracts:
             detail,
         )
 
+for path in (go_bidi_facade, python_bidi_facade):
+    if path.exists():
+        text = source(path)
+        if "bidi session must be terminal before close" in text:
+            add(
+                "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+                path,
+                1,
+                "bidi close is local resource release and must not require canonical terminality",
+            )
+
+if python_transport_facade.exists():
+    text = source(python_transport_facade)
+    bidi_adapter = re.search(
+        r"class\s+BidiSessionAdapter\b.*?(?=\nclass\s+|\Z)",
+        text,
+        flags=re.S,
+    )
+    bidi_adapter_close = (
+        re.search(
+            r"\n    def\s+close\b.*?(?=\n    def\s+|\Z)",
+            bidi_adapter.group(0),
+            flags=re.S,
+        )
+        if bidi_adapter
+        else None
+    )
+    if bidi_adapter_close and ".cancel(" in bidi_adapter_close.group(0):
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            python_transport_facade,
+            line_number(text, bidi_adapter.start() + bidi_adapter_close.start()),
+            "bidi close must release local resources without synthesizing a cancellation request",
+        )
+    bidi_adapter_cancel = (
+        re.search(
+            r"\n    def\s+cancel\b.*?(?=\n    def\s+|\Z)",
+            bidi_adapter.group(0),
+            flags=re.S,
+        )
+        if bidi_adapter
+        else None
+    )
+    if bidi_adapter_cancel and "_terminal = True" in bidi_adapter_cancel.group(0):
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            python_transport_facade,
+            line_number(text, bidi_adapter.start() + bidi_adapter_cancel.start()),
+            "bidi cancel request must keep receive alive until a canonical terminal frame",
+        )
+
 sdk_cancel_tests = (
     (
         go_stream_tests,
@@ -3097,15 +3149,15 @@ sdk_cancel_tests = (
     ),
     (
         go_direct_runtime_tests,
-        "TestDirectRuntimeStreamCancelProjectsNonTerminalRequest",
-        "TestDirectRuntimeBidiCancelProjectsNonTerminalRequest",
-        "Go direct runtime tests must prove stream/bidi cancel request projection",
+        "TestDirectRuntimeStreamCancelIsExplicitlyUnsupported",
+        "TestDirectRuntimeBidiCancelIsExplicitlyUnsupported",
+        "Go direct runtime tests must prove stream/bidi cancellation is explicitly unsupported",
     ),
     (
         python_direct_runtime_tests,
-        "test_direct_runtime_stream_cancel_projects_non_terminal_request",
-        "test_direct_runtime_bidi_cancel_projects_non_terminal_request",
-        "Python direct runtime tests must prove stream/bidi cancel request projection",
+        "test_direct_runtime_stream_cancel_is_explicitly_unsupported",
+        "test_direct_runtime_bidi_cancel_is_explicitly_unsupported",
+        "Python direct runtime tests must prove stream/bidi cancellation is explicitly unsupported",
     ),
 )
 for path, first_test, second_test, detail in sdk_cancel_tests:

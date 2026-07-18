@@ -589,15 +589,8 @@ func (t *directRuntimeStreamTransport) Cancel(ctx context.Context, reason string
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
 	}
-	t.close()
-	return json.Marshal(map[string]any{
-		"stream_id":        t.streamID,
-		"cancel_requested": true,
-		"cancelled":        false,
-		"state":            "CancelRequested",
-		"terminal":         false,
-		"reason":           reason,
-	})
+	_ = reason
+	return nil, unsupportedDirectCancellation(t.endpoint, t.streamID, "stream_cancel")
 }
 
 func (t *directRuntimeStreamTransport) Close(ctx context.Context) error {
@@ -811,13 +804,8 @@ func (t *directRuntimeBidiTransport) Cancel(ctx context.Context, reason string) 
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
 	}
-	t.close()
-	return json.Marshal(map[string]any{
-		"session_id": t.sessionID,
-		"state":      "CancelRequested",
-		"terminal":   false,
-		"reason":     reason,
-	})
+	_ = reason
+	return nil, unsupportedDirectCancellation(t.endpoint, t.sessionID, "bidi_cancel")
 }
 
 func (t *directRuntimeBidiTransport) Close(ctx context.Context) error {
@@ -1759,6 +1747,21 @@ func directRuntimeError(message string, code ErrorCode, retry RetryHint, details
 		Message:   message,
 		Details:   details,
 		Cause:     cause,
+	}
+}
+
+func unsupportedDirectCancellation(endpoint, runtimeID, capability string) *SDKError {
+	return &SDKError{
+		Code:      ErrNotImplemented,
+		Stage:     "direct_runtime",
+		Retry:     RetryNever,
+		Retryable: false,
+		Message:   "direct gRPC cancellation is unsupported because the transport cannot submit canonical lifecycle control and deliver its terminal",
+		Details: map[string]any{
+			"endpoint":   endpoint,
+			"runtime_id": runtimeID,
+			"capability": capability,
+		},
 	}
 }
 

@@ -1817,7 +1817,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertGreaterEqual(len(servicer.stream_requests), 2)
         self.assertFalse(retry_event["terminal"])
 
-    def test_direct_runtime_stream_cancel_projects_non_terminal_request(
+    def test_direct_runtime_stream_cancel_is_explicitly_unsupported(
         self,
     ) -> None:
         servicer = RecordingInvocationServicer()
@@ -1832,15 +1832,13 @@ class DirectRuntimeTests(unittest.TestCase):
                 stream_transport, _ = transport.open_stream(
                     _signed_draft().to_json().encode("utf-8")
                 )
-                raw_cancel = stream_transport.cancel("client stop")
+                with self.assertRaises(SDKError) as raised:
+                    stream_transport.cancel("client stop")
             finally:
                 transport.close()
 
-        cancel = json.loads(raw_cancel.decode("utf-8"))
-        self.assertEqual(cancel["state"], "CancelRequested")
-        self.assertFalse(cancel["terminal"])
-        self.assertFalse(cancel["cancelled"])
-        self.assertEqual(cancel["reason"], "client stop")
+        self.assertTrue(is_code(raised.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertEqual(raised.exception.details["capability"], "stream_cancel")
 
     def test_direct_runtime_bidi_provider_json_uses_terminal_receipt(self) -> None:
         servicer = RecordingInvocationServicer()
@@ -1933,7 +1931,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertGreaterEqual(len(servicer.bidi_up_frames), 2)
         self.assertFalse(retry_frame["terminal"])
 
-    def test_direct_runtime_bidi_cancel_projects_non_terminal_request(
+    def test_direct_runtime_bidi_cancel_is_explicitly_unsupported(
         self,
     ) -> None:
         servicer = RecordingInvocationServicer()
@@ -1953,14 +1951,13 @@ class DirectRuntimeTests(unittest.TestCase):
                     _signed_draft().to_json().encode("utf-8"),
                     streams_json,
                 )
-                raw_cancel = bidi_transport.cancel("client stop")
+                with self.assertRaises(SDKError) as raised:
+                    bidi_transport.cancel("client stop")
             finally:
                 transport.close()
 
-        cancel = json.loads(raw_cancel.decode("utf-8"))
-        self.assertEqual(cancel["state"], "CancelRequested")
-        self.assertFalse(cancel["terminal"])
-        self.assertEqual(cancel["reason"], "client stop")
+        self.assertTrue(is_code(raised.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertEqual(raised.exception.details["capability"], "bidi_cancel")
 
     def test_direct_bidi_rejects_missing_frame0_before_session_entry(self) -> None:
         class Stub:

@@ -273,13 +273,18 @@ func (s *StreamHandle) Cancel(ctx context.Context, reason string) (StreamCancel,
 
 	raw, err := transport.Cancel(ctx, reason)
 	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			if sdkErr.Code != ErrNotImplemented {
+				s.mu.Lock()
+				s.state = StreamFailed
+				s.mu.Unlock()
+			}
+			return StreamCancel{}, sdkErr
+		}
 		s.mu.Lock()
 		s.state = StreamFailed
 		s.mu.Unlock()
-		var sdkErr *SDKError
-		if errors.As(err, &sdkErr) {
-			return StreamCancel{}, sdkErr
-		}
 		return StreamCancel{}, transportRuntimeError("stream cancel transport failed", err)
 	}
 	cancel, err := NewStreamCancelFromJSON(raw)

@@ -252,8 +252,9 @@ class StreamHandle:
             raise _invalid_stream("stream is terminal")
         try:
             raw = self.transport.cancel(reason)
-        except SDKError:
-            self.state = StreamState.FAILED
+        except SDKError as exc:
+            if exc.code != ErrorCode.NOT_IMPLEMENTED:
+                self.state = StreamState.FAILED
             raise
         except Exception as exc:
             self.state = StreamState.FAILED

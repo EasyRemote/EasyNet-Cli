@@ -15,6 +15,20 @@ type memoryBidiTransport struct {
 	cancelReply  string
 }
 
+type unsupportedCancelBidiTransport struct {
+	memoryBidiTransport
+}
+
+func (*unsupportedCancelBidiTransport) Cancel(context.Context, string) ([]byte, error) {
+	return nil, &SDKError{
+		Code:      ErrNotImplemented,
+		Stage:     "test",
+		Retry:     RetryNever,
+		Retryable: false,
+		Message:   "bidi cancellation unsupported",
+	}
+}
+
 func (m *memoryBidiTransport) Send(ctx context.Context, frameJSON []byte) ([]byte, error) {
 	var frame map[string]any
 	if err := json.Unmarshal(frameJSON, &frame); err != nil {
@@ -289,6 +303,27 @@ func TestBidiCancelRejectsTerminalOutcome(t *testing.T) {
 	}
 	if session.State() != BidiFailed {
 		t.Fatalf("terminal cancel outcome must fail the bidi facade, got %s", session.State())
+	}
+}
+
+func TestBidiUnsupportedCancelPreservesOpenState(t *testing.T) {
+	transport := &unsupportedCancelBidiTransport{}
+	session, err := NewBidiSessionFromJSON(transport, []byte(`{"session_id":"bidi-1","state":"Open","max_buffered_frames":4}`))
+	if err != nil {
+		t.Fatalf("NewBidiSessionFromJSON: %v", err)
+	}
+
+	if _, err := session.Cancel(context.Background(), "client stop"); !IsCode(err, ErrNotImplemented) {
+		t.Fatalf("Cancel error = %v, want %s", err, ErrNotImplemented)
+	}
+	if session.State() != BidiOpen {
+		t.Fatalf("state = %s, want %s", session.State(), BidiOpen)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close after unsupported cancellation: %v", err)
+	}
+	if !transport.closed || session.State() != BidiClosed {
+		t.Fatalf("local release failed: closed=%v state=%s", transport.closed, session.State())
 	}
 }
 

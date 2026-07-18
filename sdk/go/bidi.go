@@ -345,11 +345,14 @@ func (s *BidiSession) Cancel(ctx context.Context, reason string) (BidiOutcome, e
 	}
 	raw, err := s.transport.Cancel(ctx, reason)
 	if err != nil {
-		s.state = BidiFailed
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
+			if sdkErr.Code != ErrNotImplemented {
+				s.state = BidiFailed
+			}
 			return BidiOutcome{}, sdkErr
 		}
+		s.state = BidiFailed
 		return BidiOutcome{}, transportRuntimeError("bidi cancel transport failed", err)
 	}
 	outcome, err := NewBidiOutcomeFromJSON(raw)
@@ -374,9 +377,6 @@ func (s *BidiSession) Close(ctx context.Context) error {
 	}
 	if s.state == BidiClosed {
 		return nil
-	}
-	if s.state != BidiCancelRequested && s.state != BidiTerminal && s.state != BidiCancelled && s.state != BidiFailed {
-		return invalidRuntimePayload("bidi session must be terminal before close", nil)
 	}
 	if err := s.transport.Close(ctx); err != nil {
 		s.state = BidiFailed

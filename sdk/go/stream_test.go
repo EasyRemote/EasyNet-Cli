@@ -22,6 +22,20 @@ type concurrentCancelStreamTransport struct {
 	startOnce    sync.Once
 }
 
+type unsupportedCancelStreamTransport struct {
+	memoryStreamTransport
+}
+
+func (*unsupportedCancelStreamTransport) Cancel(context.Context, string) ([]byte, error) {
+	return nil, &SDKError{
+		Code:      ErrNotImplemented,
+		Stage:     "test",
+		Retry:     RetryNever,
+		Retryable: false,
+		Message:   "stream cancellation unsupported",
+	}
+}
+
 func newConcurrentCancelStreamTransport() *concurrentCancelStreamTransport {
 	return &concurrentCancelStreamTransport{
 		recvStarted:  make(chan struct{}),
@@ -292,6 +306,21 @@ func TestStreamHandleCancelWhileReceivingWaitsForCanonicalTerminal(t *testing.T)
 	}
 	if got := <-transport.cancelReason; got != "client disconnected" {
 		t.Fatalf("cancel reason = %q", got)
+	}
+}
+
+func TestStreamHandleUnsupportedCancelPreservesOpenState(t *testing.T) {
+	transport := &unsupportedCancelStreamTransport{}
+	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-1","state":"Open","max_buffered_events":4}`))
+	if err != nil {
+		t.Fatalf("NewStreamHandleFromJSON: %v", err)
+	}
+
+	if _, err := stream.Cancel(context.Background(), "client stop"); !IsCode(err, ErrNotImplemented) {
+		t.Fatalf("Cancel error = %v, want %s", err, ErrNotImplemented)
+	}
+	if stream.State() != StreamOpen {
+		t.Fatalf("state = %s, want %s", stream.State(), StreamOpen)
 	}
 }
 

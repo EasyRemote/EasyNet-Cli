@@ -350,8 +350,9 @@ class BidiSession:
             raise _invalid_bidi("bidi session is terminal")
         try:
             raw = self.transport.cancel(reason)
-        except SDKError:
-            self.state = BidiState.FAILED
+        except SDKError as exc:
+            if exc.code != ErrorCode.NOT_IMPLEMENTED:
+                self.state = BidiState.FAILED
             raise
         except Exception as exc:
             self.state = BidiState.FAILED
@@ -368,13 +369,6 @@ class BidiSession:
     def close(self) -> None:
         if self.state == BidiState.CLOSED:
             return
-        if self.state not in {
-            BidiState.CANCEL_REQUESTED,
-            BidiState.TERMINAL,
-            BidiState.CANCELLED,
-            BidiState.FAILED,
-        }:
-            raise _invalid_bidi("bidi session must be terminal before close")
         try:
             self.transport.close()
         except SDKError:

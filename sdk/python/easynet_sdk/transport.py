@@ -1128,9 +1128,9 @@ class BidiSessionAdapter:
     """SDK-owned bidi session facade.
 
     Public session API is intentionally small, but the lifecycle
-    rules are Runtime Core concerns: an open session cannot be simply dropped,
-    timeout is a typed client wait expiry, and remote wire errors must not leak
-    as ordinary frames.
+    rules are Runtime Core concerns: close releases local carrier resources
+    without claiming canonical cancellation, timeout is a typed client wait
+    expiry, and remote wire errors must not leak as ordinary frames.
     """
 
     def __init__(
@@ -1185,19 +1185,11 @@ class BidiSessionAdapter:
         if self._closed or self._terminal:
             return
         self._channel.cancel(reason)
-        self._terminal = True
 
     def close(self) -> None:
         if self._closed:
             return
-        try:
-            self._channel.close()
-        except SDKError as exc:
-            if self._terminal or not _is_open_bidi_close_error(exc):
-                raise
-            self._channel.cancel(self._close_reason)
-            self._terminal = True
-            self._channel.close()
+        self._channel.close()
         self._closed = True
 
     def __enter__(self) -> "BidiSessionAdapter":
@@ -1549,19 +1541,6 @@ def _remote_wire_error(error: object, *, stage: str = "stream") -> SDKError:
             "wire_error": dict(error),
         },
     )
-
-
-def _is_open_bidi_close_error(error: SDKError) -> bool:
-    if error.code is not ErrorCode.INVALID_ARGUMENT:
-        return False
-    reason = error.details.get("reason")
-    if isinstance(reason, str) and reason in {
-        "bidi_session_not_terminal",
-        "session_not_terminal",
-        "not_terminal",
-    }:
-        return True
-    return "must be terminal before close" in error.message
 
 
 def _json_bytes(value: Mapping[str, object]) -> bytes:

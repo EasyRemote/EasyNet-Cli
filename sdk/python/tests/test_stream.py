@@ -2,6 +2,7 @@ import unittest
 
 from easynet_sdk import (
     ErrorCode,
+    RetryHint,
     SDKError,
     StreamEvent,
     StreamHandle,
@@ -32,6 +33,17 @@ class MemoryStreamTransport:
 
     def close(self) -> None:
         self.closed = True
+
+
+class UnsupportedCancelStreamTransport(MemoryStreamTransport):
+    def cancel(self, reason: str) -> bytes:
+        del reason
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="stream cancellation unsupported",
+        )
 
 
 class StreamTests(unittest.TestCase):
@@ -213,6 +225,18 @@ class StreamTests(unittest.TestCase):
         with self.assertRaises(SDKError):
             stream.cancel("client stop")
         self.assertEqual(stream.state, StreamState.FAILED)
+
+    def test_stream_unsupported_cancel_preserves_open_state(self) -> None:
+        stream = StreamHandle.from_json(
+            UnsupportedCancelStreamTransport(),
+            b'{"stream_id":"stream-1","state":"Open","max_buffered_events":4}',
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            stream.cancel("client stop")
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertEqual(stream.state, StreamState.OPEN)
 
     def test_stream_enforces_buffer_bound(self) -> None:
         transport = MemoryStreamTransport(

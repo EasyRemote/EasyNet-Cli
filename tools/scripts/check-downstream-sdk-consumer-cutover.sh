@@ -344,18 +344,45 @@ def check_easyremote() -> None:
     ]:
         forbid_contains(local_identity, forbidden, "easyremote:local_identity")
 
-    identity = require_file(easyremote, "easyremote/_sdk_identity.py", "easyremote:identity")
+    retired_identity_bridge = easyremote / "easyremote/_sdk_identity.py"
+    if retired_identity_bridge.exists():
+        violations.append("easyremote:retired_sdk_identity_bridge_present")
+
+    identity = require_file(easyremote, "easyremote/identity.py", "easyremote:identity")
     for required in [
         "easynet_sdk.parse_ura",
         "easynet_sdk.device_ura",
         "easynet_sdk.agent_ura",
         "easynet_sdk.hub_ura",
         "easynet_sdk.resource_ura",
-        "easynet_sdk.owner_ability_ura",
-        "easynet_sdk.canonical_ability_descriptor_ref",
-        "easynet_sdk.project_descriptor_ref",
     ]:
         require_contains(identity, required, "easyremote:identity")
+
+    addressing = require_file(
+        easyremote,
+        "easyremote/_addressing.py",
+        "easyremote:addressing",
+    )
+    for required in [
+        "easynet_sdk.AddressingClient",
+        "easynet_sdk.AxonAddressingTransport",
+        "self._addressing.parse_ura",
+        "self._addressing.device_ura",
+        "self._addressing.owner_ability_ura",
+        "self._addressing.project_ability_ura",
+    ]:
+        require_contains(addressing, required, "easyremote:addressing")
+
+    invocation = require_file(
+        easyremote,
+        "easyremote/invocation.py",
+        "easyremote:invocation_addressing",
+    )
+    require_contains(
+        invocation,
+        "easynet_sdk.project_descriptor_ref",
+        "easyremote:invocation_addressing",
+    )
 
     receipts = require_file(easyremote, "easyremote/receipts.py", "easyremote:receipt")
     for required in [
@@ -572,6 +599,7 @@ def read_credentials(): pass
 read_credentials = read_credentials
 EOF
   cat >"$good_remote/easyremote/identity.py" <<'EOF'
+import easynet_sdk
 from .config import runtime_identity_projection
 
 def from_runtime_projection(projection):
@@ -579,9 +607,6 @@ def from_runtime_projection(projection):
 
 def load():
     return runtime_identity_projection()
-EOF
-  cat >"$good_remote/easyremote/_sdk_identity.py" <<'EOF'
-import easynet_sdk
 
 _ = [
     easynet_sdk.parse_ura,
@@ -589,10 +614,29 @@ _ = [
     easynet_sdk.agent_ura,
     easynet_sdk.hub_ura,
     easynet_sdk.resource_ura,
-    easynet_sdk.owner_ability_ura,
-    easynet_sdk.canonical_ability_descriptor_ref,
-    easynet_sdk.project_descriptor_ref,
 ]
+EOF
+  cat >"$good_remote/easyremote/_addressing.py" <<'EOF'
+import easynet_sdk
+
+class Resolver:
+    def __init__(self):
+        self._addressing = easynet_sdk.AddressingClient(
+            easynet_sdk.AxonAddressingTransport()
+        )
+
+    def load(self):
+        return [
+            self._addressing.parse_ura,
+            self._addressing.device_ura,
+            self._addressing.owner_ability_ura,
+            self._addressing.project_ability_ura,
+        ]
+EOF
+  cat >"$good_remote/easyremote/invocation.py" <<'EOF'
+import easynet_sdk
+
+_ = easynet_sdk.project_descriptor_ref
 EOF
   cat >"$good_remote/easyremote/receipts.py" <<'EOF'
 import easynet_sdk
@@ -624,6 +668,14 @@ import easynet_sdk
 _ = easynet_sdk.ReceiptReference.from_runtime_receipt
 EOF
   run_audit "$good_backend" "$good_remote" >/dev/null
+
+  printf '%s\n' '"""Retired identity compatibility bridge."""' >"$good_remote/easyremote/_sdk_identity.py"
+  if run_audit "$good_backend" "$good_remote" >"$tmp/retired-identity.out" 2>&1; then
+    echo "self-test expected retired EasyRemote SDK identity bridge to fail" >&2
+    exit 1
+  fi
+  grep -Fq "easyremote:retired_sdk_identity_bridge_present" "$tmp/retired-identity.out"
+  rm "$good_remote/easyremote/_sdk_identity.py"
 
   mkdir -p "$good_backend/internal/runtimeprofile"
   cat >"$good_backend/internal/runtimeprofile/runtime.go" <<'EOF'

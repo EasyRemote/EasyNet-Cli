@@ -7,6 +7,7 @@ from easynet_sdk import (
     BidiState,
     BidiTerminalFrame,
     ErrorCode,
+    RetryHint,
     SDKError,
     is_code,
 )
@@ -41,6 +42,17 @@ class MemoryBidiTransport:
     def cancel(self, reason: str) -> bytes:
         self.cancel_reason = reason
         return self.cancel_reply
+
+
+class UnsupportedCancelBidiTransport(MemoryBidiTransport):
+    def cancel(self, reason: str) -> bytes:
+        del reason
+        raise SDKError(
+            code=ErrorCode.NOT_IMPLEMENTED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="bidi cancellation unsupported",
+        )
 
 
 def new_session(transport: MemoryBidiTransport) -> BidiSession:
@@ -214,6 +226,18 @@ class BidiTests(unittest.TestCase):
         with self.assertRaises(SDKError):
             session.cancel("client stop")
         self.assertEqual(session.state, BidiState.FAILED)
+
+    def test_unsupported_cancel_preserves_open_state(self) -> None:
+        session = new_session(UnsupportedCancelBidiTransport())
+
+        with self.assertRaises(SDKError) as caught:
+            session.cancel("client stop")
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
+        self.assertEqual(session.state, BidiState.OPEN)
+        session.close()
+        self.assertTrue(session.transport.closed)
+        self.assertEqual(session.state, BidiState.CLOSED)
 
     def test_receive_buffer_bound(self) -> None:
         transport = MemoryBidiTransport(
