@@ -1064,15 +1064,15 @@ mod tests {
         let base = || pb::Envelope {
             caller: Some(pb::AgentIdentity {
                 ura: "easynet:///r/t/agent/u.x".to_string(),
-                profile: "easynet-strict-v2".to_string(),
+                profile: "axon-strict-v2".to_string(),
             }),
             callee: Some(pb::AgentIdentity {
                 ura: callee_ura.to_string(),
-                profile: "easynet-strict-v2".to_string(),
+                profile: "axon-strict-v2".to_string(),
             }),
             subject: Some(pb::SubjectIdentity {
                 ura: callee_ura.to_string(),
-                profile: "easynet-strict-v2".to_string(),
+                profile: "axon-strict-v2".to_string(),
             }),
             invocation_nonce: vec![0; 16],
             causal_context: Some(pb::CausalContext {
@@ -1095,7 +1095,7 @@ mod tests {
         let mut unsupported_subject = base();
         unsupported_subject.subject = Some(pb::SubjectIdentity {
             ura: "easynet:///r/t/user/alice".to_string(),
-            profile: "easynet-strict-v2".to_string(),
+            profile: "axon-strict-v2".to_string(),
         });
         let err = external_signed_from_wire_parts(
             unsupported_subject,

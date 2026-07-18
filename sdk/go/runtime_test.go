@@ -53,9 +53,9 @@ func canonicalRuntimeReceiptFixture(
 		"prev_receipt_hash_hex":   strings.Repeat("00", 32),
 		"self_hash_hex":           fmt.Sprintf("%064x", index+1),
 		"cleanup_complete":        state != "admitted" && state != "Admitted" && state != "ADMITTED",
-		"caller_binding":          map[string]any{"ura": "easynet:///r/example/agent/alice.sdk", "profile": "easynet-strict-v2"},
-		"callee_binding":          map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "easynet-strict-v2"},
-		"subject_binding":         map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "easynet-strict-v2"},
+		"caller_binding":          map[string]any{"ura": "easynet:///r/example/agent/alice.sdk", "profile": "axon-strict-v2"},
+		"callee_binding":          map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "axon-strict-v2"},
+		"subject_binding":         map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "axon-strict-v2"},
 		"invocation_nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 		"causal_binding_kind":     "none",
 		"causal_binding":          map[string]any{"form": "none"},
@@ -63,7 +63,7 @@ func canonicalRuntimeReceiptFixture(
 			"algorithm":        "ed25519",
 			"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x71}, 64)),
 		},
-		"signer_binding":         map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "easynet-strict-v2"},
+		"signer_binding":         map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "axon-strict-v2"},
 		"authority_binding_kind": "self",
 		"authority_binding": map[string]any{
 			"kind":          "self",
@@ -73,7 +73,7 @@ func canonicalRuntimeReceiptFixture(
 		"subject_ref": map[string]any{
 			"kind":    1,
 			"ura":     "easynet:///r/example/device/dev-a",
-			"profile": "easynet-strict-v2",
+			"profile": "axon-strict-v2",
 		},
 		"descriptor_version": "1.0.0",
 		"schema_hash_hex":    strings.Repeat("11", 32),
@@ -88,7 +88,7 @@ func canonicalRuntimeReceiptFixture(
 			},
 			"proof_payload_base64": base64.StdEncoding.EncodeToString(proofPayload),
 			"proof_hash_hex":       fmt.Sprintf("%x", proofHash),
-			"issuer":               map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "easynet-strict-v2"},
+			"issuer":               map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "axon-strict-v2"},
 			"signature": map[string]any{
 				"algorithm":        "ed25519",
 				"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x72}, 64)),
@@ -499,7 +499,7 @@ func TestRuntimeReceiptRejectsMalformedCanonicalProofFacts(t *testing.T) {
 			proof := receipt["authority_proof"].(map[string]any)
 			proof["issuer"] = map[string]any{
 				"ura":     "easynet:///r/example/device/other",
-				"profile": "easynet-strict-v2",
+				"profile": "axon-strict-v2",
 			}
 		},
 		"invalid identity profile": func(receipt map[string]any) {
@@ -508,7 +508,7 @@ func TestRuntimeReceiptRejectsMalformedCanonicalProofFacts(t *testing.T) {
 		"hosted signer without attestation": func(receipt map[string]any) {
 			receipt["signer_binding"] = map[string]any{
 				"ura":     "easynet:///r/example/device/runtime-host",
-				"profile": "easynet-strict-v2",
+				"profile": "axon-strict-v2",
 			}
 		},
 		"self signer with attestation": func(receipt map[string]any) {

@@ -335,6 +335,33 @@ for match in re.finditer(r"InvocationDerivationPolicy::FreshRoot", local_product
             f"{local_loopback}:{local_production.count(chr(10), 0, match.start()) + 1}: anonymous FreshRoot derivation must be owned by LocalDaemonLoopbackDerivationPolicy"
         )
 
+bidi_dispatcher = "src/daemon/invocation/bidi/bidi_dispatcher.rs"
+bidi_text = read(bidi_dispatcher)
+for token, detail in (
+    ("enum SessionControlRequestKind", "closed JSON session-control inventory"),
+    ("struct SessionControlRequest", "typed JSON session-control request"),
+    ("struct SessionControlLifecycle", "explicit JSON session-control lifecycle"),
+    ("SessionControlScheduling", "explicit JSON session-control scheduling state"),
+    ("session_control_kind_for_hub", "hub-owned session-control classifier"),
+    ("session_control_lifecycle_from_wire", "single JSON request classification boundary"),
+    ("dispatch_canonical_session_invoke", "canonical ReverseDispatchCall invoke path"),
+    ("product invocations must use canonical ReverseDispatchCall", "JSON request product-bypass rejection"),
+):
+    if token not in bidi_text:
+        violations.append(f"{bidi_dispatcher}: missing {detail}: {token}")
+
+bidi_production = production_prefix(bidi_text)
+for token in (
+    "dispatch_checked_session_request",
+    "dispatch_session_request_named_for_caller",
+    "dispatch_session_request_from_session",
+    "is_inline_session_request",
+):
+    if token in bidi_production:
+        violations.append(
+            f"{bidi_dispatcher}: obsolete procedural JSON session request dispatcher remains: {token}"
+        )
+
 local_invoker = "src/daemon/invocation/dispatch/local_runtime_invoker.rs"
 for token, detail in (
     ("SystemInvocationIssuer::request_for_descriptor_ref", "local daemon-system descriptor-bound issuer"),

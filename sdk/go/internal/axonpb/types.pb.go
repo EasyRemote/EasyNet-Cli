@@ -772,7 +772,7 @@ type AgentIdentity struct {
 	Ura string `protobuf:"bytes,1,opt,name=ura,proto3" json:"ura,omitempty"`
 	// URA profile selector. Known values:
 	//
-	//	"easynet-strict-v2"  — RFC 001 default.
+	//	"axon-strict-v2"  — RFC 001 default.
 	//	"web-safe-v2"        — RFC-3986-compatible subset.
 	Profile       string `protobuf:"bytes,2,opt,name=profile,proto3" json:"profile,omitempty"`
 	unknownFields protoimpl.UnknownFields

@@ -475,7 +475,7 @@ mod tests {
                 callee: Some(agent("easynet:///r/acme/device/callee")),
                 subject: Some(SubjectIdentity {
                     ura: "easynet:///r/acme/resource/job/1".to_string(),
-                    profile: "easynet-strict-v2".to_string(),
+                    profile: "axon-strict-v2".to_string(),
                 }),
                 invocation_nonce: vec![7; 16],
                 causal_context: Some(CausalContext {
@@ -498,7 +498,7 @@ mod tests {
     fn agent(ura: &str) -> AgentIdentity {
         AgentIdentity {
             ura: ura.to_string(),
-            profile: "easynet-strict-v2".to_string(),
+            profile: "axon-strict-v2".to_string(),
         }
     }
 
@@ -529,7 +529,7 @@ mod tests {
             ability_binding: descriptor_ref(),
             subject_ref: Some(EntityRef {
                 ura: "easynet:///r/acme/resource/job/1".to_string(),
-                profile: "easynet-strict-v2".to_string(),
+                profile: "axon-strict-v2".to_string(),
                 ..EntityRef::default()
             }),
             descriptor_version: "1.0.0".to_string(),

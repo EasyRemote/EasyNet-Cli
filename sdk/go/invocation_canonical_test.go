@@ -21,7 +21,7 @@ func TestDescriptorBoundInvocationBytesUseStableAxonEncoding(t *testing.T) {
 		t.Fatalf("canonicalDescriptorBoundInvocationBytes: %v", err)
 	}
 	got := sha256.Sum256(canonical)
-	want := "47ecd2c82bd6afa612eef1d73a41eb6a75acb21368052a0e8c2277d3c3a1a6af"
+	want := "a532dd2d1987a8b1808ba9c88b92be37d5b06134286b47dfae9e2e860a860795"
 	if fmt.Sprintf("%x", got) != want {
 		t.Fatalf("canonical sha256 drift: got %x want %s", got, want)
 	}

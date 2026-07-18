@@ -69,7 +69,6 @@ from .authority import (
     validate_authority_metadata,
 )
 from .axon_addressing import (
-    AbilityAddress,
     AbilityURA,
     AddressingClient,
     AddressingProjection,
@@ -389,7 +388,6 @@ from .transport import (
 )
 
 __all__ = [
-    "AbilityAddress",
     "AbilityURA",
     "AbilityCallRequest",
     "AbilityChildContext",

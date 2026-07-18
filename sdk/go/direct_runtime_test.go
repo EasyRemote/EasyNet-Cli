@@ -69,7 +69,7 @@ func canonicalDirectRuntimeReceiptPair(invocationID string) (*axonpb.InvocationR
 	const (
 		callerURA = "easynet:///r/example/agent/alice.sdk"
 		calleeURA = "easynet:///r/example/device/dev-a"
-		profile   = "easynet-strict-v2"
+		profile   = "axon-strict-v2"
 	)
 	proofPayload := []byte("canonical-direct-runtime-test-proof")
 	proofHash := sha256.Sum256(proofPayload)

@@ -434,7 +434,7 @@ class AgentIdentity(google.protobuf.message.Message):
     """
     profile: builtins.str
     """URA profile selector. Known values:
-      "easynet-strict-v2"  — RFC 001 default.
+      "axon-strict-v2"  — RFC 001 default.
       "web-safe-v2"        — RFC-3986-compatible subset.
     """
     def __init__(

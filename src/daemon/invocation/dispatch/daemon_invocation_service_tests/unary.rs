@@ -1730,7 +1730,7 @@ async fn federation_proxy_caller_gate_accepts_local_hub_identity_with_hub_role()
     let envelope = Envelope {
         caller: Some(AgentIdentity {
             ura: local_hub_ura,
-            profile: "easynet-strict-v2".to_string(),
+            profile: "axon-strict-v2".to_string(),
         }),
         ..Envelope::default()
     };
@@ -1785,15 +1785,15 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
     let mut envelope = Envelope {
         caller: Some(AgentIdentity {
             ura: caller_ura.clone(),
-            profile: "easynet-strict-v2".to_string(),
+            profile: "axon-strict-v2".to_string(),
         }),
         callee: Some(AgentIdentity {
             ura: crate::core::ura::hub_ura("local-realm"),
-            profile: "easynet-strict-v2".to_string(),
+            profile: "axon-strict-v2".to_string(),
         }),
         subject: Some(SubjectIdentity {
             ura: descriptor_subject_ura.clone(),
-            profile: "easynet-strict-v2".to_string(),
+            profile: "axon-strict-v2".to_string(),
         }),
         invocation_nonce: vec![7; 16],
         ..Envelope::default()

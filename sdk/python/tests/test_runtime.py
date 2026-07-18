@@ -224,15 +224,15 @@ def canonical_runtime_receipt(
         "cleanup_complete": state.lower() != "admitted",
         "caller_binding": {
             "ura": "easynet:///r/example/agent/alice.sdk",
-            "profile": "easynet-strict-v2",
+            "profile": "axon-strict-v2",
         },
         "callee_binding": {
             "ura": "easynet:///r/example/device/dev-a",
-            "profile": "easynet-strict-v2",
+            "profile": "axon-strict-v2",
         },
         "subject_binding": {
             "ura": "easynet:///r/example/device/dev-a",
-            "profile": "easynet-strict-v2",
+            "profile": "axon-strict-v2",
         },
         "invocation_nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
         "causal_binding_kind": "none",
@@ -243,7 +243,7 @@ def canonical_runtime_receipt(
         },
         "signer_binding": {
             "ura": "easynet:///r/example/device/dev-a",
-            "profile": "easynet-strict-v2",
+            "profile": "axon-strict-v2",
         },
         "authority_binding_kind": "self",
         "authority_binding": {
@@ -256,7 +256,7 @@ def canonical_runtime_receipt(
         "subject_ref": {
             "kind": 1,
             "ura": "easynet:///r/example/device/dev-a",
-            "profile": "easynet-strict-v2",
+            "profile": "axon-strict-v2",
         },
         "descriptor_version": "1.0.0",
         "schema_hash_hex": "11" * 32,
@@ -273,7 +273,7 @@ def canonical_runtime_receipt(
             "proof_hash_hex": hashlib.sha256(proof_payload).hexdigest(),
             "issuer": {
                 "ura": "easynet:///r/example/device/dev-a",
-                "profile": "easynet-strict-v2",
+                "profile": "axon-strict-v2",
             },
             "signature": {
                 "algorithm": "ed25519",
@@ -607,7 +607,7 @@ class RuntimeTests(unittest.TestCase):
                     {
                         "issuer": {
                             "ura": "easynet:///r/example/device/other",
-                            "profile": "easynet-strict-v2",
+                            "profile": "axon-strict-v2",
                         }
                     }
                 ),
@@ -632,7 +632,7 @@ class RuntimeTests(unittest.TestCase):
         receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
         receipt["signer_binding"] = {
             "ura": "easynet:///r/example/device/runtime-host",
-            "profile": "easynet-strict-v2",
+            "profile": "axon-strict-v2",
         }
         with self.assertRaises(SDKError, msg="hosted signer without attestation"):
             RuntimeReceipt.from_mapping(receipt)
@@ -769,7 +769,7 @@ class RuntimeTests(unittest.TestCase):
         complete = canonical_runtime_receipt("inv-typed", "completed", "completed", 1)
         proof_payload = b"typed-proof"
         delegation_signature = base64.b64encode(bytes([0x73]) * 64).decode()
-        strict_profile = "easynet-strict-v2"
+        strict_profile = "axon-strict-v2"
         delegation_binding = {
             "kind": "delegation",
             "issuer_ura": "easynet:///r/local/agent/issuer",

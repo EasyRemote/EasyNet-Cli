@@ -235,7 +235,6 @@
       "MAX_KEYS_PER_AGENT_URA",
       "MessageAck",
       "MessageInbox",
-      "NonceReplayStore",
       "OrderedContentSession",
       "OrderedContentSessionConfig",
       "OwnedDendriteServerStream",
@@ -308,7 +307,6 @@
       "ability_schema_hash",
       "ability_schema_summary",
       "ability_ura_from_descriptor_ref",
-      "admission",
       "admission_action_from_descriptor_ref",
       "audit",
       "authority_binding_proof_hash",
@@ -357,7 +355,6 @@
       "messaging",
       "new_invocation_id",
       "normalize_authority_proof_hash",
-      "now_ms",
       "persistence",
       "reap_orphans",
       "receipt_provider",
@@ -375,14 +372,10 @@
       "try_canonical_descriptor_bound_invocation_bytes",
       "try_canonical_receipt_proof_facts",
       "ura",
-      "validate_envelope",
       "validate_hosted_attestation_authority",
       "validate_receipt_fact_semantics",
-      "validate_signature_structure",
       "verify_descriptor_bound_invocation_signature",
-      "verify_descriptor_bound_signature",
       "verify_host_attestation",
-      "verify_phase_descriptor_bound",
       "verify_receipt_chain",
       "verify_receipt_signature",
       "verify_receipt_signature_with_hosted"
@@ -970,7 +963,6 @@
       "Version"
     ],
     "python": [
-      "AbilityAddress",
       "AbilityCallRequest",
       "AbilityChildContext",
       "AbilityDescriptorClient",
@@ -1450,16 +1442,6 @@
       "ability_registry.AbilityProofBindings",
       "ability_registry.AbilityRegistration",
       "ability_registry.AbilityRegistry",
-      "admission.DEFAULT_DEDUP_WINDOW_MS",
-      "admission.NonceReplayStore",
-      "admission.REASON_CALLER_SIGNATURE_INVALID",
-      "admission.REASON_ENVELOPE_INCOMPLETE",
-      "admission.REASON_NONCE_REPLAY",
-      "admission.now_ms",
-      "admission.validate_envelope",
-      "admission.validate_signature_structure",
-      "admission.verify_descriptor_bound_signature",
-      "admission.verify_phase_descriptor_bound",
       "audit.AuthorityProof",
       "audit.AxiomBinding",
       "audit.ChainCheckResult",
@@ -1606,7 +1588,6 @@
       "handle.VALID_EVENT_TYPES",
       "handle.new_invocation_id",
       "invocation.ability_registry",
-      "invocation.admission",
       "invocation.audit",
       "invocation.axiom",
       "invocation.backpressure",
@@ -3525,7 +3506,6 @@
       "AccessControlSignatureDecision.signature_key_id",
       "AccessControlSignatureDecision.subject_ura",
       "AccessControlSignatureDecision.verifier_ura",
-      "AddressingClient.ability_address",
       "AddressingClient.ability_ura",
       "AddressingClient.ability_ura_from_descriptor_ref",
       "AddressingClient.agent_ura",
@@ -6258,8 +6238,7 @@
         "RuntimeDeviceRevokeRequest",
         "RuntimeDeviceRevokeResult",
         "RuntimeModeDevice",
-        "RuntimeModeHub",
-        "UraProfileEasynetStrictV2"
+        "RuntimeModeHub"
       ],
       "python": [
         "ControlDiscovery",
@@ -7528,14 +7507,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
-        "UraProfileEasynetStrictV2": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
         }
       },
       "python": {
@@ -9700,24 +9671,11 @@
     "access_control": {
       "rust": {
         "symbols": [
-          "NonceReplayStore",
           "REASON_NONCE_REPLAY",
           "VerifiedAdmissionPolicy",
-          "VerifiedDescriptorBoundAdmission",
-          "admission"
+          "VerifiedDescriptorBoundAdmission"
         ],
         "members": [
-          "admission.DEFAULT_DEDUP_WINDOW_MS",
-          "admission.NonceReplayStore",
-          "admission.REASON_CALLER_SIGNATURE_INVALID",
-          "admission.REASON_ENVELOPE_INCOMPLETE",
-          "admission.REASON_NONCE_REPLAY",
-          "admission.now_ms",
-          "admission.validate_envelope",
-          "admission.validate_signature_structure",
-          "admission.verify_descriptor_bound_signature",
-          "admission.verify_phase_descriptor_bound",
-          "invocation.admission",
           "receipt_provider.VerifiedAdmissionPolicy",
           "receipt_provider.VerifiedDescriptorBoundAdmission"
         ]
@@ -11411,7 +11369,6 @@
       },
       "python": {
         "symbols": [
-          "AbilityAddress",
           "AbilityURA",
           "AddressingClient",
           "AddressingProjection",
@@ -11441,7 +11398,6 @@
           "AbilityURA.profile",
           "AbilityURA.public_name",
           "AbilityURA.subject_ura",
-          "AddressingClient.ability_address",
           "AddressingClient.ability_ura",
           "AddressingClient.ability_ura_from_descriptor_ref",
           "AddressingClient.agent_ura",
@@ -11531,9 +11487,7 @@
           "sign_descriptor_bound_invocation",
           "to_jcs_bytes",
           "try_canonical_descriptor_bound_invocation_bytes",
-          "validate_envelope",
-          "verify_descriptor_bound_invocation_signature",
-          "verify_descriptor_bound_signature"
+          "verify_descriptor_bound_invocation_signature"
         ],
         "members": [
           "audit.DirectCausalTrace",
@@ -12511,8 +12465,7 @@
           "jcs_sign_args",
           "sha256",
           "signing",
-          "signing_key_from_bytes",
-          "validate_signature_structure"
+          "signing_key_from_bytes"
         ],
         "members": [
           "audit.SignedInvocationReceipt",
@@ -13569,7 +13522,6 @@
           "VerifiedReceipt",
           "VerifiedReceiptChain",
           "compute_receipt_hash",
-          "verify_phase_descriptor_bound",
           "verify_receipt_chain",
           "verify_receipt_signature",
           "verify_receipt_signature_with_hosted"
@@ -14519,7 +14471,6 @@
           "RuntimeLifecycleLimits",
           "Supervisor",
           "SupervisorSpec",
-          "now_ms",
           "reap_orphans",
           "supervisor"
         ],
@@ -16314,7 +16265,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "46399d4bade59d8909936d70bc5cc74d347fdc211c13e7ada040bba49fe64196",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -16364,9 +16315,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "f6bb7f93c6e5f232d87d4cf80dd6f59586d9b814442a18b3894e3a0a518c834d",
+          "sha256": "b1a917e41b1d7c816df0296f2e38e3701128f3a161201016683a43942bab4a62",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -16420,7 +16371,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "46399d4bade59d8909936d70bc5cc74d347fdc211c13e7ada040bba49fe64196",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -16460,9 +16411,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "f6bb7f93c6e5f232d87d4cf80dd6f59586d9b814442a18b3894e3a0a518c834d",
+          "sha256": "b1a917e41b1d7c816df0296f2e38e3701128f3a161201016683a43942bab4a62",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -16506,7 +16457,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "46399d4bade59d8909936d70bc5cc74d347fdc211c13e7ada040bba49fe64196",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -16556,9 +16507,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "f6bb7f93c6e5f232d87d4cf80dd6f59586d9b814442a18b3894e3a0a518c834d",
+          "sha256": "b1a917e41b1d7c816df0296f2e38e3701128f3a161201016683a43942bab4a62",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -16612,7 +16563,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "46399d4bade59d8909936d70bc5cc74d347fdc211c13e7ada040bba49fe64196",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -16687,9 +16638,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "f6bb7f93c6e5f232d87d4cf80dd6f59586d9b814442a18b3894e3a0a518c834d",
+          "sha256": "b1a917e41b1d7c816df0296f2e38e3701128f3a161201016683a43942bab4a62",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -16768,7 +16719,7 @@
           "path": "sdk/go/cabi_runtime.go",
           "sha256": "ab6620f6a7b30aaddec6f85144c498bdfae916fe9cab71d01155267f3fa92914",
           "interface": "CABIRuntimeTransport",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -16865,7 +16816,7 @@
           "path": "sdk/python/easynet_sdk/_cabi.py",
           "sha256": "e10e75ad1961e48007168884420d4c82a6beb5beb93a1fcbeea86f039bbfca66",
           "interface": "CABIRuntimeTransport",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -16964,7 +16915,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "46399d4bade59d8909936d70bc5cc74d347fdc211c13e7ada040bba49fe64196",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -17039,9 +16990,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "f6bb7f93c6e5f232d87d4cf80dd6f59586d9b814442a18b3894e3a0a518c834d",
+          "sha256": "b1a917e41b1d7c816df0296f2e38e3701128f3a161201016683a43942bab4a62",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -17120,7 +17071,7 @@
           "path": "sdk/go/cabi_runtime.go",
           "sha256": "ab6620f6a7b30aaddec6f85144c498bdfae916fe9cab71d01155267f3fa92914",
           "interface": "CABIRuntimeTransport",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -17242,7 +17193,7 @@
           "path": "sdk/python/easynet_sdk/_cabi.py",
           "sha256": "e10e75ad1961e48007168884420d4c82a6beb5beb93a1fcbeea86f039bbfca66",
           "interface": "CABIRuntimeTransport",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -17366,7 +17317,7 @@
           "path": "sdk/go/runtime_ability.go",
           "sha256": "3941a5b9fd90830c48855e39d3d21dfb7e8b25ae75127643b7958cfdd822ce1e",
           "interface": "RuntimeAbilityClient",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -17493,7 +17444,7 @@
           "path": "sdk/python/easynet_sdk/ability_invocation.py",
           "sha256": "c72ee40799da0c664b1ab06405b9f3f114db0d17db0713883e666759523e8f90",
           "interface": "AbilityInvocationClient",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -17622,7 +17573,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "46399d4bade59d8909936d70bc5cc74d347fdc211c13e7ada040bba49fe64196",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -17662,9 +17613,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "f6bb7f93c6e5f232d87d4cf80dd6f59586d9b814442a18b3894e3a0a518c834d",
+          "sha256": "b1a917e41b1d7c816df0296f2e38e3701128f3a161201016683a43942bab4a62",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+          "revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
         },
         "step_evidence": [
           {
@@ -17833,7 +17784,6 @@
       "MAX_KEYS_PER_AGENT_URA": "627f8e009f74eb243de7fb7f8c1ec29d9f5cac96fc79d0363abf9592446b3a68",
       "MessageAck": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29",
       "MessageInbox": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092",
-      "NonceReplayStore": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092",
       "OrderedContentSession": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092",
       "OrderedContentSessionConfig": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29",
       "OwnedDendriteServerStream": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092",
@@ -17913,17 +17863,6 @@
       "ability_schema_hash": "6eb0574b1d8373976e21d24dd4348bb06e4f25e285ac20305bec569889678e1e",
       "ability_schema_summary": "ae9e5111ed3b7999bd9e9a2116230d5e14b49eb7cd95ab279a4c68d50aab270a",
       "ability_ura_from_descriptor_ref": "20fe233c647279fe1c59caa5c580a0d430b1efb294d885d5c2f8c5bfc5e65169",
-      "admission": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
-      "admission.DEFAULT_DEDUP_WINDOW_MS": "4bd25a526219720da4fabf4ea8977a88f17430f33edbf7cc43d63afeda298bc3",
-      "admission.NonceReplayStore": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092",
-      "admission.REASON_CALLER_SIGNATURE_INVALID": "620bf4773a7890a9e8671ff5736495860f47548fa86d918b967e3df04c303fff",
-      "admission.REASON_ENVELOPE_INCOMPLETE": "42271849f3b50617672c0f00c33eb9b8245765ec6d58e6db679972c86e842af7",
-      "admission.REASON_NONCE_REPLAY": "a4f670506fe1d6d92e768a26c8d6ade5ab12921b82d29291214c397eef740cbf",
-      "admission.now_ms": "990af7e783877dbdcba14bc58ba08170b994503a940632c4e3434fc9ba1571ea",
-      "admission.validate_envelope": "39aaf8a5023389d571b66a9b14e7a076ddd8bea95e51e6362a2187c32065fc29",
-      "admission.validate_signature_structure": "85975432697faee6489f4d6b03a020269d267992aab4dd68a092acf4c51602d4",
-      "admission.verify_descriptor_bound_signature": "87a4ceb1220bf6f7dcb708ff7c52bb1699b583b0050e577de277bd142f67bca7",
-      "admission.verify_phase_descriptor_bound": "87a4ceb1220bf6f7dcb708ff7c52bb1699b583b0050e577de277bd142f67bca7",
       "admission_action_from_descriptor_ref": "20fe233c647279fe1c59caa5c580a0d430b1efb294d885d5c2f8c5bfc5e65169",
       "audit": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
       "audit.AuthorityProof": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31",
@@ -18107,7 +18046,6 @@
       "handle.new_invocation_id": "3311e81f4a7a3ed1ec70f5005d0b2f8617d75d441798573b2cec3a4b692dab38",
       "invocation": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
       "invocation.ability_registry": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
-      "invocation.admission": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
       "invocation.audit": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
       "invocation.axiom": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
       "invocation.backpressure": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
@@ -18174,7 +18112,6 @@
       "messaging.RUNTIME_BIDI_OVERFLOW_REASON": "f4dbcabb53fe9fd6d7472780aec354bba730877a7c50cde99189308d26a26a72",
       "new_invocation_id": "3311e81f4a7a3ed1ec70f5005d0b2f8617d75d441798573b2cec3a4b692dab38",
       "normalize_authority_proof_hash": "445733108ef46c89f1b984b93b5d60885ebe4b2230a4c5305df0965d801e9939",
-      "now_ms": "990af7e783877dbdcba14bc58ba08170b994503a940632c4e3434fc9ba1571ea",
       "persistence": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
       "persistence.InvocationIndex": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29",
       "persistence.InvocationRecoverySnapshot": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29",
@@ -18240,14 +18177,10 @@
       "try_canonical_descriptor_bound_invocation_bytes": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de",
       "try_canonical_receipt_proof_facts": "275e572c3c8a4226999803b6d41d3f9cdf5aa99c998f3c7fe2eb7f91a6dc9369",
       "ura": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
-      "validate_envelope": "39aaf8a5023389d571b66a9b14e7a076ddd8bea95e51e6362a2187c32065fc29",
       "validate_hosted_attestation_authority": "2ee4d3e175a1112f0f1e219a907d1d306afdbf4e5363d7665b486cb66d32f29c",
       "validate_receipt_fact_semantics": "10721774052f4d72f3058f61db6dbee01b625038d5c130418d3a9d9147d43e2b",
-      "validate_signature_structure": "85975432697faee6489f4d6b03a020269d267992aab4dd68a092acf4c51602d4",
       "verify_descriptor_bound_invocation_signature": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b",
-      "verify_descriptor_bound_signature": "87a4ceb1220bf6f7dcb708ff7c52bb1699b583b0050e577de277bd142f67bca7",
       "verify_host_attestation": "679e648c816b29f742f8e3c25a1f717ede0c589bce47a89957b2ac079fbecb9f",
-      "verify_phase_descriptor_bound": "87a4ceb1220bf6f7dcb708ff7c52bb1699b583b0050e577de277bd142f67bca7",
       "verify_receipt_chain": "0529d89c602b6b8df91b91f7b08d146283a1dda458c534649397b43203923f78",
       "verify_receipt_signature": "e74428e999b8301bb2136bd9a09048731873d7ab780ec3ed078863f5519de3de",
       "verify_receipt_signature_with_hosted": "c2af63c92e3ae6d186c41e3418f4c75f26a68e9f6ce5560b061f36a5d39228d0"
@@ -20505,7 +20438,6 @@
       "UnmarshalRawDelegationProof": "787618682cdd8236e742604277215932a3abb71feabc5fd950d43d7039661541",
       "UnmarshalRawSessionAuthority": "e66f8daa9860053b1363f24c1c988ac3b378f0fe40afbe8725c30b13ca06c38b",
       "Ura": "2c6fe72f394aa2595ed0c9b586d50eb803d97b50d1f1cfe2561624b34661f0e9",
-      "UraProfileEasynetStrictV2": "f42ad8ec980e8d4aa60dca0ad283f538101bea86dd8cdc588c00c1c931d59607",
       "UserAgentPrefix": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
       "UserURA": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
       "Version": "fc59f78951359c3a96d7988de6013c0d00469cf36f04e3bc77e5105ac39a22a4",
@@ -20513,7 +20445,6 @@
       "Version.SDKVersion": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
     },
     "python": {
-      "AbilityAddress": "dfc9da35960c866263c1bd3ca30d3ed8d16bd60e4776fbe9e49c4df0dad558a9",
       "AbilityCallRequest": "e7017edd92314fce0666d17f53c7c6eddcc7ec674332e39ffdd2fb340152ea45",
       "AbilityCallRequest.ability_ura": "bf2f1a9b279ffd577124165d1325f6a897e19910a9ad89dca3543259b131c5a6",
       "AbilityCallRequest.args": "b7cabdbbe790aeff5877c6d4ac1cf866c7b3467c4655d2f508058b6ecdf74055",
@@ -20908,8 +20839,7 @@
       "AccessControlSignatureDecision.signature_key_id": "757d8d628c41149f36f1fbb0dbbacaac81c57d8c9fce6bb8f37e81a934043a10",
       "AccessControlSignatureDecision.subject_ura": "be716d6689daf3cee7201e75cc419c7b2f04f7e1032aa61f0cda0afff6a884d5",
       "AccessControlSignatureDecision.verifier_ura": "45430548db8e0faf8894e4000784bcd8f860d9c74dc44bfd71c60c1c67144fca",
-      "AddressingClient": "4ba0894e74de3029a446dbb4bd7877c00a7fe1a9b164b562b9e3b59f7ffa798a",
-      "AddressingClient.ability_address": "1d4ceda98799538c783acd6331536b5b4a10fb3aedc4820cba6fd09f035515f9",
+      "AddressingClient": "be0cc4b7792a2a47bd1ac0628f832195e9fe6cd132a46d0a7ebfbb50ed3257cf",
       "AddressingClient.ability_ura": "6683ce038bd0208de5b61f1bfc7761931e9883432c2ed2899ee07c9781ed6319",
       "AddressingClient.ability_ura_from_descriptor_ref": "7d9def5084636623e4692b2fe56d9627538631d697e55f39128aebd4e47803d1",
       "AddressingClient.agent_ura": "4eb9cfb9404783442b31926f4152e1b6e3a3850dfd09b52a8b995b616eee3062",
@@ -20991,7 +20921,7 @@
       "AuthorizationGrant.issuer_ura": "2dbf4ec1625b0a23fd152bec985f620c08b25e4aa3f5dade232bd9acd007a5b4",
       "AuthorizationGrant.principal_ura": "4bb3bb8f0394d8fd3b826b391ab9cf57c98a4daed72f82a5bce1518a3593aff7",
       "AuthorizationGrant.revoked_unix_ms": "852fa48be57ad994d6de32c2283e4c6614aa1c389d2fcd9519d1aeb34e57a511",
-      "AxonAddressingTransport": "8a34daf14bda8fb464112953a527c3b458eac771c8060844963bbe4f03298a46",
+      "AxonAddressingTransport": "94946a924bd306fb56630eeee8755add8da11f9ddadb314a52aba0a596eb5433",
       "AxonAddressingTransport.build_descriptor_ref": "123bbcafebad6921ba3719ecfd773e3638254f5bc48ff6092e414c3077703dcf",
       "AxonAddressingTransport.build_ura": "2fb810c0f0b551f7893780454d17e7d502bcb0521dab957daba0175bf6a3fef3",
       "AxonAddressingTransport.close": "a5cbc63f606a2f1d00d0ddd107d98a028930221ccb5e3eff66763a0d57c98832",
@@ -24615,7 +24545,7 @@
     }
   ],
   "dependency_revisions": {
-    "axon_sdk": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+    "axon_sdk": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
   },
   "provider_implementations": [
     {
@@ -24636,7 +24566,7 @@
         "terminal_receipt_facts",
         "unary_invoke"
       ],
-      "axon_revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+      "axon_revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
     },
     {
       "language": "python",
@@ -24644,7 +24574,7 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/direct_runtime.py",
-      "sha256": "f6bb7f93c6e5f232d87d4cf80dd6f59586d9b814442a18b3894e3a0a518c834d",
+      "sha256": "b1a917e41b1d7c816df0296f2e38e3701128f3a161201016683a43942bab4a62",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/python/easynet_sdk/connection.py",
       "interface_sha256": "a398d78c51607f79260e73d3c7bb73f37243a67bbb18dd6b15d68cb3d5bb5f5a",
@@ -24656,7 +24586,7 @@
         "terminal_receipt_facts",
         "unary_invoke"
       ],
-      "axon_revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+      "axon_revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
     },
     {
       "language": "go",
@@ -24672,7 +24602,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+      "axon_revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
     },
     {
       "language": "python",
@@ -24688,7 +24618,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+      "axon_revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
     },
     {
       "language": "go",
@@ -24703,7 +24633,7 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+      "axon_revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
     },
     {
       "language": "python",
@@ -24718,14 +24648,14 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
+      "axon_revision": "97d520a8b05199472d2ef6ce0985f7213b45ff5a"
     }
   ],
   "inventory_source_revisions": {
-    "rust": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd",
+    "rust": "97d520a8b05199472d2ef6ce0985f7213b45ff5a",
     "c_abi": "current_checkout",
     "go": "current_checkout",
-    "python": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd",
+    "python": "97d520a8b05199472d2ef6ce0985f7213b45ff5a",
     "node": "current_checkout",
     "java": "current_checkout",
     "swift": "current_checkout"

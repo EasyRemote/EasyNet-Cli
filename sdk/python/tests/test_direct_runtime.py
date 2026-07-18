@@ -95,15 +95,15 @@ def _canonical_receipt(
         cleanup_complete=cleanup_complete,
         caller_binding=types_pb2.AgentIdentity(
             ura=caller_ura,
-            profile="easynet-strict-v2",
+            profile="axon-strict-v2",
         ),
         callee_binding=types_pb2.AgentIdentity(
             ura=CALLEE_URA,
-            profile="easynet-strict-v2",
+            profile="axon-strict-v2",
         ),
         subject_binding=types_pb2.SubjectIdentity(
             ura=CALLEE_URA,
-            profile="easynet-strict-v2",
+            profile="axon-strict-v2",
         ),
         invocation_nonce=bytes(range(1, 17)),
         causal_binding=types_pb2.CausalContext(none=types_pb2.Empty()),
@@ -123,7 +123,7 @@ def _canonical_receipt(
         subject_ref=types_pb2.EntityRef(
             kind=types_pb2.ENTITY_REF_KIND_DEVICE,
             ura=CALLEE_URA,
-            profile="easynet-strict-v2",
+            profile="axon-strict-v2",
         ),
         descriptor_version="1.0.0",
         schema_hash=bytes.fromhex("21" * 32),
@@ -136,7 +136,7 @@ def _canonical_receipt(
             proof_hash=hashlib.sha256(proof_payload).digest(),
             issuer=types_pb2.AgentIdentity(
                 ura=CALLEE_URA,
-                profile="easynet-strict-v2",
+                profile="axon-strict-v2",
             ),
             signature=types_pb2.CalleeSignature(
                 algorithm="ed25519",
@@ -1335,7 +1335,7 @@ class DirectRuntimeTests(unittest.TestCase):
         receipt.signer_binding.CopyFrom(
             types_pb2.AgentIdentity(
                 ura="easynet:///r/example/agent/runtime-host",
-                profile="easynet-strict-v2",
+                profile="axon-strict-v2",
             )
         )
 
@@ -2114,7 +2114,7 @@ class _RecordingIdentity:
         return AddressingProjection(
             kind="ability",
             valid=True,
-            profile="easynet-strict-v2",
+            profile="axon-strict-v2",
             ura=ability_ura,
             ability_ura=ability_ura,
             components={
@@ -2165,7 +2165,7 @@ def _ability_addressing_transport() -> MemoryAddressingTransport:
     transport.identity_json = (
         b'{"kind":"ability","valid":true,'
         b'"ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
-        b'"profile":"easynet-strict-v2",'
+        b'"profile":"axon-strict-v2",'
         b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
         b'"owner_kind":"device","public_name":"observe.health",'
         b'"local_registry_ability":"observe.health",'
@@ -2176,7 +2176,7 @@ def _ability_addressing_transport() -> MemoryAddressingTransport:
         b'{"kind":"descriptor_ref","valid":true,'
         b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",'
         b'"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
-        b'"descriptor_version":"1.0.0","profile":"easynet-strict-v2",'
+        b'"descriptor_version":"1.0.0","profile":"axon-strict-v2",'
         b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
         b'"metadata":{"grammar_owner":"axon"}}'
     )

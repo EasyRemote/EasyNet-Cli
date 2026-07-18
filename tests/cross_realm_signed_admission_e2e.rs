@@ -262,15 +262,15 @@ fn signed_request(
     let envelope = Envelope {
         caller: Some(PbAgentIdentity {
             ura: caller_ura.to_string(),
-            profile: "easynet-strict-v2".to_string(),
+            profile: "axon-strict-v2".to_string(),
         }),
         callee: Some(PbAgentIdentity {
             ura: callee_ura.to_string(),
-            profile: "easynet-strict-v2".to_string(),
+            profile: "axon-strict-v2".to_string(),
         }),
         subject: Some(PbSubjectIdentity {
             ura: subject_ura.clone(),
-            profile: "easynet-strict-v2".to_string(),
+            profile: "axon-strict-v2".to_string(),
         }),
         invocation_nonce: nonce.to_vec(),
         caller_signature: Some(PbCallerSignature {

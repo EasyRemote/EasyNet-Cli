@@ -160,6 +160,41 @@ struct SessionOpenPolicy {
     trust_anchor_snapshot: Arc<dyn Fn() -> Arc<RealmTrustAnchor> + Send + Sync + 'static>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionControlRequestKind {
+    FederationAdvertiseAgent,
+    FederationAdvertiseAbilities,
+    FederationResolveKey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionControlScheduling {
+    InlineDrain,
+    SpawnTask,
+}
+
+#[derive(Debug, Clone)]
+struct SessionControlRequest {
+    kind: SessionControlRequestKind,
+    caller_device_ura: String,
+    args: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+struct SessionControlLifecycle {
+    state: SessionControlLifecycleState,
+}
+
+#[derive(Debug, Clone)]
+enum SessionControlLifecycleState {
+    Validated(SessionControlRequest),
+    Scheduled {
+        request: SessionControlRequest,
+        scheduling: SessionControlScheduling,
+    },
+    Replied,
+}
+
 impl DaemonBidiRouteProvider {
     pub(crate) async fn invoke(
         &self,
@@ -203,6 +238,171 @@ impl SessionOpenPolicy {
             trust_anchor.as_ref(),
         )
         .map_err(product_status_to_axon_error)
+    }
+}
+
+impl SessionControlRequestKind {
+    fn from_public_ability(ability: &str) -> Option<Self> {
+        match ability {
+            ABILITY_FEDERATION_ADVERTISE_AGENT => Some(Self::FederationAdvertiseAgent),
+            ABILITY_FEDERATION_ADVERTISE_ABILITIES => Some(Self::FederationAdvertiseAbilities),
+            federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY => Some(Self::FederationResolveKey),
+            _ => None,
+        }
+    }
+
+    fn public_ability(self) -> &'static str {
+        match self {
+            Self::FederationAdvertiseAgent => ABILITY_FEDERATION_ADVERTISE_AGENT,
+            Self::FederationAdvertiseAbilities => ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            Self::FederationResolveKey => federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
+        }
+    }
+
+    fn scheduling(self) -> SessionControlScheduling {
+        match self {
+            Self::FederationResolveKey => SessionControlScheduling::InlineDrain,
+            Self::FederationAdvertiseAgent | Self::FederationAdvertiseAbilities => {
+                SessionControlScheduling::SpawnTask
+            }
+        }
+    }
+}
+
+fn session_control_kind_for_hub(
+    session_realm: Option<&str>,
+    ability_ura: &str,
+) -> Result<SessionControlRequestKind, String> {
+    let realm = session_realm
+        .map(str::trim)
+        .filter(|realm| !realm.is_empty())
+        .ok_or_else(|| {
+            "session_request: hub session_realm is not wired; cannot validate request \
+             ability_ura"
+                .to_string()
+        })?;
+    let hub_ura = crate::core::ura::hub_ura(realm);
+    let ability = crate::core::ura::public_ability_name_from_ability_ura(&hub_ura, ability_ura)
+        .ok_or_else(|| {
+            format!(
+                "session_request: ability_ura `{ability_ura}` does not belong to hub `{hub_ura}`"
+            )
+        })?;
+    SessionControlRequestKind::from_public_ability(&ability).ok_or_else(|| {
+        format!(
+            "session_request: ability `{ability}` is not a session-control request; \
+             product invocations must use canonical ReverseDispatchCall"
+        )
+    })
+}
+
+impl SessionControlRequest {
+    fn from_validated_parts(
+        kind: SessionControlRequestKind,
+        caller_device_ura: &str,
+        args: &[u8],
+        args_content_envelope: &SessionContentEnvelope,
+    ) -> Result<Self, SessionRequestError> {
+        Self::validate_content(kind, args_content_envelope)?;
+        let caller_device_ura = caller_device_ura.trim();
+        if caller_device_ura.is_empty() {
+            return Err(SessionRequestError::PermissionDenied {
+                reason: format!(
+                    "{}: admitted session caller is required",
+                    kind.public_ability()
+                ),
+            });
+        }
+        crate::core::ura::parse_ura(caller_device_ura).map_err(|error| {
+            SessionRequestError::PermissionDenied {
+                reason: format!(
+                    "{}: caller_device_ura is not a valid URA: {error}",
+                    kind.public_ability()
+                ),
+            }
+        })?;
+        Ok(Self {
+            kind,
+            caller_device_ura: caller_device_ura.to_string(),
+            args: args.to_vec(),
+        })
+    }
+
+    fn validate_content(
+        kind: SessionControlRequestKind,
+        args_content_envelope: &SessionContentEnvelope,
+    ) -> Result<(), SessionRequestError> {
+        let ability = kind.public_ability();
+        if args_content_envelope.is_encrypted() {
+            Err(SessionRequestError::PermissionDenied {
+                reason: format!(
+                    "session.open: Request ability `{ability}` received encrypted args \
+                     but no hub-side request decryptor is wired"
+                ),
+            })
+        } else if !args_content_envelope.content_type.is_empty()
+            && args_content_envelope.content_type != "application/json"
+        {
+            Err(SessionRequestError::PermissionDenied {
+                reason: format!(
+                    "session.open: Request ability `{ability}` received unsupported \
+                     args content_type {:?}",
+                    args_content_envelope.content_type
+                ),
+            })
+        } else if !args_content_envelope.encoding.is_empty()
+            && args_content_envelope.encoding != "identity"
+        {
+            Err(SessionRequestError::PermissionDenied {
+                reason: format!(
+                    "session.open: Request ability `{ability}` received unsupported \
+                     args encoding {:?}",
+                    args_content_envelope.encoding
+                ),
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl SessionControlLifecycle {
+    fn validated(request: SessionControlRequest) -> Self {
+        Self {
+            state: SessionControlLifecycleState::Validated(request),
+        }
+    }
+
+    fn schedule(self) -> Self {
+        match self.state {
+            SessionControlLifecycleState::Validated(request) => Self {
+                state: SessionControlLifecycleState::Scheduled {
+                    scheduling: request.kind.scheduling(),
+                    request,
+                },
+            },
+            other => Self { state: other },
+        }
+    }
+
+    fn scheduling(&self) -> Option<SessionControlScheduling> {
+        match &self.state {
+            SessionControlLifecycleState::Scheduled { scheduling, .. } => Some(*scheduling),
+            _ => None,
+        }
+    }
+
+    async fn dispatch(self, dispatcher: &BidiDispatcher) -> RequestOutcome {
+        let SessionControlLifecycleState::Scheduled { request, .. } = self.state else {
+            return RequestOutcome::Err {
+                error: SessionRequestError::PermissionDenied {
+                    reason: "session control request was not scheduled".to_string(),
+                },
+            };
+        };
+        let outcome = dispatcher.dispatch_session_control_request(&request).await;
+        let _replied = SessionControlLifecycleState::Replied;
+        outcome
     }
 }
 
@@ -1780,192 +1980,55 @@ impl BidiDispatcher {
         }
     }
 
-    /// Handle daemon-owned control requests arriving on a device's
-    /// `session.open` stream. Product invocations use the typed canonical
-    /// request arm above. The allowed control set is the hosted-agent
-    /// self-advertise pair —
-    /// `federation.advertise_agent` (identity, PR-N6 v1) and
-    /// `federation.advertise_abilities` (hot-add ability projection,
-    /// ISS-002 closure). Other ability names return
-    /// `PermissionDenied` so the device-side caller surfaces a
-    /// structured error instead of a silent timeout; widening
-    /// further awaits a per-ability admission policy.
-    ///
-    /// Trust boundary (PR-N6 spec §"What this spec does NOT cover"):
-    /// the bidi was established with a signed Bootstrap frame, so
-    /// the hub trusts the originating device on every Request frame
-    /// — no per-Request signature verify happens here.
-    pub(crate) async fn dispatch_session_request_from_session(
-        &self,
-        caller_device_ura: &str,
-        ability_ura: &str,
-        args: &[u8],
-    ) -> RequestOutcome {
-        self.dispatch_session_request_for_caller(Some(caller_device_ura), ability_ura, args)
-            .await
-    }
-
-    async fn dispatch_session_request_for_caller(
-        &self,
-        caller_device_ura: Option<&str>,
-        ability_ura: &str,
-        args: &[u8],
-    ) -> RequestOutcome {
-        let ability = match self.session_request_public_ability_for_hub(ability_ura) {
-            Ok(ability) => ability,
-            Err(reason) => {
-                return RequestOutcome::Err {
-                    error: SessionRequestError::PermissionDenied { reason },
-                };
-            }
-        };
-        self.dispatch_session_request_named_for_caller(caller_device_ura, &ability, args)
-            .await
-    }
-
-    fn is_inline_session_request(&self, ability_ura: &str) -> bool {
-        matches!(
-            self.session_request_public_ability_for_hub(ability_ura)
-                .as_deref(),
-            Ok(federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY)
-        )
-    }
-
-    async fn dispatch_checked_session_request(
+    fn session_control_lifecycle_from_wire(
         &self,
         caller_device_ura: &str,
         ability_ura: &str,
         args: &[u8],
         args_content_envelope: &SessionContentEnvelope,
-    ) -> RequestOutcome {
-        if args_content_envelope.is_encrypted() {
-            RequestOutcome::Err {
-                error: SessionRequestError::PermissionDenied {
-                    reason: format!(
-                        "session.open: Request ability_ura `{ability_ura}` received encrypted args \
-                         but no hub-side request decryptor is wired"
-                    ),
-                },
-            }
-        } else if !args_content_envelope.content_type.is_empty()
-            && args_content_envelope.content_type != "application/json"
-        {
-            RequestOutcome::Err {
-                error: SessionRequestError::PermissionDenied {
-                    reason: format!(
-                        "session.open: Request ability_ura `{ability_ura}` received unsupported \
-                         args content_type {:?}",
-                        args_content_envelope.content_type
-                    ),
-                },
-            }
-        } else if !args_content_envelope.encoding.is_empty()
-            && args_content_envelope.encoding != "identity"
-        {
-            RequestOutcome::Err {
-                error: SessionRequestError::PermissionDenied {
-                    reason: format!(
-                        "session.open: Request ability_ura `{ability_ura}` received unsupported \
-                         args encoding {:?}",
-                        args_content_envelope.encoding
-                    ),
-                },
-            }
-        } else {
-            self.dispatch_session_request_from_session(caller_device_ura, ability_ura, args)
-                .await
-        }
+    ) -> Result<SessionControlLifecycle, SessionRequestError> {
+        let kind =
+            match session_control_kind_for_hub(self.identity.session_realm.as_deref(), ability_ura)
+            {
+                Ok(kind) => kind,
+                Err(reason) => {
+                    return Err(SessionRequestError::PermissionDenied { reason });
+                }
+            };
+        let request = SessionControlRequest::from_validated_parts(
+            kind,
+            caller_device_ura,
+            args,
+            args_content_envelope,
+        )?;
+        Ok(SessionControlLifecycle::validated(request).schedule())
     }
 
-    async fn dispatch_session_request_named_for_caller(
+    async fn dispatch_session_control_request(
         &self,
-        caller_device_ura: Option<&str>,
-        ability: &str,
-        args: &[u8],
+        request: &SessionControlRequest,
     ) -> RequestOutcome {
-        match ability {
-            ABILITY_FEDERATION_ADVERTISE_AGENT => {
-                let result = match caller_device_ura {
-                    Some(caller_device_ura) => self
-                        .unary
-                        .dispatch_federation_advertise_agent_from_session(args, caller_device_ura),
-                    None => Err(Status::failed_precondition(
-                        "federation.advertise_agent: admitted session caller is required",
-                    )),
-                };
-                match result {
-                    Ok(result_bytes) => RequestOutcome::Ok { result_bytes },
-                    Err(status) => map_status_to_session_request_error(status),
-                }
+        let result = match request.kind {
+            SessionControlRequestKind::FederationAdvertiseAgent => {
+                self.unary.dispatch_federation_advertise_agent_from_session(
+                    &request.args,
+                    &request.caller_device_ura,
+                )
             }
-            // Hot-add ability projection: `easynet agent add` while the
-            // session is live pushes the new agent's ability payload
-            // through this Request frame (agent_lifecycle ISS-002).
-            // Without this arm the identity advertise above lands but
-            // the hub directory shows the agent with ZERO abilities
-            // until a stop/start republish. Routes to the same handler
-            // the unary Invoke path uses.
-            ABILITY_FEDERATION_ADVERTISE_ABILITIES => {
-                let result = match caller_device_ura {
-                    Some(caller_device_ura) => self
-                        .unary
-                        .dispatch_federation_advertise_abilities_from_session(
-                            args,
-                            caller_device_ura,
-                        ),
-                    None => Err(Status::failed_precondition(
-                        "federation.advertise_abilities: admitted session caller is required",
-                    )),
-                };
-                match result {
-                    Ok(result_bytes) => RequestOutcome::Ok { result_bytes },
-                    Err(status) => map_status_to_session_request_error(status),
-                }
+            SessionControlRequestKind::FederationAdvertiseAbilities => self
+                .unary
+                .dispatch_federation_advertise_abilities_from_session(
+                    &request.args,
+                    &request.caller_device_ura,
+                ),
+            SessionControlRequestKind::FederationResolveKey => {
+                self.unary.dispatch_federation_resolve_key(&request.args)
             }
-            // Device-pulled trust sync (paired-user keys at session
-            // attach, peer-device keys on origin-claim miss): the hub
-            // is the realm's key registrar, and the session bidi is
-            // the device's authenticated channel to ask it. Routes to
-            // the same handler the unary Invoke path uses.
-            federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY => {
-                match self.unary.dispatch_federation_resolve_key(args) {
-                    Ok(result_bytes) => RequestOutcome::Ok { result_bytes },
-                    Err(status) => map_status_to_session_request_error(status),
-                }
-            }
-            other => RequestOutcome::Err {
-                error: SessionRequestError::PermissionDenied {
-                    reason: format!(
-                        "session_request: ability `{other}` is not yet routed; \
-                         only `{ABILITY_FEDERATION_ADVERTISE_AGENT}`, \
-                         `{ABILITY_FEDERATION_ADVERTISE_ABILITIES}`, and \
-                         `{}` are wired",
-                        federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY
-                    ),
-                },
-            },
+        };
+        match result {
+            Ok(result_bytes) => RequestOutcome::Ok { result_bytes },
+            Err(status) => map_status_to_session_request_error(status),
         }
-    }
-
-    fn session_request_public_ability_for_hub(&self, ability_ura: &str) -> Result<String, String> {
-        let realm = self
-            .identity
-            .session_realm
-            .as_deref()
-            .filter(|realm| !realm.trim().is_empty())
-            .ok_or_else(|| {
-                "session_request: hub session_realm is not wired; cannot validate request \
-                 ability_ura"
-                    .to_string()
-            })?;
-        let hub_ura = crate::core::ura::hub_ura(realm);
-        crate::core::ura::public_ability_name_from_ability_ura(&hub_ura, ability_ura).ok_or_else(
-            || {
-                format!(
-                "session_request: ability_ura `{ability_ura}` does not belong to hub `{hub_ura}`"
-            )
-            },
-        )
     }
 }
 
@@ -2646,48 +2709,39 @@ async fn drain_session_runtime_up_stream(
                     ability_ura = ability_ura,
                 );
 
-                let inline_control_request = dispatcher.is_inline_session_request(&ability_ura);
-                let dispatcher_for_request = dispatcher.clone();
                 let presence_for_reply = Arc::clone(&presence);
                 let caller_ura_for_reply = caller_ura.clone();
-                if inline_control_request {
-                    crate::op_event!(
-                        component = session_accept,
-                        kind = session_request_inline_control_dispatch,
-                        caller = caller_ura,
-                        call_id = id_hex,
-                        ability_ura = ability_ura,
-                    );
-                    let outcome = dispatcher_for_request
-                        .dispatch_checked_session_request(
+                let lifecycle = match dispatcher.session_control_lifecycle_from_wire(
+                    &caller_ura_for_reply,
+                    &ability_ura,
+                    &args,
+                    &args_content_envelope,
+                ) {
+                    Ok(lifecycle) => lifecycle,
+                    Err(error) => {
+                        let frame = build_session_request_result_frame(
+                            call_id,
+                            RequestOutcome::Err { error },
+                        );
+                        push_session_request_result(
+                            &presence_for_reply,
                             &caller_ura_for_reply,
-                            &ability_ura,
-                            &args,
-                            &args_content_envelope,
-                        )
-                        .await;
-                    let frame = build_session_request_result_frame(call_id, outcome);
-                    push_session_request_result(
-                        &presence_for_reply,
-                        &caller_ura_for_reply,
-                        &id_hex,
-                        frame,
-                    );
-                } else {
-                    // Dispatch off the drain task so a slow inner
-                    // call (peer delegation round-trip, peer-side
-                    // ability handler latency) does not stall
-                    // subsequent up-frames the device sends. Each
-                    // Request gets its own short-lived task.
-                    tokio::spawn(async move {
-                        let outcome = dispatcher_for_request
-                            .dispatch_checked_session_request(
-                                &caller_ura_for_reply,
-                                &ability_ura,
-                                &args,
-                                &args_content_envelope,
-                            )
-                            .await;
+                            &id_hex,
+                            frame,
+                        );
+                        continue;
+                    }
+                };
+                match lifecycle.scheduling() {
+                    Some(SessionControlScheduling::InlineDrain) => {
+                        crate::op_event!(
+                            component = session_accept,
+                            kind = session_control_inline_dispatch,
+                            caller = caller_ura,
+                            call_id = id_hex,
+                            ability_ura = ability_ura,
+                        );
+                        let outcome = lifecycle.dispatch(&dispatcher).await;
                         let frame = build_session_request_result_frame(call_id, outcome);
                         push_session_request_result(
                             &presence_for_reply,
@@ -2695,7 +2749,40 @@ async fn drain_session_runtime_up_stream(
                             &id_hex,
                             frame,
                         );
-                    });
+                    }
+                    Some(SessionControlScheduling::SpawnTask) => {
+                        // Dispatch off the drain task so a slow inner
+                        // control does not stall subsequent up-frames the
+                        // device sends. Each request gets its own
+                        // short-lived task.
+                        let dispatcher_for_request = dispatcher.clone();
+                        tokio::spawn(async move {
+                            let outcome = lifecycle.dispatch(&dispatcher_for_request).await;
+                            let frame = build_session_request_result_frame(call_id, outcome);
+                            push_session_request_result(
+                                &presence_for_reply,
+                                &caller_ura_for_reply,
+                                &id_hex,
+                                frame,
+                            );
+                        });
+                    }
+                    None => {
+                        let frame = build_session_request_result_frame(
+                            call_id,
+                            RequestOutcome::Err {
+                                error: SessionRequestError::PermissionDenied {
+                                    reason: "session control request was not scheduled".to_string(),
+                                },
+                            },
+                        );
+                        push_session_request_result(
+                            &presence_for_reply,
+                            &caller_ura_for_reply,
+                            &id_hex,
+                            frame,
+                        );
+                    }
                 }
             }
             SessionDispatch::RequestResult { call_id, .. } => {
@@ -3151,6 +3238,83 @@ mod tests {
         let failure = r.failure.expect("typed failure");
         assert_eq!(failure.code, "TARGET_OFFLINE");
         assert!(failure.retryable);
+    }
+
+    #[test]
+    fn json_session_request_rejects_product_ability_bypass() {
+        let device_ability =
+            crate::core::ura::owner_ability_ura("easynet:///r/test/device/d1", "shell.run")
+                .expect("device ability URA");
+        let err = session_control_kind_for_hub(Some("test"), &device_ability)
+            .expect_err("device-owned product ability must not route as JSON session control");
+        assert!(
+            err.contains("does not belong to hub"),
+            "unexpected error: {err}"
+        );
+
+        let hub_product = crate::core::ura::hub_ability_ura("test", "shell.run");
+        let err = session_control_kind_for_hub(Some("test"), &hub_product)
+            .expect_err("hub-owned product ability must not route as JSON session control");
+        assert!(
+            err.contains("not a session-control request"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn json_session_request_controls_have_explicit_lifecycle_policy() {
+        let advertise = session_control_kind_for_hub(
+            Some("test"),
+            &crate::core::ura::hub_ability_ura("test", ABILITY_FEDERATION_ADVERTISE_AGENT),
+        )
+        .expect("advertise_agent control");
+        let resolve_key = session_control_kind_for_hub(
+            Some("test"),
+            &crate::core::ura::hub_ability_ura(
+                "test",
+                federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
+            ),
+        )
+        .expect("resolve_key control");
+
+        let request = SessionControlRequest::from_validated_parts(
+            advertise,
+            "easynet:///r/test/device/d1",
+            br#"{"agent":true}"#,
+            &SessionContentEnvelope::plaintext_json(),
+        )
+        .expect("valid control request");
+        let lifecycle = SessionControlLifecycle::validated(request).schedule();
+        assert_eq!(
+            lifecycle.scheduling(),
+            Some(SessionControlScheduling::SpawnTask)
+        );
+
+        let request = SessionControlRequest::from_validated_parts(
+            resolve_key,
+            "easynet:///r/test/device/d1",
+            br#"{"key":true}"#,
+            &SessionContentEnvelope::plaintext_json(),
+        )
+        .expect("valid inline control request");
+        let lifecycle = SessionControlLifecycle::validated(request).schedule();
+        assert_eq!(
+            lifecycle.scheduling(),
+            Some(SessionControlScheduling::InlineDrain)
+        );
+
+        let encrypted = SessionContentEnvelope {
+            encryption: 1,
+            ..SessionContentEnvelope::plaintext_json()
+        };
+        let err = SessionControlRequest::from_validated_parts(
+            resolve_key,
+            "easynet:///r/test/device/d1",
+            b"{}",
+            &encrypted,
+        )
+        .expect_err("encrypted JSON control args fail closed");
+        assert!(matches!(err, SessionRequestError::PermissionDenied { .. }));
     }
 
     #[tokio::test]

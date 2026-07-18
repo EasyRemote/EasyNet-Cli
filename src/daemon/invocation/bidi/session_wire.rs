@@ -215,11 +215,11 @@ mod tests {
             envelope: Some(Envelope {
                 caller: Some(AgentIdentity {
                     ura: "easynet:///r/realm/device/caller".into(),
-                    profile: "easynet-strict-v2".into(),
+                    profile: "axon-strict-v2".into(),
                 }),
                 callee: Some(AgentIdentity {
                     ura: "easynet:///r/realm/device/callee".into(),
-                    profile: "easynet-strict-v2".into(),
+                    profile: "axon-strict-v2".into(),
                 }),
                 invocation_nonce: vec![7; 16],
                 caller_signature: Some(CallerSignature {

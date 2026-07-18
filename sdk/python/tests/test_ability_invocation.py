@@ -134,7 +134,9 @@ class AbilityInvocationClientTests(unittest.TestCase):
             [{"descriptor_ref": (DESCRIPTOR_REF)}],
         )
 
-    def test_provider_lifecycle_surfaces_dispatch_stream_bidi_cancel_and_receipts(self) -> None:
+    def test_provider_lifecycle_surfaces_dispatch_stream_bidi_cancel_and_receipts(
+        self,
+    ) -> None:
         identity = _identity_transport()
         runtime_transport = MemoryRuntimeTransport()
         client = AbilityInvocationClient(
@@ -588,7 +590,7 @@ def _identity_transport() -> MemoryAddressingTransport:
     transport.identity_json = (
         b'{"kind":"ability","valid":true,'
         b'"ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
-        b'"profile":"easynet-strict-v2",'
+        b'"profile":"axon-strict-v2",'
         b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
         b'"owner_kind":"device","public_name":"observe.health",'
         b'"local_registry_ability":"easynet:///r/example/device/dev-a:observe.health",'
@@ -599,7 +601,7 @@ def _identity_transport() -> MemoryAddressingTransport:
         b'{"kind":"descriptor_ref","valid":true,'
         b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",'
         b'"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
-        b'"descriptor_version":"1.0.0","profile":"easynet-strict-v2",'
+        b'"descriptor_version":"1.0.0","profile":"axon-strict-v2",'
         b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
         b'"metadata":{"grammar_owner":"axon"}}'
     )

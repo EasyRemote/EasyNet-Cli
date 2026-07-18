@@ -31,15 +31,12 @@ use serde::Deserialize;
 use sha2::Digest;
 use tonic::{Code, Status};
 
-use axon_sdk::invocation::admission::{
-    now_ms as axon_now_ms, REASON_CALLER_SIGNATURE_INVALID, REASON_ENVELOPE_INCOMPLETE,
-    REASON_NONCE_REPLAY,
-};
 use axon_sdk::invocation::axiom::{authority_proof_expected_hash, KeyResolver};
 use axon_sdk::invocation::{
     AuthorityBinding, AxonError as InvocationError, AxonErrorKind as InvocationErrorKind,
     CallMode as AxonCallMode, DelegationProofBody, DescriptorBoundEnvelope,
     InvocationAuthorityProof, SessionAuthorityBody, VerifiedAdmissionPolicy,
+    REASON_CALLER_SIGNATURE_INVALID, REASON_ENVELOPE_INCOMPLETE, REASON_NONCE_REPLAY,
 };
 
 use crate::core::ura::{owner_local_ability_name, parse_ura, AbilitySelector, URAKind};
@@ -1083,7 +1080,7 @@ impl AdmissionFacade {
         }
         let Some(quota) = self
             .quota
-            .reserve(caller_ura, &input.ability, axon_now_ms())
+            .reserve(caller_ura, &input.ability, current_unix_ms())
         else {
             return product_admission_decision(
                 admitted_envelope,
@@ -1137,7 +1134,7 @@ impl AdmissionFacade {
             action,
             metadata,
             trust_anchor.as_ref(),
-            axon_now_ms(),
+            current_unix_ms(),
         )
         .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
         let carries_authority_proof = metadata
@@ -2485,6 +2482,10 @@ fn caller_ura_required(envelope: &Envelope) -> Result<&str, Status> {
                  (Invariant 1: caller URA required)"
             ))
         })
+}
+
+fn current_unix_ms() -> i64 {
+    Utc::now().timestamp_millis()
 }
 
 fn permission_denied_unknown_caller(caller_ura: &str) -> Status {

@@ -45,15 +45,15 @@ mod tests {
         pb::Envelope {
             caller: Some(pb::AgentIdentity {
                 ura: crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA.to_string(),
-                profile: "easynet-strict-v2".to_string(),
+                profile: "axon-strict-v2".to_string(),
             }),
             callee: Some(pb::AgentIdentity {
                 ura: CALLEE_URA.to_string(),
-                profile: "easynet-strict-v2".to_string(),
+                profile: "axon-strict-v2".to_string(),
             }),
             subject: Some(pb::SubjectIdentity {
                 ura: CALLEE_URA.to_string(),
-                profile: "easynet-strict-v2".to_string(),
+                profile: "axon-strict-v2".to_string(),
             }),
             invocation_nonce: [0x51; 16].to_vec(),
             causal_context: Some(pb::CausalContext {

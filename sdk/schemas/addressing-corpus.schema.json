@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["profile", "grammar_owner", "ura_cases", "descriptor", "invalid_uras"],
   "properties": {
-    "profile": {"const": "easynet-strict-v2"},
+    "profile": {"const": "axon-strict-v2"},
     "grammar_owner": {"const": "axon"},
     "ura_cases": {
       "type": "array",

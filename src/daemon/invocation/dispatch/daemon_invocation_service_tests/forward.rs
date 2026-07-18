@@ -12,15 +12,15 @@ fn complete_request() -> InvokeRequest {
         envelope: Some(Envelope {
             caller: Some(AgentIdentity {
                 ura: CALLER.to_string(),
-                profile: "easynet-strict-v2".to_string(),
+                profile: "axon-strict-v2".to_string(),
             }),
             callee: Some(AgentIdentity {
                 ura: CALLEE.to_string(),
-                profile: "easynet-strict-v2".to_string(),
+                profile: "axon-strict-v2".to_string(),
             }),
             subject: Some(SubjectIdentity {
                 ura: CALLEE.to_string(),
-                profile: "easynet-strict-v2".to_string(),
+                profile: "axon-strict-v2".to_string(),
             }),
             invocation_nonce: vec![7; 16],
             causal_context: Some(axon_sdk::pb::axon::v1::CausalContext {

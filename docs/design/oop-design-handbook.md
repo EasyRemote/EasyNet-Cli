@@ -137,12 +137,12 @@ URA（EasyNet 资源地址）是身份主干。语法规范**只定义一次**�
 | `CallerSignature` | struct | caller 侧对规范字节的签名（RFC-001 §4.1）：algorithm / signature / key_id_hint | `axiom.rs:383` |
 | `CalleeSignature` | struct | callee 侧对回执规范字节的签名（§4.3）；**不被 self_hash 覆盖**（签名不能覆盖自己） | `axiom.rs:391` |
 | `CausalContext` | enum | 因果谱系（§3.3）：None（root）/ Scalar（单父）/ List（fan-in）/ Merkle（大 fan-in，hash） | `axiom.rs:245` |
-| `AgentIdentity` | struct | agent 复合身份：URA + profile（EasynetStrictV2 / WebSafeV2） | `axiom.rs:60` |
+| `AgentIdentity` | struct | agent 复合身份：URA + profile（StrictV2 / WebSafeV2） | `axiom.rs:60` |
 | `SubjectIdentity` | struct | subject 复合身份；与 `AgentIdentity` **刻意区分类型**以强制 INV-7（subject 可与 callee 不同域） | `axiom.rs:78` |
 | `EntityRef` | struct | 从 `SubjectIdentity` 派生的规范化证明形，带 `EntityRefKind` 标签 | `axiom.rs:135` |
 | `AuthorityBinding` | enum | "谁有权"：Self_ / Delegated / Capability / Policy / Session / Bootstrap；哈希进受签区（不可伪造） | `axiom.rs:272` |
 | `ReceiptProofFacts` | struct | descriptor/version/schema/impl/runtime 证明事实；零哈希是受签的"not bound"事实 | `axiom.rs:343` |
-| `UraProfile` | enum | Axis B：EasynetStrictV2（RFC-001 默认）/ WebSafeV2（HTTP 工具用） | `axiom.rs:31` |
+| `UraProfile` | enum | Axis B：StrictV2（RFC-001 默认）/ WebSafeV2（HTTP 工具用） | `axiom.rs:31` |
 
 **关键设计：零哈希是事实，不是缺失。** `schema_hash` / `impl_hash` 为零时，是**受签的"未绑定"事实**，不是被剥离的缺失字段。验证方必须用 `.schema_bound()` / `.impl_bound()` 谓词判断，**不能直接零值检查**。这条贯穿整个 receipt 验证逻辑。
 

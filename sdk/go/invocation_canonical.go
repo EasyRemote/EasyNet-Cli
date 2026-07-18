@@ -8,9 +8,9 @@ import (
 	axoninv "axon.run/sdk/go/axon/invocation"
 )
 
-// UraProfileEasynetStrictV2 is the URA profile pinned by the EasyNet daemon
-// admission path for signed Invocation material.
-const UraProfileEasynetStrictV2 = "easynet-strict-v2"
+// uraProfileStrictV2 is the canonical strict URA profile pinned by
+// descriptor-bound requests and receipts.
+const uraProfileStrictV2 = "axon-strict-v2"
 
 // canonicalDescriptorBoundInvocationBytes projects the facade DTO into Axon's
 // descriptor-bound proof model. It is internal signing infrastructure, not an

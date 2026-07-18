@@ -28,9 +28,7 @@ class AxonAddressingProviderTests(unittest.TestCase):
             kind = request["kind"]
             with self.subTest(name=case["name"]):
                 if kind == "user":
-                    built = addressing.user_ura(
-                        request["realm"], request["user_id"]
-                    )
+                    built = addressing.user_ura(request["realm"], request["user_id"])
                 elif kind == "device":
                     built = addressing.device_ura(
                         request["realm"], request["device_id"]
@@ -69,12 +67,8 @@ class AxonAddressingProviderTests(unittest.TestCase):
                     fixture["grammar_owner"],
                 )
 
-        descriptor = addressing.project_descriptor_ref(
-            fixture["descriptor"]["raw"]
-        )
-        self.assertEqual(
-            descriptor.components, fixture["descriptor"]["components"]
-        )
+        descriptor = addressing.project_descriptor_ref(fixture["descriptor"]["raw"])
+        self.assertEqual(descriptor.components, fixture["descriptor"]["components"])
         for raw in fixture["invalid_uras"]:
             with self.assertRaises(SDKError):
                 addressing.parse_ura(raw)
@@ -107,7 +101,7 @@ class AxonAddressingProviderTests(unittest.TestCase):
         descriptor = addressing.project_descriptor_ref(
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
         )
-        self.assertEqual(descriptor.profile, "easynet-strict-v2")
+        self.assertEqual(descriptor.profile, "axon-strict-v2")
         self.assertEqual(
             descriptor.components,
             {
@@ -192,9 +186,7 @@ class AxonAddressingProviderTests(unittest.TestCase):
         addressing = environment.addressing_client()
 
         with self.assertRaises(SDKError) as caught:
-            addressing.project_ability_ura(
-                "easynet:///r/example/device/dev-a"
-            )
+            addressing.project_ability_ura("easynet:///r/example/device/dev-a")
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         environment.close()
@@ -211,9 +203,7 @@ class AxonAddressingProviderTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 with self.assertRaises(SDKError) as caught:
                     addressing.parse_ura(raw)
-                self.assertTrue(
-                    is_code(caught.exception, ErrorCode.INVALID_ARGUMENT)
-                )
+                self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
                 self.assertEqual(caught.exception.stage, "addressing")
 
         environment.close()

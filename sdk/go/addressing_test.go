@@ -31,7 +31,7 @@ func TestCanonicalAddressingBuildsDescriptorAndSubjectWithoutIdentityProfile(t *
 	if err != nil {
 		t.Fatalf("ProjectDescriptorRef: %v", err)
 	}
-	if descriptorProjection.Profile != UraProfileEasynetStrictV2 {
+	if descriptorProjection.Profile != uraProfileStrictV2 {
 		t.Fatalf("descriptor profile = %q", descriptorProjection.Profile)
 	}
 
@@ -64,7 +64,7 @@ func TestCanonicalAddressingBuildsDescriptorAndSubjectWithoutIdentityProfile(t *
 	if err != nil {
 		t.Fatalf("ProjectIdentity: %v", err)
 	}
-	if ownerProjection.Profile != UraProfileEasynetStrictV2 {
+	if ownerProjection.Profile != uraProfileStrictV2 {
 		t.Fatalf("owner profile = %q", ownerProjection.Profile)
 	}
 }

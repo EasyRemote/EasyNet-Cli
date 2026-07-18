@@ -111,7 +111,7 @@ func (a *CanonicalAddressing) ProjectIdentity(ctx context.Context, req URAProjec
 		URA:        parts.Raw,
 		Realm:      parts.Realm,
 		DisplayID:  DisplayID(parts.Raw),
-		Profile:    UraProfileEasynetStrictV2,
+		Profile:    uraProfileStrictV2,
 		Components: addressingComponents(parts),
 		Metadata:   addressingMetadata(),
 	}
@@ -275,7 +275,7 @@ func descriptorRefProjection(ref AbilityDescriptorRef) AddressingProjection {
 		DescriptorRef:     ref.Raw,
 		AbilityURA:        ref.AbilityURA,
 		DescriptorVersion: ref.Version,
-		Profile:           UraProfileEasynetStrictV2,
+		Profile:           uraProfileStrictV2,
 		Components: map[string]any{
 			"ability_ura":            ref.AbilityURA,
 			"descriptor_version":     ref.Version,

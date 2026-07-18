@@ -52,7 +52,7 @@ use axon_sdk::pb::axon::v1::{
     InvokeRequest, InvokeServerStreamRequest,
 };
 
-pub const DEFAULT_URA_PROFILE: &str = "easynet-strict-v2";
+pub const DEFAULT_URA_PROFILE: &str = "axon-strict-v2";
 
 pub(crate) const AUTHORITY_PROOF_METADATA_KEY: &str = "x-easynet-authority-proof";
 

@@ -220,6 +220,26 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "obsolete local loopback subject policy should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+python3 - "$SB/src/daemon/invocation/bidi/bidi_dispatcher.rs" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+probe = '''
+#[allow(dead_code)]
+fn dispatch_checked_session_request() {}
+
+'''
+marker = '#[cfg(test)]'
+path.write_text(text.replace(marker, probe + marker, 1), encoding="utf-8")
+PY
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "procedural JSON session request dispatcher should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 cat >"$SB/src/__tuple_patch_probe.rs" <<'RS'
 pub fn probe(mut target: crate::daemon::invocation::routing::target::InvocationTarget) {
     target = target.with_subject("easynet:///r/acme/resource/r1");

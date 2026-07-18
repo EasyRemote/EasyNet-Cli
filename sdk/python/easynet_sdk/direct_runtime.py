@@ -51,7 +51,7 @@ from .runtime import InvocationControlCapability, RuntimeTransport
 from .bidi import BidiFrame, BidiTransport
 from .stream import StreamTransport
 
-DEFAULT_URA_PROFILE = "easynet-strict-v2"
+DEFAULT_URA_PROFILE = "axon-strict-v2"
 DEFAULT_DIAL_TIMEOUT_SECONDS = 3.0
 DEFAULT_INVOKE_TIMEOUT_SECONDS = 60.0
 DEFAULT_DIRECT_STREAM_QUEUE_EVENTS = 1024

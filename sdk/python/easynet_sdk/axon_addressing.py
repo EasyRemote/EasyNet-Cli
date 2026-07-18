@@ -7,13 +7,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, NoReturn, Protocol, TypeVar, cast
 
-from axon_sdk.addressing import CanonicalAddressing
 from axon_sdk.invocation.axiom import AbilityDescriptorRef
 from axon_sdk.ura import ParsedURA, ParseError, display_id
+from axon_sdk.ura_facade import CanonicalUraFacade
 
 from .errors import ErrorCode, RetryHint, SDKError
 
-_PROFILE = "easynet-strict-v2"
+_PROFILE = "axon-strict-v2"
 _T = TypeVar("_T")
 
 
@@ -58,12 +58,22 @@ class AddressingProjection:
         components = value.get("components")
         metadata = value.get("metadata")
         if not isinstance(components, dict) or not isinstance(metadata, dict):
-            _invalid_addressing("Addressing projection components and metadata must be objects")
+            _invalid_addressing(
+                "Addressing projection components and metadata must be objects"
+            )
         kind = value.get("kind")
         profile = value.get("profile")
         valid = value.get("valid")
-        if not isinstance(kind, str) or not kind or not isinstance(profile, str) or not profile or not isinstance(valid, bool):
-            _invalid_addressing("Addressing projection requires kind, profile, and valid")
+        if (
+            not isinstance(kind, str)
+            or not kind
+            or not isinstance(profile, str)
+            or not profile
+            or not isinstance(valid, bool)
+        ):
+            _invalid_addressing(
+                "Addressing projection requires kind, profile, and valid"
+            )
         return cls(
             kind=kind,
             valid=valid,
@@ -98,7 +108,9 @@ class AddressingClient:
     transport: AddressingTransport
     _closed: bool = field(default=False, init=False, repr=False)
 
-    def _request(self, operation: str, value: Mapping[str, object]) -> AddressingProjection:
+    def _request(
+        self, operation: str, value: Mapping[str, object]
+    ) -> AddressingProjection:
         if self._closed:
             _invalid_addressing("Addressing client is closed")
         method = getattr(self.transport, operation)
@@ -120,34 +132,72 @@ class AddressingClient:
         return projection
 
     def project_descriptor_ref(self, descriptor_ref: str) -> AddressingProjection:
-        return self._request("project_descriptor_ref", {"descriptor_ref": _clean(descriptor_ref, "descriptor_ref")})
+        return self._request(
+            "project_descriptor_ref",
+            {"descriptor_ref": _clean(descriptor_ref, "descriptor_ref")},
+        )
 
     def user_ura(self, realm: str, user_id: str) -> str:
-        return self._build("user", realm=_clean(realm, "realm"), user_id=_clean(user_id, "user_id"))
+        return self._build(
+            "user", realm=_clean(realm, "realm"), user_id=_clean(user_id, "user_id")
+        )
 
     def device_ura(self, realm: str, device_id: str) -> str:
-        return self._build("device", realm=_clean(realm, "realm"), device_id=_clean(device_id, "device_id"))
+        return self._build(
+            "device",
+            realm=_clean(realm, "realm"),
+            device_id=_clean(device_id, "device_id"),
+        )
 
     def agent_ura(self, realm: str, user_id: str, agent_id: str) -> str:
-        return self._build("agent", owner_kind="user", realm=_clean(realm, "realm"), user_id=_clean(user_id, "user_id"), agent_id=_clean(agent_id, "agent_id"))
+        return self._build(
+            "agent",
+            owner_kind="user",
+            realm=_clean(realm, "realm"),
+            user_id=_clean(user_id, "user_id"),
+            agent_id=_clean(agent_id, "agent_id"),
+        )
 
     def device_agent_ura(self, realm: str, device_id: str, agent_id: str) -> str:
-        return self._build("agent", owner_kind="device", realm=_clean(realm, "realm"), device_id=_clean(device_id, "device_id"), agent_id=_clean(agent_id, "agent_id"))
+        return self._build(
+            "agent",
+            owner_kind="device",
+            realm=_clean(realm, "realm"),
+            device_id=_clean(device_id, "device_id"),
+            agent_id=_clean(agent_id, "agent_id"),
+        )
 
     def hub_ura(self, realm: str) -> str:
         return self._build("hub", realm=_clean(realm, "realm"))
 
     def resource_ura(self, owner_ura: str, path: str) -> str:
-        return self._build("resource", owner_ura=_clean(owner_ura, "owner_ura"), path=_clean(path, "path"))
+        return self._build(
+            "resource",
+            owner_ura=_clean(owner_ura, "owner_ura"),
+            path=_clean(path, "path"),
+        )
 
     def descriptor_bound_resource_subject_ura(self, owner_ura: str, path: str) -> str:
         return self.resource_ura(owner_ura, path)
 
     def owner_ability_ura(self, owner_ura: str, ability_name: str) -> str:
-        return self._build("ability", owner_ura=_clean(owner_ura, "owner_ura"), ability_name=_clean(ability_name, "ability_name"))
+        return self._build(
+            "ability",
+            owner_ura=_clean(owner_ura, "owner_ura"),
+            ability_name=_clean(ability_name, "ability_name"),
+        )
 
-    def device_ability_ura(self, realm: str, device_id: str, namespace: str, local_name: str) -> str:
-        name = ".".join(part for part in (_clean(namespace, "namespace"), _clean(local_name, "local_name")) if part)
+    def device_ability_ura(
+        self, realm: str, device_id: str, namespace: str, local_name: str
+    ) -> str:
+        name = ".".join(
+            part
+            for part in (
+                _clean(namespace, "namespace"),
+                _clean(local_name, "local_name"),
+            )
+            if part
+        )
         return self.owner_ability_ura(self.device_ura(realm, device_id), name)
 
     def owner_ura_for_ability(self, ability_ura: str) -> str:
@@ -157,16 +207,28 @@ class AddressingClient:
             _invalid_addressing("ability projection is missing owner_ura")
         return owner
 
-    def canonical_ability_descriptor_ref(self, value: str, descriptor_version: str = "") -> str:
+    def canonical_ability_descriptor_ref(
+        self, value: str, descriptor_version: str = ""
+    ) -> str:
         if descriptor_version.strip():
-            projection = self._request("build_descriptor_ref", {"ability_ura": _clean(value, "ability_ura"), "descriptor_version": _clean(descriptor_version, "descriptor_version")})
+            projection = self._request(
+                "build_descriptor_ref",
+                {
+                    "ability_ura": _clean(value, "ability_ura"),
+                    "descriptor_version": _clean(
+                        descriptor_version, "descriptor_version"
+                    ),
+                },
+            )
         else:
             projection = self.project_descriptor_ref(value)
         if projection.kind != "descriptor_ref" or not projection.descriptor_ref:
             _invalid_addressing("invalid descriptor_ref projection")
         return projection.descriptor_ref
 
-    def owner_ability_descriptor_ref(self, owner_ura: str, ability_name: str, descriptor_version: str = "1.0.0") -> str:
+    def owner_ability_descriptor_ref(
+        self, owner_ura: str, ability_name: str, descriptor_version: str = "1.0.0"
+    ) -> str:
         return self.canonical_ability_descriptor_ref(
             self.owner_ability_ura(owner_ura, ability_name), descriptor_version
         )
@@ -193,9 +255,6 @@ class AddressingClient:
             metadata=projection.metadata,
         )
 
-    def ability_address(self, ability_ura: str) -> AbilityURA:  # REQ-PROD-5 compatibility alias
-        return self.ability_ura(ability_ura)
-
     def _build(self, kind: str, **fields: object) -> str:
         projection = self._request("build_ura", {"kind": kind, **fields})
         if projection.kind != kind or not projection.ura:
@@ -206,9 +265,6 @@ class AddressingClient:
         if not self._closed:
             self.transport.close()
             self._closed = True
-
-
-AbilityAddress = AbilityURA  # REQ-PROD-5 compatibility alias
 
 
 def _with_client(operation: Callable[[AddressingClient], _T]) -> _T:
@@ -240,7 +296,9 @@ def agent_ura(realm: str, user_id: str, agent_id: str) -> str:
 
 
 def device_agent_ura(realm: str, device_id: str, agent_id: str) -> str:
-    return _with_client(lambda client: client.device_agent_ura(realm, device_id, agent_id))
+    return _with_client(
+        lambda client: client.device_agent_ura(realm, device_id, agent_id)
+    )
 
 
 def hub_ura(realm: str) -> str:
@@ -252,11 +310,19 @@ def resource_ura(owner_ura: str, path: str) -> str:
 
 
 def owner_ability_ura(owner_ura: str, ability_name: str) -> str:
-    return _with_client(lambda client: client.owner_ability_ura(owner_ura, ability_name))
+    return _with_client(
+        lambda client: client.owner_ability_ura(owner_ura, ability_name)
+    )
 
 
-def device_ability_ura(realm: str, device_id: str, namespace: str, local_name: str) -> str:
-    return _with_client(lambda client: client.device_ability_ura(realm, device_id, namespace, local_name))
+def device_ability_ura(
+    realm: str, device_id: str, namespace: str, local_name: str
+) -> str:
+    return _with_client(
+        lambda client: client.device_ability_ura(
+            realm, device_id, namespace, local_name
+        )
+    )
 
 
 def owner_ura_for_ability(ability_ura: str) -> str:
@@ -264,7 +330,11 @@ def owner_ura_for_ability(ability_ura: str) -> str:
 
 
 def canonical_ability_descriptor_ref(value: str, descriptor_version: str = "") -> str:
-    return _with_client(lambda client: client.canonical_ability_descriptor_ref(value, descriptor_version))
+    return _with_client(
+        lambda client: client.canonical_ability_descriptor_ref(
+            value, descriptor_version
+        )
+    )
 
 
 class AxonAddressingTransport:
@@ -275,8 +345,8 @@ class AxonAddressingTransport:
     service locator, C ABI, or signing material is involved.
     """
 
-    def __init__(self, addressing: CanonicalAddressing | None = None) -> None:
-        self._addressing = addressing or CanonicalAddressing()
+    def __init__(self, addressing: CanonicalUraFacade | None = None) -> None:
+        self._addressing = addressing or CanonicalUraFacade()
 
     def project_descriptor_ref(self, request_json: bytes) -> bytes:
         request = _request_object(request_json, "descriptor-ref projection")
@@ -292,9 +362,7 @@ class AxonAddressingTransport:
         ability_ura = _required_string(request, "ability_ura")
         descriptor_version = _required_string(request, "descriptor_version")
         try:
-            ref = self._addressing.build_descriptor_ref(
-                ability_ura, descriptor_version
-            )
+            ref = self._addressing.build_descriptor_ref(ability_ura, descriptor_version)
             return _descriptor_projection(self._addressing, ref)
         except Exception as exc:
             _invalid_addressing(f"build descriptor_ref: {exc}", exc)
@@ -326,50 +394,66 @@ class AxonAddressingTransport:
             )
         return _ura_projection(self._addressing, parsed)
 
-    def _build_typed_ura(
-        self, kind: str, request: Mapping[str, object]
-    ) -> str:
+    def _build_typed_ura(self, kind: str, request: Mapping[str, object]) -> str:
         if kind == "user":
-            return cast(str, self._addressing.user_ura(
-                _required_string(request, "realm"),
-                _required_string(request, "user_id"),
-            ))
+            return cast(
+                str,
+                self._addressing.user_ura(
+                    _required_string(request, "realm"),
+                    _required_string(request, "user_id"),
+                ),
+            )
         if kind == "device":
-            return cast(str, self._addressing.device_ura(
-                _required_string(request, "realm"),
-                _required_string(request, "device_id"),
-            ))
+            return cast(
+                str,
+                self._addressing.device_ura(
+                    _required_string(request, "realm"),
+                    _required_string(request, "device_id"),
+                ),
+            )
         if kind == "agent":
             owner_kind = _required_string(request, "owner_kind")
             realm = _required_string(request, "realm")
             agent_id = _required_string(request, "agent_id")
             if owner_kind == "user":
-                return cast(str, self._addressing.agent_ura(
-                    realm,
-                    _required_string(request, "user_id"),
-                    agent_id,
-                ))
+                return cast(
+                    str,
+                    self._addressing.agent_ura(
+                        realm,
+                        _required_string(request, "user_id"),
+                        agent_id,
+                    ),
+                )
             if owner_kind == "device":
-                return cast(str, self._addressing.device_agent_ura(
-                    realm,
-                    _required_string(request, "device_id"),
-                    agent_id,
-                ))
+                return cast(
+                    str,
+                    self._addressing.device_agent_ura(
+                        realm,
+                        _required_string(request, "device_id"),
+                        agent_id,
+                    ),
+                )
             raise ParseError(f"unsupported agent owner_kind {owner_kind!r}")
         if kind == "hub":
-            return cast(str, self._addressing.authority_ura(
-                _required_string(request, "realm")
-            ))
+            return cast(
+                str, self._addressing.authority_ura(_required_string(request, "realm"))
+            )
         if kind == "ability":
-            return cast(str, self._addressing.owner_ability_ura(
-                _required_string(request, "owner_ura"),
-                _required_string(request, "ability_name"),
-            ))
+            return cast(
+                str,
+                self._addressing.owner_ability_ura(
+                    _required_string(request, "owner_ura"),
+                    _required_string(request, "ability_name"),
+                ),
+            )
         if kind == "resource":
-            return cast(str, self._addressing.resource_ura(
-                _required_string(request, "owner_ura"),
-                _required_string(request, "path"),
-            ))
+            return cast(
+                str,
+                self._addressing.resource_ura(
+                    _required_string(request, "owner_ura"),
+                    _required_string(request, "path"),
+                ),
+            )
         raise ParseError(f"unsupported URA build kind {kind!r}")
 
     def close(self) -> None:
@@ -377,7 +461,7 @@ class AxonAddressingTransport:
 
 
 def _descriptor_projection(
-    addressing: CanonicalAddressing, ref: AbilityDescriptorRef
+    addressing: CanonicalUraFacade, ref: AbilityDescriptorRef
 ) -> bytes:
     parsed = addressing.parse_ura(ref.ability_ura)
     ability = _required_ability(parsed)
@@ -405,9 +489,7 @@ def _descriptor_projection(
     )
 
 
-def _ura_projection(
-    addressing: CanonicalAddressing, parsed: ParsedURA
-) -> bytes:
+def _ura_projection(addressing: CanonicalUraFacade, parsed: ParsedURA) -> bytes:
     components: dict[str, object] = {"realm": parsed.realm}
     projection: dict[str, object] = {
         "kind": _product_ura_kind(parsed.kind),
@@ -475,11 +557,14 @@ def _required_ability(parsed: ParsedURA) -> Any:
 
 def _public_ability_name(parsed: ParsedURA) -> str:
     ability = _required_ability(parsed)
-    return cast(str, (
-        f"{ability.namespace}.{ability.local_name}"
-        if ability.namespace
-        else ability.local_name
-    ))
+    return cast(
+        str,
+        (
+            f"{ability.namespace}.{ability.local_name}"
+            if ability.namespace
+            else ability.local_name
+        ),
+    )
 
 
 def _request_object(raw: bytes, label: str) -> dict[str, object]:
@@ -528,9 +613,7 @@ def _metadata() -> dict[str, object]:
     return {"grammar_owner": "axon", "source": "axon_sdk"}
 
 
-def _invalid_addressing(
-    message: str, cause: BaseException | None = None
-) -> NoReturn:
+def _invalid_addressing(message: str, cause: BaseException | None = None) -> NoReturn:
     raise SDKError(
         code=ErrorCode.INVALID_ARGUMENT,
         stage="addressing",

@@ -223,7 +223,7 @@ mod tests {
         Envelope {
             caller: Some(AgentIdentity {
                 ura: caller_ura.to_string(),
-                profile: "easynet-strict-v2".to_string(),
+                profile: "axon-strict-v2".to_string(),
             }),
             ..Envelope::default()
         }

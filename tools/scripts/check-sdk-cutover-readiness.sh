@@ -108,6 +108,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "runtime events live daemon E2E self-test" bash "$SELF_DIR/runtime-events-live-daemon-e2e.sh" --self-test
   run_gate "standalone Hub PrincipalLifecycle E2E self-test" bash "$SELF_DIR/standalone-hub-principal-lifecycle-e2e.sh" --self-test
   run_gate "CLI Hub/Device daemon E2E self-test" bash "$SELF_DIR/cli-hub-device-daemon-e2e.sh" --self-test
+  run_gate "Docker two-node EasyRemote CLI E2E self-test" bash "$SELF_DIR/docker-two-node-easyremote-cli-e2e.sh" --self-test
   run_gate "Python SDK live smoke self-test" bash "$SELF_DIR/python-sdk-live-smoke.sh" --self-test
   run_gate "Go SDK live smoke self-test" bash "$SELF_DIR/go-sdk-live-smoke.sh" --self-test
   run_gate "Python SDK static contract self-test" bash "$SELF_DIR/check-python-sdk-static-contract.sh" --self-test

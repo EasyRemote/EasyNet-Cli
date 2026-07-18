@@ -216,7 +216,7 @@ func TestRuntimeAbilityChildContextDispatchesWithParentReceiptCausality(t *testi
 		}}
 		admission, terminal := canonicalRuntimeReceiptPairFixture("child-1", "Completed")
 		for _, receipt := range []map[string]any{admission, terminal} {
-			receipt["caller_binding"] = map[string]any{"ura": "easynet:///r/example/agent/child.client", "profile": "easynet-strict-v2"}
+			receipt["caller_binding"] = map[string]any{"ura": "easynet:///r/example/agent/child.client", "profile": "axon-strict-v2"}
 			receipt["causal_binding_kind"] = "scalar"
 			receipt["causal_binding"] = causalBinding
 			receipt["parent_receipts"] = parents
