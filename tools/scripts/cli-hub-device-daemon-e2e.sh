@@ -17,7 +17,7 @@ DAEMON_BIN="${EASYNET_DAEMON_BIN:-$REPO_ROOT/target/debug/easynet-daemon}"
 KEYRING_BIN="${EASYNET_KEYRING_BIN:-$REPO_ROOT/target/debug/easynet-keyring}"
 
 REALM="${EASYNET_E2E_REALM:-localhost}"
-HUB_URA="easynet:///r/${REALM}/hub"
+HUB_URA="easynet:///r/${REALM}/authority"
 ADMIN_URA="easynet:///r/${REALM}/user/admin"
 USER_URA="easynet:///r/${REALM}/user/alice"
 REQUESTS="${EASYNET_E2E_REQUESTS:-24}"

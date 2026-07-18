@@ -847,14 +847,18 @@ pub fn invoke_federation_discover_filtered(
     let arg_bytes = serde_json::to_vec(&req_args).context("encode discover args")?;
 
     let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura();
+    let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
+        &local_daemon_ura,
+        "federation.discover",
+    )?;
     let subject_ura = federation_discover_subject_ura(&local_daemon_ura)?;
-    let request = ProtoEnvelope::from_target(
+    let signer = local_daemon_federation_signer(&local_daemon_ura, "federation.discover")?;
+    let request_envelope = ProtoEnvelope::from_target(
         local_daemon_ura.as_str(),
-        local_daemon_ura.as_str(),
+        target.callee_ura(),
         subject_ura.as_str(),
         RootInvocationDerivationIssuer::fresh_root(),
-    )?
-    .invoke_request("federation.discover", arg_bytes)?;
+    )?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -863,6 +867,15 @@ pub fn invoke_federation_discover_filtered(
 
     let response: axon_sdk::pb::axon::v1::InvokeResponse = {
         runtime.block_on(async move {
+            let request = request_envelope
+                .signed_descriptor_ref_invoke_request_with_signer(
+                    target.as_str(),
+                    target.descriptor_ref(),
+                    arg_bytes,
+                    &signer,
+                )
+                .await
+                .context("build descriptor-bound federation.discover request")?;
             let channel = crate::support::platform::local_daemon_grpc::connect_channel(
                 socket_path.clone(),
                 Duration::from_secs(10),
@@ -903,6 +916,21 @@ fn federation_discover_subject_ura(callee_ura: &str) -> anyhow::Result<String> {
     Ok(callee_ura.to_string())
 }
 
+fn local_daemon_federation_signer(
+    local_daemon_ura: &str,
+    ability: &str,
+) -> anyhow::Result<crate::daemon::identity::self_identity::RuntimeSigningIdentity> {
+    crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(
+        local_daemon_ura.to_string(),
+    )
+    .map_err(|err| {
+        anyhow!(
+            "{ability} requires a caller signer for `{local_daemon_ura}`; \
+             load or provision that identity in the local key service: {err}"
+        )
+    })
+}
+
 /// `federation.revoke` against the local daemon's gRPC
 /// InvocationServer. Removes the named Agent's directory entry on
 /// the hub. CLI lifecycle surfaces (`easynet device remove`,
@@ -934,13 +962,17 @@ pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result
     let arg_bytes = serde_json::to_vec(&req_args).context("encode revoke args")?;
 
     let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura();
-    let request = ProtoEnvelope::from_target(
+    let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
+        &local_daemon_ura,
+        "federation.revoke",
+    )?;
+    let signer = local_daemon_federation_signer(&local_daemon_ura, "federation.revoke")?;
+    let request_envelope = ProtoEnvelope::from_target(
         local_daemon_ura.as_str(),
-        local_daemon_ura.as_str(),
+        target.callee_ura(),
         agent_ura,
         RootInvocationDerivationIssuer::fresh_root(),
-    )?
-    .invoke_request("federation.revoke", arg_bytes)?;
+    )?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -948,6 +980,15 @@ pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result
         .context("build tokio runtime for federation.revoke")?;
 
     runtime.block_on(async move {
+        let request = request_envelope
+            .signed_descriptor_ref_invoke_request_with_signer(
+                target.as_str(),
+                target.descriptor_ref(),
+                arg_bytes,
+                &signer,
+            )
+            .await
+            .context("build descriptor-bound federation.revoke request")?;
         let channel = crate::support::platform::local_daemon_grpc::connect_channel(
             socket_path.clone(),
             Duration::from_secs(10),
@@ -998,6 +1039,30 @@ mod tests {
         )
         .expect("descriptor");
         assert_eq!(target.descriptor_ref(), expected);
+    }
+
+    #[test]
+    fn federation_system_abilities_are_bound_to_hub_catalog_descriptors() {
+        let hub = "easynet:///r/realm/authority";
+        for ability in ["federation.discover", "federation.revoke"] {
+            let target = RemoteAbilityInvocationTarget::for_target_owned_selector(hub, ability)
+                .expect("target");
+            let expected =
+                crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+                    hub,
+                    ability,
+                    crate::daemon::ability::CallMode::Rpc,
+                )
+                .expect("descriptor");
+
+            assert_eq!(target.callee_ura(), hub);
+            assert_eq!(target.descriptor_ref(), expected);
+            assert_ne!(target.descriptor_ref(), ability);
+            assert!(
+                target.descriptor_ref().contains('@'),
+                "descriptor ref must include descriptor version"
+            );
+        }
     }
 
     #[test]
