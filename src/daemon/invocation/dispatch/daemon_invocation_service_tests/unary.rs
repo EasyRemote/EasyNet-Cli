@@ -1,4 +1,5 @@
 use super::*;
+use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 use crate::daemon::federation::resolver_contract::{ResolveAnswerKind, RouteReason};
 
 #[test]
@@ -2585,7 +2586,10 @@ async fn dispatch_remote_rpc_carrier_v1_preserves_signed_canonical_material() {
     let signature = ed25519_dalek::Signature::from_slice(&signature).expect("ed25519 signature");
     test_device_signing_key()
         .verifying_key()
-        .verify(&descriptor_bound.envelope.canonical_bytes(), &signature)
+        .verify(
+            &descriptor_bound_canonical_bytes(&descriptor_bound.envelope),
+            &signature,
+        )
         .expect("forwarded carrier material must verify against original signature");
 }
 

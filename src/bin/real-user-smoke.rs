@@ -53,14 +53,16 @@ use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
 use easynet_cli::daemon::invocation::dispatch::local_runtime_invoker::{
     invoke_local_rpc_sync, open_local_stream,
 };
-use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget};
+use easynet_cli::daemon::invocation::routing::target::{
+    CallMode, InvocationTarget, SystemInvocationTargetIssuer,
+};
 use easynet_cli::daemon::resources::files::{
     resource_ref_for_local_path, FilesystemResourceCapability,
 };
 use easynet_cli::support::async_bridge::{run_blocking, NoRuntimeFallback};
 
 fn target(ability: &str, args: Value) -> InvocationTarget {
-    InvocationTarget::local_daemon_system(ability, args, CallMode::Rpc)
+    SystemInvocationTargetIssuer::local_root(ability, args, CallMode::Rpc)
 }
 
 fn smoke_local_runtime() -> Arc<LocalRuntime> {
@@ -554,7 +556,7 @@ fn main() -> anyhow::Result<()> {
                     ctx_mission_id,
                     ctx_mission_dir,
                 );
-                ctx_runtime.execute_rpc(InvocationTarget::local_daemon_system(
+                ctx_runtime.execute_rpc(SystemInvocationTargetIssuer::local_root(
                     chat_for_ctx,
                     json!({
                         "prompt": "What single all-caps token from the previous discussion contains the substring `CANARY-`? Reply with that token only, no other text.",
@@ -597,7 +599,7 @@ fn main() -> anyhow::Result<()> {
         let ability_runtime = RuntimeSmoke::daemon(Some(Arc::new(Vec::new())));
         let direct_result = rt.block_on(async {
             tokio::task::spawn_blocking(move || {
-                ability_runtime.execute_rpc(InvocationTarget::local_daemon_system(
+                ability_runtime.execute_rpc(SystemInvocationTargetIssuer::local_root(
                     "claude.audit-test-ability",
                     json!({}),
                     CallMode::Rpc,
@@ -626,7 +628,7 @@ fn main() -> anyhow::Result<()> {
         if advertised.iter().any(|n| n == "codex.chat") {
             println!("\n=== codex.chat STREAM mode (frame-by-frame) ===");
             let dispatcher_for_codex = RuntimeSmoke::daemon(Some(Arc::new(Vec::new())));
-            let codex_target = InvocationTarget::local_daemon_system(
+            let codex_target = SystemInvocationTargetIssuer::local_root(
                 "codex.chat",
                 json!({
                     "prompt": "Count from 1 to 5, one number per line.",
@@ -647,7 +649,7 @@ fn main() -> anyhow::Result<()> {
         // ── streaming reality check (claude) ──────────────────
         println!("\n=== claude.chat STREAM mode (frame-by-frame) ===");
         let dispatcher_for_stream = RuntimeSmoke::daemon(Some(Arc::new(Vec::new())));
-        let stream_target = InvocationTarget::local_daemon_system(
+        let stream_target = SystemInvocationTargetIssuer::local_root(
             chat_ability.clone(),
             json!({
                 "prompt": "Count from 1 to 5, one number per line.",

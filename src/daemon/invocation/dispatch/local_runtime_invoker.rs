@@ -299,14 +299,18 @@ mod tests {
         normalized_args: Value,
     ) -> InvocationTarget {
         if let Some(subject) = subject {
-            InvocationTarget::local_daemon_system_with_subject(
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
                 ability,
                 normalized_args,
                 CallMode::Rpc,
                 subject,
             )
         } else {
-            InvocationTarget::local_daemon_system(ability, normalized_args, CallMode::Rpc)
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                ability,
+                normalized_args,
+                CallMode::Rpc,
+            )
         }
     }
 

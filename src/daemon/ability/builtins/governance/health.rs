@@ -90,7 +90,7 @@ pub fn description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
+    use crate::daemon::invocation::routing::target::CallMode;
 
     #[test]
     fn handler_returns_health_contract_and_stamps_timestamp() {
@@ -122,11 +122,12 @@ mod tests {
         );
         register(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system(
-            ABILITY_NAME,
-            json!({"hello": "world"}),
-            CallMode::Rpc,
-        );
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                ABILITY_NAME,
+                json!({"hello": "world"}),
+                CallMode::Rpc,
+            );
         let resp = dispatcher.execute_rpc(target).unwrap();
         assert_eq!(resp["status"], "healthy");
         assert!(resp["details"].is_object());

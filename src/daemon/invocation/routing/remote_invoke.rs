@@ -39,7 +39,9 @@ use crate::daemon::invocation::dispatch::forwarded_finalization::{
     ForwardedFinalizedInvocation, ForwardedInvocationBinding,
 };
 use crate::daemon::invocation::routing::target::InvocationCausalContext;
-use crate::daemon::invocation::{InvocationDerivationPolicy, ProtoEnvelope};
+use crate::daemon::invocation::{
+    InvocationDerivationPolicy, ProtoEnvelope, RootInvocationDerivationIssuer,
+};
 use axon_sdk::invocation::CausalContext;
 use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
 use axon_sdk::pb::axon::v1::{InvocationState as WireInvocationState, InvokeResponse};
@@ -254,7 +256,6 @@ pub(crate) struct RemoteInvocationRequest<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RemoteInvocationSubject {
     Explicit(String),
-    PairedOwnerDerived(String),
     TargetOwnedSystem(String),
 }
 
@@ -262,7 +263,6 @@ impl RemoteInvocationSubject {
     fn resolve(&self) -> anyhow::Result<String> {
         let (value, field) = match self {
             Self::Explicit(value) => (value, "explicit subject"),
-            Self::PairedOwnerDerived(value) => (value, "paired owner derived subject"),
             Self::TargetOwnedSystem(value) => (value, "target-owned system subject"),
         };
         checked_remote_invocation_ura(value.clone(), field)
@@ -272,22 +272,21 @@ impl RemoteInvocationSubject {
     fn policy_name(&self) -> &'static str {
         match self {
             Self::Explicit(_) => "Explicit",
-            Self::PairedOwnerDerived(_) => "PairedOwnerDerived",
             Self::TargetOwnedSystem(_) => "TargetOwnedSystem",
         }
     }
 }
 
-/// Named nonce derivation for remote invocation ingress.
+/// Explicit nonce selected before remote transport dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RemoteInvocationNonce {
-    Fresh,
+    Explicit([u8; 16]),
 }
 
 impl RemoteInvocationNonce {
     fn derive(self) -> [u8; 16] {
         match self {
-            Self::Fresh => axon_sdk::invocation::fresh_nonce(),
+            Self::Explicit(nonce) => nonce,
         }
     }
 }
@@ -308,29 +307,36 @@ pub(crate) struct RemoteInvocationTuplePlan<'a> {
     timeout: Duration,
 }
 
+pub(crate) fn declared_root_causal_context() -> CausalContext {
+    CausalContext::None
+}
+
 impl<'a> RemoteInvocationTuplePlan<'a> {
-    pub(crate) fn public_root(
+    pub(crate) fn public_explicit(
         target: &'a RemoteAbilityInvocationTarget,
         caller_ura: impl Into<String>,
-        subject: RemoteInvocationSubject,
+        subject_ura: impl Into<String>,
+        invocation_nonce: [u8; 16],
+        causal_context: CausalContext,
         args: Value,
         timeout: Duration,
     ) -> anyhow::Result<Self> {
         Self::new(
             target,
             caller_ura,
-            subject,
-            RemoteInvocationNonce::Fresh,
-            InvocationCausalContext::public_root_derived(),
+            RemoteInvocationSubject::Explicit(subject_ura.into()),
+            RemoteInvocationNonce::Explicit(invocation_nonce),
+            InvocationCausalContext::explicit(causal_context),
             args,
             timeout,
         )
     }
 
-    pub(crate) fn public_with_causal_context(
+    fn with_explicit_nonce(
         target: &'a RemoteAbilityInvocationTarget,
         caller_ura: impl Into<String>,
         subject: RemoteInvocationSubject,
+        invocation_nonce: [u8; 16],
         causal_context: CausalContext,
         args: Value,
         timeout: Duration,
@@ -339,17 +345,18 @@ impl<'a> RemoteInvocationTuplePlan<'a> {
             target,
             caller_ura,
             subject,
-            RemoteInvocationNonce::Fresh,
+            RemoteInvocationNonce::Explicit(invocation_nonce),
             InvocationCausalContext::explicit(causal_context),
             args,
             timeout,
         )
     }
 
-    pub(crate) fn daemon_system_root(
+    fn system_root_with_explicit_nonce(
         target: &'a RemoteAbilityInvocationTarget,
         caller_ura: impl Into<String>,
         subject: RemoteInvocationSubject,
+        invocation_nonce: [u8; 16],
         args: Value,
         timeout: Duration,
     ) -> anyhow::Result<Self> {
@@ -357,7 +364,7 @@ impl<'a> RemoteInvocationTuplePlan<'a> {
             target,
             caller_ura,
             subject,
-            RemoteInvocationNonce::Fresh,
+            RemoteInvocationNonce::Explicit(invocation_nonce),
             InvocationCausalContext::daemon_system_root(),
             args,
             timeout,
@@ -398,6 +405,57 @@ impl<'a> RemoteInvocationTuplePlan<'a> {
             self.causal_context.as_axon(),
             self.args,
             self.timeout,
+        )
+    }
+}
+
+/// Issuer for daemon-owned remote root calls.
+///
+/// System callers select caller, subject, target, and timeout; only this issuer
+/// mints the fresh nonce used for the named daemon-system root policy.
+pub(crate) struct RemoteSystemInvocationIssuer;
+
+impl RemoteSystemInvocationIssuer {
+    pub(crate) fn root_plan<'a>(
+        target: &'a RemoteAbilityInvocationTarget,
+        caller_ura: impl Into<String>,
+        subject: RemoteInvocationSubject,
+        args: Value,
+        timeout: Duration,
+    ) -> anyhow::Result<RemoteInvocationTuplePlan<'a>> {
+        RemoteInvocationTuplePlan::system_root_with_explicit_nonce(
+            target,
+            caller_ura,
+            subject,
+            axon_sdk::invocation::fresh_nonce(),
+            args,
+            timeout,
+        )
+    }
+}
+
+/// Issuer for child/continuation remote calls spawned from admitted runtime
+/// context. The parent causal context is explicit; freshness is centralized
+/// here rather than minted by product bridge code.
+pub(crate) struct RemoteChildInvocationIssuer;
+
+impl RemoteChildInvocationIssuer {
+    pub(crate) fn child_plan<'a>(
+        target: &'a RemoteAbilityInvocationTarget,
+        caller_ura: impl Into<String>,
+        subject: RemoteInvocationSubject,
+        causal_context: CausalContext,
+        args: Value,
+        timeout: Duration,
+    ) -> anyhow::Result<RemoteInvocationTuplePlan<'a>> {
+        RemoteInvocationTuplePlan::with_explicit_nonce(
+            target,
+            caller_ura,
+            subject,
+            axon_sdk::invocation::fresh_nonce(),
+            causal_context,
+            args,
+            timeout,
         )
     }
 }
@@ -794,7 +852,7 @@ pub fn invoke_federation_discover_filtered(
         local_daemon_ura.as_str(),
         local_daemon_ura.as_str(),
         subject_ura.as_str(),
-        InvocationDerivationPolicy::FreshRoot,
+        RootInvocationDerivationIssuer::fresh_root(),
     )?
     .invoke_request("federation.discover", arg_bytes)?;
 
@@ -880,7 +938,7 @@ pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result
         local_daemon_ura.as_str(),
         local_daemon_ura.as_str(),
         agent_ura,
-        InvocationDerivationPolicy::FreshRoot,
+        RootInvocationDerivationIssuer::fresh_root(),
     )?
     .invoke_request("federation.revoke", arg_bytes)?;
 
@@ -983,28 +1041,30 @@ mod tests {
     }
 
     #[test]
-    fn public_tuple_plan_names_ergonomic_subject_derivation() {
+    fn public_tuple_plan_preserves_explicit_tuple_facts() {
         let descriptor = "easynet:///r/realm/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
         let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/realm/device/node-a",
             descriptor,
         )
         .expect("target");
-        let plan = RemoteInvocationTuplePlan::public_root(
+        let causal_context = CausalContext::None;
+        let plan = RemoteInvocationTuplePlan::public_explicit(
             &target,
             "easynet:///r/realm/device/caller",
-            RemoteInvocationSubject::PairedOwnerDerived(
-                "easynet:///r/realm/resource/user.alice/invoke/echo".to_string(),
-            ),
+            "easynet:///r/realm/resource/user.alice/invoke/echo",
+            [0x41; 16],
+            causal_context.clone(),
             json!({"probe": true}),
             Duration::from_secs(7),
         )
         .expect("tuple plan");
 
-        assert_eq!(plan.subject.policy_name(), "PairedOwnerDerived");
+        assert_eq!(plan.subject.policy_name(), "Explicit");
+        assert_eq!(plan.nonce, RemoteInvocationNonce::Explicit([0x41; 16]));
         assert_eq!(
             plan.causal_context,
-            InvocationCausalContext::public_root_derived()
+            InvocationCausalContext::explicit(causal_context)
         );
 
         let request = plan.into_request().expect("request");
@@ -1013,7 +1073,7 @@ mod tests {
             request.subject_ura,
             "easynet:///r/realm/resource/user.alice/invoke/echo"
         );
-        assert_ne!(request.invocation_nonce, [0; 16]);
+        assert_eq!(request.invocation_nonce, [0x41; 16]);
         assert_eq!(request.causal_context, CausalContext::None);
     }
 
@@ -1029,12 +1089,11 @@ mod tests {
             root: [0x71; 32],
             proof_ura: "easynet:///r/realm/resource/user.alice/proof/causal".to_string(),
         };
-        let request = RemoteInvocationTuplePlan::public_with_causal_context(
+        let request = RemoteInvocationTuplePlan::public_explicit(
             &target,
             "easynet:///r/realm/device/caller",
-            RemoteInvocationSubject::Explicit(
-                "easynet:///r/realm/resource/user.alice/task/child".to_string(),
-            ),
+            "easynet:///r/realm/resource/user.alice/task/child",
+            [0x51; 16],
             causal_context.clone(),
             Value::Null,
             Duration::from_secs(7),
@@ -1047,13 +1106,13 @@ mod tests {
     }
 
     #[test]
-    fn daemon_system_tuple_plan_names_system_root_derivation() {
+    fn remote_system_issuer_names_system_root_derivation() {
         let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
             "easynet:///r/realm/authority",
             "federation.resolve",
         )
         .expect("target");
-        let plan = RemoteInvocationTuplePlan::daemon_system_root(
+        let plan = RemoteSystemInvocationIssuer::root_plan(
             &target,
             "easynet:///r/realm/device/caller",
             RemoteInvocationSubject::TargetOwnedSystem(target.as_str().to_string()),
@@ -1067,6 +1126,7 @@ mod tests {
             plan.causal_context,
             InvocationCausalContext::daemon_system_root()
         );
+        assert_ne!(plan.nonce.derive(), [0; 16]);
 
         let request = plan.into_request().expect("request");
         assert_eq!(request.subject_ura, target.as_str());
@@ -1083,19 +1143,23 @@ mod tests {
         )
         .expect("target");
 
-        let bad_subject = RemoteInvocationTuplePlan::public_root(
+        let bad_subject = RemoteInvocationTuplePlan::public_explicit(
             &target,
             "easynet:///r/realm/device/caller",
-            RemoteInvocationSubject::PairedOwnerDerived(String::new()),
+            "",
+            [0x52; 16],
+            CausalContext::None,
             Value::Null,
             Duration::from_secs(7),
         );
         assert!(bad_subject.is_err());
 
-        let zero_timeout = RemoteInvocationTuplePlan::public_root(
+        let zero_timeout = RemoteInvocationTuplePlan::public_explicit(
             &target,
             "easynet:///r/realm/device/caller",
-            RemoteInvocationSubject::Explicit(target.callee_ura().to_string()),
+            target.callee_ura().to_string(),
+            [0x53; 16],
+            CausalContext::None,
             Value::Null,
             Duration::ZERO,
         );

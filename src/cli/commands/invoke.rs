@@ -42,9 +42,12 @@ use anyhow::{bail, Context};
 use clap::Args;
 use serde_json::Value;
 
+use crate::cli::commands::invocation_tuple::{
+    require_causal_root, required_nonce_hex, required_subject,
+};
 use crate::core::ura::AbilitySelector;
 use crate::support::platform::local_invoke::{
-    invoke_local_ability_target_with_subject_timeout, LocalAbilityTarget,
+    invoke_local_ability_target_explicit_root_timeout, LocalAbilityTarget,
 };
 use crate::support::platform::{output, timeouts};
 
@@ -94,6 +97,16 @@ pub struct InvokeArgs {
     /// {"subject": "..."} is rejected by the handler.
     #[arg(long, value_name = "URA")]
     pub subject: Option<String>,
+    /// AXIOM invocation nonce as exactly 16 bytes of lowercase or uppercase
+    /// hex. Required for `--node` remote public invocation so the CLI does not
+    /// mint caller freshness behind the operator's back.
+    #[arg(long, value_name = "32_HEX")]
+    pub nonce_hex: Option<String>,
+    /// Declare that this public invocation has no causal parent. Required for
+    /// `--node` root calls; future child/resume surfaces should pass an
+    /// explicit non-root causal context instead of this flag.
+    #[arg(long)]
+    pub causal_root: bool,
 }
 
 pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
@@ -154,34 +167,16 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             let caller_ura =
                 crate::support::platform::remote_device::caller_device_ura(&credentials)?;
             let target_call = ability_ref.remote_target(target)?;
-            let subject = if let Some(subject) = invoke_args
-                .subject
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-            {
-                crate::daemon::invocation::routing::remote_invoke::RemoteInvocationSubject::Explicit(
-                    subject,
-                )
-            } else {
-                let subject =
-                    default_owner_invoke_subject(&credentials, ability_selector).ok_or_else(
-                        || {
-                            anyhow::anyhow!(
-                                "remote ability invoke requires --subject when paired credentials do not \
-                                 identify an owner user"
-                            )
-                        },
-                    )?;
-                crate::daemon::invocation::routing::remote_invoke::RemoteInvocationSubject::PairedOwnerDerived(
-                    subject,
-                )
-            };
-            let request = crate::daemon::invocation::routing::remote_invoke::RemoteInvocationTuplePlan::public_root(
+            let surface = "remote ability invoke with --node";
+            let subject = required_subject(invoke_args.subject.as_deref(), surface)?.to_string();
+            let invocation_nonce = required_nonce_hex(invoke_args.nonce_hex.as_deref(), surface)?;
+            require_causal_root(invoke_args.causal_root, surface)?;
+            let request = crate::daemon::invocation::routing::remote_invoke::RemoteInvocationTuplePlan::public_explicit(
                 &target_call,
                 caller_ura,
                 subject,
+                invocation_nonce,
+                crate::daemon::invocation::routing::remote_invoke::declared_root_causal_context(),
                 arguments,
                 timeout,
             )?
@@ -207,17 +202,19 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             // through this same function per the AXON-RFC-001
             // ontology that says "every action is an ability
             // invocation".
-            let subject = invoke_args
-                .subject
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string);
+            let surface = "local ability invoke";
+            let subject = required_subject(invoke_args.subject.as_deref(), surface)?;
+            let invocation_nonce = required_nonce_hex(invoke_args.nonce_hex.as_deref(), surface)?;
+            require_causal_root(invoke_args.causal_root, surface)?;
             let dispatch_name = ability_selector.local_registry_ability();
             let target = LocalAbilityTarget::from_selector(ability_selector);
             debug_assert_eq!(target.dispatch_name(), dispatch_name);
-            let value = invoke_local_ability_target_with_subject_timeout(
-                &target, arguments, subject, timeout,
+            let value = invoke_local_ability_target_explicit_root_timeout(
+                &target,
+                arguments,
+                subject,
+                invocation_nonce,
+                timeout,
             )?;
             (value, "local daemon".to_string())
         }
@@ -242,19 +239,6 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         ability_selector.ability_ura()
     ));
     Ok(())
-}
-
-#[cfg(feature = "axon-pb")]
-fn default_owner_invoke_subject(
-    credentials: &crate::daemon::persistence::config::Credentials,
-    ability_selector: &AbilitySelector,
-) -> Option<String> {
-    let user_id = credentials.user_id().ok()?;
-    Some(crate::core::ura::resource_dot_ura(
-        credentials.realm_str().trim(),
-        &format!("user.{user_id}"),
-        &format!("invoke/{}", ability_selector.public_name()),
-    ))
 }
 
 #[derive(Debug, Clone)]
@@ -351,6 +335,7 @@ fn unwrap_envelope(v: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::commands::invocation_tuple::parse_invocation_nonce_hex;
 
     #[test]
     fn invoke_ability_ref_parses_plain_ability_ura() {
@@ -392,6 +377,8 @@ mod tests {
             timeout: 60,
             raw: false,
             subject: None,
+            nonce_hex: None,
+            causal_root: false,
         });
         let err = res.expect_err("must reject non-canonical --node");
         let msg = format!("{err}");
@@ -416,6 +403,8 @@ mod tests {
             timeout: 60,
             raw: false,
             subject: None,
+            nonce_hex: None,
+            causal_root: false,
         });
         let err = res.expect_err("must reject empty --node");
         assert!(format!("{err}").contains("empty"));
@@ -432,35 +421,27 @@ mod tests {
             timeout: 60,
             raw: false,
             subject: None,
+            nonce_hex: None,
+            causal_root: false,
         });
         let err = res.expect_err("must reject malformed JSON");
         assert!(format!("{err:#}").contains("parse --args JSON"));
     }
 
-    #[cfg(feature = "axon-pb")]
     #[test]
-    fn default_owner_invoke_subject_uses_credentials_user_resource() {
-        let credentials = crate::daemon::persistence::config::Credentials {
-            node_id: "node-a".to_string(),
-            credential_token: "token".to_string(),
-            hub_endpoint: "https://authority.example".to_string(),
-            realm: "easynet.run".to_string(),
-            deploy_signature: String::new(),
-            hub_api_base: None,
-            username: Some("dev".to_string()),
-            user_id: Some("user-123".to_string()),
-            hub_pubkey_b64: None,
-            hub_tls_ca_pem_b64: None,
-            join_receipt_hash: None,
-        };
-        let selector =
-            AbilitySelector::parse("easynet:///r/easynet.run/ability/device.node-b.shell.run")
-                .expect("ability selector");
-
+    #[cfg(feature = "axon-pb")]
+    fn parse_invocation_nonce_hex_requires_exact_nonzero_nonce() {
         assert_eq!(
-            default_owner_invoke_subject(&credentials, &selector).as_deref(),
-            Some("easynet:///r/easynet.run/resource/user.user-123/invoke/shell.run")
+            parse_invocation_nonce_hex("01010101010101010101010101010101").unwrap(),
+            [1u8; 16]
         );
+
+        let short = parse_invocation_nonce_hex("0102").expect_err("short nonce must fail");
+        assert!(format!("{short}").contains("exactly 16 bytes"));
+
+        let zero = parse_invocation_nonce_hex("00000000000000000000000000000000")
+            .expect_err("zero nonce must fail");
+        assert!(format!("{zero}").contains("all-zero"));
     }
 
     #[test]

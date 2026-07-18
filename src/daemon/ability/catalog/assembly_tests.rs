@@ -519,7 +519,7 @@ fn every_published_ability_resolves_to_a_handler() {
 #[test]
 fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
+    use crate::daemon::invocation::routing::target::CallMode;
 
     let reg = build_system_registry();
     let dispatcher = Arc::clone(&reg);
@@ -545,11 +545,12 @@ fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
             skipped_effectful_or_expensive.push(name.clone());
             continue;
         }
-        let target = InvocationTarget::local_daemon_system(
-            name.clone(),
-            serde_json::json!({}),
-            CallMode::Rpc,
-        );
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                name.clone(),
+                serde_json::json!({}),
+                CallMode::Rpc,
+            );
         match dispatcher.execute_rpc(target) {
             Ok(_) => invoked_ok.push(name.clone()),
             Err(e) => {

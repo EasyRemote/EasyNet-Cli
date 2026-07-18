@@ -99,7 +99,7 @@ pub use bidi::session_wire::SessionDispatch;
 pub use dispatch::daemon_invocation_service::DaemonInvocationService;
 #[cfg(feature = "axon-pb")]
 pub use dispatch::invocation_wire::{
-    InvocationDerivationPolicy, ProtoEnvelope, DEFAULT_URA_PROFILE,
+    InvocationDerivationPolicy, ProtoEnvelope, RootInvocationDerivationIssuer, DEFAULT_URA_PROFILE,
 };
 #[cfg(feature = "axon-pb")]
 pub use dispatch::{

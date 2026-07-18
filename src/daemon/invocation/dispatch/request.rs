@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rand::RngCore;
 
+use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 use crate::daemon::{DaemonError, Result};
 
 /// Complete unary Invocation submitted through `DaemonClient`.
@@ -514,7 +515,7 @@ impl InvocationDraft {
     /// descriptor-bound envelope helpers.
     pub fn prepare(&self, options: PrepareOptions) -> Result<PreparedInvocation> {
         let descriptor_bound = self.invocation.descriptor_bound_envelope()?;
-        let canonical_bytes = descriptor_bound.canonical_bytes();
+        let canonical_bytes = descriptor_bound_canonical_bytes(&descriptor_bound);
         let canonical_hash_hex = hex::encode(axon_sdk::invocation::sha256(&canonical_bytes));
         let args_digest_hex = hex::encode(descriptor_bound.envelope().args_digest);
         let expires_at_unix_ms = unix_ms_after(options.expires_in);
@@ -1055,7 +1056,7 @@ impl SignedInvocation {
             &target.callee_ura,
             descriptor_ref,
             &target.subject_ura,
-            axon_sdk::invocation::InvocationDerivationPolicy::FreshRoot,
+            crate::daemon::invocation::RootInvocationDerivationIssuer::fresh_root(),
         )?
         .args_json(&serde_json::to_value(command).map_err(DaemonError::EncodeArguments)?)?
         .build_draft()?

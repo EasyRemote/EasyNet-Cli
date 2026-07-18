@@ -1773,7 +1773,7 @@ fn runtime_meta_descriptor_catalog_entries(
             owner_ura,
             meta_descriptor_ref,
             owner_ura,
-            axon_sdk::invocation::InvocationDerivationPolicy::FreshRoot,
+            crate::daemon::invocation::RootInvocationDerivationIssuer::fresh_root(),
         )
         .map_err(|error| error.to_string())?
         .args_json(&serde_json::json!({

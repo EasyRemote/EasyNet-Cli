@@ -28,6 +28,7 @@ pub(crate) mod federation_gen_cert;
 pub(crate) mod federation_peers;
 pub(crate) mod federation_wire;
 pub(crate) mod groups;
+pub(crate) mod invocation_tuple;
 pub mod invocation_watch;
 pub(crate) mod invoke;
 pub(crate) mod join;

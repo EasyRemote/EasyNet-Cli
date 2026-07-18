@@ -23,8 +23,7 @@ use crate::daemon::persistence::config::{
     atomic_write_with_permissions, state_dir, WritePermissions,
 };
 use crate::support::platform::local_invoke::{
-    invoke_local_ability, invoke_local_ability_target_stream_with_subject,
-    invoke_local_ability_target_with_subject_timeout, LocalAbilityTarget, LocalStreamFrame,
+    invoke_local_ability, LocalAbilityTarget, LocalDaemonSystemAbilityIssuer, LocalStreamFrame,
 };
 use crate::support::platform::{output, timeouts};
 
@@ -98,7 +97,7 @@ fn run_camera_transition_recording(plan: &RecordingPlan) -> anyhow::Result<()> {
     let stop_target = LocalAbilityTarget::from_selector(&stop_selector);
     let start_args = camera_start_arguments(plan)?;
 
-    let start = invoke_local_ability_target_with_subject_timeout(
+    let start = LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(
         &start_target,
         start_args,
         Some(plan.subject.clone()),
@@ -117,7 +116,7 @@ fn run_camera_transition_recording(plan: &RecordingPlan) -> anyhow::Result<()> {
 
     std::thread::sleep(plan.duration);
 
-    let stop = invoke_local_ability_target_with_subject_timeout(
+    let stop = LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(
         &stop_target,
         json!({ "recording_session_id": session_id }),
         Some(plan.subject.clone()),
@@ -263,7 +262,7 @@ impl RecordingPlan {
     }
 
     fn invoke_stream(&self) -> anyhow::Result<Vec<LocalStreamFrame>> {
-        invoke_local_ability_target_stream_with_subject(
+        LocalDaemonSystemAbilityIssuer::stream_target_root(
             &self.target,
             self.arguments.clone(),
             Some(self.subject.clone()),

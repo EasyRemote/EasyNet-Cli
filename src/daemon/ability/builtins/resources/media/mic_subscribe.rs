@@ -498,7 +498,7 @@ fn wav_from_s16le(pcm: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
+    use crate::daemon::invocation::routing::target::CallMode;
     use crate::daemon::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
@@ -557,7 +557,7 @@ mod tests {
         );
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             ABILITY_MIC_SUBSCRIBE,
             json!({"sample_rate": 48000, "channels": 1, "codec": "opus"}),
             CallMode::Stream,
@@ -631,7 +631,7 @@ mod tests {
         );
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             ABILITY_MIC_SUBSCRIBE,
             json!({}),
             CallMode::Stream,
@@ -652,7 +652,7 @@ mod tests {
         );
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             ABILITY_MIC_SUBSCRIBE,
             json!({"subject": "easynet:///r/x/resource/y"}),
             CallMode::Stream,
@@ -678,7 +678,7 @@ mod tests {
         );
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             ABILITY_MIC_SUBSCRIBE,
             json!({}),
             CallMode::Stream,

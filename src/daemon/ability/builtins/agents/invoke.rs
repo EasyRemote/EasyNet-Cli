@@ -61,7 +61,7 @@ use serde_json::{json, Value};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::manifest::{AbilityManifest, ManifestAccessScope};
 use crate::daemon::invocation::dispatch::local_runtime_invoker::is_not_found_error;
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
+use crate::daemon::invocation::routing::target::CallMode;
 use crate::daemon::persistence::agent_registry::AgentRegistry;
 
 /// Verb portion of the per-agent invoke ability. Combined with the
@@ -191,7 +191,7 @@ pub fn dispatch(
                  this is a daemon boot ordering bug, not a caller-side issue"
             )
         })?;
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             qualified.to_string(),
             parsed.args.clone(),
             CallMode::Rpc,

@@ -43,6 +43,7 @@ use crate::core::ura::{owner_local_ability_name, parse_ura, AbilitySelector, URA
 use crate::daemon::ability::{
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
+use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 use crate::daemon::axon_bridge::wire_descriptor::{
     descriptor_bound_from_wire_parts, WireDescriptorBoundEnvelope,
 };
@@ -463,7 +464,8 @@ impl DaemonProductAdmissionCoordinator {
         call_mode: AxonCallMode,
         ingress: ProductAdmissionIngress,
     ) -> Result<DaemonProductAdmissionLease, Status> {
-        let envelope_key = axon_sdk::invocation::sha256(&descriptor_bound.canonical_bytes());
+        let envelope_key =
+            axon_sdk::invocation::sha256(&descriptor_bound_canonical_bytes(&descriptor_bound));
         let envelope =
             product_policy_envelope(descriptor_bound.envelope(), caller_signature, request_id)?;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -517,7 +519,9 @@ impl DaemonProductAdmissionCoordinator {
                     "derived product admission signed envelope is not descriptor-bound: {error}"
                 ))
             })?;
-        if descriptor_bound.canonical_bytes() != signed_descriptor_bound.canonical_bytes() {
+        if descriptor_bound_canonical_bytes(&descriptor_bound)
+            != descriptor_bound_canonical_bytes(&signed_descriptor_bound)
+        {
             return Err(Status::invalid_argument(
                 "derived product admission signed envelope does not match descriptor-bound request",
             ));
@@ -539,7 +543,8 @@ impl DaemonProductAdmissionCoordinator {
         &self,
         envelope: &DescriptorBoundEnvelope,
     ) -> Result<VerifiedAdmissionPolicy, InvocationError> {
-        let envelope_key = axon_sdk::invocation::sha256(&envelope.canonical_bytes());
+        let envelope_key =
+            axon_sdk::invocation::sha256(&descriptor_bound_canonical_bytes(&envelope));
         let selected = {
             let mut registry = self.registry.lock().map_err(|_| {
                 InvocationError::internal(
@@ -980,7 +985,9 @@ impl AdmissionFacade {
         )
         .map_err(axon_error_to_status)
         .map_err(|status| self.signature_denied_status(&input.envelope, &input.ability, status))?;
-        if descriptor_bound.envelope.canonical_bytes() != admitted_envelope.canonical_bytes() {
+        if descriptor_bound_canonical_bytes(&descriptor_bound.envelope)
+            != descriptor_bound_canonical_bytes(&admitted_envelope)
+        {
             return Err(self.signature_denied_status(
                 &input.envelope,
                 &input.ability,
@@ -1202,9 +1209,9 @@ impl AdmissionFacade {
             access_control_stores: self.access_control_stores.as_ref(),
             canonical_hash: Some(format!(
                 "sha256:{}",
-                hex::encode(sha2::Sha256::digest(
-                    descriptor_bound.envelope.canonical_bytes()
-                ))
+                hex::encode(sha2::Sha256::digest(descriptor_bound_canonical_bytes(
+                    &descriptor_bound.envelope
+                )))
             )),
             signature_key_id: envelope
                 .caller_signature
@@ -1493,9 +1500,9 @@ impl AdmissionFacade {
         let principal = principal_for(trusted_role, caller_ura, trust_anchor);
         let canonical_hash = format!(
             "sha256:{}",
-            hex::encode(sha2::Sha256::digest(
-                descriptor_bound.envelope.canonical_bytes()
-            ))
+            hex::encode(sha2::Sha256::digest(descriptor_bound_canonical_bytes(
+                &descriptor_bound.envelope
+            )))
         );
         let invocation_nonce = invocation_nonce_for_proof(envelope);
         let audience_ura = self.daemon_ura.as_deref().unwrap_or(callee_ura);

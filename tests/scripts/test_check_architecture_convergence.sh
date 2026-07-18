@@ -1809,7 +1809,7 @@ pub(crate) struct LocalRuntimeRequestFactory;
 
 impl LocalRuntimeRequestFactory {
     fn request_for_local_system() {
-        sign_system_canonical(&envelope.canonical_bytes());
+        sign_system_canonical(&descriptor_bound_canonical_bytes(&envelope));
     }
 }
 
@@ -3298,7 +3298,7 @@ pub(crate) struct LocalRuntimeRequestFactory;
 
 impl LocalRuntimeRequestFactory {
     pub(crate) fn request_for_local_system() {
-        sign_system_canonical(&envelope.canonical_bytes());
+        sign_system_canonical(&descriptor_bound_canonical_bytes(&envelope));
     }
 }
 

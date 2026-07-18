@@ -649,7 +649,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
         provisional_caller,
         target.hub_ura.clone(),
         membership_ura.to_string(),
-        crate::daemon::invocation::dispatch::invocation_wire::InvocationDerivationPolicy::FreshRoot,
+        crate::daemon::invocation::RootInvocationDerivationIssuer::fresh_root(),
     )?
     .signed_descriptor_ref_invoke_request_with_signer(
         crate::daemon::ability::conformance::ABILITY_FEDERATION_JOIN,
@@ -709,7 +709,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
         membership_ura.to_string(),
         target.hub_ura.clone(),
         subject,
-        crate::daemon::invocation::dispatch::invocation_wire::InvocationDerivationPolicy::FreshRoot,
+        crate::daemon::invocation::RootInvocationDerivationIssuer::fresh_root(),
     )?
     .signed_descriptor_ref_invoke_request(
         crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,

@@ -27,7 +27,7 @@ use crate::daemon::persistence::agent_aggregate::{
 };
 use crate::support::platform::local_invoke::{
     invoke_local_ability_target_with_hosted_agent_delegation, LocalAbilityTarget,
-    LocalSystemInvocationContext,
+    LocalSystemInvocationIssuer,
 };
 use crate::support::platform::output;
 
@@ -289,9 +289,8 @@ fn invoke_descriptor_mutation(
         crate::daemon::identity::local_invocation::local_daemon_ura(),
         subject_ura,
     )?;
-    let context = LocalSystemInvocationContext::new(
+    let context = LocalSystemInvocationIssuer::root_context(
         subject_ura,
-        axon_sdk::invocation::fresh_nonce(),
         &[],
         std::time::Duration::from_secs(30),
         None,

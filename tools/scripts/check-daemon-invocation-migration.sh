@@ -229,13 +229,54 @@ def require(path: str, token: str, detail: str) -> None:
     if token not in read(path):
         violations.append(f"{path}: missing {detail}: {token}")
 
-def production_prefix(text: str) -> str:
-    match = re.search(r"(?m)^\s*#\s*\[\s*cfg\s*\([^\]]*\btest\b[^\]]*\)\s*\]\s*$", text)
-    return text if match is None else text[:match.start()]
+def item_end(lines: list[str], start: int) -> int:
+    depth = 0
+    seen_open = False
+    for index in range(start, len(lines)):
+        line = lines[index]
+        depth += line.count("{")
+        if "{" in line:
+            seen_open = True
+        depth -= line.count("}")
+        if seen_open and depth <= 0:
+            return index + 1
+        if not seen_open and line.rstrip().endswith(";"):
+            return index + 1
+    return len(lines)
+
+def production_source(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    kept: list[str] = []
+    index = 0
+    pending_test_cfg = False
+    while index < len(lines):
+        line = lines[index]
+        if re.search(r"#\s*\[\s*cfg\s*\([^\]]*\btest\b[^\]]*\)\s*\]", line):
+            pending_test_cfg = True
+            kept.append("\n")
+            index += 1
+            continue
+        if pending_test_cfg:
+            if line.strip().startswith("#["):
+                kept.append("\n")
+                index += 1
+                continue
+            if line.strip() == "":
+                kept.append(line)
+                index += 1
+                continue
+            end = item_end(lines, index)
+            kept.extend("\n" for _ in range(index, end))
+            index = end
+            pending_test_cfg = False
+            continue
+        kept.append(line)
+        index += 1
+    return "".join(kept)
 
 def enclosing_function_name(text: str, offset: int):
     found = None
-    for match in re.finditer(r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", text[:offset]):
+    for match in re.finditer(r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*<[^>{}]*>)?\s*\(", text[:offset]):
         found = match.group(1)
     return found
 
@@ -247,53 +288,127 @@ for token, detail in (
     ("PublicIngress", "public-ingress explicit tuple state"),
     ("plan.ingress.into_target_bindings()?", "resolver tuple handoff"),
     ("InvocationSubject::daemon_system_derived()", "named system subject policy"),
-    ("pub fn public_root_derived()", "named public root causal policy"),
     ("InvocationCausalContext::daemon_system_root()", "named system causal policy"),
+    ("pub struct SystemInvocationTargetIssuer", "canonical daemon-system target issuer"),
+    ("pub fn local_root", "daemon-system local target issuer"),
+    ("pub fn local_root_for_subject", "daemon-system local subject target issuer"),
+    ("pub fn remote_root", "daemon-system remote target issuer"),
     ("InvocationSubject::explicit(subject)", "public subject preservation"),
     ("InvocationCausalContext::explicit(causal_context)", "public causal context preservation"),
 ):
     if token not in target_text:
         violations.append(f"{target}: missing {detail}: {token}")
 
+for token in (
+    "PublicRootDerived",
+    "public_root_derived",
+):
+    if token in production_source(target_text):
+        violations.append(f"{target}: public ingress root derivation must not exist: {token}")
+
 for path in sorted((root / "src").rglob("*.rs")):
     rel = path.relative_to(root).as_posix()
     if path.name in {"real_invoke_tests.rs", "tests.rs"} or path.name.endswith("_tests.rs"):
         continue
+    if any(part.endswith("_tests") for part in path.relative_to(root).parts):
+        continue
     if "/tests/" in f"/{rel}/":
         continue
-    production = production_prefix(path.read_text(encoding="utf-8", errors="replace"))
+    production = production_source(path.read_text(encoding="utf-8", errors="replace"))
     for match in re.finditer(r"\.with_(?:subject|causal_context)\s*\(", production):
         violations.append(
             f"{rel}:{production.count(chr(10), 0, match.start()) + 1}: production InvocationTarget tuple patching is forbidden"
         )
+    if rel != "src/daemon/invocation/routing/target.rs":
+        for match in re.finditer(
+            r"InvocationTarget::(?:local_daemon_system(?:_with_subject)?|remote_daemon_system)\s*\(",
+            production,
+        ):
+            violations.append(
+                f"{rel}:{production.count(chr(10), 0, match.start()) + 1}: daemon-system InvocationTarget construction must use SystemInvocationTargetIssuer"
+            )
     if rel != "src/daemon/invocation/routing/remote_invoke.rs":
         for match in re.finditer(r"RemoteInvocationRequest::new\s*\(", production):
             violations.append(
                 f"{rel}:{production.count(chr(10), 0, match.start()) + 1}: production remote invocation ingress must use RemoteInvocationTuplePlan"
             )
 
+    for match in re.finditer(r"\bfresh_nonce\s*\(", production):
+        function = enclosing_function_name(production, match.start())
+        if (rel, function) not in {
+            ("src/support/platform/local_invoke.rs", "root_context"),
+            ("src/daemon/invocation/routing/remote_invoke.rs", "root_plan"),
+            ("src/daemon/invocation/routing/remote_invoke.rs", "child_plan"),
+        }:
+            violations.append(
+                f"{rel}:{production.count(chr(10), 0, match.start()) + 1}: fresh nonce minting must be owned by a named invocation issuer"
+            )
+
+    for match in re.finditer(r"InvocationDerivationPolicy::FreshRoot", production):
+        function = enclosing_function_name(production, match.start())
+        if (rel, function) not in {
+            ("src/daemon/invocation/dispatch/invocation_wire.rs", "fresh_root"),
+            ("src/support/platform/local_daemon_grpc.rs", "as_axon"),
+        }:
+            violations.append(
+                f"{rel}:{production.count(chr(10), 0, match.start()) + 1}: FreshRoot policy must be issued by RootInvocationDerivationIssuer or loopback lowering"
+            )
+
+    for match in re.finditer(r"LocalSystemInvocationContext::new\s*\(", production):
+        function = enclosing_function_name(production, match.start())
+        if (rel, function) != ("src/support/platform/local_invoke.rs", "root_context"):
+            violations.append(
+                f"{rel}:{production.count(chr(10), 0, match.start()) + 1}: local system invocation context must be issued by LocalSystemInvocationIssuer"
+            )
+
+    for token in (
+        "invoke_local_ability_target_with_subject_timeout",
+        "invoke_local_ability_target_stream_with_subject",
+        "invoke_local_ability_target_bidi_json_frames_with_subject",
+        "invoke_local_daemon_ability_targeted_timeout",
+        "invoke_local_daemon_ability_targeted_stream_with_subject",
+        "invoke_local_daemon_ability_targeted_bidi_json_frames_with_subject",
+    ):
+        offset = production.find(token)
+        if offset >= 0:
+            violations.append(
+                f"{rel}:{production.count(chr(10), 0, offset) + 1}: public targeted local invocation must use explicit tuple helpers or LocalDaemonSystemAbilityIssuer"
+            )
+
 remote = "src/daemon/invocation/routing/remote_invoke.rs"
 remote_text = read(remote)
 for token, detail in (
     ("pub(crate) enum RemoteInvocationSubject", "named remote subject derivation state"),
-    ("PairedOwnerDerived", "public omitted-subject derivation policy"),
     ("TargetOwnedSystem", "daemon system subject derivation policy"),
-    ("pub(crate) enum RemoteInvocationNonce", "named remote nonce derivation state"),
+    ("pub(crate) enum RemoteInvocationNonce", "explicit remote nonce state"),
+    ("RemoteInvocationNonce::Explicit", "public explicit nonce state"),
     ("pub(crate) struct RemoteInvocationTuplePlan", "inspectable remote tuple plan"),
-    ("pub(crate) fn public_root", "public remote root tuple constructor"),
-    ("pub(crate) fn public_with_causal_context", "public remote child tuple constructor"),
-    ("pub(crate) fn daemon_system_root", "daemon-system remote root tuple constructor"),
-    ("InvocationCausalContext::public_root_derived()", "shared public root causal policy"),
+    ("pub(crate) fn public_explicit", "public explicit tuple constructor"),
+    ("pub(crate) struct RemoteSystemInvocationIssuer", "daemon-system remote issuer"),
+    ("pub(crate) fn root_plan", "daemon-system remote root issuer constructor"),
+    ("pub(crate) struct RemoteChildInvocationIssuer", "runtime child remote issuer"),
+    ("pub(crate) fn child_plan", "runtime child remote issuer constructor"),
     ("InvocationCausalContext::daemon_system_root()", "shared daemon-system causal policy"),
 ):
     if token not in remote_text:
         violations.append(f"{remote}: missing {detail}: {token}")
 
+for token in (
+    "PairedOwnerDerived",
+    "pub(crate) fn public_root",
+    "pub(crate) fn public_with_causal_context",
+    "pub(crate) fn product_policy_with_causal_context",
+    "pub(crate) fn daemon_system_root",
+    "InvocationCausalContext::public_root_derived()",
+):
+    if token in production_source(remote_text):
+        violations.append(f"{remote}: public remote ingress default remains: {token}")
+
 for path in (
     "src/cli/commands/invoke.rs",
     "src/cli/daemon_client/remote_system_ability.rs",
 ):
-    production = production_prefix(read(path))
+    production = production_source(read(path))
     for token in (
         "RemoteInvocationRequest::new",
         "axon_sdk::invocation::fresh_nonce()",
@@ -315,7 +430,20 @@ for token, detail in (
     if token not in local_text:
         violations.append(f"{local_loopback}: missing {detail}: {token}")
 
-local_production = production_prefix(local_text)
+local_invoke = "src/support/platform/local_invoke.rs"
+local_invoke_text = read(local_invoke)
+for token, detail in (
+    ("pub struct LocalDaemonSystemAbilityIssuer", "named local daemon-system ability issuer"),
+    ("invoke_target_root_timeout", "daemon-system unary target issuer"),
+    ("stream_target_root", "daemon-system stream target issuer"),
+    ("invoke_local_ability_target_explicit_root_timeout", "public local unary explicit tuple helper"),
+    ("invoke_local_ability_target_stream_explicit_root", "public local stream explicit tuple helper"),
+    ("invoke_local_ability_target_bidi_json_frames_explicit_root", "public local bidi explicit tuple helper"),
+):
+    if token not in local_invoke_text:
+        violations.append(f"{local_invoke}: missing {detail}: {token}")
+
+local_production = production_source(local_text)
 for token in (
     "LocalDaemonSubjectPolicy",
     "local_daemon_loopback_invocation_from_subject_policy",
@@ -350,7 +478,7 @@ for token, detail in (
     if token not in bidi_text:
         violations.append(f"{bidi_dispatcher}: missing {detail}: {token}")
 
-bidi_production = production_prefix(bidi_text)
+bidi_production = production_source(bidi_text)
 for token in (
     "dispatch_checked_session_request",
     "dispatch_session_request_named_for_caller",

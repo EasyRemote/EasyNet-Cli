@@ -10,8 +10,11 @@ use anyhow::Context;
 use clap::{Args, ValueEnum};
 use serde_json::{json, Value};
 
+use crate::cli::commands::invocation_tuple::{
+    require_causal_root, required_nonce_hex, required_subject,
+};
 use crate::support::platform::local_invoke::{
-    invoke_local_ability_target_bidi_json_frames_with_subject, LocalAbilityTarget, LocalBidiFrame,
+    invoke_local_ability_target_bidi_json_frames_explicit_root, LocalAbilityTarget, LocalBidiFrame,
 };
 use crate::support::platform::{output, timeouts};
 
@@ -41,6 +44,12 @@ pub struct BidiArgs {
     /// AXIOM envelope subject, expressed as a canonical resource URA.
     #[arg(long, value_name = "URA")]
     pub subject: Option<String>,
+    /// Explicit 16-byte invocation nonce as 32 hex characters.
+    #[arg(long, value_name = "HEX")]
+    pub nonce_hex: Option<String>,
+    /// Declare this bidi session as a root invocation with an empty causal parent set.
+    #[arg(long)]
+    pub causal_root: bool,
     /// Stop after this many down frames. Defaults to a bounded diagnostic sample.
     #[arg(long, value_name = "N")]
     pub max_frames: Option<usize>,
@@ -74,14 +83,15 @@ pub fn run(args: BidiArgs) -> anyhow::Result<()> {
         .map_err(anyhow::Error::msg)?
         .unwrap_or(timeouts::INVOKE_DEFAULT_SECS * 1000);
     let target = LocalAbilityTarget::from_selector(&ability_selector);
-    let frames = invoke_local_ability_target_bidi_json_frames_with_subject(
+    let surface = "local ability bidi";
+    let subject = required_subject(args.subject.as_deref(), surface)?;
+    let invocation_nonce = required_nonce_hex(args.nonce_hex.as_deref(), surface)?;
+    require_causal_root(args.causal_root, surface)?;
+    let frames = invoke_local_ability_target_bidi_json_frames_explicit_root(
         &target,
         arguments,
-        args.subject
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string),
+        subject,
+        invocation_nonce,
         Duration::from_millis(timeout_ms),
         input_frames,
         drain_limit(args.max_frames, args.until_terminal),
@@ -167,6 +177,8 @@ mod tests {
             input_frames: Vec::new(),
             timeout: 60,
             subject: None,
+            nonce_hex: None,
+            causal_root: false,
             max_frames: Some(0),
             until_terminal: false,
             raw: false,

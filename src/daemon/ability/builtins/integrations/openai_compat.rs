@@ -34,7 +34,7 @@ use crate::daemon::ability::names::integrations::{
     OPENAI_CHAT_COMPLETIONS, OPENAI_FILES_DELETE, OPENAI_FILES_RETRIEVE, OPENAI_FILES_UPLOAD,
     OPENAI_LIST_MODELS,
 };
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
+use crate::daemon::invocation::routing::target::CallMode;
 use crate::support::platform::process_singleton::ProcessSingleton;
 
 mod file_projection;
@@ -372,7 +372,7 @@ fn handle_chat_completions_with_handle(
         ability_args["system"] = json!(s);
     }
 
-    let invocation_target = InvocationTarget::local_daemon_system_with_subject(
+    let invocation_target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
         target.local_dispatch_key.clone(),
         ability_args,
         CallMode::Rpc,

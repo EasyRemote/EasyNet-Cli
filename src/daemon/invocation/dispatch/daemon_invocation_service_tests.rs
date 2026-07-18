@@ -17,6 +17,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use super::*;
+use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 use crate::daemon::identity::self_identity::{CanonicalSigner, TestCanonicalSigner};
 use crate::daemon::invocation::admission::peer_envelope_signer::sign_peer_request_envelope;
 use crate::daemon::invocation::admission::quota_meter::quota_meters_function;
@@ -946,7 +947,9 @@ fn signed_test_envelope_with_descriptor_ref(
             arguments,
         )
         .expect("descriptor-bound signed test envelope");
-    let signature = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());
+    let signature = signing_key.sign(&descriptor_bound_canonical_bytes(
+        &descriptor_bound.envelope,
+    ));
     envelope.caller_signature = Some(CallerSignature {
         algorithm: "ed25519".to_string(),
         signature: signature.to_bytes().to_vec(),

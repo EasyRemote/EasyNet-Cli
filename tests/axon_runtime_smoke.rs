@@ -24,11 +24,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axon_sdk::invocation::{
-    fresh_nonce, make_ability, sign_descriptor_bound_invocation, signing_key_from_bytes,
-    AbilityOptions, AgentIdentity, AxonError, BidiInputFrame, CallMode, CallerSignature,
-    CausalContext, DescriptorBoundEnvelope, DescriptorBoundEnvelopeParts,
-    DescriptorBoundInvocationRequest, InvocationLedger, KeyResolver, LedgerSink, LocalRuntime,
-    SubjectIdentity, UraProfile,
+    fresh_nonce, make_ability, signing_key_from_bytes, AbilityOptions, AgentIdentity, AxonError,
+    BidiInputFrame, CallMode, CallerSignature, CausalContext, DescriptorBoundEnvelope,
+    DescriptorBoundEnvelopeParts, DescriptorBoundInvocationDraft, DescriptorBoundInvocationRequest,
+    InvocationLedger, KeyResolver, LedgerSink, LocalRuntime, SubjectIdentity, UraProfile,
 };
 use easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
 use ed25519_dalek::{SigningKey, VerifyingKey};
@@ -124,7 +123,8 @@ fn build_signed_envelope(
         args_bytes: payload,
     })
     .expect("descriptor-bound envelope");
-    let signature = sign_descriptor_bound_invocation(signing_key, &envelope, "smoke-test-key");
+    let signature = DescriptorBoundInvocationDraft::from_envelope(envelope.clone())
+        .sign_caller_signature(signing_key, "smoke-test-key");
     (envelope, signature)
 }
 

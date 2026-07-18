@@ -6092,7 +6092,11 @@ mod tests {
     }
 
     fn ping_target_local() -> InvocationTarget {
-        InvocationTarget::local_daemon_system("observe.health", json!({}), CallMode::Rpc)
+        crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+            "observe.health",
+            json!({}),
+            CallMode::Rpc,
+        )
     }
 
     fn invoke_test_rpc(
@@ -6100,11 +6104,13 @@ mod tests {
         ability: &str,
         args: serde_json::Value,
     ) -> anyhow::Result<serde_json::Value> {
-        catalog.invoke_rpc_target_json(InvocationTarget::local_daemon_system(
-            ability,
-            args,
-            CallMode::Rpc,
-        ))
+        catalog.invoke_rpc_target_json(
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                ability,
+                args,
+                CallMode::Rpc,
+            ),
+        )
     }
 
     fn test_manifest(
@@ -6914,7 +6920,7 @@ mod tests {
             }),
         );
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             "media.x.snapshot",
             json!({}),
             CallMode::Rpc,
@@ -6966,7 +6972,12 @@ mod tests {
             }),
         );
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system("x.optional", json!({}), CallMode::Rpc);
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                "x.optional",
+                json!({}),
+                CallMode::Rpc,
+            );
         let resp = dispatcher.execute_rpc(target).unwrap();
         assert_eq!(
             resp,
@@ -6992,7 +7003,7 @@ mod tests {
             }),
         );
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             "x.subscribe",
             json!({}),
             CallMode::Stream,
@@ -7041,12 +7052,13 @@ mod tests {
         // construction fails loud instead of silently bouncing
         // to Local.
         let dispatcher = empty_registry();
-        let target = InvocationTarget::remote_daemon_system(
-            NodeId::new("peer"),
-            "observe.health",
-            json!({}),
-            CallMode::Rpc,
-        );
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::remote_root(
+                NodeId::new("peer"),
+                "observe.health",
+                json!({}),
+                CallMode::Rpc,
+            );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         let msg = format!("{err}");
         assert!(
@@ -7465,7 +7477,11 @@ mod tests {
         );
         let dispatcher = Arc::new(reg);
         let target =
-            InvocationTarget::local_daemon_system("device.test.echo", json!({}), CallMode::Bidi);
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                "device.test.echo",
+                json!({}),
+                CallMode::Bidi,
+            );
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -7489,7 +7505,11 @@ mod tests {
         // grep for it.
         let dispatcher = empty_registry();
         let target =
-            InvocationTarget::local_daemon_system("terminal.attach", json!({}), CallMode::Bidi);
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                "terminal.attach",
+                json!({}),
+                CallMode::Bidi,
+            );
         let err = dispatcher.execute_bidi(target).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("terminal.attach"), "names ability: {msg}");
@@ -7514,7 +7534,11 @@ mod tests {
         );
         let dispatcher = Arc::new(reg);
         let target =
-            InvocationTarget::local_daemon_system("device.test.bad", json!({}), CallMode::Bidi);
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                "device.test.bad",
+                json!({}),
+                CallMode::Bidi,
+            );
         let err = dispatcher.execute_bidi(target).unwrap_err();
         assert!(format!("{err}").contains("precondition foo missing"));
     }
@@ -7526,12 +7550,13 @@ mod tests {
         // lookup or panicking on a missing gateway method; pin it
         // so a later refactor can't drop the guard.
         let dispatcher = empty_registry();
-        let target = InvocationTarget::remote_daemon_system(
-            NodeId::new("01PEER"),
-            "terminal.attach",
-            json!({}),
-            CallMode::Bidi,
-        );
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::remote_root(
+                NodeId::new("01PEER"),
+                "terminal.attach",
+                json!({}),
+                CallMode::Bidi,
+            );
         let err = dispatcher.execute_bidi(target).unwrap_err();
         assert!(format!("{err}").to_lowercase().contains("remote"));
     }

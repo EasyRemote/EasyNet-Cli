@@ -34,8 +34,8 @@ invoke_body="$(
 grep -q 'let target = ability.local_target(&current_realm())?;' <<<"$invoke_body" \
     || fail "invoke_pages_ability must derive the typed LocalAbilityTarget from PagesAbility"
 
-grep -q 'invoke_local_ability_target_with_subject_timeout(' <<<"$invoke_body" \
-    || fail "invoke_pages_ability must use the typed local ability target helper"
+grep -q 'LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(' <<<"$invoke_body" \
+    || fail "invoke_pages_ability must use the named daemon-system ability issuer"
 
 grep -q '&target,' <<<"$invoke_body" \
     || fail "invoke_pages_ability must invoke the typed target, not a raw ability string"

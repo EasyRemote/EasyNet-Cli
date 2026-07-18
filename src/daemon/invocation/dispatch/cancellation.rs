@@ -14,6 +14,8 @@ use axon_sdk::invocation::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
+
 const DEFAULT_CANCEL_REASON: &str = "user_request";
 const MAX_CANCEL_REASON_BYTES: usize = 1_024;
 const LIFECYCLE_HASH_BYTES: usize = 32;
@@ -306,7 +308,7 @@ impl InvocationCancellationRegistry {
 }
 
 pub fn invocation_lifecycle_hash(envelope: &DescriptorBoundEnvelope) -> String {
-    hex::encode(Sha256::digest(envelope.canonical_bytes()))
+    hex::encode(Sha256::digest(descriptor_bound_canonical_bytes(envelope)))
 }
 
 fn normalize_lifecycle_hash(value: String) -> Result<String, InvocationCancellationError> {

@@ -53,7 +53,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
+use crate::daemon::invocation::routing::target::CallMode;
 use crate::daemon::persistence::agent_registry::AgentRegistry;
 
 use crate::daemon::ability::dispatch::OwnerKind;
@@ -222,7 +222,7 @@ fn send_task_handler(
         )));
     }
 
-    let invocation_target = InvocationTarget::local_daemon_system_with_subject(
+    let invocation_target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
         target.ability_ura().to_string(),
         task_args,
         CallMode::Rpc,

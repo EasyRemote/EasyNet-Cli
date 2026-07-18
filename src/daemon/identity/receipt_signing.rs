@@ -21,6 +21,7 @@ use ed25519_dalek::{Verifier as _, VerifyingKey};
 
 use super::self_identity::{CanonicalSigner, RuntimeSigningIdentity};
 use crate::daemon::ability::dispatch::{HostedAgentAuthorityInventory, HostedAgentAuthorityLease};
+use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 
 /// Owner inventory required to build a production receipt-signing runtime.
 /// `_system.local` is always added by the factory and cannot be omitted.
@@ -125,7 +126,7 @@ impl InvocationSigningAuthority for KeyServiceInvocationAuthority {
         }
         let signature = self
             .signer_capability
-            .sign_canonical(&envelope.canonical_bytes())
+            .sign_canonical(&descriptor_bound_canonical_bytes(envelope))
             .await
             .map_err(receipt_identity_error)?;
         if let Some(lease) = &self.hosted_lease {

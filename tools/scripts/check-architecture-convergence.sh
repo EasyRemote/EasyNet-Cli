@@ -1854,8 +1854,8 @@ if local_runtime_request.exists():
             "SystemInvocationIssuer must be the sole caller of the private system-signing factory",
         ),
         (
-            "sign_system_canonical(&envelope.canonical_bytes())",
-            "system signing must remain in the LocalRuntime request factory",
+            "sign_system_canonical(&descriptor_bound_canonical_bytes(&envelope))",
+            "system signing must use Axon's descriptor-bound draft owner inside the LocalRuntime request factory",
         ),
     ):
         if token not in request_text:

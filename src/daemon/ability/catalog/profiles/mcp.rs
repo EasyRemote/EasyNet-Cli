@@ -534,13 +534,13 @@ impl DaemonLocalInvoker {
         serde_json::Value,
         crate::support::platform::local_invoke::VerifiedLocalInvocationMeta,
     )> {
-        let context = crate::support::platform::local_invoke::LocalSystemInvocationContext::new(
-            target.default_subject_ura(),
-            axon_sdk::invocation::fresh_nonce(),
-            &[],
-            std::time::Duration::from_secs(30),
-            None,
-        )?;
+        let context =
+            crate::support::platform::local_invoke::LocalSystemInvocationIssuer::root_context(
+                target.default_subject_ura(),
+                &[],
+                std::time::Duration::from_secs(30),
+                None,
+            )?;
         crate::support::platform::local_invoke::invoke_local_ability_target_with_invocation_meta(
             target, args, context,
         )

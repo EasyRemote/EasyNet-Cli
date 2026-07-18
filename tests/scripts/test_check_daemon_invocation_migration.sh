@@ -165,6 +165,50 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "remote system anonymous nonce derivation should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+cat >"$SB/src/__fresh_root_probe.rs" <<'RS'
+pub fn probe() {
+    let _ = axon_sdk::invocation::InvocationDerivationPolicy::FreshRoot;
+}
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "anonymous FreshRoot policy should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+cat >"$SB/src/__local_system_context_probe.rs" <<'RS'
+pub fn probe() {
+    let _ = crate::support::platform::local_invoke::LocalSystemInvocationContext::new(
+        "easynet:///r/acme/resource/r1",
+        [1; 16],
+        &[],
+        std::time::Duration::from_secs(1),
+        None,
+    );
+}
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "anonymous local system context construction should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+cat >>"$SB/src/daemon/invocation/routing/remote_invoke.rs" <<'RS'
+
+#[cfg(test)]
+mod rf8_gate_test_only_probe {
+    fn allowed_test_only_name() {}
+}
+
+#[allow(dead_code)]
+pub(crate) fn daemon_system_root() {}
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "remote root constructor after cfg(test) should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 python3 - "$SB/src/support/platform/local_daemon_grpc.rs" <<'PY'
 from pathlib import Path
 import sys
@@ -250,6 +294,45 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "production InvocationTarget tuple patching should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+cat >"$SB/src/__target_constructor_probe.rs" <<'RS'
+pub fn probe() {
+    let _ = crate::daemon::invocation::routing::target::InvocationTarget::local_daemon_system(
+        "observe.health",
+        serde_json::Value::Null,
+        crate::daemon::invocation::routing::target::CallMode::Rpc,
+    );
+}
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "production daemon-system target constructor should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+cat >"$SB/src/cli/commands/__subject_only_local_ingress_probe.rs" <<'RS'
+#[allow(dead_code)]
+fn probe(target: &crate::support::platform::local_invoke::LocalAbilityTarget) {
+    let _ = crate::support::platform::local_invoke::invoke_local_ability_target_with_subject_timeout(
+        target,
+        serde_json::Value::Null,
+        None,
+        std::time::Duration::from_secs(1),
+    );
+    let _ = crate::support::platform::local_invoke::invoke_local_ability_target_stream_with_subject(
+        target,
+        serde_json::Value::Null,
+        None,
+        std::time::Duration::from_secs(1),
+        None,
+    );
+}
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "subject-only local public ingress should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 perl -0pi -e \

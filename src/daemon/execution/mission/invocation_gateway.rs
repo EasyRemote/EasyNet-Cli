@@ -871,7 +871,7 @@ impl MissionInvocationGateway for CatalogMissionInvocationGateway {
             }
         };
         let invocation_target =
-            crate::daemon::invocation::routing::target::InvocationTarget::local_daemon_system(
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
                 ability.clone(),
                 request.args,
                 crate::daemon::invocation::routing::target::CallMode::Rpc,
@@ -902,12 +902,11 @@ impl MissionInvocationGateway for CatalogMissionInvocationGateway {
 mod tests {
     use super::*;
 
-    use axon_sdk::invocation::axiom::sign_descriptor_bound_invocation;
     use axon_sdk::invocation::{
         make_ability, AbilityFn, AbilityOptions, AxonError, CallerSignature, CausalContext,
-        DescriptorBoundEnvelope, DescriptorBoundEnvelopeParts, DescriptorBoundInvocationRequest,
-        InvocationHandle, InvocationSigningAuthority, InvocationSigningAuthorityProvider,
-        KeyResolver, SignedEnvelope,
+        DescriptorBoundEnvelope, DescriptorBoundEnvelopeParts, DescriptorBoundInvocationDraft,
+        DescriptorBoundInvocationRequest, InvocationHandle, InvocationSigningAuthority,
+        InvocationSigningAuthorityProvider, KeyResolver, SignedEnvelope,
     };
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use tokio::sync::mpsc;
@@ -1115,11 +1114,10 @@ mod tests {
                     "mission_test_invocation_signer_caller_mismatch",
                 ));
             }
-            Ok(sign_descriptor_bound_invocation(
-                &self.signing_key,
-                envelope,
-                "mission-parent-key",
-            ))
+            Ok(
+                DescriptorBoundInvocationDraft::from_envelope(envelope.clone())
+                    .sign_caller_signature(&self.signing_key, "mission-parent-key"),
+            )
         }
     }
 

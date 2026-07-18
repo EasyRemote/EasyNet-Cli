@@ -25,6 +25,7 @@ use tonic::Status;
 
 use axon_sdk::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentity};
 
+use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 use crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts;
 use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura;
@@ -279,7 +280,7 @@ pub(crate) async fn sign_peer_request_envelope(
     let caller_signature =
         crate::daemon::invocation::caller_signature::sign_canonical_caller_signature(
             hub_signer,
-            &descriptor_bound.envelope.canonical_bytes(),
+            &descriptor_bound_canonical_bytes(&descriptor_bound.envelope),
         )
         .await
         .map_err(|err| {
@@ -501,7 +502,10 @@ mod tests {
         signer
             .signing_public_key()
             .expect("test signer public key")
-            .verify(&descriptor_bound.envelope.canonical_bytes(), &signature)
+            .verify(
+                &descriptor_bound_canonical_bytes(&descriptor_bound.envelope),
+                &signature,
+            )
             .expect("signature covers descriptor-bound canonical bytes");
         assert!(matches!(
             env.causal_context.and_then(|ctx| ctx.form),

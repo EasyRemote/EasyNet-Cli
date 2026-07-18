@@ -35,7 +35,7 @@ use crate::daemon::ability::names::{federation, governance};
 use crate::daemon::federation::client::ability_contract::ResolvedAgent;
 #[cfg(feature = "axon-pb")]
 use crate::daemon::invocation::routing::remote_invoke::{
-    RemoteAbilityInvocationTarget, RemoteInvocationSubject, RemoteInvocationTuplePlan,
+    RemoteAbilityInvocationTarget, RemoteInvocationSubject, RemoteSystemInvocationIssuer,
 };
 use crate::daemon::persistence::config;
 
@@ -484,7 +484,7 @@ fn probe_remote_device(agent_ura: &str) -> ProbeOutcome {
             agent_ura,
             DEVICE_HEALTH_ABILITY,
         )?;
-        let request = RemoteInvocationTuplePlan::daemon_system_root(
+        let request = RemoteSystemInvocationIssuer::root_plan(
             &target,
             crate::daemon::identity::local_invocation::local_daemon_ura(),
             RemoteInvocationSubject::TargetOwnedSystem(target.callee_ura().to_string()),

@@ -31,9 +31,7 @@ use super::principal_routes_gen as routes;
 use crate::core::ura;
 use crate::daemon::identity::self_identity::KeyringClient;
 use crate::daemon::keyring::{ManagedSigningKeyProjection, ManagedSigningStatus};
-use crate::support::platform::local_invoke::{
-    invoke_local_ability_target_with_subject_timeout, LocalAbilityTarget,
-};
+use crate::support::platform::local_invoke::{LocalAbilityTarget, LocalDaemonSystemAbilityIssuer};
 use crate::support::platform::output;
 
 const PROFILE_PURPOSE: &str = "user_signing.cli";
@@ -850,7 +848,7 @@ fn run_get(args: GetArgs) -> anyhow::Result<()> {
 
 fn invoke_principal_ability(ability: &str, args: Value) -> anyhow::Result<Value> {
     let target = principal_ability_target(ability, &args)?;
-    invoke_local_ability_target_with_subject_timeout(
+    LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(
         &target,
         args,
         None,

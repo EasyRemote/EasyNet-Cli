@@ -36,6 +36,7 @@ use axon_sdk::invocation::{
     UraProfile,
 };
 
+use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 use crate::daemon::identity::local_invocation::{
     sign_system_canonical, system_agent_identity, LOCAL_SYSTEM_AGENT_URA,
 };
@@ -115,11 +116,12 @@ impl LocalRuntimeRequestFactory {
                 envelope.envelope().caller.ura
             )));
         }
-        let signature = sign_system_canonical(&envelope.canonical_bytes()).map_err(|error| {
-            AxonError::internal(format!(
-                "sign daemon-local descriptor-bound invocation through key service: {error}"
-            ))
-        })?;
+        let signature = sign_system_canonical(&descriptor_bound_canonical_bytes(&envelope))
+            .map_err(|error| {
+                AxonError::internal(format!(
+                    "sign daemon-local descriptor-bound invocation through key service: {error}"
+                ))
+            })?;
         let request = DescriptorBoundInvocationRequest::externally_signed(
             mode,
             envelope,

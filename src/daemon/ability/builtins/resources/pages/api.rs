@@ -54,7 +54,7 @@ use super::state::PUBLISHED_PROJECTS;
 use crate::core::ura::AbilitySelector;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::ability::AuthorityScope;
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
+use crate::daemon::invocation::routing::target::CallMode;
 
 /// Process-wide handle to the live ability registry. Set once at
 /// boot by `pages::register`; read by the `kind="ability"` branch
@@ -235,7 +235,7 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
             let registry = handle.get().ok_or_else(|| {
                 anyhow::anyhow!("dispatch handle empty; build site forgot to populate OnceLock")
             })?;
-            let target = InvocationTarget::local_daemon_system_with_subject(
+            let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
                 selector.local_registry_ability().to_string(),
                 invoke_args,
                 CallMode::Rpc,

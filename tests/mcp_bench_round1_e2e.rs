@@ -35,9 +35,9 @@ use std::sync::Arc;
 mod runtime_fixture;
 
 use axon_sdk::invocation::{
-    fresh_nonce, sign_descriptor_bound_invocation, signing_key_from_bytes, AgentIdentity,
-    AxonError, CallMode as AxonCallMode, CausalContext, DescriptorBoundEnvelope,
-    DescriptorBoundEnvelopeParts, DescriptorBoundInvocationRequest, KeyResolver, LocalRuntime,
+    fresh_nonce, signing_key_from_bytes, AgentIdentity, AxonError, CallMode as AxonCallMode,
+    CausalContext, DescriptorBoundEnvelope, DescriptorBoundEnvelopeParts,
+    DescriptorBoundInvocationDraft, DescriptorBoundInvocationRequest, KeyResolver, LocalRuntime,
     SubjectIdentity, UraProfile,
 };
 use easynet_cli::daemon::execution::mcp::{McpClientService, McpClientsFile, McpServerSpec};
@@ -89,14 +89,10 @@ async fn externally_signed_stream_request(
         args_bytes: &payload,
     })
     .expect("complete descriptor-bound MCP invocation envelope");
-    let signature =
-        sign_descriptor_bound_invocation(signing_key, &envelope, "mcp-bench-test-caller");
-    DescriptorBoundInvocationRequest::externally_signed(
-        AxonCallMode::Stream,
-        envelope,
-        signature,
-        payload,
-    )
+    DescriptorBoundInvocationDraft::from_envelope(envelope)
+        .with_payload(payload)
+        .signed(AxonCallMode::Stream, signing_key, "mcp-bench-test-caller")
+        .expect("descriptor-bound MCP request")
 }
 
 fn registry_for_mcp_owner(

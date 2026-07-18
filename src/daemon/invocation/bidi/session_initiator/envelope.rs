@@ -41,7 +41,7 @@ pub async fn build_session_envelope_open(
         caller_ura,
         &hub_ura,
         caller_ura,
-        crate::daemon::invocation::InvocationDerivationPolicy::FreshRoot,
+        crate::daemon::invocation::RootInvocationDerivationIssuer::fresh_root(),
     )
     .map_err(|error| SelfIdentityError::Unexpected(format!("session.open envelope: {error}")))?
     .signed_descriptor_ref_invoke_request_with_signer(

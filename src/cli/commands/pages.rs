@@ -22,9 +22,7 @@
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
-use crate::support::platform::local_invoke::{
-    invoke_local_ability_target_with_subject_timeout, LocalAbilityTarget,
-};
+use crate::support::platform::local_invoke::{LocalAbilityTarget, LocalDaemonSystemAbilityIssuer};
 
 /// User-owned Pages ability verbs exposed by the local daemon.
 ///
@@ -223,7 +221,7 @@ fn current_realm() -> String {
 
 fn invoke_pages_ability(ability: &PagesAbility, args: Value) -> anyhow::Result<Value> {
     let target = ability.local_target(&current_realm())?;
-    invoke_local_ability_target_with_subject_timeout(
+    LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(
         &target,
         args,
         None,

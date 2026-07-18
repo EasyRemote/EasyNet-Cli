@@ -342,7 +342,11 @@ fn dispatcher_for(reg: Arc<AxonAbilityCatalog>) -> Arc<AxonAbilityCatalog> {
 fn target(name: &str, args: Value) -> InvocationTarget {
     // Test helper: default smoke calls use the named daemon-system policy.
     // Per-test code can still attach explicit subjects with `with_subject`.
-    InvocationTarget::local_daemon_system(name, args, CallMode::Rpc)
+    crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+        name,
+        args,
+        CallMode::Rpc,
+    )
 }
 
 fn terminal_followup_target(

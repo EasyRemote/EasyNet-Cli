@@ -659,7 +659,7 @@ pub(super) async fn signed_prelude_request(
         caller_ura,
         hub_ura,
         descriptor_subject_ura,
-        crate::daemon::invocation::dispatch::invocation_wire::InvocationDerivationPolicy::FreshRoot,
+        crate::daemon::invocation::RootInvocationDerivationIssuer::fresh_root(),
     )
     .map_err(|error| Status::invalid_argument(format!("{function_name} prelude: {error}")))?
     .signed_descriptor_ref_invoke_request_with_signer(

@@ -56,7 +56,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::core::ura::AbilitySelector;
 use crate::support::platform::local_invoke::{
     invoke_local_ability, invoke_local_ability_target_with_invocation_meta, LocalAbilityTarget,
-    LocalSystemInvocationContext,
 };
 
 /// Narrow re-export so integration tests (and other `pub` consumers
@@ -772,13 +771,13 @@ impl DiscoverRuntimeService {
         causal_parents: &[Value],
         trace_id: Option<&str>,
     ) -> anyhow::Result<(Value, Value)> {
-        let context = LocalSystemInvocationContext::new(
-            self.plan.ladder.target().default_subject_ura(),
-            axon_sdk::invocation::fresh_nonce(),
-            causal_parents,
-            std::time::Duration::from_secs(30),
-            trace_id,
-        )?;
+        let context =
+            crate::support::platform::local_invoke::LocalSystemInvocationIssuer::root_context(
+                self.plan.ladder.target().default_subject_ura(),
+                causal_parents,
+                std::time::Duration::from_secs(30),
+                trace_id,
+            )?;
         let (value, metadata) = invoke_local_ability_target_with_invocation_meta(
             self.plan.ladder.target(),
             self.plan

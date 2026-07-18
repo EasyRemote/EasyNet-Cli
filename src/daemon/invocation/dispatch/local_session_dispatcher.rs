@@ -23,6 +23,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::descriptor_binding::RuntimeBoundAbility;
 use super::invocation_wire::target_ura_from_envelope;
+#[cfg(test)]
+use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::bidi::session_initiator::{
     SessionDispatchError, SessionFrameDispatcher, SessionUpSender,
@@ -2046,7 +2048,9 @@ mod tests {
                 &args,
             )
             .expect("descriptor-bound carrier-v1 envelope");
-        let signature = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());
+        let signature = signing_key.sign(&descriptor_bound_canonical_bytes(
+            &descriptor_bound.envelope,
+        ));
         envelope.caller_signature = Some(axon_sdk::pb::axon::v1::CallerSignature {
             algorithm: "ed25519".to_string(),
             signature: signature.to_bytes().to_vec(),

@@ -65,9 +65,7 @@ use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
 use crate::daemon::ability::dispatch::OwnerKind;
 #[cfg(feature = "axon-pb")]
-use crate::daemon::invocation::routing::remote_invoke::{
-    RemoteInvocationSubject, RemoteInvocationTuplePlan,
-};
+use crate::daemon::invocation::routing::remote_invoke::RemoteInvocationSubject;
 pub const ABILITY_SEND_TASK: &str =
     crate::daemon::ability::names::integrations::A2A_CLIENT_SEND_TASK;
 
@@ -261,7 +259,7 @@ fn send_task_handler(
                 )))
             }
         };
-        let request = match RemoteInvocationTuplePlan::public_with_causal_context(
+        let request = match crate::daemon::invocation::routing::remote_invoke::RemoteChildInvocationIssuer::child_plan(
             &target_call,
             _env.callee(),
             RemoteInvocationSubject::Explicit(target_call.callee_ura().to_string()),

@@ -1260,7 +1260,7 @@ fn parse_positive_u32(ability: &'static str, raw: &str, name: &str) -> anyhow::R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
+    use crate::daemon::invocation::routing::target::CallMode;
     use crate::daemon::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
@@ -1411,7 +1411,7 @@ mod tests {
         let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             ABILITY_CAMERA_SNAPSHOT,
             json!({}),
             CallMode::Rpc,
@@ -1459,7 +1459,7 @@ mod tests {
         let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             ABILITY_CAMERA_SUBSCRIBE,
             json!({}),
             CallMode::Stream,
@@ -1497,7 +1497,7 @@ mod tests {
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let start = dispatcher
-            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
                 ABILITY_CAMERA_RECORD_START,
                 json!({"fps": 5, "max_duration_ms": 5000}),
                 CallMode::Rpc,
@@ -1508,7 +1508,7 @@ mod tests {
         assert_eq!(start["state"], "recording");
 
         let stop = dispatcher
-            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
                 ABILITY_CAMERA_RECORD_STOP,
                 json!({"recording_session_id": session_id}),
                 CallMode::Rpc,
@@ -1545,7 +1545,7 @@ mod tests {
         let dispatcher = Arc::new(reg);
         let start_args = json!({"fps": 5, "max_duration_ms": 5000, "max_bytes": 1048576});
         let first = dispatcher
-            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
                 ABILITY_CAMERA_RECORD_START,
                 start_args.clone(),
                 CallMode::Rpc,
@@ -1555,7 +1555,7 @@ mod tests {
         let session_id = first["recording_session_id"].as_str().unwrap().to_string();
 
         let duplicate_err = dispatcher
-            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
                 ABILITY_CAMERA_RECORD_START,
                 start_args,
                 CallMode::Rpc,
@@ -1580,7 +1580,7 @@ mod tests {
         }
 
         let stop = dispatcher
-            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
                 ABILITY_CAMERA_RECORD_STOP,
                 json!({"recording_session_id": session_id}),
                 CallMode::Rpc,
@@ -1597,11 +1597,12 @@ mod tests {
         let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system(
-            ABILITY_CAMERA_SUBSCRIBE,
-            json!({}),
-            CallMode::Stream,
-        );
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                ABILITY_CAMERA_SUBSCRIBE,
+                json!({}),
+                CallMode::Stream,
+            );
         let err = dispatcher.execute_stream(target).unwrap_err().to_string();
 
         assert!(
@@ -1624,11 +1625,12 @@ mod tests {
         let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system(
-            ABILITY_CAMERA_SNAPSHOT,
-            json!({}),
-            CallMode::Rpc,
-        );
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                ABILITY_CAMERA_SNAPSHOT,
+                json!({}),
+                CallMode::Rpc,
+            );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(
             err.to_string().contains(REASON_SUBJECT_REQUIRED),
@@ -1649,7 +1651,7 @@ mod tests {
         let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             ABILITY_CAMERA_SNAPSHOT,
             json!({}),
             CallMode::Rpc,
@@ -1687,7 +1689,7 @@ mod tests {
         let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             ABILITY_CAMERA_SNAPSHOT,
             json!({}),
             CallMode::Rpc,
@@ -1711,7 +1713,7 @@ mod tests {
         let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             ABILITY_CAMERA_SNAPSHOT,
             json!({"subject": "easynet:///r/x/resource/y"}),
             CallMode::Rpc,

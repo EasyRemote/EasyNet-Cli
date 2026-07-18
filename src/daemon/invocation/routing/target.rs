@@ -282,12 +282,11 @@ impl InvocationSubject {
 
 /// Explicit causal-context binding state for a daemon-local runtime dispatch.
 ///
-/// `PublicRootDerived` and `DaemonSystemRoot` are named derivation policies for
-/// root calls; neither may be represented as absence at ingress.
+/// `DaemonSystemRoot` is the named derivation policy for internal root calls;
+/// public ingress must carry an explicit causal context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvocationCausalContext {
     Explicit(CausalContext),
-    PublicRootDerived,
     DaemonSystemRoot,
 }
 
@@ -295,11 +294,6 @@ impl InvocationCausalContext {
     #[must_use]
     pub fn explicit(causal_context: CausalContext) -> Self {
         Self::Explicit(causal_context)
-    }
-
-    #[must_use]
-    pub fn public_root_derived() -> Self {
-        Self::PublicRootDerived
     }
 
     #[must_use]
@@ -311,7 +305,7 @@ impl InvocationCausalContext {
     pub fn as_axon(&self) -> CausalContext {
         match self {
             Self::Explicit(causal_context) => causal_context.clone(),
-            Self::PublicRootDerived | Self::DaemonSystemRoot => CausalContext::None,
+            Self::DaemonSystemRoot => CausalContext::None,
         }
     }
 }
@@ -346,7 +340,7 @@ impl InvocationTarget {
     /// Construct a local daemon-system dispatch using the named descriptor
     /// subject and root-causal derivation policy.
     #[must_use]
-    pub fn local_daemon_system(
+    fn local_daemon_system(
         ability: impl Into<String>,
         normalized_args: Value,
         call_mode: CallMode,
@@ -363,7 +357,7 @@ impl InvocationTarget {
     /// Construct a local daemon-system dispatch that acts on an explicit
     /// subject while still using the named root-causal system policy.
     #[must_use]
-    pub fn local_daemon_system_with_subject(
+    fn local_daemon_system_with_subject(
         ability: impl Into<String>,
         normalized_args: Value,
         call_mode: CallMode,
@@ -400,7 +394,7 @@ impl InvocationTarget {
     /// Construct a remote daemon-system dispatch using the named descriptor
     /// subject and root-causal derivation policy.
     #[must_use]
-    pub fn remote_daemon_system(
+    fn remote_daemon_system(
         node: NodeId,
         ability: impl Into<String>,
         normalized_args: Value,
@@ -484,6 +478,50 @@ impl InvocationTarget {
     #[must_use]
     pub fn resolved_causal_context(&self) -> CausalContext {
         self.causal_context.as_axon()
+    }
+}
+
+/// Canonical issuer for daemon-system invocation targets.
+///
+/// Product modules may select ability, arguments, call mode, and optional
+/// subject, but they do not construct daemon-system root subject/causal policy
+/// directly. Keeping target issuance here aligns local dispatch with the
+/// descriptor-bound request issuer used by `LocalRuntime`.
+pub struct SystemInvocationTargetIssuer;
+
+impl SystemInvocationTargetIssuer {
+    #[must_use]
+    pub fn local_root(
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+    ) -> InvocationTarget {
+        InvocationTarget::local_daemon_system(ability, normalized_args, call_mode)
+    }
+
+    #[must_use]
+    pub fn local_root_for_subject(
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+        subject: impl Into<String>,
+    ) -> InvocationTarget {
+        InvocationTarget::local_daemon_system_with_subject(
+            ability,
+            normalized_args,
+            call_mode,
+            subject,
+        )
+    }
+
+    #[must_use]
+    pub fn remote_root(
+        node: NodeId,
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+    ) -> InvocationTarget {
+        InvocationTarget::remote_daemon_system(node, ability, normalized_args, call_mode)
     }
 }
 
@@ -721,7 +759,11 @@ mod tests {
     #[test]
     fn local_daemon_system_constructor_names_root_derivation_policy() {
         let target =
-            InvocationTarget::local_daemon_system("observe.health", json!({}), CallMode::Rpc);
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                "observe.health",
+                json!({}),
+                CallMode::Rpc,
+            );
 
         assert_eq!(target.scope, TargetScope::Local);
         assert_eq!(target.ability, "observe.health");
@@ -735,7 +777,7 @@ mod tests {
 
     #[test]
     fn local_daemon_system_subject_constructor_keeps_policy_explicit() {
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             "claude.chat",
             json!({"prompt": "hello"}),
             CallMode::Rpc,
@@ -755,12 +797,13 @@ mod tests {
 
     #[test]
     fn remote_daemon_system_constructor_names_root_derivation_policy() {
-        let target = InvocationTarget::remote_daemon_system(
-            NodeId::new("peer-1"),
-            "observe.health",
-            json!({}),
-            CallMode::Rpc,
-        );
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::remote_root(
+                NodeId::new("peer-1"),
+                "observe.health",
+                json!({}),
+                CallMode::Rpc,
+            );
 
         assert_eq!(
             target.scope,
@@ -801,7 +844,11 @@ mod tests {
     #[test]
     fn daemon_system_subject_resolves_to_callee_for_non_hub_ability() {
         let target =
-            InvocationTarget::local_daemon_system("observe.health", json!({}), CallMode::Rpc);
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                "observe.health",
+                json!({}),
+                CallMode::Rpc,
+            );
 
         assert_eq!(
             target
@@ -814,7 +861,12 @@ mod tests {
     #[test]
     fn daemon_system_subject_resolves_to_ability_ura_for_hub_owner() {
         let hub_ability = crate::core::ura::hub_ability_ura("acme", "federation.status");
-        let target = InvocationTarget::local_daemon_system(hub_ability, json!({}), CallMode::Rpc);
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                hub_ability,
+                json!({}),
+                CallMode::Rpc,
+            );
 
         assert_eq!(
             target
@@ -826,7 +878,7 @@ mod tests {
 
     #[test]
     fn explicit_subject_resolution_rejects_non_ura_values() {
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             "camera.snapshot",
             json!({}),
             CallMode::Rpc,

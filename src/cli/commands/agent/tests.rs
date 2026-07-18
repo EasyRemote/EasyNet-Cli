@@ -152,7 +152,7 @@ fn invoke_agent_command_fixture(
         );
     }
     catalog.invoke_rpc_target_json(
-        crate::daemon::invocation::routing::target::InvocationTarget::local_daemon_system(
+        crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
             ability,
             args,
             crate::daemon::invocation::routing::target::CallMode::Rpc,

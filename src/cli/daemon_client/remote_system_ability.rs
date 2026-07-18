@@ -12,7 +12,7 @@ use anyhow::Context;
 
 #[cfg(feature = "axon-pb")]
 use crate::daemon::invocation::routing::remote_invoke::{
-    self, RemoteAbilityInvocationTarget, RemoteInvocationSubject, RemoteInvocationTuplePlan,
+    self, RemoteAbilityInvocationTarget, RemoteInvocationSubject, RemoteSystemInvocationIssuer,
 };
 
 #[cfg(feature = "axon-pb")]
@@ -84,7 +84,7 @@ fn invoke_target_owned_system_ability(
     let target_call =
         RemoteAbilityInvocationTarget::for_target_owned_selector(execution_target_ura, selector)?;
     let subject_ura = target_owned_system_subject_ura(&target_call)?;
-    let request = RemoteInvocationTuplePlan::daemon_system_root(
+    let request = RemoteSystemInvocationIssuer::root_plan(
         &target_call,
         caller_ura,
         RemoteInvocationSubject::TargetOwnedSystem(subject_ura),

@@ -591,12 +591,11 @@ mod tests {
 
     use crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire;
 
-    use axon_sdk::invocation::axiom::sign_descriptor_bound_invocation;
     use axon_sdk::invocation::{
         fresh_nonce, make_ability, sha256, signing_key_from_bytes, AbilityCallModes,
         AbilityOptions, AgentIdentity, AxonError, CausalContext, DescriptorBoundEnvelope,
-        DescriptorBoundEnvelopeParts, InvocationLedger, KeyResolver, LocalRuntime, SubjectIdentity,
-        UraProfile,
+        DescriptorBoundEnvelopeParts, DescriptorBoundInvocationDraft, InvocationLedger,
+        KeyResolver, LocalRuntime, SubjectIdentity, UraProfile,
     };
 
     /// RPC options carrying the descriptor proof the receipt-proof
@@ -690,7 +689,8 @@ mod tests {
                 args_bytes: payload,
             })
             .unwrap();
-        let sig_sdk = sign_descriptor_bound_invocation(sk, &descriptor_bound_sdk, "test-key");
+        let sig_sdk = DescriptorBoundInvocationDraft::from_envelope(descriptor_bound_sdk.clone())
+            .sign_caller_signature(sk, "test-key");
 
         // Project the SDK pieces back into wire form. CLI's
         // outbound clients would do the inverse direction; for the
@@ -916,8 +916,8 @@ mod tests {
             args_bytes: br#"{"command":"hostname"}"#,
         })
         .expect("backend descriptor-bound fixture");
-        let signature =
-            sign_descriptor_bound_invocation(&signing_key, &descriptor_bound, "test-key");
+        let signature = DescriptorBoundInvocationDraft::from_envelope(descriptor_bound.clone())
+            .sign_caller_signature(&signing_key, "test-key");
         let wire_env = pb::Envelope {
             caller: Some(pb::AgentIdentity {
                 ura: caller_sdk.ura,

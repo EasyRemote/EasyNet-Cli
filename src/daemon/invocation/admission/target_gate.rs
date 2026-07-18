@@ -24,6 +24,7 @@
 use tonic::Status;
 
 use crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot;
+use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 use crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts;
 use crate::daemon::federation::resolver_contract::NegativeReason;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
@@ -558,7 +559,7 @@ fn signed_child_canonical_hash(
     Ok(format!(
         "sha256:{}",
         hex::encode(axon_sdk::invocation::sha256(
-            &descriptor_bound.envelope.canonical_bytes()
+            &descriptor_bound_canonical_bytes(&descriptor_bound.envelope)
         ))
     ))
 }

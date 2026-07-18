@@ -67,10 +67,10 @@ use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use sha2::Digest as _;
 
 use axon_sdk::invocation::axiom::{
-    sign_descriptor_bound_invocation, AgentIdentity as AxiomAgentIdentity, CausalContext,
-    DescriptorBoundEnvelope, InvocationEnvelope, SubjectIdentity, UraProfile,
+    AgentIdentity as AxiomAgentIdentity, CausalContext, DescriptorBoundEnvelope,
+    InvocationEnvelope, SubjectIdentity, UraProfile,
 };
-use axon_sdk::invocation::{ErrorCode, KeyResolver};
+use axon_sdk::invocation::{DescriptorBoundInvocationDraft, ErrorCode, KeyResolver};
 use axon_sdk::pb::axon::v1::invocation_server::Invocation;
 use axon_sdk::pb::axon::v1::{
     invocation_target, AbilityTarget, AgentIdentity as PbAgentIdentity,
@@ -256,8 +256,8 @@ fn signed_request(
     let descriptor_bound =
         DescriptorBoundEnvelope::new(axiom_env).expect("descriptor-bound test envelope");
     let key_id_hint = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-    let sig =
-        sign_descriptor_bound_invocation(signing_key, &descriptor_bound, key_id_hint.as_str());
+    let sig = DescriptorBoundInvocationDraft::from_envelope(descriptor_bound)
+        .sign_caller_signature(signing_key, key_id_hint.as_str());
 
     let envelope = Envelope {
         caller: Some(PbAgentIdentity {

@@ -897,7 +897,7 @@ fn resolve_screen_subject(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
+    use crate::daemon::invocation::routing::target::CallMode;
     use crate::daemon::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
@@ -980,7 +980,7 @@ mod tests {
         let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             ABILITY_SCREEN_SNAPSHOT,
             json!({}),
             CallMode::Rpc,
@@ -1014,7 +1014,7 @@ mod tests {
         let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             ABILITY_SCREEN_SUBSCRIBE,
             json!({"fps": 5, "resolution": "320x180"}),
             CallMode::Stream,
@@ -1053,11 +1053,12 @@ mod tests {
         let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system(
-            ABILITY_SCREEN_SNAPSHOT,
-            json!({}),
-            CallMode::Rpc,
-        );
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                ABILITY_SCREEN_SNAPSHOT,
+                json!({}),
+                CallMode::Rpc,
+            );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(err.to_string().contains(REASON_SUBJECT_REQUIRED));
     }
@@ -1082,7 +1083,7 @@ mod tests {
         let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             ABILITY_SCREEN_SNAPSHOT,
             json!({}),
             CallMode::Rpc,
@@ -1099,7 +1100,7 @@ mod tests {
         let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             ABILITY_SCREEN_SNAPSHOT,
             json!({}),
             CallMode::Rpc,
@@ -1115,7 +1116,7 @@ mod tests {
         let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget::local_daemon_system_with_subject(
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
             ABILITY_SCREEN_SNAPSHOT,
             json!({"subject": "easynet:///r/x/resource/y"}),
             CallMode::Rpc,

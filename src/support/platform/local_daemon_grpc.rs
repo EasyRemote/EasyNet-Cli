@@ -186,8 +186,8 @@ pub(crate) struct LocalDaemonTargetedBidiRequest<'a> {
     pub function_name: &'a str,
     pub payload_json: serde_json::Value,
     pub callee_ura: &'a str,
-    pub default_subject_ura: &'a str,
-    pub subject: Option<String>,
+    pub subject_ura: &'a str,
+    pub invocation_nonce: [u8; 16],
     pub timeout: Duration,
     pub input_frames: Vec<serde_json::Value>,
     pub max_frames: Option<usize>,
@@ -561,7 +561,7 @@ pub(crate) fn invoke_local_daemon_ability_with_subject_timeout(
 }
 
 #[cfg(feature = "axon-pb")]
-pub(crate) fn invoke_local_daemon_ability_targeted_timeout(
+pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
     function_name: &str,
     payload_json: serde_json::Value,
     callee_ura: &str,
@@ -580,6 +580,31 @@ pub(crate) fn invoke_local_daemon_ability_targeted_timeout(
     invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
 }
 
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_local_daemon_ability_targeted_explicit_root_timeout(
+    function_name: &str,
+    payload_json: serde_json::Value,
+    callee_ura: &str,
+    subject_ura: &str,
+    invocation_nonce: [u8; 16],
+    timeout: Duration,
+) -> anyhow::Result<serde_json::Value> {
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_explicit_causal(
+        function_name,
+        payload_json,
+        callee_ura,
+        subject_ura,
+        invocation_nonce,
+        axon_sdk::pb::axon::v1::CausalContext {
+            form: Some(axon_sdk::pb::axon::v1::causal_context::Form::None(
+                axon_sdk::pb::axon::v1::Empty {},
+            )),
+        },
+        timeout,
+    )?;
+    invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
+}
+
 /// Invoke a daemon-hosted server-stream ability through Axon's local
 /// Invocation gRPC transport and drain its JSON frames.
 ///
@@ -589,7 +614,7 @@ pub(crate) fn invoke_local_daemon_ability_targeted_timeout(
 /// because stateful stream abilities keep their session state inside
 /// that process.
 #[cfg(feature = "axon-pb")]
-pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_subject(
+pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
     function_name: &str,
     payload_json: serde_json::Value,
     callee_ura: &str,
@@ -609,28 +634,59 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_subject(
     invoke_local_daemon_ability_stream_with_tuple_plan(tuple_plan, max_frames)
 }
 
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_root(
+    function_name: &str,
+    payload_json: serde_json::Value,
+    callee_ura: &str,
+    subject_ura: &str,
+    invocation_nonce: [u8; 16],
+    timeout: Duration,
+    max_frames: Option<usize>,
+) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_explicit_causal(
+        function_name,
+        payload_json,
+        callee_ura,
+        subject_ura,
+        invocation_nonce,
+        axon_sdk::pb::axon::v1::CausalContext {
+            form: Some(axon_sdk::pb::axon::v1::causal_context::Form::None(
+                axon_sdk::pb::axon::v1::Empty {},
+            )),
+        },
+        timeout,
+    )?;
+    invoke_local_daemon_ability_stream_with_tuple_plan(tuple_plan, max_frames)
+}
+
 /// Open a daemon-hosted bidirectional ability through Axon's local
 /// Invocation gRPC transport and drain JSON-frame down output.
 #[cfg(feature = "axon-pb")]
-pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_with_subject(
+pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_root(
     request: LocalDaemonTargetedBidiRequest<'_>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
     let LocalDaemonTargetedBidiRequest {
         function_name,
         payload_json,
         callee_ura,
-        default_subject_ura,
-        subject,
+        subject_ura,
+        invocation_nonce,
         timeout,
         input_frames,
         max_frames,
     } = request;
-    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_declared_subject(
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_explicit_causal(
         function_name,
         payload_json,
         callee_ura,
-        default_subject_ura,
-        subject,
+        subject_ura,
+        invocation_nonce,
+        axon_sdk::pb::axon::v1::CausalContext {
+            form: Some(axon_sdk::pb::axon::v1::causal_context::Form::None(
+                axon_sdk::pb::axon::v1::Empty {},
+            )),
+        },
         timeout,
     )?;
     invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan(
@@ -891,7 +947,7 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_subject(
+pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
     function_name: &str,
     _payload_json: serde_json::Value,
     _callee_ura: &str,
@@ -908,7 +964,24 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_subject(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_with_subject(
+pub(crate) fn invoke_local_daemon_ability_targeted_stream_explicit_root(
+    function_name: &str,
+    _payload_json: serde_json::Value,
+    _callee_ura: &str,
+    _subject_ura: &str,
+    _invocation_nonce: [u8; 16],
+    _timeout: Duration,
+    _max_frames: Option<usize>,
+) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
+    anyhow::bail!(
+        "streaming `{}` through the local Axon daemon requires the `axon-pb` feature; \
+         rebuild with `cargo build --features axon-pb`",
+        function_name
+    )
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_root(
     request: LocalDaemonTargetedBidiRequest<'_>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
     let function_name = request.function_name;
@@ -1789,7 +1862,7 @@ pub(crate) fn invoke_local_daemon_ability_with_subject_timeout(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub(crate) fn invoke_local_daemon_ability_targeted_timeout(
+pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
     function_name: &str,
     payload_json: serde_json::Value,
     _callee_ura: &str,
@@ -1797,7 +1870,29 @@ pub(crate) fn invoke_local_daemon_ability_targeted_timeout(
     _subject: Option<String>,
     _timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
-    invoke_local_daemon_ability(function_name, payload_json)
+    Err(anyhow::Error::new(
+        crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
+            "invoking targeted `{function_name}` through the local Axon daemon requires the \
+             `axon-pb` feature; rebuild with `cargo build --features axon-pb`"
+        )),
+    ))
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn invoke_local_daemon_ability_targeted_explicit_root_timeout(
+    function_name: &str,
+    _payload_json: serde_json::Value,
+    _callee_ura: &str,
+    _subject_ura: &str,
+    _invocation_nonce: [u8; 16],
+    _timeout: Duration,
+) -> anyhow::Result<serde_json::Value> {
+    Err(anyhow::Error::new(
+        crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
+            "invoking explicit-root `{function_name}` through the local Axon daemon requires the \
+             `axon-pb` feature; rebuild with `cargo build --features axon-pb`"
+        )),
+    ))
 }
 
 #[cfg(feature = "axon-pb")]

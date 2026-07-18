@@ -42,6 +42,7 @@ use rand::RngCore;
 use anyhow::Context as _;
 use tonic::Status;
 
+use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 pub use axon_sdk::invocation::InvocationDerivationPolicy;
 use axon_sdk::invocation::{
     AgentIdentity, CallerSignature, CanonicalEnvelopeBuilder, DescriptorBoundEnvelope,
@@ -55,6 +56,21 @@ use axon_sdk::pb::axon::v1::{
 pub const DEFAULT_URA_PROFILE: &str = "axon-strict-v2";
 
 pub(crate) const AUTHORITY_PROOF_METADATA_KEY: &str = "x-easynet-authority-proof";
+
+/// Canonical issuer for root invocation derivation policies.
+///
+/// Callers that legitimately start a new root invocation use this named issuer
+/// instead of mentioning `FreshRoot` inline. The resulting policy is still an
+/// Axon-owned derivation primitive; this type only centralizes daemon/product
+/// policy selection.
+pub struct RootInvocationDerivationIssuer;
+
+impl RootInvocationDerivationIssuer {
+    #[must_use]
+    pub fn fresh_root() -> InvocationDerivationPolicy {
+        InvocationDerivationPolicy::FreshRoot
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ProtoEnvelope {
@@ -356,7 +372,7 @@ impl ProtoEnvelope {
         let caller_signature =
             crate::daemon::invocation::caller_signature::sign_canonical_caller_signature(
                 signer,
-                &descriptor.canonical_bytes(),
+                &descriptor_bound_canonical_bytes(&descriptor),
             )
             .await
             .with_context(|| format!("sign descriptor-bound invocation as {caller_ura}"))?;
@@ -401,7 +417,7 @@ impl ProtoEnvelope {
         let caller_signature =
             crate::daemon::invocation::caller_signature::sign_canonical_caller_signature(
                 signer,
-                &descriptor.canonical_bytes(),
+                &descriptor_bound_canonical_bytes(&descriptor),
             )
             .await
             .with_context(|| format!("sign descriptor-bound invocation as {caller_ura}"))?;
@@ -433,7 +449,11 @@ impl ProtoEnvelope {
             .public_key(&caller_ura)
             .with_context(|| format!("resolve public signing projection for {caller_ura}"))?;
         let signature = signer
-            .sign_bound(&caller_ura, &public_key, &descriptor.canonical_bytes())
+            .sign_bound(
+                &caller_ura,
+                &public_key,
+                &descriptor_bound_canonical_bytes(&descriptor),
+            )
             .with_context(|| format!("sign descriptor-bound invocation as {caller_ura}"))?;
         self.wire_metadata.caller_signature = Some(CallerSignature {
             algorithm: "ed25519".to_string(),
@@ -1108,7 +1128,7 @@ mod tests {
             .0
             .verifying_key()
             .verify(
-                &descriptor.canonical_bytes(),
+                &descriptor_bound_canonical_bytes(&descriptor),
                 &Signature::from_bytes(&signature_bytes),
             )
             .expect("signature must verify against descriptor-bound canonical bytes");
@@ -1151,7 +1171,7 @@ mod tests {
             .0
             .verifying_key()
             .verify(
-                &descriptor.canonical_bytes(),
+                &descriptor_bound_canonical_bytes(&descriptor),
                 &Signature::from_bytes(&signature_bytes),
             )
             .expect("signature must verify against explicit descriptor ref");

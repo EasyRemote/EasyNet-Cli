@@ -253,47 +253,87 @@ pub fn invoke_local_ability_with_subject_timeout(
     )
 }
 
-/// Invoke a canonical local Ability URA target through the daemon.
+/// Named issuer for product CLI commands that invoke daemon-local abilities as
+/// `_system.local` roots while preserving the ability owner's callee identity.
 ///
-/// This path preserves the full descriptor owner identity in the signed
-/// envelope. Use it for user-facing `ability invoke <ability-ura>` surfaces;
-/// use the string-only helper only for daemon-owned system surfaces whose
-/// callee really is the local device.
-pub fn invoke_local_ability_target_with_subject_timeout(
+/// Generic `easynet ability ...` ingress must use explicit tuple helpers. This
+/// issuer exists for product commands such as pages, principal, and media
+/// record workflows whose user-facing contract is not raw invocation tuple
+/// submission.
+pub struct LocalDaemonSystemAbilityIssuer;
+
+impl LocalDaemonSystemAbilityIssuer {
+    pub fn invoke_target_root_timeout(
+        target: &LocalAbilityTarget,
+        args: Value,
+        subject: Option<String>,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        crate::support::platform::local_daemon_grpc::invoke_local_daemon_system_ability_targeted_root_timeout(
+            target.dispatch_name(),
+            args,
+            target.callee_ura(),
+            target.default_subject_ura(),
+            subject,
+            timeout,
+        )
+    }
+
+    pub fn stream_target_root(
+        target: &LocalAbilityTarget,
+        args: Value,
+        subject: Option<String>,
+        timeout: std::time::Duration,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        crate::support::platform::local_daemon_grpc::invoke_local_daemon_system_ability_targeted_stream_root(
+            target.dispatch_name(),
+            args,
+            target.callee_ura(),
+            target.default_subject_ura(),
+            subject,
+            timeout,
+            max_frames,
+        )
+    }
+}
+
+/// Invoke a canonical local target with public-ingress tuple facts.
+///
+/// This is the user-facing ability-invoke path: subject, nonce, and root
+/// causal placement are declared by the caller before daemon transport entry.
+pub fn invoke_local_ability_target_explicit_root_timeout(
     target: &LocalAbilityTarget,
     args: Value,
-    subject: Option<String>,
+    subject_ura: &str,
+    invocation_nonce: [u8; 16],
     timeout: std::time::Duration,
 ) -> anyhow::Result<Value> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_timeout(
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_explicit_root_timeout(
         target.dispatch_name(),
         args,
         target.callee_ura(),
-        target.default_subject_ura(),
-        subject,
+        subject_ura,
+        invocation_nonce,
         timeout,
     )
 }
 
-/// Stream a canonical local Ability URA target through the daemon.
-///
-/// This is the stream-mode twin of
-/// [`invoke_local_ability_target_with_subject_timeout`]; it keeps callee and
-/// default subject tied to the canonical Ability owner instead of defaulting
-/// them to the local device signer.
-pub fn invoke_local_ability_target_stream_with_subject(
+/// Stream a canonical local Ability URA target with public-ingress tuple facts.
+pub fn invoke_local_ability_target_stream_explicit_root(
     target: &LocalAbilityTarget,
     args: Value,
-    subject: Option<String>,
+    subject_ura: &str,
+    invocation_nonce: [u8; 16],
     timeout: std::time::Duration,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<LocalStreamFrame>> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_stream_with_subject(
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_stream_explicit_root(
         target.dispatch_name(),
         args,
         target.callee_ura(),
-        target.default_subject_ura(),
-        subject,
+        subject_ura,
+        invocation_nonce,
         timeout,
         max_frames,
     )
@@ -301,21 +341,22 @@ pub fn invoke_local_ability_target_stream_with_subject(
 
 /// Open a canonical local Ability URA target as an InvokeBidi JSON-frame
 /// session and drain a bounded number of down frames.
-pub fn invoke_local_ability_target_bidi_json_frames_with_subject(
+pub fn invoke_local_ability_target_bidi_json_frames_explicit_root(
     target: &LocalAbilityTarget,
     args: Value,
-    subject: Option<String>,
+    subject_ura: &str,
+    invocation_nonce: [u8; 16],
     timeout: std::time::Duration,
     input_frames: Vec<Value>,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<LocalBidiFrame>> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_bidi_json_frames_with_subject(
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_root(
         crate::support::platform::local_daemon_grpc::LocalDaemonTargetedBidiRequest {
             function_name: target.dispatch_name(),
             payload_json: args,
             callee_ura: target.callee_ura(),
-            default_subject_ura: target.default_subject_ura(),
-            subject,
+            subject_ura,
+            invocation_nonce,
             timeout,
             input_frames,
             max_frames,
@@ -353,7 +394,7 @@ pub struct LocalSystemInvocationContext<'a> {
 }
 
 impl<'a> LocalSystemInvocationContext<'a> {
-    pub fn new(
+    fn new(
         subject_ura: impl Into<String>,
         invocation_nonce: [u8; 16],
         causal_parents: &'a [Value],
@@ -384,6 +425,29 @@ impl<'a> LocalSystemInvocationContext<'a> {
             step_timeout,
             trace_id,
         })
+    }
+}
+
+/// Named issuer for daemon-local system contexts used by product adapters.
+///
+/// Callers provide the semantic subject, causal parents, timeout, and trace.
+/// Freshness is minted only here so adapters do not own root tuple facts.
+pub struct LocalSystemInvocationIssuer;
+
+impl LocalSystemInvocationIssuer {
+    pub fn root_context<'a>(
+        subject_ura: impl Into<String>,
+        causal_parents: &'a [Value],
+        step_timeout: std::time::Duration,
+        trace_id: Option<&'a str>,
+    ) -> anyhow::Result<LocalSystemInvocationContext<'a>> {
+        LocalSystemInvocationContext::new(
+            subject_ura,
+            axon_sdk::invocation::fresh_nonce(),
+            causal_parents,
+            step_timeout,
+            trace_id,
+        )
     }
 }
 

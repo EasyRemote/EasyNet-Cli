@@ -528,7 +528,7 @@ mod tests {
     use super::*;
     use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
     use crate::daemon::ability::CallMode as DescriptorCallMode;
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
+    use crate::daemon::invocation::routing::target::CallMode;
     use crate::daemon::plugins::package::PluginPackage;
     use crate::daemon::plugins::{
         PluginLoadPlanner, PluginPackageIndex, PluginRuntimeManager, PluginRuntimeState,
@@ -576,7 +576,7 @@ mod tests {
             .contains("plugin:"));
         assert_eq!(record.authority().scope().owner_projection(), "device");
         let result = catalog
-            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
                 "test.declarative_echo",
                 json!({"message": "hello"}),
                 CallMode::Rpc,
@@ -609,7 +609,7 @@ mod tests {
         );
         assert_eq!(record.descriptor().input_schema()["type"], "object");
         let result = catalog
-            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
                 "test.declarative_echo",
                 json!({"message": "hot"}),
                 CallMode::Rpc,
@@ -624,7 +624,7 @@ mod tests {
         assert!(!catalog.has_dynamic("test.declarative_echo"));
         assert!(!catalog.has_rpc("test.declarative_echo"));
         catalog
-            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
                 "test.declarative_echo",
                 json!({"message": "after"}),
                 CallMode::Rpc,
@@ -666,7 +666,7 @@ mod tests {
             "rejected plugin must not leave a dynamic handler behind"
         );
         let out = catalog
-            .invoke_rpc_target_json(InvocationTarget::local_daemon_system(
+            .invoke_rpc_target_json(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
                 "fs.read",
                 json!({}),
                 CallMode::Rpc,
@@ -697,7 +697,7 @@ mod tests {
         );
 
         let err = catalog
-            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
                 "observe.health",
                 json!({}),
                 CallMode::Rpc,
@@ -725,7 +725,7 @@ mod tests {
             .expect("EAL plugin control-plane record");
         assert_eq!(*record.implementation().source(), AbilityImplSource::Eal);
         let err = catalog
-            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
                 "test.declarative_eal",
                 json!({}),
                 CallMode::Rpc,
@@ -771,7 +771,7 @@ mod tests {
         );
         assert_eq!(record.descriptor().input_schema()["type"], "object");
         let err = catalog
-            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
                 "test.declarative_mcp",
                 json!([1, 2]),
                 CallMode::Rpc,

@@ -796,7 +796,7 @@ impl FederatedDirectorySubscriptionIssuer {
             self.signer.owner_ura(),
             callee_ura,
             subject_ura,
-            axon_sdk::invocation::InvocationDerivationPolicy::FreshRoot,
+            crate::daemon::invocation::RootInvocationDerivationIssuer::fresh_root(),
         )?
         .signed_descriptor_ref_stream_request_with_signer(
             ability,
