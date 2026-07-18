@@ -1196,9 +1196,9 @@ fn is_loopback_or_localhost(host: &str) -> bool {
     lower == "localhost" || lower == "::1" || lower.starts_with("127.")
 }
 
-fn is_docker_internal_hub_host(host: &str) -> bool {
+fn is_internal_authority_transport_host(host: &str) -> bool {
     let lower = host.to_ascii_lowercase();
-    lower == "hub" || lower.starts_with("hub-")
+    lower == "authority" || lower == "hub" || lower.starts_with("hub-")
 }
 
 fn rewrite_local_docker_session_endpoint(
@@ -1215,7 +1215,7 @@ fn rewrite_local_docker_session_endpoint(
     let Some(session_parts) = parse_url_endpoint(&creds.hub_endpoint) else {
         return false;
     };
-    if !is_docker_internal_hub_host(&session_parts.host) {
+    if !is_internal_authority_transport_host(&session_parts.host) {
         return false;
     }
 

@@ -4,10 +4,12 @@
 # Topology:
 #   hub      - opens a CLI-managed Hub daemon on TCP/TLS.
 #   provider - independently joins the Hub, starts a device daemon, and
-#              publishes several EasyRemote functions with @node.register.
+#              publishes a native EasyNet host_stream ability through the CLI
+#              plus several EasyRemote functions with @node.register.
 #   caller   - independently joins the same Hub, queries provider abilities
-#              through the CLI, calls one through the CLI, and calls the full
-#              EasyRemote syntax matrix through @remote typed stubs.
+#              through the CLI, calls one through the CLI, calls the full
+#              EasyRemote syntax matrix through @remote typed stubs, and calls
+#              the native EasyNet ability through an EasyRemote ability handle.
 
 set -euo pipefail
 
@@ -92,6 +94,10 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "@node.register" "$0"
   grep -q "@remote" "$0"
   grep -q "provider.remote" "$0"
+  grep -q "ability deploy" "$0"
+  grep -q -- "--format json" "$0"
+  grep -q "provider.ability" "$0"
+  grep -q "nativeer.native_echo" "$0"
   grep -q "ability list --node" "$0"
   grep -q "ability stream" "$0"
   grep -q "invocation list --ability-ura" "$0"
@@ -399,6 +405,111 @@ caller_cli "agent add '$TMP_AGENT' --type external --command /shared/fake-agent.
 caller_cli "agent remove '$TMP_AGENT' --purge" >"$OUT_DIR/agent-temp-remove.txt" 2>"$OUT_DIR/agent-temp-remove.err"
 caller_cli "agent list" >"$OUT_DIR/agent-list-after-temp-remove.txt" 2>"$OUT_DIR/agent-list-after-temp-remove.err"
 
+echo "==> publishing native EasyNet host_stream ability from provider via CLI deploy"
+NATIVE_NAMESPACE="nativeer"
+NATIVE_FUNCTION="native_echo"
+NATIVE_QUALIFIED="${NATIVE_NAMESPACE}.${NATIVE_FUNCTION}"
+NATIVE_BUNDLE="/shared/native-easynet-ability"
+NATIVE_SOCKET="/shared/native-easynet-host.sock"
+mkdir -p "$SHARED_DIR/native-easynet-ability"
+cat >"$SHARED_DIR/native_easynet_host.py" <<'PY'
+import json
+import signal
+import threading
+from pathlib import Path
+
+from easyremote import Context
+from easyremote._host.server import HostServer, HostedFunction
+from easyremote.schema import derive
+
+ready = Path("/shared/native-easynet-ready.json")
+stop = threading.Event()
+server = HostServer(Path("/shared/native-easynet-host.sock"))
+
+def native_echo(ctx: Context, text: str, times: int = 1) -> dict[str, object]:
+    return {
+        "source": "easynet-cli-deploy",
+        "text": text,
+        "times": times,
+        "joined": text * times,
+        "caller": ctx.caller,
+        "invocation_id": ctx.invocation_id,
+    }
+
+def handle_stop(signum, frame):
+    stop.set()
+
+signal.signal(signal.SIGTERM, handle_stop)
+signal.signal(signal.SIGINT, handle_stop)
+server.add(
+    HostedFunction(
+        name="nativeer.native_echo",
+        fn=native_echo,
+        signature=derive(native_echo, context_type=Context),
+    )
+)
+server.start()
+ready.write_text(
+    json.dumps(
+        {
+            "publisher": "easynet ability deploy",
+            "function": "nativeer.native_echo",
+            "host_socket": str(server.socket_path),
+        },
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+print("READY " + ready.read_text(encoding="utf-8").strip(), flush=True)
+try:
+    stop.wait()
+finally:
+    server.stop()
+PY
+cat >"$SHARED_DIR/native-easynet-ability/ability.json" <<JSON
+{
+  "name": "${NATIVE_FUNCTION}",
+  "namespace": "${NATIVE_NAMESPACE}",
+  "description": "Native EasyNet host_stream ability invoked by EasyRemote.",
+  "admission_action": "stream",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["text"],
+    "properties": {
+      "text": {"type": "string"},
+      "times": {"type": "integer", "default": 1}
+    },
+    "x-easyremote-parameter-order": ["text", "times"]
+  },
+  "output_schema": {
+    "type": "object",
+    "required": ["source", "text", "times", "joined", "caller", "invocation_id"],
+    "properties": {
+      "source": {"type": "string"},
+      "text": {"type": "string"},
+      "times": {"type": "integer"},
+      "joined": {"type": "string"},
+      "caller": {"type": "string"},
+      "invocation_id": {"type": "string"}
+    }
+  },
+  "exec": {
+    "kind": "host_stream",
+    "host_socket": "${NATIVE_SOCKET}",
+    "function": "${NATIVE_QUALIFIED}"
+  }
+}
+JSON
+service_exec provider "HOME=/home/provider EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python nohup python3 /shared/native_easynet_host.py > /shared/native-easynet-host.log 2>&1 & echo \$! > /shared/native-easynet-host.pid"
+wait_file "$SHARED_DIR/native-easynet-ready.json" || die "native EasyNet host_stream server did not publish readiness"
+cp "$SHARED_DIR/native-easynet-ready.json" "$OUT_DIR/native-easynet-ready.json"
+provider_cli "ability deploy '$NATIVE_BUNDLE' --node local --format json" \
+  >"$OUT_DIR/provider-native-deploy.json" 2>"$OUT_DIR/provider-native-deploy.err"
+NATIVE_ABILITY_URA="$(jq -r '.ability_ura' "$OUT_DIR/provider-native-deploy.json")"
+[[ "$NATIVE_ABILITY_URA" == easynet://* ]] || die "native EasyNet deploy returned invalid ability URA: $NATIVE_ABILITY_URA"
+
 echo "==> starting EasyRemote ComputeNode provider with @node.register matrix"
 cat >"$SHARED_DIR/easyremote_provider.py" <<'PY'
 import asyncio
@@ -514,6 +625,8 @@ caller_cli "ability list --node '$PROVIDER_NODE' --format json" \
   >"$OUT_DIR/caller-ability-list-provider.json" 2>"$OUT_DIR/caller-ability-list-provider.err"
 caller_cli "ability show '$ADD_URA' --node '$PROVIDER_NODE' --format json" \
   >"$OUT_DIR/caller-ability-show-add.json" 2>"$OUT_DIR/caller-ability-show-add.err"
+caller_cli "ability show '$NATIVE_ABILITY_URA' --node '$PROVIDER_NODE' --format json" \
+  >"$OUT_DIR/caller-ability-show-native.json" 2>"$OUT_DIR/caller-ability-show-native.err"
 
 echo "==> calling provider ability from caller device through CLI"
 caller_cli "ability stream '$ADD_URA' --args '$(json_arg add 19 23)' --format json --raw" \
@@ -530,8 +643,10 @@ from easyremote import Client, FreshRoot, ResolvedTargetSubject, remote
 
 provider_node = os.environ["PROVIDER_NODE"]
 provider_ura = os.environ["PROVIDER_URA"]
+native_ability_ura = os.environ["NATIVE_ABILITY_URA"]
 client = Client(invocation_policy=FreshRoot(ResolvedTargetSubject()))
 provider = client.device(provider_node)
+native = provider.ability("nativeer.native_echo")
 
 @remote(client=client, owner_ura=provider_ura, name="add")
 def remote_add(a: int, b: int) -> dict[str, object]: ...
@@ -557,6 +672,9 @@ def countdown(n: int): ...
 @provider.remote
 def whoami(note: str) -> dict[str, object]: ...
 
+@native.remote
+def native_echo(text: str, times: int = 1) -> dict[str, object]: ...
+
 results = {
     "decorators": ["@remote", "RemoteOwner.remote"],
     "provider_node": provider_node,
@@ -569,35 +687,46 @@ results = {
     "bundle_list_dict": bundle([1, 2, 3], {"label": "caller", "ok": True}),
     "countdown_stream": list(countdown.stream(3)),
     "whoami_context": whoami("from-caller-device"),
+    "native_easynet": {
+        "ability_ura": native_ability_ura,
+        "handle_call": native.call(text="from-handle", times=2),
+        "typed_stub": native_echo("from-stub", times=3),
+    },
 }
 print(json.dumps(results, indent=2, sort_keys=True))
 PY
-service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python PROVIDER_NODE='$PROVIDER_NODE' PROVIDER_URA='$PROVIDER_URA' python3 /shared/easyremote_caller.py" \
+service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python PROVIDER_NODE='$PROVIDER_NODE' PROVIDER_URA='$PROVIDER_URA' NATIVE_ABILITY_URA='$NATIVE_ABILITY_URA' python3 /shared/easyremote_caller.py" \
   >"$OUT_DIR/easyremote-remote-results.json" 2>"$OUT_DIR/easyremote-caller.log"
 cp "$OUT_DIR/easyremote-caller.log" "$SHARED_DIR/easyremote-caller.log"
+caller_cli "invocation list --ability-ura '$NATIVE_ABILITY_URA' --format json" \
+  >"$OUT_DIR/caller-invocation-list-native-after-easyremote.json" 2>"$OUT_DIR/caller-invocation-list-native-after-easyremote.err"
 
 echo "==> uninstalling one provider EasyRemote ability and verifying caller sees removal"
 provider_cli "ability uninstall '$ADD_URA' --yes" >"$OUT_DIR/provider-ability-uninstall-add.json" 2>"$OUT_DIR/provider-ability-uninstall-add.err"
 caller_cli "ability list --node '$PROVIDER_NODE' --format json" \
   >"$OUT_DIR/caller-ability-list-provider-after-uninstall.json" 2>"$OUT_DIR/caller-ability-list-provider-after-uninstall.err"
+provider_cli "ability uninstall '$NATIVE_ABILITY_URA' --yes" >"$OUT_DIR/provider-ability-uninstall-native.json" 2>"$OUT_DIR/provider-ability-uninstall-native.err"
+caller_cli "ability list --node '$PROVIDER_NODE' --format json" \
+  >"$OUT_DIR/caller-ability-list-provider-after-native-uninstall.json" 2>"$OUT_DIR/caller-ability-list-provider-after-native-uninstall.err"
 
 python3 - "$OUT_DIR" "$PROVIDER_NODE" "$CALLER_NODE" "$PROVIDER_URA" "$CALLER_URA" "$AGENT_NAME" "$TMP_AGENT" "$HUB_URA" \
-  "$ADD_URA" "$TOTAL_URA" "$MERGE_URA" "$DEFAULTED_URA" "$SUMMARIZE_URA" "$BUNDLE_URA" "$COUNTDOWN_URA" "$WHOAMI_URA" <<'PY' >"$OUT_DIR/report.json"
+  "$NATIVE_ABILITY_URA" "$ADD_URA" "$TOTAL_URA" "$MERGE_URA" "$DEFAULTED_URA" "$SUMMARIZE_URA" "$BUNDLE_URA" "$COUNTDOWN_URA" "$WHOAMI_URA" <<'PY' >"$OUT_DIR/report.json"
 import json
 import sys
 from pathlib import Path
 
 out = Path(sys.argv[1])
 provider_node, caller_node, provider_ura, caller_ura, agent_name, tmp_agent, hub_ura = sys.argv[2:9]
+native_ability_ura = sys.argv[9]
 ability_uras = {
-    "add": sys.argv[9],
-    "total": sys.argv[10],
-    "merge": sys.argv[11],
-    "defaulted": sys.argv[12],
-    "summarize": sys.argv[13],
-    "bundle": sys.argv[14],
-    "countdown": sys.argv[15],
-    "whoami": sys.argv[16],
+    "add": sys.argv[10],
+    "total": sys.argv[11],
+    "merge": sys.argv[12],
+    "defaulted": sys.argv[13],
+    "summarize": sys.argv[14],
+    "bundle": sys.argv[15],
+    "countdown": sys.argv[16],
+    "whoami": sys.argv[17],
 }
 
 def text(name: str) -> str:
@@ -632,11 +761,15 @@ def payload_contains(value, needle: str) -> bool:
     return needle in json.dumps(value, separators=(",", ":"), sort_keys=True)
 
 ready = load("easyremote-ready.json") or {}
+native_ready = load("native-easynet-ready.json") or {}
+native_deploy = load("provider-native-deploy.json") or {}
 remote_results = load("easyremote-remote-results.json") or {}
 cli_stream = load("caller-cli-add-stream.json") or []
 cli_add_records = invocation_records("caller-invocation-list-add-after-cli.json")
+native_records = invocation_records("caller-invocation-list-native-after-easyremote.json")
 caller_rows = ability_rows("caller-ability-list-provider.json")
 caller_rows_after_uninstall = ability_rows("caller-ability-list-provider-after-uninstall.json")
+caller_rows_after_native_uninstall = ability_rows("caller-ability-list-provider-after-native-uninstall.json")
 
 def row_has_ura(rows, ability_ura: str) -> bool:
     return any(
@@ -646,11 +779,13 @@ def row_has_ura(rows, ability_ura: str) -> bool:
     )
 
 all_provider_abilities_visible = all(row_has_ura(caller_rows, ura) for ura in ability_uras.values())
+native_visible = row_has_ura(caller_rows, native_ability_ura)
 add_removed = not row_has_ura(caller_rows_after_uninstall, ability_uras["add"])
 other_abilities_remain = all(
     row_has_ura(caller_rows_after_uninstall, ability_uras[name])
     for name in ("total", "merge", "defaulted", "summarize", "bundle", "countdown", "whoami")
 )
+native_removed = not row_has_ura(caller_rows_after_native_uninstall, native_ability_ura)
 receipt_chains_verified = (
     len(cli_add_records) == 1
     and str(cli_add_records[0].get("state", "")).lower() == "completed"
@@ -659,6 +794,20 @@ receipt_chains_verified = (
     and isinstance(cli_add_records[0]["receipt_chain"].get("anchors"), list)
     and len(cli_add_records[0]["receipt_chain"]["anchors"]) > 0
 )
+native_receipt_chains_verified = (
+    len(native_records) == 2
+    and all(str(record.get("state", "")).lower() == "completed" for record in native_records)
+    and all(isinstance(record.get("receipt_chain"), dict) for record in native_records)
+    and all(record["receipt_chain"].get("verified") is True for record in native_records)
+    and all(
+        isinstance(record["receipt_chain"].get("anchors"), list)
+        and len(record["receipt_chain"]["anchors"]) > 0
+        for record in native_records
+    )
+)
+native_results = remote_results.get("native_easynet") or {}
+native_handle = native_results.get("handle_call") or {}
+native_stub = native_results.get("typed_stub") or {}
 
 report = {
     "topology": {
@@ -668,6 +817,12 @@ report = {
         "provider_ura": provider_ura,
         "caller_node": caller_node,
         "caller_ura": caller_ura,
+    },
+    "native_easynet": {
+        "host_ready": native_ready,
+        "deploy": native_deploy,
+        "ability_ura": native_ability_ura,
+        "remote_results": native_results,
     },
     "easyremote": {
         "provider_ready": ready,
@@ -700,7 +855,15 @@ report = {
             and set((ready.get("abilities") or {}).keys()) == set(ability_uras.keys())
         ),
         "caller_cli_queried_all_provider_abilities": all_provider_abilities_visible,
+        "caller_cli_queried_native_easynet_ability": native_visible,
         "caller_cli_showed_provider_add_ability": ability_uras["add"] in text("caller-ability-show-add.json"),
+        "caller_cli_showed_native_easynet_ability": native_ability_ura in text("caller-ability-show-native.json"),
+        "provider_cli_deployed_native_easynet_ability": (
+            native_deploy.get("ability_ura") == native_ability_ura
+            and native_deploy.get("namespace") == "nativeer"
+            and native_deploy.get("public_name") == "native_echo"
+            and native_deploy.get("state") == "ACTIVE"
+        ),
         "caller_cli_stream_called_provider_add": payload_contains(cli_stream, '"value":42'),
         "caller_remote_used_module_remote_decorator": remote_results.get("add", {}).get("value") == 5,
         "caller_remote_used_owner_remote_decorator": "RemoteOwner.remote" in remote_results.get("decorators", []),
@@ -724,16 +887,35 @@ report = {
             and remote_results["whoami_context"].get("caller") == caller_ura
             and bool(remote_results["whoami_context"].get("invocation_id"))
         ),
+        "caller_remote_called_easynet_native_handle": (
+            native_handle.get("source") == "easynet-cli-deploy"
+            and native_handle.get("joined") == "from-handlefrom-handle"
+            and native_handle.get("caller") == caller_ura
+            and bool(native_handle.get("invocation_id"))
+        ),
+        "caller_remote_called_easynet_native_typed_stub": (
+            native_stub.get("source") == "easynet-cli-deploy"
+            and native_stub.get("joined") == "from-stubfrom-stubfrom-stub"
+            and native_stub.get("caller") == caller_ura
+            and bool(native_stub.get("invocation_id"))
+        ),
         "one_cli_add_invocation_record": (
             len(cli_add_records) == 1
             and ability_uras["add"] in json.dumps(cli_add_records[0])
         ),
         "cli_add_receipt_chain_projected": receipt_chains_verified,
+        "two_native_easynet_invocation_records": (
+            len(native_records) == 2
+            and all(native_ability_ura in json.dumps(record) for record in native_records)
+        ),
+        "native_easynet_receipt_chains_projected": native_receipt_chains_verified,
         "caller_observed_provider_ability_removed": add_removed,
         "provider_other_abilities_remained_after_delete": other_abilities_remain,
+        "caller_observed_native_easynet_ability_removed": native_removed,
     },
     "caller_cli_add_stream_frames": cli_stream,
     "caller_cli_add_invocation_records": cli_add_records,
+    "caller_native_easynet_invocation_records": native_records,
 }
 print(json.dumps(report, indent=2, sort_keys=True))
 PY
@@ -747,7 +929,10 @@ jq -e '
   and .assertions.temp_agent_removed_on_caller
   and .assertions.provider_registered_register_decorator_matrix
   and .assertions.caller_cli_queried_all_provider_abilities
+  and .assertions.caller_cli_queried_native_easynet_ability
   and .assertions.caller_cli_showed_provider_add_ability
+  and .assertions.caller_cli_showed_native_easynet_ability
+  and .assertions.provider_cli_deployed_native_easynet_ability
   and .assertions.caller_cli_stream_called_provider_add
   and .assertions.caller_remote_used_module_remote_decorator
   and .assertions.caller_remote_used_owner_remote_decorator
@@ -758,10 +943,15 @@ jq -e '
   and .assertions.caller_remote_list_dict_payload
   and .assertions.caller_remote_generator_stream
   and .assertions.caller_remote_context_function
+  and .assertions.caller_remote_called_easynet_native_handle
+  and .assertions.caller_remote_called_easynet_native_typed_stub
   and .assertions.one_cli_add_invocation_record
   and .assertions.cli_add_receipt_chain_projected
+  and .assertions.two_native_easynet_invocation_records
+  and .assertions.native_easynet_receipt_chains_projected
   and .assertions.caller_observed_provider_ability_removed
   and .assertions.provider_other_abilities_remained_after_delete
+  and .assertions.caller_observed_native_easynet_ability_removed
 ' "$OUT_DIR/report.json" >/dev/null
 
 python3 - "$OUT_DIR/report.json" >"$OUT_DIR/report.md" <<'PY'
@@ -777,6 +967,8 @@ print(f"- Caller device: `{report['topology']['caller_ura']}`")
 print("- EasyRemote abilities:")
 for name, ura in sorted(report["easyremote"]["ability_uras"].items()):
     print(f"  - `{name}`: `{ura}`")
+print("- Native EasyNet ability:")
+print(f"  - `nativeer.native_echo`: `{report['native_easynet']['ability_ura']}`")
 print("")
 print("## Assertions")
 for key, value in report["assertions"].items():

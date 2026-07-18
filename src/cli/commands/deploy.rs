@@ -36,7 +36,7 @@ use serde_json::json;
 
 use crate::daemon::resources::files::{resource_ref_for_local_path, FilesystemResourceCapability};
 use crate::support::platform::local_invoke::invoke_local_ability_with_subject;
-use crate::support::platform::output;
+use crate::support::platform::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
 pub struct DeployArgs {
@@ -57,6 +57,10 @@ pub struct DeployArgs {
         default_value = "local"
     )]
     pub node: String,
+    /// Output format. `json` prints the daemon's deploy result to stdout
+    /// so scripts can consume ability_ura, install_id, and state directly.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+    pub format: OutputFormat,
 }
 
 pub fn run(args: DeployArgs) -> anyhow::Result<()> {
@@ -90,6 +94,11 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
     )
     .context("invoke ability.deploy")?;
     eprintln!("{}", style("✓").green());
+
+    if args.format == OutputFormat::Json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
 
     if let Some(install_id) = result.get("install_id").and_then(|v| v.as_str()) {
         output::step(&format!("install_id: {install_id}"));

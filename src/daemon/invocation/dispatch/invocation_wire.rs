@@ -606,7 +606,7 @@ fn infer_entity_ref_kind(ura: &str) -> anyhow::Result<EntityRefKind> {
         Ok(crate::core::ura::URAKind::Ability) => Ok(EntityRefKind::Ability),
         Ok(crate::core::ura::URAKind::Device) => Ok(EntityRefKind::Device),
         Ok(crate::core::ura::URAKind::Resource) => Ok(EntityRefKind::Resource),
-        Ok(other) => anyhow::bail!("subject_ref_kind_unsupported:{other:?}"),
+        Ok(other) => anyhow::bail!("subject_ref_kind_unsupported:{}", subject_kind_label(other)),
         Err(err) => anyhow::bail!("subject_ref_ura_parse_failed:{err}"),
     }
 }
@@ -614,8 +614,12 @@ fn infer_entity_ref_kind(ura: &str) -> anyhow::Result<EntityRefKind> {
 fn top_level_subject_entity_kind(ura: &str) -> Option<EntityRefKind> {
     let rest = ura.trim().strip_prefix(crate::core::ura::URA_SCHEME)?;
     let mut segments = rest.split('/');
-    let realm = segments.next()?;
-    let role = segments.next()?;
+    let first = segments.next()?;
+    let (realm, role) = if first == "r" {
+        (segments.next()?, segments.next()?)
+    } else {
+        (first, segments.next()?)
+    };
     if realm.is_empty() || role.is_empty() {
         return None;
     }
@@ -629,6 +633,18 @@ fn top_level_subject_entity_kind(ura: &str) -> Option<EntityRefKind> {
         "state_object" | "state-object" | "state_objects" | "state-objects" | "state"
         | "states" => Some(EntityRefKind::StateObject),
         _ => None,
+    }
+}
+
+fn subject_kind_label(kind: crate::core::ura::URAKind) -> &'static str {
+    match kind {
+        crate::core::ura::URAKind::Authority => "Hub",
+        crate::core::ura::URAKind::User => "User",
+        crate::core::ura::URAKind::Agent => "Agent",
+        crate::core::ura::URAKind::Ability => "Ability",
+        crate::core::ura::URAKind::Device => "Device",
+        crate::core::ura::URAKind::Resource => "Resource",
+        crate::core::ura::URAKind::Unknown => "Unknown",
     }
 }
 

@@ -317,10 +317,9 @@ fn public_ability_name_for_wire(callee_ura: &str, ability: &str) -> String {
         crate::core::ura::URAKind::Agent => {
             crate::core::ura::owner_local_ability_name(callee_ura, ability)
         }
-        crate::core::ura::URAKind::Authority => ability
-            .strip_prefix("authority.")
-            .unwrap_or(ability)
-            .to_string(),
+        crate::core::ura::URAKind::Authority => {
+            crate::core::ura::owner_local_ability_name(callee_ura, ability)
+        }
         crate::core::ura::URAKind::Device => ability.to_string(),
         _ => ability.to_string(),
     }

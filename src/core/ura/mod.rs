@@ -272,11 +272,7 @@ pub fn owner_local_ability_name(owner_ura: &str, ability_name: &str) -> String {
                 .to_string()
         }
         URAKind::Device => name.strip_prefix("device.").unwrap_or(name).to_string(),
-        URAKind::Authority => name
-            .strip_prefix("authority.")
-            .or_else(|| name.strip_prefix("hub."))
-            .unwrap_or(name)
-            .to_string(),
+        URAKind::Authority => name.strip_prefix("hub.").unwrap_or(name).to_string(),
         _ => name.to_string(),
     }
 }
@@ -386,6 +382,13 @@ mod tests {
         assert_eq!(
             owner_local_ability_name("easynet:///r/localhost/authority", "hub.openai.chat"),
             "openai.chat"
+        );
+        assert_eq!(
+            owner_local_ability_name(
+                "easynet:///r/localhost/authority",
+                "authority.binding.grant"
+            ),
+            "authority.binding.grant"
         );
         assert_eq!(
             owner_local_ability_name("easynet:///r/localhost/agent/alice.claude", "claude.chat",),
