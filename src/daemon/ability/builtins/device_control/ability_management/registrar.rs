@@ -29,7 +29,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 
-use easynet_axon::invocation::{
+use axon_sdk::invocation::{
     AbilityCallModes, AbilityDescriptor, AbilityFn, AbilityOptions, CallMode as AxonCallMode,
     LocalRuntime,
 };
@@ -1294,10 +1294,16 @@ fn assert_runtime_options_are_proof_bound(
     axon_call_mode: AxonCallMode,
     record: &AbilityControlPlaneRecord,
 ) -> anyhow::Result<()> {
-    let proof = options.proof_for_mode(axon_call_mode);
+    let proof = options.proof_for_mode(axon_call_mode).ok_or_else(|| {
+        anyhow::anyhow!(
+            "runtime ability {:?} has no descriptor proof for {:?}",
+            record.ability(),
+            record.descriptor().call_mode()
+        )
+    })?;
     if !proof.is_bound() {
         anyhow::bail!(
-            "runtime ability {:?} has no descriptor proof for {:?}",
+            "runtime ability {:?} has an incomplete descriptor proof for {:?}",
             record.ability(),
             record.descriptor().call_mode()
         );
@@ -1339,8 +1345,14 @@ mod tests {
     #[test]
     fn registrar_rejects_duplicate_runtime_wiring() {
         let registrar = DeviceAbilityRegistrar::new_pending();
-        let first = LocalRuntime::new();
-        let second = LocalRuntime::new();
+        let first = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
+        let second = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
 
         registrar.set_runtime(first).unwrap();
         let err = registrar.set_runtime(second).unwrap_err();
@@ -1351,7 +1363,10 @@ mod tests {
     #[test]
     fn registrar_rejects_duplicate_control_plane_wiring() {
         let registrar = DeviceAbilityRegistrar::new_pending();
-        let rt = LocalRuntime::new();
+        let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         let first = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt)));
         let second = Arc::new(AxonAbilityCatalog::new_with_runtime(rt));
 
@@ -1429,7 +1444,10 @@ mod tests {
         Arc<AxonAbilityCatalog>,
     ) {
         let registrar = DeviceAbilityRegistrar::new_pending_with_store(store);
-        let rt = LocalRuntime::new();
+        let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt)));
         registrar.set_runtime(Arc::clone(&rt)).unwrap();
         registrar
@@ -1459,7 +1477,10 @@ mod tests {
         std::fs::write(&bogus_parent, b"x").unwrap();
         let store = DeviceAbilityStore::open_at(bogus_parent.join("device-abilities.json"));
         let registrar = DeviceAbilityRegistrar::new_pending_with_store(store);
-        let rt = LocalRuntime::new();
+        let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt)));
         registrar.set_runtime(Arc::clone(&rt)).unwrap();
         registrar
@@ -1495,7 +1516,10 @@ mod tests {
         let store_path = dir.path().join("device-abilities.json");
         let store = DeviceAbilityStore::open_at(store_path.clone());
         let registrar = DeviceAbilityRegistrar::new_pending_with_store(store);
-        let rt = LocalRuntime::new();
+        let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt)));
         registrar.set_runtime(Arc::clone(&rt)).unwrap();
         registrar
@@ -1570,7 +1594,7 @@ mod tests {
         assert!(!desc.options.modes.rpc, "stream ability is not rpc");
         let proof = desc.options.proof_for_mode(AxonCallMode::Stream);
         assert!(
-            proof.is_bound(),
+            proof.is_some_and(|binding| binding.is_bound()),
             "ACTIVE requires descriptor proof, not just runtime visibility"
         );
     }
@@ -1653,7 +1677,10 @@ mod tests {
             )
             .expect("device ability control-plane lookup is unambiguous")
             .expect("device ability control-plane record");
-        let proof = runtime_desc.options.proof_for_mode(AxonCallMode::Stream);
+        let proof = runtime_desc
+            .options
+            .proof_for_mode(AxonCallMode::Stream)
+            .expect("active stream ability carries descriptor proof");
         assert_eq!(proof.descriptor_version, "2.3.0");
         assert_eq!(
             proof.schema_hash,
@@ -1887,7 +1914,10 @@ mod tests {
 
         let registrar2 =
             DeviceAbilityRegistrar::new_pending_with_store(DeviceAbilityStore::open_at(store_path));
-        let rt2 = LocalRuntime::new();
+        let rt2 = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         let catalog2 = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt2)));
         registrar2.set_runtime(Arc::clone(&rt2)).unwrap();
         registrar2
@@ -1918,7 +1948,10 @@ mod tests {
         }
         let registrar2 =
             DeviceAbilityRegistrar::new_pending_with_store(DeviceAbilityStore::open_at(store_path));
-        let rt2 = LocalRuntime::new();
+        let rt2 = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         let catalog2 = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt2)));
         registrar2.set_runtime(Arc::clone(&rt2)).unwrap();
         registrar2

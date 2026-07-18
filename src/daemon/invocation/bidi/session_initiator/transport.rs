@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
+use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
 use tonic::transport::{Channel, Endpoint};
 
 use super::SessionError;

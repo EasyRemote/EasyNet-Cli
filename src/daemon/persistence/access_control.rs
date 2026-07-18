@@ -27,6 +27,7 @@ use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -234,12 +235,104 @@ pub struct AccessControlStore {
     head_hash: String,
 }
 
-impl AccessControlStore {
-    pub fn open_or_create(owner_user_id: impl Into<String>) -> anyhow::Result<Self> {
-        let owner_user_id = owner_user_id.into();
-        Self::open_or_create_at(policy_store_dir_for_owner(&owner_user_id), owner_user_id)
+/// Process-scoped owner of RFC-014 policy stores.
+///
+/// Every owner store is opened once and all reads and mutations for that owner
+/// are serialized through the same lock. This is required for the journal's
+/// sequence and hash-chain invariants: independently opened store objects can
+/// otherwise append from the same observed head.
+#[derive(Debug)]
+pub struct AccessControlStoreRegistry {
+    root: AccessControlStoreRoot,
+    stores: Mutex<BTreeMap<String, Arc<Mutex<AccessControlStore>>>>,
+}
+
+#[derive(Debug)]
+struct AccessControlStoreRoot {
+    path: PathBuf,
+    remove_on_drop: bool,
+}
+
+impl Drop for AccessControlStoreRoot {
+    fn drop(&mut self) {
+        if self.remove_on_drop {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+impl Default for AccessControlStoreRegistry {
+    fn default() -> Self {
+        Self::new(default_policy_store_dir())
+    }
+}
+
+impl AccessControlStoreRegistry {
+    #[must_use]
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: AccessControlStoreRoot {
+                path: root.into(),
+                remove_on_drop: false,
+            },
+            stores: Mutex::new(BTreeMap::new()),
+        }
     }
 
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn ephemeral() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_ROOT: AtomicU64 = AtomicU64::new(1);
+        let root = std::env::temp_dir().join(format!(
+            "easynet-access-control-{}-{}",
+            std::process::id(),
+            NEXT_ROOT.fetch_add(1, Ordering::Relaxed)
+        ));
+        Self {
+            root: AccessControlStoreRoot {
+                path: root,
+                remove_on_drop: true,
+            },
+            stores: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// Execute one transaction against an owner's canonical in-process store.
+    ///
+    /// Store acquisition failures are returned by the outer `Result`. The
+    /// closure's return value is otherwise preserved, including a domain
+    /// `Result`, so callers retain their own error classification.
+    pub fn with_store<T>(
+        &self,
+        owner_user_id: &str,
+        transaction: impl FnOnce(&mut AccessControlStore) -> T,
+    ) -> anyhow::Result<T> {
+        let store = {
+            let mut stores = self
+                .stores
+                .lock()
+                .map_err(|_| anyhow::anyhow!("access-control store registry lock poisoned"))?;
+            if let Some(store) = stores.get(owner_user_id) {
+                Arc::clone(store)
+            } else {
+                let store = Arc::new(Mutex::new(AccessControlStore::open_or_create_at(
+                    policy_store_dir_for_owner_at(&self.root.path, owner_user_id),
+                    owner_user_id,
+                )?));
+                stores.insert(owner_user_id.to_string(), Arc::clone(&store));
+                store
+            }
+        };
+        let mut store = store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("access-control owner store lock poisoned"))?;
+        Ok(transaction(&mut store))
+    }
+}
+
+impl AccessControlStore {
     pub fn open_or_create_at(
         root: impl Into<PathBuf>,
         owner_user_id: impl Into<String>,
@@ -1000,6 +1093,10 @@ pub fn default_policy_store_dir() -> PathBuf {
 }
 
 pub fn policy_store_dir_for_owner(owner_user_id: &str) -> PathBuf {
+    policy_store_dir_for_owner_at(&default_policy_store_dir(), owner_user_id)
+}
+
+fn policy_store_dir_for_owner_at(root: &Path, owner_user_id: &str) -> PathBuf {
     let safe_owner = owner_user_id
         .chars()
         .map(|ch| {
@@ -1010,7 +1107,7 @@ pub fn policy_store_dir_for_owner(owner_user_id: &str) -> PathBuf {
             }
         })
         .collect::<String>();
-    default_policy_store_dir().join(safe_owner)
+    root.join(safe_owner)
 }
 
 pub fn grant_idempotency_key(grant: &PermissionGrant) -> anyhow::Result<String> {
@@ -1517,6 +1614,51 @@ mod tests {
             revoked_at: None,
             reason: None,
         }
+    }
+
+    #[test]
+    fn registry_serializes_same_owner_journal_transactions() {
+        use std::sync::{Arc, Barrier};
+
+        const WRITERS: usize = 8;
+
+        let root = tempfile::tempdir().expect("policy root");
+        let registry = Arc::new(AccessControlStoreRegistry::new(root.path()));
+        let barrier = Arc::new(Barrier::new(WRITERS));
+        let mut writers = Vec::new();
+        for index in 0..WRITERS {
+            let registry = Arc::clone(&registry);
+            let barrier = Arc::clone(&barrier);
+            writers.push(std::thread::spawn(move || {
+                let mut grant = sample_grant(&format!("grant-{index}"));
+                grant.principal_id = format!("token-principal-{index}");
+                grant.token_id = Some(format!("token-{index}"));
+                barrier.wait();
+                registry
+                    .with_store("alice", |store| {
+                        store.create_grant(grant, "easynet:///r/test/user/alice")
+                    })
+                    .expect("open owner store")
+                    .expect("append grant transaction");
+            }));
+        }
+        for writer in writers {
+            writer.join().expect("policy writer");
+        }
+
+        let grants = registry
+            .with_store("alice", |store| store.grants())
+            .expect("read owner store");
+        assert_eq!(grants.len(), WRITERS);
+        drop(registry);
+
+        let reopened = AccessControlStore::open_or_create_at(
+            policy_store_dir_for_owner_at(root.path(), "alice"),
+            "alice",
+        )
+        .expect("replay serialized owner journal");
+        assert_eq!(reopened.grants().len(), WRITERS);
+        assert_eq!(reopened.last_sequence, (WRITERS * 2) as u64);
     }
 
     #[test]

@@ -3,8 +3,6 @@
 
 use console::style;
 
-use crate::cli::commands::mission_runs::{self, MissionRunOpts};
-
 use super::*;
 
 fn resolve_session_id(args: &SendArgs) -> anyhow::Result<Option<String>> {
@@ -274,24 +272,19 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
         ),
     };
 
-    // Hand the source to THE single in-process mission entry point.
-    // The runner installs a typed `DispatchContext`; nested
-    // `dispatch::send_to_agent` calls satisfy Step 9's invariant without
-    // mutating the parent process environment.
-    let result = mission_runs::run_mission_inproc(
-        &eal_source,
-        MissionRunOpts {
-            source_label: Some(format!("agent send {}", args.name)),
-            // `--trace <path>` is accepted by the CLI but the mission
-            // runner's authoritative trace remains the run directory.
-            // Keep the path on MissionRunOpts so a future export layer
-            // has the caller's requested destination without inventing
-            // a second mission execution path.
-            trace_path: args.trace.clone(),
-            invocation_context: None,
-            run_timeout: None,
-        },
+    let value = crate::support::platform::local_invoke::invoke_local_ability_with_subject_timeout(
+        crate::daemon::ability::builtins::automation::mission::ABILITY_RUN,
+        serde_json::json!({
+            "source": eal_source,
+            "label": format!("agent send {}", args.name),
+        }),
+        Some(crate::daemon::identity::local_invocation::local_device_ura()),
+        std::time::Duration::from_secs(3600),
     )?;
+    let result: crate::daemon::ability::builtins::automation::mission::MissionRunResponse =
+        serde_json::from_value(value).map_err(|error| {
+            anyhow::anyhow!("mission.run returned an invalid response: {error}")
+        })?;
 
     // Pull the agent's reply out of the mission's bound vars. The
     // mission ability returns a JSON object. Two shapes can appear:
@@ -301,7 +294,7 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     //     `{ok, agent, output, model, duration_ms}`
     // The user-visible reply lives in `reply` for chat and `output`
     // for shell-out — try both.
-    let reply_obj = match result.bound_vars.get("__reply") {
+    let reply_obj = match result.outputs.get("__reply") {
         Some(serde_json::Value::Object(obj)) => Some(obj.clone()),
         _ => None,
     };
@@ -312,7 +305,7 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
             .or_else(|| obj.get("output").and_then(|v| v.as_str()))
             .map(|s| s.to_string())
             .unwrap_or_else(|| serde_json::Value::Object(obj.clone()).to_string()),
-        None => match result.bound_vars.get("__reply") {
+        None => match result.outputs.get("__reply") {
             Some(other) => other.to_string(),
             None => String::new(),
         },
@@ -367,7 +360,7 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     eprintln!(
         "  {} {}",
         style("saved").dim(),
-        style(result.run_dir.display().to_string()).cyan(),
+        style(&result.run_dir).cyan(),
     );
     if let Some(sid) = response_session_id.as_deref() {
         eprintln!(

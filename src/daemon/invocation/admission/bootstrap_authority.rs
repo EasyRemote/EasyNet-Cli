@@ -8,10 +8,11 @@
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use sha2::{Digest as _, Sha256};
 
-use easynet_axon::pb::axon::v1::Envelope;
+use axon_sdk::pb::axon::v1::Envelope;
 
 use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::ability::names::device_control;
+use crate::daemon::federation::wire_contract::ResolveKeyRequest;
 use crate::daemon::invocation::admission::decision::AccessAction;
 use crate::daemon::invocation::admission::hosted_agent_publication::HostedAgentPublication;
 use crate::daemon::invocation::admission::owner_resolution::{local_device_owner_fact, OwnerFact};
@@ -22,7 +23,6 @@ use crate::daemon::invocation::dispatch::federation_wrappers::{
     ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_RESOLVE_KEY,
 };
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
-use easynet_axon::ResolveKeyRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BootstrapAuthorityDecision {
@@ -384,7 +384,7 @@ fn device_hub_key_bootstrap_authority_id(caller_ura: &str, hub_ura: &str, abilit
 mod tests {
     use super::*;
     use crate::daemon::trust::anchor::TrustedPrincipalOwner;
-    use easynet_axon::pb::axon::v1::{AgentIdentity, SubjectIdentity};
+    use axon_sdk::pb::axon::v1::{AgentIdentity, SubjectIdentity};
 
     fn envelope(caller: &str, callee: &str, subject: &str) -> Envelope {
         Envelope {

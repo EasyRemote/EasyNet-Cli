@@ -124,12 +124,12 @@ use warmup::warm_device_credential_for_session;
 #[cfg(test)]
 use warmup::{verify_device_credential_for_credentials, CredentialWarmupOutcome};
 
-use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
-use easynet_axon::pb::axon::v1::{BidiControl, BinaryChunk, InvokeBidiDown, InvokeBidiUp};
+use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+use axon_sdk::pb::axon::v1::{BidiControl, BinaryChunk, InvokeBidiDown, InvokeBidiUp};
 
 /// Daemon-side ability name this initiator targets. The hub's
 /// `InvokeBidi` dispatcher routes on
-/// `EnvelopeOpen.target.ability_name`.
+/// `EnvelopeOpen.target.typed_target.ability.function_name`.
 ///
 /// `session.open` is the daemon-owned long-lived carrier for device
 /// session membership. It is a direct wire break from the historical
@@ -323,10 +323,9 @@ pub struct SessionUpSender {
     /// single-writer gate, and the serialization it imposes is
     /// exactly the ordering the wire contract requires.
     sequence_gate: Arc<tokio::sync::Mutex<u64>>,
-    /// Negotiated dispatch contract for THIS session (DEC-F004):
-    /// written once by the supervisor when the admission receipt's
-    /// session_contract arrives; read by reply producers to pick the
-    /// frame encoding. 0 until negotiation lands = JSON era.
+    /// Negotiated canonical dispatch contract for this session. The
+    /// supervisor writes it once after session admission; dispatch is
+    /// unavailable until a canonical carrier version is present.
     negotiated_contract: Arc<std::sync::atomic::AtomicU32>,
 }
 
@@ -799,8 +798,8 @@ mod tests {
     use std::sync::mpsc as std_mpsc;
     use std::thread;
 
-    use easynet_axon::pb::axon::v1::invocation_server::{Invocation, InvocationServer};
-    use easynet_axon::pb::axon::v1::{
+    use axon_sdk::pb::axon::v1::invocation_server::{Invocation, InvocationServer};
+    use axon_sdk::pb::axon::v1::{
         InvokeRequest, InvokeResponse, InvokeServerStreamRequest, InvokeStreamChunk,
     };
     use futures::{stream, StreamExt as _};
@@ -1187,31 +1186,27 @@ mod tests {
             let frames = vec![
                 Ok(InvokeBidiDown {
                     sequence: 0,
-                    payload: Some(
-                        easynet_axon::pb::axon::v1::invoke_bidi_down::Payload::Control(
-                            BidiControl {
-                                control: Some(
-                                    easynet_axon::pb::axon::v1::bidi_control::Control::SessionEstablished(
-                                        easynet_axon::pb::axon::v1::BidiSessionEstablished {
-                                            contract_version: DEVICE_DISPATCH_CONTRACT_VERSION,
-                                            dispatch_encoding: "proto".to_string(),
-                                            session_id: 1,
-                                            displaced_prior: false,
-                                        },
-                                    ),
+                    payload: Some(axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::Control(
+                        BidiControl {
+                            control: Some(
+                                axon_sdk::pb::axon::v1::bidi_control::Control::SessionEstablished(
+                                    axon_sdk::pb::axon::v1::BidiSessionEstablished {
+                                        contract_version: DEVICE_DISPATCH_CONTRACT_VERSION,
+                                        dispatch_encoding: "proto".to_string(),
+                                        session_id: 1,
+                                        displaced_prior: false,
+                                    },
                                 ),
-                            },
-                        ),
-                    ),
+                            ),
+                        },
+                    )),
                     ..InvokeBidiDown::default()
                 }),
                 Ok(InvokeBidiDown {
                     sequence: 9,
-                    payload: Some(
-                        easynet_axon::pb::axon::v1::invoke_bidi_down::Payload::Control(
-                            BidiControl::default(),
-                        ),
-                    ),
+                    payload: Some(axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::Control(
+                        BidiControl::default(),
+                    )),
                     ..InvokeBidiDown::default()
                 }),
             ];
@@ -1271,13 +1266,13 @@ mod tests {
         }
     }
 
-    async fn spawn_silent_session_hub() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    async fn spawn_silent_session_hub() -> (SocketAddr, super::tasks::AbortOnDrop) {
         spawn_silent_session_hub_with_prelude(false).await
     }
 
     async fn spawn_silent_session_hub_with_prelude(
         reject_unary_prelude: bool,
-    ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    ) -> (SocketAddr, super::tasks::AbortOnDrop) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind silent session hub");
@@ -1292,7 +1287,7 @@ mod tests {
                 .await
                 .expect("silent session hub server");
         });
-        (addr, handle)
+        (addr, super::tasks::AbortOnDrop(handle))
     }
 
     fn reserve_loopback_addr() -> SocketAddr {
@@ -1306,7 +1301,7 @@ mod tests {
         addr: SocketAddr,
     ) -> (
         tokio::sync::oneshot::Receiver<()>,
-        tokio::task::JoinHandle<()>,
+        super::tasks::AbortOnDrop,
     ) {
         let listener = TcpListener::bind(addr)
             .await
@@ -1323,10 +1318,10 @@ mod tests {
                 .await
                 .expect("notifying session hub server");
         });
-        (opened_rx, handle)
+        (opened_rx, super::tasks::AbortOnDrop(handle))
     }
 
-    async fn spawn_clean_close_session_hub() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    async fn spawn_clean_close_session_hub() -> (SocketAddr, super::tasks::AbortOnDrop) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind clean-close session hub");
@@ -1339,10 +1334,10 @@ mod tests {
                 .await
                 .expect("clean-close session hub server");
         });
-        (addr, handle)
+        (addr, super::tasks::AbortOnDrop(handle))
     }
 
-    async fn spawn_out_of_sequence_session_hub() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    async fn spawn_out_of_sequence_session_hub() -> (SocketAddr, super::tasks::AbortOnDrop) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind out-of-sequence session hub");
@@ -1357,13 +1352,13 @@ mod tests {
                 .await
                 .expect("out-of-sequence session hub server");
         });
-        (addr, handle)
+        (addr, super::tasks::AbortOnDrop(handle))
     }
 
     async fn spawn_recording_prelude_hub() -> (
         SocketAddr,
         Arc<tokio::sync::Mutex<Vec<(String, Value)>>>,
-        tokio::task::JoinHandle<()>,
+        super::tasks::AbortOnDrop,
     ) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -1379,33 +1374,55 @@ mod tests {
                 .await
                 .expect("recording prelude hub server");
         });
-        (addr, invokes, handle)
+        (addr, invokes, super::tasks::AbortOnDrop(handle))
     }
 
     #[tokio::test]
     async fn build_session_envelope_open_carries_caller_ura_and_ability_name() {
-        let signer = TestSessionSigner::random("easynet:///r/realm/device/n1");
+        let expected_device = crate::core::ura::device_ura("realm", "n1");
+        let expected_hub = crate::core::ura::hub_ura("realm");
+        let expected_ability =
+            crate::core::ura::owner_ability_ura(&expected_hub, ABILITY_SESSION_OPEN)
+                .expect("session.open Ability URA");
+        let signer = TestSessionSigner::random(expected_device.as_str());
         let frame = build_session_envelope_open(signer.as_ref())
             .await
             .expect("signed frame");
         let UpPayload::EnvelopeOpen(eo) = frame.payload.expect("payload") else {
             panic!("frame 0 must be EnvelopeOpen");
         };
-        assert_eq!(
-            eo.target
-                .as_ref()
-                .map(|t| t.ability_name.as_str())
-                .unwrap_or(""),
-            ABILITY_SESSION_OPEN,
-        );
+        let target = eo.target.as_ref().expect("typed session.open target");
         assert_eq!(
             eo.envelope
                 .as_ref()
                 .and_then(|e| e.caller.as_ref())
                 .map(|a| a.ura.as_str())
                 .unwrap_or(""),
-            "easynet:///r/realm/device/n1",
+            expected_device,
         );
+        assert_eq!(
+            eo.envelope
+                .as_ref()
+                .and_then(|e| e.callee.as_ref())
+                .map(|a| a.ura.as_str())
+                .unwrap_or(""),
+            expected_hub,
+        );
+        let descriptor_ref =
+            crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
+                "test session.open",
+                &expected_hub,
+                Some(target),
+            )
+            .expect("session.open descriptor ref");
+        assert!(
+            descriptor_ref.starts_with(&format!("{expected_ability}@")),
+            "{descriptor_ref}"
+        );
+        let axon_sdk::pb::axon::v1::invocation_target::TypedTarget::Ability(ability) =
+            target.typed_target.as_ref().expect("typed ability target");
+        assert_eq!(ability.function_name, ABILITY_SESSION_OPEN);
+        assert!(eo.metadata.is_empty());
     }
 
     #[tokio::test]
@@ -1645,7 +1662,7 @@ mod tests {
         let (addr, _server) = spawn_clean_close_session_hub().await;
 
         let stats = tokio::time::timeout(
-            Duration::from_secs(5),
+            TEST_SUPERVISOR_PROGRESS_TIMEOUT,
             dial_and_run_session(
                 format!("http://{addr}"),
                 TestSessionSigner::random("easynet:///r/realm/device/n1"),
@@ -1656,7 +1673,7 @@ mod tests {
             ),
         )
         .await
-        .expect("clean-close dial bounded to 5 s")
+        .expect("clean-close dial completes within the shared session progress bound")
         .expect("clean hub close must surface as Ok(stats), not an error");
 
         assert_eq!(stats.frames_received, 0, "empty down stream sent no frames");
@@ -2322,7 +2339,7 @@ mod tests {
             .await
             .expect("supervisor exits promptly after cancel")
             .expect("supervisor task did not panic");
-        hub_handle.abort();
+        drop(hub_handle);
     }
 
     #[tokio::test]

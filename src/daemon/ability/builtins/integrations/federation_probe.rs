@@ -24,7 +24,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::BTreeMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -478,14 +478,20 @@ fn probe_remote_device(agent_ura: &str) -> ProbeOutcome {
             agent_ura,
             DEVICE_HEALTH_ABILITY,
         )?;
-        crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(
-            &target,
-            json!({
-            "source": "node.list",
-            "probe": "alive",
-            }),
-            None,
-        )
+        let request =
+            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationRequest::new(
+                &target,
+                crate::daemon::identity::local_invocation::local_daemon_ura(),
+                target.callee_ura(),
+                axon_sdk::invocation::fresh_nonce(),
+                axon_sdk::invocation::CausalContext::None,
+                json!({
+                    "source": "node.list",
+                    "probe": "alive",
+                }),
+                Duration::from_secs(30),
+            )?;
+        crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(request)
     })();
     #[cfg(feature = "axon-pb")]
     match result {

@@ -65,7 +65,7 @@ async fn live_reachability_holds_baseline() {
     );
 
     let mut reg = AxonAbilityCatalog::new();
-    let owner = easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp");
+    let owner = axon_sdk::ura::agent_ura("test-realm", "test-user", "mcp");
     let result = reflect_all(&svc, &mut reg, &owner).await;
 
     // Group failures by server.

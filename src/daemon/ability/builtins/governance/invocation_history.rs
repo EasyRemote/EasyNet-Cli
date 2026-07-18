@@ -21,15 +21,15 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use serde_json::{Value, json};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 use crate::daemon::persistence::daemon_config::{
-    DaemonConfig, default_config_path, default_ledger_dir,
+    default_config_path, default_ledger_dir, DaemonConfig,
 };
-use easynet_axon::invocation::{
+use axon_sdk::invocation::{
     InvocationLedger, InvocationLedgerFetchKey, InvocationLedgerQuery, InvocationLedgerRecord,
 };
 
@@ -40,75 +40,8 @@ pub const ABILITY_HISTORY_GET: &str =
 pub const ABILITY_TRACE_GET: &str = crate::daemon::ability::names::governance::INVOCATION_TRACE_GET;
 pub const ABILITY_HISTORY_PATH: &str =
     crate::daemon::ability::names::governance::INVOCATION_HISTORY_PATH;
-
-/// Daemon-internal, side-effect-free read RPC: fetch one ledger record by
-/// `request_id` or canonical invocation URA.
-///
-/// Distinct from [`ABILITY_HISTORY_GET`]: this is NOT dispatched through the
-/// Axon LocalRuntime (which would append a second ledger row and corrupt the
-/// audit trail the caller is observing). The daemon `invoke` handler services
-/// it directly off the in-process `InvocationLedger` and writes no ledger row.
-/// It is the channel an out-of-process CLI uses to observe the receipt
-/// projection of a request it just issued, instead of opening the daemon-owned
-/// redb file (which redb forbids from a second process via its exclusive lock).
 pub const ABILITY_INVOCATION_RECORD_GET: &str =
     crate::daemon::ability::names::governance::INVOCATION_RECORD_GET;
-
-/// Fetch one ledger record by `request_id` directly off an in-process ledger
-/// handle, with no dispatch and no ledger write. Returns `None` when no record
-/// exists yet (the sink persists asynchronously after the unary response).
-///
-/// Side-effect-free by construction: it only issues a redb read transaction on
-/// a handle the daemon already holds open, so it never takes a second
-/// cross-process lock and never appends to the ledger.
-pub fn record_by_request_id(
-    ledger: &InvocationLedger,
-    request_id: &str,
-) -> anyhow::Result<Option<Value>> {
-    let request_id = request_id.trim();
-    if request_id.is_empty() {
-        anyhow::bail!("invocation.record.get: request_id must not be empty");
-    }
-    record_by_query(
-        ledger,
-        InvocationLedgerQuery::new()
-            .key(InvocationLedgerFetchKey::RequestId(request_id.to_string()))
-            .limit(1),
-    )
-}
-
-/// Fetch one ledger record from the daemon-held ledger handle using the same
-/// key shape as `invocation.history.get`, without dispatching an Axon ability
-/// and without appending an observation row.
-pub fn record_by_args(ledger: &InvocationLedger, args: &Value) -> anyhow::Result<Option<Value>> {
-    let query = record_query_from_args(args)?;
-    record_by_query(ledger, query)
-}
-
-/// Fetch one trace graph from the daemon-held ledger handle using the same key
-/// shape as `invocation.trace.get`, without dispatching an Axon ability and
-/// without appending an observation row.
-pub fn trace_by_args(ledger: &InvocationLedger, args: &Value) -> anyhow::Result<Value> {
-    let query = query_from_args(args)?;
-    let trace_id = match query.key.as_ref() {
-        Some(InvocationLedgerFetchKey::TraceId(trace_id)) => Some(trace_id.clone()),
-        _ => ledger
-            .fetch_one(query)?
-            .and_then(|record| (!record.trace_id.is_empty()).then_some(record.trace_id)),
-    };
-    let Some(trace_id) = trace_id else {
-        anyhow::bail!("expected key.trace_id, key.ura, or key.request_id");
-    };
-    let graph = ledger.trace_graph(&trace_id)?;
-    Ok(json!({
-        "ledger_ura": ledger_resource_ura(),
-        "ledger_path": ledger_path_from_config().display().to_string(),
-        "trace_id": graph.trace_id,
-        "nodes": graph.records,
-        "edges": graph.edges,
-        "edge_semantics": "Axon causal links: source receipt URA/hash -> target invocation URA",
-    }))
-}
 
 fn record_query_from_args(args: &Value) -> anyhow::Result<InvocationLedgerQuery> {
     if let Some(request_id) = args.get("request_id").and_then(non_empty_str) {
@@ -123,18 +56,6 @@ fn record_query_from_args(args: &Value) -> anyhow::Result<InvocationLedgerQuery>
     Ok(query)
 }
 
-fn record_by_query(
-    ledger: &InvocationLedger,
-    query: InvocationLedgerQuery,
-) -> anyhow::Result<Option<Value>> {
-    let Some(record) = ledger.fetch_one(query)? else {
-        return Ok(None);
-    };
-    serde_json::to_value(record)
-        .map(Some)
-        .map_err(|err| anyhow::anyhow!("serialize invocation ledger record: {err}"))
-}
-
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 500;
 const HISTORY_CURSOR_PREFIX: &str = "receipt-history:v1:";
@@ -142,11 +63,20 @@ const MAX_HISTORY_CURSOR_LEN: usize = 4096;
 
 pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedger>>) {
     let reader = Arc::new(InvocationLedgerReader::new(ledger));
+    for owner in reg.local_runtime_owners() {
+        register_for_owner(reg, owner, Arc::clone(&reader));
+    }
+}
 
+fn register_for_owner(
+    reg: &mut AxonAbilityCatalog,
+    owner: OwnerKind,
+    reader: Arc<InvocationLedgerReader>,
+) {
     let list_reader = Arc::clone(&reader);
     reg.register_rpc_with_spec(
         ABILITY_HISTORY_LIST,
-        OwnerKind::Device,
+        owner.clone(),
         crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_HISTORY_LIST,
             list_history_description(),
@@ -157,7 +87,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedge
     let get_reader = Arc::clone(&reader);
     reg.register_rpc_with_spec(
         ABILITY_HISTORY_GET,
-        OwnerKind::Device,
+        owner.clone(),
         crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_HISTORY_GET,
             get_history_description(),
@@ -165,10 +95,21 @@ pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedge
         ),
         Arc::new(move |args| get_reader.get_history(args)),
     );
+    let record_reader = Arc::clone(&reader);
+    reg.register_rpc_with_spec(
+        ABILITY_INVOCATION_RECORD_GET,
+        owner.clone(),
+        crate::daemon::ability::catalog::system_manifest::registry_manifest(
+            ABILITY_INVOCATION_RECORD_GET,
+            get_record_description(),
+            get_record_input_schema(),
+        ),
+        Arc::new(move |args| record_reader.get_record(args)),
+    );
     let trace_reader = Arc::clone(&reader);
     reg.register_rpc_with_spec(
         ABILITY_TRACE_GET,
-        OwnerKind::Device,
+        owner.clone(),
         crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_TRACE_GET,
             get_trace_description(),
@@ -179,7 +120,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedge
     let path_reader = Arc::clone(&reader);
     reg.register_rpc_with_spec(
         ABILITY_HISTORY_PATH,
-        OwnerKind::Device,
+        owner,
         crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_HISTORY_PATH,
             get_path_description(),
@@ -248,6 +189,13 @@ impl InvocationLedgerReader {
         }))
     }
 
+    fn get_record(&self, args: Value) -> anyhow::Result<Value> {
+        let query = record_query_from_args(&args)?;
+        let path = ledger_path_from_config();
+        let record = self.fetch_one(&path, query)?;
+        Ok(json!({ "record": record }))
+    }
+
     fn get_trace(&self, args: Value) -> anyhow::Result<Value> {
         let query = query_from_args(&args)?;
         let trace_id = match query.key.as_ref() {
@@ -309,7 +257,7 @@ impl InvocationLedgerReader {
         &self,
         path: &Path,
         trace_id: &str,
-    ) -> anyhow::Result<easynet_axon::invocation::InvocationTraceGraph> {
+    ) -> anyhow::Result<axon_sdk::invocation::InvocationTraceGraph> {
         if let Some(ledger) = self.shared.as_ref() {
             return Ok(ledger.trace_graph(trace_id)?);
         }
@@ -612,9 +560,9 @@ fn fetch_one_from_path(
 fn trace_graph_from_path(
     path: &Path,
     trace_id: &str,
-) -> anyhow::Result<easynet_axon::invocation::InvocationTraceGraph> {
+) -> anyhow::Result<axon_sdk::invocation::InvocationTraceGraph> {
     if !path.exists() {
-        return Ok(easynet_axon::invocation::InvocationTraceGraph {
+        return Ok(axon_sdk::invocation::InvocationTraceGraph {
             trace_id: trace_id.to_string(),
             ..Default::default()
         });
@@ -630,6 +578,10 @@ pub fn list_history_description() -> &'static str {
 
 pub fn get_history_description() -> &'static str {
     "Fetch one invocation ledger record by key.ura, key.request_id, or key.trace_id."
+}
+
+pub fn get_record_description() -> &'static str {
+    "Observe one invocation ledger record by request_id or canonical ledger key."
 }
 
 pub fn get_trace_description() -> &'static str {
@@ -674,6 +626,22 @@ pub fn get_history_input_schema() -> Value {
             "filter": filter_schema()
         },
         "required": ["key"],
+        "additionalProperties": false
+    })
+}
+
+pub fn get_record_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "request_id": { "type": "string", "minLength": 1 },
+            "key": key_schema(),
+            "filter": filter_schema()
+        },
+        "anyOf": [
+            { "required": ["request_id"] },
+            { "required": ["key"] }
+        ],
         "additionalProperties": false
     })
 }
@@ -754,6 +722,7 @@ mod tests {
         register(&mut reg, None);
         assert!(reg.get_rpc(ABILITY_HISTORY_LIST).is_some());
         assert!(reg.get_rpc(ABILITY_HISTORY_GET).is_some());
+        assert!(reg.get_rpc(ABILITY_INVOCATION_RECORD_GET).is_some());
         assert!(reg.get_rpc(ABILITY_TRACE_GET).is_some());
         assert!(reg.get_rpc(ABILITY_HISTORY_PATH).is_some());
     }
@@ -788,22 +757,59 @@ mod tests {
         for ability in [
             ABILITY_HISTORY_LIST,
             ABILITY_HISTORY_GET,
+            ABILITY_INVOCATION_RECORD_GET,
             ABILITY_TRACE_GET,
             ABILITY_HISTORY_PATH,
         ] {
-            let record = reg
-                .control_plane_record_for_mode(ability, crate::daemon::ability::CallMode::Rpc)
-                .expect("control-plane lookup must be unambiguous")
-                .unwrap_or_else(|| panic!("{ability} must publish a canonical descriptor"));
-            assert_eq!(
-                record
-                    .descriptor()
-                    .input_schema()
-                    .get("type")
-                    .and_then(Value::as_str),
-                Some("object"),
-                "{ability} must publish an object input schema"
+            let records = reg
+                .authority_ability_catalog_snapshot()
+                .into_iter()
+                .filter(|row| row.name == ability)
+                .collect::<Vec<_>>();
+            assert!(
+                !records.is_empty(),
+                "{ability} must publish a canonical descriptor"
             );
+            for record in records {
+                assert_eq!(
+                    record
+                        .descriptor
+                        .input_schema()
+                        .get("type")
+                        .and_then(Value::as_str),
+                    Some("object"),
+                    "{ability} must publish an object input schema"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn combined_runtime_registers_observation_routes_for_device_and_hub() {
+        let device_ura = crate::core::ura::device_ura("history-test", "device-a");
+        let authority =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+                device_ura,
+            )
+            .expect("combined authority context");
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
+        let mut reg =
+            AxonAbilityCatalog::new_with_runtime_and_authority_context(runtime, authority);
+
+        register(&mut reg, None);
+
+        for ability in [ABILITY_INVOCATION_RECORD_GET, ABILITY_TRACE_GET] {
+            let rows = reg
+                .authority_ability_catalog_snapshot()
+                .into_iter()
+                .filter(|row| row.name == ability)
+                .collect::<Vec<_>>();
+            assert_eq!(rows.len(), 2, "{ability} must exist on both local planes");
+            assert!(rows.iter().any(|row| row.owner == OwnerKind::Device));
+            assert!(rows.iter().any(|row| row.owner == OwnerKind::Hub));
         }
     }
 
@@ -836,7 +842,7 @@ mod tests {
     fn get_record_reads_by_request_id() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("invocations.redb");
-        let ledger = easynet_axon::invocation::InvocationLedger::open(&path).unwrap();
+        let ledger = axon_sdk::invocation::InvocationLedger::open(&path).unwrap();
         let record = sample_record("req-test");
         ledger.put(&record).unwrap();
         drop(ledger);
@@ -855,7 +861,7 @@ mod tests {
     fn shared_ledger_reader_does_not_reopen_database() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("invocations.redb");
-        let ledger = Arc::new(easynet_axon::invocation::InvocationLedger::open(&path).unwrap());
+        let ledger = Arc::new(axon_sdk::invocation::InvocationLedger::open(&path).unwrap());
         let record = sample_record("req-shared");
         ledger.put(&record).unwrap();
 
@@ -876,7 +882,7 @@ mod tests {
     fn list_history_response_uses_ura_field_names() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("invocations.redb");
-        let ledger = Arc::new(easynet_axon::invocation::InvocationLedger::open(&path).unwrap());
+        let ledger = Arc::new(axon_sdk::invocation::InvocationLedger::open(&path).unwrap());
         ledger.put(&sample_record("req-list-json")).unwrap();
 
         let reader = InvocationLedgerReader::new(Some(Arc::clone(&ledger)));
@@ -917,7 +923,7 @@ mod tests {
     fn list_history_excludes_noisy_abilities_before_truncating() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("invocations.redb");
-        let ledger = Arc::new(easynet_axon::invocation::InvocationLedger::open(&path).unwrap());
+        let ledger = Arc::new(axon_sdk::invocation::InvocationLedger::open(&path).unwrap());
         let mut noisy = sample_record("req-noisy");
         noisy.ability_name = "terminal.read".to_string();
         noisy.ability_ura = "easynet:///r/test/ability/terminal.read".to_string();
@@ -951,7 +957,7 @@ mod tests {
     fn list_history_returns_stable_cursor_and_resumes_after_anchor() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("invocations.redb");
-        let ledger = Arc::new(easynet_axon::invocation::InvocationLedger::open(&path).unwrap());
+        let ledger = Arc::new(axon_sdk::invocation::InvocationLedger::open(&path).unwrap());
         let mut newest = sample_record("req-newest");
         newest.started_unix_ms = 30;
         let mut middle = sample_record("req-middle");
@@ -1001,7 +1007,7 @@ mod tests {
     fn list_history_rejects_cursor_outside_current_query() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("invocations.redb");
-        let ledger = Arc::new(easynet_axon::invocation::InvocationLedger::open(&path).unwrap());
+        let ledger = Arc::new(axon_sdk::invocation::InvocationLedger::open(&path).unwrap());
         let mut kept = sample_record("req-kept");
         kept.ability_ura = "easynet:///r/test/ability/kept".to_string();
         let mut excluded = sample_record("req-excluded");
@@ -1085,16 +1091,12 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(query.subject_uras.len(), 2);
-        assert!(
-            query
-                .subject_uras
-                .contains("easynet:///r/test/device/mac-1")
-        );
-        assert!(
-            query
-                .subject_uras
-                .contains("easynet:///r/test/agent/alice.frontend")
-        );
+        assert!(query
+            .subject_uras
+            .contains("easynet:///r/test/device/mac-1"));
+        assert!(query
+            .subject_uras
+            .contains("easynet:///r/test/agent/alice.frontend"));
     }
 
     #[test]
@@ -1139,10 +1141,10 @@ mod tests {
     fn trace_graph_reads_causal_edges() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("invocations.redb");
-        let ledger = easynet_axon::invocation::InvocationLedger::open(&path).unwrap();
+        let ledger = axon_sdk::invocation::InvocationLedger::open(&path).unwrap();
         let parent = sample_record("req-parent");
         let mut child = sample_record("req-child");
-        child.causal_links = vec![easynet_axon::invocation::InvocationCausalLink {
+        child.causal_links = vec![axon_sdk::invocation::InvocationCausalLink {
             source_invocation_ura: Some(parent.invocation_ura.clone()),
             source_receipt_ura: format!("{}/receipt/1", parent.invocation_ura),
             source_receipt_hash: "01".repeat(32),
@@ -1166,8 +1168,8 @@ mod tests {
         assert_eq!(graph.edges[0].relation, "child_spawned");
     }
 
-    fn sample_record(request_id: &str) -> easynet_axon::invocation::InvocationLedgerRecord {
-        easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
+    fn sample_record(request_id: &str) -> axon_sdk::invocation::InvocationLedgerRecord {
+        axon_sdk::invocation::InvocationLedgerRecordBuilder::new()
             .invocation_ura(crate::core::ura::resource_dot_ura(
                 "test",
                 "alice.invocations",
@@ -1181,15 +1183,16 @@ mod tests {
             .subject_ura("easynet:///r/test/user/alice".to_string())
             .ability_ura("easynet:///r/test/ability/hub.observe.health".to_string())
             .ability_name("observe.health".to_string())
+            .authority_form("self".to_string())
             .state("completed".to_string())
             .started_unix_ms(1)
             .completed_unix_ms(2)
             .elapsed_ms(1_u64)
-            .args(easynet_axon::invocation::LedgerEventPayload::digest(
+            .args(axon_sdk::invocation::LedgerEventPayload::digest(
                 "application/json",
                 b"{}",
             ))
-            .result(easynet_axon::invocation::LedgerEventPayload::digest(
+            .result(axon_sdk::invocation::LedgerEventPayload::digest(
                 "application/json",
                 b"{\"ok\":true}",
             ))
@@ -1201,8 +1204,8 @@ mod tests {
         request_id: &str,
         ability_name: &str,
         ability_ura: &str,
-    ) -> easynet_axon::invocation::InvocationLedgerRecord {
-        easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
+    ) -> axon_sdk::invocation::InvocationLedgerRecord {
+        axon_sdk::invocation::InvocationLedgerRecordBuilder::new()
             .invocation_ura(crate::core::ura::resource_dot_ura(
                 "test",
                 "alice.invocations",
@@ -1216,9 +1219,10 @@ mod tests {
             .subject_ura("easynet:///r/test/user/alice".to_string())
             .ability_ura(ability_ura.to_string())
             .ability_name(ability_name.to_string())
+            .authority_form("self".to_string())
             .state("completed".to_string())
             .started_unix_ms(1)
-            .args(easynet_axon::invocation::LedgerEventPayload::digest(
+            .args(axon_sdk::invocation::LedgerEventPayload::digest(
                 "application/json",
                 b"{}",
             ))
@@ -1230,7 +1234,7 @@ mod tests {
     fn list_history_or_matches_multiple_ability_uras() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("invocations.redb");
-        let ledger = easynet_axon::invocation::InvocationLedger::open(&path).unwrap();
+        let ledger = axon_sdk::invocation::InvocationLedger::open(&path).unwrap();
         ledger
             .put(&record_with_ability(
                 "req-by-ura",

@@ -52,9 +52,9 @@ use crate::daemon::ability::builtins::governance::invocation_history::{
 use crate::support::platform::local_invoke::invoke_local_ability;
 use crate::support::platform::output;
 
-type Record = easynet_axon::invocation::InvocationLedgerRecord;
-use easynet_axon::invocation::axiom::InvocationUsage;
-use easynet_axon::invocation::InvocationState;
+type Record = axon_sdk::invocation::InvocationLedgerRecord;
+use axon_sdk::invocation::axiom::InvocationUsage;
+use axon_sdk::invocation::InvocationState;
 
 /// Poll cadence for `--follow`. A constant, not a flag: the ledger
 /// read is daemon-local and cheap, and a knob would only invite
@@ -1197,21 +1197,30 @@ mod tests {
     /// One non-terminal ledger record, decoded the same way the
     /// production `fetch_trace` path decodes a trace snapshot.
     fn running_record(ura: &str, state: &str) -> Record {
-        serde_json::from_value(json!({
-            "invocation_ura": ura,
-            "request_id": "req-1",
-            "trace_id": "trace-stuck",
-            "span_id": "span-1",
-            "caller_ura": "easynet:///r/acme/agent/user.caller",
-            "callee_ura": "easynet:///r/acme/agent/user.callee",
-            "subject_ura": "easynet:///r/acme/agent/user.callee",
-            "ability_ura": "easynet:///r/acme/ability/user.callee.fs.read",
-            "ability_name": "fs.read",
-            "state": state,
-            "started_unix_ms": 0,
-            "args": { "kind": "digest", "content_type": "application/json", "sha256": "00", "size_bytes": 0 },
-        }))
-        .expect("minimal running ledger record decodes")
+        let record = axon_sdk::invocation::InvocationLedgerRecordBuilder::new()
+            .invocation_ura(ura)
+            .request_id("req-1")
+            .trace_id("trace-stuck")
+            .span_id("span-1")
+            .caller_ura("easynet:///r/acme/agent/user.caller")
+            .callee_ura("easynet:///r/acme/agent/user.callee")
+            .subject_ura("easynet:///r/acme/agent/user.callee")
+            .ability_ura("easynet:///r/acme/ability/user.callee.fs.read")
+            .ability_name("fs.read")
+            .state(state)
+            .started_unix_ms(0)
+            .authority_form("self")
+            .args(axon_sdk::invocation::LedgerEventPayload::Digest {
+                content_type: "application/json".to_string(),
+                sha256: "00".to_string(),
+                size_bytes: 0,
+            })
+            .build()
+            .expect("canonical running ledger fixture");
+        serde_json::from_value(
+            serde_json::to_value(record).expect("running ledger fixture serializes"),
+        )
+        .expect("running ledger fixture decodes")
     }
 
     #[test]

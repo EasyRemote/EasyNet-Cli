@@ -106,15 +106,16 @@ pub const HARD_MAX_CYCLES: u32 = 50;
 /// the daemon's canonical Invocation service through one Mission gateway.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     use crate::daemon::ability::dispatch::OwnerKind;
-    let runtime = reg
-        .runtime()
-        .expect("mission.think registration requires the shared Axon runtime");
+    let runtime = reg.runtime();
     reg.register_rpc_with_envelope_and_owner(
         "mission.think",
         OwnerKind::Device,
         Arc::new(move |envelope, args| {
+            let runtime = runtime.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("mission.think execution requires an executable canonical runtime")
+            })?;
             let gateway =
-                DaemonMissionInvocationGateway::from_envelope(&envelope, Arc::clone(&runtime))?;
+                DaemonMissionInvocationGateway::from_envelope(&envelope, Arc::clone(runtime))?;
             think_handler(&gateway, args)
         }),
     );
@@ -695,11 +696,11 @@ fn run_curator_turn(request: CuratorTurnRequest<'_>) -> Value {
     };
 
     match invocation_gateway.invoke(MissionInvocationRequest::system(publish_name, publish_args)) {
-        Ok(v) => json!({
+        Ok(outcome) => json!({
             "attempted": true,
             "ok": true,
             "target": target,
-            "publish_result": v,
+            "publish_result": outcome.value,
         }),
         Err(e) => json!({
             "attempted": true,
@@ -1102,7 +1103,9 @@ fn invoke_agent_chat(
     agent: &str,
     args: Value,
 ) -> anyhow::Result<Value> {
-    invocation_gateway.invoke(MissionInvocationRequest::hosted_agent(agent, "chat", args))
+    invocation_gateway
+        .invoke(MissionInvocationRequest::hosted_agent(agent, "chat", args))
+        .map(|outcome| outcome.value)
 }
 
 /// Parsed args carrier. A struct beats a 5-tuple because the
@@ -1910,7 +1913,10 @@ This skill does X.\n";
             )
             .expect("test device authority root is canonical");
         let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
             authority_context,
         );
         let counter_c = Arc::clone(&counter);

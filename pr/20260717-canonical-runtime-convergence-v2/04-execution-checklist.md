@@ -8,7 +8,26 @@
 - [x] Migrate the sole production caller.
 - [x] Remove the obsolete public scatter-argument helper.
 - [x] Verify descriptor tests and lib build.
-- [ ] Close remaining SPEC root forks RF-1 through RF-9.
+- [x] Close remaining SPEC root forks RF-1 through RF-9.
+
+## 2026-07-18 Final Convergence Verification
+
+- [x] Rebuild the canonical public API model and parity matrix from the current
+      Go/Python provider sources and current Axon working-tree revision.
+- [x] Pass the Canonical Runtime Convergence V2 gate through RF-1 to RF-9,
+      including locked proto-codegen derivation.
+- [x] Prove one product mutation commits once and returns one Axon-finalized
+      admission/terminal receipt chain.
+- [x] Prove canonical signature and product admission precede handler mutation
+      for unary, stream, and bidi geometries.
+- [x] Run Go and Python lifecycle/failure-path suites and downstream
+      EasyRemote/backend product smokes.
+- [x] Run live Go/Python daemon smoke, runtime-events cross-repository E2E, and
+      standalone Hub PrincipalLifecycle TCP+TLS recovery E2E.
+- [x] Run the complete Rust library suite after aligning the clean-close bidi
+      test with the shared session progress bound.
+- [x] Close RF-1 through RF-9 acceptance gates for the checked-out CLI/Axon
+      source state.
 
 ## Mission Terminal Transition Slice
 

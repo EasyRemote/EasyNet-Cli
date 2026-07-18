@@ -18,7 +18,7 @@ use clap::{Args, Subcommand};
 use console::style;
 
 use crate::cli::commands::discuss as discuss_cmd;
-use crate::cli::commands::mission_runs::{self, CancelOutcome, MissionRunOpts};
+use crate::cli::commands::mission_runs::{self, CancelOutcome};
 use crate::cli::commands::think as think_cmd;
 use crate::eal;
 use crate::support::platform::output::{self, OutputFormat};
@@ -153,7 +153,7 @@ fn run_run(args: RunArgs) -> anyhow::Result<()> {
 
     // Show a quick pre-run summary based on a parse-only pass. We compile
     // here purely to get the IR shape for the banner; the real execution
-    // happens inside `run_mission_inproc`, which compiles again. The
+    // happens inside `mission.run`, which compiles again. The
     // double-compile is cheap (parser + planner are pure) and keeps the
     // banner / single-entry contract orthogonal.
     let program = eal::parser::parse(&source)?;
@@ -182,17 +182,17 @@ fn run_run(args: RunArgs) -> anyhow::Result<()> {
         .dim(),
     );
 
-    // Single in-process entry — see `mission_runs::run_mission_inproc`
-    // module-level comment for the load-bearing invariant.
-    let result = mission_runs::run_mission_inproc(
-        &source,
-        MissionRunOpts {
-            source_label: Some(args.file.clone()),
-            trace_path: None,
-            invocation_context: None,
-            run_timeout: None,
-        },
+    let value = crate::support::platform::local_invoke::invoke_local_ability_with_subject_timeout(
+        crate::daemon::ability::builtins::automation::mission::ABILITY_RUN,
+        serde_json::json!({"source": source, "label": args.file}),
+        Some(crate::daemon::identity::local_invocation::local_device_ura()),
+        std::time::Duration::from_secs(3600),
     )?;
+    let result: crate::daemon::ability::builtins::automation::mission::MissionRunResponse =
+        serde_json::from_value(value).map_err(|error| {
+            anyhow::anyhow!("mission.run returned an invalid response: {error}")
+        })?;
+    let run_dir = std::path::PathBuf::from(&result.run_dir);
 
     if matches!(args.format, OutputFormat::Json) {
         // Machine record on stdout (progress already went to stderr).
@@ -209,7 +209,7 @@ fn run_run(args: RunArgs) -> anyhow::Result<()> {
                 "steps_total": result.meta.steps_total,
                 "steps_completed": result.meta.steps_completed,
                 "steps_failed": result.meta.steps_failed,
-                "run_dir": result.run_dir.display().to_string(),
+                "run_dir": result.run_dir,
             }))?
         );
         return Ok(());
@@ -224,13 +224,13 @@ fn run_run(args: RunArgs) -> anyhow::Result<()> {
     eprintln!(
         "  {} {}",
         style("saved").dim(),
-        style(result.run_dir.display().to_string()).cyan()
+        style(&result.run_dir).cyan()
     );
     if args.trace {
         // Print the persisted trace.json (the runner has already written
         // it). This avoids re-serializing in-memory state and keeps the
         // CLI handler dependency-free of `ExecutionReport`.
-        let trace_path = result.run_dir.join("trace.json");
+        let trace_path = run_dir.join("trace.json");
         if let Ok(trace) = std::fs::read_to_string(&trace_path) {
             eprintln!();
             println!("{trace}");

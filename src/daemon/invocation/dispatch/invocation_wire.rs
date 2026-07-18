@@ -2,36 +2,34 @@
 // ===========================================
 //
 // File: src/daemon/invocation/invocation_wire.rs
-// Description: Typed construction boundary for proto InvokeRequest
-//              and Envelope values emitted by the CLI/daemon.
+// Description: Product-policy projection into Axon-owned canonical
+//              Invocation envelopes and protocol transport requests.
 //
 // Protocol Responsibility
 // -----------------------
-// This module owns the outbound proto envelope shape. Callers supply
-// domain URAs and JSON bytes; this builder validates URA grammar,
-// installs the default URA profile, and generates a replay nonce for
-// complete envelopes.
+// Axon owns the canonical seven-tuple and its descriptor-bound form.
+// This module validates product URAs, requires an explicit freshness/
+// causal derivation policy, and projects Axon's completed canonical
+// envelope onto the protobuf carrier.
 //
 // Implementation Approach
 // -----------------------
-// Keep the API deliberately small:
-//   * `caller_only` for genesis/prelude calls that are admitted by a
-//     special path before the full AXIOM tuple is available.
-//   * `loopback` for local daemon/hub self-calls where caller,
-//     callee, and subject are the same URA.
-//   * `targeted` for normal caller → callee with explicit subject.
+// Keep the API deliberately small. Every constructor requires a named
+// `InvocationDerivationPolicy`; no constructor silently invents nonce
+// or causal placement. Canonical assembly happens only after ability
+// and args are known.
 //
 // Usage Contract
 // --------------
-// Production call sites should not hand-build `Envelope` /
-// `InvokeRequest` struct literals. Tests may still construct raw
-// proto fixtures when they intentionally exercise malformed shapes.
+// Production call sites select a derivation policy and must not
+// hand-build `Envelope` / `InvokeRequest` struct literals. Tests may
+// still construct raw proto fixtures to exercise malformed shapes.
 //
 // Architectural Position
 // ----------------------
 // This is the wire-facade counterpart to `crate::core::ura` (canonical URA
-// construction/parsing) and `daemon::invocation::receipts::runtime_record` (domain invocation
-// records). It does not perform admission. When a caller provides a
+// construction/parsing). Canonical invocation and receipt state remains owned
+// by Axon SDK. It does not perform admission. When a caller provides a
 // `SelfIdentity`, it can attach the caller signature over Axon's
 // descriptor-bound canonical bytes so production daemon IPC has one
 // wire-shape construction point.
@@ -42,33 +40,34 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rand::RngCore;
 
 use anyhow::Context as _;
-use tonic::{Response, Status};
+use tonic::Status;
 
-use easynet_axon::invocation::DescriptorBoundEnvelope;
-use easynet_axon::pb::axon::v1::{
-    causal_context, AgentIdentity, CallerSignature, CausalContext, Empty, EntityRef, EntityRefKind,
-    Envelope, InvocationTarget, InvokeRequest, InvokeResponse, InvokeServerStreamRequest,
-    SubjectIdentity,
+pub use axon_sdk::invocation::InvocationDerivationPolicy;
+use axon_sdk::invocation::{
+    AgentIdentity, CallerSignature, CanonicalEnvelopeBuilder, DescriptorBoundEnvelope,
+    SubjectIdentity, UraProfile, WireEnvelopeMetadata,
 };
-
-use crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts;
+use axon_sdk::pb::axon::v1::{
+    invocation_target, AbilityTarget, EntityRef, EntityRefKind, Envelope, InvocationTarget,
+    InvokeRequest, InvokeServerStreamRequest,
+};
 
 pub const DEFAULT_URA_PROFILE: &str = "easynet-strict-v2";
 
 pub(crate) const AUTHORITY_PROOF_METADATA_KEY: &str = "x-easynet-authority-proof";
-pub(crate) const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-ref";
 
 #[derive(Debug, Clone)]
 pub struct ProtoEnvelope {
-    inner: Envelope,
+    canonical: CanonicalEnvelopeBuilder,
+    wire_metadata: WireEnvelopeMetadata,
 }
 
 /// Daemon-owned local loopback request projection.
 ///
 /// This value is intentionally not the public `DaemonInvocation` SDK builder:
 /// local CLI loopback submits route names and lets the daemon dispatch boundary
-/// resolve descriptor refs. It still owns the complete wire envelope shape so
-/// support-layer socket adapters do not mirror Axon protobuf construction.
+/// resolve descriptor refs. It retains only downstream request parameters and
+/// delegates canonical tuple derivation and wire envelope assembly to Axon.
 #[derive(Debug, Clone)]
 pub(crate) struct LocalDaemonLoopbackInvocation {
     function_name: String,
@@ -77,7 +76,7 @@ pub(crate) struct LocalDaemonLoopbackInvocation {
     subject_ura: String,
     arguments: Vec<u8>,
     timeout: Duration,
-    causal_context: Option<CausalContext>,
+    derivation_policy: InvocationDerivationPolicy,
     trace_id: Option<String>,
 }
 
@@ -88,6 +87,7 @@ impl LocalDaemonLoopbackInvocation {
         caller_ura: impl Into<String>,
         callee_ura: impl Into<String>,
         subject_ura: impl Into<String>,
+        derivation_policy: InvocationDerivationPolicy,
         timeout: Duration,
     ) -> anyhow::Result<Self> {
         let function_name = checked_function_name(function_name)?;
@@ -100,7 +100,7 @@ impl LocalDaemonLoopbackInvocation {
             subject_ura: checked_ura(subject_ura.into(), "subject_ura")?,
             arguments,
             timeout,
-            causal_context: None,
+            derivation_policy,
             trace_id: None,
         })
     }
@@ -118,12 +118,6 @@ impl LocalDaemonLoopbackInvocation {
     }
 
     #[must_use]
-    pub(crate) fn with_causal_context(mut self, causal_context: CausalContext) -> Self {
-        self.causal_context = Some(causal_context);
-        self
-    }
-
-    #[must_use]
     pub(crate) fn with_trace_id(mut self, trace_id: Option<&str>) -> Self {
         self.trace_id = trace_id
             .map(str::trim)
@@ -135,6 +129,10 @@ impl LocalDaemonLoopbackInvocation {
     pub(crate) fn invoke_request(&self) -> anyhow::Result<InvokeRequest> {
         Ok(InvokeRequest {
             envelope: Some(self.envelope()?),
+            target: Some(wire_invocation_target(
+                &self.function_name,
+                &self.function_name,
+            )?),
             function_name: self.function_name.clone(),
             arguments: self.arguments.clone(),
             content_type: "application/json".to_string(),
@@ -146,6 +144,10 @@ impl LocalDaemonLoopbackInvocation {
     pub(crate) fn stream_request(&self) -> anyhow::Result<InvokeServerStreamRequest> {
         Ok(InvokeServerStreamRequest {
             envelope: Some(self.envelope()?),
+            target: Some(wire_invocation_target(
+                &self.function_name,
+                &self.function_name,
+            )?),
             function_name: self.function_name.clone(),
             arguments: self.arguments.clone(),
             content_type: "application/json".to_string(),
@@ -155,19 +157,14 @@ impl LocalDaemonLoopbackInvocation {
     }
 
     pub(crate) fn envelope(&self) -> anyhow::Result<Envelope> {
-        let mut envelope = ProtoEnvelope::targeted(
+        ProtoEnvelope::from_target(
             self.caller_ura.clone(),
             self.callee_ura.clone(),
             self.subject_ura.clone(),
-        )?;
-        if let Some(causal_context) = self.causal_context.clone() {
-            envelope = envelope.with_causal_context(causal_context);
-        }
-        let mut envelope = envelope.into_inner();
-        if let Some(trace_id) = self.trace_id.as_ref() {
-            envelope.trace_id = trace_id.clone();
-        }
-        Ok(envelope)
+            self.derivation_policy.clone(),
+        )?
+        .with_trace_id(self.trace_id.as_deref())
+        .wire_envelope_for(&self.function_name, &self.arguments)
     }
 
     fn timeout_seconds(&self) -> i32 {
@@ -176,39 +173,36 @@ impl LocalDaemonLoopbackInvocation {
 }
 
 impl ProtoEnvelope {
-    pub fn caller_only(caller_ura: impl Into<String>) -> anyhow::Result<Self> {
-        let caller_ura = checked_ura(caller_ura.into(), "caller_ura")?;
-        Ok(Self {
-            inner: Envelope {
-                caller: Some(agent_identity(caller_ura)),
-                ..Envelope::default()
-            },
-        })
-    }
-
-    pub fn loopback(ura: impl Into<String>) -> anyhow::Result<Self> {
+    pub fn loopback(
+        ura: impl Into<String>,
+        derivation_policy: InvocationDerivationPolicy,
+    ) -> anyhow::Result<Self> {
         let ura = checked_ura(ura.into(), "loopback_ura")?;
-        Self::targeted(ura.clone(), ura.clone(), ura)
+        Self::from_target(ura.clone(), ura.clone(), ura, derivation_policy)
     }
 
-    pub fn targeted(
+    pub fn from_target(
         caller_ura: impl Into<String>,
         callee_ura: impl Into<String>,
         subject_ura: impl Into<String>,
+        derivation_policy: InvocationDerivationPolicy,
     ) -> anyhow::Result<Self> {
         let caller_ura = checked_ura(caller_ura.into(), "caller_ura")?;
         let callee_ura = checked_ura(callee_ura.into(), "callee_ura")?;
         let subject_ura = checked_ura(subject_ura.into(), "subject_ura")?;
         try_entity_ref(subject_ura.clone())?;
+        let canonical = CanonicalEnvelopeBuilder::new(
+            AgentIdentity::new(caller_ura, UraProfile::StrictV2),
+            AgentIdentity::new(callee_ura, UraProfile::StrictV2),
+            SubjectIdentity::new(subject_ura, UraProfile::StrictV2),
+            derivation_policy,
+        )
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
         Ok(Self {
-            inner: Envelope {
-                caller: Some(agent_identity(caller_ura)),
-                callee: Some(agent_identity(callee_ura)),
-                subject: Some(subject_identity(subject_ura.clone())),
+            canonical,
+            wire_metadata: WireEnvelopeMetadata {
                 request_id: fresh_request_id(),
-                invocation_nonce: fresh_invocation_nonce().to_vec(),
-                causal_context: Some(root_causal_context()),
-                ..Envelope::default()
+                ..WireEnvelopeMetadata::default()
             },
         })
     }
@@ -217,6 +211,7 @@ impl ProtoEnvelope {
         provisional_caller_ura: impl Into<String>,
         hub_ura: impl Into<String>,
         membership_ura: impl Into<String>,
+        derivation_policy: InvocationDerivationPolicy,
     ) -> anyhow::Result<Self> {
         let caller_ura = checked_provisional_ura(provisional_caller_ura.into())?;
         let hub_ura = checked_ura(hub_ura.into(), "hub_ura")?;
@@ -244,35 +239,38 @@ impl ProtoEnvelope {
         }
         try_entity_ref(membership_ura.clone())?;
 
+        let canonical = CanonicalEnvelopeBuilder::new(
+            AgentIdentity::new(caller_ura, UraProfile::StrictV2),
+            AgentIdentity::new(hub_ura, UraProfile::StrictV2),
+            SubjectIdentity::new(membership_ura, UraProfile::StrictV2),
+            derivation_policy,
+        )
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
         Ok(Self {
-            inner: Envelope {
-                caller: Some(agent_identity(caller_ura)),
-                callee: Some(agent_identity(hub_ura)),
-                subject: Some(subject_identity(membership_ura)),
+            canonical,
+            wire_metadata: WireEnvelopeMetadata {
                 request_id: fresh_request_id(),
-                invocation_nonce: fresh_invocation_nonce().to_vec(),
-                causal_context: Some(root_causal_context()),
-                ..Envelope::default()
+                ..WireEnvelopeMetadata::default()
             },
         })
     }
 
     #[must_use]
-    pub fn into_inner(self) -> Envelope {
-        self.inner
-    }
-
-    #[must_use]
     pub fn callee_ura(&self) -> Option<&str> {
-        self.inner.callee.as_ref().map(|callee| callee.ura.as_str())
+        Some(self.canonical.callee_ura())
+    }
+
+    pub fn into_inner(self, ability: &str, arguments: &[u8]) -> anyhow::Result<Envelope> {
+        self.wire_envelope_for(ability, arguments)
     }
 
     #[must_use]
-    pub fn with_causal_context(
-        mut self,
-        causal_context: easynet_axon::pb::axon::v1::CausalContext,
-    ) -> Self {
-        self.inner.causal_context = Some(causal_context);
+    pub fn with_trace_id(mut self, trace_id: Option<&str>) -> Self {
+        self.wire_metadata.trace_id = trace_id
+            .map(str::trim)
+            .filter(|trace_id| !trace_id.is_empty())
+            .unwrap_or_default()
+            .to_string();
         self
     }
 
@@ -285,8 +283,10 @@ impl ProtoEnvelope {
         if function_name.trim().is_empty() {
             anyhow::bail!("function_name must not be empty");
         }
+        let envelope = self.wire_envelope_for(&function_name, &arguments)?;
         Ok(InvokeRequest {
-            envelope: Some(self.into_inner()),
+            envelope: Some(envelope),
+            target: Some(wire_invocation_target(&function_name, &function_name)?),
             function_name,
             arguments,
             ..InvokeRequest::default()
@@ -316,17 +316,17 @@ impl ProtoEnvelope {
             anyhow::bail!("descriptor_ability_ref must not be empty");
         }
         let signed = self.sign_descriptor_bound(&descriptor_ability_ref, &arguments, signer)?;
-        let mut request = InvokeRequest {
-            envelope: Some(signed.into_inner()),
+        let envelope = signed.wire_envelope_for(&descriptor_ability_ref, &arguments)?;
+        Ok(InvokeRequest {
+            envelope: Some(envelope),
+            target: Some(wire_invocation_target(
+                &descriptor_ability_ref,
+                &function_name,
+            )?),
             function_name,
             arguments,
             ..InvokeRequest::default()
-        };
-        request.metadata.insert(
-            SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(),
-            descriptor_ability_ref,
-        );
-        Ok(request)
+        })
     }
 
     /// Owner-bound asynchronous variant used by CLI and daemon relay adapters.
@@ -364,18 +364,65 @@ impl ProtoEnvelope {
             )
             .await
             .with_context(|| format!("sign descriptor-bound invocation as {caller_ura}"))?;
-        self.inner.caller_signature = Some(caller_signature);
-        let mut request = InvokeRequest {
-            envelope: Some(self.into_inner()),
+        self.wire_metadata.caller_signature = Some(caller_signature.into());
+        let envelope = self.wire_envelope_for(&descriptor_ability_ref, &arguments)?;
+        Ok(InvokeRequest {
+            envelope: Some(envelope),
+            target: Some(wire_invocation_target(
+                &descriptor_ability_ref,
+                &function_name,
+            )?),
             function_name,
             arguments,
             ..InvokeRequest::default()
-        };
-        request.metadata.insert(
-            SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(),
-            descriptor_ability_ref,
-        );
-        Ok(request)
+        })
+    }
+
+    /// Build a descriptor-bound server-stream request with the same canonical
+    /// signing and metadata rules as unary invocation.
+    pub async fn signed_descriptor_ref_stream_request_with_signer(
+        mut self,
+        function_name: impl Into<String>,
+        descriptor_ability_ref: impl Into<String>,
+        arguments: Vec<u8>,
+        signer: &dyn crate::daemon::identity::self_identity::CanonicalSigner,
+    ) -> anyhow::Result<InvokeServerStreamRequest> {
+        let function_name = function_name.into();
+        if function_name.trim().is_empty() {
+            anyhow::bail!("function_name must not be empty");
+        }
+        let descriptor_ability_ref = descriptor_ability_ref.into();
+        if descriptor_ability_ref.trim().is_empty() {
+            anyhow::bail!("descriptor_ability_ref must not be empty");
+        }
+        let descriptor = self.descriptor_bound_envelope(&descriptor_ability_ref, &arguments)?;
+        let caller_ura = descriptor.envelope().caller.ura.clone();
+        if signer.owner_ura() != caller_ura {
+            anyhow::bail!(
+                "caller signer owner mismatch: envelope caller is `{caller_ura}`, signer is `{}`",
+                signer.owner_ura()
+            );
+        }
+        let caller_signature =
+            crate::daemon::invocation::caller_signature::sign_canonical_caller_signature(
+                signer,
+                &descriptor.canonical_bytes(),
+            )
+            .await
+            .with_context(|| format!("sign descriptor-bound invocation as {caller_ura}"))?;
+        self.wire_metadata.caller_signature = Some(caller_signature.into());
+        let envelope = self.wire_envelope_for(&descriptor_ability_ref, &arguments)?;
+        Ok(InvokeServerStreamRequest {
+            envelope: Some(envelope),
+            target: Some(wire_invocation_target(
+                &descriptor_ability_ref,
+                &function_name,
+            )?),
+            function_name,
+            arguments,
+            content_type: "application/json".to_string(),
+            ..InvokeServerStreamRequest::default()
+        })
     }
 
     /// Attach an Ed25519 caller signature over Axon's
@@ -394,7 +441,7 @@ impl ProtoEnvelope {
         let signature = signer
             .sign_bound(&caller_ura, &public_key, &descriptor.canonical_bytes())
             .with_context(|| format!("sign descriptor-bound invocation as {caller_ura}"))?;
-        self.inner.caller_signature = Some(CallerSignature {
+        self.wire_metadata.caller_signature = Some(CallerSignature {
             algorithm: "ed25519".to_string(),
             signature: signature.to_bytes().to_vec(),
             key_id_hint: BASE64_STANDARD.encode(public_key.to_bytes()),
@@ -410,9 +457,18 @@ impl ProtoEnvelope {
         if ability.trim().is_empty() {
             anyhow::bail!("ability must not be empty");
         }
-        descriptor_bound_from_wire_parts(self.inner.clone(), ability.to_string(), arguments)
-            .map(|wire| wire.envelope)
-            .map_err(|err| anyhow::anyhow!("{err}"))
+        self.canonical
+            .descriptor_bound_envelope(ability, arguments)
+            .map_err(|error| anyhow::anyhow!("{error}"))
+    }
+
+    fn wire_envelope_for(&self, ability: &str, arguments: &[u8]) -> anyhow::Result<Envelope> {
+        if ability.trim().is_empty() {
+            anyhow::bail!("ability must not be empty");
+        }
+        self.canonical
+            .wire_envelope(ability, arguments, self.wire_metadata.clone())
+            .map_err(|error| anyhow::anyhow!("{error}"))
     }
 }
 
@@ -426,23 +482,95 @@ fn checked_function_name(function_name: &str) -> anyhow::Result<String> {
 
 /// Build the protobuf target selector used by bidi `EnvelopeOpen`.
 ///
-/// This is transport projection only. It preserves the wire field name
-/// (`ability_name`) because generated proto structs own that ABI, while callers
-/// may pass either a route-local ability name or a descriptor ref depending on
-/// the ingress contract. Canonical caller/callee/subject ownership remains in
-/// the signed envelope, not in this selector.
+/// `ability_binding` is the canonical callable identity. Signed public calls
+/// must pass an AbilityDescriptorRef; trusted local calls may pass a route-only
+/// identity that the daemon resolves before LocalRuntime admission.
+///
+/// `function_name` is a distinct execution route fact. It is never substituted
+/// for the descriptor binding.
 pub(crate) fn wire_invocation_target(
-    target_ref: impl Into<String>,
+    ability_binding: impl Into<String>,
+    function_name: impl Into<String>,
 ) -> anyhow::Result<InvocationTarget> {
-    let target_ref = target_ref.into();
-    let target_ref = target_ref.trim();
-    if target_ref.is_empty() {
-        anyhow::bail!("invocation target must not be empty");
+    let ability_binding = ability_binding.into();
+    let ability_binding = ability_binding.trim();
+    if ability_binding.is_empty() {
+        anyhow::bail!("invocation ability binding must not be empty");
     }
+    let function_name = checked_function_name(&function_name.into())?;
     Ok(InvocationTarget {
-        ability_name: target_ref.to_string(),
+        typed_target: Some(invocation_target::TypedTarget::Ability(AbilityTarget {
+            ability_name: ability_binding.to_string(),
+            function_name,
+        })),
         ..InvocationTarget::default()
     })
+}
+
+/// Extract the canonical descriptor proof carrier from a typed invocation
+/// target. Legacy target fields and metadata are intentionally ignored.
+pub(crate) fn ability_binding_from_invocation_target<'a>(
+    surface: &'static str,
+    target: Option<&'a InvocationTarget>,
+) -> Result<&'a str, Status> {
+    let target = target.ok_or_else(|| {
+        Status::invalid_argument(format!(
+            "{surface}: invocation requires typed descriptor target \
+             InvocationTarget.typed_target"
+        ))
+    })?;
+    let Some(invocation_target::TypedTarget::Ability(ability)) = target.typed_target.as_ref()
+    else {
+        return Err(Status::invalid_argument(format!(
+            "{surface}: invocation requires a typed Ability target"
+        )));
+    };
+    let binding = ability.ability_name.trim();
+    if binding.is_empty() {
+        return Err(Status::invalid_argument(format!(
+            "{surface}: typed Ability target is missing ability_name"
+        )));
+    }
+    Ok(binding)
+}
+
+pub(crate) fn function_name_from_invocation_target<'a>(
+    surface: &'static str,
+    target: Option<&'a InvocationTarget>,
+) -> Result<&'a str, Status> {
+    let target = target.ok_or_else(|| {
+        Status::invalid_argument(format!(
+            "{surface}: invocation requires InvocationTarget.typed_target"
+        ))
+    })?;
+    let Some(invocation_target::TypedTarget::Ability(ability)) = target.typed_target.as_ref()
+    else {
+        return Err(Status::invalid_argument(format!(
+            "{surface}: invocation requires a typed Ability target"
+        )));
+    };
+    let function_name = ability.function_name.trim();
+    if function_name.is_empty() {
+        return Err(Status::invalid_argument(format!(
+            "{surface}: typed Ability target is missing function_name"
+        )));
+    }
+    Ok(function_name)
+}
+
+pub(crate) fn descriptor_ref_from_invocation_target(
+    surface: &'static str,
+    callee_ura: &str,
+    target: Option<&InvocationTarget>,
+) -> Result<String, Status> {
+    let raw = ability_binding_from_invocation_target(surface, target)?;
+    crate::daemon::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(callee_ura, raw)
+        .map_err(|error| {
+            Status::invalid_argument(format!(
+                "{surface}: typed Ability target must carry a complete descriptor ref for \
+                 callee `{callee_ura}`: {error}"
+            ))
+        })
 }
 
 fn checked_ura(ura: String, field: &str) -> anyhow::Result<String> {
@@ -464,20 +592,6 @@ fn checked_provisional_ura(ura: String) -> anyhow::Result<String> {
         anyhow::bail!("provisional_caller_ura must be `provisional:` plus 64 hex characters");
     }
     Ok(ura)
-}
-
-fn agent_identity(ura: String) -> AgentIdentity {
-    AgentIdentity {
-        ura,
-        profile: DEFAULT_URA_PROFILE.to_string(),
-    }
-}
-
-fn subject_identity(ura: String) -> SubjectIdentity {
-    SubjectIdentity {
-        ura,
-        profile: DEFAULT_URA_PROFILE.to_string(),
-    }
 }
 
 pub(crate) fn try_entity_ref(ura: String) -> anyhow::Result<EntityRef> {
@@ -524,22 +638,10 @@ fn top_level_subject_entity_kind(ura: &str) -> Option<EntityRefKind> {
     }
 }
 
-fn fresh_invocation_nonce() -> [u8; 16] {
-    let mut nonce = [0_u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut nonce);
-    nonce
-}
-
 fn fresh_request_id() -> String {
     let mut bytes = [0_u8; 16];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
     format!("req-{}", hex::encode(bytes))
-}
-
-fn root_causal_context() -> CausalContext {
-    CausalContext {
-        form: Some(causal_context::Form::None(Empty {})),
-    }
 }
 
 /// Content type the daemon dispatch surfaces emit on
@@ -590,9 +692,9 @@ pub(crate) fn target_ura_from_envelope(
 pub(crate) fn status_from_axon_invoke_error(
     surface: &str,
     ability: &str,
-    err: easynet_axon::invocation::AxonError,
+    err: axon_sdk::invocation::AxonError,
 ) -> tonic::Status {
-    use easynet_axon::invocation::AxonErrorKind;
+    use axon_sdk::invocation::AxonErrorKind;
     use tonic::Status;
 
     let message =
@@ -600,7 +702,7 @@ pub(crate) fn status_from_axon_invoke_error(
     if err.reason.contains("unknown_ability") || err.reason.contains("mode_not_supported") {
         return Status::not_found(message);
     }
-    if axon_error_is_trust_denial(&err) {
+    if axon_error_is_caller_trust_denial(&err) {
         let message = if message.contains("not in the realm trust anchor") {
             message
         } else {
@@ -619,13 +721,13 @@ pub(crate) fn status_from_axon_invoke_error(
     }
 }
 
-fn axon_error_is_trust_denial(err: &easynet_axon::invocation::AxonError) -> bool {
-    let reason = err.reason.to_ascii_uppercase();
-    let message = err.message.to_ascii_lowercase();
-    reason.contains("CALLER_KEY_NOT_FOUND")
-        || reason.contains("CALLER_KEY_REVOKED")
-        || message.contains("realm_trust_anchor: no entry")
-        || message.contains("caller not trusted")
+fn axon_error_is_caller_trust_denial(err: &axon_sdk::invocation::AxonError) -> bool {
+    use axon_sdk::invocation::ErrorCode;
+
+    matches!(
+        err.code,
+        ErrorCode::CallerUnknown | ErrorCode::CallerKeyNotFound | ErrorCode::CallerKeyRevoked
+    )
 }
 
 /// Explain why a descriptor-bound request cannot be routed through a
@@ -679,32 +781,6 @@ pub(crate) fn parse_json_args<T: serde::de::DeserializeOwned>(
     })
 }
 
-/// Encode a typed federation response into `InvokeResponse.result`
-/// with `result_content_type = "application/json"`. Mapping any
-/// serialisation error to `Status::internal` because the wrappers
-/// use serde-derived types — failure here is a programmer bug, not
-/// a caller bug.
-///
-/// `state` is set to `INVOCATION_STATE_COMPLETED` so unary callers
-/// that grep on `resp.state == "completed"` (Go-side
-/// `stateString` mapping) see the expected wire-visible success
-/// signal. Without this the proto default-zero value
-/// (`INVOCATION_STATE_UNSPECIFIED`) collapses to `"failed"` on the
-/// Go side per `stateString`'s default arm — silent failure-look-
-/// like under what the dispatcher considers a clean dispatch.
-pub(crate) fn wrap_json_response<T: serde::Serialize>(
-    response: &T,
-) -> Result<Response<InvokeResponse>, Status> {
-    let bytes = encode_json_payload(response)?;
-    let invoke_response = InvokeResponse {
-        result: bytes,
-        result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
-        state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
-        ..InvokeResponse::default()
-    };
-    Ok(Response::new(invoke_response))
-}
-
 /// Serialize product output without asserting invocation lifecycle state.
 /// Exact-route providers return these bytes to Axon; only LocalRuntime may
 /// project admission and terminal state onto the public Invoke response.
@@ -719,6 +795,7 @@ pub(crate) fn encode_json_payload<T: serde::Serialize>(response: &T) -> Result<V
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axon_sdk::pb::axon::v1::causal_context;
     use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 
     struct TestSigner(SigningKey);
@@ -742,13 +819,52 @@ mod tests {
     }
 
     #[test]
-    fn targeted_envelope_has_full_tuple_and_nonce() {
+    fn caller_trust_error_codes_map_to_permission_denied_transport_status() {
+        use axon_sdk::invocation::{AxonError, ErrorCode};
+
+        for code in [
+            ErrorCode::CallerUnknown,
+            ErrorCode::CallerKeyNotFound,
+            ErrorCode::CallerKeyRevoked,
+        ] {
+            let error = AxonError::invalid_argument(code.as_str())
+                .with_code(code)
+                .with_message("typed trust rejection");
+            let status = status_from_axon_invoke_error("InvokeStream", "test.stream", error);
+            assert_eq!(
+                status.code(),
+                tonic::Code::PermissionDenied,
+                "{} must remain a permission denial at a streaming transport boundary",
+                code.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn trust_wording_cannot_reclassify_non_trust_error_codes() {
+        use axon_sdk::invocation::{AxonError, ErrorCode};
+
+        let error = AxonError::invalid_argument("caller not trusted")
+            .with_code(ErrorCode::RequestPayloadInvalid)
+            .with_message("realm_trust_anchor: no entry");
+        let status = status_from_axon_invoke_error("InvokeStream", "test.stream", error);
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn fresh_root_policy_builds_full_tuple_and_nonce() {
         let hub = crate::core::ura::hub_ura("acme");
         let subject = crate::core::ura::owner_ability_ura(&hub, "federation.resolve")
             .expect("hub ability subject");
-        let env = ProtoEnvelope::targeted("easynet:///r/acme/device/dev-a", &hub, &subject)
-            .unwrap()
-            .into_inner();
+        let env = ProtoEnvelope::from_target(
+            "easynet:///r/acme/device/dev-a",
+            &hub,
+            &subject,
+            InvocationDerivationPolicy::FreshRoot,
+        )
+        .unwrap()
+        .into_inner("federation.resolve", b"{}")
+        .unwrap();
         assert_eq!(env.caller.unwrap().ura, "easynet:///r/acme/device/dev-a");
         assert_eq!(env.callee.unwrap().ura, hub);
         assert_eq!(env.subject.unwrap().ura, subject);
@@ -763,11 +879,64 @@ mod tests {
     }
 
     #[test]
-    fn targeted_rejects_provisional_caller() {
+    fn explicit_policy_preserves_caller_selected_nonce() {
+        let nonce = [0x5A; 16];
+        let env = ProtoEnvelope::from_target(
+            "easynet:///r/acme/device/dev-a",
+            "easynet:///r/acme/device/dev-b",
+            "easynet:///r/acme/resource/task-1",
+            InvocationDerivationPolicy::Explicit {
+                invocation_nonce: nonce,
+                causal_context: axon_sdk::invocation::CausalContext::None,
+            },
+        )
+        .unwrap()
+        .into_inner("task.run", b"{}")
+        .unwrap();
+
+        assert_eq!(env.invocation_nonce, nonce);
+        assert!(matches!(
+            env.causal_context.and_then(|ctx| ctx.form),
+            Some(causal_context::Form::None(_))
+        ));
+    }
+
+    #[test]
+    fn canonical_envelope_ownership_stays_in_axon() {
+        let source = include_str!("invocation_wire.rs");
+        let nonce_generator = ["fresh", "_nonce"].concat();
+        let tuple_constructor = ["InvocationEnvelope", "::from_wire_parts"].concat();
+        let wire_literal = ["Envelope", " {"].concat();
+        let wrapped_wire_literal = ["Ok(", &wire_literal].concat();
+        let hidden_root_default = [
+            "derivation_policy:",
+            " InvocationDerivationPolicy::FreshRoot",
+        ]
+        .concat();
+        let causal_policy_override = ["fn with_", "causal_context"].concat();
+
+        assert!(!source.contains(&nonce_generator));
+        assert!(!source.contains(&tuple_constructor));
+        assert!(!source.contains(&hidden_root_default));
+        assert!(!source.contains(&causal_policy_override));
+        assert!(!source.lines().any(|line| {
+            line.trim_start().starts_with(&wire_literal) || line.contains(&wrapped_wire_literal)
+        }));
+        assert!(source.contains("CanonicalEnvelopeBuilder"));
+    }
+
+    #[test]
+    fn target_rejects_provisional_caller() {
         let provisional = format!("provisional:{}", "a".repeat(64));
         let hub = crate::core::ura::hub_ura("acme");
         let subject = "easynet:///r/acme/device/dev-a";
-        let err = ProtoEnvelope::targeted(provisional, hub, subject).unwrap_err();
+        let err = ProtoEnvelope::from_target(
+            provisional,
+            hub,
+            subject,
+            InvocationDerivationPolicy::FreshRoot,
+        )
+        .unwrap_err();
         assert!(format!("{err}").contains("caller_ura is not a valid URA"));
     }
 
@@ -776,9 +945,15 @@ mod tests {
         let provisional = format!("provisional:{}", "a".repeat(64));
         let hub = crate::core::ura::hub_ura("acme");
         let membership = "easynet:///r/acme/device/dev-a";
-        let env = ProtoEnvelope::federation_join_genesis(&provisional, &hub, membership)
-            .unwrap()
-            .into_inner();
+        let env = ProtoEnvelope::federation_join_genesis(
+            &provisional,
+            &hub,
+            membership,
+            InvocationDerivationPolicy::FreshRoot,
+        )
+        .unwrap()
+        .into_inner("federation.join", b"{}")
+        .unwrap();
         assert_eq!(env.caller.unwrap().ura, provisional);
         assert_eq!(env.callee.unwrap().ura, hub);
         assert_eq!(env.subject.unwrap().ura, membership);
@@ -787,6 +962,7 @@ mod tests {
             format!("provisional:{}", "b".repeat(64)),
             crate::core::ura::hub_ura("acme"),
             "easynet:///r/other/device/dev-a",
+            InvocationDerivationPolicy::FreshRoot,
         )
         .unwrap_err();
         assert!(format!("{cross_realm}").contains("does not match hub realm"));
@@ -794,10 +970,13 @@ mod tests {
 
     #[test]
     fn loopback_sets_caller_callee_subject_to_same_ura() {
-        let req = ProtoEnvelope::loopback("easynet:///r/acme/device/dev-a")
-            .unwrap()
-            .invoke_request("federation.discover", b"{}".to_vec())
-            .unwrap();
+        let req = ProtoEnvelope::loopback(
+            "easynet:///r/acme/device/dev-a",
+            InvocationDerivationPolicy::FreshRoot,
+        )
+        .unwrap()
+        .invoke_request("federation.discover", b"{}".to_vec())
+        .unwrap();
         let env = req.envelope.unwrap();
         assert_eq!(env.caller.unwrap().ura, "easynet:///r/acme/device/dev-a");
         assert_eq!(env.callee.unwrap().ura, "easynet:///r/acme/device/dev-a");
@@ -814,14 +993,20 @@ mod tests {
     #[test]
     fn hub_and_user_subject_refs_are_rejected() {
         let hub = crate::core::ura::hub_ura("acme");
-        let hub_err =
-            ProtoEnvelope::targeted("easynet:///r/acme/device/dev-a", &hub, &hub).unwrap_err();
+        let hub_err = ProtoEnvelope::from_target(
+            "easynet:///r/acme/device/dev-a",
+            &hub,
+            &hub,
+            InvocationDerivationPolicy::FreshRoot,
+        )
+        .unwrap_err();
         assert!(format!("{hub_err}").contains("subject_ref_kind_unsupported:Hub"));
 
-        let user_err = ProtoEnvelope::targeted(
+        let user_err = ProtoEnvelope::from_target(
             "easynet:///r/acme/device/dev-a",
             &hub,
             "easynet:///r/acme/user/alice",
+            InvocationDerivationPolicy::FreshRoot,
         )
         .unwrap_err();
         assert!(format!("{user_err}").contains("subject_ref_kind_unsupported:User"));
@@ -829,40 +1014,40 @@ mod tests {
 
     #[test]
     fn resource_subject_with_agent_path_segment_stays_resource() {
-        let env = ProtoEnvelope::targeted(
+        let env = ProtoEnvelope::from_target(
             "easynet:///r/acme/device/dev-a",
             "easynet:///r/acme/device/dev-a",
             "easynet:///r/acme/resource/project/agent/audit-log",
+            InvocationDerivationPolicy::FreshRoot,
         )
         .unwrap()
-        .into_inner();
+        .into_inner("resource.read", b"{}")
+        .unwrap();
         let subject_ref = try_entity_ref(env.subject.unwrap().ura).unwrap();
         assert_eq!(subject_ref.kind, EntityRefKind::Resource as i32);
     }
 
     #[test]
-    fn caller_only_keeps_tuple_incomplete_for_genesis_preludes() {
-        let env = ProtoEnvelope::caller_only("easynet:///r/acme/device/dev-a")
-            .unwrap()
-            .into_inner();
-        assert!(env.caller.is_some());
-        assert!(env.callee.is_none());
-        assert!(env.subject.is_none());
-    }
-
-    #[test]
     fn invalid_ura_is_rejected_before_wire_send() {
-        let err = ProtoEnvelope::loopback("agent://self").unwrap_err();
+        let err = ProtoEnvelope::loopback("agent://self", InvocationDerivationPolicy::FreshRoot)
+            .unwrap_err();
         assert!(format!("{err}").contains("valid URA"));
     }
 
     #[test]
-    fn wire_invocation_target_trims_and_rejects_empty_selector() {
-        let target = wire_invocation_target(" demo.echo ").unwrap();
-        assert_eq!(target.ability_name, "demo.echo");
+    fn wire_invocation_target_separates_ability_binding_and_function_name() {
+        let target = wire_invocation_target(" descriptor-ref ", " demo.echo ").unwrap();
+        let invocation_target::TypedTarget::Ability(ability) =
+            target.typed_target.expect("typed ability target");
+        assert_eq!(ability.ability_name, "descriptor-ref");
+        assert_eq!(ability.function_name, "demo.echo");
+        assert!(target.ability_name.is_empty());
+        assert!(target.function_name.is_empty());
 
-        let err = wire_invocation_target("  ").unwrap_err();
-        assert!(format!("{err}").contains("invocation target must not be empty"));
+        let err = wire_invocation_target("  ", "demo.echo").unwrap_err();
+        assert!(format!("{err}").contains("ability binding must not be empty"));
+        let err = wire_invocation_target("descriptor-ref", "  ").unwrap_err();
+        assert!(format!("{err}").contains("function_name must not be empty"));
     }
 
     #[test]
@@ -874,10 +1059,11 @@ mod tests {
             "{}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
             crate::core::ura::owner_ability_ura(callee, "demo.echo").unwrap()
         );
-        let envelope = ProtoEnvelope::targeted(
+        let envelope = ProtoEnvelope::from_target(
             "easynet:///r/acme/device/dev-a",
             callee,
             "easynet:///r/acme/device/dev-a",
+            InvocationDerivationPolicy::FreshRoot,
         )
         .unwrap();
         let descriptor = envelope
@@ -892,12 +1078,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            request
-                .metadata
-                .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
-                .map(String::as_str),
-            Some(descriptor_ref.as_str())
+            descriptor_ref_from_invocation_target(
+                "test signed request",
+                callee,
+                request.target.as_ref(),
+            )
+            .unwrap(),
+            descriptor_ref
         );
+        assert!(request.metadata.is_empty());
         let signature = request
             .envelope
             .unwrap()
@@ -923,10 +1112,11 @@ mod tests {
             "{}@2.3.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke",
             crate::core::ura::owner_ability_ura(callee, "echo").unwrap()
         );
-        let envelope = ProtoEnvelope::targeted(
+        let envelope = ProtoEnvelope::from_target(
             "easynet:///r/acme/device/dev-a",
             callee,
             "easynet:///r/acme/device/dev-a",
+            InvocationDerivationPolicy::FreshRoot,
         )
         .unwrap();
         let descriptor = envelope

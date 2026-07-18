@@ -12,7 +12,9 @@ use std::collections::BTreeMap;
 #[cfg(test)]
 mod cases {
     use super::*;
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+    use crate::daemon::execution::mission::invocation_gateway::{
+        MissionInvocationRecord, MissionReceiptReference,
+    };
     use crate::eal::{parser, runtime::planner};
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
@@ -61,25 +63,6 @@ mod cases {
         }
     }
 
-    fn dummy_agent_entry() -> AgentEntry {
-        use crate::core::agent::spec::{AgentSpec, RuntimeKind};
-        use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
-
-        let root = crate::daemon::persistence::config::agents_root().join("alice");
-        let _ = std::fs::remove_dir_all(&root);
-        AgentDirectory::create(
-            &Location::Local { root: root.clone() },
-            AgentSpec::new("alice".to_string(), RuntimeKind::ClaudeCode),
-        )
-        .expect("create manifest-backed dummy agent directory");
-
-        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
-        entry.command = "easynet-test-nonexistent-agent-binary".to_string();
-        entry.root_path = Some(root);
-        entry.timeout_secs = 1;
-        entry
-    }
-
     impl StepDispatcher for MockDispatcher {
         fn dispatch(
             &self,
@@ -88,7 +71,7 @@ mod cases {
             ability: &AbilityName,
             _arguments: &Value,
             timeout_ms: Option<u64>,
-            _causal_parents: &[Value],
+            _dependency_receipts: &[MissionReceiptReference],
         ) -> Result<StepDispatchOutcome, EalError> {
             let ability_str = ability.as_str().to_string();
             let call_num = self.call_count.fetch_add(1, Ordering::SeqCst);
@@ -370,7 +353,7 @@ mod cases {
                 _ability: &AbilityName,
                 _arguments: &Value,
                 _timeout_ms: Option<u64>,
-                _causal_parents: &[Value],
+                _dependency_receipts: &[MissionReceiptReference],
             ) -> Result<StepDispatchOutcome, EalError> {
                 self.seen.lock().unwrap().push(
                     crate::daemon::execution::mission::context::current().map(|c| c.mission_id),
@@ -534,43 +517,6 @@ mod cases {
         assert!(json.contains("\"result_sha256\""));
         // Roundtrip
         let _: ExecutionTrace = serde_json::from_str(&json).unwrap();
-    }
-
-    #[test]
-    fn dispatch_to_agent_chat_requires_canonical_daemon_invocation() {
-        // Mission/EAL must never execute chat directly when the daemon
-        // is absent. A direct fallback would bypass Invocation admission
-        // and receipts and could duplicate a turn after an uncertain
-        // transport failure.
-        let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut registry = AgentRegistry::default();
-        registry
-            .agents
-            .insert("alice".to_string(), dummy_agent_entry());
-
-        let agent_id = crate::core::agent::id::AgentId::parse("alice").expect("valid agent id");
-        let ability =
-            AbilityName::parse(crate::daemon::ability::builtins::agents::chat::ABILITY_VERB)
-                .expect("valid chat ability");
-        let err = dispatch_to_agent(
-            &registry,
-            &agent_id,
-            &ability,
-            &serde_json::json!({"prompt": "hi"}),
-            &[],
-            "trace-test",
-        )
-        .expect_err("chat dispatch must fail when the canonical daemon is absent");
-        let msg = format!("{err}");
-
-        assert!(
-            msg.contains("daemon") || msg.contains("gRPC"),
-            "expected canonical daemon invocation failure, got: {msg}"
-        );
-        assert!(
-            !msg.contains("easynet-test-nonexistent-agent-binary"),
-            "chat dispatch must not spawn a direct fallback driver, got: {msg}"
-        );
     }
 
     // ── Test 5: Retry with exponential backoff ──
@@ -861,7 +807,7 @@ mod cases {
                 ability: &AbilityName,
                 _: &Value,
                 _: Option<u64>,
-                _: &[Value],
+                _: &[MissionReceiptReference],
             ) -> Result<StepDispatchOutcome, EalError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(serde_json::json!({"ok": true, "function": ability.as_str()}).into())
@@ -950,7 +896,7 @@ mod cases {
             ability: &AbilityName,
             arguments: &Value,
             _timeout_ms: Option<u64>,
-            _causal_parents: &[Value],
+            _dependency_receipts: &[MissionReceiptReference],
         ) -> Result<StepDispatchOutcome, EalError> {
             self.seen
                 .lock()
@@ -984,7 +930,7 @@ mod cases {
                 _ability: &AbilityName,
                 _arguments: &Value,
                 _timeout_ms: Option<u64>,
-                _causal_parents: &[Value],
+                _dependency_receipts: &[MissionReceiptReference],
             ) -> Result<StepDispatchOutcome, EalError> {
                 Err(EalError::NotFound("device 'node-x' not registered".into()))
             }
@@ -1152,7 +1098,7 @@ mod cases {
             "upstream".to_string(),
             CapturedResult {
                 value: b"{not json".to_vec(),
-                invocation: None,
+                invocation: MissionInvocationRecord::for_test("test.malformed", 0x61),
             },
         );
 
@@ -1257,7 +1203,7 @@ mod cases {
             "upstream".to_string(),
             CapturedResult {
                 value: b"{\"answer\": 42}".to_vec(),
-                invocation: None,
+                invocation: MissionInvocationRecord::for_test("test.producer", 0x62),
             },
         );
 
@@ -1403,7 +1349,7 @@ mod cases {
             ability: &AbilityName,
             _arguments: &Value,
             _timeout_ms: Option<u64>,
-            _causal_parents: &[Value],
+            _dependency_receipts: &[MissionReceiptReference],
         ) -> Result<StepDispatchOutcome, EalError> {
             let k = ability.as_str().to_string();
             self.calls.lock().unwrap().push(k.clone());
@@ -1470,16 +1416,15 @@ mod cases {
         );
     }
 
-    /// Loop-internal steps thread causal parents from the iteration
-    /// scope and receive the mission run's `RunContext` (trace_id =
-    /// mission_id): the receipt chain stays connected inside loop
-    /// bodies, and every lowered envelope is ledger-groupable.
+    /// Loop-internal joins retain dependency receipts from the
+    /// iteration scope and receive the mission run's `RunContext`
+    /// (trace_id = mission_id).
     #[test]
-    fn loop_steps_thread_causal_parents_and_trace_id() {
-        type RecordedCalls = Arc<Mutex<Vec<(String, String, Vec<Value>)>>>;
+    fn loop_steps_retain_dependency_receipts_and_trace_id() {
+        type RecordedCalls = Arc<Mutex<Vec<(String, String, Vec<MissionReceiptReference>)>>>;
 
         struct RecordingDispatcher {
-            // (ability, trace_id, causal_parents) per dispatch.
+            // (ability, trace_id, dependency receipts) per dispatch.
             calls: RecordedCalls,
         }
         impl StepDispatcher for RecordingDispatcher {
@@ -1490,24 +1435,17 @@ mod cases {
                 ability: &AbilityName,
                 _arguments: &Value,
                 _timeout_ms: Option<u64>,
-                causal_parents: &[Value],
+                dependency_receipts: &[MissionReceiptReference],
             ) -> Result<StepDispatchOutcome, EalError> {
                 let qualified = format!("a.{}", ability.as_str());
                 self.calls.lock().unwrap().push((
                     ability.as_str().to_string(),
                     run.trace_id.to_string(),
-                    causal_parents.to_vec(),
+                    dependency_receipts.to_vec(),
                 ));
                 Ok(StepDispatchOutcome {
                     value: serde_json::json!({"done": true}),
-                    invocation: Some(serde_json::json!({
-                        "ability": qualified,
-                        "invocation_ura": format!("ura:{qualified}"),
-                        "receipt": {"anchor": {
-                            "receipt_ura": format!("ura:{qualified}/receipt/1"),
-                            "receipt_hash": "ab",
-                        }},
-                    })),
+                    invocation: MissionInvocationRecord::for_test(&qualified, 0xab),
                 })
             }
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
@@ -1542,18 +1480,97 @@ mod cases {
         let (_, _, step_parents) = &calls[0];
         assert!(
             step_parents.is_empty(),
-            "iteration root must have no causal parents"
+            "iteration root must have no dependency receipts"
         );
         let (_, _, ok_parents) = &calls[1];
         assert_eq!(
             ok_parents.len(),
             1,
-            "verify step must name the body step as its causal parent"
+            "verify step must retain the body step receipt"
         );
-        assert_eq!(
-            ok_parents[0].get("node").and_then(Value::as_str),
-            Some("a.step")
-        );
+        assert!(ok_parents[0]
+            .projection()
+            .get("receipt_ura")
+            .and_then(Value::as_str)
+            .is_some());
+    }
+
+    #[test]
+    fn fan_in_join_retains_each_producer_receipt() {
+        type RecordedCalls = Arc<Mutex<Vec<(String, Vec<MissionReceiptReference>)>>>;
+
+        struct JoinRecordingDispatcher {
+            calls: RecordedCalls,
+            next_marker: Arc<AtomicU32>,
+        }
+
+        impl StepDispatcher for JoinRecordingDispatcher {
+            fn dispatch(
+                &self,
+                _run: RunContext<'_>,
+                _target: &IrTarget,
+                ability: &AbilityName,
+                _arguments: &Value,
+                _timeout_ms: Option<u64>,
+                dependency_receipts: &[MissionReceiptReference],
+            ) -> Result<StepDispatchOutcome, EalError> {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((ability.as_str().to_string(), dependency_receipts.to_vec()));
+                let marker = self.next_marker.fetch_add(1, Ordering::SeqCst) as u8;
+                Ok(StepDispatchOutcome {
+                    value: serde_json::json!({"ability": ability.as_str()}),
+                    invocation: MissionInvocationRecord::for_test(ability.as_str(), marker),
+                })
+            }
+
+            fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
+                Ok(Box::new(Self {
+                    calls: Arc::clone(&self.calls),
+                    next_marker: Arc::clone(&self.next_marker),
+                }))
+            }
+        }
+
+        let source = r#"
+            mission "fan-in" {
+                let left = call "produce.left" on "local"
+                let right = call "produce.right" on "local"
+                let joined = call "join" on "local" with {
+                    left = left.output,
+                    right = right.output
+                }
+            }
+        "#;
+        let ir = planner::compile(&parser::parse(source).unwrap()).unwrap();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let dispatcher = JoinRecordingDispatcher {
+            calls: Arc::clone(&calls),
+            next_marker: Arc::new(AtomicU32::new(1)),
+        };
+
+        let report = execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
+        assert_eq!(report.steps_failed, 0);
+
+        let calls = calls.lock().unwrap();
+        let (_, join_receipts) = calls
+            .iter()
+            .find(|(ability, _)| ability == "join")
+            .expect("join step dispatched");
+        assert_eq!(join_receipts.len(), 2);
+        let receipt_uras = join_receipts
+            .iter()
+            .map(|receipt| {
+                receipt
+                    .projection()
+                    .get("receipt_ura")
+                    .and_then(Value::as_str)
+                    .expect("typed receipt reference has canonical URA")
+                    .to_string()
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(receipt_uras.len(), 2, "join must retain both producers");
     }
 
     /// `done: bool` must be found through the daemon shell-executor
@@ -1576,17 +1593,16 @@ mod cases {
     }
 
     /// A named loop's `<name>.result` export feeds a downstream step
-    /// (`.result` accessor): the downstream step names the winning
-    /// iteration's final verify invocation as its causal parent (the
-    /// receipt chain crosses the loop boundary), and the run-level
+    /// (`.result` accessor): the downstream step retains the winning
+    /// iteration's verified terminal receipt, and the run-level
     /// `__runner_receipt_graph__` substitution carries loop-internal
     /// invocation records.
     #[test]
     fn loop_result_feeds_downstream_step_with_receipt_chain() {
-        type RecordedCalls = Arc<Mutex<Vec<(String, Value, Vec<Value>)>>>;
+        type RecordedCalls = Arc<Mutex<Vec<(String, Value, Vec<MissionReceiptReference>)>>>;
 
         struct ArgRecordingDispatcher {
-            // (ability, arguments, causal_parents) per dispatch.
+            // (ability, arguments, dependency receipts) per dispatch.
             calls: RecordedCalls,
         }
         impl StepDispatcher for ArgRecordingDispatcher {
@@ -1597,24 +1613,17 @@ mod cases {
                 ability: &AbilityName,
                 arguments: &Value,
                 _timeout_ms: Option<u64>,
-                causal_parents: &[Value],
+                dependency_receipts: &[MissionReceiptReference],
             ) -> Result<StepDispatchOutcome, EalError> {
                 let qualified = format!("a.{}", ability.as_str());
                 self.calls.lock().unwrap().push((
                     ability.as_str().to_string(),
                     arguments.clone(),
-                    causal_parents.to_vec(),
+                    dependency_receipts.to_vec(),
                 ));
                 Ok(StepDispatchOutcome {
                     value: serde_json::json!({"done": true}),
-                    invocation: Some(serde_json::json!({
-                        "ability": qualified,
-                        "invocation_ura": format!("ura:{qualified}"),
-                        "receipt": {"anchor": {
-                            "receipt_ura": format!("ura:{qualified}/receipt/1"),
-                            "receipt_hash": "ab",
-                        }},
-                    })),
+                    invocation: MissionInvocationRecord::for_test(&qualified, 0xab),
                 })
             }
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
@@ -1649,10 +1658,11 @@ mod cases {
         // Loop-boundary receipt edge: the publish step's parent is the
         // winning iteration's final verify invocation.
         assert_eq!(publish_parents.len(), 1);
-        assert_eq!(
-            publish_parents[0].get("node").and_then(Value::as_str),
-            Some("a.ok")
-        );
+        assert!(publish_parents[0]
+            .projection()
+            .get("receipt_ura")
+            .and_then(Value::as_str)
+            .is_some());
         // `doc:` resolved from the loop's exported result payload.
         assert_eq!(
             publish_args.get("doc").and_then(|d| d.get("done")),

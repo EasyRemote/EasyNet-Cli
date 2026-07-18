@@ -50,7 +50,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::config::{WritePermissions, atomic_write_with_permissions, state_dir};
+use super::config::{atomic_write_with_permissions, state_dir, WritePermissions};
 
 pub(crate) const FILE_NAME: &str = "local-agents.json";
 

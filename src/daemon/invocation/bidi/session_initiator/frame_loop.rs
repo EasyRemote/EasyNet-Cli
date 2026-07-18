@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
-use easynet_axon::pb::axon::v1::{InvokeBidiDown, InvokeBidiUp};
+use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
+use axon_sdk::pb::axon::v1::{InvokeBidiDown, InvokeBidiUp};
 use futures::StreamExt as _;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -158,7 +158,7 @@ fn apply_session_contract(
     hub_endpoint: &str,
     connection_state_sink: &dyn SessionConnectionStateSink,
 ) {
-    use easynet_axon::pb::axon::v1::{bidi_control, invoke_bidi_down::Payload};
+    use axon_sdk::pb::axon::v1::{bidi_control, invoke_bidi_down::Payload};
     let Some(Payload::Control(control)) = frame.payload.as_ref() else {
         return;
     };

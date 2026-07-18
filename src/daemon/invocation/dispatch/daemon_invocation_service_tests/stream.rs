@@ -287,11 +287,12 @@ async fn invoke_stream_subscribe_directory_v2_emits_heartbeat_when_idle() {
 
 #[tokio::test]
 async fn invoke_stream_dispatches_registered_local_stream_ability() {
-    use easynet_axon::invocation::{make_ability, AbilityOptions, CallMode};
+    use axon_sdk::invocation::{make_ability, AbilityOptions, CallMode};
     use futures::StreamExt;
 
     const ABILITY: &str = "test.local_stream";
-    let rt = test_runtime_with_default_trust();
+    let runtime_assembly = test_runtime_with_default_trust();
+    let rt = runtime_assembly.runtime();
     let runtime_ability =
         crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ABILITY).expect("stream ability URA");
     // Stream-mode descriptor proof so Axon's receipt-proof normalizer
@@ -327,7 +328,7 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     )
     .await
     .unwrap();
-    let svc = make_service_with_test_runtime(Arc::clone(&rt));
+    let svc = make_service_with_test_runtime(runtime_assembly);
     publish_test_stream_route(&svc, TEST_DAEMON_URA, ABILITY);
     sync_runtime_proof_from_catalog(
         &svc,
@@ -343,13 +344,15 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(
-                ProtoEnvelope::targeted(
+                ProtoEnvelope::from_target(
                     crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
                     TEST_DAEMON_URA,
                     subject_ura,
+                    InvocationDerivationPolicy::FreshRoot,
                 )
                 .expect("valid unsigned loopback stream envelope")
-                .into_inner(),
+                .into_inner(&function_name, &arguments)
+                .expect("complete unsigned loopback stream tuple"),
             ),
             function_name,
             arguments,
@@ -383,7 +386,7 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     assert_eq!(first.sequence, 0);
     assert_eq!(
         first.state,
-        easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
+        axon_sdk::invocation::InvocationState::Completed.to_wire_i32()
     );
     assert!(
         first.admission_receipt.is_some(),
@@ -425,11 +428,12 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
 
 #[tokio::test]
 async fn invoke_stream_cancels_local_runtime_when_client_drops_response() {
-    use easynet_axon::invocation::{make_ability, AbilityOptions, CallMode};
+    use axon_sdk::invocation::{make_ability, AbilityOptions, CallMode};
     use futures::StreamExt;
 
     const ABILITY: &str = "test.local_stream_cancel_on_drop";
-    let rt = test_runtime_with_default_trust();
+    let runtime_assembly = test_runtime_with_default_trust();
+    let rt = runtime_assembly.runtime();
     let runtime_ability =
         crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ABILITY).expect("stream ability URA");
     let first_frame_sent = Arc::new(std::sync::Mutex::new(None));
@@ -478,7 +482,7 @@ async fn invoke_stream_cancels_local_runtime_when_client_drops_response() {
     )
     .await
     .unwrap();
-    let svc = make_service_with_test_runtime(Arc::clone(&rt));
+    let svc = make_service_with_test_runtime(runtime_assembly);
     publish_test_stream_route(&svc, TEST_DAEMON_URA, ABILITY);
     sync_runtime_proof_from_catalog(
         &svc,
@@ -491,13 +495,15 @@ async fn invoke_stream_cancels_local_runtime_when_client_drops_response() {
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(
-                ProtoEnvelope::targeted(
+                ProtoEnvelope::from_target(
                     crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
                     TEST_DAEMON_URA,
                     TEST_DAEMON_URA,
+                    InvocationDerivationPolicy::FreshRoot,
                 )
                 .expect("valid unsigned loopback stream envelope")
-                .into_inner(),
+                .into_inner(ABILITY, br#"{}"#)
+                .expect("complete unsigned loopback stream tuple"),
             ),
             function_name: ABILITY.to_string(),
             arguments: br#"{}"#.to_vec(),
@@ -529,11 +535,12 @@ async fn invoke_stream_cancels_local_runtime_when_client_drops_response() {
 
 #[tokio::test]
 async fn invoke_stream_accepts_descriptor_ref_function_name() {
-    use easynet_axon::invocation::{make_ability, AbilityOptions, CallMode};
+    use axon_sdk::invocation::{make_ability, AbilityOptions, CallMode};
     use futures::StreamExt;
 
     let ability = "browser.descriptor_stream";
-    let rt = test_runtime_with_default_trust();
+    let runtime_assembly = test_runtime_with_default_trust();
+    let rt = runtime_assembly.runtime();
     let runtime_ability =
         crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ability).expect("stream ability URA");
     rt.register_ability_with_options(
@@ -551,7 +558,7 @@ async fn invoke_stream_accepts_descriptor_ref_function_name() {
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(Arc::clone(&rt));
+    let svc = make_service_with_test_runtime(runtime_assembly);
     publish_test_stream_route(&svc, TEST_DAEMON_URA, ability);
     sync_runtime_proof_from_catalog(
         &svc,
@@ -571,13 +578,15 @@ async fn invoke_stream_accepts_descriptor_ref_function_name() {
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(
-                ProtoEnvelope::targeted(
+                ProtoEnvelope::from_target(
                     crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
                     TEST_DAEMON_URA,
                     TEST_DAEMON_URA,
+                    InvocationDerivationPolicy::FreshRoot,
                 )
                 .expect("valid unsigned loopback stream envelope")
-                .into_inner(),
+                .into_inner(&descriptor_ref, &arguments)
+                .expect("complete descriptor-ref stream tuple"),
             ),
             function_name: descriptor_ref,
             arguments: arguments.clone(),
@@ -599,8 +608,9 @@ async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapsh
     };
     use futures::StreamExt;
 
+    let runtime_assembly = test_runtime_with_default_trust();
     let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-        test_runtime_with_default_trust(),
+        runtime_assembly.runtime(),
         AbilityAuthorityContext::for_device_authority_root(TEST_DAEMON_URA)
             .expect("test daemon URA is a valid device authority root"),
     );
@@ -615,20 +625,21 @@ async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapsh
         test_route_manifest("browser.snapshot_once"),
         handler,
     );
-    let rt = catalog.runtime().expect("catalog attaches a LocalRuntime");
-    let svc = make_service_with_test_runtime(Arc::clone(&rt));
+    let svc = make_service_with_test_runtime(runtime_assembly);
     publish_test_stream_route(&svc, TEST_DAEMON_URA, "browser.snapshot_once");
 
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(
-                ProtoEnvelope::targeted(
+                ProtoEnvelope::from_target(
                     crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
                     TEST_DAEMON_URA,
                     TEST_DAEMON_URA,
+                    InvocationDerivationPolicy::FreshRoot,
                 )
                 .expect("valid unsigned loopback stream envelope")
-                .into_inner(),
+                .into_inner("browser.snapshot_once", br#"{}"#)
+                .expect("complete snapshot stream tuple"),
             ),
             function_name: "browser.snapshot_once".to_string(),
             arguments: br#"{}"#.to_vec(),
@@ -685,12 +696,13 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
     // dispatcher reads the Stream-mode proof version and stamps the wire
     // ref accordingly; before the fix, reassembly forced 1.0.0 and Axon
     // rejected the call as proof_descriptor_version_mismatch.
-    use easynet_axon::invocation::{make_ability, AbilityOptions, CallMode};
+    use axon_sdk::invocation::{make_ability, AbilityOptions, CallMode};
     use futures::StreamExt;
 
     const NON_DEFAULT_VERSION: &str = "2.0.0";
     const ABILITY: &str = "test.versioned_stream";
-    let rt = test_runtime_with_default_trust();
+    let runtime_assembly = test_runtime_with_default_trust();
+    let rt = runtime_assembly.runtime();
     let runtime_ability =
         crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ABILITY).expect("stream ability URA");
     rt.register_ability_with_options(
@@ -709,7 +721,7 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
     )
     .await
     .unwrap();
-    let svc = make_service_with_test_runtime(Arc::clone(&rt));
+    let svc = make_service_with_test_runtime(runtime_assembly);
     publish_test_stream_route(&svc, TEST_DAEMON_URA, ABILITY);
     sync_runtime_proof_from_catalog(
         &svc,
@@ -724,13 +736,15 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(
-                ProtoEnvelope::targeted(
+                ProtoEnvelope::from_target(
                     crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
                     TEST_DAEMON_URA,
                     TEST_DAEMON_URA,
+                    InvocationDerivationPolicy::FreshRoot,
                 )
                 .expect("valid loopback stream envelope")
-                .into_inner(),
+                .into_inner(&function_name, &arguments)
+                .expect("complete loopback stream tuple"),
             ),
             function_name,
             arguments,
@@ -776,7 +790,9 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
         }])
         .expect("remote caller trust anchor"),
     );
-    let receipt_runtime = test_local_runtime(SharedTrustAnchor::new(Arc::clone(&receipt_anchor)));
+    let receipt_runtime_assembly =
+        test_runtime_assembly(SharedTrustAnchor::new(Arc::clone(&receipt_anchor)));
+    let receipt_runtime = receipt_runtime_assembly.runtime();
     let receipt_catalog = catalog_with_json_echo_on_runtime(
         TARGET_DEVICE_URA,
         ABILITY,
@@ -798,21 +814,22 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
         &arguments,
         &signing_key,
     );
-    let metadata = std::collections::HashMap::from([(
-        crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-            .to_string(),
-        descriptor_ref,
-    )]);
-    grant_child_access_for_test(ChildAccessGrantInput {
-        owner_user_id: OWNER_USER_ID,
-        principal_kind: PrincipalKind::Device,
-        principal_ura: TEST_DAEMON_URA,
-        token_class: None,
-        callee_ura: TARGET_DEVICE_URA,
-        subject_ura: &subject_ura,
-        ability_ura: &test_owner_ability_ura(TARGET_DEVICE_URA, ABILITY),
-        action: AccessAction::Invoke,
-    });
+    let access_control_stores = Arc::new(
+        crate::daemon::persistence::access_control::AccessControlStoreRegistry::ephemeral(),
+    );
+    grant_child_access_for_test(
+        access_control_stores.as_ref(),
+        ChildAccessGrantInput {
+            owner_user_id: OWNER_USER_ID,
+            principal_kind: PrincipalKind::Device,
+            principal_ura: TEST_DAEMON_URA,
+            token_class: None,
+            callee_ura: TARGET_DEVICE_URA,
+            subject_ura: &subject_ura,
+            ability_ura: &test_owner_ability_ura(TARGET_DEVICE_URA, ABILITY),
+            action: AccessAction::Invoke,
+        },
+    );
 
     // The simulated target must finalize the exact request that crossed the
     // session. Reusing a receipt from a different ability would defeat the
@@ -821,19 +838,22 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
         Arc::clone(&receipt_anchor),
         Some(TARGET_DEVICE_URA.to_string()),
     )
+    .with_access_control_stores(Arc::clone(&access_control_stores))
     .with_ability_catalog(Arc::clone(&receipt_catalog));
     let receipt_service =
         DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), receipt_admission)
             .with_hub_signer(test_hub_signer("test-realm"))
             .with_local_ability_catalog(Arc::clone(&receipt_catalog))
-            .with_local_runtime(Arc::clone(&receipt_runtime));
+            .with_daemon_runtime(receipt_runtime_assembly);
     publish_test_route(&receipt_service, TARGET_DEVICE_URA, ABILITY);
     let receipt_response = receipt_service
         .invoke(Request::new(InvokeRequest {
             envelope: Some(envelope.clone()),
+            target: Some(
+                wire_invocation_target(&descriptor_ref, ABILITY).expect("typed descriptor target"),
+            ),
             function_name: ABILITY.to_string(),
             arguments: arguments.clone(),
-            metadata: metadata.clone(),
             ..InvokeRequest::default()
         }))
         .await
@@ -880,16 +900,12 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
     let source_admission = AdmissionFacade::with_trust_anchor_cell(
         source_cell.clone(),
         Some(TEST_DAEMON_URA.to_string()),
-    );
-    let source_runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-        Some(Arc::new(
-            crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(source_cell),
-        )),
-        None,
-    );
+    )
+    .with_access_control_stores(access_control_stores);
+    let source_runtime_assembly = test_runtime_assembly(source_cell);
     let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), source_admission)
         .with_hub_signer(test_hub_signer("test-realm"))
-        .with_local_runtime(source_runtime)
+        .with_daemon_runtime(source_runtime_assembly)
         .with_pending_stream(Arc::clone(&pending_stream));
     let (target_tx, mut target_rx) = mpsc::channel(4);
     svc.directory.presence.insert_negotiated(
@@ -905,9 +921,11 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(envelope),
+            target: Some(
+                wire_invocation_target(&descriptor_ref, ABILITY).expect("typed descriptor target"),
+            ),
             function_name: ABILITY.to_string(),
             arguments: arguments.clone(),
-            metadata,
             ..InvokeServerStreamRequest::default()
         }))
         .await
@@ -941,9 +959,15 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
             );
             assert_eq!(request.function_name, ABILITY);
             assert_eq!(request.arguments, arguments);
-            assert!(request
-                .metadata
-                .contains_key(crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY));
+            assert_eq!(
+                crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
+                    "test forwarded stream",
+                    TARGET_DEVICE_URA,
+                    request.target.as_ref(),
+                )
+                .unwrap(),
+                descriptor_ref
+            );
             call.call_id
         }
         other => panic!("expected canonical DispatchCall carrier, got {other:?}"),
@@ -995,7 +1019,7 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
     assert_eq!(first.sequence, 1);
     assert_eq!(
         first.state,
-        easynet_axon::invocation::InvocationState::Running.to_wire_i32()
+        axon_sdk::invocation::InvocationState::Running.to_wire_i32()
     );
     assert!(!first.terminal);
     assert_eq!(first.payload, br#"{"delta":"part-1"}"#);
@@ -1015,7 +1039,7 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
         .expect("terminal is Ok");
     assert_eq!(
         terminal.state,
-        easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
+        axon_sdk::invocation::InvocationState::Completed.to_wire_i32()
     );
     assert!(terminal.terminal);
     assert_eq!(terminal.sequence, 2);
@@ -1035,7 +1059,9 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
 async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
     use base64::Engine as _;
 
-    let rt = test_runtime_with_default_trust();
+    let trust = SharedTrustAnchor::new(Arc::new(test_trust_anchor()));
+    let runtime_assembly = test_runtime_assembly(trust.clone());
+    let rt = runtime_assembly.runtime();
     let mut catalog =
         crate::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
             Arc::clone(&rt),
@@ -1073,11 +1099,39 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
         crate::daemon::ability::CallMode::Bidi,
     );
     let open = make_descriptor_ref_envelope_open(&file_transfer_descriptor_ref, args);
-    let wire = crate::daemon::axon_bridge::dispatch_shim::external_signed_from_envelope_open(&open)
-        .expect("wire dispatch");
+    let descriptor_ref =
+        crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
+            "test external signed bidi",
+            TEST_DAEMON_URA,
+            open.target.as_ref(),
+        )
+        .expect("typed descriptor target");
+    let wire = crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+        open.envelope.clone().expect("signed envelope"),
+        descriptor_ref,
+        open.initial_args.clone(),
+        open.metadata.clone(),
+    )
+    .expect("wire dispatch");
+    let admission =
+        AdmissionFacade::with_trust_anchor_cell(trust, Some(TEST_DAEMON_URA.to_string()))
+            .with_ability_catalog(Arc::new(catalog));
+    let product_admission = runtime_assembly
+        .admission_graph()
+        .product_policy()
+        .stage(
+            &admission,
+            &wire,
+            crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER,
+            axon_sdk::invocation::CallMode::Bidi,
+        )
+        .expect("stage daemon product admission");
     let handle = crate::daemon::axon_bridge::dispatch_shim::open_bidi_external_signed(&rt, wire)
         .await
         .expect("open external-signed bidi");
+    product_admission
+        .commit()
+        .expect("commit daemon product admission");
     let (input, mut output) = handle.split();
 
     input
@@ -1164,19 +1218,18 @@ async fn invoke_rejects_caller_not_in_trust_anchor() {
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x55; 32]);
     let arguments = br#"{"agent_ura":"easynet:///r/realm/agent/test.external"}"#.to_vec();
     let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URA, ABILITY_FEDERATION_HEARTBEAT);
+    let trust = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
+    let runtime_assembly = test_runtime_assembly(trust.clone());
     let svc = register_test_daemon_routes(
         DaemonInvocationService::new(
             Arc::new(PresenceRegistry::new()),
-            AdmissionFacade::new(
-                Arc::new(RealmTrustAnchor::default()),
-                Some(TEST_DAEMON_URA.to_string()),
-            ),
+            AdmissionFacade::with_trust_anchor_cell(trust, Some(TEST_DAEMON_URA.to_string())),
         )
-        .with_local_runtime(test_runtime_with_default_trust()),
+        .with_daemon_runtime(runtime_assembly),
         TEST_DAEMON_URA,
     );
-    match svc
-        .invoke(Request::new(InvokeRequest {
+    let error = expect_canonical_in_band_failure(
+        svc.invoke(Request::new(InvokeRequest {
             envelope: Some(signed_test_envelope_with_descriptor_ref(
                 caller_ura,
                 TEST_DAEMON_URA,
@@ -1185,46 +1238,66 @@ async fn invoke_rejects_caller_not_in_trust_anchor() {
                 &arguments,
                 &signing_key,
             )),
-            function_name: descriptor_ref.clone(),
+            target: Some(
+                wire_invocation_target(&descriptor_ref, ABILITY_FEDERATION_HEARTBEAT)
+                    .expect("typed descriptor target"),
+            ),
+            function_name: ABILITY_FEDERATION_HEARTBEAT.to_string(),
             arguments,
-            metadata: std::collections::HashMap::from([(
-                crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-                    .to_string(),
-                descriptor_ref,
-            )]),
             ..InvokeRequest::default()
         }))
-        .await
-    {
-        Err(err) => {
-            assert_eq!(err.code(), tonic::Code::PermissionDenied, "{}", err.message());
-            assert!(
-                err.message().contains("not in the realm trust anchor"),
-                "rejection must reference trust-set miss, got: {}",
-                err.message()
-            );
-        }
-        Ok(_) => panic!("caller outside trust anchor must be rejected"),
-    }
+        .await,
+        axon_sdk::invocation::ErrorCode::CallerKeyNotFound,
+        "caller outside trust anchor must be rejected",
+    );
+    assert!(
+        error.message.contains("not in the realm trust anchor"),
+        "rejection must reference trust-set miss, got: {}",
+        error.message
+    );
 }
 
 #[tokio::test]
 async fn invoke_stream_rejects_caller_not_in_trust_anchor() {
     // Stream surface shares the same membership check as unary.
-    let svc = DaemonInvocationService::new(
-        Arc::new(PresenceRegistry::new()),
-        AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None),
+    let caller_ura = "easynet:///r/realm/agent/test.external";
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x55; 32]);
+    let arguments = b"{}".to_vec();
+    let trust = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
+    let runtime_assembly = test_runtime_assembly(trust.clone());
+    let svc = register_test_daemon_routes(
+        DaemonInvocationService::new(
+            Arc::new(PresenceRegistry::new()),
+            AdmissionFacade::with_trust_anchor_cell(trust, Some(TEST_DAEMON_URA.to_string())),
+        )
+        .with_daemon_runtime(runtime_assembly),
+        TEST_DAEMON_URA,
+    );
+    let descriptor_ref = catalog_test_descriptor_ref(
+        svc.directory
+            .local_ability_catalog
+            .as_deref()
+            .expect("test service ability catalog"),
+        TEST_DAEMON_URA,
+        ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
+        crate::daemon::ability::CallMode::Stream,
     );
     match svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
-            envelope: Some(Envelope {
-                caller: Some(AgentIdentity {
-                    ura: "easynet:///r/realm/agent/test.external".to_string(),
-                    ..AgentIdentity::default()
-                }),
-                ..Envelope::default()
-            }),
+            envelope: Some(signed_test_envelope_with_descriptor_ref(
+                caller_ura,
+                TEST_DAEMON_URA,
+                TEST_DAEMON_URA,
+                descriptor_ref.clone(),
+                &arguments,
+                &signing_key,
+            )),
+            target: Some(
+                wire_invocation_target(&descriptor_ref, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY)
+                    .expect("typed descriptor target"),
+            ),
             function_name: ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY.to_string(),
+            arguments,
             ..InvokeServerStreamRequest::default()
         }))
         .await

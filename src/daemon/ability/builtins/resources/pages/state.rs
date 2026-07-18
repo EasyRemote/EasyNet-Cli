@@ -258,7 +258,10 @@ mod tests {
             .with_declared_agent_authority_root(pages_agent)
             .expect("Pages test Agent authority");
         Arc::new(AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            easynet_axon::invocation::LocalRuntime::new(),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
             authority_context,
         ))
     }

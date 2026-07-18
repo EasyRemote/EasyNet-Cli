@@ -28,11 +28,11 @@
 //! - Daemon receipt adapter. Axon remains the owner of cryptographic proof
 //!   semantics; product modules own only presentation-specific projections.
 
-use easynet_axon::invocation::{
+use axon_sdk::invocation::{
     FinalizationCheckpointVerifier, InvocationState, KeyResolver, SignedInvocationReceipt,
     VerifiedFinalizationCheckpoints,
 };
-use easynet_axon::pb::axon::v1::InvocationReceipt;
+use axon_sdk::pb::axon::v1::InvocationReceipt;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -55,12 +55,12 @@ pub(crate) enum FinalizationProjectionError {
     #[error("{stage} receipt wire proof is malformed: {source}")]
     WireMalformed {
         stage: &'static str,
-        source: easynet_axon::invocation::AxonError,
+        source: axon_sdk::invocation::AxonError,
     },
     #[error("{stage} receipt signature is invalid: {source}")]
     SignatureInvalid {
         stage: &'static str,
-        source: easynet_axon::invocation::AxonError,
+        source: axon_sdk::invocation::AxonError,
     },
     #[error("admission checkpoint did not verify as Admitted")]
     AdmissionState,
@@ -70,7 +70,7 @@ pub(crate) enum FinalizationProjectionError {
     TerminalBeforeAdmission,
     #[error("finalization cryptographic verification failed: {source}")]
     Finalization {
-        source: easynet_axon::invocation::AxonError,
+        source: axon_sdk::invocation::AxonError,
     },
 }
 
@@ -81,7 +81,7 @@ pub(crate) fn verify_wire_checkpoint(
 ) -> Result<SignedInvocationReceipt, FinalizationProjectionError> {
     let stage_label = stage.as_str();
     let canonical =
-        easynet_axon::invocation::wire::try_receipt_from_wire(receipt).map_err(|source| {
+        axon_sdk::invocation::wire::try_receipt_from_wire(receipt).map_err(|source| {
             FinalizationProjectionError::WireMalformed {
                 stage: stage_label,
                 source,

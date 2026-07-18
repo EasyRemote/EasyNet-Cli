@@ -6,8 +6,9 @@
 //! subject for loopback calls that still need to pass through Axon's public
 //! signed invocation API.
 
-use easynet_axon::invocation::{
-    AgentIdentity, AxonError, ErrorCode, ErrorStage, KeyResolver, SecurityClass, UraProfile,
+use axon_sdk::invocation::{
+    AgentIdentity, AxonError, CanonicalReceiptProvider, ErrorCode, ErrorStage, KeyResolver,
+    SecurityClass, UraProfile,
 };
 use ed25519_dalek::{Signature, VerifyingKey};
 use std::sync::{Arc, OnceLock};
@@ -19,7 +20,7 @@ pub(crate) const UNPAIRED_LOCAL_DEVICE_ID: &str = "local";
 
 /// Build an Axon identity for a daemon-local agent URA.
 pub(crate) fn agent_identity(ura: impl Into<String>) -> AgentIdentity {
-    AgentIdentity::new(ura, UraProfile::EasynetStrictV2)
+    AgentIdentity::new(ura, UraProfile::StrictV2)
 }
 
 /// Build the daemon's synthetic caller identity.
@@ -187,44 +188,56 @@ fn control_discovery_daemon_ura() -> Option<String> {
     }
 }
 
-/// KeyResolver overlay for EasyNet-Cli's synthetic system caller.
+/// Stable CLI-owned resolver graph for canonical runtime admission.
 ///
-/// What this is: a bounded single-key resolver branch for
-/// `easynet:///r/_system/agent/_system.local`.
+/// The graph is complete before `LocalRuntime` is constructed. It combines
+/// four explicit key authorities without mutating the SDK runtime:
 ///
-/// What this is not: a trust shortcut for ordinary device, hub, backend, or
-/// user URAs. Every non-system lookup is delegated unchanged to the upstream
-/// resolver.
-pub(crate) struct LocalSystemKeyResolver {
-    upstream: Option<Arc<dyn KeyResolver>>,
-    receipt_signing_runtime: Option<std::sync::Weak<easynet_axon::invocation::LocalRuntime>>,
+/// - daemon trust-anchor identities;
+/// - product bootstrap identities;
+/// - request-scoped provisional bootstrap candidates;
+/// - receipt-signer public projections.
+///
+/// `_system.local` remains a bounded exact-match branch backed by the daemon
+/// key service. No branch can resolve an alias owned by another branch.
+pub struct CanonicalAdmissionKeyResolver {
+    trusted_identities: Arc<dyn KeyResolver>,
+    bootstrap_identities:
+        Arc<crate::daemon::axon_bridge::runtime_admin::RuntimeBootstrapIdentityProvider>,
+    provisional_bootstrap:
+        Arc<crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider>,
+    receipt_signers: Arc<dyn CanonicalReceiptProvider>,
 }
 
-impl LocalSystemKeyResolver {
-    pub(crate) fn new(upstream: Option<Arc<dyn KeyResolver>>) -> Self {
+impl CanonicalAdmissionKeyResolver {
+    pub(crate) fn new(
+        trusted_identities: Arc<dyn KeyResolver>,
+        bootstrap_identities: Arc<
+            crate::daemon::axon_bridge::runtime_admin::RuntimeBootstrapIdentityProvider,
+        >,
+        provisional_bootstrap: Arc<
+            crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider,
+        >,
+        receipt_signers: Arc<dyn CanonicalReceiptProvider>,
+    ) -> Self {
         Self {
-            upstream,
-            receipt_signing_runtime: None,
+            trusted_identities,
+            bootstrap_identities,
+            provisional_bootstrap,
+            receipt_signers,
         }
     }
 
-    pub(crate) fn with_receipt_signing_runtime(
-        mut self,
-        runtime: std::sync::Weak<easynet_axon::invocation::LocalRuntime>,
-    ) -> Self {
-        self.receipt_signing_runtime = Some(runtime);
-        self
+    pub(crate) fn bootstrap_identity_provider(
+        &self,
+    ) -> Arc<crate::daemon::axon_bridge::runtime_admin::RuntimeBootstrapIdentityProvider> {
+        Arc::clone(&self.bootstrap_identities)
     }
 
-    fn receipt_signer_key(&self, signer_ura: &str) -> Result<Option<VerifyingKey>, AxonError> {
-        let Some(runtime) = self
-            .receipt_signing_runtime
-            .as_ref()
-            .and_then(std::sync::Weak::upgrade)
-        else {
-            return Ok(None);
-        };
-        runtime.resolve_receipt_signer_key(signer_ura)
+    pub(crate) fn provisional_bootstrap_provider(
+        &self,
+    ) -> Arc<crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider> {
+        Arc::clone(&self.provisional_bootstrap)
     }
 
     fn unknown_agent_key(agent_ura: &str) -> AxonError {
@@ -234,24 +247,20 @@ impl LocalSystemKeyResolver {
             .with_security_class(SecurityClass::Identity)
             .with_message(format!("unknown_agent_key:{agent_ura}"))
     }
+
+    fn append_unique(keys: &mut Vec<VerifyingKey>, candidate: VerifyingKey) {
+        if !keys.contains(&candidate) {
+            keys.push(candidate);
+        }
+    }
 }
 
-impl KeyResolver for LocalSystemKeyResolver {
+impl KeyResolver for CanonicalAdmissionKeyResolver {
     fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
-        if agent_ura == LOCAL_SYSTEM_AGENT_URA {
-            return system_verifying_key().map_err(|error| {
-                AxonError::internal(format!(
-                    "daemon-local system identity unavailable from key service: {error}"
-                ))
-            });
-        }
-        if let Some(key) = self.receipt_signer_key(agent_ura)? {
-            return Ok(key);
-        }
-        self.upstream
-            .as_ref()
-            .ok_or_else(|| Self::unknown_agent_key(agent_ura))?
-            .resolve(agent_ura)
+        self.resolve_all(agent_ura)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Self::unknown_agent_key(agent_ura))
     }
 
     fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
@@ -264,24 +273,141 @@ impl KeyResolver for LocalSystemKeyResolver {
                     ))
                 });
         }
-        if let Some(key) = self.receipt_signer_key(agent_ura)? {
-            return Ok(vec![key]);
+
+        let mut keys = Vec::new();
+        if let Some(key) = self.receipt_signers.resolve_signer_key(agent_ura)? {
+            Self::append_unique(&mut keys, key);
         }
-        self.upstream
-            .as_ref()
-            .ok_or_else(|| Self::unknown_agent_key(agent_ura))?
-            .resolve_all(agent_ura)
+        if let Some(bootstrap_keys) = self.bootstrap_identities.keys_for(agent_ura)? {
+            for key in bootstrap_keys {
+                Self::append_unique(&mut keys, key);
+            }
+        }
+        if let Some(key) = self.provisional_bootstrap.key_for(agent_ura)? {
+            Self::append_unique(&mut keys, key);
+        }
+        match self.trusted_identities.resolve_all(agent_ura) {
+            Ok(trusted_keys) => {
+                for key in trusted_keys {
+                    Self::append_unique(&mut keys, key);
+                }
+            }
+            Err(error) if error.code == ErrorCode::CallerKeyNotFound && !keys.is_empty() => {}
+            Err(error) => return Err(error),
+        }
+        if keys.is_empty() {
+            Err(Self::unknown_agent_key(agent_ura))
+        } else {
+            Ok(keys)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::Verifier as _;
+    use std::sync::Arc;
 
-    use super::{local_daemon_ura, sign_system_canonical, system_verifying_key};
+    use axon_sdk::invocation::{
+        AgentIdentity, AxonError, CanonicalReceiptProvider, DescriptorBoundEnvelope, ErrorCode,
+        KeyResolver, ReceiptSigningAuthority, VerifiedAdmissionPolicy,
+    };
+    use ed25519_dalek::{Verifier as _, VerifyingKey};
+
+    use super::{
+        local_daemon_ura, sign_system_canonical, system_verifying_key,
+        CanonicalAdmissionKeyResolver,
+    };
+    use crate::daemon::axon_bridge::runtime_admin::{
+        ProvisionalBootstrapKeyProvider, RuntimeBootstrapIdentityProvider,
+    };
     use crate::daemon::control::discovery::{
         self, ControlDiscovery, DaemonIdentity, IpcVersionRange, IPC_VERSION_V1,
     };
+
+    struct FixedReceiptKeyProjection {
+        signer_ura: &'static str,
+        key: VerifyingKey,
+    }
+
+    #[async_trait::async_trait]
+    impl CanonicalReceiptProvider for FixedReceiptKeyProjection {
+        fn verify_admission_policy(
+            &self,
+            _envelope: &DescriptorBoundEnvelope,
+        ) -> Result<VerifiedAdmissionPolicy, AxonError> {
+            Err(AxonError::internal("unused_test_admission_policy"))
+        }
+
+        async fn resolve_signing_authority(
+            &self,
+            _callee: &AgentIdentity,
+        ) -> Result<Arc<dyn ReceiptSigningAuthority>, AxonError> {
+            Err(AxonError::internal("unused_test_signing_authority"))
+        }
+
+        fn resolve_signer_key(&self, signer_ura: &str) -> Result<Option<VerifyingKey>, AxonError> {
+            Ok((signer_ura == self.signer_ura).then_some(self.key))
+        }
+    }
+
+    struct FailingTrustedIdentityResolver {
+        error: AxonError,
+    }
+
+    impl KeyResolver for FailingTrustedIdentityResolver {
+        fn resolve(&self, _agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+            Err(self.error.clone())
+        }
+    }
+
+    fn admission_resolver_with_trusted_error(
+        signer_ura: &'static str,
+        trusted_error: AxonError,
+    ) -> (CanonicalAdmissionKeyResolver, VerifyingKey) {
+        let mut compressed_basepoint = [0x66; 32];
+        compressed_basepoint[0] = 0x58;
+        let key =
+            VerifyingKey::from_bytes(&compressed_basepoint).expect("Ed25519 basepoint public key");
+        let trusted_identities: Arc<dyn KeyResolver> = Arc::new(FailingTrustedIdentityResolver {
+            error: trusted_error,
+        });
+        let receipt_signers: Arc<dyn CanonicalReceiptProvider> =
+            Arc::new(FixedReceiptKeyProjection { signer_ura, key });
+        (
+            CanonicalAdmissionKeyResolver::new(
+                trusted_identities,
+                Arc::new(RuntimeBootstrapIdentityProvider::default()),
+                Arc::new(ProvisionalBootstrapKeyProvider::default()),
+                receipt_signers,
+            ),
+            key,
+        )
+    }
+
+    #[test]
+    fn admission_resolver_ignores_only_an_absent_trusted_identity() {
+        const SIGNER_URA: &str = "easynet:///r/acme/device/receipt-signer";
+        let missing = AxonError::invalid_argument(ErrorCode::CallerKeyNotFound.as_str())
+            .with_code(ErrorCode::CallerKeyNotFound);
+        let (resolver, receipt_key) = admission_resolver_with_trusted_error(SIGNER_URA, missing);
+
+        assert_eq!(resolver.resolve_all(SIGNER_URA).unwrap(), vec![receipt_key]);
+    }
+
+    #[test]
+    fn admission_resolver_preserves_trusted_identity_provider_failures() {
+        const SIGNER_URA: &str = "easynet:///r/acme/device/receipt-signer";
+        let (resolver, _) = admission_resolver_with_trusted_error(
+            SIGNER_URA,
+            AxonError::internal("trusted_identity_backend_unavailable"),
+        );
+
+        let error = resolver
+            .resolve_all(SIGNER_URA)
+            .expect_err("provider failure must not be hidden by another candidate key");
+        assert_eq!(error.code, ErrorCode::InternalError);
+        assert_eq!(error.reason, "trusted_identity_backend_unavailable");
+    }
 
     #[test]
     fn system_signing_capability_verifies_against_the_shared_runtime_projection() {

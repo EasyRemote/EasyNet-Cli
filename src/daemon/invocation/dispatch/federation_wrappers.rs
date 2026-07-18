@@ -52,14 +52,14 @@ use crate::daemon::ability::conformance;
 use crate::daemon::federation::read_model::advertised_agents::{
     AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
 };
-use crate::daemon::invocation::bidi::state::presence::PresenceRegistry;
-#[cfg(test)]
-use easynet_axon::pb::axon::v1 as axon_pb;
-pub use easynet_axon::{
+pub use crate::daemon::federation::wire_contract::{
     DiscoverRequest, DiscoverResponse, ListUserDevicesRequest, ListUserDevicesResponse,
     ResolveAgentSummary, ResolveFilterRequest, ResolveKeyRequest, ResolveKeyResponse,
     ResolveRequest, ResolveResponse,
 };
+use crate::daemon::invocation::bidi::state::presence::PresenceRegistry;
+#[cfg(test)]
+use axon_sdk::pb::axon::v1 as axon_pb;
 
 /// `federation.join` — caller's claimed URA is authoritative; no
 /// hub-side `agent/a-X` minting (spec §5.1 URA scheme migration).

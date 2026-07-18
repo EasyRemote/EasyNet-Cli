@@ -6,7 +6,7 @@
 // =============================
 //
 // File: src/eal/interpreter.rs
-// Description: Client-side execution engine for Mission IR v2 (temporary — target: MissionControl v2).
+// Description: Daemon-owned execution engine for Mission IR v2.
 //
 // Execution Model:
 //   Phases execute sequentially (data-flow barriers between them).
@@ -100,9 +100,11 @@ pub(super) fn execute_step_with_retry(
     run: RunContext<'_>,
     step: &IrStep,
     arguments: &Value,
-    causal_parents: &[Value],
+    dependency_receipts: &[
+        crate::daemon::execution::mission::invocation_gateway::MissionReceiptReference
+    ],
 ) -> StepExecResult {
-    // MissionControl semantics: `max_retries` is the number of retries AFTER the
+    // Mission runtime semantics: `max_retries` is the number of retries AFTER the
     // first attempt, so total attempts = 1 + max_retries.
     #[allow(clippy::cast_sign_loss)] // max_retries is checked > 0 above
     let max_attempts = if matches!(step.on_failure, IrFailurePolicy::Retry) && step.max_retries > 0
@@ -153,7 +155,7 @@ pub(super) fn execute_step_with_retry(
             &step.ability,
             arguments,
             dispatch_timeout_ms,
-            causal_parents,
+            dependency_receipts,
         );
 
         match res {
@@ -367,7 +369,12 @@ pub(super) fn process_step_result(
     global_step: usize,
     total: usize,
     phase_idx: usize,
-) -> (StepOutcome, StepTrace, Option<Vec<u8>>) {
+) -> (
+    StepOutcome,
+    StepTrace,
+    Option<Vec<u8>>,
+    Option<crate::daemon::execution::mission::invocation_gateway::MissionInvocationRecord>,
+) {
     match result {
         StepExecResult::Ok {
             result_bytes,
@@ -405,6 +412,7 @@ pub(super) fn process_step_result(
             ));
 
             let size = result_bytes.len();
+            let projection = invocation.projection();
             let trace = StepTrace {
                 step_id: step.step_id.clone(),
                 ability: step.ability.clone(),
@@ -419,12 +427,17 @@ pub(super) fn process_step_result(
                 result_size_bytes: Some(size),
                 result_sha256: Some(result_sha256),
                 error: None,
-                invocation,
+                invocation: Some(projection),
                 input_refs: step.input_refs.clone(),
                 output_binding: step.output_binding.clone(),
             };
 
-            (StepOutcome::Completed, trace, Some(result_bytes))
+            (
+                StepOutcome::Completed,
+                trace,
+                Some(result_bytes),
+                Some(invocation),
+            )
         }
         StepExecResult::Error {
             message,
@@ -473,7 +486,7 @@ pub(super) fn process_step_result(
                 output_binding: step.output_binding.clone(),
             };
 
-            (outcome, trace, None)
+            (outcome, trace, None, None)
         }
         StepExecResult::SkippedByDependency {
             message,
@@ -509,7 +522,7 @@ pub(super) fn process_step_result(
                 input_refs: step.input_refs.clone(),
                 output_binding: step.output_binding.clone(),
             };
-            (StepOutcome::Skipped, trace, None)
+            (StepOutcome::Skipped, trace, None, None)
         }
     }
 }

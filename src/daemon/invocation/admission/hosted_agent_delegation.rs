@@ -26,7 +26,7 @@
 
 use std::collections::HashMap;
 
-use easynet_axon::pb::axon::v1::Envelope;
+use axon_sdk::pb::axon::v1::Envelope;
 use tonic::Status;
 
 use crate::daemon::ability::{
@@ -153,18 +153,21 @@ impl HostedAgentDelegationIssuer {
 mod tests {
     use super::*;
     use crate::daemon::ability::HostedAgentDelegationContext;
-    use crate::daemon::invocation::ProtoEnvelope;
+    use crate::daemon::invocation::{InvocationDerivationPolicy, ProtoEnvelope};
 
     fn loopback_envelope() -> Envelope {
-        let mut envelope = ProtoEnvelope::targeted(
+        ProtoEnvelope::from_target(
             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
             "easynet:///r/default/device/local",
             "easynet:///r/default/device/local",
+            InvocationDerivationPolicy::Explicit {
+                invocation_nonce: [0x44; 16],
+                causal_context: axon_sdk::invocation::CausalContext::None,
+            },
         )
         .unwrap()
-        .into_inner();
-        envelope.invocation_nonce = vec![0x44; 16];
-        envelope
+        .into_inner("meta.acquire", b"")
+        .unwrap()
     }
 
     #[test]

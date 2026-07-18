@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rand::RngCore;
@@ -22,26 +23,32 @@ pub struct DaemonInvocation {
     descriptor_ref: String,
     subject_ura: String,
     nonce: [u8; 16],
-    causal_context: easynet_axon::pb::axon::v1::CausalContext,
+    causal_context: axon_sdk::pb::axon::v1::CausalContext,
     args: Vec<u8>,
     content_type: String,
     metadata: HashMap<String, String>,
-    caller_signature: Option<easynet_axon::pb::axon::v1::CallerSignature>,
+    caller_signature: Option<axon_sdk::pb::axon::v1::CallerSignature>,
     timeout_seconds: Option<i32>,
 }
 
 #[cfg(feature = "axon-pb")]
 impl DaemonInvocation {
-    /// Start building a complete Invocation. A fresh nonce is
-    /// generated immediately so callers can inspect it before
-    /// dispatch.
+    /// Start building a complete Invocation under an explicit Axon-owned
+    /// freshness and causal-placement policy.
     pub fn builder(
         caller_ura: impl Into<String>,
         callee_ura: impl Into<String>,
         descriptor_ref: impl Into<String>,
         subject_ura: impl Into<String>,
+        derivation_policy: axon_sdk::invocation::InvocationDerivationPolicy,
     ) -> Result<DaemonInvocationBuilder> {
-        DaemonInvocationBuilder::new(caller_ura, callee_ura, descriptor_ref, subject_ura)
+        DaemonInvocationBuilder::new(
+            caller_ura,
+            callee_ura,
+            descriptor_ref,
+            subject_ura,
+            derivation_policy,
+        )
     }
 
     /// Caller URA.
@@ -70,7 +77,7 @@ impl DaemonInvocation {
     }
 
     /// Causal context carried in the request envelope.
-    pub fn causal_context(&self) -> &easynet_axon::pb::axon::v1::CausalContext {
+    pub fn causal_context(&self) -> &axon_sdk::pb::axon::v1::CausalContext {
         &self.causal_context
     }
 
@@ -96,59 +103,76 @@ impl DaemonInvocation {
         self.timeout_seconds
     }
 
-    pub fn caller_signature(&self) -> Option<&easynet_axon::pb::axon::v1::CallerSignature> {
+    pub fn caller_signature(&self) -> Option<&axon_sdk::pb::axon::v1::CallerSignature> {
         self.caller_signature.as_ref()
     }
 
-    fn envelope(&self) -> easynet_axon::pb::axon::v1::Envelope {
-        let mut envelope = crate::daemon::invocation::ProtoEnvelope::targeted(
+    fn signed_envelope(&self) -> Result<axon_sdk::pb::axon::v1::Envelope> {
+        let caller_signature = self.caller_signature.clone().ok_or_else(|| {
+            DaemonError::InvalidInvocation(
+                "wire submission requires the SignedInvocation state".to_string(),
+            )
+        })?;
+        if caller_signature.algorithm.trim().is_empty() || caller_signature.signature.is_empty() {
+            return Err(DaemonError::InvalidInvocation(
+                "wire submission requires complete caller signature material".to_string(),
+            ));
+        }
+        let mut envelope = crate::daemon::invocation::ProtoEnvelope::from_target(
             self.caller_ura.clone(),
             self.callee_ura.clone(),
             self.subject_ura.clone(),
+            crate::daemon::invocation::InvocationDerivationPolicy::try_explicit_from_wire_causal_context(
+                self.nonce,
+                self.causal_context.clone(),
+            )
+            .expect("DaemonInvocation builder validates the wire causal context"),
         )
         .expect("DaemonInvocation builder validates caller/callee/subject URAs")
-        .into_inner();
-        envelope.invocation_nonce = self.nonce.to_vec();
-        envelope.causal_context = Some(self.causal_context.clone());
-        envelope.caller_signature = self.caller_signature.clone();
-        envelope
+        .into_inner(&self.descriptor_ref, &self.args)
+        .expect("DaemonInvocation builder validates the complete canonical tuple");
+        envelope.caller_signature = Some(caller_signature);
+        Ok(envelope)
     }
 
-    fn content_envelope(&self) -> easynet_axon::pb::axon::v1::ContentEnvelope {
-        easynet_axon::pb::axon::v1::ContentEnvelope {
+    fn content_envelope(&self) -> axon_sdk::pb::axon::v1::ContentEnvelope {
+        axon_sdk::pb::axon::v1::ContentEnvelope {
             content_type: self.content_type.clone(),
             encoding: "identity".to_string(),
-            ..easynet_axon::pb::axon::v1::ContentEnvelope::default()
+            ..axon_sdk::pb::axon::v1::ContentEnvelope::default()
         }
     }
 
-    fn wire_metadata(&self) -> Result<HashMap<String, String>> {
-        let mut metadata = self.metadata.clone();
-        let key = crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY;
-        if let Some(existing) = metadata.get(key).map(String::as_str).map(str::trim) {
-            if !existing.is_empty() && existing != self.descriptor_ref {
-                return Err(DaemonError::InvalidInvocation(format!(
-                    "{key} metadata `{existing}` does not match invocation descriptor_ref `{}`",
-                    self.descriptor_ref
-                )));
-            }
-        }
-        metadata.insert(key.to_string(), self.descriptor_ref.clone());
-        Ok(metadata)
+    fn function_name(&self) -> Result<String> {
+        let ability_ura =
+            axon_sdk::invocation::ability_ura_from_descriptor_ref(&self.descriptor_ref)
+                .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
+        axon_sdk::ura::public_ability_name_from_ability_ura(&self.callee_ura, ability_ura)
+            .ok_or_else(|| {
+                DaemonError::InvalidInvocation(format!(
+                    "descriptor_ref `{}` has no public function name for callee `{}`",
+                    self.descriptor_ref, self.callee_ura
+                ))
+            })
     }
 
-    pub(crate) fn into_request(self) -> Result<easynet_axon::pb::axon::v1::InvokeRequest> {
-        use easynet_axon::pb::axon::v1::InvokeRequest;
-        let function_name = self.descriptor_ref.clone();
-        let envelope = self.envelope();
+    pub(crate) fn into_request(self) -> Result<axon_sdk::pb::axon::v1::InvokeRequest> {
+        use axon_sdk::pb::axon::v1::InvokeRequest;
+        let function_name = self.function_name()?;
+        let target = crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+            &self.descriptor_ref,
+            &function_name,
+        )
+        .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
+        let envelope = self.signed_envelope()?;
         let content_envelope = self.content_envelope();
-        let metadata = self.wire_metadata()?;
         Ok(InvokeRequest {
             envelope: Some(envelope),
+            target: Some(target),
             function_name,
             arguments: self.args,
             content_type: self.content_type,
-            metadata,
+            metadata: self.metadata,
             content_envelope: Some(content_envelope),
             timeout_seconds: self.timeout_seconds.unwrap_or(0),
             ..InvokeRequest::default()
@@ -161,18 +185,23 @@ impl DaemonInvocation {
 
     pub(crate) fn into_server_stream_request(
         self,
-    ) -> Result<easynet_axon::pb::axon::v1::InvokeServerStreamRequest> {
-        use easynet_axon::pb::axon::v1::InvokeServerStreamRequest;
-        let function_name = self.descriptor_ref.clone();
-        let envelope = self.envelope();
+    ) -> Result<axon_sdk::pb::axon::v1::InvokeServerStreamRequest> {
+        use axon_sdk::pb::axon::v1::InvokeServerStreamRequest;
+        let function_name = self.function_name()?;
+        let target = crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+            &self.descriptor_ref,
+            &function_name,
+        )
+        .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
+        let envelope = self.signed_envelope()?;
         let content_envelope = self.content_envelope();
-        let metadata = self.wire_metadata()?;
         Ok(InvokeServerStreamRequest {
             envelope: Some(envelope),
+            target: Some(target),
             function_name,
             arguments: self.args,
             content_type: self.content_type,
-            metadata,
+            metadata: self.metadata,
             content_envelope: Some(content_envelope),
             ..InvokeServerStreamRequest::default()
         })
@@ -180,27 +209,29 @@ impl DaemonInvocation {
 
     pub(crate) fn into_bidi_open_frame(
         self,
-        streams: Vec<easynet_axon::pb::axon::v1::StreamDescriptor>,
-    ) -> Result<easynet_axon::pb::axon::v1::InvokeBidiUp> {
-        use easynet_axon::pb::axon::v1::{invoke_bidi_up, EnvelopeOpen, InvokeBidiUp};
+        streams: Vec<axon_sdk::pb::axon::v1::StreamDescriptor>,
+    ) -> Result<axon_sdk::pb::axon::v1::InvokeBidiUp> {
+        use axon_sdk::pb::axon::v1::{invoke_bidi_up, EnvelopeOpen, InvokeBidiUp};
         if streams.is_empty() {
             return Err(DaemonError::InvalidInvocation(
                 "bidi streams must not be empty".to_string(),
             ));
         }
         validate_bidi_streams(&streams)?;
+        let function_name = self.function_name()?;
         let target = crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
-            self.descriptor_ref.clone(),
+            &self.descriptor_ref,
+            &function_name,
         )
         .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))?;
-        let envelope = self.envelope();
+        let envelope = self.signed_envelope()?;
         let content_envelope = self.content_envelope();
-        let metadata = self.wire_metadata()?;
         let mac = envelope
             .caller_signature
             .as_ref()
-            .map(|sig| sig.signature.clone())
-            .unwrap_or_default();
+            .expect("signed_envelope guarantees caller signature")
+            .signature
+            .clone();
         Ok(InvokeBidiUp {
             sequence: 0,
             mac,
@@ -210,7 +241,7 @@ impl DaemonInvocation {
                 initial_args: self.args,
                 args_content_type: self.content_type.clone(),
                 streams,
-                metadata,
+                metadata: self.metadata,
                 content_envelope: Some(content_envelope),
                 // No session-resume semantics on the SDK frame-0 path;
                 // the session extension is the transport supervisor's
@@ -222,30 +253,46 @@ impl DaemonInvocation {
 }
 
 /// Builder for `DaemonInvocation`.
+///
+/// The generic state records whether the caller has explicitly supplied the
+/// Invocation arguments. A builder with `InvocationArgsUnset` cannot be
+/// inspected or built, so public ingress cannot silently substitute an empty
+/// payload.
 #[cfg(feature = "axon-pb")]
 #[derive(Debug, Clone)]
-pub struct DaemonInvocationBuilder {
+pub struct DaemonInvocationBuilder<ArgsState = InvocationArgsUnset> {
     caller_ura: String,
     callee_ura: String,
     descriptor_ref: String,
     subject_ura: String,
     nonce: [u8; 16],
-    causal_context: easynet_axon::pb::axon::v1::CausalContext,
+    causal_context: axon_sdk::pb::axon::v1::CausalContext,
     args: Vec<u8>,
     content_type: String,
     metadata: HashMap<String, String>,
-    caller_signature: Option<easynet_axon::pb::axon::v1::CallerSignature>,
+    caller_signature: Option<axon_sdk::pb::axon::v1::CallerSignature>,
     timeout_seconds: Option<i32>,
-    args_set: bool,
+    args_state: PhantomData<ArgsState>,
 }
 
+/// Invocation builder state before arguments are explicitly supplied.
 #[cfg(feature = "axon-pb")]
-impl DaemonInvocationBuilder {
+#[derive(Debug, Clone, Copy)]
+pub struct InvocationArgsUnset;
+
+/// Invocation builder state after arguments are explicitly supplied.
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Copy)]
+pub struct InvocationArgsSet;
+
+#[cfg(feature = "axon-pb")]
+impl DaemonInvocationBuilder<InvocationArgsUnset> {
     fn new(
         caller_ura: impl Into<String>,
         callee_ura: impl Into<String>,
         descriptor_ref: impl Into<String>,
         subject_ura: impl Into<String>,
+        derivation_policy: axon_sdk::invocation::InvocationDerivationPolicy,
     ) -> Result<Self> {
         let caller_ura = checked_ura(caller_ura.into(), "caller_ura")?;
         let callee_ura = checked_ura(callee_ura.into(), "callee_ura")?;
@@ -266,98 +313,83 @@ impl DaemonInvocationBuilder {
                 &descriptor_ref,
             )
             .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))?;
+        let derived = crate::daemon::invocation::ProtoEnvelope::from_target(
+            caller_ura.clone(),
+            callee_ura.clone(),
+            subject_ura.clone(),
+            derivation_policy,
+        )
+        .and_then(|envelope| envelope.into_inner(&descriptor_ref, &[]))
+        .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
+        let nonce = axon_sdk::invocation::try_invocation_nonce(derived.invocation_nonce)
+            .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
+        let causal_context = derived.causal_context.ok_or_else(|| {
+            DaemonError::InvalidInvocation(
+                "Axon derivation policy omitted causal_context".to_string(),
+            )
+        })?;
         Ok(Self {
             caller_ura,
             callee_ura,
             descriptor_ref,
             subject_ura,
-            nonce: easynet_axon::invocation::fresh_nonce(),
-            causal_context: empty_causal_context(),
+            nonce,
+            causal_context,
             args: Vec::new(),
             content_type: "application/json".to_string(),
             metadata: HashMap::new(),
             caller_signature: None,
             timeout_seconds: None,
-            args_set: false,
+            args_state: PhantomData,
         })
     }
+}
 
-    /// Override the generated nonce. Primarily for deterministic
-    /// tests and receipt-chain replay fixtures.
-    pub fn nonce(mut self, nonce: [u8; 16]) -> Self {
-        self.nonce = nonce;
-        self
-    }
-
-    /// Override the default root causal context.
-    pub fn causal_context(
-        mut self,
-        causal_context: easynet_axon::pb::axon::v1::CausalContext,
-    ) -> Self {
-        self.causal_context = causal_context;
-        self
-    }
-
+#[cfg(feature = "axon-pb")]
+impl<ArgsState> DaemonInvocationBuilder<ArgsState> {
     /// Supply raw argument bytes and content type.
     pub fn args_bytes(
-        mut self,
+        self,
         args: impl Into<Vec<u8>>,
         content_type: impl Into<String>,
-    ) -> Result<Self> {
+    ) -> Result<DaemonInvocationBuilder<InvocationArgsSet>> {
         let content_type = content_type.into();
         if content_type.trim().is_empty() {
             return Err(DaemonError::InvalidInvocation(
                 "content_type must not be empty".to_string(),
             ));
         }
-        self.args = args.into();
-        self.content_type = content_type.trim().to_string();
-        self.args_set = true;
-        Ok(self)
+        Ok(self.with_explicit_args(args.into(), content_type.trim().to_string()))
     }
 
     /// Supply JSON arguments.
-    pub fn args_json(mut self, value: &serde_json::Value) -> Result<Self> {
-        self.args = serde_json::to_vec(value).map_err(DaemonError::EncodeArguments)?;
-        self.content_type = "application/json".to_string();
-        self.args_set = true;
-        Ok(self)
+    pub fn args_json(
+        self,
+        value: &serde_json::Value,
+    ) -> Result<DaemonInvocationBuilder<InvocationArgsSet>> {
+        let args = serde_json::to_vec(value).map_err(DaemonError::EncodeArguments)?;
+        Ok(self.with_explicit_args(args, "application/json".to_string()))
     }
 
-    /// Inspect the current immutable draft. SDK-stable call paths use
-    /// this instead of submitting the mutable builder directly.
-    ///
-    /// Invariant 1: the seven-tuple fields and args payload are
-    /// complete before canonical prepare.
-    /// Invariant 2: defaults already filled by the builder, such as
-    /// nonce and root causal context, are visible in the returned
-    /// `InvocationDraft`.
-    pub fn inspect(&self) -> Result<InvocationDraft> {
-        if !self.args_set {
-            return Err(DaemonError::InvalidInvocation(
-                "args must be set explicitly before building an SDK invocation draft".to_string(),
-            ));
+    fn with_explicit_args(
+        self,
+        args: Vec<u8>,
+        content_type: String,
+    ) -> DaemonInvocationBuilder<InvocationArgsSet> {
+        DaemonInvocationBuilder {
+            caller_ura: self.caller_ura,
+            callee_ura: self.callee_ura,
+            descriptor_ref: self.descriptor_ref,
+            subject_ura: self.subject_ura,
+            nonce: self.nonce,
+            causal_context: self.causal_context,
+            args,
+            content_type,
+            metadata: self.metadata,
+            caller_signature: self.caller_signature,
+            timeout_seconds: self.timeout_seconds,
+            args_state: PhantomData,
         }
-        Ok(InvocationDraft {
-            invocation: DaemonInvocation {
-                caller_ura: self.caller_ura.clone(),
-                callee_ura: self.callee_ura.clone(),
-                descriptor_ref: self.descriptor_ref.clone(),
-                subject_ura: self.subject_ura.clone(),
-                nonce: self.nonce,
-                causal_context: self.causal_context.clone(),
-                args: self.args.clone(),
-                content_type: self.content_type.clone(),
-                metadata: self.metadata.clone(),
-                caller_signature: self.caller_signature.clone(),
-                timeout_seconds: self.timeout_seconds,
-            },
-        })
-    }
-
-    /// Finish the SDK-stable immutable draft.
-    pub fn build_draft(self) -> Result<InvocationDraft> {
-        self.inspect()
     }
 
     /// Replace non-axiom request metadata. Metadata is transported
@@ -374,7 +406,7 @@ impl DaemonInvocationBuilder {
     /// this SDK surface only carries the already-produced signature.
     pub fn caller_signature(
         mut self,
-        caller_signature: easynet_axon::pb::axon::v1::CallerSignature,
+        caller_signature: axon_sdk::pb::axon::v1::CallerSignature,
     ) -> Self {
         self.caller_signature = Some(caller_signature);
         self
@@ -382,7 +414,7 @@ impl DaemonInvocationBuilder {
 
     /// Per-call timeout in seconds (`InvokeRequest.timeout_seconds`,
     /// capped daemon-side by the envelope deadline). Rejects
-    /// non-positive values — leave unset for the daemon default.
+    /// non-positive values - leave unset for the daemon default.
     pub fn timeout_seconds(mut self, seconds: i32) -> Result<Self> {
         if seconds <= 0 {
             return Err(DaemonError::InvalidInvocation(
@@ -392,9 +424,52 @@ impl DaemonInvocationBuilder {
         self.timeout_seconds = Some(seconds);
         Ok(self)
     }
+}
+
+#[cfg(feature = "axon-pb")]
+impl DaemonInvocationBuilder<InvocationArgsSet> {
+    /// Inspect the current immutable draft. SDK-stable call paths use
+    /// this instead of submitting the mutable builder directly.
+    ///
+    /// Invariant 1: the seven-tuple fields and args payload are
+    /// complete before canonical prepare.
+    /// Invariant 2: nonce and causal context derived by the caller-selected
+    /// policy are visible in the returned `InvocationDraft`.
+    pub fn inspect(&self) -> Result<InvocationDraft> {
+        Ok(InvocationDraft {
+            invocation: self.to_invocation(),
+        })
+    }
+
+    /// Finish the SDK-stable immutable draft.
+    pub fn build_draft(self) -> Result<InvocationDraft> {
+        Ok(InvocationDraft {
+            invocation: self.into_invocation(),
+        })
+    }
 
     /// Finish building the Invocation.
     pub fn build(self) -> DaemonInvocation {
+        self.into_invocation()
+    }
+
+    fn to_invocation(&self) -> DaemonInvocation {
+        DaemonInvocation {
+            caller_ura: self.caller_ura.clone(),
+            callee_ura: self.callee_ura.clone(),
+            descriptor_ref: self.descriptor_ref.clone(),
+            subject_ura: self.subject_ura.clone(),
+            nonce: self.nonce,
+            causal_context: self.causal_context.clone(),
+            args: self.args.clone(),
+            content_type: self.content_type.clone(),
+            metadata: self.metadata.clone(),
+            caller_signature: self.caller_signature.clone(),
+            timeout_seconds: self.timeout_seconds,
+        }
+    }
+
+    fn into_invocation(self) -> DaemonInvocation {
         DaemonInvocation {
             caller_ura: self.caller_ura,
             callee_ura: self.callee_ura,
@@ -442,7 +517,7 @@ impl InvocationDraft {
     pub fn prepare(&self, options: PrepareOptions) -> Result<PreparedInvocation> {
         let descriptor_bound = self.invocation.descriptor_bound_envelope()?;
         let canonical_bytes = descriptor_bound.canonical_bytes();
-        let canonical_hash_hex = hex::encode(easynet_axon::invocation::sha256(&canonical_bytes));
+        let canonical_hash_hex = hex::encode(axon_sdk::invocation::sha256(&canonical_bytes));
         let args_digest_hex = hex::encode(descriptor_bound.envelope().args_digest);
         let expires_at_unix_ms = unix_ms_after(options.expires_in);
         let signer_policy = SignerPolicy {
@@ -459,7 +534,7 @@ impl InvocationDraft {
             draft: self.clone(),
             request_id: fresh_prepare_request_id(),
             descriptor_ref: self.invocation.descriptor_ref.clone(),
-            descriptor_hash_hex: hex::encode(easynet_axon::invocation::sha256(
+            descriptor_hash_hex: hex::encode(axon_sdk::invocation::sha256(
                 self.invocation.descriptor_ref.as_bytes(),
             )),
             schema_hash_hex: None,
@@ -521,7 +596,7 @@ impl InvocationTuple {
             subject_ura: invocation.subject_ura.clone(),
             nonce_base64: base64_encode(&invocation.nonce),
             causal_context: causal_context_json(&invocation.causal_context),
-            args_digest_hex: hex::encode(easynet_axon::invocation::sha256(&invocation.args)),
+            args_digest_hex: hex::encode(axon_sdk::invocation::sha256(&invocation.args)),
             content_type: invocation.content_type.clone(),
             metadata: invocation.metadata.clone(),
             timeout_seconds: invocation.timeout_seconds,
@@ -918,8 +993,8 @@ impl CallerSignatureMaterial {
         Ok(())
     }
 
-    fn into_wire(self) -> easynet_axon::pb::axon::v1::CallerSignature {
-        easynet_axon::pb::axon::v1::CallerSignature {
+    fn into_wire(self) -> axon_sdk::pb::axon::v1::CallerSignature {
+        axon_sdk::pb::axon::v1::CallerSignature {
             algorithm: self.algorithm,
             signature: self.signature,
             key_id_hint: self.key_id_hint,
@@ -982,6 +1057,7 @@ impl SignedInvocation {
             &target.callee_ura,
             descriptor_ref,
             &target.subject_ura,
+            axon_sdk::invocation::InvocationDerivationPolicy::FreshRoot,
         )?
         .args_json(&serde_json::to_value(command).map_err(DaemonError::EncodeArguments)?)?
         .build_draft()?
@@ -996,54 +1072,38 @@ impl SignedInvocation {
 
 #[cfg(feature = "axon-pb")]
 impl DaemonInvocation {
-    fn descriptor_bound_envelope(
-        &self,
-    ) -> Result<easynet_axon::invocation::DescriptorBoundEnvelope> {
-        let envelope = self.envelope();
-        let caller = envelope
-            .caller
-            .ok_or_else(|| DaemonError::InvalidInvocation("wire envelope missing caller".into()))
-            .and_then(|caller| {
-                easynet_axon::invocation::wire::try_agent_identity_from_wire(caller)
-                    .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))
-            })?;
-        let callee = envelope
-            .callee
-            .ok_or_else(|| DaemonError::InvalidInvocation("wire envelope missing callee".into()))
-            .and_then(|callee| {
-                easynet_axon::invocation::wire::try_agent_identity_from_wire(callee)
-                    .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))
-            })?;
-        let subject = envelope
-            .subject
-            .ok_or_else(|| DaemonError::InvalidInvocation("wire envelope missing subject".into()))
-            .and_then(|subject| {
-                easynet_axon::invocation::wire::try_subject_identity_from_wire(subject)
-                    .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))
-            })?;
-        let causal_context =
-            easynet_axon::invocation::wire::causal_context_from_wire(envelope.causal_context)
-                .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))?;
+    fn descriptor_bound_envelope(&self) -> Result<axon_sdk::invocation::DescriptorBoundEnvelope> {
         let descriptor_ref =
-            easynet_axon::invocation::canonical_ability_descriptor_ref(&self.descriptor_ref)
+            axon_sdk::invocation::canonical_ability_descriptor_ref(&self.descriptor_ref)
                 .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))?;
-        easynet_axon::invocation::DescriptorBoundEnvelope::from_parts(
-            easynet_axon::invocation::DescriptorBoundEnvelopeParts {
-                caller,
-                callee,
-                ability: descriptor_ref,
-                subject,
-                invocation_nonce: self.nonce,
-                causal_context,
-                args_bytes: &self.args,
-            },
+        let derivation_policy =
+            axon_sdk::invocation::InvocationDerivationPolicy::try_explicit_from_wire_causal_context(
+                self.nonce,
+                self.causal_context.clone(),
+            )
+            .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))?;
+        axon_sdk::invocation::CanonicalEnvelopeBuilder::new(
+            axon_sdk::invocation::AgentIdentity::new(
+                &self.caller_ura,
+                axon_sdk::invocation::UraProfile::StrictV2,
+            ),
+            axon_sdk::invocation::AgentIdentity::new(
+                &self.callee_ura,
+                axon_sdk::invocation::UraProfile::StrictV2,
+            ),
+            axon_sdk::invocation::SubjectIdentity::new(
+                &self.subject_ura,
+                axon_sdk::invocation::UraProfile::StrictV2,
+            ),
+            derivation_policy,
         )
+        .and_then(|builder| builder.descriptor_bound_envelope(descriptor_ref, &self.args))
         .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))
     }
 }
 
 #[cfg(feature = "axon-pb")]
-fn validate_bidi_streams(streams: &[easynet_axon::pb::axon::v1::StreamDescriptor]) -> Result<()> {
+fn validate_bidi_streams(streams: &[axon_sdk::pb::axon::v1::StreamDescriptor]) -> Result<()> {
     let mut seen = std::collections::BTreeSet::new();
     if streams.len() > 1 && streams.iter().any(|stream| stream.stream_id == 0) {
         return Err(DaemonError::InvalidInvocation(
@@ -1086,14 +1146,6 @@ fn checked_ura(value: String, field: &str) -> Result<String> {
 }
 
 #[cfg(feature = "axon-pb")]
-fn empty_causal_context() -> easynet_axon::pb::axon::v1::CausalContext {
-    use easynet_axon::pb::axon::v1::{causal_context, CausalContext, Empty};
-    CausalContext {
-        form: Some(causal_context::Form::None(Empty {})),
-    }
-}
-
-#[cfg(feature = "axon-pb")]
 fn unix_ms_after(duration: Duration) -> u64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1108,8 +1160,8 @@ fn base64_encode(bytes: &[u8]) -> String {
 }
 
 #[cfg(feature = "axon-pb")]
-fn causal_context_json(context: &easynet_axon::pb::axon::v1::CausalContext) -> serde_json::Value {
-    use easynet_axon::pb::axon::v1::causal_context::Form;
+fn causal_context_json(context: &axon_sdk::pb::axon::v1::CausalContext) -> serde_json::Value {
+    use axon_sdk::pb::axon::v1::causal_context::Form;
     match context.form.as_ref() {
         Some(Form::None(_)) => serde_json::json!({"form": "none"}),
         Some(Form::Scalar(receipt)) => serde_json::json!({
@@ -1231,6 +1283,23 @@ mod tests {
         )
     }
 
+    fn explicit_root(
+        invocation_nonce: [u8; 16],
+    ) -> axon_sdk::invocation::InvocationDerivationPolicy {
+        axon_sdk::invocation::InvocationDerivationPolicy::Explicit {
+            invocation_nonce,
+            causal_context: axon_sdk::invocation::CausalContext::None,
+        }
+    }
+
+    fn test_caller_signature() -> axon_sdk::pb::axon::v1::CallerSignature {
+        axon_sdk::pb::axon::v1::CallerSignature {
+            algorithm: "ed25519".to_string(),
+            signature: vec![7; 64],
+            key_id_hint: "caller-key".to_string(),
+        }
+    }
+
     #[test]
     fn invocation_builder_keeps_complete_tuple_inspectable() {
         let hub = crate::core::ura::hub_ura("acme");
@@ -1240,9 +1309,9 @@ mod tests {
             &hub,
             &observe_ref,
             "easynet:///r/acme/device/dev-a",
+            explicit_root([0x42; 16]),
         )
         .unwrap()
-        .nonce([0x42; 16])
         .args_json(&serde_json::json!({"ok": true}))
         .unwrap()
         .build();
@@ -1257,6 +1326,43 @@ mod tests {
     }
 
     #[test]
+    fn unsigned_draft_cannot_enter_any_wire_geometry() {
+        use axon_sdk::pb::axon::v1::StreamDescriptor;
+
+        let hub = crate::core::ura::hub_ura("acme");
+        let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
+        let invocation = DaemonInvocation::builder(
+            "easynet:///r/acme/device/dev-a",
+            &hub,
+            observe_ref,
+            "easynet:///r/acme/device/dev-a",
+            explicit_root([0x43; 16]),
+        )
+        .unwrap()
+        .args_json(&serde_json::json!({"ok": true}))
+        .unwrap()
+        .build();
+
+        for error in [
+            invocation.clone().into_request().unwrap_err(),
+            invocation.clone().into_server_stream_request().unwrap_err(),
+            invocation
+                .into_bidi_open_frame(vec![StreamDescriptor {
+                    stream_id: 1,
+                    content_type: "application/json".to_string(),
+                    ordering: "STRICT".to_string(),
+                    ..StreamDescriptor::default()
+                }])
+                .unwrap_err(),
+        ] {
+            assert!(
+                error.to_string().contains("SignedInvocation state"),
+                "unexpected unsigned wire rejection: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn invocation_builder_emits_complete_stream_request() {
         let hub = crate::core::ura::hub_ura("acme");
         let watch_ref = descriptor_ref(&hub, "device.watch.health", "2.4.0");
@@ -1265,11 +1371,12 @@ mod tests {
             &hub,
             &watch_ref,
             "easynet:///r/acme/device/dev-a",
+            explicit_root([0x24; 16]),
         )
         .unwrap()
-        .nonce([0x24; 16])
         .args_json(&serde_json::json!({"interval_ms": 1000}))
         .unwrap()
+        .caller_signature(test_caller_signature())
         .build()
         .into_server_stream_request()
         .unwrap();
@@ -1277,7 +1384,7 @@ mod tests {
         let envelope = request
             .envelope
             .expect("stream request must carry envelope");
-        assert_eq!(request.function_name, watch_ref);
+        assert_eq!(request.function_name, "device.watch.health");
         assert_eq!(request.content_type, "application/json");
         assert_eq!(request.arguments, br#"{"interval_ms":1000}"#);
         assert_eq!(envelope.invocation_nonce, vec![0x24; 16]);
@@ -1295,48 +1402,54 @@ mod tests {
             "stream request must carry causal context"
         );
         assert_eq!(
-            request.metadata
-                [crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY],
+            crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
+                "test stream request",
+                &hub,
+                request.target.as_ref(),
+            )
+            .unwrap(),
             watch_ref,
-            "SDK wire requests must carry the descriptor ref used for canonical signing"
+            "SDK wire requests must carry the descriptor ref in the canonical typed target"
         );
     }
 
     #[test]
-    fn invocation_builder_rejects_conflicting_signed_descriptor_metadata() {
+    fn invocation_builder_treats_metadata_as_non_canonical() {
         let hub = crate::core::ura::hub_ura("acme");
         let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
-        let other_ref = descriptor_ref(&hub, "observe.health", "9.9.9");
         let mut metadata = HashMap::new();
-        metadata.insert(
-            crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-                .to_string(),
-            other_ref,
-        );
-        let err = DaemonInvocation::builder(
+        metadata.insert("x-product-policy".to_string(), "value".to_string());
+        let request = DaemonInvocation::builder(
             "easynet:///r/acme/device/dev-a",
             &hub,
             &observe_ref,
             "easynet:///r/acme/device/dev-a",
+            axon_sdk::invocation::InvocationDerivationPolicy::FreshRoot,
         )
         .unwrap()
         .metadata(metadata)
         .args_json(&serde_json::json!({"ok": true}))
         .unwrap()
+        .caller_signature(test_caller_signature())
         .build()
         .into_request()
-        .expect_err("conflicting descriptor metadata must reject");
+        .expect("non-canonical metadata must remain transport-only");
 
-        assert!(
-            err.to_string()
-                .contains("does not match invocation descriptor_ref"),
-            "unexpected error: {err}"
+        assert_eq!(request.metadata["x-product-policy"], "value");
+        assert_eq!(
+            crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
+                "test unary request",
+                &hub,
+                request.target.as_ref(),
+            )
+            .unwrap(),
+            observe_ref
         );
     }
 
     #[test]
     fn invocation_builder_emits_complete_bidi_frame0() {
-        use easynet_axon::pb::axon::v1::{invoke_bidi_up, CallerSignature, StreamDescriptor};
+        use axon_sdk::pb::axon::v1::{invoke_bidi_up, CallerSignature, StreamDescriptor};
         let mut metadata = HashMap::new();
         metadata.insert("x-easynet-delegation".to_string(), "producer".to_string());
         let hub = crate::core::ura::hub_ura("acme");
@@ -1347,9 +1460,9 @@ mod tests {
             &hub,
             &pty_ref,
             "easynet:///r/acme/device/dev-a",
+            explicit_root([0x33; 16]),
         )
         .unwrap()
-        .nonce([0x33; 16])
         .args_json(&serde_json::json!({"session_id": "pty-1"}))
         .unwrap()
         .metadata(metadata)
@@ -1379,15 +1492,19 @@ mod tests {
             envelope.caller.expect("caller required").ura,
             "easynet:///r/acme/device/dev-a"
         );
-        assert_eq!(open.target.expect("target required").ability_name, pty_ref);
+        let target = open.target.expect("target required");
+        assert_eq!(
+            crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
+                "test bidi request",
+                &hub,
+                Some(&target),
+            )
+            .unwrap(),
+            pty_ref
+        );
         assert_eq!(open.initial_args, br#"{"session_id":"pty-1"}"#);
         assert_eq!(open.args_content_type, "application/json");
         assert_eq!(open.metadata["x-easynet-delegation"], "producer");
-        assert_eq!(
-            open.metadata
-                [crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY],
-            pty_ref
-        );
         assert_eq!(open.streams.len(), 1);
         assert_eq!(open.streams[0].stream_id, 1);
         assert_eq!(
@@ -1400,7 +1517,7 @@ mod tests {
 
     #[test]
     fn invocation_builder_rejects_ambiguous_bidi_stream_zero() {
-        use easynet_axon::pb::axon::v1::StreamDescriptor;
+        use axon_sdk::pb::axon::v1::StreamDescriptor;
         let hub = crate::core::ura::hub_ura("acme");
         let pty_ref = descriptor_ref(&hub, "device.pty.attach", "2.4.0");
         let err = DaemonInvocation::builder(
@@ -1408,7 +1525,10 @@ mod tests {
             &hub,
             &pty_ref,
             "easynet:///r/acme/device/dev-a",
+            axon_sdk::invocation::InvocationDerivationPolicy::FreshRoot,
         )
+        .unwrap()
+        .args_bytes(Vec::new(), "application/octet-stream")
         .unwrap()
         .build()
         .into_bidi_open_frame(vec![
@@ -1434,7 +1554,14 @@ mod tests {
     fn invocation_builder_rejects_invalid_ura() {
         let hub = crate::core::ura::hub_ura("acme");
         let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
-        let err = DaemonInvocation::builder("not-a-ura", &hub, observe_ref, &hub).unwrap_err();
+        let err = DaemonInvocation::builder(
+            "not-a-ura",
+            &hub,
+            observe_ref,
+            &hub,
+            axon_sdk::invocation::InvocationDerivationPolicy::FreshRoot,
+        )
+        .unwrap_err();
         assert!(format!("{err}").contains("caller_ura"));
     }
 
@@ -1446,29 +1573,31 @@ mod tests {
             &hub,
             "observe.health",
             "easynet:///r/acme/device/dev-a",
+            axon_sdk::invocation::InvocationDerivationPolicy::FreshRoot,
         )
         .unwrap_err();
         assert!(format!("{err}").contains("descriptor ref"));
     }
 
     #[test]
-    fn sdk_draft_rejects_missing_explicit_args() {
+    fn sdk_draft_accepts_explicit_empty_args() {
         let hub = crate::core::ura::hub_ura("acme");
         let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
-        let err = DaemonInvocation::builder(
+        let draft = DaemonInvocation::builder(
             "easynet:///r/acme/device/dev-a",
             &hub,
             &observe_ref,
             "easynet:///r/acme/device/dev-a",
+            axon_sdk::invocation::InvocationDerivationPolicy::FreshRoot,
         )
         .unwrap()
+        .args_bytes(Vec::new(), "application/json")
+        .unwrap()
         .build_draft()
-        .unwrap_err();
+        .unwrap();
 
-        assert!(
-            format!("{err}").contains("args must be set explicitly"),
-            "draft must reject implicit empty args: {err}"
-        );
+        assert!(draft.invocation().args().is_empty());
+        assert_eq!(draft.invocation().content_type(), "application/json");
     }
 
     #[test]
@@ -1480,9 +1609,9 @@ mod tests {
             &hub,
             &observe_ref,
             "easynet:///r/acme/device/dev-a",
+            explicit_root([0x11; 16]),
         )
         .unwrap()
-        .nonce([0x11; 16])
         .args_json(&serde_json::json!({"probe": true}))
         .unwrap()
         .build_draft()
@@ -1526,9 +1655,9 @@ mod tests {
             &hub,
             &observe_ref,
             "easynet:///r/acme/device/dev-a",
+            explicit_root([0x12; 16]),
         )
         .unwrap()
-        .nonce([0x12; 16])
         .args_json(&serde_json::json!({"probe": true}))
         .unwrap()
         .build_draft()
@@ -1562,9 +1691,9 @@ mod tests {
             &authority,
             &target_ref,
             "easynet:///r/acme/device/dev-a",
+            explicit_root([0x12; 16]),
         )
         .unwrap()
-        .nonce([0x12; 16])
         .args_json(&serde_json::json!({"probe": true}))
         .unwrap()
         .build_draft()
@@ -1606,9 +1735,9 @@ mod tests {
             &hub,
             &observe_ref,
             "easynet:///r/acme/device/dev-a",
+            explicit_root([0x13; 16]),
         )
         .unwrap()
-        .nonce([0x13; 16])
         .args_json(&serde_json::json!({"probe": true}))
         .unwrap()
         .build_draft()
@@ -1647,9 +1776,9 @@ mod tests {
             &hub,
             &observe_ref,
             "easynet:///r/acme/device/dev-a",
+            explicit_root([0x14; 16]),
         )
         .unwrap()
-        .nonce([0x14; 16])
         .args_json(&serde_json::json!({"probe": true}))
         .unwrap()
         .build_draft()
@@ -1672,20 +1801,25 @@ mod tests {
         let policy_ref = entry.signer_policy_ref.clone().unwrap();
         let hub = crate::core::ura::hub_ura("acme");
         let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
-        let prepared = DaemonInvocation::builder(caller, &hub, &observe_ref, caller)
-            .unwrap()
-            .nonce([0x15; 16])
-            .args_json(&serde_json::json!({"probe": true}))
-            .unwrap()
-            .build_draft()
-            .unwrap()
-            .prepare(PrepareOptions {
-                expires_in: Duration::from_secs(60),
-                signer_id: Some(signer_id.clone()),
-                policy_ref: Some(policy_ref.clone()),
-                local_daemon_signing: true,
-            })
-            .unwrap();
+        let prepared = DaemonInvocation::builder(
+            caller,
+            &hub,
+            &observe_ref,
+            caller,
+            explicit_root([0x15; 16]),
+        )
+        .unwrap()
+        .args_json(&serde_json::json!({"probe": true}))
+        .unwrap()
+        .build_draft()
+        .unwrap()
+        .prepare(PrepareOptions {
+            expires_in: Duration::from_secs(60),
+            signer_id: Some(signer_id.clone()),
+            policy_ref: Some(policy_ref.clone()),
+            local_daemon_signing: true,
+        })
+        .unwrap();
 
         let signer = KeyServiceLocalDaemonInvocationSigner::new(key_service);
         let signed = prepared.sign_with_local_daemon_signer(&signer).unwrap();
@@ -1704,20 +1838,25 @@ mod tests {
         let (key_service, entry) = test_managed_key_service(caller);
         let hub = crate::core::ura::hub_ura("acme");
         let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
-        let prepared = DaemonInvocation::builder(caller, &hub, &observe_ref, caller)
-            .unwrap()
-            .nonce([0x16; 16])
-            .args_json(&serde_json::json!({"probe": true}))
-            .unwrap()
-            .build_draft()
-            .unwrap()
-            .prepare(PrepareOptions {
-                expires_in: Duration::from_secs(60),
-                signer_id: Some(format!("signer-{}", entry.key_id)),
-                policy_ref: Some("daemon-key-inventory:sha256:wrong".to_string()),
-                local_daemon_signing: true,
-            })
-            .unwrap();
+        let prepared = DaemonInvocation::builder(
+            caller,
+            &hub,
+            &observe_ref,
+            caller,
+            explicit_root([0x16; 16]),
+        )
+        .unwrap()
+        .args_json(&serde_json::json!({"probe": true}))
+        .unwrap()
+        .build_draft()
+        .unwrap()
+        .prepare(PrepareOptions {
+            expires_in: Duration::from_secs(60),
+            signer_id: Some(format!("signer-{}", entry.key_id)),
+            policy_ref: Some("daemon-key-inventory:sha256:wrong".to_string()),
+            local_daemon_signing: true,
+        })
+        .unwrap();
 
         let signer = KeyServiceLocalDaemonInvocationSigner::new(key_service);
         let err = prepared.sign_with_local_daemon_signer(&signer).unwrap_err();

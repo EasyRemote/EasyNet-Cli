@@ -586,7 +586,10 @@ mod tests {
     #[test]
     fn register_publishes_invoke_manifest_description() {
         let mut reg = AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
         );
         register_for_agent(
             &mut reg,
@@ -636,7 +639,10 @@ mod tests {
         agents: AgentRegistry,
     ) -> impl Fn(Value) -> anyhow::Result<Value> {
         let mut reg = AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
         );
         for (name, h) in target_handlers {
             reg.register_rpc_with_owner_and_action(

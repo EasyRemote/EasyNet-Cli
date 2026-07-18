@@ -4,14 +4,14 @@
 // File: src/eal/ir.rs
 // Description: Serializable intermediate representation — the compilation target of EAL.
 //
-// Key Innovation (over Axon MissionControl v1):
+// Key innovation over the retired Axon-owned Mission model:
 //   Steps have explicit `input_refs` (arg_key → source binding) and `output_binding`
 //   (variable name for captured result). This enables data flow between steps,
-//   which MissionControl v1 cannot do (it discards InvokeResponse.result).
+//   while retaining each child Invocation result and receipt.
 //
 // Execution Targets:
 //   - Client-side interpreter (current — temporary engine)
-//   - MissionControl v2 (future — server-side, stateful, with result persistence)
+//   - EasyNet-Cli daemon owns stateful Mission execution and result persistence.
 //   - JSON inspection via `easynet mission run --emit-ir`
 //
 // Proto Upgrade Path:
@@ -43,7 +43,7 @@ use crate::core::agent::id::{AbilityName, AgentId};
 ///   `claude.chat(prompt: "hi")`           → `IrTarget::Agent(AgentId)`
 ///   `call "x" on "node-1" with {...}`     → `IrTarget::Device { node_id }`
 ///   `call "x" on "<registered-agent>"`    → REJECTED at
-///                                            `run_mission_inproc` time
+///                                            MissionRunner execution
 ///                                            with a clear error pointing
 ///                                            at member-call form. See
 ///                                            `cli/mission_runs.rs::find_implicit_agent_fallback`

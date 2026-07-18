@@ -15,8 +15,8 @@
 //
 // CI enforcement lives in `tools/scripts/check-kernel-boundary.sh`:
 // anything under `src/daemon/control/` may import
-// `crate::daemon::boot::kernel::api`, `crate::daemon::invocation::receipts::runtime_record`,
-// `crate::core::domain`, and nothing else from daemon execution internals.
+// `crate::daemon::boot::kernel::api`, `crate::core::domain`, and nothing else
+// from daemon execution internals.
 //
 // Why v1 KernelApi is still thin
 // ------------------------------
@@ -25,11 +25,10 @@
 // file, counts the methods, confirms their domain-object signatures,
 // and moves on.
 //
-// v10.3 C* unity: every execution entry point ultimately funnels
-// through `invoke`. Schedule tick, loop iteration, permission
-// admission, Client FFI — all construct a RuntimeInvocation adapter
-// record and call
-// `invoke`. No bypass paths.
+// v10.3 C* unity: every execution entry point ultimately funnels through
+// `invoke`. Schedule ticks and loop iterations construct Axon's canonical
+// descriptor-bound request and call `invoke`. No daemon-owned Invocation or
+// Receipt model crosses this boundary.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -38,7 +37,7 @@ use crate::core::domain::{
     DiscussRoom, LoopId, LoopInstance, PermissionDecision, PermissionId, PermissionRequest, RoomId,
     ScheduleEntry, ScheduleId, Session, SessionId,
 };
-use crate::daemon::invocation::receipts::runtime_record::{Receipt, RuntimeInvocation};
+use axon_sdk::invocation::{DescriptorBoundInvocationRequest, FinalizedInvocation};
 use serde_json::Value;
 
 /// v1 KernelApi surface. Each method is the daemon-kernel analogue of a
@@ -56,16 +55,25 @@ use serde_json::Value;
 /// feature-specific typed channel. The trait surface grows PR by
 /// PR — the method *placeholders* listed here are the v1 floor.
 pub trait KernelApi: Send + Sync {
-    // ── RuntimeInvocation adapter (C* unity entry point) ─────────────
+    // ── Canonical runtime entry point ────────────────────────────────
 
-    /// The single execution entry point. Schedule tick, loop
-    /// controller, permission admission, Client FFI all construct
-    /// a RuntimeInvocation adapter record and call this method. Returns
-    /// the terminal Receipt.
-    ///
-    /// v1 signature returns `Result<Receipt>` synchronously; v2
-    /// async version returns `impl Future<Output = Receipt>`.
-    fn invoke(&self, invocation: RuntimeInvocation) -> anyhow::Result<Receipt>;
+    /// Construct one daemon-local RPC request through the same descriptor
+    /// binding and signing authority used by every LocalRuntime ingress.
+    fn prepare_local_system_rpc(
+        &self,
+        callee_ura: &str,
+        ability: &str,
+        subject_ura: &str,
+        payload: Vec<u8>,
+    ) -> anyhow::Result<DescriptorBoundInvocationRequest>;
+
+    /// The single synchronous kernel execution entry. The input and terminal
+    /// result are Axon SDK canonical objects; the kernel owns only product
+    /// permission policy and session observation around LocalRuntime.
+    fn invoke(
+        &self,
+        request: DescriptorBoundInvocationRequest,
+    ) -> anyhow::Result<FinalizedInvocation>;
 
     // ── Session (PR-ATTACH) ──────────────────────────────────────────
 

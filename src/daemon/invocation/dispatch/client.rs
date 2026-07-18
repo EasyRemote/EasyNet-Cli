@@ -60,14 +60,15 @@ impl DaemonClient {
         &self.endpoint
     }
 
-    /// Invoke a complete daemon Invocation through Axon's gRPC
+    /// Submit a signed daemon Invocation through Axon's gRPC
     /// `Invocation.Invoke` method.
     #[cfg(feature = "axon-pb")]
     pub async fn invoke(
         &self,
-        invocation: DaemonInvocation,
-    ) -> Result<easynet_axon::pb::axon::v1::InvokeResponse> {
-        let ability = invocation.descriptor_ref().to_string();
+        signed: SignedInvocation,
+    ) -> Result<axon_sdk::pb::axon::v1::InvokeResponse> {
+        let ability = signed.prepared().descriptor_ref().to_string();
+        let invocation = signed.into_daemon_invocation();
         let request = invocation.into_request()?;
         let channel = local_daemon_grpc::connect_channel(
             self.endpoint.clone(),
@@ -79,8 +80,7 @@ impl DaemonClient {
             endpoint: self.endpoint.clone(),
             source,
         })?;
-        let mut client =
-            easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
         client
             .invoke(request)
             .await
@@ -92,14 +92,15 @@ impl DaemonClient {
             })
     }
 
-    /// Open a complete daemon Invocation through Axon's gRPC
+    /// Open a signed daemon Invocation through Axon's gRPC
     /// `Invocation.InvokeStream` method.
     #[cfg(feature = "axon-pb")]
     pub async fn invoke_stream(
         &self,
-        invocation: DaemonInvocation,
-    ) -> Result<tonic::Streaming<easynet_axon::pb::axon::v1::InvokeStreamChunk>> {
-        let ability = invocation.descriptor_ref().to_string();
+        signed: SignedInvocation,
+    ) -> Result<tonic::Streaming<axon_sdk::pb::axon::v1::InvokeStreamChunk>> {
+        let ability = signed.prepared().descriptor_ref().to_string();
+        let invocation = signed.into_daemon_invocation();
         let request = invocation.into_server_stream_request()?;
         let channel = local_daemon_grpc::connect_channel(
             self.endpoint.clone(),
@@ -111,8 +112,7 @@ impl DaemonClient {
             endpoint: self.endpoint.clone(),
             source,
         })?;
-        let mut client =
-            easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
         client
             .invoke_stream(request)
             .await
@@ -124,18 +124,19 @@ impl DaemonClient {
             })
     }
 
-    /// Open a complete daemon Invocation through Axon's gRPC
+    /// Open a signed daemon Invocation through Axon's gRPC
     /// `Invocation.InvokeBidi` method.
     ///
-    /// Frame 0 is an `EnvelopeOpen` generated from the same complete
-    /// `DaemonInvocation` tuple used by unary and server-stream calls.
+    /// Frame 0 is an `EnvelopeOpen` generated from the same signed tuple used
+    /// by unary and server-stream calls.
     #[cfg(feature = "axon-pb")]
     pub async fn invoke_bidi(
         &self,
-        invocation: DaemonInvocation,
-        streams: Vec<easynet_axon::pb::axon::v1::StreamDescriptor>,
+        signed: SignedInvocation,
+        streams: Vec<axon_sdk::pb::axon::v1::StreamDescriptor>,
     ) -> Result<DaemonBidiSession> {
-        let ability = invocation.descriptor_ref().to_string();
+        let ability = signed.prepared().descriptor_ref().to_string();
+        let invocation = signed.into_daemon_invocation();
         let frame0 = invocation.into_bidi_open_frame(streams)?;
         let channel = local_daemon_grpc::connect_channel(
             self.endpoint.clone(),
@@ -147,8 +148,7 @@ impl DaemonClient {
             endpoint: self.endpoint.clone(),
             source,
         })?;
-        let mut client =
-            easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+        let mut client = axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
         let (up_tx, up_rx) = tokio::sync::mpsc::channel(64);
         up_tx
             .send(frame0)
@@ -250,8 +250,15 @@ impl RuntimeClient {
         callee_ura: impl Into<String>,
         descriptor_ref: impl Into<String>,
         subject_ura: impl Into<String>,
+        derivation_policy: axon_sdk::invocation::InvocationDerivationPolicy,
     ) -> Result<DaemonInvocationBuilder> {
-        DaemonInvocation::builder(caller_ura, callee_ura, descriptor_ref, subject_ura)
+        DaemonInvocation::builder(
+            caller_ura,
+            callee_ura,
+            descriptor_ref,
+            subject_ura,
+            derivation_policy,
+        )
     }
 
     /// Prepare canonical signing material for an immutable draft.
@@ -276,8 +283,8 @@ impl RuntimeClient {
             });
         }
         let tuple = signed.prepared().tuple();
-        let response = self.inner.invoke(signed.into_daemon_invocation()).await?;
-        let outcome = InvocationOutcome::from_verified_invoke_response(
+        let response = self.inner.invoke(signed).await?;
+        let outcome = InvocationOutcome::from_invoke_response(
             tuple,
             response,
             &local_daemon_grpc::LocalKeyServiceReceiptResolver::new(),
@@ -317,11 +324,8 @@ impl RuntimeClient {
         })?;
         let signed_cancel = prepared.sign_with_canonical_signer(&signer).await?;
         let tuple = signed_cancel.prepared().tuple();
-        let response = self
-            .inner
-            .invoke(signed_cancel.into_daemon_invocation())
-            .await?;
-        let outcome = InvocationOutcome::from_verified_invoke_response(
+        let response = self.inner.invoke(signed_cancel).await?;
+        let outcome = InvocationOutcome::from_invoke_response(
             tuple,
             response,
             &local_daemon_grpc::LocalKeyServiceReceiptResolver::new(),
@@ -454,42 +458,61 @@ pub struct InvocationOutcome {
 }
 
 impl InvocationOutcome {
-    pub(crate) fn from_verified_invoke_response(
+    pub(crate) fn from_invoke_response(
         tuple: InvocationTuple,
-        response: easynet_axon::pb::axon::v1::InvokeResponse,
-        resolver: &dyn easynet_axon::invocation::KeyResolver,
+        response: axon_sdk::pb::axon::v1::InvokeResponse,
+        resolver: &dyn axon_sdk::invocation::KeyResolver,
     ) -> Result<Self> {
-        use easynet_axon::invocation::InvocationState;
+        use axon_sdk::invocation::InvocationState;
 
-        let error = response.error.as_ref().map(RuntimeErrorSummary::from_wire);
-        let admission_wire = response.admission_receipt.clone().ok_or_else(|| {
-            DaemonError::InvalidInvocation(
-                "InvokeResponse omitted its signed admission receipt".to_string(),
-            )
-        })?;
-        let terminal_wire = response.terminal_receipt.clone().ok_or_else(|| {
-            DaemonError::InvalidInvocation(
-                "InvokeResponse omitted its signed terminal receipt".to_string(),
-            )
-        })?;
-        let checkpoints =
-            crate::daemon::invocation::receipts::finalization_projection::verify_wire_finalization_checkpoints(
-                admission_wire,
-                terminal_wire,
-                resolver,
-            )
-            .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
         let response_state = InvocationState::try_from(response.state).map_err(|error| {
             DaemonError::InvalidInvocation(format!("InvokeResponse state is invalid: {error}"))
         })?;
-        if checkpoints.terminal().state() != response_state {
-            return Err(DaemonError::InvalidInvocation(
-                "verified terminal receipt state disagrees with InvokeResponse state".to_string(),
-            ));
-        }
-        let stages = InvocationReceiptStages {
-            admission: Some(ReceiptSummary::from_signed(checkpoints.admission())?),
-            terminal: Some(ReceiptSummary::from_signed(checkpoints.terminal())?),
+        let error = response.error.as_ref().map(RuntimeErrorSummary::from_wire);
+        let stages = match (
+            response.admission_receipt.clone(),
+            response.terminal_receipt.clone(),
+        ) {
+            (Some(admission_wire), Some(terminal_wire)) => {
+                let checkpoints =
+                    crate::daemon::invocation::receipts::finalization_projection::verify_wire_finalization_checkpoints(
+                        admission_wire,
+                        terminal_wire,
+                        resolver,
+                    )
+                    .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
+                if checkpoints.terminal().state() != response_state {
+                    return Err(DaemonError::InvalidInvocation(
+                        "verified terminal receipt state disagrees with InvokeResponse state"
+                            .to_string(),
+                    ));
+                }
+                InvocationReceiptStages {
+                    admission: Some(ReceiptSummary::from_signed(checkpoints.admission())?),
+                    terminal: Some(ReceiptSummary::from_signed(checkpoints.terminal())?),
+                }
+            }
+            (None, None)
+                if response_state == InvocationState::Failed
+                    && response
+                        .error
+                        .as_ref()
+                        .is_some_and(is_pre_admission_failure)
+                    && response.proof_error.is_none() =>
+            {
+                InvocationReceiptStages::default()
+            }
+            (None, None) => {
+                return Err(DaemonError::InvalidInvocation(
+                    "receipt-free InvokeResponse must be a typed pre-admission Failed outcome"
+                        .to_string(),
+                ))
+            }
+            _ => {
+                return Err(DaemonError::InvalidInvocation(
+                    "InvokeResponse carried a partial receipt checkpoint chain".to_string(),
+                ))
+            }
         };
         let result = InvocationResult {
             tuple,
@@ -530,8 +553,24 @@ impl InvocationOutcome {
     }
 }
 
+fn is_pre_admission_failure(error: &axon_sdk::pb::axon::v1::Error) -> bool {
+    use axon_sdk::pb::axon::v1::ErrorStage;
+
+    matches!(
+        ErrorStage::try_from(error.stage),
+        Ok(ErrorStage::GlobalAdmission
+            | ErrorStage::CallerAuthentication
+            | ErrorStage::AuthorityValidation
+            | ErrorStage::BootstrapAuthorization
+            | ErrorStage::Quota
+            | ErrorStage::AbilityResolution
+            | ErrorStage::AbilityPolicy
+            | ErrorStage::RequestValidation)
+    )
+}
+
 fn invocation_state_name(state: i32) -> String {
-    use easynet_axon::invocation::InvocationState;
+    use axon_sdk::invocation::InvocationState;
 
     if state == InvocationState::Accepted.to_wire_i32() {
         "Accepted".to_string()
@@ -598,14 +637,14 @@ pub struct ReceiptSummary {
 
 impl ReceiptSummary {
     pub(crate) fn from_signed(
-        receipt: &easynet_axon::invocation::SignedInvocationReceipt,
+        receipt: &axon_sdk::invocation::SignedInvocationReceipt,
     ) -> Result<Self> {
-        let wire = easynet_axon::invocation::wire::receipt_to_wire(receipt)
+        let wire = axon_sdk::invocation::wire::receipt_to_wire(receipt)
             .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
         Ok(Self::from_verified_wire(&wire))
     }
 
-    fn from_verified_wire(receipt: &easynet_axon::pb::axon::v1::InvocationReceipt) -> Self {
+    fn from_verified_wire(receipt: &axon_sdk::pb::axon::v1::InvocationReceipt) -> Self {
         Self {
             verification: ReceiptVerification::Verified,
             index: receipt.index,
@@ -630,7 +669,11 @@ impl ReceiptSummary {
             causal_binding_kind: causal_binding_kind(receipt.causal_binding.as_ref()),
             causal_binding: causal_binding_summary(receipt.causal_binding.as_ref()),
             callee_signature: receipt.callee_signature.as_ref().map(signature_summary),
-            signer_binding: receipt.signer_binding.as_ref().map(agent_binding_summary),
+            signer_binding: receipt
+                .signer_binding
+                .as_ref()
+                .or(receipt.callee_binding.as_ref())
+                .map(agent_binding_summary),
             host_attestation_base64: base64_bytes(&receipt.host_attestation),
             authority_binding_kind: authority_binding_kind(receipt.authority_binding.as_ref()),
             authority_binding: authority_binding_summary(receipt.authority_binding.as_ref()),
@@ -731,7 +774,7 @@ fn base64_bytes(bytes: &[u8]) -> String {
 }
 
 fn agent_binding_summary(
-    binding: &easynet_axon::pb::axon::v1::AgentIdentity,
+    binding: &axon_sdk::pb::axon::v1::AgentIdentity,
 ) -> ReceiptAgentBindingSummary {
     ReceiptAgentBindingSummary {
         ura: binding.ura.clone(),
@@ -740,7 +783,7 @@ fn agent_binding_summary(
 }
 
 fn subject_binding_summary(
-    binding: &easynet_axon::pb::axon::v1::SubjectIdentity,
+    binding: &axon_sdk::pb::axon::v1::SubjectIdentity,
 ) -> ReceiptSubjectBindingSummary {
     ReceiptSubjectBindingSummary {
         ura: binding.ura.clone(),
@@ -748,9 +791,7 @@ fn subject_binding_summary(
     }
 }
 
-fn entity_ref_summary(
-    reference: &easynet_axon::pb::axon::v1::EntityRef,
-) -> ReceiptEntityRefSummary {
+fn entity_ref_summary(reference: &axon_sdk::pb::axon::v1::EntityRef) -> ReceiptEntityRefSummary {
     ReceiptEntityRefSummary {
         kind: reference.kind,
         ura: reference.ura.clone(),
@@ -759,7 +800,7 @@ fn entity_ref_summary(
 }
 
 fn signature_summary(
-    signature: &easynet_axon::pb::axon::v1::CalleeSignature,
+    signature: &axon_sdk::pb::axon::v1::CalleeSignature,
 ) -> ReceiptSignatureSummary {
     ReceiptSignatureSummary {
         algorithm: signature.algorithm.clone(),
@@ -768,14 +809,14 @@ fn signature_summary(
     }
 }
 
-fn receipt_ref_summary(reference: &easynet_axon::pb::axon::v1::ReceiptRef) -> ReceiptRefSummary {
+fn receipt_ref_summary(reference: &axon_sdk::pb::axon::v1::ReceiptRef) -> ReceiptRefSummary {
     ReceiptRefSummary {
         receipt_hash_hex: hex::encode(&reference.receipt_hash),
         receipt_ura: reference.receipt_ura.clone(),
     }
 }
 
-fn failure_summary(failure: &easynet_axon::pb::axon::v1::Error) -> ReceiptFailureSummary {
+fn failure_summary(failure: &axon_sdk::pb::axon::v1::Error) -> ReceiptFailureSummary {
     ReceiptFailureSummary {
         code: failure.code.clone(),
         message: failure.message.clone(),
@@ -785,7 +826,7 @@ fn failure_summary(failure: &easynet_axon::pb::axon::v1::Error) -> ReceiptFailur
     }
 }
 
-fn usage_summary(usage: &easynet_axon::pb::axon::v1::InvocationUsage) -> ReceiptUsageSummary {
+fn usage_summary(usage: &axon_sdk::pb::axon::v1::InvocationUsage) -> ReceiptUsageSummary {
     ReceiptUsageSummary {
         tokens_in: usage.tokens_in,
         tokens_out: usage.tokens_out,
@@ -795,7 +836,7 @@ fn usage_summary(usage: &easynet_axon::pb::axon::v1::InvocationUsage) -> Receipt
 }
 
 fn authority_proof_summary(
-    proof: &easynet_axon::pb::axon::v1::InvocationAuthorityProof,
+    proof: &axon_sdk::pb::axon::v1::InvocationAuthorityProof,
 ) -> ReceiptAuthorityProofSummary {
     ReceiptAuthorityProofSummary {
         proof_type: proof.proof_type.clone(),
@@ -810,9 +851,9 @@ fn authority_proof_summary(
 }
 
 fn causal_binding_summary(
-    causal: Option<&easynet_axon::pb::axon::v1::CausalContext>,
+    causal: Option<&axon_sdk::pb::axon::v1::CausalContext>,
 ) -> serde_json::Value {
-    use easynet_axon::pb::axon::v1::causal_context::Form;
+    use axon_sdk::pb::axon::v1::causal_context::Form;
 
     match causal.and_then(|context| context.form.as_ref()) {
         Some(Form::None(_)) => serde_json::json!({"form": "none"}),
@@ -833,8 +874,8 @@ fn causal_binding_summary(
     }
 }
 
-fn causal_binding_kind(causal: Option<&easynet_axon::pb::axon::v1::CausalContext>) -> String {
-    use easynet_axon::pb::axon::v1::causal_context::Form;
+fn causal_binding_kind(causal: Option<&axon_sdk::pb::axon::v1::CausalContext>) -> String {
+    use axon_sdk::pb::axon::v1::causal_context::Form;
 
     match causal.and_then(|context| context.form.as_ref()) {
         Some(Form::None(_)) => "none",
@@ -847,9 +888,9 @@ fn causal_binding_kind(causal: Option<&easynet_axon::pb::axon::v1::CausalContext
 }
 
 fn authority_binding_summary(
-    binding: Option<&easynet_axon::pb::axon::v1::AuthorityBinding>,
+    binding: Option<&axon_sdk::pb::axon::v1::AuthorityBinding>,
 ) -> serde_json::Value {
-    use easynet_axon::pb::axon::v1::authority_binding::Authority;
+    use axon_sdk::pb::axon::v1::authority_binding::Authority;
 
     match binding.and_then(|binding| binding.authority.as_ref()) {
         Some(Authority::SelfAuthority(value)) => serde_json::json!({
@@ -896,10 +937,8 @@ fn authority_binding_summary(
     }
 }
 
-fn authority_binding_kind(
-    binding: Option<&easynet_axon::pb::axon::v1::AuthorityBinding>,
-) -> String {
-    use easynet_axon::pb::axon::v1::authority_binding::Authority;
+fn authority_binding_kind(binding: Option<&axon_sdk::pb::axon::v1::AuthorityBinding>) -> String {
+    use axon_sdk::pb::axon::v1::authority_binding::Authority;
 
     match binding.and_then(|binding| binding.authority.as_ref()) {
         Some(Authority::SelfAuthority(_)) => "self",
@@ -923,13 +962,147 @@ pub struct RuntimeErrorSummary {
 }
 
 impl RuntimeErrorSummary {
-    pub(crate) fn from_wire(error: &easynet_axon::pb::axon::v1::Error) -> Self {
+    pub(crate) fn from_wire(error: &axon_sdk::pb::axon::v1::Error) -> Self {
+        let stage = axon_sdk::pb::axon::v1::ErrorStage::try_from(error.stage)
+            .map(|stage| {
+                stage
+                    .as_str_name()
+                    .strip_prefix("ERROR_STAGE_")
+                    .unwrap_or(stage.as_str_name())
+                    .to_ascii_lowercase()
+            })
+            .unwrap_or_else(|_| error.stage.to_string());
         Self {
             code: error.code.clone(),
-            stage: "runtime".to_string(),
+            stage,
             message: error.message.clone(),
             retryable: error.retryable,
         }
+    }
+}
+
+#[cfg(test)]
+mod invocation_outcome_tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use axon_sdk::invocation::InvocationState;
+    use axon_sdk::pb::axon::v1::{Error, ErrorStage, InvocationReceipt, InvokeResponse};
+
+    fn tuple() -> InvocationTuple {
+        InvocationTuple {
+            caller_ura: "easynet:///r/acme/device/dev-a".to_string(),
+            callee_ura: "easynet:///r/acme/device/dev-a".to_string(),
+            descriptor_ref: "easynet:///r/acme/ability/observe.health@1.0.0#descriptor!invoke"
+                .to_string(),
+            subject_ura: "easynet:///r/acme/device/dev-a".to_string(),
+            nonce_base64: "AAAAAAAAAAAAAAAAAAAAAA==".to_string(),
+            causal_context: serde_json::json!({"form": "none"}),
+            args_digest_hex: "00".repeat(32),
+            content_type: "application/json".to_string(),
+            metadata: HashMap::new(),
+            timeout_seconds: Some(30),
+        }
+    }
+
+    fn resolver() -> local_daemon_grpc::LocalKeyServiceReceiptResolver {
+        local_daemon_grpc::LocalKeyServiceReceiptResolver::new()
+    }
+
+    fn admission_error() -> Error {
+        Error {
+            code: "CALLER_SIGNATURE_INVALID".to_string(),
+            message: "ed25519_signature_wrong_length".to_string(),
+            stage: ErrorStage::CallerAuthentication as i32,
+            ..Error::default()
+        }
+    }
+
+    #[test]
+    fn receipt_free_admission_rejection_is_a_typed_terminal_outcome() {
+        let outcome = InvocationOutcome::from_invoke_response(
+            tuple(),
+            InvokeResponse {
+                state: InvocationState::Failed.to_wire_i32(),
+                error: Some(admission_error()),
+                ..InvokeResponse::default()
+            },
+            &resolver(),
+        )
+        .expect("receipt-free pre-admission failure");
+
+        assert_eq!(outcome.result().terminal_state, "Failed");
+        assert!(outcome.result().receipt.is_none());
+        assert!(outcome.stages().admission().is_none());
+        assert!(outcome.stages().terminal().is_none());
+        let error = outcome.result().error.as_ref().expect("typed error");
+        assert_eq!(error.code, "CALLER_SIGNATURE_INVALID");
+        assert_eq!(error.stage, "caller_authentication");
+    }
+
+    #[test]
+    fn receipt_free_non_failed_response_is_rejected() {
+        let error = InvocationOutcome::from_invoke_response(
+            tuple(),
+            InvokeResponse {
+                state: InvocationState::Completed.to_wire_i32(),
+                ..InvokeResponse::default()
+            },
+            &resolver(),
+        )
+        .expect_err("Completed must carry verified finalization receipts");
+
+        assert!(error
+            .to_string()
+            .contains("receipt-free InvokeResponse must be a typed pre-admission Failed outcome"));
+    }
+
+    #[test]
+    fn receipt_free_transport_or_execution_failure_is_rejected() {
+        for stage in [
+            ErrorStage::Unspecified,
+            ErrorStage::Transport,
+            ErrorStage::Execution,
+        ] {
+            let error = InvocationOutcome::from_invoke_response(
+                tuple(),
+                InvokeResponse {
+                    state: InvocationState::Failed.to_wire_i32(),
+                    error: Some(Error {
+                        code: "NON_ADMISSION_FAILURE".to_string(),
+                        message: "runtime did not produce a finalization chain".to_string(),
+                        stage: stage as i32,
+                        ..Error::default()
+                    }),
+                    ..InvokeResponse::default()
+                },
+                &resolver(),
+            )
+            .expect_err("receipt-free non-admission failure must fail closed");
+
+            assert!(error.to_string().contains(
+                "receipt-free InvokeResponse must be a typed pre-admission Failed outcome"
+            ));
+        }
+    }
+
+    #[test]
+    fn partial_receipt_checkpoint_chain_is_rejected() {
+        let error = InvocationOutcome::from_invoke_response(
+            tuple(),
+            InvokeResponse {
+                state: InvocationState::Failed.to_wire_i32(),
+                error: Some(admission_error()),
+                admission_receipt: Some(InvocationReceipt::default()),
+                ..InvokeResponse::default()
+            },
+            &resolver(),
+        )
+        .expect_err("partial receipt chain must fail closed");
+
+        assert!(error
+            .to_string()
+            .contains("partial receipt checkpoint chain"));
     }
 }
 
@@ -945,8 +1118,8 @@ impl RuntimeErrorSummary {
 #[cfg(feature = "axon-pb")]
 pub struct DaemonBidiSession {
     ability: String,
-    up_tx: tokio::sync::mpsc::Sender<easynet_axon::pb::axon::v1::InvokeBidiUp>,
-    down: tonic::Streaming<easynet_axon::pb::axon::v1::InvokeBidiDown>,
+    up_tx: tokio::sync::mpsc::Sender<axon_sdk::pb::axon::v1::InvokeBidiUp>,
+    down: tonic::Streaming<axon_sdk::pb::axon::v1::InvokeBidiDown>,
     next_sequence: u64,
 }
 
@@ -964,16 +1137,14 @@ impl DaemonBidiSession {
         self,
     ) -> (
         String,
-        tokio::sync::mpsc::Sender<easynet_axon::pb::axon::v1::InvokeBidiUp>,
-        tonic::Streaming<easynet_axon::pb::axon::v1::InvokeBidiDown>,
+        tokio::sync::mpsc::Sender<axon_sdk::pb::axon::v1::InvokeBidiUp>,
+        tonic::Streaming<axon_sdk::pb::axon::v1::InvokeBidiDown>,
     ) {
         (self.ability, self.up_tx, self.down)
     }
 
     /// Read the next down-direction frame.
-    pub async fn next_down(
-        &mut self,
-    ) -> Result<Option<easynet_axon::pb::axon::v1::InvokeBidiDown>> {
+    pub async fn next_down(&mut self) -> Result<Option<axon_sdk::pb::axon::v1::InvokeBidiDown>> {
         self.down
             .message()
             .await
@@ -987,9 +1158,9 @@ impl DaemonBidiSession {
     /// Send a binary chunk on the up direction.
     pub async fn send_binary_chunk(
         &mut self,
-        chunk: easynet_axon::pb::axon::v1::BinaryChunk,
+        chunk: axon_sdk::pb::axon::v1::BinaryChunk,
     ) -> Result<()> {
-        use easynet_axon::pb::axon::v1::{invoke_bidi_up, InvokeBidiUp};
+        use axon_sdk::pb::axon::v1::{invoke_bidi_up, InvokeBidiUp};
         let sequence = self.take_next_sequence();
         self.up_tx
             .send(InvokeBidiUp {
@@ -1006,9 +1177,9 @@ impl DaemonBidiSession {
     /// Send a control frame on the up direction.
     pub async fn send_control(
         &mut self,
-        control: easynet_axon::pb::axon::v1::BidiControl,
+        control: axon_sdk::pb::axon::v1::BidiControl,
     ) -> Result<()> {
-        use easynet_axon::pb::axon::v1::{invoke_bidi_up, InvokeBidiUp};
+        use axon_sdk::pb::axon::v1::{invoke_bidi_up, InvokeBidiUp};
         let sequence = self.take_next_sequence();
         self.up_tx
             .send(InvokeBidiUp {
@@ -1024,7 +1195,7 @@ impl DaemonBidiSession {
 
     /// Send a graceful EOF control frame.
     pub async fn send_eof(&mut self) -> Result<()> {
-        use easynet_axon::pb::axon::v1::{bidi_control, BidiControl};
+        use axon_sdk::pb::axon::v1::{bidi_control, BidiControl};
         self.send_control(BidiControl {
             control: Some(bidi_control::Control::Eof(true)),
         })

@@ -1,5 +1,10 @@
 # Plan v4.1.2: Theory of Operation — Post-RFC-001 EasyNet (Binding Contract)
 
+> **Historical status**: superseded by
+> `docs/spec/canonical-runtime-convergence-v2.md`. This document preserves the
+> pre-URA design record and is not an active architecture or terminology
+> authority.
+
 ## Why this revision
 
 v4.1 was conditionally approved. v4.1.1 patched 9 contract gaps and

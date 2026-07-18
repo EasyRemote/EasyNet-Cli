@@ -7,7 +7,7 @@
 // =============================
 //
 // File: src/eal/interpreter.rs
-// Description: Client-side execution engine for Mission IR v2 (temporary — target: MissionControl v2).
+// Description: Daemon-owned execution engine for Mission IR v2.
 //
 // Execution Model:
 //   Phases execute sequentially (data-flow barriers between them).
@@ -42,9 +42,10 @@ mod retry;
 mod tests;
 mod trace;
 
-#[cfg(test)]
-use dispatch::dispatch_to_agent;
-pub use dispatch::AgentAwareDispatcher;
+use crate::daemon::execution::mission::invocation_gateway::{
+    MissionInvocationGateway, MissionInvocationRecord, MissionReceiptReference,
+};
+pub(crate) use dispatch::AgentAwareDispatcher;
 use phases::{
     calls_from_partition, execute_calls_phase_partition, execute_loop, split_phase_steps,
     PhasePartition, PhaseRunState,
@@ -95,13 +96,13 @@ type IrStep = IrCall;
 // into parallel phases) does not silently break this layer.
 
 #[derive(Debug, Clone, Copy)]
-pub struct RunContext<'a> {
+pub(crate) struct RunContext<'a> {
     pub tenant: &'a str,
     pub trace_id: &'a str,
     pub deadline: Option<Instant>,
 }
 
-pub trait StepDispatcher {
+pub(crate) trait StepDispatcher {
     /// Dispatch one step. The runtime sees only the resolved
     /// `IrTarget` enum and the typed `AbilityName` — there is no
     /// string-based `is_agent` check here, by design (see
@@ -111,12 +112,11 @@ pub trait StepDispatcher {
     /// future telemetry) can branch on category rather than parsing
     /// English strings. The error is converted to its display form
     /// when stored in `StepExecResult::Error.message`.
-    /// `causal_parents` carries the producing steps' receipt anchors
-    /// (`{node, invocation_ura, receipt_ura, receipt_hash}` objects)
-    /// for this step's `input_refs`. Dispatchers that lower onto the
-    /// Axon Invocation surface encode them as the envelope's
-    /// `causal_context`; transports without an invocation surface
-    /// ignore them.
+    /// `dependency_receipts` carries the verified terminal receipt
+    /// anchors of the producing steps named by this step's
+    /// `input_refs`. They are typed dependency evidence for joins;
+    /// the canonical child causal authority remains the admitted
+    /// Mission parent's receipt minted by `prepare_child_dispatch`.
     fn dispatch(
         &self,
         run: RunContext<'_>,
@@ -124,7 +124,7 @@ pub trait StepDispatcher {
         ability: &AbilityName,
         arguments: &Value,
         timeout_ms: Option<u64>,
-        causal_parents: &[Value],
+        dependency_receipts: &[MissionReceiptReference],
     ) -> Result<StepDispatchOutcome, EalError>;
 
     /// Create an independent clone for parallel dispatch.
@@ -133,21 +133,21 @@ pub trait StepDispatcher {
 }
 
 /// Successful dispatch outcome: the step's result value plus the
-/// seven-tuple invocation record (envelope echo + ledger receipt
-/// anchors) when the dispatcher uses the production Axon surface.
-/// Test dispatchers may omit it; production Mission/EAL dispatchers
-/// must not execute through a receipt-less fallback path.
+/// mandatory seven-tuple invocation record (envelope echo + verified
+/// terminal receipt). A successful EAL step cannot exist without its
+/// canonical child Invocation.
 #[derive(Debug)]
-pub struct StepDispatchOutcome {
+pub(crate) struct StepDispatchOutcome {
     pub value: Value,
-    pub invocation: Option<Value>,
+    pub invocation: MissionInvocationRecord,
 }
 
+#[cfg(test)]
 impl From<Value> for StepDispatchOutcome {
     fn from(value: Value) -> Self {
         Self {
             value,
-            invocation: None,
+            invocation: MissionInvocationRecord::for_test("test.dispatch", 0x7f),
         }
     }
 }
@@ -166,17 +166,14 @@ impl From<Value> for StepDispatchOutcome {
 /// `MissionRunMeta.trace_id`, every child Invocation envelope, and
 /// the on-disk `trace.json` all name the same run. That identity is
 /// operational metadata, not an eighth Invocation tuple field.
-pub fn execute_with_endpoint_for_trace_with_timeout(
-    endpoint: &str,
+pub(crate) fn execute_with_gateway_for_trace_with_timeout(
+    gateway: std::sync::Arc<dyn MissionInvocationGateway>,
     tenant: &str,
     ir: &MissionIr,
     trace_id: String,
     run_timeout: Option<Duration>,
 ) -> anyhow::Result<ExecutionReport> {
-    let dispatcher = AgentAwareDispatcher::new(
-        endpoint,
-        crate::support::platform::timeouts::LOCAL_DAEMON_CONNECT_TIMEOUT_MS,
-    );
+    let dispatcher = AgentAwareDispatcher::new(gateway);
     execute_with_dispatcher_for_trace_with_timeout(&dispatcher, tenant, ir, trace_id, run_timeout)
 }
 
@@ -184,7 +181,7 @@ pub fn execute_with_endpoint_for_trace_with_timeout(
 
 #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
 #[cfg(test)]
-pub fn execute_with_dispatcher(
+fn execute_with_dispatcher(
     dispatcher: &dyn StepDispatcher,
     tenant: &str,
     ir: &MissionIr,
@@ -201,7 +198,7 @@ pub fn execute_with_dispatcher(
 /// call the endpoint variant above so the same trace id reaches the
 /// daemon-lowered child Invocations.
 #[cfg(test)]
-pub fn execute_with_dispatcher_for_trace(
+fn execute_with_dispatcher_for_trace(
     dispatcher: &dyn StepDispatcher,
     tenant: &str,
     ir: &MissionIr,
@@ -213,7 +210,7 @@ pub fn execute_with_dispatcher_for_trace(
 /// Execute a mission through an injected dispatcher with an optional run-level
 /// timeout. The timeout is converted once into a deadline and each child
 /// dispatch receives only the remaining budget.
-pub fn execute_with_dispatcher_for_trace_with_timeout(
+fn execute_with_dispatcher_for_trace_with_timeout(
     dispatcher: &dyn StepDispatcher,
     tenant: &str,
     ir: &MissionIr,
@@ -447,9 +444,8 @@ enum StepExecResult {
         completed_at: u64,
         retry_count: u32,
         retry_history: Vec<RetryRecord>,
-        /// Seven-tuple invocation record from the daemon lowering
-        /// path; None when the step ran through a receipt-less path.
-        invocation: Option<Value>,
+        /// Seven-tuple invocation record from the daemon lowering path.
+        invocation: MissionInvocationRecord,
     },
     Error {
         message: String,

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use easynet_axon::pb::axon::v1::BidiControl;
+use axon_sdk::pb::axon::v1::BidiControl;
 use tonic::transport::Channel;
 
 use super::prelude::{invoke_prelude_unary, signed_prelude_request};
@@ -68,7 +68,7 @@ pub(super) fn spawn_federation_heartbeat(
 ) -> AbortOnDrop {
     AbortOnDrop(tokio::spawn(async move {
         let mut heartbeat_client =
-            easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel);
+            axon_sdk::pb::axon::v1::invocation_client::InvocationClient::new(channel);
         let mut last_error: Option<String> = None;
         loop {
             tokio::time::sleep(FEDERATION_HEARTBEAT_INTERVAL).await;
@@ -118,7 +118,7 @@ pub(super) fn spawn_federation_heartbeat(
 /// auto-includes it in the lease batch, so an empty batch after a
 /// cursor-load failure still refreshes device liveness.
 async fn send_federation_heartbeat(
-    client: &mut easynet_axon::pb::axon::v1::invocation_client::InvocationClient<Channel>,
+    client: &mut axon_sdk::pb::axon::v1::invocation_client::InvocationClient<Channel>,
     signer: &dyn CanonicalSigner,
     hub_published_abilities: &HubPublishedAbilityStore,
 ) -> Result<(), tonic::Status> {

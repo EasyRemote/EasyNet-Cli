@@ -7,7 +7,7 @@
 
 use thiserror::Error;
 
-use easynet_axon::pb::axon::v1::Envelope;
+use axon_sdk::pb::axon::v1::Envelope;
 
 use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore;

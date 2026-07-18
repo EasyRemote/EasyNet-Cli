@@ -882,22 +882,17 @@ mod tests {
     #[test]
     fn local_registry_satisfies_hub_introspection_slice() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let agents = crate::daemon::persistence::agent_registry::AgentRegistry::default();
         let hub_ura = crate::core::ura::hub_ura("conformance-test");
         let authority_context =
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
                 &hub_ura,
             )
             .expect("Hub authority context");
-        let registry = crate::daemon::ability::catalog::build_registry_with_services_result(
-            crate::daemon::ability::catalog::RegistryBuildConfig::new_with_authority_context(
-                crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
-                &agents,
+        let registry =
+            crate::daemon::ability::catalog::build_registry_snapshot_with_authority_context(
                 authority_context,
-            ),
-        )
-        .expect("build Hub registry")
-        .catalog;
+            )
+            .expect("build Hub registry snapshot");
         let report =
             RegistryConformance::new(&registry).check("hub", HubBaseline::required_abilities());
         assert!(report.is_conformant(), "{}", report.panic_message());

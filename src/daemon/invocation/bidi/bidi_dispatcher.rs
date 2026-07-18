@@ -1,15 +1,13 @@
 // EasyNet Daemon — InvokeBidi Dispatcher
 // ========================================
 //
-// File: src/daemon/invocation/bidi_dispatcher.rs
-// Description: Owns every `InvokeBidi` routing decision the daemon
-//              makes after frame-0 transport policy (commit-plan-2
-//              Axis E / E2, final dispatcher):
+// File: src/daemon/invocation/bidi/bidi_dispatcher.rs
+// Description: Owns generic `InvokeBidi` routing and the product providers
+//              installed behind exact descriptor-bound routes:
 //
 //                * typed `DispatchCall` / `ReverseDispatchCall` relay over a
 //                  device's session reverse channel
-//                * `session.open` — device session accept loop +
-//                  the hub-side session-frame request dispatcher
+//                * `session.open` - Hub-owned presence and carrier provider
 //                * plugin/builtin bidi wire abilities — local PTY/
 //                  file-transfer adapters and the remote bidi bridge
 //
@@ -17,8 +15,9 @@
 //              terminal/admission receipt builders, the local bidi
 //              frame mappers, and the session/local down-stream types.
 //
-//              Composes `UnaryDispatcher` so bidi and unary entry points use
-//              the same admission and route-selection policy.
+//              Composes `UnaryDispatcher` for generic bidi route selection and
+//              reverse session requests. Exact-route admission belongs to
+//              LocalRuntime.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -32,11 +31,12 @@ use std::time::Duration;
 use std::future::Future;
 
 use futures::Stream;
+use prost::Message as _;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tonic::{Response, Status, Streaming};
 
-use easynet_axon::pb::axon::v1::{
+use axon_sdk::pb::axon::v1::{
     bidi_control, invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload,
     BidiControl, BidiSessionEstablished, BinaryChunk, EnvelopeOpen, InvokeBidiDown, InvokeBidiUp,
     StreamDescriptor,
@@ -57,6 +57,9 @@ use crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_
 use crate::daemon::invocation::dispatch::daemon_invocation_service::{
     DaemonBidiRoute, DAEMON_INVOCATION_BIDI_ROUTES,
 };
+use crate::daemon::invocation::dispatch::daemon_route_runtime::{
+    product_status_to_axon_error, SESSION_OPEN_EXT_METADATA_KEY,
+};
 use crate::daemon::invocation::dispatch::deps::{
     DirectoryPlane, IdentityPlane, RuntimePlane, SessionPlane,
 };
@@ -70,20 +73,19 @@ use crate::daemon::invocation::dispatch::forwarded_finalization::{
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
     status_from_axon_invoke_error, target_ura_from_envelope, BoxedDownStream,
-    SIGNED_DESCRIPTOR_REF_METADATA_KEY,
 };
 use crate::daemon::invocation::dispatch::unary_dispatcher::UnaryDispatcher;
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
 };
-use easynet_axon::invocation::{AbilityFrame, BidiInputFrame, CallMode};
+use axon_sdk::invocation::{AbilityContext, AbilityFrame, AxonError, BidiInputFrame, CallMode};
 
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
     DispatchResult, DispatchStreamEvent, PendingDispatchMap, PendingStreamDispatchMap,
 };
 use crate::daemon::invocation::bidi::state::presence::{
-    DispatchFrame, DispatchSender, OfflineReason, PresenceRegistry, SessionContract,
-    SessionTrustContext, DISPATCH_CHANNEL_CAPACITY,
+    DispatchFrame, DispatchSender, OfflineReason, PresenceRegistration, PresenceRegistry,
+    SessionContract, SessionTrustContext, DISPATCH_CHANNEL_CAPACITY,
 };
 use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
 use crate::daemon::trust::anchor::RealmTrustAnchor;
@@ -96,6 +98,10 @@ use crate::daemon::trust::anchor::RealmTrustAnchor;
 /// never claim an `AxonRuntimeAdmin` ability the dispatcher does not
 /// actually install (SPEC §7.1 notes 6/7, §7.3 item 7, §9.1 item 13).
 pub(crate) const RUNTIME_ADMIN_BIDI_ROUTES: &[DaemonBidiRoute] = DAEMON_INVOCATION_BIDI_ROUTES;
+pub(crate) const SESSION_RUNTIME_FRAME_CONTENT_TYPE: &str =
+    "application/vnd.axon.session-frame+protobuf";
+pub(crate) const SESSION_RUNTIME_TRANSPORT_ERROR_CONTENT_TYPE: &str =
+    "application/vnd.axon.session-transport-error+text";
 
 /// `InvokeBidi` routing surface. Cheap per-call construction: every
 /// plane, the gate, and the composed unary dispatcher are `Arc`-shaped.
@@ -118,6 +124,85 @@ pub(crate) struct BidiDispatcherDeps {
     pub(crate) runtime: RuntimePlane,
     pub(crate) gate: TargetGate,
     pub(crate) unary: UnaryDispatcher,
+}
+
+/// Product provider installed behind every exact daemon bidi registration.
+///
+/// It routes the typed exact inventory to cohesive product providers;
+/// transport adapters can exchange frames with them only through the
+/// LocalRuntime bidi handle.
+#[derive(Clone)]
+pub(crate) struct DaemonBidiRouteProvider {
+    session_open: SessionOpenProvider,
+}
+
+/// Product owner for the Hub's long-lived Device presence carrier.
+///
+/// This provider owns only session policy and its direct collaborators. It is
+/// transport-agnostic: its sole I/O surface is `AbilityContext`.
+#[derive(Clone)]
+struct SessionOpenProvider {
+    presence: Arc<PresenceRegistry>,
+    pending: Option<Arc<PendingDispatchMap>>,
+    pending_stream: Option<Arc<PendingStreamDispatchMap>>,
+    policy: SessionOpenPolicy,
+    session_requests: BidiDispatcher,
+}
+
+/// Reload-aware product policy for admitting one Device presence into a Hub.
+///
+/// The narrow snapshot source keeps transport admission machinery out of the
+/// provider while preserving trust-anchor reload visibility for every open.
+#[derive(Clone)]
+struct SessionOpenPolicy {
+    session_realm: Option<String>,
+    trust_anchor_snapshot: Arc<dyn Fn() -> Arc<RealmTrustAnchor> + Send + Sync + 'static>,
+}
+
+impl DaemonBidiRouteProvider {
+    pub(crate) async fn invoke(
+        &self,
+        route: DaemonBidiRoute,
+        context: Arc<AbilityContext>,
+    ) -> Result<Vec<u8>, AxonError> {
+        match route {
+            DaemonBidiRoute::SessionOpen => self.session_open.invoke(context).await,
+        }
+    }
+}
+
+impl SessionOpenProvider {
+    fn new(dispatcher: &BidiDispatcher) -> Self {
+        Self {
+            presence: Arc::clone(&dispatcher.directory.presence),
+            pending: dispatcher.sessions.pending.clone(),
+            pending_stream: dispatcher.sessions.pending_stream.clone(),
+            policy: SessionOpenPolicy::new(
+                dispatcher.admission.clone(),
+                dispatcher.identity.session_realm.clone(),
+            ),
+            session_requests: dispatcher.clone(),
+        }
+    }
+}
+
+impl SessionOpenPolicy {
+    fn new(admission: AdmissionFacade, session_realm: Option<String>) -> Self {
+        Self {
+            session_realm,
+            trust_anchor_snapshot: Arc::new(move || admission.trust_anchor_snapshot()),
+        }
+    }
+
+    fn validate_caller(&self, caller_ura: &str) -> Result<(), AxonError> {
+        let trust_anchor = (self.trust_anchor_snapshot)();
+        validate_session_realm(
+            caller_ura,
+            self.session_realm.as_deref(),
+            trust_anchor.as_ref(),
+        )
+        .map_err(product_status_to_axon_error)
+    }
 }
 
 impl BidiDispatcher {
@@ -143,84 +228,99 @@ impl BidiDispatcher {
         }
     }
 
-    /// Frame-0 routing: the match that used to live in the tonic
-    /// `invoke_bidi` method. The trait shell validates + admits frame 0
-    /// and delegates here.
+    pub(crate) fn daemon_route_provider(&self) -> DaemonBidiRouteProvider {
+        DaemonBidiRouteProvider {
+            session_open: SessionOpenProvider::new(self),
+        }
+    }
+
+    /// Exact bidi transport entry. Product lifecycle is selected by the
+    /// LocalRuntime registration, never by this transport dispatcher.
+    pub(crate) async fn dispatch_daemon_route_runtime(
+        &self,
+        route: DaemonBidiRoute,
+        envelope_open: &EnvelopeOpen,
+        up: Streaming<InvokeBidiUp>,
+    ) -> Result<Response<BoxedDownStream<InvokeBidiDown>>, Status> {
+        let runtime = self.runtime.local_runtime().ok_or_else(|| {
+            Status::failed_precondition(format!(
+                "{} exact bidi route requires shared Axon LocalRuntime",
+                route.name()
+            ))
+        })?;
+        crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
+            runtime,
+            self.runtime.cancellations.clone(),
+            self.admission.clone(),
+            self.runtime.product_policy()?,
+        )
+        .open_bidi(route, envelope_open, up)
+        .await
+    }
+
+    /// Generic frame-0 routing. Exact routes are rejected here because their
+    /// sole ingress is the descriptor-bound daemon runtime adapter.
     pub(crate) async fn dispatch(
         &self,
         ability_name: &str,
         envelope_open: &EnvelopeOpen,
         up: Streaming<InvokeBidiUp>,
     ) -> Result<Response<BoxedDownStream<InvokeBidiDown>>, Status> {
-        match DaemonBidiRoute::from_function(ability_name) {
-            Some(DaemonBidiRoute::SessionOpen) => {
-                let caller_ura = envelope_open
-                    .envelope
-                    .as_ref()
-                    .and_then(|e| e.caller.as_ref())
-                    .map(|c| c.ura.clone())
-                    .ok_or_else(|| {
-                        Status::invalid_argument(
-                            "session.open: envelope.caller.ura is required \
-                             (already checked by transport policy gate; this is a defensive check)",
-                        )
-                    })?;
-                let contract = session_contract_from_ext(envelope_open.session_ext.as_ref())?;
-                self.dispatch_self_session_accept(caller_ura, envelope_open, contract, up)
-                    .await
+        if let Some(route) = DaemonBidiRoute::from_function(ability_name) {
+            return Err(Status::failed_precondition(format!(
+                "exact bidi route `{}` must enter through DaemonRouteRuntimeAdapter",
+                route.name()
+            )));
+        }
+        let selection = self.resolve_bidi_route(envelope_open).await?;
+        let call_mode = selection.call_mode();
+        let selected_route = match selection.into_dispatch() {
+            CanonicalRouteDispatch::Local(route) => route,
+            CanonicalRouteDispatch::Peer(route) => {
+                return Err(Status::unimplemented(format!(
+                    "InvokeBidi selected canonical peer route to hub `{}` for `{}`, but \
+                     the generic cross-realm bidi carrier is unsupported",
+                    route.hub_ura, route.query_name,
+                )));
             }
-            None => {
-                let selection = self.resolve_bidi_route(envelope_open).await?;
-                let call_mode = selection.call_mode();
-                let selected_route = match selection.into_dispatch() {
-                    CanonicalRouteDispatch::Local(route) => route,
-                    CanonicalRouteDispatch::Peer(route) => {
-                        return Err(Status::unimplemented(format!(
-                            "InvokeBidi selected canonical peer route to hub `{}` for `{}`, but \
-                             the generic cross-realm bidi carrier is unsupported",
-                            route.hub_ura, route.query_name,
-                        )));
-                    }
-                };
-                let wire_kind = self
-                    .runtime
-                    .ability_wire
-                    .bidi_wire_kind_for(&selected_route.dispatch_name)
-                    .ok_or_else(|| {
-                        crate::op_event!(
-                            component = daemon_invocation,
-                            kind = invoke_bidi_unwired_ability,
-                            ability = ability_name,
-                            dispatch_ability = selected_route.dispatch_name.as_str(),
-                            route_ura = selected_route.route_ura.as_str(),
-                        );
-                        Status::unimplemented(format!(
-                            "InvokeBidi selected route `{}` for ability `{ability_name}`, but dispatch \
-                             ability `{}` has no daemon bidi wire adapter",
-                            selected_route.route_ura, selected_route.dispatch_name,
-                        ))
-                    })?;
-                let execution_host_is_self = self
-                    .gate
-                    .matches_self_target_ura(&selected_route.execution_host_ura)
-                    .await;
-                if selected_route
-                    .dispatch_target(execution_host_is_self)
-                    .is_local_runtime()
-                {
-                    self.dispatch_local_bidi_selected_route(
-                        envelope_open,
-                        up,
-                        selected_route,
-                        call_mode,
-                        wire_kind,
-                    )
-                    .await
-                } else {
-                    self.dispatch_remote_bidi(&selected_route, envelope_open, up, call_mode)
-                        .await
-                }
-            }
+        };
+        let wire_kind = self
+            .runtime
+            .ability_wire
+            .bidi_wire_kind_for(&selected_route.dispatch_name)
+            .ok_or_else(|| {
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = invoke_bidi_unwired_ability,
+                    ability = ability_name,
+                    dispatch_ability = selected_route.dispatch_name.as_str(),
+                    route_ura = selected_route.route_ura.as_str(),
+                );
+                Status::unimplemented(format!(
+                    "InvokeBidi selected route `{}` for ability `{ability_name}`, but dispatch \
+                     ability `{}` has no daemon bidi wire adapter",
+                    selected_route.route_ura, selected_route.dispatch_name,
+                ))
+            })?;
+        let execution_host_is_self = self
+            .gate
+            .matches_self_target_ura(&selected_route.execution_host_ura)
+            .await;
+        if selected_route
+            .dispatch_target(execution_host_is_self)
+            .is_local_runtime()
+        {
+            self.dispatch_local_bidi_selected_route(
+                envelope_open,
+                up,
+                selected_route,
+                call_mode,
+                wire_kind,
+            )
+            .await
+        } else {
+            self.dispatch_remote_bidi(&selected_route, envelope_open, up, call_mode)
+                .await
         }
     }
 }
@@ -503,7 +603,7 @@ impl BidiDispatcher {
                     UpPayload::Control(control)
                         if matches!(
                             control.control,
-                            Some(easynet_axon::pb::axon::v1::bidi_control::Control::Eof(true))
+                            Some(axon_sdk::pb::axon::v1::bidi_control::Control::Eof(true))
                         ) =>
                     {
                         eof_sent = true;
@@ -519,7 +619,7 @@ impl BidiDispatcher {
                         if ability_owned
                             == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH =>
                     {
-                        let Some(easynet_axon::pb::axon::v1::bidi_control::Control::PtyResize(
+                        let Some(axon_sdk::pb::axon::v1::bidi_control::Control::PtyResize(
                             resize,
                         )) = control.control
                         else {
@@ -635,16 +735,11 @@ impl BidiDispatcher {
         envelope_open: &EnvelopeOpen,
     ) -> Result<CanonicalRouteSelection, Status> {
         let target_ura = target_ura_from_envelope(envelope_open.envelope.as_ref(), "InvokeBidi")?;
-        let ability = envelope_open
-            .target
-            .as_ref()
-            .map(|target| target.ability_name.trim())
-            .filter(|ability| !ability.is_empty())
-            .ok_or_else(|| {
-                Status::invalid_argument(
-                    "InvokeBidi frame 0 missing target.ability_name for namespace.resolve",
-                )
-            })?;
+        let ability =
+            crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                "InvokeBidi frame 0",
+                envelope_open.target.as_ref(),
+            )?;
 
         let selection = self
             .gate
@@ -679,7 +774,7 @@ impl BidiDispatcher {
             route_ura = selected_route.route_ura.as_str(),
         );
 
-        let Some(runtime) = self.runtime.local_runtime.as_ref() else {
+        let Some(runtime) = self.runtime.local_runtime() else {
             return Err(Status::failed_precondition(format!(
                 "InvokeBidi: ability `{}` cannot run because Axon LocalRuntime \
                  is not wired at boot",
@@ -688,7 +783,7 @@ impl BidiDispatcher {
         };
         let bound_ability = RuntimeBoundAbility::from_selected_route(
             "InvokeBidi",
-            runtime,
+            &runtime,
             self.directory.local_ability_catalog.as_deref(),
             &selected_route,
             call_mode,
@@ -702,25 +797,25 @@ impl BidiDispatcher {
                 Some(&selected_route.route_ura),
             )?
             .into_descriptor_ref();
-        let signed_ability = envelope_open
-            .target
-            .as_ref()
-            .map(|target| target.ability_name.as_str())
-            .unwrap_or_default();
+        let target_ability =
+            crate::daemon::invocation::dispatch::invocation_wire::ability_binding_from_invocation_target(
+                "InvokeBidi",
+                envelope_open.target.as_ref(),
+            )?;
         bound_ability.require_wire_target_matches(
             "InvokeBidi",
             &selected_route.callee_ura,
-            signed_ability,
+            target_ability,
             &selected_route.route_ura,
         )?;
         let wire_envelope = envelope_open
             .envelope
             .clone()
             .ok_or_else(|| Status::invalid_argument("InvokeBidi request missing envelope"))?;
-        let local_self_admitted = self
+        let local_system_ingress = self
             .admission
-            .accepts_local_self_envelope(envelope_open.envelope.as_ref());
-        let wire = if local_self_admitted {
+            .accepts_local_system_envelope(envelope_open.envelope.as_ref());
+        let wire = if local_system_ingress {
             let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                 &envelope_open.metadata,
                 &wire_envelope,
@@ -740,20 +835,35 @@ impl BidiDispatcher {
                 false,
                 &dispatch_ability,
             )?;
+            let signed_descriptor_ref = bound_ability
+                .signed_descriptor_ref_from_target(
+                    "InvokeBidi",
+                    &selected_route.callee_ura,
+                    call_mode,
+                    envelope_open.target.as_ref(),
+                )?
+                .into_descriptor_ref();
             crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                 wire_envelope,
-                dispatch_descriptor_ref,
+                signed_descriptor_ref,
                 envelope_open.initial_args.clone(),
                 metadata,
             )
         }
         .map_err(|err| status_from_axon_invoke_error("InvokeBidi", &dispatch_ability, *err))?;
+        let product_admission = self.runtime.stage_product_admission(
+            &self.admission,
+            &wire,
+            &dispatch_ability,
+            CallMode::Bidi,
+        )?;
         let handle =
-            crate::daemon::axon_bridge::dispatch_shim::open_bidi_external_signed(runtime, wire)
+            crate::daemon::axon_bridge::dispatch_shim::open_bidi_external_signed(&runtime, wire)
                 .await
                 .map_err(|err| {
                     status_from_axon_invoke_error("InvokeBidi", &dispatch_ability, err)
                 })?;
+        product_admission.commit()?;
         let admission_receipt = handle.admission_receipt().await.map_err(|err| {
             Status::failed_precondition(format!(
                 "CANONICAL_ADMISSION_REQUIRED: InvokeBidi `{dispatch_ability}`: {err}"
@@ -761,7 +871,7 @@ impl BidiDispatcher {
         })?;
         let admission_frame = InvokeBidiDown {
             payload: Some(DownPayload::Receipt(
-                easynet_axon::invocation::wire::receipt_to_wire(&admission_receipt).map_err(
+                axon_sdk::invocation::wire::receipt_to_wire(&admission_receipt).map_err(
                     |error| {
                         Status::failed_precondition(format!(
                             "CANONICAL_ADMISSION_PROJECTION_FAILED: {error}"
@@ -895,38 +1005,54 @@ impl BidiDispatcher {
             Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
         ))
     }
+}
 
-    pub(crate) async fn dispatch_self_session_accept(
-        &self,
-        caller_ura: String,
-        envelope_open: &EnvelopeOpen,
-        contract: SessionContract,
-        up: Streaming<InvokeBidiUp>,
-    ) -> Result<Response<BoxedDownStream<InvokeBidiDown>>, Status> {
-        validate_session_realm(
-            &caller_ura,
-            self.identity.session_realm.as_deref(),
-            &self.admission.trust_anchor_snapshot(),
-        )?;
+impl SessionOpenProvider {
+    /// Hub-owned `session.open` lifecycle.
+    ///
+    /// The signed tuple and carrier contract are read only from the admitted
+    /// runtime context. Presence ownership is held by `SessionPresenceLease`,
+    /// so every provider exit path, including runtime cancellation, removes
+    /// only the session generation installed by this invocation.
+    async fn invoke(&self, context: Arc<AbilityContext>) -> Result<Vec<u8>, AxonError> {
+        let signed = context.signed_envelope().ok_or_else(|| {
+            AxonError::permission_denied(
+                "session.open provider requires an admitted signed envelope",
+            )
+        })?;
+        let caller_ura = signed.envelope.caller.ura.trim().to_string();
+        if caller_ura.is_empty() {
+            return Err(AxonError::invalid_argument(
+                "session.open provider requires a non-empty caller URA",
+            ));
+        }
+        let trust_context =
+            session_trust_context(&caller_ura, signed.signature.key_id_hint.as_str());
+        let contract = session_contract_from_runtime_metadata(&context.request_metadata)?;
+        self.policy.validate_caller(&caller_ura)?;
 
         let (down_tx, down_rx): (DispatchSender, _) =
             mpsc::channel::<Result<DispatchFrame, Status>>(DISPATCH_CHANNEL_CAPACITY);
 
-        // Register before spawning so a canonical `DispatchCall` arriving
-        // immediately can find this
-        // sender. The PresenceRegistry handles displacement (Offline +
-        // Online emission ordering) under the hood; the slot remembers
-        // the frame-0 carrier negotiation (DEC-F004).
+        // Register before the established frame is emitted so a canonical
+        // DispatchCall arriving immediately can find this provider-owned
+        // session. PresenceRegistry serializes displacement and preserves
+        // Offline-before-Online event ordering.
         let negotiated_version = contract.version.min(CANONICAL_SESSION_CARRIER_VERSION);
         let claimant_nonce = contract.claimant_boot_nonce.clone();
-        let trust_context = session_trust_context_from_open(caller_ura.as_str(), envelope_open);
-        let registration = self.directory.presence.insert_negotiated_with_trust(
+        let presence = Arc::clone(&self.presence);
+        let PresenceRegistration {
+            session_id,
+            displaced,
+            displaced_claimant_nonce,
+        } = presence.insert_negotiated_with_trust(
             caller_ura.clone(),
             down_tx,
             contract,
             trust_context,
         );
-        let displaced_prior = registration.displaced.is_some();
+        let displaced_prior = displaced.is_some();
+        drop(displaced);
         crate::op_event!(
             component = daemon_invocation,
             kind = self_session_admitted,
@@ -939,8 +1065,7 @@ impl BidiDispatcher {
         // claimant conflict, not a same-device restart. Surfaced as a
         // first-class op_event so the ping-pong incident class
         // (2026-06-11, 5,428 reconnects) is attributable from logs.
-        if let Some(prior_nonce) = registration
-            .displaced_claimant_nonce
+        if let Some(prior_nonce) = displaced_claimant_nonce
             .as_ref()
             .filter(|prior| !prior.is_empty() && !claimant_nonce.is_empty())
         {
@@ -953,45 +1078,122 @@ impl BidiDispatcher {
             }
         }
 
-        // Spawn the upstream consumer. It routes typed dispatch results and
-        // remaining streaming/control replies to their correlation tables.
-        let presence_for_drain = Arc::clone(&self.directory.presence);
-        let pending_for_drain = self.sessions.pending.clone();
-        let pending_stream_for_drain = self.sessions.pending_stream.clone();
-        let caller_ura_for_drain = caller_ura.clone();
-        // The drain task needs a service handle so reverse calls use the same
-        // dispatch policy as unary `Invoke`. `DaemonInvocationService`
-        // is `Clone` over Arc/Option fields so this is cheap.
-        let service_for_drain = self.clone();
-        tokio::spawn(async move {
-            drain_session_up_stream(
-                up,
-                caller_ura_for_drain,
-                registration.session_id,
-                presence_for_drain,
-                pending_for_drain,
-                pending_stream_for_drain,
-                service_for_drain,
-            )
-            .await
-        });
-
-        // Hand the down stream to tonic. Frames arrive in `down_tx` as
-        // `DispatchFrame`
-        // (presence_registry's newtype around `InvokeBidiDown`).
-        // The tonic trait wants raw `InvokeBidiDown`, so map each
-        // frame to unwrap the newtype.
-        let stream = SessionDownStream::new(
+        let mut lease =
+            SessionPresenceLease::new(Arc::clone(&presence), caller_ura.clone(), session_id);
+        let mut down = SessionProviderDownStream::new(
             down_rx,
-            build_session_established_control(
-                negotiated_version,
-                registration.session_id,
-                displaced_prior,
-            ),
+            build_session_established_control(negotiated_version, session_id, displaced_prior),
         );
-        Ok(Response::new(
-            Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
-        ))
+
+        // SessionEstablished remains the first product frame. Axon's
+        // admission receipt is projected by the transport immediately after
+        // this frame, preserving the established device wire contract while
+        // keeping receipt ownership canonical.
+        let established = down.next().await.ok_or_else(|| {
+            AxonError::internal("session.open provider closed before SessionEstablished")
+        })?;
+        emit_session_provider_frame(context.as_ref(), established).await?;
+
+        let input = drain_session_runtime_up_stream(
+            Arc::clone(&context),
+            caller_ura.clone(),
+            Arc::clone(&presence),
+            self.pending.clone(),
+            self.pending_stream.clone(),
+            self.session_requests.clone(),
+        );
+        tokio::pin!(input);
+
+        loop {
+            tokio::select! {
+                close_reason = &mut input => {
+                    lease.close(close_reason);
+                    while let Some(frame) = down.next().await {
+                        emit_session_provider_frame(context.as_ref(), frame).await?;
+                    }
+                    return Ok(Vec::new());
+                }
+                frame = down.next() => {
+                    let Some(frame) = frame else {
+                        lease.close(OfflineReason::StreamClosed);
+                        return Ok(Vec::new());
+                    };
+                    emit_session_provider_frame(context.as_ref(), frame).await?;
+                }
+            }
+        }
+    }
+}
+
+async fn emit_session_provider_frame(
+    context: &AbilityContext,
+    frame: Result<InvokeBidiDown, Status>,
+) -> Result<(), AxonError> {
+    let frame = frame.map_err(product_status_to_axon_error)?;
+    context
+        .emit_progress(frame.encode_to_vec(), SESSION_RUNTIME_FRAME_CONTENT_TYPE)
+        .await
+}
+
+/// Generation-bound presence ownership for one provider invocation.
+///
+/// `Drop` is the cancellation path: if Axon aborts the ability while neither
+/// stream branch is running, the exact generation is still removed without
+/// disturbing a newer displaced replacement.
+struct SessionPresenceLease {
+    presence: Arc<PresenceRegistry>,
+    caller_ura: String,
+    session_id: crate::daemon::invocation::bidi::state::presence::PresenceSessionId,
+    state: SessionPresenceLeaseState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionPresenceLeaseState {
+    Active,
+    Closed,
+}
+
+impl SessionPresenceLease {
+    fn new(
+        presence: Arc<PresenceRegistry>,
+        caller_ura: String,
+        session_id: crate::daemon::invocation::bidi::state::presence::PresenceSessionId,
+    ) -> Self {
+        Self {
+            presence,
+            caller_ura,
+            session_id,
+            state: SessionPresenceLeaseState::Active,
+        }
+    }
+
+    fn close(&mut self, reason: OfflineReason) {
+        if self.state == SessionPresenceLeaseState::Closed {
+            return;
+        }
+        self.state = SessionPresenceLeaseState::Closed;
+        let outcome = if self
+            .presence
+            .remove_if_session(&self.caller_ura, self.session_id, reason)
+            .is_some()
+        {
+            "removed_from_registry"
+        } else {
+            "superseded_by_newer_session"
+        };
+        crate::op_event!(
+            component = session_accept,
+            kind = session_ended,
+            caller = self.caller_ura,
+            close_reason = reason,
+            outcome = outcome,
+        );
+    }
+}
+
+impl Drop for SessionPresenceLease {
+    fn drop(&mut self) {
+        self.close(OfflineReason::StreamClosed);
     }
 }
 
@@ -1011,7 +1213,7 @@ fn build_session_down_keepalive_frame() -> DispatchFrame {
 /// retired; accepting either would create a live session that can only carry
 /// the removed JSON projection.
 pub(crate) fn session_contract_from_ext(
-    ext: Option<&easynet_axon::pb::axon::v1::SessionOpenExt>,
+    ext: Option<&axon_sdk::pb::axon::v1::SessionOpenExt>,
 ) -> Result<SessionContract, Status> {
     let ext = ext.ok_or_else(|| {
         Status::failed_precondition(
@@ -1028,6 +1230,28 @@ pub(crate) fn session_contract_from_ext(
         version: ext.contract_version,
         claimant_boot_nonce: ext.claimant_boot_nonce.clone(),
     })
+}
+
+fn session_contract_from_runtime_metadata(
+    metadata: &std::collections::HashMap<String, String>,
+) -> Result<SessionContract, AxonError> {
+    let encoded = metadata.get(SESSION_OPEN_EXT_METADATA_KEY).ok_or_else(|| {
+        product_status_to_axon_error(Status::failed_precondition(
+            "CANONICAL_CARRIER_REQUIRED: session.open runtime context is missing carrier negotiation",
+        ))
+    })?;
+    let bytes = hex::decode(encoded).map_err(|error| {
+        AxonError::invalid_argument(format!(
+            "session.open runtime carrier metadata is malformed: {error}"
+        ))
+    })?;
+    let extension =
+        axon_sdk::pb::axon::v1::SessionOpenExt::decode(bytes.as_slice()).map_err(|error| {
+            AxonError::invalid_argument(format!(
+                "session.open runtime carrier negotiation cannot be decoded: {error}"
+            ))
+        })?;
+    session_contract_from_ext(Some(&extension)).map_err(product_status_to_axon_error)
 }
 
 /// Frame-0 down is a typed session-control acknowledgement. Session
@@ -1053,15 +1277,15 @@ fn build_session_established_control(
     }
 }
 
-async fn project_finalized_bidi_receipt(
-    receiver: &easynet_axon::invocation::BidiOutputReceiver,
+pub(crate) async fn project_finalized_bidi_receipt(
+    receiver: &axon_sdk::invocation::BidiOutputReceiver,
 ) -> Result<InvokeBidiDown, Status> {
     let finalized = receiver.finalized().await.map_err(|err| {
         Status::failed_precondition(format!("CANONICAL_FINALIZATION_REQUIRED: {err}"))
     })?;
     Ok(InvokeBidiDown {
         payload: Some(DownPayload::Receipt(
-            easynet_axon::invocation::wire::receipt_to_wire(&finalized.terminal_receipt).map_err(
+            axon_sdk::invocation::wire::receipt_to_wire(&finalized.terminal_receipt).map_err(
                 |error| {
                     Status::failed_precondition(format!(
                         "CANONICAL_TERMINAL_PROJECTION_FAILED: {error}"
@@ -1112,9 +1336,9 @@ pub(crate) fn map_local_bidi_up_payload(
     wire_kind: LocalBidiWireKind,
     payload: UpPayload,
 ) -> LocalBidiUpFrame {
+    use axon_sdk::pb::axon::v1::bidi_control::Control as ControlVariant;
+    use axon_sdk::pb::axon::v1::{BidiControl, PtyResize};
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-    use easynet_axon::pb::axon::v1::bidi_control::Control as ControlVariant;
-    use easynet_axon::pb::axon::v1::{BidiControl, PtyResize};
     use serde_json::json;
 
     match (wire_kind, payload) {
@@ -1328,11 +1552,10 @@ pub(crate) fn map_local_bidi_handler_frame(
 /// keepalive task that cloned the sender would accidentally keep the
 /// displaced stream open, which is exactly the class of lifecycle
 /// bug we are trying to eliminate here.
-struct SessionDownStream {
+struct SessionProviderDownStream {
     down_rx: tokio::sync::mpsc::Receiver<Result<DispatchFrame, Status>>,
     pending_normal_frames: VecDeque<Result<DispatchFrame, Status>>,
     next_heartbeat: Pin<Box<tokio::time::Sleep>>,
-    next_sequence: u64,
     /// Set to `Some(control)` at construction; first `poll_next`
     /// yields it and clears the slot. Subsequent polls follow the
     /// recv-then-heartbeat path.
@@ -1345,15 +1568,11 @@ pub(crate) struct LocalBidiDownStream {
     pending_admission_receipt: Option<InvokeBidiDown>,
 }
 
-/// Stamp the bidi down-stream sequence number on a frame and advance
-/// the counter. Shared by `LocalBidiDownStream` and
-/// `SessionDownStream` (formerly two byte-identical copies). The
-/// `saturating_add` is intentional: at 2^64 frames per session the
-/// counter freezes at u64::MAX rather than wrapping; clients that
-/// see two consecutive frames with `sequence = u64::MAX` are
-/// expected to surface a session-exhausted error and reconnect.
-/// Wrapping silently to 0 would look like a fresh session to the
-/// receiver and corrupt the ordering invariant.
+/// Stamp the transport-owned bidi down-stream sequence number and advance the
+/// counter. Product providers emit unstamped frames; `LocalBidiDownStream` is
+/// the single sequence owner for every tonic projection. The `saturating_add`
+/// is intentional: at 2^64 frames per session the counter freezes at
+/// u64::MAX rather than wrapping.
 fn stamp_bidi_down_sequence(next: &mut u64, mut frame: InvokeBidiDown) -> InvokeBidiDown {
     frame.sequence = *next;
     *next = next.saturating_add(1);
@@ -1404,7 +1623,7 @@ impl Stream for LocalBidiDownStream {
     }
 }
 
-impl SessionDownStream {
+impl SessionProviderDownStream {
     fn new(
         down_rx: tokio::sync::mpsc::Receiver<Result<DispatchFrame, Status>>,
         initial_control: InvokeBidiDown,
@@ -1413,7 +1632,6 @@ impl SessionDownStream {
             down_rx,
             pending_normal_frames: VecDeque::new(),
             next_heartbeat: Box::pin(tokio::time::sleep(SESSION_DOWN_HEARTBEAT_INTERVAL)),
-            next_sequence: 0,
             pending_initial_control: Some(initial_control),
         }
     }
@@ -1422,10 +1640,6 @@ impl SessionDownStream {
         self.next_heartbeat
             .as_mut()
             .reset(tokio::time::Instant::now() + SESSION_DOWN_HEARTBEAT_INTERVAL);
-    }
-
-    fn stamp_sequence(&mut self, frame: InvokeBidiDown) -> InvokeBidiDown {
-        stamp_bidi_down_sequence(&mut self.next_sequence, frame)
     }
 
     fn poll_dispatch_frame(
@@ -1458,19 +1672,19 @@ impl SessionDownStream {
     }
 }
 
-impl Stream for SessionDownStream {
+impl Stream for SessionProviderDownStream {
     type Item = Result<InvokeBidiDown, Status>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(control) = self.pending_initial_control.take() {
             self.reset_heartbeat();
-            return Poll::Ready(Some(Ok(self.stamp_sequence(control))));
+            return Poll::Ready(Some(Ok(control)));
         }
 
         match self.poll_dispatch_frame(cx) {
             Poll::Ready(Some(Ok(frame))) => {
                 self.reset_heartbeat();
-                return Poll::Ready(Some(Ok(self.stamp_sequence(frame.frame))));
+                return Poll::Ready(Some(Ok(frame.frame)));
             }
             Poll::Ready(Some(Err(status))) => {
                 self.reset_heartbeat();
@@ -1483,9 +1697,7 @@ impl Stream for SessionDownStream {
         match self.next_heartbeat.as_mut().poll(cx) {
             Poll::Ready(()) => {
                 self.reset_heartbeat();
-                Poll::Ready(Some(Ok(
-                    self.stamp_sequence(build_session_down_keepalive_frame().frame)
-                )))
+                Poll::Ready(Some(Ok(build_session_down_keepalive_frame().frame)))
             }
             Poll::Pending => Poll::Pending,
         }
@@ -1499,11 +1711,8 @@ impl BidiDispatcher {
     /// revalidated here before any route or execution is attempted.
     async fn dispatch_canonical_session_invoke(
         &self,
-        request: easynet_axon::pb::axon::v1::InvokeRequest,
-    ) -> Result<easynet_axon::pb::axon::v1::InvokeResponse, SessionRequestError> {
-        if let Err(status) = self.admission.verify_invoke(&request) {
-            return Err(session_request_error_from_status(status));
-        }
+        request: axon_sdk::pb::axon::v1::InvokeRequest,
+    ) -> Result<axon_sdk::pb::axon::v1::InvokeResponse, SessionRequestError> {
         let (result, _) = self.unary.dispatch_local_rpc_selected_route(&request).await;
         match result {
             Ok(response) => Ok(response.into_inner()),
@@ -1744,8 +1953,8 @@ pub(crate) fn build_session_request_result_frame(
     call_id: [u8; 16],
     outcome: RequestOutcome,
 ) -> crate::daemon::invocation::bidi::state::presence::DispatchFrame {
-    use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload;
-    use easynet_axon::pb::axon::v1::{BinaryChunk, InvokeBidiDown};
+    use axon_sdk::pb::axon::v1::invoke_bidi_down::Payload;
+    use axon_sdk::pb::axon::v1::{BinaryChunk, InvokeBidiDown};
 
     let frame = SessionDispatch::RequestResult { call_id, outcome };
     let data = match frame.encode_frame() {
@@ -1829,11 +2038,11 @@ pub(crate) fn push_session_request_result(
     }
 }
 
-/// Map a carrier-v1 typed failure into the session-plane projection
-/// the pending maps carry. `error` keeps the human-readable string the
-/// JSON-era consumers expect; `failure` keeps the typed class.
+/// Map a canonical typed failure into the session-plane projection used by
+/// pending callers. `error` is the human-readable projection; `failure`
+/// preserves the typed class.
 pub(crate) fn pending_result_from_carrier_v1(
-    result: &easynet_axon::pb::axon::v1::DispatchResult,
+    result: &axon_sdk::pb::axon::v1::DispatchResult,
 ) -> DispatchResult {
     DispatchResult {
         payload: result.payload.clone(),
@@ -1851,13 +2060,13 @@ pub(crate) fn pending_result_from_carrier_v1(
 
 #[derive(Debug)]
 enum CarrierDispatchEvent {
-    Admission(Box<easynet_axon::pb::axon::v1::InvocationReceipt>),
+    Admission(Box<axon_sdk::pb::axon::v1::InvocationReceipt>),
     Chunk(Vec<u8>),
     Terminal(Box<DispatchResult>),
 }
 
 fn classify_carrier_v1_result(
-    result: easynet_axon::pb::axon::v1::DispatchResult,
+    result: axon_sdk::pb::axon::v1::DispatchResult,
 ) -> Result<(u64, CarrierDispatchEvent), (u64, DispatchResult)> {
     let call_id = result.call_id;
     let protocol_failure =
@@ -1925,7 +2134,7 @@ fn classify_carrier_v1_result(
                 "CARRIER_STREAM_PHASE_INVALID",
             ));
         }
-        if admission.state != easynet_axon::invocation::InvocationState::Admitted.to_wire_i32() {
+        if admission.state != axon_sdk::invocation::InvocationState::Admitted.to_wire_i32() {
             return Err(protocol_failure(
                 "stream admission DispatchResult carried a non-admission checkpoint",
                 "CANONICAL_ADMISSION_INVALID",
@@ -1943,7 +2152,7 @@ fn classify_carrier_v1_result(
 }
 
 pub(crate) fn session_failure_from_axon_error(
-    err: &easynet_axon::pb::axon::v1::Error,
+    err: &axon_sdk::pb::axon::v1::Error,
 ) -> SessionFailure {
     SessionFailure::from_reason(
         &err.message,
@@ -1960,19 +2169,19 @@ pub(crate) fn session_failure_from_axon_error(
 /// the single-track typed Error (DEC-F004 point 3).
 pub(crate) fn build_reverse_dispatch_result_frame(
     call_id: [u8; 16],
-    outcome: Result<easynet_axon::pb::axon::v1::InvokeResponse, SessionRequestError>,
+    outcome: Result<axon_sdk::pb::axon::v1::InvokeResponse, SessionRequestError>,
 ) -> DispatchFrame {
-    use easynet_axon::pb::axon::v1::ReverseDispatchResult;
+    use axon_sdk::pb::axon::v1::ReverseDispatchResult;
     let (payload, failure, admission_receipt, terminal_receipt) = match outcome {
         Ok(response) => {
             if response.admission_receipt.is_none() || response.terminal_receipt.is_none() {
                 (
                     Vec::new(),
-                    Some(easynet_axon::pb::axon::v1::Error {
+                    Some(axon_sdk::pb::axon::v1::Error {
                         code: "CANONICAL_FINALIZATION_REQUIRED".to_string(),
                         message: "hub canonical reverse dispatch completed without both signed finalization checkpoints".to_string(),
                         retryable: false,
-                        ..easynet_axon::pb::axon::v1::Error::default()
+                        ..axon_sdk::pb::axon::v1::Error::default()
                     }),
                     None,
                     None,
@@ -2001,11 +2210,11 @@ pub(crate) fn build_reverse_dispatch_result_frame(
             };
             (
                 Vec::new(),
-                Some(easynet_axon::pb::axon::v1::Error {
+                Some(axon_sdk::pb::axon::v1::Error {
                     code: code.to_string(),
                     message,
                     retryable,
-                    ..easynet_axon::pb::axon::v1::Error::default()
+                    ..axon_sdk::pb::axon::v1::Error::default()
                 }),
                 None,
                 None,
@@ -2116,57 +2325,57 @@ fn report_chunk_delivery(
     }
 }
 
-/// Drain a device's `session.open` up-stream. Each up-frame is
-/// may carry typed `DispatchResult` / `ReverseDispatchCall` frames or the
+/// Drain a device's runtime-owned `session.open` inbox. Each frame may carry
+/// typed `DispatchResult` / `ReverseDispatchCall` frames or the
 /// remaining JSON streaming/control frames. Matching pending entries are
 /// settled by call_id.
 ///
-/// On stream close (any reason — graceful CloseSend, transport
-/// reset, RST_STREAM, peer crash) the device is removed from the
-/// presence registry with an appropriate `OfflineReason` so that
-/// future `lookup` calls see it as offline immediately.
-async fn drain_session_up_stream(
-    mut up: Streaming<InvokeBidiUp>,
+/// The returned reason is consumed by `SessionPresenceLease`; this function
+/// never mutates lifecycle ownership itself.
+async fn drain_session_runtime_up_stream(
+    context: Arc<AbilityContext>,
     caller_ura: String,
-    session_id: crate::daemon::invocation::bidi::state::presence::PresenceSessionId,
     presence: Arc<PresenceRegistry>,
     pending: Option<Arc<PendingDispatchMap>>,
     pending_stream: Option<Arc<PendingStreamDispatchMap>>,
     dispatcher: BidiDispatcher,
-) {
-    use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+) -> OfflineReason {
+    use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 
     let mut close_reason = OfflineReason::StreamClosed;
     let mut expected_up_sequence = 1_u64;
 
-    while let Some(frame_result) = up.next().await {
-        let frame = match frame_result {
-            Ok(f) => f,
-            Err(status) => {
-                // Walk the std::error::Error source chain so the
-                // underlying h2::Error (with its `Reason` code and
-                // `Initiator`) surfaces, not just tonic's opaque
-                // "h2 protocol error" wrapper. Without this we
-                // cannot distinguish a peer-initiated CANCEL from
-                // a library-initiated PROTOCOL_ERROR, which makes
-                // diagnosing reset-loops on the device side
-                // impossible.
-                let mut chain = format!("{status}");
-                let mut src: Option<&dyn std::error::Error> = std::error::Error::source(&status);
-                while let Some(err) = src {
-                    chain.push_str(&format!(" ↳ {err}"));
-                    src = err.source();
-                }
-                // `tonic::Code` has Display; use it so the op-event
-                // field renders as `code=InvalidArgument` (bare
-                // PascalCase) instead of a Debug-quoted string.
-                let status_code = status.code();
+    while let Some(message) = context.recv_message(None).await {
+        if message.content_type == SESSION_RUNTIME_TRANSPORT_ERROR_CONTENT_TYPE {
+            let chain = String::from_utf8_lossy(&message.payload);
+            crate::op_event!(
+                component = session_accept,
+                kind = up_stream_error,
+                caller = caller_ura,
+                chain = chain.as_ref(),
+                code = "transport",
+            );
+            close_reason = OfflineReason::StreamReset;
+            break;
+        }
+        if message.content_type != SESSION_RUNTIME_FRAME_CONTENT_TYPE {
+            crate::op_event!(
+                component = session_accept,
+                kind = malformed_runtime_session_frame,
+                caller = caller_ura,
+                content_type = message.content_type,
+            );
+            close_reason = OfflineReason::StreamReset;
+            break;
+        }
+        let frame = match InvokeBidiUp::decode(message.payload.as_slice()) {
+            Ok(frame) => frame,
+            Err(error) => {
                 crate::op_event!(
                     component = session_accept,
-                    kind = up_stream_error,
+                    kind = malformed_runtime_session_frame,
                     caller = caller_ura,
-                    chain = chain,
-                    code = status_code,
+                    error = error.to_string(),
                 );
                 close_reason = OfflineReason::StreamReset;
                 break;
@@ -2193,7 +2402,7 @@ async fn drain_session_up_stream(
             Some(UpPayload::Control(control)) => {
                 if matches!(
                     control.control,
-                    Some(easynet_axon::pb::axon::v1::bidi_control::Control::Eof(true))
+                    Some(axon_sdk::pb::axon::v1::bidi_control::Control::Eof(true))
                 ) {
                     break;
                 }
@@ -2318,9 +2527,9 @@ async fn drain_session_up_stream(
             None => continue,
         };
 
-        // Parse SessionDispatch::Result. A malformed frame is logged
-        // but does not tear down the session — the device may send
-        // future frames that are well-formed.
+        // Binary chunks carry daemon-owned JSON control/input frames only.
+        // Canonical Invocation results are protobuf DispatchResult frames and
+        // are handled above.
         let dispatch = match SessionDispatch::decode_frame(&chunk.data) {
             Ok(d) => d,
             Err(err) => {
@@ -2336,60 +2545,6 @@ async fn drain_session_up_stream(
         };
 
         match dispatch {
-            SessionDispatch::Result {
-                call_id,
-                payload,
-                terminal,
-                error,
-                failure,
-                request_id,
-            } => {
-                if terminal {
-                    let dispatch_result = DispatchResult {
-                        payload,
-                        error,
-                        failure,
-                        request_id,
-                        admission_receipt: None,
-                        terminal_receipt: None,
-                    };
-                    settle_terminal_result(
-                        &pending,
-                        &pending_stream,
-                        &caller_ura,
-                        call_id,
-                        dispatch_result,
-                    )
-                    .await;
-                } else {
-                    let Some(pending_stream) = pending_stream.as_ref() else {
-                        crate::op_event!(
-                            component = session_accept,
-                            kind = streaming_result_dropped_no_pending_stream_map,
-                            caller = caller_ura,
-                            call_id = call_id,
-                        );
-                        continue;
-                    };
-                    report_chunk_delivery(
-                        pending_stream.deliver_chunk(call_id, payload).await,
-                        &caller_ura,
-                        call_id,
-                    );
-                }
-            }
-            SessionDispatch::BidiOpen {
-                call_id, ability, ..
-            } => {
-                crate::op_event!(
-                    component = session_accept,
-                    kind = unexpected_upstream_frame,
-                    caller = caller_ura,
-                    frame_kind = "BidiOpen",
-                    call_id = call_id,
-                    ability = ability,
-                );
-            }
             SessionDispatch::BidiInput { call_id, eof, .. } => {
                 crate::op_event!(
                     component = session_accept,
@@ -2484,29 +2639,7 @@ async fn drain_session_up_stream(
         }
     }
 
-    // `OfflineReason: Display` renders the stable snake_case wire
-    // label shared with `presence_event_to_directory_event` so the
-    // op-event and the directory projection report the same string.
-    if presence
-        .remove_if_session(&caller_ura, session_id, close_reason)
-        .is_some()
-    {
-        crate::op_event!(
-            component = session_accept,
-            kind = session_ended,
-            caller = caller_ura,
-            close_reason = close_reason,
-            outcome = "removed_from_registry",
-        );
-    } else {
-        crate::op_event!(
-            component = session_accept,
-            kind = session_ended,
-            caller = caller_ura,
-            close_reason = close_reason,
-            outcome = "superseded_by_newer_session",
-        );
-    }
+    close_reason
 }
 
 fn refresh_session_owner_projection_lease(dispatcher: &BidiDispatcher, caller_ura: &str) -> bool {
@@ -2587,10 +2720,7 @@ pub(crate) fn validate_session_realm(
     )))
 }
 
-fn session_trust_context_from_open(
-    caller_ura: &str,
-    envelope_open: &EnvelopeOpen,
-) -> SessionTrustContext {
+fn session_trust_context(caller_ura: &str, key_id_hint: &str) -> SessionTrustContext {
     let is_user = matches!(
         crate::core::ura::parse_ura(caller_ura).map(|parsed| parsed.kind),
         Ok(crate::core::ura::URAKind::User)
@@ -2598,12 +2728,7 @@ fn session_trust_context_from_open(
     if !is_user {
         return SessionTrustContext::default();
     }
-    let presented = envelope_open
-        .envelope
-        .as_ref()
-        .and_then(|envelope| envelope.caller_signature.as_ref())
-        .map(|signature| signature.key_id_hint.trim().to_string())
-        .unwrap_or_default();
+    let presented = key_id_hint.trim().to_string();
     SessionTrustContext::user_pubkey(presented)
 }
 
@@ -2625,7 +2750,7 @@ fn remote_bidi_forwarded_request(
     selected_route: &SelectedInvokeRoute,
     envelope_open: &EnvelopeOpen,
     call_mode: CallMode,
-) -> Result<easynet_axon::pb::axon::v1::InvokeRequest, Status> {
+) -> Result<axon_sdk::pb::axon::v1::InvokeRequest, Status> {
     if !matches!(call_mode, CallMode::Bidi) {
         return Err(Status::failed_precondition(format!(
             "InvokeBidi route `{}` resolved with non-bidi call mode {call_mode:?}",
@@ -2636,16 +2761,14 @@ fn remote_bidi_forwarded_request(
         .envelope
         .clone()
         .ok_or_else(|| Status::invalid_argument("InvokeBidi request missing envelope"))?;
-    Ok(easynet_axon::pb::axon::v1::InvokeRequest {
+    Ok(axon_sdk::pb::axon::v1::InvokeRequest {
         envelope: Some(signed_envelope_for_selected_route(
             envelope,
             selected_route,
-            envelope_open
-                .metadata
-                .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
-                .map(String::as_str),
+            envelope_open.target.as_ref(),
             &envelope_open.initial_args,
         )?),
+        target: envelope_open.target.clone(),
         function_name: selected_route.dispatch_name.clone(),
         arguments: envelope_open.initial_args.clone(),
         metadata: envelope_open.metadata.clone(),
@@ -2719,7 +2842,7 @@ pub(crate) fn remote_bidi_target_ura(envelope_open: &EnvelopeOpen) -> Option<Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easynet_axon::pb::axon::v1::SessionOpenExt;
+    use axon_sdk::pb::axon::v1::SessionOpenExt;
 
     #[test]
     fn absent_ext_fails_closed_without_canonical_carrier() {
@@ -2756,12 +2879,85 @@ mod tests {
     }
 
     #[test]
+    fn runtime_metadata_decodes_the_canonical_session_contract() {
+        let extension = SessionOpenExt {
+            contract_version: CANONICAL_SESSION_CARRIER_VERSION,
+            claimant_boot_nonce: vec![0x5a; 16],
+        };
+        let metadata = std::collections::HashMap::from([(
+            SESSION_OPEN_EXT_METADATA_KEY.to_string(),
+            hex::encode(extension.encode_to_vec()),
+        )]);
+        let contract = session_contract_from_runtime_metadata(&metadata)
+            .expect("provider metadata must decode through the canonical contract validator");
+        assert_eq!(contract.version, CANONICAL_SESSION_CARRIER_VERSION);
+        assert_eq!(contract.claimant_boot_nonce, vec![0x5a; 16]);
+    }
+
+    #[test]
+    fn runtime_metadata_rejects_missing_session_contract() {
+        let error = session_contract_from_runtime_metadata(&std::collections::HashMap::new())
+            .expect_err("provider must fail closed without carrier negotiation");
+        assert!(
+            error.to_string().contains("CANONICAL_CARRIER_REQUIRED"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn presence_lease_drop_removes_only_its_registered_generation() {
+        let presence = Arc::new(PresenceRegistry::new());
+        let caller_ura = "easynet:///r/test/device/provider-lease".to_string();
+        let (sender, _receiver) =
+            mpsc::channel::<Result<DispatchFrame, Status>>(DISPATCH_CHANNEL_CAPACITY);
+        let registration = presence.insert_negotiated(
+            caller_ura.clone(),
+            sender,
+            SessionContract {
+                version: CANONICAL_SESSION_CARRIER_VERSION,
+                claimant_boot_nonce: vec![0x11; 16],
+            },
+        );
+        let lease = SessionPresenceLease::new(
+            Arc::clone(&presence),
+            caller_ura.clone(),
+            registration.session_id,
+        );
+        let (replacement_sender, _replacement_receiver) =
+            mpsc::channel::<Result<DispatchFrame, Status>>(DISPATCH_CHANNEL_CAPACITY);
+        let PresenceRegistration {
+            session_id: replacement_session_id,
+            displaced,
+            ..
+        } = presence.insert_negotiated(
+            caller_ura.clone(),
+            replacement_sender,
+            SessionContract {
+                version: CANONICAL_SESSION_CARRIER_VERSION,
+                claimant_boot_nonce: vec![0x22; 16],
+            },
+        );
+        drop(displaced);
+        assert!(presence.lookup(&caller_ura).is_some());
+        drop(lease);
+        assert!(
+            presence.lookup(&caller_ura).is_some(),
+            "dropping a displaced provider lease must not remove its replacement"
+        );
+        let _ = presence.remove_if_session(
+            &caller_ura,
+            replacement_session_id,
+            OfflineReason::StreamClosed,
+        );
+    }
+
+    #[test]
     fn carrier_v1_failure_maps_to_single_track_projection() {
-        let pb = easynet_axon::pb::axon::v1::DispatchResult {
+        let pb = axon_sdk::pb::axon::v1::DispatchResult {
             call_id: 7,
             payload: b"partial".to_vec(),
             terminal: true,
-            failure: Some(easynet_axon::pb::axon::v1::Error {
+            failure: Some(axon_sdk::pb::axon::v1::Error {
                 code: "TARGET_OFFLINE".into(),
                 message: "device went away".into(),
                 retryable: true,
@@ -2780,7 +2976,7 @@ mod tests {
 
     #[test]
     fn carrier_v1_unary_success_without_checkpoints_is_rejected() {
-        let pb = easynet_axon::pb::axon::v1::DispatchResult {
+        let pb = axon_sdk::pb::axon::v1::DispatchResult {
             call_id: 8,
             payload: b"ok".to_vec(),
             terminal: true,
@@ -2797,16 +2993,16 @@ mod tests {
 
     #[test]
     fn carrier_v1_unary_success_requires_both_checkpoints() {
-        let pb = easynet_axon::pb::axon::v1::DispatchResult {
+        let pb = axon_sdk::pb::axon::v1::DispatchResult {
             call_id: 8,
             payload: b"ok".to_vec(),
             terminal: true,
-            admission_receipt: Some(easynet_axon::pb::axon::v1::InvocationReceipt {
-                state: easynet_axon::invocation::InvocationState::Admitted.to_wire_i32(),
+            admission_receipt: Some(axon_sdk::pb::axon::v1::InvocationReceipt {
+                state: axon_sdk::invocation::InvocationState::Admitted.to_wire_i32(),
                 ..Default::default()
             }),
-            terminal_receipt: Some(easynet_axon::pb::axon::v1::InvocationReceipt {
-                state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+            terminal_receipt: Some(axon_sdk::pb::axon::v1::InvocationReceipt {
+                state: axon_sdk::invocation::InvocationState::Completed.to_wire_i32(),
                 ..Default::default()
             }),
             ..Default::default()
@@ -2824,15 +3020,15 @@ mod tests {
 
     #[test]
     fn carrier_v1_stream_terminal_cannot_repeat_admission_checkpoint() {
-        let pb = easynet_axon::pb::axon::v1::DispatchResult {
+        let pb = axon_sdk::pb::axon::v1::DispatchResult {
             call_id: 9,
             terminal: true,
-            admission_receipt: Some(easynet_axon::pb::axon::v1::InvocationReceipt {
-                state: easynet_axon::invocation::InvocationState::Admitted.to_wire_i32(),
+            admission_receipt: Some(axon_sdk::pb::axon::v1::InvocationReceipt {
+                state: axon_sdk::invocation::InvocationState::Admitted.to_wire_i32(),
                 ..Default::default()
             }),
-            terminal_receipt: Some(easynet_axon::pb::axon::v1::InvocationReceipt {
-                state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+            terminal_receipt: Some(axon_sdk::pb::axon::v1::InvocationReceipt {
+                state: axon_sdk::invocation::InvocationState::Completed.to_wire_i32(),
                 ..Default::default()
             }),
             ..Default::default()
@@ -2847,10 +3043,10 @@ mod tests {
 
     #[test]
     fn carrier_v1_stream_terminal_failure_requires_terminal_checkpoint() {
-        let pb = easynet_axon::pb::axon::v1::DispatchResult {
+        let pb = axon_sdk::pb::axon::v1::DispatchResult {
             call_id: 9,
             terminal: true,
-            failure: Some(easynet_axon::pb::axon::v1::Error {
+            failure: Some(axon_sdk::pb::axon::v1::Error {
                 code: "STREAM_OPEN_FAILED".into(),
                 message: "target rejected stream open".into(),
                 retryable: false,
@@ -2887,7 +3083,8 @@ mod tests {
     #[tokio::test]
     async fn session_down_stream_prioritizes_control_frames_over_normal_backlog() {
         let (tx, rx) = mpsc::channel::<Result<DispatchFrame, Status>>(8);
-        let mut stream = SessionDownStream::new(rx, build_session_established_control(1, 7, false));
+        let mut stream =
+            SessionProviderDownStream::new(rx, build_session_established_control(1, 7, false));
 
         let first = stream.next().await.expect("control frame").expect("ok");
         assert!(

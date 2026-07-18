@@ -3,11 +3,12 @@
 //
 // File: src/daemon/invocation/state/usage_quota.rs
 //
-// Per-(consumer-URA, ability) invocation quota for unary invokes.
-// The admission gate consults this module only AFTER identity,
-// signature, and replay checks have already admitted the caller.
-// Quota is a governance refinement; it is not an authentication or
-// authorization substitute.
+// Per-(consumer-URA, ability) invocation quota for unary invokes. The
+// provider-backed product policy reserves capacity after Axon signature and
+// nonce reservation, then commits only after canonical runtime admission.
+// Policy rejection or any later launch failure drops the reservation and
+// restores the slot. Quota is governance policy, not authentication or replay
+// authority.
 //
 // Scope: unary invoke only
 // ------------------------
@@ -26,7 +27,8 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::daemon::persistence::daemon_config::QuotaConfig;
@@ -109,12 +111,15 @@ impl QuotaDecision {
 }
 
 /// One key's live window state.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct WindowState {
     /// Wall-clock millis when the current window opened.
     window_start_ms: i64,
-    /// Requests already consumed in the current window.
-    used: i32,
+    /// Admitted requests committed in the current window.
+    committed: i32,
+    /// Runtime admission transactions that reserved capacity but have not yet
+    /// completed canonical launch admission.
+    pending: HashSet<u64>,
 }
 
 /// Fixed-width key for one `(consumer_ura, ability)` quota window.
@@ -211,6 +216,25 @@ impl SharedUsageQuotaGate {
         ability: &str,
         now_ms: i64,
     ) -> Option<QuotaDecision> {
+        let reservation = self.reserve(consumer_ura, ability, now_ms)?;
+        let decision = reservation.decision();
+        reservation.commit();
+        Some(decision)
+    }
+
+    /// Reserve quota before handler execution and commit it only after Axon
+    /// confirms canonical runtime admission.
+    ///
+    /// Dropping the returned reservation rolls the provisional count back.
+    /// Axon's nonce reservation already excludes concurrent replays when the
+    /// provider seam runs; this reservation only makes product quota commit
+    /// atomic with successful canonical launch admission.
+    pub(crate) fn reserve(
+        &self,
+        consumer_ura: &str,
+        ability: &str,
+        now_ms: i64,
+    ) -> Option<QuotaReservation> {
         let (cap, window_ms) = match self.policy.read() {
             Ok(guard) => {
                 let policy = guard.as_ref()?;
@@ -227,7 +251,7 @@ impl SharedUsageQuotaGate {
         }
         Some(
             self.store
-                .check_and_record(consumer_ura, ability, cap, window_ms, now_ms),
+                .reserve(consumer_ura, ability, cap, window_ms, now_ms),
         )
     }
 
@@ -249,6 +273,7 @@ impl SharedUsageQuotaGate {
 #[derive(Clone, Debug, Default)]
 pub struct SharedUsageQuotaStore {
     inner: Arc<Mutex<HashMap<QuotaKey, WindowState>>>,
+    next_reservation_id: Arc<AtomicU64>,
 }
 
 impl SharedUsageQuotaStore {
@@ -259,6 +284,7 @@ impl SharedUsageQuotaStore {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
+            next_reservation_id: Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -272,21 +298,35 @@ impl SharedUsageQuotaStore {
         window_ms: i64,
         now_ms: i64,
     ) -> QuotaDecision {
+        let reservation = self.reserve(consumer_ura, ability, cap, window_ms, now_ms);
+        let decision = reservation.decision();
+        reservation.commit();
+        decision
+    }
+
+    fn reserve(
+        &self,
+        consumer_ura: &str,
+        ability: &str,
+        cap: i32,
+        window_ms: i64,
+        now_ms: i64,
+    ) -> QuotaReservation {
         if cap <= 0 {
-            return QuotaDecision::unmetered();
+            return QuotaReservation::inactive(QuotaDecision::unmetered());
         }
         let window_ms = window_ms.max(1);
         let key = match QuotaKey::new(consumer_ura, ability) {
             Ok(key) => key,
             Err(reason) => {
-                return QuotaDecision {
+                return QuotaReservation::inactive(QuotaDecision {
                     allowed: false,
                     quota_remaining: 0,
                     quota_limit: cap,
                     reset_at_unix_ms: now_ms.saturating_add(window_ms),
                     retry_after_ms: 0,
                     deny_reason: Some(reason),
-                };
+                });
             }
         };
 
@@ -297,48 +337,85 @@ impl SharedUsageQuotaStore {
         if !guard.contains_key(&key) && guard.len() >= MAX_QUOTA_TRACKED_KEYS {
             prune_expired_windows(&mut guard, now_ms, window_ms);
             if guard.len() >= MAX_QUOTA_TRACKED_KEYS {
-                return QuotaDecision {
+                return QuotaReservation::inactive(QuotaDecision {
                     allowed: false,
                     quota_remaining: 0,
                     quota_limit: cap,
                     reset_at_unix_ms: now_ms.saturating_add(window_ms),
                     retry_after_ms: i32::try_from(window_ms).unwrap_or(i32::MAX),
                     deny_reason: Some(QuotaDenyReason::StoreSaturated),
-                };
+                });
             }
         }
 
         let state = guard.entry(key).or_insert(WindowState {
             window_start_ms: now_ms,
-            used: 0,
+            committed: 0,
+            pending: HashSet::new(),
         });
 
         if now_ms.saturating_sub(state.window_start_ms) >= window_ms {
             state.window_start_ms = now_ms;
-            state.used = 0;
+            state.committed = 0;
+            state.pending.clear();
         }
 
         let reset_at_unix_ms = state.window_start_ms.saturating_add(window_ms);
-        if state.used >= cap {
+        let used = state
+            .committed
+            .saturating_add(i32::try_from(state.pending.len()).unwrap_or(i32::MAX));
+        if used >= cap {
             let retry_after_ms = reset_at_unix_ms.saturating_sub(now_ms).max(0);
-            return QuotaDecision {
+            return QuotaReservation::inactive(QuotaDecision {
                 allowed: false,
                 quota_remaining: 0,
                 quota_limit: cap,
                 reset_at_unix_ms,
                 retry_after_ms: i32::try_from(retry_after_ms).unwrap_or(i32::MAX),
                 deny_reason: Some(QuotaDenyReason::BudgetExhausted),
-            };
+            });
         }
 
-        state.used += 1;
-        QuotaDecision {
+        let reservation_id = self.next_reservation_id.fetch_add(1, Ordering::Relaxed);
+        state.pending.insert(reservation_id);
+        let decision = QuotaDecision {
             allowed: true,
-            quota_remaining: cap - state.used,
+            quota_remaining: cap - used - 1,
             quota_limit: cap,
             reset_at_unix_ms,
             retry_after_ms: 0,
             deny_reason: None,
+        };
+        QuotaReservation {
+            store: Some(self.clone()),
+            key,
+            window_start_ms: state.window_start_ms,
+            reservation_id,
+            decision,
+        }
+    }
+
+    fn finish_reservation(
+        &self,
+        key: QuotaKey,
+        window_start_ms: i64,
+        reservation_id: u64,
+        commit: bool,
+    ) {
+        let mut guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(state) = guard.get_mut(&key) else {
+            return;
+        };
+        if state.window_start_ms != window_start_ms || !state.pending.remove(&reservation_id) {
+            return;
+        }
+        if commit {
+            state.committed = state.committed.saturating_add(1);
+        } else if state.committed == 0 && state.pending.is_empty() {
+            guard.remove(&key);
         }
     }
 
@@ -363,6 +440,47 @@ impl SharedUsageQuotaStore {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+/// Transactional quota capacity held while canonical runtime admission is in
+/// progress.
+pub(crate) struct QuotaReservation {
+    store: Option<SharedUsageQuotaStore>,
+    key: QuotaKey,
+    window_start_ms: i64,
+    reservation_id: u64,
+    decision: QuotaDecision,
+}
+
+impl QuotaReservation {
+    fn inactive(decision: QuotaDecision) -> Self {
+        Self {
+            store: None,
+            key: QuotaKey([0u8; 32]),
+            window_start_ms: 0,
+            reservation_id: 0,
+            decision,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn decision(&self) -> QuotaDecision {
+        self.decision
+    }
+
+    pub(crate) fn commit(mut self) {
+        if let Some(store) = self.store.take() {
+            store.finish_reservation(self.key, self.window_start_ms, self.reservation_id, true);
+        }
+    }
+}
+
+impl Drop for QuotaReservation {
+    fn drop(&mut self) {
+        if let Some(store) = self.store.take() {
+            store.finish_reservation(self.key, self.window_start_ms, self.reservation_id, false);
+        }
     }
 }
 
@@ -468,6 +586,44 @@ mod tests {
         assert!(handle.join().unwrap().allowed);
         let second = store.check_and_record("alice", "echo", 1, 10_000, 1_100);
         assert!(!second.allowed, "shared budget exhausted across threads");
+    }
+
+    #[test]
+    fn dropped_reservation_rolls_back_provisional_budget() {
+        let store = SharedUsageQuotaStore::new();
+        let reservation = store.reserve("alice", "echo", 1, 10_000, 1_000);
+        assert!(reservation.decision().allowed);
+
+        let blocked_while_pending = store.reserve("alice", "echo", 1, 10_000, 1_001);
+        assert!(!blocked_while_pending.decision().allowed);
+        drop(blocked_while_pending);
+
+        drop(reservation);
+        assert!(
+            store
+                .check_and_record("alice", "echo", 1, 10_000, 1_002)
+                .allowed,
+            "canonical admission rejection must restore the reserved slot"
+        );
+    }
+
+    #[test]
+    fn committed_reservation_consumes_budget_exactly_once() {
+        let store = SharedUsageQuotaStore::new();
+        let reservation = store.reserve("alice", "echo", 2, 10_000, 1_000);
+        assert_eq!(reservation.decision().quota_remaining, 1);
+        reservation.commit();
+
+        let second = store.reserve("alice", "echo", 2, 10_000, 1_001);
+        assert_eq!(second.decision().quota_remaining, 0);
+        second.commit();
+
+        let exhausted = store.check_and_record("alice", "echo", 2, 10_000, 1_002);
+        assert!(!exhausted.allowed);
+        assert_eq!(
+            exhausted.deny_reason,
+            Some(QuotaDenyReason::BudgetExhausted)
+        );
     }
 
     #[test]

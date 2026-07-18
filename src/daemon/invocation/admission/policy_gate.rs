@@ -8,7 +8,7 @@
 use chrono::Utc;
 use tonic::Status;
 
-use easynet_axon::pb::axon::v1::Envelope;
+use axon_sdk::pb::axon::v1::Envelope;
 
 use crate::core::ura::{parse_ura, AbilityOwner, URAKind};
 use crate::daemon::invocation::admission::decision::{
@@ -19,7 +19,7 @@ use crate::daemon::invocation::admission::owner_resolution::{
     local_device_owner_fact, OwnerFact, OwnerResolutionInput, OwnerResolver,
 };
 use crate::daemon::invocation::admission::policy_engine::{PolicyEngine, PolicyInput};
-use crate::daemon::persistence::access_control::AccessControlStore;
+use crate::daemon::persistence::access_control::AccessControlStoreRegistry;
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
 
 #[derive(Debug, Clone)]
@@ -31,6 +31,7 @@ pub struct AdmissionPolicyContext<'a> {
     pub trusted_role: TrustedAgentRole,
     pub daemon_ura: Option<&'a str>,
     pub trust_anchor: &'a RealmTrustAnchor,
+    pub access_control_stores: &'a AccessControlStoreRegistry,
     pub canonical_hash: Option<String>,
     pub signature_key_id: Option<String>,
     pub verified_authority_id: Option<String>,
@@ -81,8 +82,9 @@ impl AdmissionPolicyGate {
             });
         }
         let grants = match owner.owner_user_id.as_deref() {
-            Some(owner_user_id) => AccessControlStore::open_or_create(owner_user_id)
-                .map(|store| store.grants())
+            Some(owner_user_id) => context
+                .access_control_stores
+                .with_store(owner_user_id, |store| store.grants())
                 .map_err(|err| {
                     Status::internal(format!(
                         "POLICY_STORE_UNAVAILABLE: owner_user_id={owner_user_id} error={err}"
@@ -345,7 +347,7 @@ pub(crate) fn ability_ura_for(callee_ura: &str, ability: &str) -> Result<String,
 }
 
 fn agent_ura(
-    identity: Option<&easynet_axon::pb::axon::v1::AgentIdentity>,
+    identity: Option<&axon_sdk::pb::axon::v1::AgentIdentity>,
     role: &str,
 ) -> Result<String, Status> {
     identity
@@ -356,7 +358,7 @@ fn agent_ura(
 }
 
 fn subject_ura(
-    identity: Option<&easynet_axon::pb::axon::v1::SubjectIdentity>,
+    identity: Option<&axon_sdk::pb::axon::v1::SubjectIdentity>,
 ) -> Result<String, Status> {
     identity
         .map(|identity| identity.ura.trim())
@@ -372,7 +374,7 @@ mod tests {
     use crate::daemon::invocation::admission::decision::PolicyDecisionReason;
     use crate::daemon::persistence::config::{save_credentials, Credentials};
     use crate::daemon::trust::anchor::{TrustedAgent, TrustedPrincipalOwner};
-    use easynet_axon::pb::axon::v1::{AgentIdentity, SubjectIdentity};
+    use axon_sdk::pb::axon::v1::{AgentIdentity, SubjectIdentity};
     use std::path::PathBuf;
 
     fn identity(ura: &str) -> AgentIdentity {
@@ -489,6 +491,7 @@ mod tests {
     #[test]
     fn user_subject_projects_owner_policy_allow() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
         let envelope = Envelope {
             caller: Some(identity("easynet:///r/test/user/alice")),
             callee: Some(identity("easynet:///r/test/agent/alice.worker")),
@@ -506,6 +509,7 @@ mod tests {
             trusted_role: TrustedAgentRole::User,
             daemon_ura: None,
             trust_anchor: &empty_anchor(),
+            access_control_stores: &stores,
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: None,
             verified_authority_id: None,
@@ -518,6 +522,7 @@ mod tests {
     #[test]
     fn hub_link_principal_gets_descriptor_safe_read_default() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
         let envelope = Envelope {
             caller: Some(identity("easynet:///r/test/hub")),
             callee: Some(identity("easynet:///r/test/agent/alice.worker")),
@@ -535,6 +540,7 @@ mod tests {
             trusted_role: TrustedAgentRole::Hub,
             daemon_ura: None,
             trust_anchor: &empty_anchor(),
+            access_control_stores: &stores,
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: None,
             verified_authority_id: None,
@@ -550,6 +556,7 @@ mod tests {
     #[test]
     fn hub_link_principal_cannot_stream_without_grant() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
         let envelope = Envelope {
             caller: Some(identity("easynet:///r/test/hub")),
             callee: Some(identity("easynet:///r/test/agent/alice.worker")),
@@ -567,6 +574,7 @@ mod tests {
             trusted_role: TrustedAgentRole::Hub,
             daemon_ura: None,
             trust_anchor: &empty_anchor(),
+            access_control_stores: &stores,
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: None,
             verified_authority_id: None,
@@ -584,6 +592,7 @@ mod tests {
     #[test]
     fn local_hub_allows_forwarding_to_trusted_remote_owner_realm() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
         let envelope = Envelope {
             caller: Some(identity("easynet:///r/local/device/caller")),
             callee: Some(identity("easynet:///r/peer/device/callee")),
@@ -601,6 +610,7 @@ mod tests {
             trusted_role: TrustedAgentRole::Device,
             daemon_ura: Some("easynet:///r/local/hub"),
             trust_anchor: &anchor_with_peer_realm(),
+            access_control_stores: &stores,
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: None,
             verified_authority_id: None,
@@ -623,6 +633,7 @@ mod tests {
     #[test]
     fn local_hub_does_not_forward_to_untrusted_remote_owner_realm() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
         let envelope = Envelope {
             caller: Some(identity("easynet:///r/local/device/caller")),
             callee: Some(identity("easynet:///r/peer/device/callee")),
@@ -640,6 +651,7 @@ mod tests {
             trusted_role: TrustedAgentRole::Device,
             daemon_ura: Some("easynet:///r/local/hub"),
             trust_anchor: &empty_anchor(),
+            access_control_stores: &stores,
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: None,
             verified_authority_id: None,

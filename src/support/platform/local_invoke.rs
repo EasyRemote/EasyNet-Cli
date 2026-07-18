@@ -253,20 +253,6 @@ pub fn invoke_local_ability_with_subject_timeout(
     )
 }
 
-/// Explicit local projection for stream-mode abilities when a scalar caller
-/// needs one JSON value. This opens InvokeStream directly and returns the first
-/// non-empty payload frame; it never probes unary first.
-pub fn invoke_local_stream_ability_first_payload(
-    ability: &str,
-    args: Value,
-    subject: Option<String>,
-    timeout: std::time::Duration,
-) -> anyhow::Result<Value> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_stream_first_payload_with_subject(
-        ability, args, subject, timeout,
-    )
-}
-
 /// Invoke a canonical local Ability URA target through the daemon.
 ///
 /// This path preserves the full descriptor owner identity in the signed
@@ -337,49 +323,12 @@ pub fn invoke_local_ability_target_bidi_json_frames_with_subject(
     )
 }
 
-/// Same as [`invoke_local_ability_with_subject`] but returns the
-/// invocation record alongside the result.
-///
-/// This is the EAL mission runner's lowering surface: each mission
-/// step becomes one complete seven-tuple Axon invocation. The
-/// returned metadata value carries the envelope echo (caller /
-/// callee / ability / subject / nonce / causal_context) plus the
-/// receipt-bound `invocation_ura`, `trace_id`, and verified finalization
-/// anchor — the material a downstream step needs to name THIS step
-/// as its causal parent. `causal_parents` entries are
-/// `{node, invocation_ura, receipt_ura, receipt_hash}` objects from
-/// prior verified projections in this process; they are encoded into the
-/// envelope's `causal_context` (explicit `Empty` for a root step, `ReceiptRef`
-/// scalar for one parent, ordered `ReceiptList` for a join).
-/// `trace_id` is the mission run's id; it is stamped on the
-/// envelope's operational-metadata `trace_id` field so the daemon
-/// ledger groups every step of one run under one trace.
-pub fn invoke_local_ability_with_invocation_meta(
-    ability: &str,
-    args: Value,
-    subject: Option<String>,
-    causal_parents: &[Value],
-    step_timeout: Option<std::time::Duration>,
-    trace_id: Option<&str>,
-    callee_agent: Option<&str>,
-) -> anyhow::Result<(Value, Value)> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_with_invocation_meta(
-        ability,
-        args,
-        subject,
-        causal_parents,
-        step_timeout,
-        trace_id,
-        callee_agent,
-    )
-}
-
 /// Metadata produced only after Axon has verified the admission and terminal
 /// receipt checkpoints against the trusted local key service.
 ///
 /// The constructor remains private to this module. Consumers may inspect or
-/// serialize the compatibility JSON projection, but cannot label arbitrary
-/// JSON as verified metadata.
+/// serialize the verified JSON projection, but cannot label arbitrary JSON as
+/// verified metadata.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VerifiedLocalInvocationMeta(Value);
 
@@ -389,64 +338,103 @@ impl VerifiedLocalInvocationMeta {
     }
 }
 
+/// Explicit caller-owned facts for a daemon-local system invocation.
+///
+/// The caller identity is fixed by the named `_system.local` issuer. Callee and
+/// ability come from [`LocalAbilityTarget`]. Subject, nonce, causal placement,
+/// timeout, and trace placement must be selected before transport entry.
+#[derive(Debug)]
+pub struct LocalSystemInvocationContext<'a> {
+    subject_ura: String,
+    invocation_nonce: [u8; 16],
+    causal_parents: &'a [Value],
+    step_timeout: std::time::Duration,
+    trace_id: Option<&'a str>,
+}
+
+impl<'a> LocalSystemInvocationContext<'a> {
+    pub fn new(
+        subject_ura: impl Into<String>,
+        invocation_nonce: [u8; 16],
+        causal_parents: &'a [Value],
+        step_timeout: std::time::Duration,
+        trace_id: Option<&'a str>,
+    ) -> anyhow::Result<Self> {
+        let subject_ura = subject_ura.into();
+        let subject_ura = subject_ura.trim();
+        if subject_ura.is_empty() {
+            anyhow::bail!("local system invocation subject_ura must not be empty");
+        }
+        crate::core::ura::parse_ura(subject_ura).map_err(|error| {
+            anyhow::anyhow!("local system invocation subject_ura is invalid: {error}")
+        })?;
+        if invocation_nonce == [0; 16] {
+            anyhow::bail!("local system invocation nonce must not be all-zero");
+        }
+        if step_timeout.is_zero() {
+            anyhow::bail!("local system invocation timeout must be greater than zero");
+        }
+        if trace_id.is_some_and(|trace_id| trace_id.trim().is_empty()) {
+            anyhow::bail!("local system invocation trace_id must not be empty when supplied");
+        }
+        Ok(Self {
+            subject_ura: subject_ura.to_string(),
+            invocation_nonce,
+            causal_parents,
+            step_timeout,
+            trace_id,
+        })
+    }
+}
+
 /// Invoke a canonical local Ability target and return cryptographically
 /// verified invocation metadata with the result.
-///
-/// Unlike the mission-compatibility helper above, this entry point never
-/// resolves an agent display name and never substitutes the local device as
-/// descriptor owner. The wire callee and default subject come directly from
-/// [`LocalAbilityTarget`], which is constructed from the canonical Ability
-/// URA advertised by discovery/tools-list.
 pub fn invoke_local_ability_target_with_invocation_meta(
     target: &LocalAbilityTarget,
     args: Value,
-    subject: Option<String>,
-    causal_parents: &[Value],
-    step_timeout: Option<std::time::Duration>,
-    trace_id: Option<&str>,
+    context: LocalSystemInvocationContext<'_>,
 ) -> anyhow::Result<(Value, VerifiedLocalInvocationMeta)> {
     let request =
         crate::support::platform::local_daemon_grpc::LocalDaemonTargetedInvocationMetaRequest {
             function_name: target.dispatch_name(),
             payload_json: args,
-            target:
-                crate::support::platform::local_daemon_grpc::LocalDaemonCanonicalInvocationTarget {
-                    callee_ura: target.callee_ura(),
-                    default_subject_ura: target.default_subject_ura(),
-                },
-            subject,
-            causal_parents,
-            step_timeout,
-            trace_id,
+            callee_ura: target.callee_ura(),
+            subject_ura: &context.subject_ura,
+            invocation_nonce: context.invocation_nonce,
+            causal_parents: context.causal_parents,
+            step_timeout: context.step_timeout,
+            trace_id: context.trace_id,
         };
     let (value, metadata) =
         crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_with_invocation_meta(request)?;
     Ok((value, VerifiedLocalInvocationMeta(metadata)))
 }
 
-/// Same as [`invoke_local_ability_with_invocation_meta`], but annotates the
-/// returned metadata with the hosted agent whose local device signed the call.
+/// Invoke a canonical local target with explicit hosted-agent delegation.
 ///
 /// This does NOT rewrite the hosted agent into Axon's caller. The signed
 /// Invocation caller is the local daemon IPC system identity; hosted-agent
 /// intent is carried as explicit delegation metadata and ability arguments,
 /// not by rewriting caller identity.
-pub fn invoke_local_ability_with_hosted_agent_delegation(
-    ability: &str,
+pub fn invoke_local_ability_target_with_hosted_agent_delegation(
+    target: &LocalAbilityTarget,
     args: Value,
-    subject: Option<String>,
-    causal_parents: &[Value],
-    step_timeout: Option<std::time::Duration>,
-    trace_id: Option<&str>,
+    context: LocalSystemInvocationContext<'_>,
     hosted_agent_ura: &str,
 ) -> anyhow::Result<(Value, Value)> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_with_hosted_agent_delegation(
-        ability,
-        args,
-        subject,
-        causal_parents,
-        step_timeout,
-        trace_id,
+    let request =
+        crate::support::platform::local_daemon_grpc::LocalDaemonTargetedInvocationMetaRequest {
+            function_name: target.dispatch_name(),
+            payload_json: args,
+            callee_ura: target.callee_ura(),
+            subject_ura: &context.subject_ura,
+            invocation_nonce: context.invocation_nonce,
+            causal_parents: context.causal_parents,
+            step_timeout: context.step_timeout,
+            trace_id: context.trace_id,
+        };
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_with_hosted_agent_delegation(
+        request,
         hosted_agent_ura,
     )
 }
@@ -482,6 +470,45 @@ pub fn federation_not_wired_error(action: &str) -> anyhow::Error {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn local_system_context_requires_complete_explicit_facts() {
+        let complete = LocalSystemInvocationContext::new(
+            "easynet:///r/acme/resource/device.local/probe/alive",
+            [0x33; 16],
+            &[],
+            std::time::Duration::from_secs(5),
+            Some("trace-1"),
+        )
+        .expect("complete context");
+        assert_eq!(complete.invocation_nonce, [0x33; 16]);
+        assert_eq!(complete.step_timeout, std::time::Duration::from_secs(5));
+
+        assert!(LocalSystemInvocationContext::new(
+            "",
+            [0x33; 16],
+            &[],
+            std::time::Duration::from_secs(5),
+            None,
+        )
+        .is_err());
+        assert!(LocalSystemInvocationContext::new(
+            "easynet:///r/acme/resource/device.local/probe/alive",
+            [0; 16],
+            &[],
+            std::time::Duration::from_secs(5),
+            None,
+        )
+        .is_err());
+        assert!(LocalSystemInvocationContext::new(
+            "easynet:///r/acme/resource/device.local/probe/alive",
+            [0x33; 16],
+            &[],
+            std::time::Duration::ZERO,
+            None,
+        )
+        .is_err());
+    }
 
     #[test]
     fn local_ability_target_preserves_agent_owner_as_callee_and_subject() {
@@ -550,7 +577,7 @@ mod tests {
     #[test]
     fn invoke_local_ability_surfaces_daemon_down_with_actionable_message() {
         // Fresh HOME: no Axon daemon socket can be accepting. The
-        // compatibility helper must surface the same actionable
+        // canonical helper must surface the same actionable
         // daemon-down message while routing through daemon.sock,
         // not the legacy control socket frame.
         let _g = crate::cli::commands::test_support::HomeGuard::new();

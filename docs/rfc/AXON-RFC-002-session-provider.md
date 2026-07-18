@@ -774,7 +774,7 @@ decision is binding for implementation.
 - Each `Accepted` attach establishes its own §A16 frame chain
   anchored on its attach receipt's content hash.
 - "Walking previous attach episodes for a session_id" is a
-  query over the receipt log: `WHERE callee == session_uri`.
+  query over the receipt log: `WHERE callee == session_ura`.
 - The provider does not maintain attach history; axon does
   not maintain attach history; the receipt log is the source
   of truth.

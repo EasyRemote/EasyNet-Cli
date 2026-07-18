@@ -16,7 +16,6 @@ use crate::daemon::ability::dispatch::{
 };
 use crate::daemon::ability::manifest::{EalExec, McpExec};
 use crate::daemon::ability::{AbilityImplSource, RuntimeEnv};
-use crate::daemon::execution::mission::context::ParentInvocationContext;
 use crate::daemon::plugins::contribution::{
     PluginContributionBuilder, PluginContributionSet, PluginRequirementSet,
 };
@@ -436,19 +435,46 @@ fn rpc_process_handler(command: SidecarCommand, ability: String) -> LocalRpcHand
 
 fn eal_rpc_handler(spec: EalExec) -> LocalRpcHandlerWithEnvelope {
     Arc::new(move |env, args: Value| {
-        let invocation_context = invocation_context_from_envelope(&env).to_json_value();
-        crate::daemon::execution::mission::executors::eal::run_eal_exec_with_invocation_context(
-            &spec,
-            &args,
-            Some(invocation_context),
-            None,
+        let gateway = Arc::new(PluginEalInvocationGateway::new(env));
+        crate::daemon::execution::mission::executors::eal::run_eal_exec_with_gateway(
+            &spec, &args, gateway, None,
         )
     })
 }
 
+#[derive(Clone)]
+struct PluginEalInvocationGateway {
+    admitted_parent: EnvelopeContext,
+}
+
+impl PluginEalInvocationGateway {
+    fn new(admitted_parent: EnvelopeContext) -> Self {
+        Self { admitted_parent }
+    }
+}
+
+impl crate::daemon::execution::mission::invocation_gateway::MissionInvocationGateway
+    for PluginEalInvocationGateway
+{
+    fn invoke(
+        &self,
+        request: crate::daemon::execution::mission::invocation_gateway::MissionInvocationRequest,
+    ) -> anyhow::Result<
+        crate::daemon::execution::mission::invocation_gateway::MissionInvocationOutcome,
+    > {
+        let gateway =
+            crate::daemon::execution::mission::invocation_gateway::DaemonMissionInvocationGateway::from_admitted_envelope(
+                &self.admitted_parent,
+            )?;
+        crate::daemon::execution::mission::invocation_gateway::MissionInvocationGateway::invoke(
+            &gateway, request,
+        )
+    }
+}
+
 fn mcp_rpc_handler(spec: McpExec) -> LocalRpcHandlerWithEnvelope {
     Arc::new(move |env, args: Value| {
-        let invocation_context = invocation_context_from_envelope(&env).to_json_value();
+        let invocation_context = invocation_observation_from_envelope(&env);
         crate::daemon::ability::builtins::integrations::mcp::executor::run_mcp_exec_with_invocation_context(
             &spec,
             &args,
@@ -457,15 +483,15 @@ fn mcp_rpc_handler(spec: McpExec) -> LocalRpcHandlerWithEnvelope {
     })
 }
 
-fn invocation_context_from_envelope(env: &EnvelopeContext) -> ParentInvocationContext {
-    ParentInvocationContext {
-        caller: Some(env.caller().to_string()),
-        callee: Some(env.callee().to_string()),
-        ability: Some(env.ability().to_string()),
-        subject: Some(env.subject().to_string()),
-        invocation_nonce: Some(env.invocation_nonce().to_vec()),
-        causal_context: Some(env.causal_context().clone()),
-    }
+fn invocation_observation_from_envelope(env: &EnvelopeContext) -> Value {
+    serde_json::json!({
+        "caller": env.caller(),
+        "callee": env.callee(),
+        "ability": env.ability(),
+        "subject": env.subject(),
+        "invocation_nonce": env.invocation_nonce(),
+        "causal_context": env.causal_context(),
+    })
 }
 
 fn stream_process_handler(
@@ -510,7 +536,10 @@ mod tests {
 
     fn executable_test_catalog() -> AxonAbilityCatalog {
         AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
         )
     }
 
@@ -647,16 +676,47 @@ mod tests {
     }
 
     #[test]
-    fn plugin_runtime_host_registers_eal_declarative_rpc() {
-        let root = tempfile::tempdir().expect("root");
-        write_eal_declarative_package(root.path());
-        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
-        let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
+    fn plugin_eal_gateway_rejects_child_dispatch_without_daemon_product_policy() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut catalog = executable_test_catalog();
+        catalog.register_rpc_with_envelope_and_owner(
+            "observe.health",
+            OwnerKind::Device,
+            Arc::new(|env, _args| {
+                let gateway = PluginEalInvocationGateway::new(env);
+                let request =
+                    crate::daemon::execution::mission::invocation_gateway::MissionInvocationRequest::system(
+                        "observe.health",
+                        json!({}),
+                    );
+                crate::daemon::execution::mission::invocation_gateway::MissionInvocationGateway::invoke(
+                    &gateway, request,
+                )
+                .map(|_| json!({"unexpected": "child dispatch admitted"}))
+            }),
+        );
 
-        manager_from_index(index)
-            .register_current_plugins(&mut catalog)
-            .expect("register declarative eal");
+        let err = catalog
+            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+                "observe.health",
+                json!({}),
+                CallMode::Rpc,
+                "easynet:///r/acme/resource/test",
+            ))
+            .expect_err("canonical-only runtime must not synthesize daemon product policy");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(
+                "Mission child dispatch requires the admitting daemon product-policy capability"
+            ),
+            "wrong error: {msg}"
+        );
+    }
+
+    #[test]
+    fn plugin_runtime_host_registers_eal_declarative_rpc() {
+        let mut catalog = executable_test_catalog();
+        register_eal_declarative_plugin(&mut catalog);
 
         assert!(catalog.has_rpc("test.declarative_eal"));
         let record = catalog
@@ -675,6 +735,16 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains("eal executor"), "wrong error: {msg}");
         assert!(msg.contains("name"), "wrong error: {msg}");
+    }
+
+    fn register_eal_declarative_plugin(catalog: &mut AxonAbilityCatalog) {
+        let root = tempfile::tempdir().expect("root");
+        write_eal_declarative_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+        let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
+        manager_from_index(index)
+            .register_current_plugins(catalog)
+            .expect("register declarative eal");
     }
 
     #[test]

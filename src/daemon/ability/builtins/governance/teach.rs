@@ -22,20 +22,20 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::core::ura::AbilitySelector;
-use crate::daemon::ability::HostedAgentAuthority;
 use crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
 use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest};
+use crate::daemon::ability::HostedAgentAuthority;
 use crate::daemon::axon_bridge::hot_agent_registrar::{
-    HotAgentRegistrarError, HotAgentRegistrarReadiness, HotAgentRuntimeSyncOutcome,
-    block_on_hot_registrar,
+    block_on_hot_registrar, HotAgentRegistrarError, HotAgentRegistrarReadiness,
+    HotAgentRuntimeSyncOutcome,
 };
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentAggregateSnapshot, AgentRegistryProjectionLoadError,
@@ -44,9 +44,9 @@ use crate::daemon::persistence::agent_aggregate::{
 use crate::daemon::persistence::config::sync_parent_dir;
 use crate::daemon::persistence::teach_grants::{
     AcquireStagedGrant, AcquiringArtifactRecoveryState, AcquiringArtifactTxn,
-    DescriptorImportRecord, EXECUTION_MODE_DEFAULT, TeachGrant, TeachGrantAdmissionSnapshot,
+    DescriptorImportRecord, TeachGrant, TeachGrantAdmissionSnapshot,
     TeachGrantAdmissionSnapshotDraft, TeachGrantAuthoritySnapshot, TeachGrantDraft,
-    TeachGrantStore,
+    TeachGrantStore, EXECUTION_MODE_DEFAULT,
 };
 use crate::support::platform::errors::append_cleanup_error;
 
@@ -1259,8 +1259,7 @@ impl AuthorizedForget {
     fn from_request(env: EnvelopeContext, request: ForgetRequest) -> anyhow::Result<Self> {
         let agent_snapshot = AgentAggregateRepository::load_snapshot()?;
         let registered_agent = agent_snapshot.registered_agent_runtime_projection(&request.agent);
-        let agent_entry_for_runtime =
-            registered_agent.as_ref().map(|agent| agent.entry().clone());
+        let agent_entry_for_runtime = registered_agent.as_ref().map(|agent| agent.entry().clone());
         let agent_identity =
             hosted_agent_identity_by_name(&agent_snapshot, &request.agent, FORGET)?;
         let agent_ura = agent_identity.agent_ura.to_string();
@@ -1859,12 +1858,15 @@ mod tests {
         caller_env_with_subject(caller, FORGET, subject_for(learner_ura, "quote"))
     }
 
-    fn executable_test_runtime() -> Arc<easynet_axon::invocation::LocalRuntime> {
-        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None)
+    fn executable_test_runtime() -> Arc<axon_sdk::invocation::LocalRuntime> {
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        )
     }
 
     fn hot_registrar_cell_with_runtime(
-        runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+        runtime: Arc<axon_sdk::invocation::LocalRuntime>,
     ) -> SharedHotRegistrarCell {
         let dispatch_handle = Arc::new(std::sync::OnceLock::new());
         let registrar =
@@ -2055,16 +2057,12 @@ mod tests {
 
         // …the copy is on disk, and the original is untouched.
         let home = std::env::var("HOME").unwrap();
-        assert!(
-            std::path::Path::new(&home)
-                .join("agents/apprentice/abilities/quote.ability.toml")
-                .exists()
-        );
-        assert!(
-            std::path::Path::new(&home)
-                .join("agents/mentor/abilities/quote.ability.toml")
-                .exists()
-        );
+        assert!(std::path::Path::new(&home)
+            .join("agents/apprentice/abilities/quote.ability.toml")
+            .exists());
+        assert!(std::path::Path::new(&home)
+            .join("agents/mentor/abilities/quote.ability.toml")
+            .exists());
     }
 
     #[test]
@@ -2604,11 +2602,9 @@ mod tests {
             })
             .expect("forget");
         let home = std::env::var("HOME").unwrap();
-        assert!(
-            !std::path::Path::new(&home)
-                .join("agents/apprentice/abilities/quote.ability.toml")
-                .exists()
-        );
+        assert!(!std::path::Path::new(&home)
+            .join("agents/apprentice/abilities/quote.ability.toml")
+            .exists());
         assert!(
             std::path::Path::new(&home)
                 .join("agents/mentor/abilities/quote.ability.toml")

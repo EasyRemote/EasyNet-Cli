@@ -41,17 +41,18 @@ use crate::daemon::invocation::dispatch::federation_wrappers;
 use crate::daemon::invocation::dispatch::invocation_wire::{
     wire_invocation_target, FEDERATION_RESULT_CONTENT_TYPE,
 };
-use crate::daemon::invocation::ProtoEnvelope;
-use crate::daemon::persistence::access_control::AccessControlStore;
-use easynet_axon::invocation::{AbilityFrame, BidiInputFrame, CallMode};
-use easynet_axon::pb::axon::v1::{
+use crate::daemon::invocation::{InvocationDerivationPolicy, ProtoEnvelope};
+use axon_sdk::invocation::{AbilityFrame, BidiInputFrame, CallMode};
+use axon_sdk::pb::axon::v1::{
     invoke_bidi_down::Payload as DownPayload, BinaryChunk, StreamDescriptor,
 };
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
-use easynet_axon::pb::axon::v1::{AgentIdentity, CallerSignature, Envelope, SubjectIdentity};
+use crate::daemon::trust::anchor::{
+    RealmTrustAnchor, TrustedAgent, TrustedAgentRole, TrustedPrincipalOwner,
+};
+use axon_sdk::pb::axon::v1::{AgentIdentity, CallerSignature, Envelope, SubjectIdentity};
 
 /// Test helper daemon URA — admitted by the test admission
 /// facade via the loopback bypass. Tests that exercise
@@ -86,16 +87,17 @@ fn make_service_with_daemon_route_owner(route_owner_ura: &str) -> DaemonInvocati
 
 fn make_service_with_runtime(
     route_owner_ura: &str,
-    runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+    runtime_assembly: crate::daemon::axon_bridge::runtime_factory::DaemonRuntimeAssembly,
 ) -> DaemonInvocationService {
-    let service = make_unregistered_service_for_route_owner_and_runtime(route_owner_ura, runtime);
+    let service =
+        make_unregistered_service_for_route_owner_and_runtime(route_owner_ura, runtime_assembly);
     register_test_daemon_routes(service, route_owner_ura)
 }
 
 fn make_service_with_test_runtime(
-    runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+    runtime_assembly: crate::daemon::axon_bridge::runtime_factory::DaemonRuntimeAssembly,
 ) -> DaemonInvocationService {
-    make_service_with_runtime(TEST_DAEMON_URA, runtime)
+    make_service_with_runtime(TEST_DAEMON_URA, runtime_assembly)
 }
 
 fn make_service_with_presence(presence: Arc<PresenceRegistry>) -> DaemonInvocationService {
@@ -108,17 +110,26 @@ fn make_service_with_presence_and_heartbeat(
 ) -> DaemonInvocationService {
     let anchor = test_trust_anchor();
     let cell = SharedTrustAnchor::new(Arc::new(anchor));
-    let runtime = test_local_runtime(cell.clone());
-    let local_ability_catalog = test_catalog_for_route_owner(TEST_DAEMON_URA, Arc::clone(&runtime));
+    let runtime_assembly = test_runtime_assembly(cell.clone());
+    let runtime = runtime_assembly.runtime();
+    let access_control_stores = Arc::new(
+        crate::daemon::persistence::access_control::AccessControlStoreRegistry::ephemeral(),
+    );
+    let local_ability_catalog = test_catalog_for_route_owner(
+        TEST_DAEMON_URA,
+        Arc::clone(&runtime),
+        Arc::clone(&access_control_stores),
+    );
     let admission = AdmissionFacade::with_trust_anchor_cell(
         cell,
         test_admission_daemon_ura_for_route_owner(TEST_DAEMON_URA),
     )
+    .with_access_control_stores(access_control_stores)
     .with_ability_catalog(Arc::clone(&local_ability_catalog));
     let mut service = DaemonInvocationService::new(presence, admission)
         .with_hub_signer(test_hub_signer("test-realm"))
         .with_local_ability_catalog(local_ability_catalog)
-        .with_local_runtime(runtime);
+        .with_daemon_runtime(runtime_assembly);
     if let Some(interval) = heartbeat_interval_ms {
         service = service.with_subscribe_v2_heartbeat_interval_ms(interval);
     }
@@ -145,11 +156,13 @@ fn register_test_daemon_routes(
 ) -> DaemonInvocationService {
     let runtime = service
         .runtime
-        .local_runtime
-        .as_ref()
-        .cloned()
+        .local_runtime()
         .expect("test service must have a LocalRuntime before route registration");
-    let catalog = test_catalog_for_route_owner(route_owner_ura, runtime);
+    let catalog = test_catalog_for_route_owner(
+        route_owner_ura,
+        runtime,
+        service.admission.access_control_stores(),
+    );
     service.admission = service
         .admission
         .clone()
@@ -165,19 +178,40 @@ fn register_test_daemon_routes(
 fn make_unregistered_service_for_route_owner(route_owner_ura: &str) -> DaemonInvocationService {
     let anchor = test_trust_anchor();
     let cell = SharedTrustAnchor::new(Arc::new(anchor));
-    let runtime = test_local_runtime(cell.clone());
-    make_unregistered_service_for_route_owner_and_runtime(route_owner_ura, runtime)
+    let runtime_assembly = test_runtime_assembly(cell);
+    make_unregistered_service_for_route_owner_and_runtime(route_owner_ura, runtime_assembly)
 }
 
 fn make_unregistered_service_for_route_owner_and_runtime(
     route_owner_ura: &str,
-    runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+    runtime_assembly: crate::daemon::axon_bridge::runtime_factory::DaemonRuntimeAssembly,
 ) -> DaemonInvocationService {
     let anchor = test_trust_anchor();
     let cell = SharedTrustAnchor::new(Arc::new(anchor));
-    let local_ability_catalog = test_catalog_for_route_owner(route_owner_ura, Arc::clone(&runtime));
+    make_unregistered_service_for_route_owner_and_runtime_trust(
+        route_owner_ura,
+        runtime_assembly,
+        cell,
+    )
+}
+
+fn make_unregistered_service_for_route_owner_and_runtime_trust(
+    route_owner_ura: &str,
+    runtime_assembly: crate::daemon::axon_bridge::runtime_factory::DaemonRuntimeAssembly,
+    cell: SharedTrustAnchor,
+) -> DaemonInvocationService {
+    let runtime = runtime_assembly.runtime();
+    let access_control_stores = Arc::new(
+        crate::daemon::persistence::access_control::AccessControlStoreRegistry::ephemeral(),
+    );
+    let local_ability_catalog = test_catalog_for_route_owner(
+        route_owner_ura,
+        Arc::clone(&runtime),
+        Arc::clone(&access_control_stores),
+    );
     let admission_daemon_ura = test_admission_daemon_ura_for_route_owner(route_owner_ura);
     let admission = AdmissionFacade::with_trust_anchor_cell(cell.clone(), admission_daemon_ura)
+        .with_access_control_stores(access_control_stores)
         .with_ability_catalog(Arc::clone(&local_ability_catalog));
     let signer_realm = crate::core::ura::parse_ura(route_owner_ura)
         .map(|parsed| parsed.realm)
@@ -185,48 +219,67 @@ fn make_unregistered_service_for_route_owner_and_runtime(
     DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
         .with_hub_signer(test_hub_signer(&signer_realm))
         .with_local_ability_catalog(local_ability_catalog)
-        .with_local_runtime(runtime)
+        .with_daemon_runtime(runtime_assembly)
 }
 
 fn test_trust_anchor() -> RealmTrustAnchor {
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
-    RealmTrustAnchor::from_entries(vec![
-        TrustedAgent {
-            agent_ura: TEST_DAEMON_URA.to_string(),
-            public_key_b64: BASE64_STANDARD
-                .encode(test_device_signing_key().verifying_key().to_bytes()),
+    let devices = vec![
+        (
+            TEST_DAEMON_URA,
+            test_device_signing_key().verifying_key().to_bytes(),
+        ),
+        (
+            "easynet:///r/test-realm/device/client-1",
+            test_device_signing_key().verifying_key().to_bytes(),
+        ),
+        (
+            TEST_BOOTSTRAP_CALLER_URA,
+            test_bootstrap_caller_signing_key()
+                .verifying_key()
+                .to_bytes(),
+        ),
+    ];
+    let entries = devices
+        .iter()
+        .map(|(agent_ura, public_key)| TrustedAgent {
+            agent_ura: (*agent_ura).to_string(),
+            public_key_b64: BASE64_STANDARD.encode(public_key),
             role: TrustedAgentRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
             origin_realm: None,
             hub_endpoint: None,
             tls_ca_pem_path: None,
-        },
-        TrustedAgent {
-            agent_ura: "easynet:///r/test-realm/device/client-1".to_string(),
-            public_key_b64: BASE64_STANDARD
-                .encode(test_device_signing_key().verifying_key().to_bytes()),
-            role: TrustedAgentRole::Device,
+        })
+        .collect();
+    let principal_owners = devices
+        .iter()
+        .map(|(principal_ura, _)| TrustedPrincipalOwner {
+            principal_ura: (*principal_ura).to_string(),
+            owner_user_id: "test-user".to_string(),
+            owner_ura: "easynet:///r/test-realm/user/test-user".to_string(),
+            owner_username: Some("test-user".to_string()),
             added_at_unix_ms: 1_700_000_000_000,
-            origin_realm: None,
-            hub_endpoint: None,
-            tls_ca_pem_path: None,
-        },
-        TrustedAgent {
-            agent_ura: TEST_BOOTSTRAP_CALLER_URA.to_string(),
-            public_key_b64: BASE64_STANDARD.encode(
-                test_bootstrap_caller_signing_key()
-                    .verifying_key()
-                    .to_bytes(),
-            ),
-            role: TrustedAgentRole::Device,
-            added_at_unix_ms: 1_700_000_000_000,
-            origin_realm: None,
-            hub_endpoint: None,
-            tls_ca_pem_path: None,
-        },
-    ])
-    .expect("test daemon trust anchor")
+        })
+        .collect();
+    RealmTrustAnchor::from_parts_with_principal_owners(entries, principal_owners, Vec::new())
+        .expect("test daemon trust anchor")
+}
+
+fn test_trust_anchor_without_principal_owners() -> RealmTrustAnchor {
+    RealmTrustAnchor::from_entries(test_trust_anchor().entries_sorted())
+        .expect("test trust anchor without principal-owner projections")
+}
+
+fn test_trust_anchor_with_entries(entries: Vec<TrustedAgent>) -> RealmTrustAnchor {
+    let mut anchor = test_trust_anchor();
+    for entry in entries {
+        anchor
+            .append_agent(entry)
+            .expect("additional test trust entry must be canonical and unique");
+    }
+    anchor
 }
 
 fn test_admission_daemon_ura_for_route_owner(route_owner_ura: &str) -> Option<String> {
@@ -239,13 +292,17 @@ fn test_admission_daemon_ura_for_route_owner(route_owner_ura: &str) -> Option<St
 
 fn test_catalog_for_route_owner(
     route_owner_ura: &str,
-    runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+    runtime: Arc<axon_sdk::invocation::LocalRuntime>,
+    access_control_stores: Arc<
+        crate::daemon::persistence::access_control::AccessControlStoreRegistry,
+    >,
 ) -> Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog> {
     let authority_context = test_authority_context_for_route_owner(route_owner_ura);
     let agents = crate::daemon::persistence::agent_registry::AgentRegistry::default();
     let mut catalog_config =
         crate::daemon::ability::catalog::RegistryBuildConfig::new_with_authority_context(
-            crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
+            crate::daemon::ability::catalog::RegistryBuildServices::fresh()
+                .with_access_control_stores(access_control_stores),
             &agents,
             authority_context,
         );
@@ -277,15 +334,29 @@ fn test_authority_context_for_route_owner(
     }
 }
 
-fn test_local_runtime(cell: SharedTrustAnchor) -> Arc<easynet_axon::invocation::LocalRuntime> {
-    crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-        Some(Arc::new(TestRuntimeKeyResolver::new(cell))),
+fn test_runtime_assembly(
+    cell: SharedTrustAnchor,
+) -> crate::daemon::axon_bridge::runtime_factory::DaemonRuntimeAssembly {
+    crate::daemon::axon_bridge::runtime_factory::build_test_daemon_runtime_assembly(
+        Arc::new(TestRuntimeKeyResolver::new(cell)),
         None,
     )
 }
 
-fn test_runtime_with_default_trust() -> Arc<easynet_axon::invocation::LocalRuntime> {
-    test_local_runtime(SharedTrustAnchor::new(Arc::new(test_trust_anchor())))
+trait DaemonInvocationServiceTestRuntimeExt {
+    fn with_test_daemon_runtime(self, cell: SharedTrustAnchor) -> Self;
+}
+
+impl DaemonInvocationServiceTestRuntimeExt for DaemonInvocationService {
+    fn with_test_daemon_runtime(self, cell: SharedTrustAnchor) -> Self {
+        let runtime_assembly = test_runtime_assembly(cell);
+        self.with_daemon_runtime(runtime_assembly)
+    }
+}
+
+fn test_runtime_with_default_trust(
+) -> crate::daemon::axon_bridge::runtime_factory::DaemonRuntimeAssembly {
+    test_runtime_assembly(SharedTrustAnchor::new(Arc::new(test_trust_anchor())))
 }
 
 struct TestRuntimeKeyResolver {
@@ -300,25 +371,25 @@ impl TestRuntimeKeyResolver {
     }
 }
 
-impl easynet_axon::invocation::KeyResolver for TestRuntimeKeyResolver {
+impl axon_sdk::invocation::KeyResolver for TestRuntimeKeyResolver {
     fn resolve(
         &self,
         agent_ura: &str,
-    ) -> Result<ed25519_dalek::VerifyingKey, easynet_axon::invocation::AxonError> {
+    ) -> Result<ed25519_dalek::VerifyingKey, axon_sdk::invocation::AxonError> {
         if agent_ura == TEST_DAEMON_URA {
             return Ok(test_device_signing_key().verifying_key());
         }
-        easynet_axon::invocation::KeyResolver::resolve(&self.trust, agent_ura)
+        axon_sdk::invocation::KeyResolver::resolve(&self.trust, agent_ura)
     }
 
     fn resolve_all(
         &self,
         agent_ura: &str,
-    ) -> Result<Vec<ed25519_dalek::VerifyingKey>, easynet_axon::invocation::AxonError> {
+    ) -> Result<Vec<ed25519_dalek::VerifyingKey>, axon_sdk::invocation::AxonError> {
         if agent_ura == TEST_DAEMON_URA {
             return Ok(vec![test_device_signing_key().verifying_key()]);
         }
-        easynet_axon::invocation::KeyResolver::resolve_all(&self.trust, agent_ura)
+        axon_sdk::invocation::KeyResolver::resolve_all(&self.trust, agent_ura)
     }
 }
 
@@ -545,25 +616,16 @@ async fn runtime_with_json_echo(
     ability: &'static str,
     marker_key: &'static str,
     marker_value: &'static str,
-) -> Arc<easynet_axon::invocation::LocalRuntime> {
-    catalog_with_json_echo(owner_ura, ability, marker_key, marker_value)
-        .runtime()
-        .expect("catalog-backed echo runtime")
-}
-
-fn catalog_with_json_echo(
-    owner_ura: &str,
-    ability: &'static str,
-    marker_key: &'static str,
-    marker_value: &'static str,
-) -> Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog> {
-    catalog_with_json_echo_on_runtime(
+) -> crate::daemon::axon_bridge::runtime_factory::DaemonRuntimeAssembly {
+    let runtime_assembly = test_runtime_with_default_trust();
+    let _catalog = catalog_with_json_echo_on_runtime(
         owner_ura,
         ability,
         marker_key,
         marker_value,
-        test_runtime_with_default_trust(),
-    )
+        runtime_assembly.runtime(),
+    );
+    runtime_assembly
 }
 
 fn catalog_with_json_echo_on_runtime(
@@ -571,7 +633,7 @@ fn catalog_with_json_echo_on_runtime(
     ability: &'static str,
     marker_key: &'static str,
     marker_value: &'static str,
-    runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+    runtime: Arc<axon_sdk::invocation::LocalRuntime>,
 ) -> Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog> {
     use crate::daemon::ability::dispatch::{
         AbilityAuthorityContext, AxonAbilityCatalog, LocalRpcHandler, OwnerKind,
@@ -607,9 +669,15 @@ fn catalog_with_json_echo_on_runtime(
 }
 
 fn test_envelope() -> Envelope {
-    ProtoEnvelope::targeted(TEST_DAEMON_URA, TEST_DAEMON_URA, TEST_DAEMON_URA)
-        .expect("valid test envelope")
-        .into_inner()
+    ProtoEnvelope::from_target(
+        crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+        TEST_DAEMON_URA,
+        TEST_DAEMON_URA,
+        InvocationDerivationPolicy::FreshRoot,
+    )
+    .expect("valid test envelope")
+    .into_inner("test.envelope", b"")
+    .expect("complete test tuple")
 }
 
 #[test]
@@ -711,11 +779,9 @@ fn bind_invoke_request_to_descriptor_ref(
         &request.arguments,
         signing_key,
     ));
-    request.function_name = descriptor_ref.clone();
-    request.metadata.insert(
-        crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-            .to_string(),
-        descriptor_ref,
+    request.target = Some(
+        wire_invocation_target(&descriptor_ref, &request.function_name)
+            .expect("test descriptor target"),
     );
 }
 
@@ -725,7 +791,7 @@ async fn sync_runtime_proof_from_catalog(
     ability: &str,
     call_mode: crate::daemon::ability::CallMode,
 ) {
-    use easynet_axon::invocation::{AbilityCallModes, AbilityOptions, CallMode as AxonCallMode};
+    use axon_sdk::invocation::{AbilityCallModes, AbilityOptions, CallMode as AxonCallMode};
 
     let catalog = svc
         .directory
@@ -771,8 +837,7 @@ async fn sync_runtime_proof_from_catalog(
         crate::core::ura::owner_ability_ura(owner_ura, ability).expect("test runtime ability URA");
     let runtime = svc
         .runtime
-        .local_runtime
-        .as_ref()
+        .local_runtime()
         .expect("test service has local runtime");
     runtime
         .update_ability_options(&runtime_ability, options)
@@ -797,6 +862,7 @@ async fn signed_federation_join_request(
         provisional,
         hub_ura,
         membership_ura,
+        InvocationDerivationPolicy::FreshRoot,
     )
     .expect("genesis envelope")
     .signed_descriptor_ref_invoke_request_with_signer(
@@ -839,10 +905,18 @@ fn signed_test_envelope_with_descriptor_ref(
     use ed25519_dalek::Signer as _;
 
     let nonce = next_test_invocation_nonce();
-    let mut envelope = ProtoEnvelope::targeted(caller_ura, callee_ura, subject_ura)
-        .expect("valid signed test envelope")
-        .into_inner();
-    envelope.invocation_nonce = nonce.to_vec();
+    let mut envelope = ProtoEnvelope::from_target(
+        caller_ura,
+        callee_ura,
+        subject_ura,
+        InvocationDerivationPolicy::Explicit {
+            invocation_nonce: nonce,
+            causal_context: axon_sdk::invocation::CausalContext::None,
+        },
+    )
+    .expect("valid signed test envelope")
+    .into_inner(&descriptor_ref, arguments)
+    .expect("complete signed test tuple");
     let descriptor_bound =
         crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
             envelope.clone(),
@@ -897,13 +971,11 @@ fn signed_invoke_request(
             &arguments,
             signing_key,
         )),
-        function_name: descriptor_ref.clone(),
+        target: Some(
+            wire_invocation_target(&descriptor_ref, function_name).expect("test descriptor target"),
+        ),
+        function_name: function_name.to_string(),
         arguments,
-        metadata: std::collections::HashMap::from([(
-            crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-                .to_string(),
-            descriptor_ref,
-        )]),
         ..InvokeRequest::default()
     })
 }
@@ -914,13 +986,42 @@ fn parse_response_body<T: serde::de::DeserializeOwned>(resp: Response<InvokeResp
     serde_json::from_slice(&body.result).expect("response body deserialises")
 }
 
+fn expect_canonical_in_band_failure(
+    result: Result<Response<InvokeResponse>, Status>,
+    expected_code: axon_sdk::invocation::ErrorCode,
+    expectation: &str,
+) -> axon_sdk::pb::axon::v1::Error {
+    let body = result
+        .unwrap_or_else(|status| {
+            panic!(
+                "{expectation}: invocation failure must be in-band, got transport status: {status}"
+            )
+        })
+        .into_inner();
+    assert_eq!(
+        body.state,
+        axon_sdk::invocation::InvocationState::Failed.to_wire_i32(),
+        "{expectation}: canonical failure must use the Failed terminal state"
+    );
+    let error = body
+        .error
+        .expect("canonical Failed outcome must carry a typed error");
+    assert_eq!(
+        error.code,
+        expected_code.as_str(),
+        "{expectation}: wrong canonical error code"
+    );
+    error
+}
+
 // Shared invoke_remote frame helpers used by stream and bidi tests.
 // Canonical session dispatch helpers.
 
-use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
-use easynet_axon::pb::axon::v1::{BidiControl, EnvelopeOpen, InvokeBidiUp};
+use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+use axon_sdk::pb::axon::v1::{BidiControl, EnvelopeOpen, InvokeBidiUp};
 fn make_envelope_open(ability: &str, initial_args: Vec<u8>) -> EnvelopeOpen {
     let signing_key = test_device_signing_key();
+    let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URA, ability);
     EnvelopeOpen {
         envelope: Some(signed_test_envelope(
             TEST_DAEMON_URA,
@@ -930,7 +1031,9 @@ fn make_envelope_open(ability: &str, initial_args: Vec<u8>) -> EnvelopeOpen {
             &initial_args,
             &signing_key,
         )),
-        target: Some(wire_invocation_target(ability).expect("test wire target")),
+        target: Some(
+            wire_invocation_target(descriptor_ref, ability).expect("test descriptor target"),
+        ),
         streams: vec![StreamDescriptor {
             stream_id: 1,
             content_type: "application/json".to_string(),
@@ -945,6 +1048,11 @@ fn make_envelope_open(ability: &str, initial_args: Vec<u8>) -> EnvelopeOpen {
 
 fn make_descriptor_ref_envelope_open(descriptor_ref: &str, initial_args: Vec<u8>) -> EnvelopeOpen {
     let signing_key = test_device_signing_key();
+    let ability_ura = axon_sdk::invocation::ability_ura_from_descriptor_ref(descriptor_ref)
+        .expect("test descriptor ability URA");
+    let function_name =
+        axon_sdk::ura::public_ability_name_from_ability_ura(TEST_DAEMON_URA, ability_ura)
+            .expect("test public function name");
     EnvelopeOpen {
         envelope: Some(signed_test_envelope_with_descriptor_ref(
             TEST_DAEMON_URA,
@@ -954,7 +1062,9 @@ fn make_descriptor_ref_envelope_open(descriptor_ref: &str, initial_args: Vec<u8>
             &initial_args,
             &signing_key,
         )),
-        target: Some(wire_invocation_target(descriptor_ref).expect("test descriptor target")),
+        target: Some(
+            wire_invocation_target(descriptor_ref, function_name).expect("test descriptor target"),
+        ),
         initial_args,
         args_content_type: "application/json".to_string(),
         ..EnvelopeOpen::default()
@@ -964,6 +1074,7 @@ fn make_descriptor_ref_envelope_open(descriptor_ref: &str, initial_args: Vec<u8>
 fn make_envelope_open_with_callee(callee_ura: &str) -> EnvelopeOpen {
     let ability = crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH;
     let signing_key = test_device_signing_key();
+    let descriptor_ref = test_descriptor_ref(callee_ura, ability);
     EnvelopeOpen {
         envelope: Some(signed_test_envelope(
             TEST_DAEMON_URA,
@@ -973,7 +1084,9 @@ fn make_envelope_open_with_callee(callee_ura: &str) -> EnvelopeOpen {
             &[],
             &signing_key,
         )),
-        target: Some(wire_invocation_target(ability).expect("test wire target")),
+        target: Some(
+            wire_invocation_target(descriptor_ref, ability).expect("test descriptor target"),
+        ),
         ..EnvelopeOpen::default()
     }
 }
@@ -995,7 +1108,10 @@ struct ChildAccessGrantInput<'a> {
     action: AccessAction,
 }
 
-fn grant_child_access_for_test(input: ChildAccessGrantInput<'_>) {
+fn grant_child_access_for_test(
+    stores: &crate::daemon::persistence::access_control::AccessControlStoreRegistry,
+    input: ChildAccessGrantInput<'_>,
+) {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     let ChildAccessGrantInput {
@@ -1011,37 +1127,38 @@ fn grant_child_access_for_test(input: ChildAccessGrantInput<'_>) {
     static GRANT_COUNTER: AtomicU64 = AtomicU64::new(1);
     let n = GRANT_COUNTER.fetch_add(1, Ordering::Relaxed);
     let token_id = token_class.map(|_| principal_ura.to_string());
-    let mut store =
-        AccessControlStore::open_or_create(owner_user_id).expect("open test access-control store");
-    store
-        .create_grant(
-            PermissionGrant {
-                grant_id: format!("test-grant-{n}"),
-                owner_user_id: owner_user_id.to_string(),
-                principal_kind,
-                principal_id: principal_ura.to_string(),
-                token_id,
-                token_class,
-                callee_ura: Some(callee_ura.to_string()),
-                subject_ura_pattern: Some(subject_ura.to_string()),
-                ability_ura_pattern: Some(ability_ura.to_string()),
-                actions: vec![action],
-                constraints: None,
-                effect: PermissionEffect::Allow,
-                lifetime: PermissionGrantLifetime::Session,
-                state: PermissionGrantState::Active,
-                expires_at: None,
-                review_required_after: None,
-                last_reviewed_at: None,
-                last_used_at: None,
-                created_by: crate::core::ura::user_ura("test-realm", owner_user_id),
-                created_at: "2026-07-09T00:00:00Z".to_string(),
-                updated_at: None,
-                revoked_at: None,
-                reason: Some("forward-invoke test fixture".to_string()),
-            },
-            &crate::core::ura::user_ura("test-realm", owner_user_id),
-        )
+    stores
+        .with_store(owner_user_id, |store| {
+            store.create_grant(
+                PermissionGrant {
+                    grant_id: format!("test-grant-{n}"),
+                    owner_user_id: owner_user_id.to_string(),
+                    principal_kind,
+                    principal_id: principal_ura.to_string(),
+                    token_id,
+                    token_class,
+                    callee_ura: Some(callee_ura.to_string()),
+                    subject_ura_pattern: Some(subject_ura.to_string()),
+                    ability_ura_pattern: Some(ability_ura.to_string()),
+                    actions: vec![action],
+                    constraints: None,
+                    effect: PermissionEffect::Allow,
+                    lifetime: PermissionGrantLifetime::Session,
+                    state: PermissionGrantState::Active,
+                    expires_at: None,
+                    review_required_after: None,
+                    last_reviewed_at: None,
+                    last_used_at: None,
+                    created_by: crate::core::ura::user_ura("test-realm", owner_user_id),
+                    created_at: "2026-07-09T00:00:00Z".to_string(),
+                    updated_at: None,
+                    revoked_at: None,
+                    reason: Some("forward-invoke test fixture".to_string()),
+                },
+                &crate::core::ura::user_ura("test-realm", owner_user_id),
+            )
+        })
+        .expect("open test access-control store")
         .expect("create test child access grant");
 }
 
@@ -1092,6 +1209,8 @@ impl FederationClient for RecordingFederationClient {
     }
 }
 
+#[path = "daemon_invocation_service_tests/admission.rs"]
+mod admission;
 #[path = "daemon_invocation_service_tests/bidi.rs"]
 mod bidi;
 #[path = "daemon_invocation_service_tests/forward.rs"]

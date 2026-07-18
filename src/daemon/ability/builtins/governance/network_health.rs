@@ -45,7 +45,7 @@
 
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::daemon::ability::builtins::agents::discover::{
     DiscoverFederationResolver, SharedDiscoverFederationResolver,

@@ -49,7 +49,7 @@ state_key
     A tuple that uniquely identifies one state object instance
     within a state_type. Stable for the lifetime of the object;
     survives node restart, ownership transfer, and replay.
-    For easynet.web_app: (realm, owner_agent_uri, app_slug).
+    For easynet.web_app: (realm, owner_agent_ura, app_slug).
 
 canonical_state_hash
     A deterministic hash over the canonical fields of one state
@@ -94,11 +94,11 @@ is pure construction.
 state_type:  easynet.web_app
 
 state_key:
-    (realm, owner_agent_uri, app_slug)
+    (realm, owner_agent_ura, app_slug)
 
       realm             logical namespace, e.g. "default" or
                         "acme"; carried in URAs.
-      owner_agent_uri   the canonical authority for this state
+      owner_agent_ura   the canonical authority for this state
                         object. Every CanonicalReceipt MUST carry
                         this agent's signature. The owner_agent
                         is named at create time and IMMUTABLE for
@@ -177,7 +177,7 @@ must produce a state object whose canonical hash does not depend on
 any of them.
 
 ```
-runtime_node_uri      which node currently executes this app
+runtime_node_ura      which node currently executes this app
                       (build, serve). MAY change between
                       OperationalReceipts; MUST NOT change
                       canonical hash.
@@ -257,7 +257,7 @@ Stopped     no executor process associated with this app on any
 Starting    webapp.serve has been invoked; an executor is
             launching the dev/preview server but it has not yet
             confirmed liveness.
-Running     executor is up; bound_port and runtime_node_uri are
+Running     executor is up; bound_port and runtime_node_ura are
             populated; HTTP/WS reverse proxy can succeed.
 Crashed     executor exited unexpectedly while previously
             Running; the canonical state is unchanged. May be
@@ -347,9 +347,9 @@ webapp.serve
     canonical precondition:  WebAppState == Built
     runtime pre :  Stopped | Crashed
     runtime post:  Starting → Running | Crashed
-    args:  optional port_hint, optional executor_node_uri
+    args:  optional port_hint, optional executor_node_ura
     receipt class: OperationalReceipt
-        runtime_node_uri = chosen executor
+        runtime_node_ura = chosen executor
         bound_port       = allocated
         started_at       = now
     canonical_state_hash MUST NOT change across this call.
@@ -732,7 +732,7 @@ Built / Starting
 
 Built / Running
     human_view   200  HTTP and WebSocket reverse-proxied to
-                      runtime_node_uri:bound_port. WS upgrade is
+                      runtime_node_ura:bound_port. WS upgrade is
                       mandatory — dev servers like Vite require
                       HMR; a hub that strips Upgrade headers
                       breaks the demo.

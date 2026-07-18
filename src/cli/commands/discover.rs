@@ -40,7 +40,7 @@
 // still print, exit code 0 (spec D9).
 //
 // The seven-tuple is auditable: each daemon discover call goes through
-// `invoke_local_ability_with_invocation_meta`, and the envelope echoes
+// `invoke_local_ability_target_with_invocation_meta`, and the envelope echoes
 // (caller / callee / ability / subject / …) are included verbatim in
 // `--format json` output as `invocations` (spec 0.1-7, W1-E2E-1 ⑤).
 //
@@ -55,7 +55,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::ura::AbilitySelector;
 use crate::support::platform::local_invoke::{
-    invoke_local_ability, invoke_local_ability_with_invocation_meta,
+    invoke_local_ability, invoke_local_ability_target_with_invocation_meta, LocalAbilityTarget,
+    LocalSystemInvocationContext,
 };
 
 /// Narrow re-export so integration tests (and other `pub` consumers
@@ -523,41 +524,50 @@ impl DiscoverExecutionPlan {
 
 /// Wire-level target for one discover ladder invocation.
 ///
-/// Invariant 1: `ability` is the owner-local public ability name that
-/// belongs in the Axon descriptor ref. It is never the legacy dotted
-/// `<agent>.discover` registry key.
-/// Invariant 2: `callee_agent` is present only for hosted-agent ladders;
-/// the daemon route resolver is responsible for mapping
-/// `(callee_agent, ability=discover)` to the local registry key.
+/// The target already contains the canonical callee URA and descriptor subject;
+/// display names never cross into invocation construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DiscoverLadderTarget {
-    ability: String,
-    callee_agent: Option<String>,
+    target: LocalAbilityTarget,
 }
 
 impl DiscoverLadderTarget {
-    fn device_aggregate() -> Self {
-        Self {
-            ability: crate::daemon::ability::builtins::agents::discover::DEVICE_DISCOVER_ABILITY
-                .to_string(),
-            callee_agent: None,
-        }
+    fn device_aggregate() -> anyhow::Result<Self> {
+        let owner = crate::daemon::identity::local_invocation::local_daemon_ura();
+        let ability = crate::daemon::ability::builtins::agents::discover::DEVICE_DISCOVER_ABILITY;
+        let subject = discover_subject_for_owner(&owner, ability)?;
+        Ok(Self {
+            target: LocalAbilityTarget::new(ability, &owner, subject)?,
+        })
     }
 
-    fn hosted_agent(agent: impl Into<String>) -> Self {
-        Self {
-            ability: crate::daemon::ability::builtins::agents::discover::ABILITY_VERB.to_string(),
-            callee_agent: Some(agent.into()),
-        }
+    fn hosted_agent(agent_ura: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            target: LocalAbilityTarget::new(
+                crate::daemon::ability::builtins::agents::discover::ABILITY_VERB,
+                agent_ura,
+                agent_ura,
+            )?,
+        })
     }
 
-    fn ability(&self) -> &str {
-        &self.ability
+    fn target(&self) -> &LocalAbilityTarget {
+        &self.target
     }
+}
 
-    fn callee_agent(&self) -> Option<&str> {
-        self.callee_agent.as_deref()
+fn discover_subject_for_owner(owner_ura: &str, ability: &str) -> anyhow::Result<String> {
+    let owner = crate::core::ura::parse_ura(owner_ura)
+        .map_err(|error| anyhow::anyhow!("discover owner URA is invalid: {error}"))?;
+    if owner.kind == crate::core::ura::URAKind::Hub {
+        let public_name = crate::core::ura::owner_local_ability_name(owner_ura, ability);
+        return crate::core::ura::owner_ability_ura(owner_ura, &public_name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "cannot derive descriptor subject for Hub-owned discover ability {ability:?}"
+            )
+        });
     }
+    Ok(owner_ura.to_string())
 }
 
 impl SourceWindowMode {
@@ -762,18 +772,22 @@ impl DiscoverRuntimeService {
         causal_parents: &[Value],
         trace_id: Option<&str>,
     ) -> anyhow::Result<(Value, Value)> {
-        invoke_local_ability_with_invocation_meta(
-            self.plan.ladder.ability(),
+        let context = LocalSystemInvocationContext::new(
+            self.plan.ladder.target().default_subject_ura(),
+            axon_sdk::invocation::fresh_nonce(),
+            causal_parents,
+            std::time::Duration::from_secs(30),
+            trace_id,
+        )?;
+        let (value, metadata) = invoke_local_ability_target_with_invocation_meta(
+            self.plan.ladder.target(),
             self.plan
                 .source_window
                 .runtime_args(scope, self.plan.source_limit, &self.plan.query),
-            None,
-            causal_parents,
-            None,
-            trace_id,
-            self.plan.ladder.callee_agent(),
+            context,
         )
-        .with_context(|| format!("walk discover tier {scope:?}"))
+        .with_context(|| format!("walk discover tier {scope:?}"))?;
+        Ok((value, metadata.as_value().clone()))
     }
 }
 
@@ -908,28 +922,27 @@ fn rank_and_deduplicate_candidates(mut candidates: Vec<Candidate>, limit: usize)
 /// daemon's historical `<agent>.discover` registry key.
 fn resolve_ladder_target(as_agent: Option<&str>) -> anyhow::Result<DiscoverLadderTarget> {
     let Some(requested_agent) = as_agent.map(str::trim).filter(|agent| !agent.is_empty()) else {
-        return Ok(DiscoverLadderTarget::device_aggregate());
+        return DiscoverLadderTarget::device_aggregate();
     };
     let value = invoke_local_ability("agent.list", json!({}))
         .context("resolve discover entry from the agent registry")?;
-    let mut names: Vec<String> = value
+    let agent_ura = value
         .get("agents")
         .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|r| r.get("name").and_then(Value::as_str))
-                .map(str::to_owned)
-                .collect()
+        .and_then(|rows| {
+            rows.iter().find_map(|row| {
+                (row.get("name").and_then(Value::as_str) == Some(requested_agent))
+                    .then(|| row.get("ura").and_then(Value::as_str))
+                    .flatten()
+            })
         })
-        .unwrap_or_default();
-    names.sort();
-    if !names.iter().any(|name| name == requested_agent) {
-        anyhow::bail!(
-            "agent {requested_agent:?} is not registered on this daemon; choose one from \
-             `easynet agent list`"
-        );
-    }
-    Ok(DiscoverLadderTarget::hosted_agent(requested_agent))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "agent {requested_agent:?} is not registered with a canonical Agent URA on this \
+                 daemon; choose one from `easynet agent list`"
+            )
+        })?;
+    DiscoverLadderTarget::hosted_agent(agent_ura)
 }
 
 /// Project every ladder row into a scored candidate; count rows whose
@@ -1318,10 +1331,14 @@ mod tests {
 
     #[test]
     fn hosted_ladder_target_uses_owner_local_discover_ability() {
-        let target = DiscoverLadderTarget::hosted_agent("testbot");
+        let target = DiscoverLadderTarget::hosted_agent("easynet:///r/acme/agent/alice.testbot")
+            .expect("hosted target");
 
-        assert_eq!(target.ability(), "discover");
-        assert_eq!(target.callee_agent(), Some("testbot"));
+        assert_eq!(target.target().dispatch_name(), "discover");
+        assert_eq!(
+            target.target().callee_ura(),
+            "easynet:///r/acme/agent/alice.testbot"
+        );
     }
 
     #[test]

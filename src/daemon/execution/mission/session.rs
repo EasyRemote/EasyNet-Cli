@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[cfg(test)]
-use easynet_axon::invocation::persistence::PersistentLog;
+use axon_sdk::invocation::persistence::PersistentLog;
 #[cfg(test)]
 use tokio::sync::broadcast;
 use uuid::Uuid;

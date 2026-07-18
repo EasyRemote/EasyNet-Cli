@@ -6,8 +6,8 @@
 //! trust anchor; the hint only disambiguates 1:N principal keys and prevents
 //! products from inventing per-call signature dialects.
 
+use axon_sdk::pb::axon::v1::CallerSignature;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use easynet_axon::pb::axon::v1::CallerSignature;
 
 use crate::daemon::identity::self_identity::{CanonicalSigner, SelfIdentityError};
 

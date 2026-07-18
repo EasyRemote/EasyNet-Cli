@@ -157,13 +157,13 @@ pub struct DispatchFrame {
     /// The proto-encoded bidirectional-down frame. Owned so the
     /// dispatcher does not hold references across the channel
     /// boundary.
-    pub frame: easynet_axon::pb::axon::v1::InvokeBidiDown,
+    pub frame: axon_sdk::pb::axon::v1::InvokeBidiDown,
     pub priority: DispatchPriority,
 }
 
 impl DispatchFrame {
     #[must_use]
-    pub fn normal(frame: easynet_axon::pb::axon::v1::InvokeBidiDown) -> Self {
+    pub fn normal(frame: axon_sdk::pb::axon::v1::InvokeBidiDown) -> Self {
         Self {
             frame,
             priority: DispatchPriority::Normal,
@@ -171,7 +171,7 @@ impl DispatchFrame {
     }
 
     #[must_use]
-    pub fn control(frame: easynet_axon::pb::axon::v1::InvokeBidiDown) -> Self {
+    pub fn control(frame: axon_sdk::pb::axon::v1::InvokeBidiDown) -> Self {
         Self {
             frame,
             priority: DispatchPriority::Control,

@@ -11,7 +11,9 @@ use serde_json::Value;
 use anyhow::Context;
 
 #[cfg(feature = "axon-pb")]
-use crate::daemon::invocation::routing::remote_invoke::{self, RemoteAbilityInvocationTarget};
+use crate::daemon::invocation::routing::remote_invoke::{
+    self, RemoteAbilityInvocationTarget, RemoteInvocationRequest,
+};
 
 #[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_remote_device_system_ability(
@@ -22,8 +24,9 @@ pub(crate) fn invoke_remote_device_system_ability(
 ) -> anyhow::Result<Value> {
     let _ = action_label;
     let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
-    let caller_ura = crate::support::platform::remote_device::caller_device_ura_from_credentials();
-    invoke_target_owned_system_ability(&target_ura, selector, args, caller_ura.as_deref())
+    let caller_ura =
+        crate::support::platform::remote_device::require_caller_device_ura_from_credentials()?;
+    invoke_target_owned_system_ability(&target_ura, selector, args, &caller_ura)
         .with_context(|| format!("forward {selector} to remote device target={target_ura}"))
 }
 
@@ -58,7 +61,7 @@ pub(crate) fn invoke_current_realm_hub_system_ability(
 
     let hub_ura = crate::core::ura::hub_ura(realm);
     let caller_ura = crate::core::ura::device_ura(realm, node_id);
-    let value = invoke_target_owned_system_ability(&hub_ura, selector, args, Some(&caller_ura))
+    let value = invoke_target_owned_system_ability(&hub_ura, selector, args, &caller_ura)
         .with_context(|| format!("invoke {selector} against realm hub"))?;
     Ok(Some(value))
 }
@@ -76,9 +79,34 @@ fn invoke_target_owned_system_ability(
     execution_target_ura: &str,
     selector: &str,
     args: Value,
-    caller_ura: Option<&str>,
+    caller_ura: &str,
 ) -> anyhow::Result<Value> {
     let target_call =
         RemoteAbilityInvocationTarget::for_target_owned_selector(execution_target_ura, selector)?;
-    remote_invoke::invoke_remote_target(&target_call, args, caller_ura)
+    let subject_ura = target_owned_system_subject_ura(&target_call)?;
+    let request = RemoteInvocationRequest::new(
+        &target_call,
+        caller_ura,
+        subject_ura,
+        axon_sdk::invocation::fresh_nonce(),
+        axon_sdk::invocation::CausalContext::None,
+        args,
+        std::time::Duration::from_secs(30),
+    )?;
+    remote_invoke::invoke_remote_target(request)
+}
+
+#[cfg(feature = "axon-pb")]
+fn target_owned_system_subject_ura(
+    target: &RemoteAbilityInvocationTarget,
+) -> anyhow::Result<String> {
+    let callee = crate::core::ura::parse_ura(target.callee_ura())
+        .map_err(|error| anyhow::anyhow!("remote system callee URA is invalid: {error}"))?;
+    match callee.kind {
+        crate::core::ura::URAKind::Device => Ok(target.callee_ura().to_string()),
+        crate::core::ura::URAKind::Hub => Ok(target.as_str().to_string()),
+        other => anyhow::bail!(
+            "target-owned remote system ability requires Device or Hub callee, got {other}"
+        ),
+    }
 }

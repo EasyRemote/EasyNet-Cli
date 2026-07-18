@@ -302,6 +302,7 @@ mod tests {
             package_version: "0.1.0".to_string(),
             display_name: "Test Companion".to_string(),
             package_root: PathBuf::from("/tmp/package"),
+            user_home: PathBuf::from("/tmp/home"),
             platform: "windows".to_string(),
             spec: PlatformCompanionSpec::Windows {
                 exe: PathBuf::from("TestCompanion.exe"),

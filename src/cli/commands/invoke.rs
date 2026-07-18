@@ -149,27 +149,10 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     let (result, fulfilled_label) = match node_ura.as_deref() {
         #[cfg(feature = "axon-pb")]
         Some(target) => {
-            // Resolve a real caller URA from credentials.json when
-            // available — the CLI's hardcoded fallback
-            // `easynet:///r/cli/device/local` is rejected by the
-            // local daemon's admission gate the moment the device
-            // it runs against is paired (the daemon's realm-trust
-            // anchor knows about its own device URA but not about
-            // the generic CLI placeholder). Pass-through to
-            // The forward target call signs with the daemon's device URA when
-            // credentials are present. None keeps fixture scripts working when
-            // they run without credentials.json.
-            // URA v4.1.4 Phase 2F: caller URA for an `easynet
-            // ability invoke --node ...` originating from a daemon
-            // is the daemon's *device* URA, not an agent URA. The
-            // legacy `/agent/<node>` shape collapsed devices into
-            // the agent namespace; v4.1.4 puts the daemon under the
-            // `device` role with the same node-id tail.
-            let credentials = crate::daemon::persistence::config::load_credentials().ok();
-            let caller_ura = credentials
-                .as_ref()
-                .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
-                .map(|c| crate::core::ura::device_ura(c.realm.trim(), c.node_id.trim()));
+            let credentials = crate::daemon::persistence::config::load_credentials()
+                .context("remote ability invoke requires paired device credentials")?;
+            let caller_ura =
+                crate::support::platform::remote_device::caller_device_ura(&credentials)?;
             let target_call = ability_ref.remote_target(target)?;
             let subject = invoke_args
                 .subject
@@ -177,21 +160,25 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
-                .or_else(|| {
-                    credentials
-                        .as_ref()
-                        .and_then(|creds| default_owner_invoke_subject(creds, ability_selector))
-                });
-            let value =
-                crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_with_timeout(
+                .or_else(|| default_owner_invoke_subject(&credentials, ability_selector))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "remote ability invoke requires --subject when paired credentials do not \
+                         identify an owner user"
+                    )
+                })?;
+            let request =
+                crate::daemon::invocation::routing::remote_invoke::RemoteInvocationRequest::new(
                     &target_call,
-                    subject.as_deref(),
+                    caller_ura,
+                    subject,
+                    axon_sdk::invocation::fresh_nonce(),
+                    axon_sdk::invocation::CausalContext::None,
                     arguments,
-                    caller_ura.as_deref(),
-                    // Originating CLI invoke: no inbound causal parent to chain.
-                    &[],
                     timeout,
                 )?;
+            let value =
+                crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(request)?;
             (value, format!("canonical Invoke target={target}"))
         }
         // The `not(axon-pb)` arm of `--node` already bailed above;
@@ -271,7 +258,7 @@ impl InvokeAbilityRef {
     fn parse(raw: &str) -> anyhow::Result<Self> {
         let raw = raw.trim();
         if raw.contains('@') {
-            let descriptor_ref = easynet_axon::invocation::canonical_ability_descriptor_ref(raw)
+            let descriptor_ref = axon_sdk::invocation::canonical_ability_descriptor_ref(raw)
                 .map_err(|err| anyhow::anyhow!("parse <ability-ura>@<version>: {err}"))?;
             let ability_ura =
                 crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(

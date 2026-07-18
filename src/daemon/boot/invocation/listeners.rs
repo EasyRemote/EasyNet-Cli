@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
+use axon_sdk::pb::axon::v1::invocation_server::InvocationServer;
 use tonic::transport::{Identity, Server, ServerTlsConfig};
 
 #[cfg(windows)]

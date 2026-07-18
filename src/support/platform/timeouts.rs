@@ -36,18 +36,6 @@
 //                                      is the legacy value kept for
 //                                      back-compat.
 //
-// 2. **Infrastructure** (internal plumbing deadlines, never surfaced
-//    as a flag). Today there is one:
-//
-//     - [`LOCAL_DAEMON_CONNECT_TIMEOUT_MS`] — how long local daemon
-//                                      connection is allowed to block
-//                                      before we declare the local
-//                                      runtime unreachable. 5 s is
-//                                      short enough to fail fast for
-//                                      an unattended CLI invocation
-//                                      yet long enough to absorb a
-//                                      cold UDS accept under load.
-//
 // The number `0` is reserved across the CLI to mean "inherit the
 // runtime default" — never hard-coded, but often plumbed through the
 // bridge layer for per-operation budgets. [`effective_ms`] converts a
@@ -98,27 +86,6 @@ pub const AGENT_SEND_DEFAULT_SECS: u64 = 3600;
 #[cfg(test)]
 pub const THINK_DEFAULT_SECS: u64 = 3600;
 
-/// How long a local daemon connection may block before we declare the
-/// runtime unreachable, in milliseconds.
-///
-/// 5 s is the calibrated floor:
-///
-/// - Long enough to absorb a cold UDS / TCP accept on a loaded box,
-///   where the runtime's `accept` loop can stall under heavy fork /
-///   heartbeat traffic for ~1 s in the worst case observed in
-///   practice. A 1 s floor produced flakes under CI load; 5 s
-///   eliminates them without making the "runtime is not running"
-///   error path feel stuck.
-/// - Short enough that an unattended CLI invocation against a down
-///   runtime fails fast — well under the 30 s a human waits before
-///   hitting Ctrl-C.
-///
-/// Not user-tunable by design: every `easynet` command that touches
-/// the runtime should wait the same amount, so `doctor` output is
-/// comparable across commands and operators can learn the shape of a
-/// "runtime down" failure once.
-pub const LOCAL_DAEMON_CONNECT_TIMEOUT_MS: u64 = 5_000;
-
 /// Convert a user-facing seconds value (from a `--timeout <N>` flag) to
 /// the `Option<Duration>`-in-milliseconds shape used by the bridge API.
 ///
@@ -164,20 +131,5 @@ mod tests {
         // u64::MAX seconds * 1000 would overflow. Surface it as an error
         // rather than silently wrapping or panicking in debug.
         assert!(effective_ms(u64::MAX).is_err());
-    }
-
-    /// Pin the bridge-connect budget so a silent re-tune (e.g. "lower
-    /// it to 1 s to speed up offline tests") has to be made with eyes
-    /// open. The tower's whole purpose is that any change to this
-    /// value is reviewed as a timeout-policy decision, not as an
-    /// incidental `const` edit hidden in some other PR.
-    #[test]
-    fn bridge_connect_budget_is_calibrated_not_ambient() {
-        assert_eq!(
-            LOCAL_DAEMON_CONNECT_TIMEOUT_MS, 5_000,
-            "LOCAL_DAEMON_CONNECT_TIMEOUT_MS is a reviewed timeout-policy \
-             constant — if you are changing it, update the module \
-             doc's rationale too"
-        );
     }
 }

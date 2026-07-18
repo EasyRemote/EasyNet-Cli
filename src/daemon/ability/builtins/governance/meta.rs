@@ -50,7 +50,7 @@ use crate::daemon::ability::descriptors::{AbilityDescriptor, AbilityIdentity};
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 pub const ABILITY_DESCRIBE: &str = crate::daemon::ability::names::governance::META_DESCRIBE;
 pub const ABILITY_LIST_ABILITIES: &str =
@@ -640,11 +640,9 @@ mod tests {
             d("fs.read").with_input_schema(json!({"type": "string"})),
         )
         .expect_err("same identity/version/mode with different schema must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("conflicting canonical descriptors")
-        );
+        assert!(error
+            .to_string()
+            .contains("conflicting canonical descriptors"));
     }
 
     fn seed_test_credentials(realm: &str, node_id: &str, username: &str) {
@@ -741,7 +739,10 @@ mod tests {
     ) -> Arc<AxonAbilityCatalog> {
         let handle = Arc::new(std::sync::OnceLock::new());
         let mut registry = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
             authority_context,
         );
         super::register(
@@ -769,7 +770,10 @@ mod tests {
             )
             .expect("explicit hosted-Agent test authorities must be canonical");
         AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
             authority_context,
         )
     }
@@ -838,7 +842,10 @@ mod tests {
         let calls_for_provider = Arc::clone(&provider_calls);
         let handle = Arc::new(std::sync::OnceLock::new());
         let mut registry = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            easynet_axon::invocation::LocalRuntime::new(),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
             AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
                 .expect("Hub authority context"),
         );
@@ -861,10 +868,9 @@ mod tests {
         let rows = response["abilities"].as_array().expect("ability rows");
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|row| row["owner_ura"] == hub_ura));
-        assert!(
-            rows.iter()
-                .all(|row| row["source"] == "daemon:control-plane")
-        );
+        assert!(rows
+            .iter()
+            .all(|row| row["source"] == "daemon:control-plane"));
         assert!(rows.iter().all(|row| {
             row["ability_ura"].as_str().is_some_and(|ability_ura| {
                 crate::core::ura::AbilitySelector::parse(ability_ura)
@@ -895,16 +901,12 @@ mod tests {
         let hub_rows = hub_response["abilities"].as_array().unwrap();
         assert_eq!(device_rows.len(), 2);
         assert_eq!(hub_rows.len(), 2);
-        assert!(
-            device_rows
-                .iter()
-                .all(|row| row["owner_ura"] == device_ura && row["owner_ura"] != "self")
-        );
-        assert!(
-            hub_rows
-                .iter()
-                .all(|row| row["owner_ura"] == hub_ura && row["owner_ura"] != "self")
-        );
+        assert!(device_rows
+            .iter()
+            .all(|row| row["owner_ura"] == device_ura && row["owner_ura"] != "self"));
+        assert!(hub_rows
+            .iter()
+            .all(|row| row["owner_ura"] == hub_ura && row["owner_ura"] != "self"));
 
         let device_list = device_rows
             .iter()
@@ -1026,11 +1028,9 @@ mod tests {
             .iter()
             .find(|a| a["name"].as_str() == Some("svc_plain"))
             .expect("plain ability row present");
-        assert!(
-            plain["metadata"]
-                .as_object()
-                .is_none_or(|m| !m.contains_key("health_status"))
-        );
+        assert!(plain["metadata"]
+            .as_object()
+            .is_none_or(|m| !m.contains_key("health_status")));
     }
 
     #[test]
@@ -1185,7 +1185,10 @@ mod tests {
         // Registration imports the manifest into the governed descriptor;
         // meta.list_abilities reads that committed descriptor directly.
         let mut live_reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            easynet_axon::invocation::LocalRuntime::new(),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
             AbilityAuthorityContext::for_device_authority_root(device_ura)
                 .expect("fixed Device authority context"),
         );
@@ -1351,7 +1354,10 @@ mod tests {
 
         let device_ura = "easynet:///r/test/device/01DEV";
         let mut live_reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            easynet_axon::invocation::LocalRuntime::new(),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
             AbilityAuthorityContext::for_device_authority_root(device_ura)
                 .expect("fixed Device authority context"),
         );
@@ -1388,7 +1394,7 @@ mod tests {
         // catalogue backing SchemaForm, so it must read static OR
         // dynamic manifests rather than the static-only map.
         use crate::daemon::ability::dispatch::OwnerKind;
-        use crate::daemon::persistence::local_agents::{LocalAgentsFile, save};
+        use crate::daemon::persistence::local_agents::{save, LocalAgentsFile};
         use std::sync::OnceLock;
 
         let _home = crate::cli::commands::test_support::HomeGuard::new();
@@ -1450,7 +1456,7 @@ mod tests {
     #[cfg(feature = "remote-desktop")]
     #[test]
     fn list_abilities_surfaces_remote_desktop_plugin_manifest_schema() {
-        use crate::daemon::persistence::local_agents::{LocalAgentsFile, save};
+        use crate::daemon::persistence::local_agents::{save, LocalAgentsFile};
         use crate::daemon::plugins::{
             DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
             PluginRequirementSet, PluginRuntimeLimits,
@@ -1513,7 +1519,7 @@ mod tests {
     #[test]
     fn list_abilities_includes_hot_added_hosted_agent_from_local_agents_ura() {
         use crate::daemon::persistence::local_agents::{
-            LocalAgentsFile, save, upsert_hosted_agent,
+            save, upsert_hosted_agent, LocalAgentsFile,
         };
         use std::sync::OnceLock;
 
@@ -1602,7 +1608,7 @@ mod tests {
     #[test]
     fn list_abilities_keeps_same_public_ability_name_for_multiple_hosted_agents() {
         use crate::daemon::persistence::local_agents::{
-            LocalAgentsFile, save, upsert_hosted_agent,
+            save, upsert_hosted_agent, LocalAgentsFile,
         };
         use std::sync::OnceLock;
 
@@ -1719,12 +1725,10 @@ mod tests {
         assert_eq!(resp["abilities_summary"]["total"], 0);
         // Empty by_namespace must be an object, not absent — caller
         // shouldn't have to special-case missing key.
-        assert!(
-            resp["abilities_summary"]["by_namespace"]
-                .as_object()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(resp["abilities_summary"]["by_namespace"]
+            .as_object()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

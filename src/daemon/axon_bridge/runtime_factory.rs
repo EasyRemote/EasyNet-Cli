@@ -17,80 +17,376 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::{collections::HashMap, sync::Mutex};
 
+#[cfg(any(test, feature = "axon-pb"))]
+use axon_sdk::invocation::AxonError;
 #[cfg(test)]
-use easynet_axon::invocation::{
-    sha256, AgentIdentity, CalleeSignature, ReceiptSigningAuthority,
-    ReceiptSigningAuthorityProvider,
+use axon_sdk::invocation::{
+    authority_proof_expected_hash, sha256, AgentIdentity, AuthorityBinding, CalleeSignature,
+    DescriptorBoundEnvelope, InvocationAuthorityProof, ReceiptSigningAuthority,
+    VerifiedAdmissionPolicy,
 };
-use easynet_axon::invocation::{
-    AxiomBinding, AxonError, InvocationLedger, KeyResolver, LedgerSink, LocalRuntime,
+use axon_sdk::invocation::{
+    AxiomBinding, CanonicalReceiptProvider, InvocationLedger, KeyResolver, LedgerSink, LocalRuntime,
 };
+#[cfg(any(test, feature = "axon-pb"))]
+use ed25519_dalek::VerifyingKey;
 #[cfg(test)]
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey, SIGNATURE_LENGTH};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
 
-use crate::daemon::identity::local_invocation::LocalSystemKeyResolver;
+use crate::daemon::identity::local_invocation::CanonicalAdmissionKeyResolver;
+#[cfg(feature = "axon-pb")]
 use crate::daemon::identity::receipt_signing::load_runtime_signing_authority_providers;
+#[cfg(feature = "axon-pb")]
 pub use crate::daemon::identity::receipt_signing::ProductionReceiptAuthorityConfig;
 
+/// Immutable runtime admission composition shared by transport dispatch and
+/// Axon's signature verifier.
+#[cfg(feature = "axon-pb")]
+pub struct DaemonRuntimeAdmissionGraph {
+    key_resolver: Arc<CanonicalAdmissionKeyResolver>,
+    product_policy: Arc<
+        crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator,
+    >,
+}
+
+#[cfg(feature = "axon-pb")]
+impl DaemonRuntimeAdmissionGraph {
+    fn new(
+        key_resolver: Arc<CanonicalAdmissionKeyResolver>,
+        product_policy: Arc<
+            crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator,
+        >,
+    ) -> Self {
+        Self {
+            key_resolver,
+            product_policy,
+        }
+    }
+
+    pub(crate) fn bootstrap_identity_provider(
+        &self,
+    ) -> Arc<crate::daemon::axon_bridge::runtime_admin::RuntimeBootstrapIdentityProvider> {
+        self.key_resolver.bootstrap_identity_provider()
+    }
+
+    pub(crate) fn provisional_bootstrap_provider(
+        &self,
+    ) -> Arc<crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider> {
+        self.key_resolver.provisional_bootstrap_provider()
+    }
+
+    pub(crate) fn product_policy(
+        &self,
+    ) -> Arc<
+        crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator,
+    > {
+        Arc::clone(&self.product_policy)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl KeyResolver for DaemonRuntimeAdmissionGraph {
+    fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+        self.key_resolver.resolve(agent_ura)
+    }
+
+    fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
+        self.key_resolver.resolve_all(agent_ura)
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+struct ProductPolicyCanonicalReceiptProvider {
+    receipt_authority: Arc<dyn CanonicalReceiptProvider>,
+    product_policy: Arc<
+        crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator,
+    >,
+}
+
+#[async_trait::async_trait]
+#[cfg(feature = "axon-pb")]
+impl CanonicalReceiptProvider for ProductPolicyCanonicalReceiptProvider {
+    fn verify_admission_policy(
+        &self,
+        envelope: &axon_sdk::invocation::DescriptorBoundEnvelope,
+    ) -> Result<axon_sdk::invocation::VerifiedAdmissionPolicy, AxonError> {
+        self.product_policy.verify_provider_policy(envelope)
+    }
+
+    async fn resolve_signing_authority(
+        &self,
+        callee: &axon_sdk::invocation::AgentIdentity,
+    ) -> Result<Arc<dyn axon_sdk::invocation::ReceiptSigningAuthority>, AxonError> {
+        self.receipt_authority
+            .resolve_signing_authority(callee)
+            .await
+    }
+
+    fn resolve_signer_key(&self, signer_ura: &str) -> Result<Option<VerifyingKey>, AxonError> {
+        self.receipt_authority.resolve_signer_key(signer_ura)
+    }
+}
+
+/// One immutable daemon runtime assembly.
+///
+/// The canonical runtime and the CLI-owned admission graph are constructed
+/// together and cannot be replaced independently. Any transport that exposes
+/// daemon-owned routes must receive this value rather than a bare
+/// [`LocalRuntime`].
+#[derive(Clone)]
+#[cfg(feature = "axon-pb")]
+pub struct DaemonRuntimeAssembly {
+    runtime: Arc<LocalRuntime>,
+    admission_graph: Arc<DaemonRuntimeAdmissionGraph>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl DaemonRuntimeAssembly {
+    #[must_use]
+    pub fn runtime(&self) -> Arc<LocalRuntime> {
+        Arc::clone(&self.runtime)
+    }
+
+    #[must_use]
+    pub(crate) fn admission_graph(&self) -> Arc<DaemonRuntimeAdmissionGraph> {
+        Arc::clone(&self.admission_graph)
+    }
+
+    /// Bind the daemon's completed product policy facade to the handlers
+    /// already installed in this exact runtime.
+    ///
+    /// Catalog assembly must precede facade assembly because admission
+    /// validates descriptors against the live catalog. This explicit
+    /// one-writer operation closes that construction cycle before listeners
+    /// are published, without introducing a process-global runtime lookup.
+    pub fn bind_derived_invocation_admission(
+        &self,
+        catalog: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
+        facade: crate::daemon::invocation::admission::admission_facade::AdmissionFacade,
+    ) -> anyhow::Result<()> {
+        catalog.bind_derived_invocation_admission(Arc::new(
+            crate::daemon::invocation::admission::admission_facade::DaemonDerivedInvocationAdmission::new(
+                facade,
+                self.admission_graph.product_policy(),
+            ),
+        ))
+    }
+}
+
 /// Build the daemon production runtime from persistent owner-bound key-service
-/// capabilities. No private key enters the CLI process.
+/// capabilities and one stable admission graph. No private key enters the CLI
+/// process.
+#[cfg(feature = "axon-pb")]
 pub fn build_production_local_runtime(
     config: ProductionReceiptAuthorityConfig,
-) -> Result<Arc<LocalRuntime>, AxonError> {
+    trusted_identities: Arc<dyn KeyResolver>,
+) -> Result<DaemonRuntimeAssembly, AxonError> {
     let providers = load_runtime_signing_authority_providers(config)?;
-    Ok(LocalRuntime::new_with_signing_authority_providers(
-        Some(providers.invocation),
+    Ok(assemble_daemon_runtime(
+        trusted_identities,
         providers.receipt,
+        Some(providers.invocation),
+        None,
     ))
 }
 
-/// Construct an explicit local-fast `Arc<LocalRuntime>` for daemon tests.
+/// Build the complete daemon runtime assembly from explicit canonical
+/// providers.
+///
+/// Host adapters and integration tests use this constructor when they expose
+/// daemon routes but own their trust and receipt providers. The optional
+/// ledger is installed during assembly so the returned value is ready before
+/// publication.
+#[must_use]
+#[cfg(feature = "axon-pb")]
+pub fn build_daemon_runtime_with_receipt_provider(
+    trusted_identities: Arc<dyn KeyResolver>,
+    canonical_receipt_provider: Arc<dyn CanonicalReceiptProvider>,
+    ledger: Option<Arc<InvocationLedger>>,
+) -> DaemonRuntimeAssembly {
+    assemble_daemon_runtime(trusted_identities, canonical_receipt_provider, None, ledger)
+}
+
+#[cfg(feature = "axon-pb")]
+fn assemble_daemon_runtime(
+    trusted_identities: Arc<dyn KeyResolver>,
+    canonical_receipt_provider: Arc<dyn CanonicalReceiptProvider>,
+    invocation_authority_provider: Option<
+        Arc<dyn axon_sdk::invocation::InvocationSigningAuthorityProvider>,
+    >,
+    ledger: Option<Arc<InvocationLedger>>,
+) -> DaemonRuntimeAssembly {
+    let product_policy = Arc::new(
+        crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator::default(),
+    );
+    let receipt_provider: Arc<dyn CanonicalReceiptProvider> =
+        Arc::new(ProductPolicyCanonicalReceiptProvider {
+            receipt_authority: canonical_receipt_provider,
+            product_policy: Arc::clone(&product_policy),
+        });
+    let bootstrap_identities = Arc::new(
+        crate::daemon::axon_bridge::runtime_admin::RuntimeBootstrapIdentityProvider::default(),
+    );
+    let provisional_bootstrap = Arc::new(
+        crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider::default(),
+    );
+    let admission_key_resolver = Arc::new(CanonicalAdmissionKeyResolver::new(
+        trusted_identities,
+        bootstrap_identities,
+        provisional_bootstrap,
+        Arc::clone(&receipt_provider),
+    ));
+    let admission_graph = Arc::new(DaemonRuntimeAdmissionGraph::new(
+        admission_key_resolver,
+        product_policy,
+    ));
+    let runtime_resolver: Arc<dyn KeyResolver> = admission_graph.clone();
+    let runtime = LocalRuntime::new_with_authority_providers(
+        runtime_resolver,
+        invocation_authority_provider,
+        receipt_provider,
+    );
+    install_ledger_sink(&runtime, ledger);
+    DaemonRuntimeAssembly {
+        runtime,
+        admission_graph,
+    }
+}
+
+/// Build a runtime from an explicit trust resolver and receipt provider.
+///
+/// Bounded probes use this canonical-only seam when they do not expose daemon
+/// routes. Both dependencies are mandatory; feature-enabled daemon transports
+/// must use the immutable daemon assembly constructor instead.
+pub fn build_local_runtime_with_receipt_provider(
+    trusted_identities: Arc<dyn KeyResolver>,
+    receipt_provider: Arc<dyn CanonicalReceiptProvider>,
+) -> Arc<LocalRuntime> {
+    let bootstrap_identities = Arc::new(
+        crate::daemon::axon_bridge::runtime_admin::RuntimeBootstrapIdentityProvider::default(),
+    );
+    let provisional_bootstrap = Arc::new(
+        crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider::default(),
+    );
+    let resolver: Arc<dyn KeyResolver> = Arc::new(CanonicalAdmissionKeyResolver::new(
+        trusted_identities,
+        bootstrap_identities,
+        provisional_bootstrap,
+        Arc::clone(&receipt_provider),
+    ));
+    LocalRuntime::new_with_canonical_receipt_provider(resolver, receipt_provider)
+}
+
+/// Construct an explicit canonical-only `Arc<LocalRuntime>` for unit tests.
 ///
 /// Test wiring includes:
 ///
-/// - the caller-key resolver supplied by the services layer, wrapped with the
-///   daemon-local `_system.local` resolver branch, so external signed calls
-///   and daemon-internal signed calls both use Axon's public admission path;
+/// - the required caller-key resolver supplied by the test;
+/// - an explicit test receipt provider;
 /// - the ledger sink backed by `InvocationLedger` (so every
 ///   terminal invocation persists into `<ledger_dir>/invocations.redb`
 ///   without the dispatch arm needing to manually build a record).
 ///
-/// Production boot must use [`build_production_local_runtime`].
+/// This fixture intentionally has no daemon product-policy coordinator. Tests
+/// for daemon transport admission must use
+/// [`build_test_daemon_runtime_assembly`]. Production boot must use
+/// [`build_production_local_runtime`].
 #[cfg(test)]
 #[must_use]
 pub fn build_local_runtime(
-    key_resolver: Option<Arc<dyn KeyResolver>>,
+    key_resolver: Arc<dyn KeyResolver>,
     ledger: Option<Arc<InvocationLedger>>,
 ) -> Arc<LocalRuntime> {
-    let runtime = build_ephemeral_test_runtime();
-    configure_local_runtime(&runtime, key_resolver, ledger);
+    let receipt_provider = ephemeral_test_canonical_receipt_provider();
+    let runtime = build_local_runtime_with_receipt_provider(key_resolver, receipt_provider);
+    install_ledger_sink(&runtime, ledger);
     runtime
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "axon-pb"))]
 #[must_use]
-pub(crate) fn build_ephemeral_test_runtime() -> Arc<LocalRuntime> {
-    LocalRuntime::new_with_receipt_signing_authority_provider(
-        ephemeral_test_receipt_signing_authority_provider(),
+/// Construct the complete downstream daemon admission assembly for transport
+/// tests that stage product policy before entering the canonical runtime.
+pub(crate) fn build_test_daemon_runtime_assembly(
+    key_resolver: Arc<dyn KeyResolver>,
+    ledger: Option<Arc<InvocationLedger>>,
+) -> DaemonRuntimeAssembly {
+    build_daemon_runtime_with_receipt_provider(
+        key_resolver,
+        ephemeral_test_canonical_receipt_provider(),
+        ledger,
     )
 }
 
 #[cfg(test)]
-pub(crate) fn ephemeral_test_receipt_signing_authority_provider(
-) -> Arc<dyn ReceiptSigningAuthorityProvider> {
-    Arc::new(EphemeralTestReceiptSigningAuthorityProvider::default())
+#[must_use]
+pub(crate) fn rejecting_test_key_resolver() -> Arc<dyn KeyResolver> {
+    Arc::new(RejectingTestKeyResolver)
+}
+
+#[cfg(test)]
+struct RejectingTestKeyResolver;
+
+#[cfg(test)]
+impl KeyResolver for RejectingTestKeyResolver {
+    fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+        Err(AxonError::permission_denied(format!(
+            "test_key_not_configured:{agent_ura}"
+        )))
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn ephemeral_test_canonical_receipt_provider() -> Arc<dyn CanonicalReceiptProvider> {
+    Arc::new(EphemeralTestCanonicalReceiptProvider::default())
+}
+
+#[cfg(test)]
+#[must_use]
+pub(crate) fn ephemeral_test_receipt_key_resolver() -> Arc<dyn KeyResolver> {
+    Arc::new(EphemeralTestReceiptKeyResolver)
+}
+
+#[cfg(test)]
+struct EphemeralTestReceiptKeyResolver;
+
+#[cfg(test)]
+impl KeyResolver for EphemeralTestReceiptKeyResolver {
+    fn resolve(&self, signer_ura: &str) -> Result<VerifyingKey, AxonError> {
+        Ok(SigningKey::from_bytes(&sha256(signer_ura.as_bytes())).verifying_key())
+    }
 }
 
 #[cfg(test)]
 #[derive(Default)]
-struct EphemeralTestReceiptSigningAuthorityProvider {
+struct EphemeralTestCanonicalReceiptProvider {
     authorities: Mutex<HashMap<AgentIdentity, Arc<dyn ReceiptSigningAuthority>>>,
 }
 
 #[cfg(test)]
 #[async_trait::async_trait]
-impl ReceiptSigningAuthorityProvider for EphemeralTestReceiptSigningAuthorityProvider {
-    async fn resolve(
+impl CanonicalReceiptProvider for EphemeralTestCanonicalReceiptProvider {
+    fn verify_admission_policy(
+        &self,
+        envelope: &DescriptorBoundEnvelope,
+    ) -> Result<VerifiedAdmissionPolicy, AxonError> {
+        let binding = AuthorityBinding::Self_ {
+            principal_ura: envelope.envelope().caller.ura.clone(),
+        };
+        let mut proof = InvocationAuthorityProof::new(
+            "test-self-admission",
+            Some(binding.clone()),
+            Vec::new(),
+            [0u8; 32],
+            Some(envelope.envelope().callee.clone()),
+            None,
+            "easynet-cli.test_self_admission.v1",
+        );
+        proof.proof_hash = authority_proof_expected_hash(&proof);
+        VerifiedAdmissionPolicy::new(envelope, binding, proof)
+    }
+
+    async fn resolve_signing_authority(
         &self,
         callee: &AgentIdentity,
     ) -> Result<Arc<dyn ReceiptSigningAuthority>, AxonError> {
@@ -162,53 +458,25 @@ impl ReceiptSigningAuthority for EphemeralTestReceiptSigningAuthority {
         self.verifying_key()
     }
 
-    async fn sign_canonical_receipt(
+    async fn sign_and_verify(
         &self,
         canonical_receipt: &[u8],
     ) -> Result<CalleeSignature, AxonError> {
         let signature: Signature = self.signing_key.sign(canonical_receipt);
+        self.verifying_key()
+            .verify(canonical_receipt, &signature)
+            .map_err(|_| AxonError::internal("cli_test_receipt_signature_self_verify_failed"))?;
         Ok(CalleeSignature {
             algorithm: "ed25519".to_string(),
             signature: signature.to_bytes().to_vec(),
             key_id_hint: "cli-test-runtime".to_string(),
         })
     }
-
-    fn verify_canonical_receipt(
-        &self,
-        canonical_receipt: &[u8],
-        signature: &CalleeSignature,
-    ) -> Result<(), AxonError> {
-        if signature.algorithm != "ed25519" {
-            return Err(AxonError::invalid_argument(format!(
-                "unsupported_algorithm:{}",
-                signature.algorithm
-            )));
-        }
-        let bytes: [u8; SIGNATURE_LENGTH] = signature
-            .signature
-            .as_slice()
-            .try_into()
-            .map_err(|_| AxonError::invalid_argument("callee_signature_wrong_length"))?;
-        self.verifying_key()
-            .verify(canonical_receipt, &Signature::from_bytes(&bytes))
-            .map_err(|_| AxonError::invalid_argument("callee_signature_invalid"))
-    }
 }
 
-/// Install daemon-specific admission and ledger adapters onto an
-/// already-created runtime. Daemon boot uses this when ability
-/// registration has to happen before `invocation_transport` finishes loading
-/// the transport config and trust anchor.
-pub fn configure_local_runtime(
-    runtime: &Arc<LocalRuntime>,
-    key_resolver: Option<Arc<dyn KeyResolver>>,
-    ledger: Option<Arc<InvocationLedger>>,
-) {
-    runtime.set_admission_key_resolver(Arc::new(
-        LocalSystemKeyResolver::new(key_resolver)
-            .with_receipt_signing_runtime(Arc::downgrade(runtime)),
-    ));
+/// Install the optional persistence sink. Admission and signing providers are
+/// immutable constructor dependencies and are deliberately absent here.
+pub fn install_ledger_sink(runtime: &Arc<LocalRuntime>, ledger: Option<Arc<InvocationLedger>>) {
     if let Some(ledger) = ledger {
         runtime.set_ledger_sink(
             LedgerSink::new(ledger)
@@ -219,18 +487,14 @@ pub fn configure_local_runtime(
 }
 
 fn ledger_invocation_ura(invocation_id: &str, binding: &AxiomBinding) -> String {
-    easynet_axon::ura::invocation_record_ura_for_binding(
+    axon_sdk::ura::invocation_record_ura_for_binding(
         &binding.subject.ura,
         &binding.callee.ura,
         &binding.caller.ura,
         invocation_id,
     )
     .unwrap_or_else(|| {
-        easynet_axon::ura::invocation_history_resource_ura(
-            "_system",
-            "hub.invocations",
-            invocation_id,
-        )
+        axon_sdk::ura::invocation_history_resource_ura("_system", "hub.invocations", invocation_id)
     })
 }
 
@@ -246,47 +510,34 @@ fn ledger_route_ura(ability_name: &str, binding: &AxiomBinding) -> String {
     let caller_public_name =
         crate::core::ura::owner_local_ability_name(&binding.caller.ura, ability_name);
 
-    easynet_axon::ura::published_route_ura(&binding.callee.ura, &callee_public_name)
-        .or_else(|| {
-            easynet_axon::ura::published_route_ura(&binding.caller.ura, &caller_public_name)
-        })
+    axon_sdk::ura::published_route_ura(&binding.callee.ura, &callee_public_name)
+        .or_else(|| axon_sdk::ura::published_route_ura(&binding.caller.ura, &caller_public_name))
         .unwrap_or_else(|| {
-            easynet_axon::ura::hub_ability_ura("_system", &format!("system.{ability_name}"))
+            axon_sdk::ura::hub_ability_ura("_system", &format!("system.{ability_name}"))
         })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easynet_axon::invocation::axiom::AuthorityBinding;
-    use easynet_axon::invocation::{AgentIdentity, CausalContext, SubjectIdentity, UraProfile};
+    use axon_sdk::invocation::axiom::AuthorityBinding;
+    use axon_sdk::invocation::{AgentIdentity, CausalContext, SubjectIdentity, UraProfile};
 
     #[test]
-    fn build_local_runtime_returns_handle_with_admission_and_sink_optional() {
-        // Smoke: factory accepts (anchor, None) without panicking and
-        // returns a runtime. The actual end-to-end "ledger writes
-        // happen on terminal" semantics are pinned by Axon's own
-        // tests + Phase 0's tests/axon_runtime_smoke.rs; here we
-        // just need to know the wiring assembles.
-        let rt = build_local_runtime(None, None);
+    fn build_local_runtime_requires_explicit_admission_and_allows_no_sink() {
+        let rt = build_local_runtime(rejecting_test_key_resolver(), None);
         // Arc strong count > 0 — proves the runtime was built.
         assert!(Arc::strong_count(&rt) >= 1);
     }
 
     #[test]
     fn ledger_resolvers_use_axon_canonical_ura_helpers() {
-        let caller = AgentIdentity::new(
-            "easynet:///r/localhost/user/dev",
-            UraProfile::EasynetStrictV2,
-        );
+        let caller = AgentIdentity::new("easynet:///r/localhost/user/dev", UraProfile::StrictV2);
         let callee = AgentIdentity::new(
             "easynet:///r/localhost/agent/dev.liangbing",
-            UraProfile::EasynetStrictV2,
+            UraProfile::StrictV2,
         );
-        let subject = SubjectIdentity::new(
-            "easynet:///r/localhost/user/dev",
-            UraProfile::EasynetStrictV2,
-        );
+        let subject = SubjectIdentity::new("easynet:///r/localhost/user/dev", UraProfile::StrictV2);
         let binding = AxiomBinding {
             caller: caller.clone(),
             callee,
@@ -312,20 +563,15 @@ mod tests {
             "easynet:///r/localhost/resource/dev/invocation/inv_123/history"
         );
 
-        let fallback_caller = AgentIdentity::new(
-            "easynet:///r/localhost/user/dev",
-            UraProfile::EasynetStrictV2,
-        );
+        let fallback_caller =
+            AgentIdentity::new("easynet:///r/localhost/user/dev", UraProfile::StrictV2);
         let fallback_binding = AxiomBinding {
             caller: fallback_caller.clone(),
             callee: AgentIdentity::new(
                 crate::core::ura::hub_ura("localhost"),
-                UraProfile::EasynetStrictV2,
+                UraProfile::StrictV2,
             ),
-            subject: SubjectIdentity::new(
-                "easynet:///r/localhost/user/dev",
-                UraProfile::EasynetStrictV2,
-            ),
+            subject: SubjectIdentity::new("easynet:///r/localhost/user/dev", UraProfile::StrictV2),
             invocation_nonce: [0u8; 16],
             causal: CausalContext::None,
             payload_digest: [0u8; 32],

@@ -10,14 +10,10 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 use tonic::Status;
 
-use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
-
-use easynet_axon::pb::axon::v1::{invoke_bidi_down::Payload as DownPayload, InvokeBidiDown};
+use axon_sdk::pb::axon::v1::{invoke_bidi_down::Payload as DownPayload, InvokeBidiDown};
 
 use crate::daemon::invocation::bidi::state::presence::{
     DispatchFrame, PresenceDispatchSession, PresenceRegistry, CANONICAL_SESSION_CARRIER_VERSION,
@@ -93,37 +89,20 @@ impl SessionContentEnvelope {
     }
 }
 
-/// JSON wire shapes retained for daemon-owned bootstrap control and
-/// bidirectional file-transfer streams.
+/// JSON wire shapes for daemon-owned bootstrap control and bidi input bytes.
 ///
 /// Direction discipline (per PR-N6 spec §"Direction discipline"):
 ///
-///   `Result`           device → hub only (streaming/control replies)
 ///   `Request`          device → hub only — daemon-owned control
 ///   `RequestResult`    hub → device only — answers a `Request`
 ///                      with resolved bytes or a typed error
+///
+/// Canonical dispatch opens and results are protobuf `DispatchCall` and
+/// `DispatchResult`; they must never be reintroduced into this JSON control
+/// envelope.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionDispatch {
-    /// Hub → target device. Open one long-lived local bidi handler
-    /// on the target and bind it to `call_id`. Used by the
-    /// same-hub `fs.transfer` bridge: the hub forwards the
-    /// backend's InvokeBidi open to the device's local
-    /// `fs.transfer` ability, then streams caller input via
-    /// `BidiInput` and target output back via non-terminal
-    /// `Result` frames.
-    BidiOpen {
-        call_id: u64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        callee_ura: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        subject_ura: Option<String>,
-        ability: String,
-        args: Vec<u8>,
-        args_content_envelope: SessionContentEnvelope,
-        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-        metadata: HashMap<String, String>,
-    },
     /// Hub → target device. One incremental input frame for a
     /// previously-opened remote bidi session. `payload` carries raw
     /// bytes; `eof=true` closes the input side after this frame.
@@ -131,20 +110,6 @@ pub enum SessionDispatch {
         call_id: u64,
         payload: Vec<u8>,
         eof: bool,
-    },
-    /// Target device → hub. The target ran the ability and is
-    /// returning the reply. The session task sees this on the
-    /// session up stream and routes it via
-    /// `PendingDispatchMap::complete(call_id, …)`.
-    Result {
-        call_id: u64,
-        payload: Vec<u8>,
-        terminal: bool,
-        error: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        failure: Option<SessionFailure>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        request_id: Option<String>,
     },
     /// Device → hub daemon-owned control request. Product invocations use
     /// protobuf `ReverseDispatchCall` instead.
@@ -218,10 +183,10 @@ pub fn call_id_hex(call_id: &[u8; 16]) -> String {
 /// rides the wire unchanged; no inner JSON envelope is created.
 pub(crate) fn build_carrier_v1_dispatch_frame(
     call_id: u64,
-    request: easynet_axon::pb::axon::v1::InvokeRequest,
+    request: axon_sdk::pb::axon::v1::InvokeRequest,
     open_bidi: bool,
 ) -> DispatchFrame {
-    use easynet_axon::pb::axon::v1::DispatchCall;
+    use axon_sdk::pb::axon::v1::DispatchCall;
     DispatchFrame::normal(InvokeBidiDown {
         payload: Some(DownPayload::DispatchCall(DispatchCall {
             call_id,
@@ -235,13 +200,17 @@ pub(crate) fn build_carrier_v1_dispatch_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easynet_axon::pb::axon::v1::{
+    use axon_sdk::pb::axon::v1::{
         invoke_bidi_down::Payload, AgentIdentity, CallerSignature, Envelope, InvokeRequest,
     };
     use prost::Message as _;
 
     #[test]
     fn canonical_carrier_preserves_complete_request() {
+        let descriptor_ref = format!(
+            "easynet:///r/realm/ability/device.callee.echo@1.0.0#{}!invoke",
+            "aa".repeat(32)
+        );
         let request = InvokeRequest {
             envelope: Some(Envelope {
                 caller: Some(AgentIdentity {
@@ -260,7 +229,14 @@ mod tests {
                 }),
                 ..Envelope::default()
             }),
-            function_name: "easynet:///r/realm/ability/device.callee.echo".into(),
+            target: Some(
+                crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+                    descriptor_ref,
+                    "echo",
+                )
+                .expect("typed descriptor target"),
+            ),
+            function_name: "echo".into(),
             arguments: b"opaque".to_vec(),
             timeout_seconds: 17,
             ..InvokeRequest::default()

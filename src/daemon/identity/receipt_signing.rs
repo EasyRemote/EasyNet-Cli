@@ -9,12 +9,15 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use easynet_axon::invocation::{
+use axon_sdk::invocation::{
     canonical_host_attestation_bytes, AgentIdentity, AxonError, CalleeSignature, CallerSignature,
-    DescriptorBoundEnvelope, InvocationSigningAuthority, InvocationSigningAuthorityProvider,
-    ReceiptSigningAuthority, ReceiptSigningAuthorityProvider, UraProfile,
+    CanonicalReceiptProvider, DescriptorBoundEnvelope, InvocationSigningAuthority,
+    InvocationSigningAuthorityProvider, ReceiptSigningAuthority, UraProfile,
+    VerifiedAdmissionPolicy,
 };
-use ed25519_dalek::{Signature, Verifier as _, VerifyingKey, SIGNATURE_LENGTH};
+#[cfg(test)]
+use ed25519_dalek::{Signature, SIGNATURE_LENGTH};
+use ed25519_dalek::{Verifier as _, VerifyingKey};
 
 use super::self_identity::{CanonicalSigner, RuntimeSigningIdentity};
 use crate::daemon::ability::dispatch::{HostedAgentAuthorityInventory, HostedAgentAuthorityLease};
@@ -154,7 +157,7 @@ impl ReceiptSigningAuthority for KeyServiceReceiptAuthority {
         self.verifying_key
     }
 
-    async fn sign_canonical_receipt(
+    async fn sign_and_verify(
         &self,
         canonical_receipt: &[u8],
     ) -> Result<CalleeSignature, AxonError> {
@@ -169,33 +172,14 @@ impl ReceiptSigningAuthority for KeyServiceReceiptAuthority {
         if let Some(lease) = &self.hosted_lease {
             lease.validate()?;
         }
+        self.verifying_key
+            .verify(canonical_receipt, &signature)
+            .map_err(|_| AxonError::internal("daemon_receipt_signature_self_verify_failed"))?;
         Ok(CalleeSignature {
             algorithm: "ed25519".to_string(),
             signature: signature.to_bytes().to_vec(),
             key_id_hint: self.key_id_hint.clone(),
         })
-    }
-
-    fn verify_canonical_receipt(
-        &self,
-        canonical_receipt: &[u8],
-        signature: &CalleeSignature,
-    ) -> Result<(), AxonError> {
-        if let Some(lease) = &self.hosted_lease {
-            lease.validate()?;
-        }
-        if signature.algorithm != "ed25519" {
-            return Err(AxonError::invalid_argument(
-                "daemon_receipt_signature_algorithm_invalid",
-            ));
-        }
-        let bytes: [u8; SIGNATURE_LENGTH] =
-            signature.signature.as_slice().try_into().map_err(|_| {
-                AxonError::invalid_argument("daemon_receipt_signature_length_invalid")
-            })?;
-        self.verifying_key
-            .verify(canonical_receipt, &Signature::from_bytes(&bytes))
-            .map_err(|_| AxonError::invalid_argument("daemon_receipt_signature_invalid"))
     }
 }
 
@@ -273,7 +257,7 @@ impl KeyServiceReceiptAuthorityProvider {
         lease: HostedAgentAuthorityLease,
         inventory: Arc<dyn HostedAgentAuthorityInventory>,
     ) -> Result<Arc<dyn ReceiptSigningAuthority>, AxonError> {
-        easynet_axon::invocation::validate_hosted_attestation_authority(&callee.ura, &device.ura)?;
+        axon_sdk::invocation::validate_hosted_attestation_authority(&callee.ura, &device.ura)?;
         let signer = self
             .signer_capabilities
             .get(&device.ura)
@@ -307,8 +291,20 @@ impl KeyServiceReceiptAuthorityProvider {
 }
 
 #[async_trait::async_trait]
-impl ReceiptSigningAuthorityProvider for KeyServiceReceiptAuthorityProvider {
-    async fn resolve(
+impl CanonicalReceiptProvider for KeyServiceReceiptAuthorityProvider {
+    fn verify_admission_policy(
+        &self,
+        _envelope: &DescriptorBoundEnvelope,
+    ) -> Result<VerifiedAdmissionPolicy, AxonError> {
+        // This provider owns key custody only. Daemon runtime assembly wraps
+        // it with the CLI product-admission coordinator, which is the sole
+        // producer of receipt-bound admission policy.
+        Err(AxonError::internal(
+            "daemon_product_admission_coordinator_required",
+        ))
+    }
+
+    async fn resolve_signing_authority(
         &self,
         callee: &AgentIdentity,
     ) -> Result<Arc<dyn ReceiptSigningAuthority>, AxonError> {
@@ -324,7 +320,7 @@ impl ReceiptSigningAuthorityProvider for KeyServiceReceiptAuthorityProvider {
             AxonError::permission_denied("daemon_receipt_callee_not_owned")
                 .with_context("callee_ura", callee.ura.clone())
         })?;
-        if callee.profile != UraProfile::EasynetStrictV2 {
+        if callee.profile != UraProfile::StrictV2 {
             return Err(AxonError::permission_denied(
                 "daemon_receipt_callee_profile_mismatch",
             ));
@@ -369,10 +365,7 @@ impl InvocationSigningAuthorityProvider for KeyServiceReceiptAuthorityProvider {
             let Some(device) = self.hosted_agent_device.as_ref() else {
                 return Ok(None);
             };
-            easynet_axon::invocation::validate_hosted_attestation_authority(
-                caller_ura,
-                &device.ura,
-            )?;
+            axon_sdk::invocation::validate_hosted_attestation_authority(caller_ura, &device.ura)?;
             let signer = self
                 .signer_capabilities
                 .get(&device.ura)
@@ -451,14 +444,14 @@ fn strict_self_signed_identity(ura: &str) -> Result<AgentIdentity, AxonError> {
             "daemon_receipt_self_signed_owner_kind_invalid",
         ));
     }
-    Ok(AgentIdentity::new(ura, UraProfile::EasynetStrictV2))
+    Ok(AgentIdentity::new(ura, UraProfile::StrictV2))
 }
 
 fn strict_identity(ura: &str) -> Result<AgentIdentity, AxonError> {
     crate::core::ura::parse_ura(ura).map_err(|error| {
         AxonError::invalid_argument(format!("daemon_receipt_owner_invalid:{error}"))
     })?;
-    Ok(AgentIdentity::new(ura, UraProfile::EasynetStrictV2))
+    Ok(AgentIdentity::new(ura, UraProfile::StrictV2))
 }
 
 fn key_id_hint(owner_ura: &str, verifying_key: &VerifyingKey) -> String {
@@ -475,7 +468,7 @@ fn receipt_identity_error(error: impl std::fmt::Display) -> AxonError {
 
 pub(crate) struct RuntimeSigningAuthorityProviders {
     pub invocation: Arc<dyn InvocationSigningAuthorityProvider>,
-    pub receipt: Arc<dyn ReceiptSigningAuthorityProvider>,
+    pub receipt: Arc<dyn CanonicalReceiptProvider>,
 }
 
 pub(crate) fn load_runtime_signing_authority_providers(
@@ -483,7 +476,7 @@ pub(crate) fn load_runtime_signing_authority_providers(
 ) -> Result<RuntimeSigningAuthorityProviders, AxonError> {
     let provider = Arc::new(KeyServiceReceiptAuthorityProvider::load(config)?);
     let invocation: Arc<dyn InvocationSigningAuthorityProvider> = provider.clone();
-    let receipt: Arc<dyn ReceiptSigningAuthorityProvider> = provider;
+    let receipt: Arc<dyn CanonicalReceiptProvider> = provider;
     Ok(RuntimeSigningAuthorityProviders {
         invocation,
         receipt,
@@ -499,6 +492,26 @@ mod tests {
     use crate::daemon::keyring::{MasterKeySource, Vault};
     use std::collections::HashSet;
     use std::sync::Mutex;
+
+    fn verify_authority_signature(
+        authority: &dyn ReceiptSigningAuthority,
+        canonical_receipt: &[u8],
+        signature: &CalleeSignature,
+    ) -> Result<(), AxonError> {
+        if signature.algorithm != "ed25519" {
+            return Err(AxonError::invalid_argument(
+                "test_receipt_signature_algorithm_invalid",
+            ));
+        }
+        let bytes: [u8; SIGNATURE_LENGTH] =
+            signature.signature.as_slice().try_into().map_err(|_| {
+                AxonError::invalid_argument("test_receipt_signature_length_invalid")
+            })?;
+        authority
+            .verifying_key()
+            .verify(canonical_receipt, &Signature::from_bytes(&bytes))
+            .map_err(|_| AxonError::invalid_argument("test_receipt_signature_invalid"))
+    }
 
     #[derive(Default)]
     struct TestHostedAgentInventory {
@@ -571,7 +584,7 @@ mod tests {
     async fn hosted_receipt_signer_is_owner_bound_and_resolver_visible() {
         let provider = test_device_provider();
         let callee = strict_identity("easynet:///r/acme/agent/alice.worker").unwrap();
-        let authority = ReceiptSigningAuthorityProvider::resolve(&provider, &callee)
+        let authority = CanonicalReceiptProvider::resolve_signing_authority(&provider, &callee)
             .await
             .unwrap();
         let signer_ura = "easynet:///r/acme/device/edge-01";
@@ -583,7 +596,7 @@ mod tests {
         assert_eq!(authority.callee_identity(), &callee);
         assert_eq!(authority.signer_identity().ura, signer_ura);
         assert_eq!(authority.verifying_key(), resolver_key);
-        easynet_axon::invocation::verify_host_attestation(
+        axon_sdk::invocation::verify_host_attestation(
             &callee.ura,
             signer_ura,
             authority.host_attestation(),
@@ -592,17 +605,20 @@ mod tests {
         .unwrap();
 
         let canonical = b"daemon-production-receipt";
-        let signature = authority.sign_canonical_receipt(canonical).await.unwrap();
-        authority
-            .verify_canonical_receipt(canonical, &signature)
-            .unwrap();
+        let signature = authority.sign_and_verify(canonical).await.unwrap();
+        verify_authority_signature(authority.as_ref(), canonical, &signature).unwrap();
     }
 
     #[tokio::test]
     async fn hosted_receipt_provider_rejects_non_agent_substitution() {
         let provider = test_device_provider();
         let unowned_hub = strict_identity("easynet:///r/acme/hub").unwrap();
-        let error = match ReceiptSigningAuthorityProvider::resolve(&provider, &unowned_hub).await {
+        let error = match CanonicalReceiptProvider::resolve_signing_authority(
+            &provider,
+            &unowned_hub,
+        )
+        .await
+        {
             Ok(_) => panic!("hosted Device authority must not sign for a Hub"),
             Err(error) => error,
         };
@@ -615,7 +631,7 @@ mod tests {
         let unhosted = strict_identity("easynet:///r/acme/agent/bob.worker").unwrap();
 
         let receipt_error =
-            match ReceiptSigningAuthorityProvider::resolve(&provider, &unhosted).await {
+            match CanonicalReceiptProvider::resolve_signing_authority(&provider, &unhosted).await {
                 Ok(_) => panic!("unhosted Agent must not receive receipt authority"),
                 Err(error) => error,
             };
@@ -633,14 +649,14 @@ mod tests {
         let (provider, inventory) = test_device_provider_with_inventory();
         let callee_ura = "easynet:///r/acme/agent/alice.worker";
         let callee = strict_identity(callee_ura).unwrap();
-        let authority = ReceiptSigningAuthorityProvider::resolve(&provider, &callee)
+        let authority = CanonicalReceiptProvider::resolve_signing_authority(&provider, &callee)
             .await
             .unwrap();
 
         inventory.revoke(callee_ura);
 
         let error = authority
-            .sign_canonical_receipt(b"must-not-sign-after-revoke")
+            .sign_and_verify(b"must-not-sign-after-revoke")
             .await
             .expect_err("T1 lease must be invalid after T2 revoke");
         assert_eq!(error.reason, "daemon_signing_authority_lease_revoked");
@@ -664,7 +680,7 @@ mod tests {
             self_signed_authority(strict_self_signed_identity(owner).unwrap(), first_signer)
                 .unwrap();
         let signature = first_authority
-            .sign_canonical_receipt(canonical_receipt)
+            .sign_and_verify(canonical_receipt)
             .await
             .unwrap();
         let published_key = first_authority.verifying_key();
@@ -682,8 +698,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(restarted_authority.verifying_key(), published_key);
-        restarted_authority
-            .verify_canonical_receipt(canonical_receipt, &signature)
+        verify_authority_signature(&restarted_authority, canonical_receipt, &signature)
             .expect("resolver-visible persistent key verifies the pre-restart receipt signature");
     }
 

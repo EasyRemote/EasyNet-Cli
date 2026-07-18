@@ -4,8 +4,8 @@ use super::*;
 /// receipt-proof normalizer admits its dispatch (production stamps the
 /// equivalent from the control-plane record). Non-zero stub hashes;
 /// version is the default these owner-local test abilities dispatch under.
-fn test_rpc_options() -> easynet_axon::invocation::AbilityOptions {
-    use easynet_axon::invocation::{AbilityCallModes, AbilityOptions};
+fn test_rpc_options() -> axon_sdk::invocation::AbilityOptions {
+    use axon_sdk::invocation::{AbilityCallModes, AbilityOptions};
     AbilityOptions::default()
         .with_modes(AbilityCallModes::RPC)
         .with_descriptor_proof(
@@ -17,8 +17,8 @@ fn test_rpc_options() -> easynet_axon::invocation::AbilityOptions {
         )
 }
 
-fn test_stream_options() -> easynet_axon::invocation::AbilityOptions {
-    use easynet_axon::invocation::{AbilityOptions, CallMode};
+fn test_stream_options() -> axon_sdk::invocation::AbilityOptions {
+    use axon_sdk::invocation::{AbilityOptions, CallMode};
     AbilityOptions::streaming().with_mode_descriptor_proof(
         CallMode::Stream,
         crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
@@ -166,10 +166,11 @@ async fn axon_arm_must_not_intercept_calls_targeting_a_peer_device() {
     // predicate layer; the full bidi exercise lives in
     // integration tests where a real grpc Streaming can be
     // constructed.
-    use easynet_axon::invocation::make_ability;
+    use axon_sdk::invocation::make_ability;
 
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
-    let rt = test_runtime_with_default_trust();
+    let runtime_assembly = test_runtime_with_default_trust();
+    let rt = runtime_assembly.runtime();
     // Register an ability under a name that exists everywhere
     // (every daemon mirrors `agent.list` into its
     // LocalRuntime via the Phase-3 boot sweep). The bug it's
@@ -183,7 +184,7 @@ async fn axon_arm_must_not_intercept_calls_targeting_a_peer_device() {
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(Arc::clone(&rt)).with_session_realm("test-realm");
+    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
 
     // 1. THIS daemon's URA → self target.
     assert!(
@@ -225,12 +226,13 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
     // Returns `(response, runtime_started=true)` after the runtime has
     // produced the canonical terminal receipt. The daemon only projects
     // that outcome; LedgerSink owns the single durable row.
-    use easynet_axon::invocation::{make_ability, InvocationLedger, LedgerSink};
+    use axon_sdk::invocation::{make_ability, InvocationLedger, LedgerSink};
 
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
     let temp = tempfile::tempdir().unwrap();
     let ledger = Arc::new(InvocationLedger::open(temp.path().join("inv.redb")).unwrap());
-    let rt = test_runtime_with_default_trust();
+    let runtime_assembly = test_runtime_with_default_trust();
+    let rt = runtime_assembly.runtime();
     rt.set_ledger_sink(LedgerSink::new(Arc::clone(&ledger)));
     let runtime_ability =
         crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "demo.unary_via_axon").unwrap();
@@ -245,14 +247,14 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
                     .unwrap_or(serde_json::Value::Null),
                 "subject": subject,
             }))
-            .map_err(|err| easynet_axon::invocation::AxonError::internal(err.to_string()))
+            .map_err(|err| axon_sdk::invocation::AxonError::internal(err.to_string()))
         }),
         test_rpc_options(),
     )
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(Arc::clone(&rt)).with_session_realm("test-realm");
+    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
     publish_test_route(&svc, TEST_DAEMON_URA, "demo.unary_via_axon");
     sync_runtime_proof_from_catalog(
         &svc,
@@ -347,10 +349,11 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
 
 #[tokio::test]
 async fn dispatch_local_rpc_terminal_failure_stays_in_band_with_receipts() {
-    use easynet_axon::invocation::{make_ability, AxonError, InvocationState};
+    use axon_sdk::invocation::{make_ability, AxonError, InvocationState};
 
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
-    let rt = test_runtime_with_default_trust();
+    let runtime_assembly = test_runtime_with_default_trust();
+    let rt = runtime_assembly.runtime();
     let ability = "demo.terminal_failure";
     let runtime_ability = crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ability).unwrap();
     rt.register_ability_with_options(
@@ -363,7 +366,7 @@ async fn dispatch_local_rpc_terminal_failure_stays_in_band_with_receipts() {
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(Arc::clone(&rt)).with_session_realm("test-realm");
+    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
     publish_test_route(&svc, TEST_DAEMON_URA, ability);
     sync_runtime_proof_from_catalog(
         &svc,
@@ -418,10 +421,11 @@ async fn dispatch_local_rpc_terminal_failure_stays_in_band_with_receipts() {
 
 #[tokio::test]
 async fn dispatch_local_rpc_selected_route_accepts_descriptor_ref_function_name() {
-    use easynet_axon::invocation::make_ability;
+    use axon_sdk::invocation::make_ability;
 
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
-    let rt = test_runtime_with_default_trust();
+    let runtime_assembly = test_runtime_with_default_trust();
+    let rt = runtime_assembly.runtime();
     let ability = "demo.descriptor_bound_unary";
     let runtime_ability = crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ability).unwrap();
     rt.register_ability_with_options(
@@ -432,7 +436,7 @@ async fn dispatch_local_rpc_selected_route_accepts_descriptor_ref_function_name(
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(Arc::clone(&rt)).with_session_realm("test-realm");
+    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
     publish_test_route(&svc, TEST_DAEMON_URA, ability);
     sync_runtime_proof_from_catalog(
         &svc,
@@ -469,12 +473,13 @@ async fn dispatch_local_rpc_selected_route_accepts_descriptor_ref_function_name(
 
 #[tokio::test]
 async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
-    use easynet_axon::invocation::{make_ability, InvocationLedger, LedgerSink};
+    use axon_sdk::invocation::{make_ability, InvocationLedger, LedgerSink};
 
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
     let temp = tempfile::tempdir().unwrap();
     let ledger = Arc::new(InvocationLedger::open(temp.path().join("inv.redb")).unwrap());
-    let rt = test_runtime_with_default_trust();
+    let runtime_assembly = test_runtime_with_default_trust();
+    let rt = runtime_assembly.runtime();
     rt.set_ledger_sink(LedgerSink::new(Arc::clone(&ledger)));
     let runtime_ability =
         crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "demo.loopback_unsigned").unwrap();
@@ -493,14 +498,14 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
                 "payload": serde_json::from_slice::<serde_json::Value>(&ctx.payload)
                     .unwrap_or(serde_json::Value::Null),
             }))
-            .map_err(|err| easynet_axon::invocation::AxonError::internal(err.to_string()))
+            .map_err(|err| axon_sdk::invocation::AxonError::internal(err.to_string()))
         }),
         test_rpc_options(),
     )
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(Arc::clone(&rt)).with_session_realm("test-realm");
+    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
     publish_test_route(&svc, TEST_DAEMON_URA, "demo.loopback_unsigned");
     sync_runtime_proof_from_catalog(
         &svc,
@@ -513,13 +518,15 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
     let arguments = br#"{"k":"v"}"#.to_vec();
     let request = InvokeRequest {
         envelope: Some(
-            ProtoEnvelope::targeted(
+            ProtoEnvelope::from_target(
                 crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
                 TEST_DAEMON_URA,
                 "easynet:///r/test-realm/resource/camera-1",
+                InvocationDerivationPolicy::FreshRoot,
             )
             .expect("valid loopback envelope")
-            .into_inner(),
+            .into_inner("demo.loopback_unsigned", &arguments)
+            .expect("complete loopback tuple"),
         ),
         function_name: catalog_test_descriptor_ref(
             svc.directory.local_ability_catalog.as_ref().unwrap(),
@@ -634,13 +641,15 @@ async fn simple_local_rpc_invocation_concurrency_probe() {
             let response = svc
                 .invoke(Request::new(InvokeRequest {
                     envelope: Some(
-                        ProtoEnvelope::targeted(
+                        ProtoEnvelope::from_target(
                             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
                             TEST_DAEMON_URA,
                             TEST_DAEMON_URA,
+                            InvocationDerivationPolicy::FreshRoot,
                         )
                         .expect("valid concurrency probe envelope")
-                        .into_inner(),
+                        .into_inner(ability, &arguments)
+                        .expect("complete concurrency probe tuple"),
                     ),
                     function_name: ability.to_string(),
                     arguments,
@@ -722,8 +731,8 @@ async fn simple_local_rpc_invocation_concurrency_probe() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 #[ignore = "load probe; set EASYNET_INVOCATION_TRANSPORT_PROBE to override request count"]
 async fn simple_uds_invocation_concurrency_probe() {
-    use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
-    use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
+    use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
+    use axon_sdk::pb::axon::v1::invocation_server::InvocationServer;
     use tokio::task::JoinSet;
     use tokio_stream::wrappers::UnixListenerStream;
     use tonic::transport::{Endpoint, Server, Uri};
@@ -809,13 +818,15 @@ async fn simple_uds_invocation_concurrency_probe() {
             let response = client
                 .invoke(Request::new(InvokeRequest {
                     envelope: Some(
-                        ProtoEnvelope::targeted(
+                        ProtoEnvelope::from_target(
                             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
                             TEST_DAEMON_URA,
                             TEST_DAEMON_URA,
+                            InvocationDerivationPolicy::FreshRoot,
                         )
                         .expect("valid UDS concurrency probe envelope")
-                        .into_inner(),
+                        .into_inner(ability, &arguments)
+                        .expect("complete UDS concurrency probe tuple"),
                     ),
                     function_name: ability.to_string(),
                     arguments,
@@ -904,8 +915,8 @@ async fn dispatch_local_rpc_selected_route_rejects_when_runtime_misses() {
     // matching LocalRuntime handler. Dispatch must reject that inconsistent
     // projection as NotFound and must not start an Axon invocation.
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
-    let rt = test_runtime_with_default_trust();
-    let svc = make_service_with_test_runtime(Arc::clone(&rt)).with_session_realm("test-realm");
+    let runtime_assembly = test_runtime_with_default_trust();
+    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
     publish_test_route(&svc, TEST_DAEMON_URA, "missing.ability");
 
     let request = invoke_request("missing.ability", "{}").into_inner();
@@ -931,10 +942,11 @@ async fn dispatch_local_rpc_selected_route_rejects_when_runtime_misses() {
 
 #[tokio::test]
 async fn selected_route_binding_rejects_removed_control_plane_record_even_with_runtime_row() {
-    use easynet_axon::invocation::{make_ability, CallMode};
+    use axon_sdk::invocation::{make_ability, CallMode};
 
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
-    let rt = test_runtime_with_default_trust();
+    let runtime_assembly = test_runtime_with_default_trust();
+    let rt = runtime_assembly.runtime();
     let ability = "demo.stale_catalog_proof";
     let runtime_ability =
         crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ability).expect("runtime ability URA");
@@ -946,7 +958,7 @@ async fn selected_route_binding_rejects_removed_control_plane_record_even_with_r
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(Arc::clone(&rt)).with_session_realm("test-realm");
+    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
     publish_test_route(&svc, TEST_DAEMON_URA, ability);
     sync_runtime_proof_from_catalog(
         &svc,
@@ -1012,10 +1024,11 @@ async fn dispatch_local_rpc_selected_route_returns_false_for_non_rpc_runtime_row
     // for it. `axon_took_it` must stay false so `invoke()` records
     // the failed unary attempt through the manual ledger path
     // instead of assuming Axon's LedgerSink persisted a row.
-    use easynet_axon::invocation::make_ability;
+    use axon_sdk::invocation::make_ability;
 
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
-    let rt = test_runtime_with_default_trust();
+    let runtime_assembly = test_runtime_with_default_trust();
+    let rt = runtime_assembly.runtime();
     let runtime_ability =
         crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "demo.stream_only").unwrap();
     rt.register_ability_with_options(
@@ -1026,7 +1039,7 @@ async fn dispatch_local_rpc_selected_route_returns_false_for_non_rpc_runtime_row
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(Arc::clone(&rt)).with_session_realm("test-realm");
+    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
     publish_test_route(&svc, TEST_DAEMON_URA, "demo.stream_only");
 
     let request = invoke_request("demo.stream_only", "{}").into_inner();

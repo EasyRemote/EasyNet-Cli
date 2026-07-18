@@ -16,15 +16,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::Context;
+use axon_sdk::invocation::InvocationState;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::core::domain::{AgentId, LoopId, LoopInstance, LoopState, NodeId, SessionId, TenantId};
+use crate::core::domain::{AgentId, LoopId, LoopInstance, LoopState, NodeId, TenantId};
 use crate::daemon::boot::kernel::api::KernelApi;
-use crate::daemon::invocation::receipts::runtime_record::{
-    runtime_invocation_id, RuntimeCausalContext, RuntimeInvocation, TerminalState,
-};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopInvocationKind {
@@ -78,65 +76,70 @@ impl LoopInvocationDriver for KernelLoopInvocationDriver {
             &format!("loop.{}", loop_id.as_str()),
             &format!("{}/{}", kind.as_str(), iter),
         );
-        let invocation = RuntimeInvocation::try_new(
-            local_device_ura.clone(),
-            local_device_ura,
-            format!("{}.chat", worker_agent.as_str()),
-            loop_subject_ura,
-            RuntimeCausalContext::Null,
-            json!({ "prompt": prompt }),
+        let payload = serde_json::to_vec(&json!({ "prompt": prompt }))
+            .context("encode loop chat invocation payload")?;
+        let request = self.kernel.prepare_local_system_rpc(
+            &local_device_ura,
+            &format!("{}.chat", worker_agent.as_str()),
+            &loop_subject_ura,
+            payload,
         )?;
-        let invocation_id = runtime_invocation_id(&invocation)?;
-        let receipt = self.kernel.invoke(invocation)?;
-        match receipt.terminal {
-            TerminalState::Succeeded => {}
-            TerminalState::Cancelled => {
+        let finalized = self.kernel.invoke(request)?;
+        let terminal_reason = || {
+            finalized
+                .failure
+                .as_ref()
+                .map(ToString::to_string)
+                .filter(|reason| !reason.is_empty())
+                .unwrap_or_else(|| finalized.terminal_receipt.reason().to_string())
+        };
+        match finalized.terminal_state {
+            InvocationState::Completed => {}
+            InvocationState::Cancelled => {
                 anyhow::bail!("loop {} {} iter {} cancelled", loop_id, kind.as_str(), iter);
             }
-            TerminalState::TimedOut { reason } => {
+            InvocationState::TimedOut => {
                 anyhow::bail!(
                     "loop {} {} iter {} timed out: {}",
                     loop_id,
                     kind.as_str(),
                     iter,
-                    reason
+                    terminal_reason()
                 );
             }
-            TerminalState::Failed { reason } => {
+            InvocationState::Failed => {
                 anyhow::bail!(
                     "loop {} {} iter {} failed: {}",
                     loop_id,
                     kind.as_str(),
                     iter,
-                    reason
+                    terminal_reason()
                 );
             }
+            state => anyhow::bail!(
+                "loop {} {} iter {} returned non-terminal canonical state {}",
+                loop_id,
+                kind.as_str(),
+                iter,
+                state.as_str()
+            ),
         }
 
-        let history = self
-            .kernel
-            .session_events(&SessionId::new(invocation_id.clone()), 0)
-            .with_context(|| {
-                format!(
-                    "loop {} {} iter {}: session {} missing after invoke",
-                    loop_id,
-                    kind.as_str(),
-                    iter,
-                    invocation_id
-                )
-            })?;
-        history
-            .iter()
-            .rev()
-            .find_map(|event| {
-                (event.get("kind").and_then(Value::as_str) == Some("agent_response"))
-                    .then(|| event.get("content").and_then(Value::as_str))
-                    .flatten()
-                    .map(str::to_owned)
-            })
+        let response: Value = serde_json::from_slice(finalized.output()).with_context(|| {
+            format!(
+                "loop {} {} iter {}: decode canonical chat response",
+                loop_id,
+                kind.as_str(),
+                iter
+            )
+        })?;
+        response
+            .get("reply")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "loop {} {} iter {}: agent_response content missing",
+                    "loop {} {} iter {}: canonical chat response is missing reply",
                     loop_id,
                     kind.as_str(),
                     iter

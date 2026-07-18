@@ -29,7 +29,7 @@
 
 use std::sync::Arc;
 
-use easynet_axon::pb::axon::v1::Envelope;
+use axon_sdk::pb::axon::v1::Envelope;
 use tonic::Status;
 
 use crate::daemon::invocation::admission::admission_facade::AdmissionTransportBoundary;
@@ -207,8 +207,8 @@ fn role_label(role: TrustedAgentRole) -> &'static str {
 mod tests {
     use super::*;
     use crate::daemon::invocation::admission::revoke_user_pubkey::RevokeUserPubkeyIntent;
+    use axon_sdk::pb::axon::v1::AgentIdentity;
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-    use easynet_axon::pb::axon::v1::AgentIdentity;
     use ed25519_dalek::SigningKey;
 
     fn intent(agent_ura: &str, role: TrustedAgentRole) -> RegisterPubkeyIntent {

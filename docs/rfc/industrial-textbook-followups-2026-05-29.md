@@ -25,7 +25,7 @@ src/services/invocation_transport/daemon_invocation_service/
 ├── bidi_streams.rs         # SessionDownStream / LocalBidiDownStream / frame mappers
 ├── ledger_record.rs        # InvocationLedger record building (~free fns at the file tail)
 └── tests/
-    ├── mod.rs              # shared test fixtures (make_service, TEST_DAEMON_URI, etc.)
+    ├── mod.rs              # shared test fixtures (make_service, TEST_DAEMON_URA, etc.)
     ├── federation_arms.rs
     ├── self_session_accept.rs
     └── ...                 # one test file per arm module

@@ -195,6 +195,8 @@ pub struct HubAbilitiesDiff {
 #[derive(Debug, Clone, Serialize)]
 pub struct AdvertiseAgentArgs {
     pub agent_ura: String,
+    /// Durable owner-cursor generation for this Agent incarnation.
+    pub generation: u64,
     /// Empty when the hosted Agent has no key of its own (the
     /// common case for §1.3 Model B; receipts are signed by the
     /// host's key, attested via host_attestation in the
@@ -415,6 +417,7 @@ mod tests {
     fn advertise_args_serializes_self_signed_kind() {
         let args = AdvertiseAgentArgs {
             agent_ura: "easynet:///r/acme/device/01DEV".into(),
+            generation: 1,
             public_key_hex: "aa".into(),
             signing_authority: AdvertisedSigningAuthority::SelfSigned,
             host_node_id: None,
@@ -422,12 +425,14 @@ mod tests {
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
         assert_eq!(v["signing_authority"]["kind"], "self_signed");
         assert_eq!(v["agent_ura"], "easynet:///r/acme/device/01DEV");
+        assert_eq!(v["generation"], 1);
     }
 
     #[test]
     fn advertise_args_serializes_hosted_kind_with_host_ura() {
         let args = AdvertiseAgentArgs {
             agent_ura: "easynet:///r/acme/agent/u1.01LLM".into(),
+            generation: 7,
             public_key_hex: "".into(),
             signing_authority: AdvertisedSigningAuthority::HostedBy {
                 host_ura: "easynet:///r/acme/device/01DEV".into(),
@@ -440,6 +445,7 @@ mod tests {
             v["signing_authority"]["host_ura"],
             "easynet:///r/acme/device/01DEV"
         );
+        assert_eq!(v["generation"], 7);
     }
 
     #[test]

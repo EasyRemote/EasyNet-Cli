@@ -51,6 +51,8 @@
 // Copyright (c) 2026 EasyNet.
 
 use std::sync::Arc;
+#[cfg(feature = "axon-pb")]
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -89,29 +91,90 @@ pub fn register(
     );
 }
 
-/// Extract the causal parent anchors (`{receipt_ura, receipt_hash}` objects)
-/// from an inbound `EnvelopeContext.causal_context`. The adapter serialises
-/// the typed `CausalContext` as `{"kind":"none"}`, `{"kind":"scalar",..}`, or
-/// `{"kind":"list","receipts":[..]}` (see `ability_dispatch::causal_context_to_json`).
-/// Returns the parent list to chain onto the forward hop; empty for a root
-/// invocation.
+/// Recover the complete canonical causal context from the admitted parent.
+///
+/// Unknown or incomplete projections fail closed. A forwarding adapter must
+/// never reinterpret an unsupported parent as a new root invocation.
 #[cfg(any(feature = "axon-pb", test))]
-fn causal_parents_from_env(env: &crate::daemon::ability::dispatch::EnvelopeContext) -> Vec<Value> {
-    let cc = env.causal_context();
-    match cc.get("kind").and_then(Value::as_str) {
-        Some("scalar") => vec![json!({
-            "receipt_ura": cc.get("receipt_ura").cloned().unwrap_or(Value::Null),
-            "receipt_hash": cc.get("receipt_hash").cloned().unwrap_or(Value::Null),
-        })],
-        Some("list") => cc
-            .get("receipts")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
-        // "none", "merkle", or anything unrecognised: no chainable receipt
-        // anchors, so this forward hop roots a fresh causal context.
-        _ => Vec::new(),
+fn causal_context_from_env(
+    env: &crate::daemon::ability::dispatch::EnvelopeContext,
+) -> anyhow::Result<axon_sdk::invocation::CausalContext> {
+    use axon_sdk::invocation::CausalContext;
+
+    let projection = env.causal_context();
+    match projection.get("kind").and_then(Value::as_str) {
+        Some("none") => Ok(CausalContext::None),
+        Some("scalar") => Ok(CausalContext::Scalar(receipt_ref_from_projection(
+            projection,
+            "scalar causal context",
+        )?)),
+        Some("list") => {
+            let receipts = projection
+                .get("receipts")
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow::anyhow!("list causal context is missing receipts"))?;
+            if receipts.is_empty() {
+                anyhow::bail!("list causal context must contain at least one receipt");
+            }
+            let refs = receipts
+                .iter()
+                .enumerate()
+                .map(|(index, receipt)| {
+                    receipt_ref_from_projection(receipt, &format!("causal receipt #{index}"))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            Ok(CausalContext::List(refs))
+        }
+        Some("merkle") => {
+            let root = hash_from_projection(projection, "root", "merkle causal context")?;
+            let proof_ura = required_ura(projection, "proof_ura", "merkle causal context")?;
+            Ok(CausalContext::Merkle { root, proof_ura })
+        }
+        Some(kind) => anyhow::bail!("unsupported causal context kind {kind:?}"),
+        None => anyhow::bail!("causal context is missing kind"),
     }
+}
+
+#[cfg(any(feature = "axon-pb", test))]
+fn receipt_ref_from_projection(
+    projection: &Value,
+    label: &str,
+) -> anyhow::Result<axon_sdk::invocation::ReceiptRef> {
+    Ok(axon_sdk::invocation::ReceiptRef {
+        receipt_hash: hash_from_projection(projection, "receipt_hash", label)?,
+        receipt_ura: required_ura(projection, "receipt_ura", label)?,
+    })
+}
+
+#[cfg(any(feature = "axon-pb", test))]
+fn hash_from_projection(projection: &Value, field: &str, label: &str) -> anyhow::Result<[u8; 32]> {
+    let encoded = projection
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{label} is missing {field}"))?;
+    let decoded = hex::decode(encoded)
+        .map_err(|error| anyhow::anyhow!("{label} has invalid {field}: {error}"))?;
+    decoded.try_into().map_err(|bytes: Vec<u8>| {
+        anyhow::anyhow!(
+            "{label} {field} must decode to 32 bytes, got {}",
+            bytes.len()
+        )
+    })
+}
+
+#[cfg(any(feature = "axon-pb", test))]
+fn required_ura(projection: &Value, field: &str, label: &str) -> anyhow::Result<String> {
+    let ura = projection
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{label} is missing {field}"))?;
+    crate::core::ura::parse_ura(ura)
+        .map_err(|error| anyhow::anyhow!("{label} has invalid {field} URA: {error}"))?;
+    Ok(ura.to_string())
 }
 
 /// `a2a.client.send_task` handler.
@@ -173,34 +236,45 @@ fn send_task_handler(
             }
         };
 
-        let caller_ura = crate::daemon::persistence::config::load_credentials()
-            .ok()
-            .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
-            .map(|c| crate::core::ura::device_ura(c.realm.trim(), c.node_id.trim()));
         if let Some(message) = local_daemon_transport_error() {
             return Ok(error_response(&message));
         }
-        let resolve_caller = caller_ura.as_deref().unwrap_or_else(|| _env.caller());
         let target_call = match resolve_a2a_target(
             &target_ura,
             &agent_name,
             &skill_name,
             federation_resolver,
-            resolve_caller,
+            _env.callee(),
         ) {
             Ok(target_call) => target_call,
             Err(e) => return Ok(error_response(&format!("{e}"))),
         };
-        // Chain the inbound invocation's causal parents onto the forward
-        // hop so an A2A relay preserves the receipt DAG instead of re-rooting
-        // it (SPEC §15.1-1, bug-1 Slice B). Root invocations yield no parents.
-        let causal_parents = causal_parents_from_env(_env);
-        match crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_with_causal_parents(
-            &target_call,
-            task_args,
-            caller_ura.as_deref(),
-            &causal_parents,
-        ) {
+        let causal_context = match causal_context_from_env(_env) {
+            Ok(causal_context) => causal_context,
+            Err(error) => {
+                return Ok(error_response(&format!(
+                    "invalid admitted causal context: {error}"
+                )))
+            }
+        };
+        let request =
+            match crate::daemon::invocation::routing::remote_invoke::RemoteInvocationRequest::new(
+                &target_call,
+                _env.callee(),
+                target_call.callee_ura(),
+                axon_sdk::invocation::fresh_nonce(),
+                causal_context,
+                task_args,
+                Duration::from_secs(30),
+            ) {
+                Ok(request) => request,
+                Err(error) => {
+                    return Ok(error_response(&format!(
+                        "build canonical remote invocation: {error}"
+                    )))
+                }
+            };
+        match crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(request) {
             Ok(value) => Ok(json!({ "ok": true, "result": value })),
             Err(e) => Ok(error_response(&format!("{e}"))),
         }
@@ -283,7 +357,7 @@ fn resolve_a2a_target(
 #[cfg(feature = "axon-pb")]
 fn select_a2a_agent<'a>(
     agents: &'a [crate::daemon::federation::client::ability_contract::ResolvedAgent],
-    target: &easynet_axon::ura::ParsedURA,
+    target: &axon_sdk::ura::ParsedURA,
     execution_target_ura: &str,
     agent_name: &str,
 ) -> anyhow::Result<&'a crate::daemon::federation::client::ability_contract::ResolvedAgent> {
@@ -306,7 +380,7 @@ fn select_a2a_agent<'a>(
 #[cfg(feature = "axon-pb")]
 fn a2a_agent_matches_target(
     agent: &crate::daemon::federation::client::ability_contract::ResolvedAgent,
-    target: &easynet_axon::ura::ParsedURA,
+    target: &axon_sdk::ura::ParsedURA,
     agent_name: &str,
 ) -> bool {
     let Ok(agent_ura) = crate::core::ura::parse_ura(&agent.ura) else {
@@ -440,45 +514,64 @@ mod tests {
     /// `EnvelopeContext.causal_context` serialised shape so a relayed task
     /// preserves the receipt DAG instead of re-rooting it.
     #[test]
-    fn causal_parents_extracted_from_each_causal_context_shape() {
+    fn causal_context_is_recovered_without_re_rooting() {
         use crate::daemon::ability::dispatch::EnvelopeContext;
+        use axon_sdk::invocation::CausalContext;
 
-        // Root: {"kind":"none"} -> no parents.
         let none_env = EnvelopeContext::for_test_ability(
             "easynet:///r/acme/device/local",
             ABILITY_SEND_TASK,
             "easynet:///r/acme/device/local",
         )
         .with_causal_context(json!({"kind": "none"}));
-        assert!(causal_parents_from_env(&none_env).is_empty());
+        assert_eq!(
+            causal_context_from_env(&none_env).expect("root context"),
+            CausalContext::None
+        );
 
-        // Scalar: one receipt anchor.
         let scalar_env = none_env.clone().with_causal_context(json!({
             "kind": "scalar",
             "receipt_ura": "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r1/receipt",
-            "receipt_hash": "aa",
+            "receipt_hash": "aa".repeat(32),
         }));
-        let scalar = causal_parents_from_env(&scalar_env);
-        assert_eq!(scalar.len(), 1);
-        assert_eq!(
-            scalar[0]["receipt_ura"],
-            "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r1/receipt"
-        );
+        let CausalContext::Scalar(scalar) =
+            causal_context_from_env(&scalar_env).expect("scalar context")
+        else {
+            panic!("expected scalar context");
+        };
+        assert_eq!(scalar.receipt_hash, [0xaa; 32]);
 
-        // List: fan-in parents pass through verbatim.
         let list_env = none_env.with_causal_context(json!({
             "kind": "list",
             "receipts": [
-                {"receipt_ura": "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r1/receipt", "receipt_hash": "aa"},
-                {"receipt_ura": "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r2/receipt", "receipt_hash": "bb"},
+                {"receipt_ura": "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r1/receipt", "receipt_hash": "aa".repeat(32)},
+                {"receipt_ura": "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r2/receipt", "receipt_hash": "bb".repeat(32)},
             ],
         }));
-        let list = causal_parents_from_env(&list_env);
+        let CausalContext::List(list) = causal_context_from_env(&list_env).expect("list context")
+        else {
+            panic!("expected list context");
+        };
         assert_eq!(list.len(), 2);
         assert_eq!(
-            list[1]["receipt_ura"],
+            list[1].receipt_ura,
             "easynet:///r/acme/resource/agent.a2a.forwarder/invocation/r2/receipt"
         );
+    }
+
+    #[test]
+    fn incomplete_causal_context_is_rejected_instead_of_becoming_root() {
+        let env = crate::daemon::ability::dispatch::EnvelopeContext::for_test_ability(
+            "easynet:///r/acme/device/local",
+            ABILITY_SEND_TASK,
+            "easynet:///r/acme/device/local",
+        )
+        .with_causal_context(json!({"kind": "future-form"}));
+
+        let error = causal_context_from_env(&env).expect_err("unknown causal form must fail");
+        assert!(error
+            .to_string()
+            .contains("unsupported causal context kind"));
     }
 
     #[test]

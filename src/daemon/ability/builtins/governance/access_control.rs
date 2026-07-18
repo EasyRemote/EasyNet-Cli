@@ -28,15 +28,15 @@ use std::sync::{Arc, OnceLock};
 
 use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::ability::catalog::system_manifest::registry_manifest;
-use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler, OwnerKind};
 use crate::daemon::invocation::admission::decision::{
     AbilityCallTrace, AdmissionExplainResult, OwnerResolution, OwnerSource,
     PermissionRequestStatus, PolicyDecision, RedactionReason, SignatureDecision,
     SignatureDecisionOutcome, SignatureDecisionReason, TraceStage,
 };
 use crate::daemon::invocation::admission::policy_engine::{PolicyEngine, PolicyInput};
-use crate::daemon::persistence::access_control::AccessControlStore;
-use easynet_axon::invocation::{InvocationLedger, InvocationLedgerFetchKey, InvocationLedgerQuery};
+use crate::daemon::persistence::access_control::AccessControlStoreRegistry;
+use axon_sdk::invocation::{InvocationLedger, InvocationLedgerFetchKey, InvocationLedgerQuery};
 
 pub const AUTHORITY_BINDING_GRANT: &str =
     crate::daemon::ability::names::governance::AUTHORITY_BINDING_GRANT;
@@ -55,13 +55,19 @@ pub const POLICY_REQUEST_LIST: &str =
 pub const ADMISSION_EXPLAIN: &str = crate::daemon::ability::names::governance::ADMISSION_EXPLAIN;
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    register_with_ledger(reg, None, Arc::new(OnceLock::new()));
+    register_with_ledger(
+        reg,
+        None,
+        Arc::new(OnceLock::new()),
+        Arc::new(AccessControlStoreRegistry::default()),
+    );
 }
 
 pub fn register_with_ledger(
     reg: &mut AxonAbilityCatalog,
     ledger: Option<Arc<InvocationLedger>>,
     _catalog: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    access_control_stores: Arc<AccessControlStoreRegistry>,
 ) {
     let runtime_governance_owners = [OwnerKind::Device, OwnerKind::Hub];
     for ability in [
@@ -73,14 +79,35 @@ pub fn register_with_ledger(
         POLICY_REQUEST_RESOLVE,
         POLICY_REQUEST_LIST,
     ] {
-        let handler = match ability {
-            AUTHORITY_BINDING_GRANT => grant_handler,
-            AUTHORITY_BINDING_REVOKE => revoke_handler,
-            AUTHORITY_BINDING_LIST => list_grants_handler,
-            AUTHORITY_BINDING_CHECK => check_handler,
-            POLICY_REQUEST_CREATE => request_create_handler,
-            POLICY_REQUEST_RESOLVE => request_resolve_handler,
-            POLICY_REQUEST_LIST => request_list_handler,
+        let handler: LocalRpcHandler = match ability {
+            AUTHORITY_BINDING_GRANT => {
+                let stores = Arc::clone(&access_control_stores);
+                Arc::new(move |args| grant_handler(args, stores.as_ref()))
+            }
+            AUTHORITY_BINDING_REVOKE => {
+                let stores = Arc::clone(&access_control_stores);
+                Arc::new(move |args| revoke_handler(args, stores.as_ref()))
+            }
+            AUTHORITY_BINDING_LIST => {
+                let stores = Arc::clone(&access_control_stores);
+                Arc::new(move |args| list_grants_handler(args, stores.as_ref()))
+            }
+            AUTHORITY_BINDING_CHECK => {
+                let stores = Arc::clone(&access_control_stores);
+                Arc::new(move |args| check_handler(args, stores.as_ref()))
+            }
+            POLICY_REQUEST_CREATE => {
+                let stores = Arc::clone(&access_control_stores);
+                Arc::new(move |args| request_create_handler(args, stores.as_ref()))
+            }
+            POLICY_REQUEST_RESOLVE => {
+                let stores = Arc::clone(&access_control_stores);
+                Arc::new(move |args| request_resolve_handler(args, stores.as_ref()))
+            }
+            POLICY_REQUEST_LIST => {
+                let stores = Arc::clone(&access_control_stores);
+                Arc::new(move |args| request_list_handler(args, stores.as_ref()))
+            }
             _ => unreachable!("static RFC-014 ability list"),
         };
         for owner in runtime_governance_owners.iter().cloned() {
@@ -88,7 +115,7 @@ pub fn register_with_ledger(
                 ability,
                 owner,
                 registry_manifest(ability, description_for(ability), input_schema_for(ability)),
-                std::sync::Arc::new(handler),
+                Arc::clone(&handler),
             );
         }
     }
@@ -109,7 +136,7 @@ pub fn register_with_ledger(
     }
 }
 
-fn grant_handler(args: Value) -> anyhow::Result<Value> {
+fn grant_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Result<Value> {
     let request: GrantRequest = serde_json::from_value(args)?;
     let grant = grant_from_wire_mutation_boundary(
         request.grant,
@@ -117,21 +144,23 @@ fn grant_handler(args: Value) -> anyhow::Result<Value> {
         request.principal_ura.as_deref(),
     )?;
     let actor_ura = require_actor_ura(request.actor_ura.as_deref())?;
-    let mut store = AccessControlStore::open_or_create(grant.owner_user_id.clone())?;
-    let result = store.create_grant(grant, actor_ura)?;
+    let owner_user_id = grant.owner_user_id.clone();
+    let result =
+        stores.with_store(&owner_user_id, |store| store.create_grant(grant, actor_ura))??;
     Ok(serde_json::to_value(result)?)
 }
 
-fn revoke_handler(args: Value) -> anyhow::Result<Value> {
+fn revoke_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Result<Value> {
     let request: RevokeRequest = serde_json::from_value(args)?;
     let owner_user_id = owner_user_id_from_mutation_boundary(request.owner_ura.as_deref())?;
     let actor_ura = require_actor_ura(request.actor_ura.as_deref())?;
-    let mut store = AccessControlStore::open_or_create(owner_user_id.clone())?;
-    let grant = store.revoke_grant(&request.grant_id, &owner_user_id, actor_ura, request.reason)?;
+    let grant = stores.with_store(&owner_user_id, |store| {
+        store.revoke_grant(&request.grant_id, &owner_user_id, actor_ura, request.reason)
+    })??;
     Ok(json!({ "grant": grant }))
 }
 
-fn list_grants_handler(args: Value) -> anyhow::Result<Value> {
+fn list_grants_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Result<Value> {
     let request: ListGrantsRequest = serde_json::from_value(args)?;
     let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_deref())?;
     let principal_id = principal_id_from_boundary(
@@ -139,8 +168,7 @@ fn list_grants_handler(args: Value) -> anyhow::Result<Value> {
         request.principal_ura.as_deref(),
         request.token_id.as_deref(),
     )?;
-    let store = AccessControlStore::open_or_create(owner_user_id)?;
-    let mut grants = store.grants();
+    let mut grants = stores.with_store(&owner_user_id, |store| store.grants())?;
     if let Some(principal_id) = principal_id {
         grants.retain(|grant| grant.principal_id == principal_id);
     }
@@ -172,7 +200,7 @@ fn list_grants_handler(args: Value) -> anyhow::Result<Value> {
     Ok(json!({ "grants": grants }))
 }
 
-fn check_handler(args: Value) -> anyhow::Result<Value> {
+fn check_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Result<Value> {
     let request: CheckRequest = serde_json::from_value(args)?;
     let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_deref())?;
     let principal_id = principal_id_from_boundary(
@@ -181,7 +209,7 @@ fn check_handler(args: Value) -> anyhow::Result<Value> {
         request.token_id.as_deref(),
     )?
     .ok_or_else(|| anyhow::anyhow!("principal_ura or token_id is required for policy checks"))?;
-    let store = AccessControlStore::open_or_create(owner_user_id.clone())?;
+    let grants = stores.with_store(&owner_user_id, |store| store.grants())?;
     let owner = OwnerResolution {
         owner_user_id: Some(owner_user_id),
         owner_ura: request.owner_ura,
@@ -207,12 +235,15 @@ fn check_handler(args: Value) -> anyhow::Result<Value> {
         verified_authority_id: request.authority_proof_id,
         rejector_ura: request.rejector_ura,
         now: chrono::Utc::now(),
-        grants: store.grants(),
+        grants,
     });
     Ok(json!({ "policy_decision": decision }))
 }
 
-fn request_create_handler(args: Value) -> anyhow::Result<Value> {
+fn request_create_handler(
+    args: Value,
+    stores: &AccessControlStoreRegistry,
+) -> anyhow::Result<Value> {
     let request: PermissionRequestEnvelope = serde_json::from_value(args)?;
     let permission_request = permission_request_from_wire_mutation_boundary(
         request.request,
@@ -220,12 +251,17 @@ fn request_create_handler(args: Value) -> anyhow::Result<Value> {
         request.principal_ura.as_deref(),
     )?;
     let actor_ura = require_actor_ura(request.actor_ura.as_deref())?;
-    let mut store = AccessControlStore::open_or_create(permission_request.owner_user_id.clone())?;
-    let request = store.upsert_permission_request(permission_request, actor_ura)?;
+    let owner_user_id = permission_request.owner_user_id.clone();
+    let request = stores.with_store(&owner_user_id, |store| {
+        store.upsert_permission_request(permission_request, actor_ura)
+    })??;
     Ok(json!({ "request": request }))
 }
 
-fn request_resolve_handler(args: Value) -> anyhow::Result<Value> {
+fn request_resolve_handler(
+    args: Value,
+    stores: &AccessControlStoreRegistry,
+) -> anyhow::Result<Value> {
     let request: PermissionRequestResolutionEnvelope = serde_json::from_value(args)?;
     let permission_request = permission_request_from_wire_mutation_boundary(
         request.request,
@@ -233,35 +269,37 @@ fn request_resolve_handler(args: Value) -> anyhow::Result<Value> {
         request.principal_ura.as_deref(),
     )?;
     let actor_ura = require_actor_ura(request.actor_ura.as_deref())?;
-    let mut store = AccessControlStore::open_or_create(permission_request.owner_user_id.clone())?;
-    if permission_request.status == PermissionRequestStatus::Approved {
-        if let Some(grant) = request.created_grant {
-            let grant = grant_from_wire_mutation_boundary(
-                grant,
-                request.owner_ura.as_deref(),
-                request.principal_ura.as_deref(),
-            )?;
-            let result = store.resolve_permission_request_with_grant(
-                permission_request,
-                grant,
-                actor_ura,
-            )?;
-            return Ok(serde_json::to_value(result)?);
+    let owner_user_id = permission_request.owner_user_id.clone();
+    stores.with_store(&owner_user_id, |store| {
+        if permission_request.status == PermissionRequestStatus::Approved {
+            if let Some(grant) = request.created_grant {
+                let grant = grant_from_wire_mutation_boundary(
+                    grant,
+                    request.owner_ura.as_deref(),
+                    request.principal_ura.as_deref(),
+                )?;
+                let result = store.resolve_permission_request_with_grant(
+                    permission_request,
+                    grant,
+                    actor_ura,
+                )?;
+                return Ok(serde_json::to_value(result)?);
+            }
+            if let Some(proof) = request.authority_proof {
+                let result = store.resolve_permission_request_with_authority_proof(
+                    permission_request,
+                    proof,
+                    actor_ura,
+                )?;
+                return Ok(serde_json::to_value(result)?);
+            }
         }
-        if let Some(proof) = request.authority_proof {
-            let result = store.resolve_permission_request_with_authority_proof(
-                permission_request,
-                proof,
-                actor_ura,
-            )?;
-            return Ok(serde_json::to_value(result)?);
-        }
-    }
-    let request = store.resolve_permission_request(permission_request, actor_ura)?;
-    Ok(json!({ "request": request }))
+        let request = store.resolve_permission_request(permission_request, actor_ura)?;
+        Ok(json!({ "request": request }))
+    })?
 }
 
-fn request_list_handler(args: Value) -> anyhow::Result<Value> {
+fn request_list_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Result<Value> {
     let request: ListRequestsRequest = serde_json::from_value(args)?;
     let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_deref())?;
     let principal_id = principal_id_from_boundary(
@@ -283,8 +321,7 @@ fn request_list_handler(args: Value) -> anyhow::Result<Value> {
             anyhow::bail!("created_at_or_after must not be after created_at_or_before");
         }
     }
-    let store = AccessControlStore::open_or_create(owner_user_id)?;
-    let mut requests = store.requests();
+    let mut requests = stores.with_store(&owner_user_id, |store| store.requests())?;
     if let Some(principal_id) = principal_id {
         requests.retain(|item| item.principal_id == principal_id);
     }
@@ -497,7 +534,7 @@ impl AdmissionExplainReader {
                 },
             )?;
         let signed_action =
-            easynet_axon::invocation::admission_action_from_descriptor_ref(&record.descriptor_ref)
+            axon_sdk::invocation::admission_action_from_descriptor_ref(&record.descriptor_ref)
                 .map_err(|error| {
                     anyhow::anyhow!(
                 "admission.explain: ledger record has an invalid descriptor reference: {error}"
@@ -601,8 +638,8 @@ struct FailureProjection {
 /// ledger error. This is a projection, not a second policy engine and never
 /// trusts caller-supplied explain fields.
 fn project_failure(
-    error: &easynet_axon::invocation::LedgerErrorRecord,
-    record: &easynet_axon::invocation::InvocationLedgerRecord,
+    error: &axon_sdk::invocation::LedgerErrorRecord,
+    record: &axon_sdk::invocation::InvocationLedgerRecord,
 ) -> FailureProjection {
     let Some((prefix, encoded)) = error.message.split_once(": ") else {
         return FailureProjection::default();
@@ -1204,18 +1241,25 @@ mod tests {
     #[test]
     fn revoke_requires_a_canonical_actor_ura_before_opening_the_store() {
         let _home = HomeGuard::new();
-        let missing = revoke_handler(json!({
-            "grant_id": "grant-1",
-            "owner_ura": "easynet:///r/test/user/alice"
-        }))
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let missing = revoke_handler(
+            json!({
+                "grant_id": "grant-1",
+                "owner_ura": "easynet:///r/test/user/alice"
+            }),
+            &stores,
+        )
         .expect_err("an audited revoke cannot infer its actor from owner_user_id");
         assert!(missing.to_string().contains("actor_ura is required"));
 
-        let invalid = revoke_handler(json!({
-            "grant_id": "grant-1",
-            "owner_ura": "easynet:///r/test/user/alice",
-            "actor_ura": "alice"
-        }))
+        let invalid = revoke_handler(
+            json!({
+                "grant_id": "grant-1",
+                "owner_ura": "easynet:///r/test/user/alice",
+                "actor_ura": "alice"
+            }),
+            &stores,
+        )
         .expect_err("a scalar actor must not be persisted as an actor URA");
         assert!(invalid
             .to_string()
@@ -1225,20 +1269,27 @@ mod tests {
     #[test]
     fn policy_mutations_reject_scalar_only_identity_boundaries() {
         let _home = HomeGuard::new();
-        let missing_owner = grant_handler(json!({
-            "actor_ura": "easynet:///r/example/user/alice",
-            "grant": grant_payload("grant-scalar-owner", "device.files.read", "session-1")
-        }))
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let missing_owner = grant_handler(
+            json!({
+                "actor_ura": "easynet:///r/example/user/alice",
+                "grant": grant_payload("grant-scalar-owner", "device.files.read", "session-1")
+            }),
+            &stores,
+        )
         .expect_err("owner_user_id must not replace owner_ura on a mutation");
         assert!(missing_owner
             .to_string()
             .contains("owner_ura is required for a policy mutation"));
 
-        let missing_principal = grant_handler(json!({
-            "owner_ura": "easynet:///r/example/user/alice",
-            "actor_ura": "easynet:///r/example/user/alice",
-            "grant": user_grant_payload("grant-scalar-principal")
-        }))
+        let missing_principal = grant_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "actor_ura": "easynet:///r/example/user/alice",
+                "grant": user_grant_payload("grant-scalar-principal")
+            }),
+            &stores,
+        )
         .expect_err("a non-token mutation must carry principal_ura");
         assert!(missing_principal
             .to_string()
@@ -1248,30 +1299,40 @@ mod tests {
     #[test]
     fn policy_read_boundaries_reject_scalar_only_owner_identity() {
         let _home = HomeGuard::new();
-        let list_error = list_grants_handler(json!({
-            "owner_user_id": "alice",
-            "token_id": "token-1"
-        }))
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let list_error = list_grants_handler(
+            json!({
+                "owner_user_id": "alice",
+                "token_id": "token-1"
+            }),
+            &stores,
+        )
         .expect_err("owner_user_id must not replace owner_ura on grant reads");
         assert!(list_error.to_string().contains("owner_user_id"));
 
-        let check_error = check_handler(json!({
-            "owner_user_id": "alice",
-            "caller_ura": "easynet:///r/example/hub",
-            "principal_kind": "token",
-            "token_id": "token-1",
-            "callee_ura": "easynet:///r/example/device/dev-a",
-            "subject_ura": "easynet:///r/example/resource/user.alice/session/session-target",
-            "ability_ura": "easynet:///r/example/ability/device.dev-a.terminal.attach",
-            "action": "stream"
-        }))
+        let check_error = check_handler(
+            json!({
+                "owner_user_id": "alice",
+                "caller_ura": "easynet:///r/example/hub",
+                "principal_kind": "token",
+                "token_id": "token-1",
+                "callee_ura": "easynet:///r/example/device/dev-a",
+                "subject_ura": "easynet:///r/example/resource/user.alice/session/session-target",
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.terminal.attach",
+                "action": "stream"
+            }),
+            &stores,
+        )
         .expect_err("owner_user_id must not replace owner_ura on policy checks");
         assert!(check_error.to_string().contains("owner_user_id"));
 
-        let requests_error = request_list_handler(json!({
-            "owner_user_id": "alice",
-            "token_id": "token-1"
-        }))
+        let requests_error = request_list_handler(
+            json!({
+                "owner_user_id": "alice",
+                "token_id": "token-1"
+            }),
+            &stores,
+        )
         .expect_err("owner_user_id must not replace owner_ura on request reads");
         assert!(requests_error.to_string().contains("owner_user_id"));
     }
@@ -1283,7 +1344,7 @@ mod tests {
             Arc::new(InvocationLedger::open(dir.path().join("invocations.redb")).expect("ledger"));
         ledger
             .put(
-                &easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
+                &axon_sdk::invocation::InvocationLedgerRecordBuilder::new()
                     .invocation_ura("easynet:///r/test/resource/alice.invocations/req-1")
                     .request_id("req-1")
                     .trace_id("trace-1")
@@ -1295,9 +1356,10 @@ mod tests {
                     .ability_name("terminal.create")
                     .descriptor_ref("easynet:///r/test/ability/device.dev-a.terminal.create@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read")
                     .admission_action("read")
+                    .authority_form("self")
                     .safe_read(true)
                     .state("failed")
-                    .error(easynet_axon::invocation::LedgerErrorRecord {
+                    .error(axon_sdk::invocation::LedgerErrorRecord {
                         source: "daemon_invocation_service".to_string(),
                         code: "POLICY_DENIED".to_string(),
                         message: format!(
@@ -1324,7 +1386,7 @@ mod tests {
                         context: std::collections::BTreeMap::new(),
                     })
                     .started_unix_ms(1)
-                    .args(easynet_axon::invocation::LedgerEventPayload::digest(
+                    .args(axon_sdk::invocation::LedgerEventPayload::digest(
                         "application/json",
                         b"{}",
                     ))
@@ -1335,7 +1397,10 @@ mod tests {
 
         let callee_ura = "easynet:///r/test/device/dev-a";
         let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            easynet_axon::invocation::LocalRuntime::new(),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
                 callee_ura,
             )
@@ -1407,7 +1472,7 @@ mod tests {
             let descriptor_ref = format!("{ability_ura}@1.0.0#{digest}!{action}");
             ledger
                 .put(
-                    &easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
+                    &axon_sdk::invocation::InvocationLedgerRecordBuilder::new()
                         .invocation_ura(format!(
                             "easynet:///r/test/resource/alice.invocations/{request_id}"
                         ))
@@ -1421,10 +1486,11 @@ mod tests {
                         .ability_name(ability_name)
                         .descriptor_ref(descriptor_ref)
                         .admission_action(action)
+                        .authority_form("self")
                         .safe_read(action == "read")
                         .state("completed")
                         .started_unix_ms(1)
-                        .args(easynet_axon::invocation::LedgerEventPayload::digest(
+                        .args(axon_sdk::invocation::LedgerEventPayload::digest(
                             "application/json",
                             b"{}",
                         ))
@@ -1484,17 +1550,24 @@ mod tests {
     #[test]
     fn authority_binding_list_supports_rfc014_scope_filters() {
         let _home = HomeGuard::new();
-        grant_handler(json!({
-            "owner_ura": "easynet:///r/example/user/alice",
-            "actor_ura": "easynet:///r/example/user/alice",
-            "grant": grant_payload("grant-target", "device.terminal.attach", "session-target")
-        }))
+        let stores = AccessControlStoreRegistry::ephemeral();
+        grant_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "actor_ura": "easynet:///r/example/user/alice",
+                "grant": grant_payload("grant-target", "device.terminal.attach", "session-target")
+            }),
+            &stores,
+        )
         .expect("target grant");
-        grant_handler(json!({
-            "owner_ura": "easynet:///r/example/user/alice",
-            "actor_ura": "easynet:///r/example/user/alice",
-            "grant": grant_payload("grant-other", "device.files.read", "session-other")
-        }))
+        grant_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "actor_ura": "easynet:///r/example/user/alice",
+                "grant": grant_payload("grant-other", "device.files.read", "session-other")
+            }),
+            &stores,
+        )
         .expect("other grant");
 
         let output = list_grants_handler(json!({
@@ -1506,7 +1579,7 @@ mod tests {
             "action": "stream",
             "effect": "allow",
             "state": "active"
-        }))
+        }), &stores)
         .expect("list grants");
 
         let grants = output["grants"].as_array().expect("grants array");
@@ -1517,22 +1590,29 @@ mod tests {
     #[test]
     fn authority_binding_grant_derives_owner_and_user_principal_from_ura() {
         let _home = HomeGuard::new();
-        let output = grant_handler(json!({
-            "owner_ura": "easynet:///r/example/user/alice",
-            "principal_ura": "easynet:///r/example/user/alice",
-            "actor_ura": "easynet:///r/example/user/alice",
-            "grant": user_grant_payload("grant-user")
-        }))
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let output = grant_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "principal_ura": "easynet:///r/example/user/alice",
+                "actor_ura": "easynet:///r/example/user/alice",
+                "grant": user_grant_payload("grant-user")
+            }),
+            &stores,
+        )
         .expect("user grant");
 
         assert_eq!(output["grant"]["owner_user_id"], "alice");
         assert_eq!(output["grant"]["principal_id"], "alice");
 
-        let listed = list_grants_handler(json!({
-            "owner_ura": "easynet:///r/example/user/alice",
-            "principal_kind": "user",
-            "principal_ura": "easynet:///r/example/user/alice"
-        }))
+        let listed = list_grants_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "principal_kind": "user",
+                "principal_ura": "easynet:///r/example/user/alice"
+            }),
+            &stores,
+        )
         .expect("list by URA");
         let grants = listed["grants"].as_array().expect("grants array");
         assert_eq!(grants.len(), 1);
@@ -1542,23 +1622,27 @@ mod tests {
     #[test]
     fn authority_binding_rejects_nested_scalar_identity_fields() {
         let _home = HomeGuard::new();
-        let grant_error = grant_handler(json!({
-            "owner_ura": "easynet:///r/example/user/alice",
-            "principal_ura": "easynet:///r/example/user/alice",
-            "actor_ura": "easynet:///r/example/user/alice",
-            "grant": {
-                "grant_id": "grant-scalar",
-                "owner_user_id": "bob",
-                "principal_kind": "user",
-                "principal_id": "bob",
-                "actions": ["invoke"],
-                "effect": "allow",
-                "lifetime": "session",
-                "state": "active",
-                "created_by": "easynet:///r/example/user/bob",
-                "created_at": "2026-07-09T00:00:00Z"
-            }
-        }))
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let grant_error = grant_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "principal_ura": "easynet:///r/example/user/alice",
+                "actor_ura": "easynet:///r/example/user/alice",
+                "grant": {
+                    "grant_id": "grant-scalar",
+                    "owner_user_id": "bob",
+                    "principal_kind": "user",
+                    "principal_id": "bob",
+                    "actions": ["invoke"],
+                    "effect": "allow",
+                    "lifetime": "session",
+                    "state": "active",
+                    "created_by": "easynet:///r/example/user/bob",
+                    "created_at": "2026-07-09T00:00:00Z"
+                }
+            }),
+            &stores,
+        )
         .expect_err("nested scalar identity fields must not be accepted");
         assert!(
             grant_error.to_string().contains("owner_user_id")
@@ -1566,26 +1650,29 @@ mod tests {
             "{grant_error}"
         );
 
-        let request_error = request_create_handler(json!({
-            "owner_ura": "easynet:///r/example/user/alice",
-            "principal_ura": "easynet:///r/example/user/alice",
-            "actor_ura": "easynet:///r/example/user/alice",
-            "request": {
-                "request_id": "req-scalar",
-                "owner_user_id": "bob",
-                "caller_ura": "easynet:///r/example/hub",
-                "principal_kind": "user",
-                "principal_id": "bob",
-                "callee_ura": "easynet:///r/example/device/dev-a",
-                "subject_ura": "easynet:///r/example/user/alice",
-                "ability_ura": "easynet:///r/example/ability/device.dev-a.agent.list",
-                "action": "invoke",
-                "requested_lifetimes": ["session"],
-                "status": "pending",
-                "created_at": "2026-07-09T00:00:00Z",
-                "expires_at": "2026-07-09T01:00:00Z"
-            }
-        }))
+        let request_error = request_create_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "principal_ura": "easynet:///r/example/user/alice",
+                "actor_ura": "easynet:///r/example/user/alice",
+                "request": {
+                    "request_id": "req-scalar",
+                    "owner_user_id": "bob",
+                    "caller_ura": "easynet:///r/example/hub",
+                    "principal_kind": "user",
+                    "principal_id": "bob",
+                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "subject_ura": "easynet:///r/example/user/alice",
+                    "ability_ura": "easynet:///r/example/ability/device.dev-a.agent.list",
+                    "action": "invoke",
+                    "requested_lifetimes": ["session"],
+                    "status": "pending",
+                    "created_at": "2026-07-09T00:00:00Z",
+                    "expires_at": "2026-07-09T01:00:00Z"
+                }
+            }),
+            &stores,
+        )
         .expect_err("nested request scalar identity fields must not be accepted");
         assert!(
             request_error.to_string().contains("owner_user_id")
@@ -1597,39 +1684,49 @@ mod tests {
     #[test]
     fn policy_request_list_supports_rfc014_scope_and_creation_filters() {
         let _home = HomeGuard::new();
-        request_create_handler(json!({
-            "owner_ura": "easynet:///r/example/user/alice",
-            "actor_ura": "easynet:///r/example/user/alice",
-            "request": request_payload(
-                "req-target",
-                "device.terminal.attach",
-                "session-target",
-                "2026-07-09T00:00:00Z"
-            )
-        }))
+        let stores = AccessControlStoreRegistry::ephemeral();
+        request_create_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "actor_ura": "easynet:///r/example/user/alice",
+                "request": request_payload(
+                    "req-target",
+                    "device.terminal.attach",
+                    "session-target",
+                    "2026-07-09T00:00:00Z"
+                )
+            }),
+            &stores,
+        )
         .expect("target request");
-        request_create_handler(json!({
-            "owner_ura": "easynet:///r/example/user/alice",
-            "actor_ura": "easynet:///r/example/user/alice",
-            "request": request_payload(
-                "req-other",
-                "device.files.read",
-                "session-other",
-                "2026-07-09T00:10:00Z"
-            )
-        }))
+        request_create_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "actor_ura": "easynet:///r/example/user/alice",
+                "request": request_payload(
+                    "req-other",
+                    "device.files.read",
+                    "session-other",
+                    "2026-07-09T00:10:00Z"
+                )
+            }),
+            &stores,
+        )
         .expect("other request");
 
-        let output = request_list_handler(json!({
-            "owner_ura": "easynet:///r/example/user/alice",
-            "token_id": "token-1",
-            "status": "pending",
-            "callee_ura": "easynet:///r/example/device/dev-a",
-            "ability_ura": "easynet:///r/example/ability/device.dev-a.terminal.attach",
-            "subject_ura": "easynet:///r/example/resource/user.alice/session/session-target",
-            "created_at_or_after": "2026-07-09T00:00:00Z",
-            "created_at_or_before": "2026-07-09T00:05:00Z"
-        }))
+        let output = request_list_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "token_id": "token-1",
+                "status": "pending",
+                "callee_ura": "easynet:///r/example/device/dev-a",
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.terminal.attach",
+                "subject_ura": "easynet:///r/example/resource/user.alice/session/session-target",
+                "created_at_or_after": "2026-07-09T00:00:00Z",
+                "created_at_or_before": "2026-07-09T00:05:00Z"
+            }),
+            &stores,
+        )
         .expect("list requests");
 
         let requests = output["requests"].as_array().expect("requests array");
@@ -1639,11 +1736,15 @@ mod tests {
 
     #[test]
     fn policy_request_list_rejects_invalid_creation_filter_window() {
-        let err = request_list_handler(json!({
-            "owner_ura": "easynet:///r/example/user/alice",
-            "created_at_or_after": "2026-07-09T00:05:00Z",
-            "created_at_or_before": "2026-07-09T00:00:00Z"
-        }))
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let err = request_list_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "created_at_or_after": "2026-07-09T00:05:00Z",
+                "created_at_or_before": "2026-07-09T00:00:00Z"
+            }),
+            &stores,
+        )
         .expect_err("invalid creation filter window must fail");
         assert!(
             err.to_string()

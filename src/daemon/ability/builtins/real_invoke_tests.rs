@@ -83,7 +83,9 @@ use crate::daemon::ability::builtins::{
     },
     governance::consent as permission_ability,
 };
-use crate::daemon::ability::catalog::{build_registry, is_publishable_catalog_name};
+use crate::daemon::ability::catalog::{
+    build_registry, build_registry_for_test_execution, is_publishable_catalog_name,
+};
 use crate::daemon::ability::conformance::{BaselineSurface, HubBaseline};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
@@ -102,10 +104,15 @@ fn authority_fixture_device_ura() -> String {
     crate::core::ura::device_ura("localhost", "dev-1")
 }
 
-fn runtime_attached_catalog() -> AxonAbilityCatalog {
-    AxonAbilityCatalog::new_with_runtime(
-        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+fn canonical_test_runtime() -> Arc<axon_sdk::invocation::LocalRuntime> {
+    crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+        crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+        None,
     )
+}
+
+fn runtime_attached_catalog() -> AxonAbilityCatalog {
+    AxonAbilityCatalog::new_with_runtime(canonical_test_runtime())
 }
 
 fn runtime_attached_catalog_for_realm(realm: &str) -> AxonAbilityCatalog {
@@ -122,7 +129,7 @@ fn runtime_attached_catalog_for_realm(realm: &str) -> AxonAbilityCatalog {
         })
         .expect("build realm-specific real-invoke authority context");
     AxonAbilityCatalog::new_with_runtime_and_authority_context(
-        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        canonical_test_runtime(),
         authority_context,
     )
 }
@@ -201,6 +208,7 @@ fn registry_with_temp_home_for_profile(
         crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
     );
     config.authority_context = Some(authority_context_for_real_invoke(profile));
+    config.local_runtime = Some(canonical_test_runtime());
     config.loaders = Some(Arc::new(Vec::new()));
     let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)
         .expect("build production registry for isolated invocation test")
@@ -233,6 +241,7 @@ fn registry_with_voice_temp_home() -> (
     config.authority_context = Some(authority_context_for_real_invoke(
         RealInvokeAuthorityProfile::CombinedDeviceHub,
     ));
+    config.local_runtime = Some(canonical_test_runtime());
     config.loaders = Some(Arc::new(Vec::new()));
     let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)
         .expect("build production registry for isolated Voice invocation test")
@@ -267,6 +276,7 @@ fn registry_with_joined_temp_home() -> (
         )
         .expect("build joined Device authority fixture with hot hosted-Agent inventory"),
     );
+    config.local_runtime = Some(canonical_test_runtime());
     config.loaders = Some(Arc::new(Vec::new()));
     let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)
         .expect("build joined production registry for isolated invocation test")
@@ -380,8 +390,8 @@ fn terminal_followup_target(
 // Borrowed receipt-URA shape (ledger.rs test convention) — no
 // production builder yet; RFC-007/008 tracks canonicalization (F-042).
 #[cfg(feature = "remote-desktop")]
-fn remote_desktop_test_consent_causal_context() -> easynet_axon::invocation::CausalContext {
-    easynet_axon::invocation::CausalContext::Scalar(easynet_axon::invocation::ReceiptRef {
+fn remote_desktop_test_consent_causal_context() -> axon_sdk::invocation::CausalContext {
+    axon_sdk::invocation::CausalContext::Scalar(axon_sdk::invocation::ReceiptRef {
         receipt_ura: "easynet:///r/acme/resource/alice.invocations/test-local-consent".to_string(),
         receipt_hash: [0x42; 32],
     })
@@ -391,7 +401,7 @@ fn invoke(name: &str, args: Value) -> Value {
     // Convenience for tests that don't need a HomeGuard. For
     // tests that do, build the dispatcher inline so the guard
     // outlives the call.
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     match d.execute_rpc(target(name, args)) {
         Ok(v) => v,
@@ -493,6 +503,22 @@ fn real_invocation_history_get_accepts_request_id() {
     assert!(
         body.contains_key("record"),
         "history get must return a record field even when absent: {resp}"
+    );
+}
+
+#[test]
+fn real_invocation_record_get_accepts_request_id() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "invocation.record.get",
+            json!({ "request_id": "missing-real-invoke-request" }),
+        ))
+        .expect("invocation.record.get");
+    let body = resp.as_object().expect("object");
+    assert!(
+        body.contains_key("record"),
+        "record get must return a record field even when absent: {resp}"
     );
 }
 
@@ -1361,7 +1387,10 @@ fn real_consent_decide_records_a_decision() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let perms = Arc::new(crate::daemon::execution::permission::PermissionService::new());
     let mut reg = AxonAbilityCatalog::new_with_runtime(
-        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        ),
     );
     permission_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
@@ -2614,7 +2643,7 @@ fn every_published_ability_has_a_real_invoke_test() {
 #[test]
 fn real_device_plugin_status_reports_runtime_surface() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let status = d
         .execute_rpc(target("plugin.status", json!({})))
@@ -2629,7 +2658,7 @@ fn real_device_plugin_status_reports_runtime_surface() {
 #[test]
 fn real_device_plugin_reload_reports_registration_diff() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let report = d
         .execute_rpc(target("plugin.reload", json!({})))
@@ -2648,7 +2677,7 @@ fn real_device_plugin_reload_reports_registration_diff() {
 #[test]
 fn real_device_plugin_activate_realtime_routes_through_lifecycle_ability() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let result = d.execute_rpc(target(
         "plugin.activate_realtime",
@@ -3086,7 +3115,7 @@ fn seed_real_invoke_display_resource(hardware_id: &str) -> String {
 #[test]
 fn real_mic_subscribe_routes_to_subject_gate() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let mut t = target("mic.subscribe", json!({}))
         .with_subject("easynet:///r/acme/resource/missing-real-invoke-mic");
@@ -3103,7 +3132,7 @@ fn real_mic_subscribe_routes_to_subject_gate() {
 #[test]
 fn real_camera_subscribe_routes_to_media_subject_gate() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let mut t = target("camera.subscribe", json!({}));
     t.call_mode = CallMode::Stream;
@@ -3122,7 +3151,7 @@ fn real_camera_snapshot_with_no_subject_returns_subject_required() {
     // MUST reject with reason="subject_required". The dedicated
     // suite in `media::camera_snapshot` covers the populated path.
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target("camera.snapshot", json!({})))
@@ -3136,7 +3165,7 @@ fn real_camera_snapshot_with_no_subject_returns_subject_required() {
 #[test]
 fn real_camera_record_start_with_no_subject_returns_subject_required() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target("camera.record_start", json!({})))
@@ -3150,7 +3179,7 @@ fn real_camera_record_start_with_no_subject_returns_subject_required() {
 #[test]
 fn real_camera_record_stop_with_no_subject_returns_subject_required() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target(
@@ -3167,7 +3196,7 @@ fn real_camera_record_stop_with_no_subject_returns_subject_required() {
 #[test]
 fn real_screen_subscribe_with_no_subject_returns_subject_required() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let mut t = target("screen.subscribe", json!({}));
     t.call_mode = CallMode::Stream;
@@ -3183,7 +3212,7 @@ fn real_screen_subscribe_with_no_subject_returns_subject_required() {
 #[test]
 fn real_screen_snapshot_with_no_subject_returns_subject_required() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target("screen.snapshot", json!({})))
@@ -3198,7 +3227,7 @@ fn real_screen_snapshot_with_no_subject_returns_subject_required() {
 #[cfg(feature = "remote-desktop")]
 fn real_remote_desktop_permission_status_reports_contract() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let status = d
         .execute_rpc(target("remote_desktop.permission_status", json!({})))
@@ -3213,7 +3242,7 @@ fn real_remote_desktop_permission_status_reports_contract() {
 #[cfg(feature = "remote-desktop")]
 fn real_remote_desktop_request_permission_reports_contract() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let status = d
         .execute_rpc(target("remote_desktop.request_permission", json!({})))
@@ -3228,7 +3257,7 @@ fn real_remote_desktop_request_permission_reports_contract() {
 #[cfg(feature = "remote-desktop")]
 fn real_remote_desktop_create_session_requires_envelope_subject() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target("remote_desktop.create_session", json!({})))
@@ -3244,7 +3273,7 @@ fn real_remote_desktop_create_session_requires_envelope_subject() {
 fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let subject = seed_real_invoke_display_resource("remote-desktop-real-invoke-display");
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let session_id = unique_call_id("remote-desktop");
 
@@ -3373,7 +3402,7 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
 #[cfg(feature = "remote-desktop")]
 fn real_remote_desktop_attach_reaches_session_gate_without_starting_capture() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let mut attach = target(
         "remote_desktop.attach",
@@ -3392,7 +3421,7 @@ fn real_remote_desktop_attach_reaches_session_gate_without_starting_capture() {
 #[test]
 fn real_speaker_publish_routes_to_media_stub() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let mut t = target("speaker.publish", json!({}));
     t.call_mode = CallMode::Bidi;
@@ -3454,7 +3483,7 @@ fn real_browser_open_session_mints_resource_ura() {
 #[test]
 fn real_browser_send_input_requires_known_session() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target(
@@ -3473,7 +3502,7 @@ fn real_browser_capture_viewport_emits_one_placeholder_frame() {
     // Open a session inside the same dispatcher so the in-process
     // session store sees the row when capture_viewport runs.
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let open = d
         .execute_rpc(target(
@@ -3497,7 +3526,7 @@ fn real_browser_capture_viewport_emits_one_placeholder_frame() {
 #[tokio::test]
 async fn real_browser_attach_session_emits_ready_frame_and_accepts_close() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let open = d
         .execute_rpc(target(
@@ -3551,7 +3580,7 @@ async fn real_browser_attach_session_emits_ready_frame_and_accepts_close() {
 #[test]
 fn real_browser_close_session_is_idempotent() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let open = d
         .execute_rpc(target(
@@ -3766,7 +3795,7 @@ fn real_device_openai_chat_completions_rejects_missing_request_arg() {
     // body must fail-fast rather than dispatch into the chat-base
     // pipeline with a None.
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target("openai.chat_completions", json!({})))
@@ -3914,7 +3943,10 @@ fn real_test_api_key_create_then_list_then_revoke_round_trip() {
     // the same code paths the production registration would.
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let mut reg = AxonAbilityCatalog::new_with_runtime(
-        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        ),
     );
     crate::daemon::ability::builtins::governance::api_key::register(&mut reg, "test");
     let d = dispatcher_for(Arc::new(reg));

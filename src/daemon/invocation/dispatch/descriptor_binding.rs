@@ -12,14 +12,13 @@
 // version. This boundary joins the two and returns the only string that may be
 // passed into `external_signed_from_wire_parts`.
 
-use std::collections::HashMap;
-
-use easynet_axon::invocation::{AbilityOptions, CallMode, LocalRuntime};
+use axon_sdk::invocation::{AbilityOptions, CallMode, LocalRuntime};
+use axon_sdk::pb::axon::v1::InvocationTarget;
 use tonic::Status;
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::invocation::dispatch::invocation_wire::{
-    status_from_dispatch_key_mismatch, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
+    descriptor_ref_from_invocation_target, status_from_dispatch_key_mismatch,
 };
 use crate::daemon::invocation::routing::route_resolver::SelectedInvokeRoute;
 
@@ -153,7 +152,13 @@ impl RuntimeBoundAbility {
                 descriptor_ref: selected.descriptor_ref.clone(),
             });
         }
-        let proof_binding = self.options.proof_for_mode(mode);
+        let proof_binding = self.options.proof_for_mode(mode).ok_or_else(|| {
+            Status::failed_precondition(format!(
+                "{surface}: {} has no descriptor proof for {}",
+                route_context(route_ura, &self.runtime_ability_ura),
+                call_mode_label(mode)
+            ))
+        })?;
         let descriptor_binding =
             crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire(
                 &proof_binding.descriptor_version,
@@ -218,13 +223,13 @@ impl RuntimeBoundAbility {
         Ok(signed_ability_ura)
     }
 
-    pub(crate) fn signed_descriptor_ref_from_metadata(
+    pub(crate) fn signed_descriptor_ref_from_target(
         &self,
         surface: &'static str,
         callee_ura: &str,
         mode: CallMode,
-        metadata: &HashMap<String, String>,
-    ) -> Result<Option<DescriptorBoundAbilityRef>, Status> {
+        target: Option<&InvocationTarget>,
+    ) -> Result<DescriptorBoundAbilityRef, Status> {
         if !self.supports_mode(mode) {
             return Err(Status::invalid_argument(format!(
                 "{surface}: ability `{}` is registered, but does not support {} Invoke",
@@ -232,24 +237,7 @@ impl RuntimeBoundAbility {
                 call_mode_label(mode)
             )));
         }
-        let Some(raw) = metadata
-            .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            return Ok(None);
-        };
-        let descriptor_ref =
-            crate::daemon::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
-                callee_ura, raw,
-            )
-            .map_err(|err| {
-                Status::invalid_argument(format!(
-                    "{surface}: signed descriptor ref `{raw}` is invalid for callee \
-                     `{callee_ura}`: {err}"
-                ))
-            })?;
+        let descriptor_ref = descriptor_ref_from_invocation_target(surface, callee_ura, target)?;
         let signed_ability_ura =
             crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
                 &descriptor_ref,
@@ -266,7 +254,7 @@ impl RuntimeBoundAbility {
                 self.runtime_ability_ura
             )));
         }
-        Ok(Some(DescriptorBoundAbilityRef { descriptor_ref }))
+        Ok(DescriptorBoundAbilityRef { descriptor_ref })
     }
 }
 
@@ -317,7 +305,13 @@ fn selected_route_descriptor_ref_from_catalog(
                 descriptor_mode.as_str()
             ))
         })?;
-    let proof = options.proof_for_mode(mode);
+    let proof = options.proof_for_mode(mode).ok_or_else(|| {
+        Status::failed_precondition(format!(
+            "{surface}: selected route `{}` runtime registration for `{runtime_ability_ura}` has no {} descriptor proof",
+            route.route_ura,
+            call_mode_label(mode)
+        ))
+    })?;
     let descriptor = record.descriptor();
     let implementation = record.implementation();
     let expected_descriptor_hash = descriptor.descriptor_hash_bytes();
@@ -389,7 +383,7 @@ fn runtime_ability_ura(
     _surface: &'static str,
     callee_ura: &str,
     ability: &str,
-) -> Result<String, easynet_axon::invocation::AxonError> {
+) -> Result<String, axon_sdk::invocation::AxonError> {
     crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, ability)
 }
 
@@ -413,7 +407,7 @@ fn call_mode_label(mode: CallMode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easynet_axon::invocation::{
+    use axon_sdk::invocation::{
         make_ability, AbilityCallModes, AbilityOptions, CallMode as AxonCallMode, LocalRuntime,
     };
 
@@ -424,6 +418,19 @@ mod tests {
             runtime_ability_ura: crate::core::ura::owner_ability_ura(CALLEE, ability)
                 .expect("test ability URA"),
             options: AbilityOptions::default(),
+            selected_route_descriptor_ref: None,
+        }
+    }
+
+    fn bound_all_modes(ability: &str) -> RuntimeBoundAbility {
+        RuntimeBoundAbility {
+            runtime_ability_ura: crate::core::ura::owner_ability_ura(CALLEE, ability)
+                .expect("test ability URA"),
+            options: AbilityOptions::default().with_modes(AbilityCallModes {
+                rpc: true,
+                stream: true,
+                bidi: true,
+            }),
             selected_route_descriptor_ref: None,
         }
     }
@@ -569,7 +576,10 @@ mod tests {
             (crate::daemon::ability::CallMode::Bidi, "test.selected_bidi"),
         ] {
             let catalog = AxonAbilityCatalog::new();
-            let runtime = LocalRuntime::new();
+            let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            );
             register_catalog_descriptor(&catalog, ability, mode);
             register_runtime_ability(
                 &runtime,
@@ -613,7 +623,10 @@ mod tests {
     async fn selected_route_rejects_missing_catalog_descriptor_proof() {
         let callee_ura = local_callee();
         let ability = "test.missing_catalog_proof";
-        let runtime = LocalRuntime::new();
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         register_runtime_ability(
             &runtime,
             &callee_ura,
@@ -647,7 +660,10 @@ mod tests {
         let callee_ura = local_callee();
         let ability = "test.drifted_runtime_proof";
         let catalog = AxonAbilityCatalog::new();
-        let runtime = LocalRuntime::new();
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         register_catalog_descriptor(&catalog, ability, crate::daemon::ability::CallMode::Rpc);
         register_runtime_ability(
             &runtime,
@@ -676,49 +692,153 @@ mod tests {
     }
 
     #[test]
-    fn signed_descriptor_ref_metadata_preserves_caller_signed_version() {
+    fn signed_descriptor_ref_target_preserves_caller_signed_version() {
         let ref_ = format!(
             "{}@2.3.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
             crate::core::ura::owner_ability_ura(CALLEE, "terminal.list").unwrap()
         );
-        let mut metadata = HashMap::new();
-        metadata.insert(SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(), ref_.clone());
+        let target = crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+            &ref_,
+            "terminal.list",
+        )
+        .unwrap();
 
         let got = bound("terminal.list")
-            .signed_descriptor_ref_from_metadata(
+            .signed_descriptor_ref_from_target(
                 "test carrier-v1",
                 CALLEE,
                 CallMode::Rpc,
-                &metadata,
+                Some(&target),
             )
-            .expect("metadata descriptor ref is valid")
-            .expect("metadata descriptor ref is present");
+            .expect("typed target descriptor ref is valid");
 
         assert_eq!(got.into_descriptor_ref(), ref_);
     }
 
     #[test]
-    fn signed_descriptor_ref_metadata_must_match_selected_route() {
+    fn signed_descriptor_ref_target_must_match_selected_route() {
         let ref_ = format!(
             "{}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
             crate::core::ura::owner_ability_ura(CALLEE, "skill.list").unwrap()
         );
-        let mut metadata = HashMap::new();
-        metadata.insert(SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(), ref_);
+        let target = crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+            ref_,
+            "terminal.list",
+        )
+        .unwrap();
 
         let err = bound("terminal.list")
-            .signed_descriptor_ref_from_metadata(
+            .signed_descriptor_ref_from_target(
                 "test carrier-v1",
                 CALLEE,
                 CallMode::Rpc,
-                &metadata,
+                Some(&target),
             )
-            .expect_err("metadata descriptor ref for another ability must reject");
+            .expect_err("target descriptor ref for another ability must reject");
 
         assert!(
             err.message().contains("route selected"),
             "unexpected error: {}",
             err.message()
         );
+    }
+
+    #[test]
+    fn signed_descriptor_ref_rejects_route_only_typed_target() {
+        let target = crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+            "terminal.list",
+            "terminal.list",
+        )
+        .unwrap();
+
+        let err = bound("terminal.list")
+            .signed_descriptor_ref_from_target(
+                "test signed public Invoke",
+                CALLEE,
+                CallMode::Rpc,
+                Some(&target),
+            )
+            .expect_err("route-only target must not authorize signed public admission");
+
+        assert!(
+            err.message().contains("complete descriptor ref"),
+            "unexpected error: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn signed_descriptor_ref_ignores_legacy_target_fields() {
+        let target = InvocationTarget {
+            ability_name: format!(
+                "{}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+                crate::core::ura::owner_ability_ura(CALLEE, "terminal.list").unwrap()
+            ),
+            ..InvocationTarget::default()
+        };
+
+        let err = bound("terminal.list")
+            .signed_descriptor_ref_from_target(
+                "test signed public Invoke",
+                CALLEE,
+                CallMode::Rpc,
+                Some(&target),
+            )
+            .expect_err("legacy target fields must not carry descriptor proof");
+
+        assert!(
+            err.message().contains("typed Ability target"),
+            "unexpected error: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn unary_stream_and_bidi_share_the_same_typed_descriptor_rule() {
+        let descriptor_ref = format!(
+            "{}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+            crate::core::ura::owner_ability_ura(CALLEE, "terminal.list").unwrap()
+        );
+        let descriptor_target =
+            crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+                &descriptor_ref,
+                "terminal.list",
+            )
+            .unwrap();
+        let route_only_target =
+            crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+                "terminal.list",
+                "terminal.list",
+            )
+            .unwrap();
+        let bound = bound_all_modes("terminal.list");
+
+        for mode in [CallMode::Rpc, CallMode::Stream, CallMode::Bidi] {
+            assert_eq!(
+                bound
+                    .signed_descriptor_ref_from_target(
+                        "test signed public geometry",
+                        CALLEE,
+                        mode,
+                        Some(&descriptor_target),
+                    )
+                    .unwrap()
+                    .into_descriptor_ref(),
+                descriptor_ref
+            );
+            let error = bound
+                .signed_descriptor_ref_from_target(
+                    "test signed public geometry",
+                    CALLEE,
+                    mode,
+                    Some(&route_only_target),
+                )
+                .expect_err("route-only target must fail for every signed geometry");
+            assert!(
+                error.message().contains("complete descriptor ref"),
+                "{mode:?}: unexpected error: {}",
+                error.message()
+            );
+        }
     }
 }

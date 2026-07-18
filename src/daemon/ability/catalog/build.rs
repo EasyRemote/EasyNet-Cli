@@ -57,27 +57,12 @@ use crate::daemon::execution::pty::PtyService;
 use crate::daemon::execution::schedule::ScheduleService;
 use crate::daemon::execution::session::SessionService;
 use crate::daemon::persistence::{
+    access_control::AccessControlStoreRegistry,
     agent_aggregate::{AgentAggregateRepository, AgentRegistryProjectionLoadError},
     agent_registry::AgentRegistry,
 };
 use anyhow::Context as _;
 use std::sync::Arc;
-
-fn registry_assembly_runtime() -> Arc<easynet_axon::invocation::LocalRuntime> {
-    #[cfg(test)]
-    {
-        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None)
-    }
-    #[cfg(not(test))]
-    {
-        // Production daemon boot injects an owner-bound runtime from
-        // runtime_factory::build_production_local_runtime. This default exists
-        // only for descriptor/catalogue assembly callers that need registration
-        // to see a LocalRuntime-shaped object before transport boot wires
-        // admission and ledger policy.
-        easynet_axon::invocation::LocalRuntime::new()
-    }
-}
 
 /// Build a `AxonAbilityCatalog` populated with every v1 system
 /// ability handler plus deterministic builtin plugin abilities.
@@ -114,6 +99,56 @@ pub fn build_registry() -> Arc<AxonAbilityCatalog> {
     }
     #[cfg(test)]
     build_registry_uncached()
+}
+
+/// Build an immutable metadata snapshot for one explicit authority set.
+///
+/// This is the non-executable counterpart to
+/// [`build_registry_with_services_result`]. It never starts daemon runtime
+/// services and deliberately has no `LocalRuntime`.
+pub fn build_registry_snapshot_with_authority_context(
+    authority_context: AbilityAuthorityContext,
+) -> anyhow::Result<Arc<AxonAbilityCatalog>> {
+    let agents = AgentRegistry::default();
+    let config = deterministic_snapshot_build_config_for_profile(
+        RegistryBuildServices::fresh(),
+        &agents,
+        DeterministicAuthorityProfile::DeviceDefault,
+    );
+    let config = RegistryBuildConfig {
+        authority_context: Some(authority_context),
+        ..config
+    };
+    build_registry_with_services_result_inner(
+        config,
+        RegistryAssemblyMode::DeterministicSnapshot {
+            plugins: PluginRegistryMode::BuiltinOnlyDeterministic,
+        },
+    )
+    .map(|built| built.catalog)
+}
+
+#[cfg(test)]
+pub(crate) fn build_registry_for_test_execution() -> anyhow::Result<Arc<AxonAbilityCatalog>> {
+    let agents = AgentRegistry::default();
+    let mut config = deterministic_snapshot_build_config_for_profile(
+        RegistryBuildServices::fresh(),
+        &agents,
+        DeterministicAuthorityProfile::DeviceDefault,
+    );
+    config.local_runtime = Some(
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        ),
+    );
+    build_registry_with_services_result_inner(
+        config,
+        RegistryAssemblyMode::DeterministicSnapshot {
+            plugins: PluginRegistryMode::BuiltinOnlyDeterministic,
+        },
+    )
+    .map(|built| built.catalog)
 }
 
 fn build_registry_uncached() -> Arc<AxonAbilityCatalog> {
@@ -187,12 +222,9 @@ fn deterministic_snapshot_build_config_for_profile<'a>(
     };
     let mut config =
         RegistryBuildConfig::new_with_authority_context(services, agents, authority_context);
-    // Descriptor snapshots register every handler but never invoke one. Some
-    // handlers bind their canonical dispatch gateway during registration, so
-    // the snapshot must provide the same runtime object shape as daemon
-    // assembly instead of maintaining a second, partially constructible
-    // registration path.
-    config.local_runtime = Some(registry_assembly_runtime());
+    // Descriptor snapshots are metadata-only. Executable daemon assembly must
+    // inject its one canonical runtime explicitly.
+    config.local_runtime = None;
     config
 }
 
@@ -283,6 +315,7 @@ pub struct RegistryBuildServices {
     pub schedule: Arc<ScheduleService>,
     pub loop_svc: Arc<LoopService>,
     pub discover_federation_resolver: discover_ability::SharedDiscoverFederationResolver,
+    pub access_control_stores: Arc<AccessControlStoreRegistry>,
 }
 
 impl RegistryBuildServices {
@@ -303,6 +336,7 @@ impl RegistryBuildServices {
             discover_federation_resolver: Arc::new(
                 discover_ability::DetachedDiscoverFederationResolver,
             ),
+            access_control_stores: Arc::new(AccessControlStoreRegistry::default()),
         }
     }
 
@@ -325,15 +359,21 @@ impl RegistryBuildServices {
         self.discover_federation_resolver = resolver;
         self
     }
+
+    #[must_use]
+    pub fn with_access_control_stores(mut self, stores: Arc<AccessControlStoreRegistry>) -> Self {
+        self.access_control_stores = stores;
+        self
+    }
 }
 
 pub struct RegistryBuildConfig<'a> {
     pub services: RegistryBuildServices,
-    pub invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
+    pub invocation_ledger: Option<Arc<axon_sdk::invocation::InvocationLedger>>,
     pub agents: &'a AgentRegistry,
     pub loaders: Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>,
     pub pages_identity: PagesIdentity,
-    pub local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
+    pub local_runtime: Option<Arc<axon_sdk::invocation::LocalRuntime>>,
     pub authority_context: Option<crate::daemon::ability::dispatch::AbilityAuthorityContext>,
     pub hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
     pub shared_stores: RegistrySharedStores,
@@ -365,7 +405,7 @@ impl<'a> RegistryBuildConfig<'a> {
             agents,
             loaders: Arc::new(Vec::new()),
             pages_identity: PagesIdentity::default(),
-            local_runtime: Some(registry_assembly_runtime()),
+            local_runtime: None,
             authority_context: Some(authority_context),
             hot_agent_registrar_cell: Arc::new(
                 agent_lifecycle_ability::SharedHotRegistrarCell::new(),
@@ -377,10 +417,10 @@ impl<'a> RegistryBuildConfig<'a> {
 
 pub struct RegistryDaemonBuildConfig {
     pub services: RegistryBuildServices,
-    pub invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
+    pub invocation_ledger: Option<Arc<axon_sdk::invocation::InvocationLedger>>,
     pub loaders: Option<Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>>,
     pub pages_identity: PagesIdentity,
-    pub local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
+    pub local_runtime: Option<Arc<axon_sdk::invocation::LocalRuntime>>,
     pub authority_context: Option<crate::daemon::ability::dispatch::AbilityAuthorityContext>,
     pub hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
     pub shared_stores: RegistrySharedStores,
@@ -394,7 +434,7 @@ impl RegistryDaemonBuildConfig {
             invocation_ledger: None,
             loaders: None,
             pages_identity: PagesIdentity::default(),
-            local_runtime: Some(registry_assembly_runtime()),
+            local_runtime: None,
             authority_context: Some(AbilityAuthorityContext::from_local_environment()),
             hot_agent_registrar_cell: Arc::new(
                 agent_lifecycle_ability::SharedHotRegistrarCell::new(),
@@ -407,6 +447,10 @@ impl RegistryDaemonBuildConfig {
 pub fn build_registry_with_services_result(
     config: RegistryBuildConfig<'_>,
 ) -> anyhow::Result<BuiltAbilityRegistry> {
+    anyhow::ensure!(
+        config.local_runtime.is_some(),
+        "daemon registry assembly requires an explicit canonical LocalRuntime"
+    );
     build_registry_with_services_result_inner(config, RegistryAssemblyMode::DaemonRuntime)
 }
 
@@ -487,6 +531,7 @@ fn build_registry_with_services_result_inner(
         schedule,
         loop_svc,
         discover_federation_resolver,
+        access_control_stores,
     } = services;
     #[cfg(feature = "axon-pb")]
     let invocation_cancellations =
@@ -593,6 +638,7 @@ fn build_registry_with_services_result_inner(
         &mut reg,
         invocation_ledger.clone(),
         Arc::clone(&local_registry_handle),
+        access_control_stores,
     );
     #[cfg(feature = "axon-pb")]
     invocation_cancel_ability::register(&mut reg, invocation_cancellations.clone());
@@ -1005,7 +1051,7 @@ fn build_registry_with_services_result_inner(
         let reflection_realm = pages_identity
             .realm
             .clone()
-            .unwrap_or_else(|| easynet_axon::ura::REALM_EASYNET.to_string());
+            .unwrap_or_else(|| axon_sdk::ura::REALM_EASYNET.to_string());
         crate::daemon::ability::builtins::integrations::mcp::reflective_registry::PostArcReflection::plan(
             crate::daemon::ability::builtins::integrations::mcp::reflective_registry::McpReflectionMode::from_env(),
             pages_identity.user.as_deref(),
@@ -1196,7 +1242,7 @@ fn declare_daemon_native_agent_authorities(
         ("Files", files::management_agent_ura(realm, user)),
         (
             "MCP reflection",
-            easynet_axon::ura::agent_ura(realm, user, "mcp"),
+            axon_sdk::ura::agent_ura(realm, user, "mcp"),
         ),
     ];
     for (executor, authority_root) in declared_roots {
@@ -1331,10 +1377,13 @@ mod daemon_native_authority_tests {
         )
         .expect("declare daemon-native Agent authorities");
         let registry = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            registry_assembly_runtime(),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
             authority_context,
         );
-        let mcp_root = easynet_axon::ura::agent_ura("native-authority", "alice", "mcp");
+        let mcp_root = axon_sdk::ura::agent_ura("native-authority", "alice", "mcp");
         let handler = Arc::new(|_args| {
             let (_tx, rx) = tokio::sync::broadcast::channel(1);
             Ok(StreamSource::Live(rx))

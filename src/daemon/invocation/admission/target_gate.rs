@@ -38,7 +38,7 @@ use crate::daemon::invocation::routing::route_resolver::{
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentLocalTargetProjection, HostedAgentTarget,
 };
-use easynet_axon::pb::axon::v1::Envelope;
+use axon_sdk::pb::axon::v1::{Envelope, InvocationTarget};
 
 /// Resolve-first gate over the daemon's routing authorities. Cheap to
 /// construct (every plane is `Arc`-shaped); the service builds one per
@@ -425,7 +425,7 @@ pub(crate) fn route_negative_message(failure: &ResolveRouteFailure) -> String {
 }
 
 pub(crate) fn route_negative_status(failure: ResolveRouteFailure) -> Status {
-    use easynet_axon::pb::axon::v1::NegativeReason;
+    use axon_sdk::pb::axon::v1::NegativeReason;
 
     let message = route_negative_message(&failure);
     match failure.reason {
@@ -462,24 +462,35 @@ pub(crate) fn route_profile_blocked_status(selected_route: &SelectedInvokeRoute)
 /// canonical bytes and turns a valid signature into
 /// `CALLER_SIGNATURE_INVALID` on the executing daemon. RFC-014 centralizes
 /// that drift check in `ChildInvocationBuilder`; this helper only adapts the
-/// resolver-selected route plus transport metadata into the builder input.
+/// resolver-selected route plus canonical typed target into the builder input.
 pub(crate) fn signed_envelope_for_selected_route(
     envelope: Envelope,
     selected_route: &SelectedInvokeRoute,
-    signed_descriptor_ref: Option<&str>,
+    target: Option<&InvocationTarget>,
     args: &[u8],
 ) -> Result<Envelope, Status> {
-    let signed_descriptor_ref = signed_descriptor_ref
+    let signed_callee = envelope
+        .callee
+        .as_ref()
+        .map(|callee| callee.ura.as_str())
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            Status::invalid_argument(format!(
-                "{}: selected route `{}` requires a signed descriptor ref",
-                SignatureDecisionReason::SignedDescriptorRefMissing.as_str(),
-                selected_route.route_ura
-            ))
-        })?
+        .filter(|callee| !callee.is_empty())
+        .ok_or_else(|| Status::invalid_argument("signed remote Invoke envelope missing callee"))?
         .to_string();
+    let signed_descriptor_ref =
+        crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
+            "signed remote Invoke",
+            &signed_callee,
+            target,
+        )
+        .map_err(|status| {
+            Status::invalid_argument(format!(
+                "{}: selected route `{}` requires a typed descriptor target: {}",
+                SignatureDecisionReason::SignedDescriptorRefMissing.as_str(),
+                selected_route.route_ura,
+                status.message()
+            ))
+        })?;
     let route = SelectedChildRoute::descriptor_bound(
         selected_route.route_ura.clone(),
         selected_route.callee_ura.clone(),
@@ -503,14 +514,6 @@ pub(crate) fn signed_envelope_for_selected_route(
             SignatureDecisionReason::CallerSignatureMissing.as_str()
         )));
     }
-    let signed_callee = envelope
-        .callee
-        .as_ref()
-        .map(|callee| callee.ura.as_str())
-        .map(str::trim)
-        .filter(|callee| !callee.is_empty())
-        .ok_or_else(|| Status::invalid_argument("signed remote Invoke envelope missing callee"))?
-        .to_string();
     let signed_subject = envelope
         .subject
         .as_ref()
@@ -552,7 +555,7 @@ fn signed_child_canonical_hash(
             })?;
     Ok(format!(
         "sha256:{}",
-        hex::encode(easynet_axon::invocation::sha256(
+        hex::encode(axon_sdk::invocation::sha256(
             &descriptor_bound.envelope.canonical_bytes()
         ))
     ))
@@ -578,7 +581,7 @@ mod tests {
     use super::{local_runtime_authority_ura, route_negative_status};
     use crate::daemon::invocation::routing::route_resolver::ResolveRouteFailure;
 
-    fn negative_status(reason: easynet_axon::pb::axon::v1::NegativeReason) -> tonic::Status {
+    fn negative_status(reason: axon_sdk::pb::axon::v1::NegativeReason) -> tonic::Status {
         route_negative_status(ResolveRouteFailure {
             query_name: "easynet:///r/acme/device/node-a#skill.list".to_string(),
             reason,
@@ -588,7 +591,7 @@ mod tests {
 
     #[test]
     fn resolver_absence_maps_to_not_found() {
-        use easynet_axon::pb::axon::v1::NegativeReason;
+        use axon_sdk::pb::axon::v1::NegativeReason;
 
         for reason in [NegativeReason::Nxdomain, NegativeReason::Nodata] {
             assert_eq!(negative_status(reason).code(), tonic::Code::NotFound);
@@ -597,7 +600,7 @@ mod tests {
 
     #[test]
     fn resolver_policy_and_capacity_reasons_keep_typed_transport_codes() {
-        use easynet_axon::pb::axon::v1::NegativeReason;
+        use axon_sdk::pb::axon::v1::NegativeReason;
 
         assert_eq!(
             negative_status(NegativeReason::Unauthorized).code(),
@@ -619,7 +622,7 @@ mod tests {
 
     #[test]
     fn resolver_placement_reasons_remain_failed_precondition() {
-        use easynet_axon::pb::axon::v1::NegativeReason;
+        use axon_sdk::pb::axon::v1::NegativeReason;
 
         for reason in [
             NegativeReason::Unspecified,

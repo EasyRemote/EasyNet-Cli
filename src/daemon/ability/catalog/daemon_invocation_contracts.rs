@@ -282,7 +282,7 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
                 "public_key_hex": string_prop("Optional advertised Agent verifying key."),
                 "generation": integer_prop("Monotonic directory generation for this advertisement.")
             }),
-            &["agent_ura"],
+            &["agent_ura", "generation"],
             true,
         ),
         ABILITY_FEDERATION_ADVERTISE_ABILITIES => object_schema(

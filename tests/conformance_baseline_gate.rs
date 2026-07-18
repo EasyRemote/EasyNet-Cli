@@ -88,22 +88,17 @@ fn device_mode_registry_satisfies_device_baseline() {
 #[test]
 fn hub_mode_registry_satisfies_hub_local_registry_slice() {
     let _home = HomeGuard::new();
-    let agents = easynet_cli::daemon::persistence::agent_registry::AgentRegistry::default();
     let hub_ura = easynet_cli::core::ura::hub_ura("conformance-test");
     let authority_context =
         easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
             &hub_ura,
         )
         .expect("Hub authority context");
-    let registry = easynet_cli::daemon::ability::catalog::build_registry_with_services_result(
-        easynet_cli::daemon::ability::catalog::RegistryBuildConfig::new_with_authority_context(
-            easynet_cli::daemon::ability::catalog::RegistryBuildServices::fresh(),
-            &agents,
+    let registry =
+        easynet_cli::daemon::ability::catalog::build_registry_snapshot_with_authority_context(
             authority_context,
-        ),
-    )
-    .expect("build Hub registry")
-    .catalog;
+        )
+        .expect("build Hub registry snapshot");
     let report =
         RegistryConformance::new(&registry).check("hub", HubBaseline::required_abilities());
     assert!(report.is_conformant(), "{}", report.panic_message());

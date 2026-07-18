@@ -292,15 +292,14 @@ fn launch_agent_label(plan: &DesktopCompanionPlan) -> Result<&str> {
 }
 
 fn launch_agent_path(plan: &DesktopCompanionPlan) -> Result<PathBuf> {
-    Ok(dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
+    Ok(plan
+        .user_home
         .join("Library/LaunchAgents")
         .join(format!("{}.plist", launch_agent_label(plan)?)))
 }
 
 fn installed_app_path(plan: &DesktopCompanionPlan, source_app_bundle: &Path) -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
+    plan.user_home
         .join(".easynet/apps")
         .join(&plan.package_id)
         .join(&plan.package_version)
@@ -430,6 +429,7 @@ mod tests {
             package_version: "0.1.0".to_string(),
             display_name: "EasyNet Menu Bar".to_string(),
             package_root: PathBuf::from("/tmp/pkg"),
+            user_home: PathBuf::from("/tmp/home"),
             platform: "macos".to_string(),
             spec: PlatformCompanionSpec::Macos {
                 bundle_id: "tech.silan.easynet.menubar".to_string(),
@@ -516,6 +516,7 @@ mod tests {
             package_version: version.to_string(),
             display_name: "EasyNet Menu Bar".to_string(),
             package_root: PathBuf::from("/tmp/pkg"),
+            user_home: PathBuf::from("/tmp/home"),
             platform: "macos".to_string(),
             spec: PlatformCompanionSpec::Macos {
                 bundle_id: "tech.silan.easynet.menubar".to_string(),

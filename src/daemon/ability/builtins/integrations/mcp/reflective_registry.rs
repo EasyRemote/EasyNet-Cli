@@ -516,7 +516,7 @@ impl PostArcReflection {
             );
             return Self::Skip;
         };
-        let owner_ura = easynet_axon::ura::agent_ura(realm, user, "mcp");
+        let owner_ura = axon_sdk::ura::agent_ura(realm, user, "mcp");
         match mode {
             McpReflectionMode::Off => {
                 crate::op_event!(
@@ -1625,7 +1625,10 @@ mod tests {
             )
             .expect("MCP test authority context");
         AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
             authority_context,
         )
     }
@@ -2021,7 +2024,7 @@ while True:
             PostArcReflection::SpawnLazy { owner_ura } => {
                 assert_eq!(
                     owner_ura,
-                    easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp"),
+                    axon_sdk::ura::agent_ura("test-realm", "test-user", "mcp"),
                     "lazy supervisor must receive the canonical mcp-profile URA"
                 );
             }
@@ -2069,7 +2072,7 @@ while True:
             } => {
                 assert_eq!(
                     owner_ura,
-                    easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp"),
+                    axon_sdk::ura::agent_ura("test-realm", "test-user", "mcp"),
                 );
                 let echo_entry = per_server
                     .get("echo")

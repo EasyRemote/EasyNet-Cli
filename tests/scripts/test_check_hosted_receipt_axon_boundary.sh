@@ -15,7 +15,7 @@ trap 'rm -rf "$SB"' EXIT
 mkdir -p "$SB/tools/scripts" "$SB/src/runtime" "$SB/tests"
 cp "$SCRIPT" "$SB/tools/scripts/check-hosted-receipt-axon-boundary.sh"
 printf 'pub mod dispatch_receipt;\n' > "$SB/src/runtime/mod.rs"
-printf 'use easynet_axon::invocation::audit::HostedAgentReceiptHeader;\n' \
+printf 'use axon_sdk::invocation::audit::HostedAgentReceiptHeader;\n' \
   > "$SB/src/runtime/dispatch_receipt.rs"
 
 (
@@ -23,7 +23,7 @@ printf 'use easynet_axon::invocation::audit::HostedAgentReceiptHeader;\n' \
   bash tools/scripts/check-hosted-receipt-axon-boundary.sh
 ) >/dev/null || fail "happy path should pass"
 
-printf 'pub use easynet_axon::invocation::audit::HostedAgentReceiptHeader;\n' \
+printf 'pub use axon_sdk::invocation::audit::HostedAgentReceiptHeader;\n' \
   > "$SB/src/runtime/hosted_receipt.rs"
 set +e
 (

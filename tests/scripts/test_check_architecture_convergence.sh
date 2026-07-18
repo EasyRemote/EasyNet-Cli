@@ -87,14 +87,15 @@ make_good_fixture() {
 
   cat >"$CLI/src/eal/interpreter/dispatch.rs" <<'EOF'
 use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+use crate::daemon::execution::mission::invocation_gateway::MissionInvocationGateway;
 
 fn load_registry_or_warn() {
     AgentAggregateRepository::load_snapshot()
         .map(|snapshot| snapshot.registered_agent_registry_projection());
 }
 
-fn dispatch_step(client: &InvocationClient, child: ChildInvocation) {
-    client.invoke_remote(child);
+fn dispatch_step(gateway: &dyn MissionInvocationGateway, request: MissionInvocationRequest) {
+    gateway.invoke_step(request);
 }
 
 // A direct executor name in documentation is not an execution edge:
@@ -155,6 +156,46 @@ use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 fn persisted_local_device_ura() -> Option<String> {
     let hosted_identity = AgentAggregateRepository::load_hosted_identity_status().ok()?;
     hosted_identity.host_device_agent_ura().map(str::to_string)
+}
+EOF
+  cat >"$CLI/src/daemon/invocation/bidi/session_wire.rs" <<'EOF'
+enum SessionDispatch {
+    BidiInput {
+        call_id: u64,
+        payload: Vec<u8>,
+        eof: bool,
+    },
+    Request {
+        call_id: [u8; 16],
+    },
+    RequestResult {
+        call_id: [u8; 16],
+    },
+}
+EOF
+  cat >"$CLI/src/daemon/invocation/dispatch/local_session_dispatcher.rs" <<'EOF'
+fn carrier_v1_control_failure(call_id: u64) -> DispatchResult {
+    DispatchResult {
+        call_id,
+        terminal: false,
+        failure: Some(control_failure()),
+        ..Default::default()
+    }
+}
+
+async fn send_bidi_terminal(
+    outbound: &SessionUpSender,
+    call_id: u64,
+    finalized: &FinalizedInvocation,
+) {
+    outbound.send(DispatchResult {
+        call_id,
+        terminal: true,
+        terminal_receipt: Some(receipt_to_session_wire(
+            &finalized.terminal_receipt,
+        )),
+        ..Default::default()
+    });
 }
 EOF
   cat >"$CLI/src/daemon/resources/context/clipboard_tracker.rs" <<'EOF'
@@ -941,8 +982,11 @@ fn find_implicit_agent_fallback(ir: &MissionIr) -> anyhow::Result<Option<Implici
     Ok(None)
 }
 
-fn run_mission_inproc(opts: MissionRunOpts) {
-    execute_with_endpoint_for_trace_with_timeout(opts.run_timeout);
+fn run_mission(
+    gateway: Arc<dyn MissionInvocationGateway>,
+    opts: MissionRunOpts,
+) {
+    execute_with_gateway_for_trace_with_timeout(gateway, opts.run_timeout);
 }
 EOF
   cat >"$CLI/src/daemon/execution/mission/invocation_gateway.rs" <<'EOF'
@@ -1148,7 +1192,7 @@ fn resolve_delegation(peer_source: PeerSource, parsed_owner: ParsedOwner, select
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/resources/voice.rs" <<'EOF'
-use easynet_axon::{
+use axon_sdk::{
     VoiceCallState,
     VoiceEndReason,
     VoiceEventType,
@@ -1526,6 +1570,9 @@ fn start_daemon_invocation_transport(config: DaemonConfig) -> anyhow::Result<()>
     let daemon_route_owner = daemon_ura.as_deref().unwrap();
     service.register_daemon_unary_routes(daemon_route_owner)?;
     service.register_daemon_stream_routes(daemon_route_owner)?;
+    if capabilities.hub_runtime {
+        service.register_daemon_bidi_routes(daemon_route_owner)?;
+    }
     spawn_tcp_tls_listener(
         &config,
         listen_tcp,
@@ -1557,12 +1604,22 @@ impl DaemonRouteRuntimeAdapter {
         self.runtime.register_many(registrations).await;
     }
 
+    async fn register_bidis(&self, registrations: Vec<AbilityRegistration>) {
+        let options = AbilityOptions::bidi();
+        self.runtime.register_many(registrations).await;
+    }
+
     async fn dispatch(&self, route: DaemonUnaryRoute, request: &InvokeRequest, ingress: DaemonRouteIngress) {
         dispatch_rpc_admitted(&self.runtime, route, request, ingress).await;
     }
 
     async fn open_stream(&self, route: DaemonStreamRoute, request: &InvokeServerStreamRequest) {
         open_stream_admitted(&self.runtime, route, request).await;
+    }
+
+    async fn open_bidi(&self, route: DaemonBidiRoute, request: &EnvelopeOpen) {
+        open_bidi_external_signed(&self.runtime, route, request).await;
+        project_finalized_bidi_receipt(receiver).await;
     }
 }
 EOF
@@ -1573,9 +1630,9 @@ impl StreamDispatcher {
         route: DaemonStreamRoute,
         request: &InvokeServerStreamRequest,
     ) {
-        let local_self_admitted = true;
+        let local_system_ingress = true;
         DaemonRouteRuntimeAdapter::new(runtime, cancellations)
-            .open_stream(route, request, local_self_admitted)
+            .open_stream(route, request, local_system_ingress)
             .await;
     }
 }
@@ -1625,6 +1682,12 @@ impl DaemonInvocationService {
             .await;
     }
 
+    pub(crate) async fn register_daemon_bidi_routes(&self, owner_ura: &str) {
+        DaemonRouteRuntimeAdapter::new(runtime, cancellations)
+            .register_bidis(owner_ura, catalog.as_ref(), provider)
+            .await;
+    }
+
     async fn dispatch_daemon_unary_route(&self, route: DaemonUnaryRoute, request: &InvokeRequest, ingress: DaemonRouteIngress) {
         self.unary_dispatcher()
             .dispatch_daemon_route_runtime(route, request, ingress)
@@ -1636,6 +1699,16 @@ impl DaemonInvocationService {
         match DaemonStreamRoute::from_function(&inner.function_name) {
             Some(route) => streams.dispatch_daemon_route_runtime(route, &inner).await,
             None => streams.dispatch_selected_route(&inner).await,
+        }
+    }
+
+    async fn invoke_bidi(&self, ability_name: &str, envelope_open: &EnvelopeOpen, up: Streaming<InvokeBidiUp>) {
+        let dispatcher = self.bidi_dispatcher();
+        match DaemonBidiRoute::from_function(ability_name) {
+            Some(route) => dispatcher
+                .dispatch_daemon_route_runtime(route, envelope_open, up)
+                .await,
+            None => dispatcher.dispatch(ability_name, envelope_open, up).await,
         }
     }
 }
@@ -1660,13 +1733,70 @@ use crate::daemon::invocation::dispatch::daemon_invocation_service::{
 
 pub(crate) const RUNTIME_ADMIN_BIDI_ROUTES: &[DaemonBidiRoute] = DAEMON_INVOCATION_BIDI_ROUTES;
 
-impl BidiDispatcher {
-    async fn dispatch(&self, ability_name: &str) {
-        match DaemonBidiRoute::from_function(ability_name) {
-            Some(DaemonBidiRoute::SessionOpen) => self.dispatch_self_session_accept().await,
-            None => self.dispatch_local_bidi_selected_route().await,
+pub(crate) struct DaemonBidiRouteProvider {
+    session_open: SessionOpenProvider,
+}
+
+impl DaemonBidiRouteProvider {
+    async fn invoke(&self, route: DaemonBidiRoute, context: Arc<AbilityContext>) {
+        match route {
+            DaemonBidiRoute::SessionOpen => self.session_open.invoke(context).await,
         }
     }
+}
+
+struct SessionOpenPolicy;
+
+struct SessionOpenProvider {
+    policy: SessionOpenPolicy,
+}
+
+impl SessionOpenProvider {
+    async fn invoke(&self, context: Arc<AbilityContext>) {}
+}
+
+impl BidiDispatcher {
+    async fn dispatch(&self, ability_name: &str) {
+        if let Some(route) = DaemonBidiRoute::from_function(ability_name) {
+            panic!("exact route must use adapter: {:?}", route);
+        }
+        self.dispatch_local_bidi_selected_route().await;
+    }
+
+    async fn dispatch_daemon_route_runtime(&self, route: DaemonBidiRoute, envelope_open: &EnvelopeOpen, up: Streaming<InvokeBidiUp>) {
+        DaemonRouteRuntimeAdapter::new(runtime, cancellations)
+            .open_bidi(route, envelope_open, up)
+            .await;
+    }
+}
+
+fn classify_carrier_v1_result(result: DispatchResult) {
+    if result.terminal {
+        if result.terminal_receipt.is_none() {
+            return protocol_failure("CANONICAL_TERMINAL_RECEIPT_REQUIRED");
+        }
+        return CarrierDispatchEvent::Terminal(result);
+    }
+    CarrierDispatchEvent::Chunk(result.payload)
+}
+EOF
+  mkdir -p "$CLI/src/daemon/ability/catalog"
+  cat >"$CLI/src/daemon/ability/catalog/runtime_admin_contracts.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_control_plane_descriptor_with_owner(
+        "session.open",
+        &OwnerKind::Hub,
+    );
+}
+EOF
+  mkdir -p "$CLI/src/daemon/invocation/bidi/session_initiator"
+  cat >"$CLI/src/daemon/invocation/bidi/session_initiator/envelope.rs" <<'EOF'
+fn build_session_envelope_open(caller_ura: &str) {
+    let caller = parse_ura(caller_ura).unwrap();
+    let hub_ura = crate::core::ura::hub_ura(&caller.realm);
+    let descriptor = catalog_descriptor_ref_for_wire(&hub_ura, "session.open", CallMode::Bidi);
+    ProtoEnvelope::from_target(caller_ura, &hub_ura, caller_ura, FreshRoot)
+        .signed_descriptor_ref_invoke_request_with_signer("session.open", descriptor, vec![], signer);
 }
 EOF
   mkdir -p "$CLI/src/daemon/axon_bridge"
@@ -1697,13 +1827,12 @@ impl SystemInvocationIssuer {
 EOF
   cat >"$CLI/src/daemon/axon_bridge/wire_descriptor.rs" <<'EOF'
 fn descriptor_bound_from_wire_parts(envelope: Envelope) -> Result<(), AxonError> {
-    let caller = envelope
-        .caller
-        .ok_or_else(|| AxonError::invalid_argument("wire envelope missing caller"))?;
-    let subject = envelope
-        .subject
-        .ok_or_else(|| AxonError::invalid_argument("wire envelope missing subject"))?;
-    let nonce = wire::try_invocation_nonce(envelope.invocation_nonce)?;
+    let descriptor_ref = require_descriptor_ref_for_wire(&callee_ura, &ability)?;
+    let envelope = wire::try_descriptor_bound_envelope_from_wire_parts(
+        envelope,
+        descriptor_ref,
+        payload,
+    )?;
     Ok(())
 }
 EOF
@@ -1729,6 +1858,10 @@ fn open_stream_local_with_subject() {
 
 fn open_bidi_local_with_subject() {
     SystemInvocationIssuer::request_for_descriptor_ref();
+}
+
+pub async fn open_bidi_external_signed() {
+    invoke_descriptor_bound_bidi_request_async(request).await;
 }
 
 fn dispatch_rpc_local_with_subject() {
@@ -1970,10 +2103,7 @@ impl RuntimeClient {
         let prepared = signed.prepare_cancel_command(reason)?;
         let signer = RuntimeSigningIdentity::load_default(caller_ura)?;
         let signed_cancel = prepared.sign_with_canonical_signer(&signer).await?;
-        let response = self
-            .inner
-            .invoke(signed_cancel.into_daemon_invocation())
-            .await?;
+        let response = self.inner.invoke(signed_cancel).await?;
         Ok(InvocationHandle::from_response(response))
     }
 }
@@ -2027,9 +2157,13 @@ fn off_box_facade_does_not_accept_daemon_ura_spoof_as_local_self() {}
 #[test]
 fn off_box_facade_does_not_accept_local_system_self_admission() {}
 
-#[test]
-fn signed_invocation_cancel_command_replay_is_rejected() {
-    assert!(replay_store.rejects_duplicate("invocation.cancel"));
+EOF
+  mkdir -p "$CLI/src/daemon/invocation/dispatch/daemon_invocation_service_tests"
+  cat >"$CLI/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs" <<'EOF'
+#[tokio::test]
+async fn signed_invocation_cancel_command_replay_is_rejected() {
+    let replay = invoke_cancel_twice_through_local_runtime().await;
+    assert_eq!(replay.reason, "NONCE_REPLAY");
 }
 EOF
   cat >"$CLI/src/daemon/invocation/admission/identity_write_gate.rs" <<'EOF'
@@ -2270,7 +2404,9 @@ fn collect_owner_catalog() -> anyhow::Result<()> {
 }
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/invocation_wire.rs" <<'EOF'
-pub(crate) struct LocalDaemonLoopbackInvocation;
+pub(crate) struct LocalDaemonLoopbackInvocation {
+    derivation_policy: InvocationDerivationPolicy,
+}
 
 impl LocalDaemonLoopbackInvocation {
     pub(crate) fn invoke_request(&self) {
@@ -2282,11 +2418,7 @@ impl LocalDaemonLoopbackInvocation {
     }
 
     pub(crate) fn envelope(&self) {
-        let _envelope = ProtoEnvelope::targeted(caller, callee, subject);
-    }
-
-    pub(crate) fn with_causal_context(self, causal_context: CausalContext) -> Self {
-        self
+        let _envelope = ProtoEnvelope::from_target(caller, callee, subject, self.derivation_policy);
     }
 
     pub(crate) fn with_trace_id(self, trace_id: Option<&str>) -> Self {
@@ -2295,17 +2427,11 @@ impl LocalDaemonLoopbackInvocation {
 }
 EOF
   cat >"$CLI/src/support/platform/local_daemon_grpc.rs" <<'EOF'
-use crate::daemon::persistence::agent_aggregate::{
-    AgentAggregateRepository, HostedAgentNameLookupError,
-};
 use crate::daemon::invocation::dispatch::invocation_wire::LocalDaemonLoopbackInvocation;
 
-fn canonical_hosted_agent_ura_by_name(agent_name: &str) -> anyhow::Result<String> {
-    let snapshot = AgentAggregateRepository::try_load_snapshot()?;
-    snapshot
-        .hosted_agent_ura_by_name(agent_name)
-        .map(str::to_string)
-        .ok_or(HostedAgentNameLookupError::NotFound)?
+fn invoke_with_hosted_agent_delegation(hosted_agent_ura: &str) -> anyhow::Result<()> {
+    let _delegation = HostedAgentDelegationRequest::new(hosted_agent_ura)?;
+    Ok(())
 }
 
 fn local_daemon_loopback_invocation_from_subject_policy() -> LocalDaemonLoopbackInvocation {
@@ -2870,10 +2996,10 @@ expect_fail \
 make_good_fixture
 mkdir -p "$CLI/src/daemon/invocation/receipts"
 cat >"$CLI/src/daemon/invocation/receipts/finalization_projection.rs" <<'EOF'
-use easynet_axon::invocation::FinalizationCheckpointVerifier;
+use axon_sdk::invocation::FinalizationCheckpointVerifier;
 
 fn verify_wire(receipt: InvocationReceipt) {
-    easynet_axon::invocation::wire::try_receipt_from_wire(receipt);
+    axon_sdk::invocation::wire::try_receipt_from_wire(receipt);
 }
 EOF
 expect_pass "receipt proof primitives owned by adapter"
@@ -2881,7 +3007,7 @@ expect_pass "receipt proof primitives owned by adapter"
 make_good_fixture
 cat >"$CLI/src/daemon/invocation/dispatch/manual_receipt_verify.rs" <<'EOF'
 fn verify_wire(receipt: InvocationReceipt) {
-    easynet_axon::invocation::wire::try_receipt_from_wire(receipt);
+    axon_sdk::invocation::wire::try_receipt_from_wire(receipt);
 }
 EOF
 expect_fail \
@@ -2919,6 +3045,19 @@ expect_fail \
   "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
 
 make_good_fixture
+python3 - "$CLI/src/daemon/boot/invocation/mod.rs" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+text = text.replace("        service.register_daemon_bidi_routes(daemon_route_owner)?;\n", "")
+path.write_text(text)
+PY
+expect_fail \
+  "daemon exact bidi boot registration owner fork" \
+  "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
 cat >"$CLI/src/daemon/invocation/bidi/bidi_dispatcher.rs" <<'EOF'
 impl BidiDispatcher {
     async fn dispatch(&self, ability_name: &str) {
@@ -2931,6 +3070,126 @@ impl BidiDispatcher {
 EOF
 expect_fail \
   "daemon exact bidi route inventory fork" \
+  "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
+python3 - "$CLI/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+needle = "        let dispatcher = self.bidi_dispatcher();\n"
+text = text.replace(
+    needle,
+    "        self.admission.verify_envelope_for_bidi(envelope_open)?;\n"
+    + needle,
+    1,
+)
+path.write_text(text)
+PY
+expect_fail \
+  "daemon bidi legacy outer admission root fork" \
+  "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
+python3 - "$CLI/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+needle = "impl DaemonInvocationService {\n"
+text = text.replace(
+    needle,
+    needle + "    fn legacy_unary_root(&self, inner: &InvokeRequest) {\n"
+    "        self.admission.verify_invoke(inner);\n"
+    "    }\n",
+    1,
+)
+path.write_text(text)
+PY
+expect_fail \
+  "daemon unary legacy outer admission root fork" \
+  "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
+python3 - "$CLI/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+needle = "    async fn invoke_stream(&self, inner: InvokeServerStreamRequest) {\n"
+text = text.replace(
+    needle,
+    needle + "        self.admission.verify_invoke_stream(&inner)?;\n",
+    1,
+)
+path.write_text(text)
+PY
+expect_fail \
+  "daemon stream legacy outer admission root fork" \
+  "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
+python3 - "$CLI/src/daemon/invocation/bidi/bidi_dispatcher.rs" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+text = text.replace(
+    "struct SessionOpenProvider {\n    policy: SessionOpenPolicy,\n}",
+    "struct SessionOpenProvider {\n"
+    "    admission: AdmissionFacade,\n"
+    "    session_realm: Option<String>,\n"
+    "}",
+)
+path.write_text(text)
+PY
+expect_fail \
+  "session.open provider transport-policy owner fork" \
+  "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/catalog/runtime_admin_contracts.rs" <<'EOF'
+const SESSION_OPEN_TEMPLATE_DEVICE_URA: &str = "easynet:///r/_system/device/session-open-template";
+
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_control_plane_descriptor_with_scope(
+        "session.open",
+        &OwnerKind::Device,
+    );
+}
+EOF
+expect_fail \
+  "session.open Device owner contract fork" \
+  "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
+cat >>"$CLI/src/daemon/ability/dispatch.rs" <<'EOF'
+impl AxonAbilityCatalog {
+    fn register_control_plane_descriptor_with_scope(
+        &self,
+        ability: &str,
+        authority_scope: AuthorityScope,
+    ) {
+        self.register_control_plane_with_scope(ability, authority_scope);
+    }
+}
+EOF
+expect_fail \
+  "explicit descriptor authority scope registration fork" \
+  "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/bidi/session_initiator/envelope.rs" <<'EOF'
+fn build_session_envelope_open(caller_ura: &str) {
+    let callee = AgentIdentity {
+        ura: caller_ura.to_string(),
+    };
+    catalog_descriptor_ref_for_wire(caller_ura, "session.open", CallMode::Bidi);
+}
+EOF
+expect_fail \
+  "session.open signed tuple owner fork" \
   "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
 
 make_good_fixture
@@ -2998,6 +3257,22 @@ EOF
 expect_fail \
   "wire local-system tuple fallback fork" \
   "R16C_SYSTEM_INVOCATION_ISSUER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/dispatch/manual_envelope.rs" <<'EOF'
+fn build_envelope(caller: AgentIdentity, callee: AgentIdentity, subject: SubjectIdentity) {
+    let _envelope = Envelope {
+        caller: Some(caller),
+        callee: Some(callee),
+        subject: Some(subject),
+        invocation_nonce: vec![1; 16],
+        ..Envelope::default()
+    };
+}
+EOF
+expect_fail \
+  "manual canonical envelope owner fork" \
+  "R16D_CANONICAL_ENVELOPE_OWNER_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/axon_bridge/local_runtime_request.rs" <<'EOF'
@@ -3396,6 +3671,24 @@ fn lookup_hosted_agent_by_name(file: &LocalAgentsFile, name: &str) -> anyhow::Re
 EOF
 expect_fail \
   "mission child target aggregate fork" \
+  "R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/support/platform/local_daemon_grpc.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, HostedAgentNameLookupError,
+};
+
+fn resolve_hosted_agent_callee(agent_name: &str) -> anyhow::Result<String> {
+    let snapshot = AgentAggregateRepository::try_load_snapshot()?;
+    snapshot
+        .hosted_agent_ura_by_name(agent_name)
+        .map_err(|error: HostedAgentNameLookupError| anyhow::anyhow!("{error}"))?
+        .ok_or_else(|| anyhow::anyhow!("unknown hosted Agent"))
+}
+EOF
+expect_fail \
+  "local daemon transport hosted Agent name lookup fork" \
   "R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK"
 
 make_good_fixture
@@ -4376,6 +4669,49 @@ EOF
 expect_fail \
   "direct runtime handle owner fork" \
   "R61_DIRECT_RUNTIME_HANDLE_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/bidi/session_wire.rs" <<'EOF'
+enum SessionDispatch {
+    BidiOpen {
+        call_id: u64,
+    },
+    Result {
+        call_id: u64,
+        terminal: bool,
+    },
+}
+EOF
+expect_fail \
+  "JSON session invocation carrier fork" \
+  "R64_SESSION_CANONICAL_CARRIER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/dispatch/local_session_dispatcher.rs" <<'EOF'
+fn carrier_v1_control_failure(call_id: u64) -> DispatchResult {
+    DispatchResult {
+        call_id,
+        terminal: true,
+        ..Default::default()
+    }
+}
+
+async fn send_bidi_terminal(
+    outbound: &SessionUpSender,
+    call_id: u64,
+    failure: Error,
+) {
+    outbound.send(DispatchResult {
+        call_id,
+        terminal: true,
+        failure: Some(failure),
+        ..Default::default()
+    });
+}
+EOF
+expect_fail \
+  "receiptless session terminal fork" \
+  "R64_SESSION_CANONICAL_CARRIER_FORK"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

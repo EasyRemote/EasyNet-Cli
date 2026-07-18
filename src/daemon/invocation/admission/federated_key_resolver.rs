@@ -35,7 +35,7 @@
 //
 // Sync trait shape
 // ----------------
-// `easynet_axon::invocation::axiom::KeyResolver::resolve` is a
+// `axon_sdk::invocation::axiom::KeyResolver::resolve` is a
 // sync method (called from inside the sync `run_admission`
 // pipeline). The cross-hub dial is async (tonic). We bridge via
 // `tokio::task::block_in_place` + `Handle::current().block_on`
@@ -51,17 +51,18 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use axon_sdk::invocation::axiom::KeyResolver;
+use axon_sdk::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, SecurityClass};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use easynet_axon::invocation::axiom::KeyResolver;
-use easynet_axon::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, SecurityClass};
 use ed25519_dalek::VerifyingKey;
 
 use crate::daemon::federation::client::FederationClient;
+use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::peer_envelope_signer::PeerInvokeRequest;
-use crate::daemon::trust::anchor::RealmTrustAnchor;
+use crate::daemon::trust::cell::SharedTrustAnchor;
 #[cfg(test)]
-use easynet_axon::pb::axon::v1::InvokeRequest;
+use axon_sdk::pb::axon::v1::InvokeRequest;
 
 /// Default TTL for a federated-resolve cache entry. 5 minutes
 /// trims a hot signed-call path from O(N) cross-hub round-trips
@@ -133,10 +134,11 @@ impl SharedFederatedKeyCache {
 /// no entry for the URA and the caller's realm is one the
 /// operator has marked as federated via DEC-N1 schema-B
 /// `origin_realm` on a `[[trusted_agent]]` entry.
+#[derive(Clone)]
 pub struct FederatedKeyResolver {
-    trust_anchor: Arc<RealmTrustAnchor>,
+    trust_anchor: SharedTrustAnchor,
     federation_client: Option<Arc<dyn FederationClient>>,
-    federated_peers: Arc<std::collections::BTreeMap<String, String>>,
+    federated_peers: SharedFederatedPeers,
     self_realm: Option<String>,
     /// Public key presented by the envelope being admitted, encoded as
     /// standard base64. User URAs are 1:N, so cross-realm
@@ -161,6 +163,11 @@ pub struct FederatedKeyResolver {
     hub_signer: Option<Arc<dyn CanonicalSigner>>,
 }
 
+enum LocalKeyResolutionError {
+    Missing,
+    InvalidAuthority(AxonError),
+}
+
 impl FederatedKeyResolver {
     /// Construct a resolver that always tries the local trust
     /// anchor first, then federation. The federation client is
@@ -169,9 +176,9 @@ impl FederatedKeyResolver {
     /// equivalent to PR-7's `TrustAnchorKeyResolver`.
     #[must_use]
     pub fn new(
-        trust_anchor: Arc<RealmTrustAnchor>,
+        trust_anchor: SharedTrustAnchor,
         federation_client: Option<Arc<dyn FederationClient>>,
-        federated_peers: Arc<std::collections::BTreeMap<String, String>>,
+        federated_peers: SharedFederatedPeers,
         self_realm: Option<String>,
     ) -> Self {
         Self {
@@ -219,6 +226,14 @@ impl FederatedKeyResolver {
         self
     }
 
+    #[must_use]
+    pub fn request_scoped_with_presented_pubkey_b64(
+        &self,
+        presented_pubkey_b64: impl Into<String>,
+    ) -> Self {
+        self.clone().with_presented_pubkey_b64(presented_pubkey_b64)
+    }
+
     /// Attach the owner-bound signing capability used for outbound cross-hub
     /// `federation.resolve_key` requests. The resolver never receives or
     /// derives private key material.
@@ -233,6 +248,24 @@ impl FederatedKeyResolver {
     /// `self.cache.clone().flush()`.
     pub fn flush_cache(&self) {
         self.cache.flush();
+    }
+
+    #[must_use]
+    pub fn is_configured_federated_caller(&self, caller_ura: &str) -> bool {
+        if self.federation_client.is_none() {
+            return false;
+        }
+        let Some(caller_realm) =
+            crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura(
+                caller_ura,
+            )
+        else {
+            return false;
+        };
+        if self.self_realm.as_deref() == Some(caller_realm.as_str()) {
+            return false;
+        }
+        self.federated_peers.snapshot().contains_key(&caller_realm)
     }
 
     /// Test-only: total cached entries.
@@ -295,36 +328,30 @@ impl FederatedKeyResolver {
 
     /// Local-first lookup. Mirrors `TrustAnchorKeyResolver` shape
     /// so existing single-realm setups behave identically.
-    fn resolve_local(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+    fn resolve_local(&self, agent_ura: &str) -> Result<VerifyingKey, LocalKeyResolutionError> {
+        let trust_anchor = self.trust_anchor.snapshot();
         let entry = match self.presented_pubkey_b64.as_deref() {
-            Some(pk) => self.trust_anchor.lookup_user_by_pubkey(agent_ura, pk),
-            None => self.trust_anchor.lookup(agent_ura),
+            Some(pk) => trust_anchor.lookup_user_by_pubkey(agent_ura, pk),
+            None => trust_anchor.lookup(agent_ura),
         }
-        .ok_or_else(|| {
-            AxonError::new(AxonErrorKind::InvalidArgument)
-                .with_code(ErrorCode::CallerKeyNotFound)
-                .with_stage(ErrorStage::CallerAuthentication)
-                .with_security_class(SecurityClass::Identity)
-                .with_message(format!("agent_ura:{agent_ura}"))
-        })?;
-        let raw = BASE64_STANDARD.decode(&entry.public_key_b64).map_err(|e| {
-            AxonError::new(AxonErrorKind::InvalidArgument)
-                .with_reason("public_key_b64_decode_failed")
-                .with_message(format!("agent_ura:{agent_ura}:{e}"))
-        })?;
+        .ok_or(LocalKeyResolutionError::Missing)?;
+        let invalid_authority = |detail: String| {
+            LocalKeyResolutionError::InvalidAuthority(
+                caller_key_not_found(agent_ura, detail.as_str())
+                    .with_context("authority_source", "local_trust_anchor"),
+            )
+        };
+        let raw = BASE64_STANDARD
+            .decode(&entry.public_key_b64)
+            .map_err(|error| invalid_authority(format!("public_key_b64_decode_failed:{error}")))?;
         let arr: [u8; 32] = raw.as_slice().try_into().map_err(|_| {
-            AxonError::new(AxonErrorKind::InvalidArgument)
-                .with_reason("public_key_wrong_length")
-                .with_message(format!(
-                    "agent_ura:{agent_ura}:expected_32_got_{}",
-                    raw.len()
-                ))
+            invalid_authority(format!(
+                "public_key_wrong_length:expected_32_got_{}",
+                raw.len()
+            ))
         })?;
-        VerifyingKey::from_bytes(&arr).map_err(|e| {
-            AxonError::new(AxonErrorKind::InvalidArgument)
-                .with_reason("public_key_parse_failed")
-                .with_message(format!("agent_ura:{agent_ura}:{e}"))
-        })
+        VerifyingKey::from_bytes(&arr)
+            .map_err(|error| invalid_authority(format!("public_key_parse_failed:{error}")))
     }
 
     /// Cross-realm fall-through. Decision tree per spec §commit 2/N:
@@ -390,10 +417,12 @@ impl FederatedKeyResolver {
         // federated_peers but not to realm-trust.toml).
         let trust_entry_marked = self
             .trust_anchor
+            .snapshot()
             .entries_sorted()
             .into_iter()
             .any(|e| e.origin_realm.as_deref() == Some(caller_realm.as_str()));
-        let peer_entry = self.federated_peers.get(&caller_realm);
+        let peers = self.federated_peers.snapshot();
+        let peer_entry = peers.get(&caller_realm);
         if !trust_entry_marked && peer_entry.is_none() {
             return Err(caller_key_not_found(agent_ura, "realm_not_federated"));
         }
@@ -517,7 +546,8 @@ impl KeyResolver for FederatedKeyResolver {
         // Local-first per INV-2.
         match self.resolve_local(agent_ura) {
             Ok(key) => Ok(key),
-            Err(_) => self.resolve_federated(agent_ura),
+            Err(LocalKeyResolutionError::Missing) => self.resolve_federated(agent_ura),
+            Err(LocalKeyResolutionError::InvalidAuthority(error)) => Err(error),
         }
     }
 }
@@ -538,9 +568,23 @@ fn caller_key_not_found(agent_ura: &str, detail: &str) -> AxonError {
 mod tests {
     use super::*;
     use crate::daemon::identity::self_identity::TestCanonicalSigner;
-    use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
     use ed25519_dalek::SigningKey;
     use std::collections::BTreeMap;
+
+    fn test_resolver(
+        trust_anchor: Arc<RealmTrustAnchor>,
+        federation_client: Option<Arc<dyn FederationClient>>,
+        federated_peers: Arc<BTreeMap<String, String>>,
+        self_realm: Option<String>,
+    ) -> FederatedKeyResolver {
+        FederatedKeyResolver::new(
+            SharedTrustAnchor::new(trust_anchor),
+            federation_client,
+            SharedFederatedPeers::new(federated_peers.as_ref().clone()),
+            self_realm,
+        )
+    }
 
     fn test_hub_signer(realm: &str) -> Arc<dyn CanonicalSigner> {
         Arc::new(TestCanonicalSigner::new(
@@ -597,10 +641,10 @@ mod tests {
             _target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
             _request: InvokeRequest,
         ) -> Result<
-            easynet_axon::pb::axon::v1::InvokeResponse,
+            axon_sdk::pb::axon::v1::InvokeResponse,
             crate::daemon::federation::client::FederationClientError,
         > {
-            Ok(easynet_axon::pb::axon::v1::InvokeResponse {
+            Ok(axon_sdk::pb::axon::v1::InvokeResponse {
                 result: self.canned_response.clone(),
                 ..Default::default()
             })
@@ -618,7 +662,7 @@ mod tests {
             target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
             _request: InvokeRequest,
         ) -> Result<
-            easynet_axon::pb::axon::v1::InvokeResponse,
+            axon_sdk::pb::axon::v1::InvokeResponse,
             crate::daemon::federation::client::FederationClientError,
         > {
             Err(
@@ -642,7 +686,7 @@ mod tests {
         // dial we'd get an error. The local-first short-circuit
         // means the dial must NOT happen.
         let client: Arc<dyn FederationClient> = Arc::new(DialFailedClient);
-        let resolver = FederatedKeyResolver::new(
+        let resolver = test_resolver(
             anchor,
             Some(client),
             Arc::new(BTreeMap::new()),
@@ -651,6 +695,47 @@ mod tests {
 
         let key = resolver.resolve(local_ura).expect("local hit");
         assert_eq!(key.to_bytes().len(), 32);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn one_resolver_observes_live_trust_and_peer_replacements() {
+        let (_signing, pk_b64) = ed25519_pubkey_b64();
+        let local_ura = "easynet:///r/realm-a/device/local-device";
+        let cross_ura = "easynet:///r/realm-b/device/peer-device";
+        let trust = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
+        let peers = SharedFederatedPeers::default();
+        let response_json = serde_json::json!({ "public_key_b64": pk_b64 });
+        let client: Arc<dyn FederationClient> = Arc::new(CannedFederationClient {
+            canned_response: serde_json::to_vec(&response_json).unwrap(),
+        });
+        let resolver = FederatedKeyResolver::new(
+            trust.clone(),
+            Some(client),
+            peers.clone(),
+            Some("realm-a".to_string()),
+        )
+        .with_hub_signer(test_hub_signer("realm-a"));
+
+        resolver
+            .resolve(local_ura)
+            .expect_err("unpublished local key must fail");
+        trust.replace(Arc::new(
+            RealmTrustAnchor::from_entries(vec![local_entry(local_ura, &pk_b64)]).unwrap(),
+        ));
+        resolver
+            .resolve(local_ura)
+            .expect("same resolver observes trust replacement");
+
+        resolver
+            .resolve(cross_ura)
+            .expect_err("unpublished peer route must fail");
+        peers.replace(BTreeMap::from([(
+            "realm-b".to_string(),
+            "https://hub-b:50443".to_string(),
+        )]));
+        resolver
+            .resolve(cross_ura)
+            .expect("same resolver observes peer replacement");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -674,7 +759,7 @@ mod tests {
             canned_response: serde_json::to_vec(&response_json).unwrap(),
         });
 
-        let resolver = FederatedKeyResolver::new(
+        let resolver = test_resolver(
             anchor,
             Some(client),
             Arc::new(peers),
@@ -698,7 +783,7 @@ mod tests {
             }))
             .unwrap(),
         });
-        let resolver = FederatedKeyResolver::new(
+        let resolver = test_resolver(
             Arc::new(RealmTrustAnchor::default()),
             Some(client),
             Arc::new(peers),
@@ -721,7 +806,7 @@ mod tests {
         // trust entry. The resolver MUST NOT dial — operator did
         // not opt into cross-realm resolution for realm-b.
         let client: Arc<dyn FederationClient> = Arc::new(DialFailedClient);
-        let resolver = FederatedKeyResolver::new(
+        let resolver = test_resolver(
             anchor,
             Some(client),
             Arc::new(BTreeMap::new()),
@@ -743,7 +828,7 @@ mod tests {
         peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
 
         let client: Arc<dyn FederationClient> = Arc::new(DialFailedClient);
-        let resolver = FederatedKeyResolver::new(
+        let resolver = test_resolver(
             anchor,
             Some(client),
             Arc::new(peers),
@@ -774,7 +859,7 @@ mod tests {
         // DialFailedClient ensures any accidental federated dial
         // would surface as a different error variant.
         let client: Arc<dyn FederationClient> = Arc::new(DialFailedClient);
-        let resolver = FederatedKeyResolver::new(
+        let resolver = test_resolver(
             anchor,
             Some(client),
             Arc::new(peers),
@@ -825,16 +910,57 @@ mod tests {
             _target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
             _request: InvokeRequest,
         ) -> Result<
-            easynet_axon::pb::axon::v1::InvokeResponse,
+            axon_sdk::pb::axon::v1::InvokeResponse,
             crate::daemon::federation::client::FederationClientError,
         > {
             self.dial_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(easynet_axon::pb::axon::v1::InvokeResponse {
+            Ok(axon_sdk::pb::axon::v1::InvokeResponse {
                 result: self.canned_response.clone(),
                 ..Default::default()
             })
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn invalid_local_authority_does_not_fall_through_to_federation() {
+        let caller_ura = "easynet:///r/realm-b/device/local-corrupt";
+        let anchor = Arc::new(
+            RealmTrustAnchor::from_entries(vec![local_entry(caller_ura, "not-base64")])
+                .expect("trust inventory accepts key material for admission-time validation"),
+        );
+        let (_, federated_key) = ed25519_pubkey_b64();
+        let client = Arc::new(CountingFederationClient::new(
+            serde_json::to_vec(&serde_json::json!({
+                "public_key_b64": federated_key,
+            }))
+            .unwrap(),
+        ));
+        let federation_client: Arc<dyn FederationClient> = client.clone();
+        let resolver = test_resolver(
+            anchor,
+            Some(federation_client),
+            Arc::new(BTreeMap::from([(
+                "realm-b".to_string(),
+                "https://hub-b:50443".to_string(),
+            )])),
+            Some("realm-a".to_string()),
+        )
+        .with_hub_signer(test_hub_signer("realm-a"));
+
+        let error = resolver
+            .resolve(caller_ura)
+            .expect_err("a corrupt local authority row must fail closed");
+        assert_eq!(error.code, ErrorCode::CallerKeyNotFound);
+        assert_eq!(
+            error.context.get("authority_source").map(String::as_str),
+            Some("local_trust_anchor")
+        );
+        assert_eq!(
+            client.dials(),
+            0,
+            "an invalid claimed local authority must not be replaced by a federated key"
+        );
     }
 
     struct EchoPresentedPubkeyClient {
@@ -866,7 +992,7 @@ mod tests {
             _target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
             request: InvokeRequest,
         ) -> Result<
-            easynet_axon::pb::axon::v1::InvokeResponse,
+            axon_sdk::pb::axon::v1::InvokeResponse,
             crate::daemon::federation::client::FederationClientError,
         > {
             self.dial_count
@@ -881,7 +1007,7 @@ mod tests {
                 .get("presented_pubkey_b64")
                 .and_then(|v| v.as_str())
                 .expect("presented pubkey must be forwarded");
-            Ok(easynet_axon::pb::axon::v1::InvokeResponse {
+            Ok(axon_sdk::pb::axon::v1::InvokeResponse {
                 result: serde_json::to_vec(&serde_json::json!({
                     "public_key_b64": pk_b64,
                 }))
@@ -908,7 +1034,7 @@ mod tests {
         ));
         let client: Arc<dyn FederationClient> = counting.clone();
 
-        let resolver = FederatedKeyResolver::new(
+        let resolver = test_resolver(
             anchor,
             Some(client),
             Arc::new(peers),
@@ -939,7 +1065,7 @@ mod tests {
         ));
         let client: Arc<dyn FederationClient> = counting.clone();
 
-        let resolver = FederatedKeyResolver::new(
+        let resolver = test_resolver(
             anchor,
             Some(client),
             Arc::new(peers),
@@ -971,7 +1097,7 @@ mod tests {
         ));
         let client: Arc<dyn FederationClient> = counting.clone();
 
-        let resolver = FederatedKeyResolver::new(
+        let resolver = test_resolver(
             anchor,
             Some(client),
             Arc::new(peers),
@@ -999,7 +1125,7 @@ mod tests {
         peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
 
         let client: Arc<dyn FederationClient> = Arc::new(DialFailedClient);
-        let resolver = FederatedKeyResolver::new(
+        let resolver = test_resolver(
             anchor,
             Some(client),
             Arc::new(peers),
@@ -1030,7 +1156,7 @@ mod tests {
         );
 
         let client = Arc::new(EchoPresentedPubkeyClient::new());
-        let resolver = FederatedKeyResolver::new(
+        let resolver = test_resolver(
             anchor,
             Some(client.clone()),
             Arc::new(BTreeMap::new()),
@@ -1057,7 +1183,7 @@ mod tests {
         let client = Arc::new(EchoPresentedPubkeyClient::new());
 
         let client_dyn: Arc<dyn FederationClient> = client.clone();
-        let key_a = FederatedKeyResolver::new(
+        let key_a = test_resolver(
             Arc::clone(&anchor),
             Some(client_dyn),
             Arc::clone(&peers),
@@ -1070,13 +1196,12 @@ mod tests {
         .expect("federated user key a");
 
         let client_dyn: Arc<dyn FederationClient> = client.clone();
-        let key_b =
-            FederatedKeyResolver::new(anchor, Some(client_dyn), peers, Some("realm-a".to_string()))
-                .with_hub_signer(test_hub_signer("realm-a"))
-                .with_cache(cache)
-                .with_presented_pubkey_b64(pk_b.clone())
-                .resolve(user_ura)
-                .expect("federated user key b");
+        let key_b = test_resolver(anchor, Some(client_dyn), peers, Some("realm-a".to_string()))
+            .with_hub_signer(test_hub_signer("realm-a"))
+            .with_cache(cache)
+            .with_presented_pubkey_b64(pk_b.clone())
+            .resolve(user_ura)
+            .expect("federated user key b");
 
         assert_eq!(BASE64_STANDARD.encode(key_a.to_bytes()), pk_a);
         assert_eq!(BASE64_STANDARD.encode(key_b.to_bytes()), pk_b);
@@ -1115,7 +1240,7 @@ mod tests {
             }))
             .unwrap(),
         });
-        let resolver = FederatedKeyResolver::new(
+        let resolver = test_resolver(
             anchor,
             Some(client),
             Arc::new(peers),

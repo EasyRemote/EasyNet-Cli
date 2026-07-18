@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use easynet_axon::invocation::{
+use axon_sdk::invocation::{
     AbilityFrame, BidiInputSender, BidiOutputReceiver, CallMode as AxonInvocationCallMode,
     CausalContext, DescriptorBoundInvocationRequest, InvocationHandle, InvocationState,
     LocalRuntime, StreamingInvocationHandle,
@@ -135,7 +135,7 @@ pub const NOT_FOUND_REASON_FRAGMENTS: &[&str] = &[
 /// reason-string fragments. Defined over `&str` because callers come
 /// from three error provenances — `anyhow::Error` (via Display),
 /// `String` (from the local-runtime `Result<_, String>`), and
-/// `easynet_axon::AxonError::reason`. A typed predicate over
+/// `axon_sdk::AxonError::reason`. A typed predicate over
 /// `&AxonError` is a follow-up that depends on the SDK growing a
 /// `NotFound` variant in its 7-class taxonomy.
 pub fn is_not_found_error(msg: &str) -> bool {
@@ -272,7 +272,7 @@ pub async fn drain_local_stream_frames(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions};
+    use axon_sdk::invocation::{make_ability, AbilityCallModes, AbilityOptions};
 
     use crate::daemon::invocation::routing::target::CallMode;
     use serde_json::json;
@@ -314,7 +314,10 @@ mod tests {
         callee_ura: &str,
         ability: &str,
     ) -> Arc<LocalRuntime> {
-        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None);
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         let runtime_ability =
             ability_ura_for_wire(callee_ura, ability).expect("runtime ability URA");
         runtime

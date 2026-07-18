@@ -145,7 +145,10 @@ mod tests {
             .expect("remote desktop contribution finish");
         let contributions = PluginContributionSet::new(vec![contribution]);
         let mut reg = AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
         );
         DaemonPluginBinder::static_catalog(&mut reg)
             .bind_set(&contributions)

@@ -5,7 +5,7 @@
 //
 //   1. The ability's wire-level URA matches the canonical shape
 //      `easynet:///r/<realm>/ability/<user>.<agent>.<verb>` produced
-//      by `easynet_axon::ura::URA::ability`.
+//      by `axon_sdk::ura::URA::ability`.
 //   2. The URA literal contains NO implementation label such as
 //      `mcp_upstream` (the discipline gate 2 enforces at script
 //      level — duplicated in code so a regression trips here even
@@ -23,8 +23,10 @@
 
 use std::sync::Arc;
 
-use easynet_axon::invocation::LocalRuntime;
-use easynet_axon::ura::{ability_ura, agent_ura};
+#[path = "support/runtime_fixture.rs"]
+mod runtime_fixture;
+
+use axon_sdk::ura::{ability_ura, agent_ura};
 use easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all;
 use easynet_cli::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
 use easynet_cli::daemon::execution::mcp::{McpClientService, McpClientsFile, McpServerSpec};
@@ -39,7 +41,7 @@ fn registry_for_mcp_owner(owner_ura: &str) -> AxonAbilityCatalog {
         )
         .expect("MCP owner must be hosted by the test Device authority");
     AxonAbilityCatalog::new_with_runtime_and_authority_context(
-        LocalRuntime::new(),
+        runtime_fixture::rejecting_runtime(),
         authority_context,
     )
 }

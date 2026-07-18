@@ -68,6 +68,41 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "direct DaemonInvocation construction should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+perl -0pi -e 's/args_state: PhantomData<ArgsState>,/args_set: bool,/' \
+    "$SB/src/daemon/invocation/dispatch/request.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime args-set boolean should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e \
+    's/derivation_policy: axon_sdk::invocation::InvocationDerivationPolicy,/derivation_policy: (),/g' \
+    "$SB/src/daemon/invocation/dispatch/request.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing explicit derivation policy should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e \
+    's/impl<ArgsState> DaemonInvocationBuilder<ArgsState> \{/impl<ArgsState> DaemonInvocationBuilder<ArgsState> {\n    pub fn nonce(mut self, nonce: [u8; 16]) -> Self { self.nonce = nonce; self }/' \
+    "$SB/src/daemon/invocation/dispatch/request.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "public nonce override should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e \
+    's/impl DaemonInvocationBuilder<InvocationArgsSet> \{/impl<ArgsState> DaemonInvocationBuilder<ArgsState> {/' \
+    "$SB/src/daemon/invocation/dispatch/request.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "generic builder completion path should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 printf '\nNote: Requires a local or remote Axon runtime. The easynet runtime start command auto-spawns one.\n' \
     >>"$SB/README.md"
 rc=0
@@ -76,11 +111,14 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "stale README product runtime text should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-printf '\npub fn invocation_id_of() {}\n' >>"$SB/src/daemon/invocation/receipts/runtime_record.rs"
+mkdir -p "$SB/src/daemon/invocation/receipts"
+cat >"$SB/src/daemon/invocation/receipts/runtime_record.rs" <<'RS'
+pub struct RuntimeInvocation;
+RS
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "daemon invocation runtime-record semantic fork should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "obsolete daemon runtime-record authority should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 cat >>"$SB/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'RS'

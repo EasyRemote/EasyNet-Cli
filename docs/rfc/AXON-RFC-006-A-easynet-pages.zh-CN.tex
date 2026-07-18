@@ -235,11 +235,11 @@ URA 拉取的全过程。附录 B（\texttt{easynet.web\_app} 压力测试）以
 state_type:  easynet.page
 
 state_key:
-    (realm: string, owner_agent_uri: string, slug: string)
+    (realm: string, owner_agent_ura: string, slug: string)
 
   realm           逻辑命名空间。Phase 1：每个守护进程一个 realm，
                   在配置中命名（默认 "default"）。
-  owner_agent_uri 规范权限。即为本 page 每个 CanonicalReceipt
+  owner_agent_ura 规范权限。即为本 page 每个 CanonicalReceipt
                   签名的 agent。按主文 §1.3 嵌在 key 内（不是字段）。
   slug            owner 命名空间内的 kebab-case 标识符
                   (^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$)。

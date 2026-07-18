@@ -59,10 +59,10 @@ pub use invocation::dispatch::client::{
 };
 #[cfg(feature = "axon-pb")]
 pub use invocation::{
-    CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationDraft,
-    InvocationTuple, KeyServiceLocalDaemonInvocationSigner, LocalDaemonInvocationSigner,
-    PrepareOptions, PreparedInvocation, SignedInvocation, SignerPolicy, SignerPolicyMode,
-    SigningMaterial,
+    CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationArgsSet,
+    InvocationArgsUnset, InvocationDraft, InvocationTuple, KeyServiceLocalDaemonInvocationSigner,
+    LocalDaemonInvocationSigner, PrepareOptions, PreparedInvocation, SignedInvocation,
+    SignerPolicy, SignerPolicyMode, SigningMaterial,
 };
 
 /// Result alias for the daemon SDK surface.

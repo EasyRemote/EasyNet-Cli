@@ -63,7 +63,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
 
 #[cfg(feature = "axon-pb")]
-pub type DispatchReceipt = easynet_axon::pb::axon::v1::InvocationReceipt;
+pub type DispatchReceipt = axon_sdk::pb::axon::v1::InvocationReceipt;
 
 #[cfg(not(feature = "axon-pb"))]
 #[derive(Debug, Clone, PartialEq)]
@@ -366,8 +366,8 @@ impl PendingStreamDispatchMap {
         target_ura: &str,
         delivery_policy: StreamDeliveryPolicy,
     ) -> PendingStreamHandle {
-        // SessionDispatch::Result frames share one session-wide
-        // keyspace across unary and streaming paths. Reserve odd
+        // DispatchResult frames share one session-wide keyspace across
+        // unary and streaming paths. Reserve odd
         // call_ids for streaming so a late terminal/chunk frame cannot
         // accidentally complete a unary waiter (or vice versa).
         let sequence = self.inner.next_call_id.fetch_add(1, Ordering::Relaxed);

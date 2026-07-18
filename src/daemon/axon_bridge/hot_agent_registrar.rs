@@ -22,12 +22,11 @@
 
 use std::sync::{Arc, OnceLock};
 
-use easynet_axon::invocation::LocalRuntime;
+use axon_sdk::invocation::LocalRuntime;
 
 use crate::daemon::ability::builtins::agents::chat::{
-    ContextLoader, build_agent_ability_handler, build_chat_handler_for,
-    build_chat_stream_handler_for, build_discover_handler_for, build_host_stream_handler,
-    build_invoke_handler_for,
+    build_agent_ability_handler, build_chat_handler_for, build_chat_stream_handler_for,
+    build_discover_handler_for, build_host_stream_handler, build_invoke_handler_for, ContextLoader,
 };
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::persistence::agent_registry::AgentEntry;
@@ -421,7 +420,7 @@ pub struct HotAgentRevokeRequest {
 /// by the current `session.open` bidi; tests can supply a recorder.
 pub trait HotAgentAdvertiser: Send + Sync {
     fn advertise_hosted_agent(&self, request: HotAgentAdvertiseRequest)
-    -> HotAgentAdvertiseOutcome;
+        -> HotAgentAdvertiseOutcome;
 
     fn publish_owner_projection(
         &self,
@@ -759,7 +758,7 @@ impl HotAgentRegistrar {
                             Arc::clone(&self.loaders),
                             bare,
                         );
-                        if Self::register_rpc_with_spec(
+                        if Self::register_rpc_with_envelope_and_spec(
                             &mut sync_ctx,
                             &ability_name,
                             owner.clone(),
@@ -1050,6 +1049,59 @@ impl HotAgentRegistrar {
         }
     }
 
+    async fn register_rpc_with_envelope_and_spec(
+        ctx: &mut HotAgentRuntimeSyncContext<'_>,
+        ability_name: &str,
+        owner: OwnerKind,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
+        default_action: crate::daemon::ability::descriptors::AdmissionAction,
+        handler: crate::daemon::ability::dispatch::LocalRpcHandlerWithEnvelope,
+    ) -> bool {
+        let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
+            Some(runtime_key) => {
+                Self::runtime_has_mode(
+                    ctx.runtime,
+                    &runtime_key,
+                    crate::daemon::ability::CallMode::Rpc,
+                )
+                .await
+            }
+            None => {
+                Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome, ctx.failures);
+                return false;
+            }
+        };
+        let manifest = match ensure_admission_action(manifest, default_action) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                Self::record_registration_error(ability_name, error, ctx.outcome, ctx.failures);
+                return false;
+            }
+        };
+        match ctx
+            .catalog
+            .hot_register_rpc_with_envelope_spec_and_authority_scope(
+                ability_name,
+                owner,
+                ctx.authority_scope.clone(),
+                manifest,
+                handler,
+            ) {
+            Ok(()) if was_present => {
+                ctx.outcome.replaced += 1;
+                true
+            }
+            Ok(()) => {
+                ctx.outcome.registered += 1;
+                true
+            }
+            Err(error) => {
+                Self::record_registration_error(ability_name, error, ctx.outcome, ctx.failures);
+                false
+            }
+        }
+    }
+
     async fn register_stream_with_spec(
         ctx: &mut HotAgentRuntimeSyncContext<'_>,
         ability_name: &str,
@@ -1301,7 +1353,10 @@ mod tests {
     #[tokio::test]
     async fn register_agent_rejects_reserved_device_owner_token() {
         let registrar = build_pending();
-        let rt = LocalRuntime::new();
+        let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);
 
@@ -1348,7 +1403,10 @@ mod tests {
     #[tokio::test]
     async fn register_agent_reconciles_rows_without_backing_manifests() {
         let registrar = build_pending();
-        let rt = LocalRuntime::new();
+        let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         let catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
@@ -1414,7 +1472,10 @@ mod tests {
         // registrar layer; the boot-side wiring + lifecycle handler
         // wiring are tested separately.
         let registrar = build_pending();
-        let rt = LocalRuntime::new();
+        let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
@@ -1465,10 +1526,13 @@ mod tests {
         // The runtime sync must replace those rows instead of
         // reporting duplicate-name failures and leaving old handler
         // closures in place.
-        use easynet_axon::invocation::AbilityChangeEvent;
+        use axon_sdk::invocation::AbilityChangeEvent;
 
         let registrar = build_pending();
-        let rt = LocalRuntime::new();
+        let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
@@ -1552,7 +1616,10 @@ mod tests {
         // LocalRuntime Ability URA keys back to owner-local public
         // names, so `runtime.has_ability` flips back to `false`.
         let registrar = build_pending();
-        let rt = LocalRuntime::new();
+        let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         let _catalog = wire_runtime_and_catalog(&registrar, Arc::clone(&rt));
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");

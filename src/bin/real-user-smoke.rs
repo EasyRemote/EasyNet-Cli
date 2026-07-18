@@ -31,13 +31,15 @@
 // Email: silan.hu@u.nus.edu
 // Copyright (c) 2026-2027 easynet. All rights reserved.
 
+use axon_sdk::invocation::axiom::authority_proof_expected_hash;
+use axon_sdk::invocation::{
+    sha256, AgentIdentity, AuthorityBinding, AxonError, CalleeSignature, CanonicalReceiptProvider,
+    DescriptorBoundEnvelope, InvocationAuthorityProof, KeyResolver, LocalRuntime,
+    ReceiptSigningAuthority, StreamingInvocationHandle, VerifiedAdmissionPolicy,
+};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
-use easynet_axon::invocation::{
-    sha256, AgentIdentity, AxonError, CalleeSignature, LocalRuntime, ReceiptSigningAuthority,
-    ReceiptSigningAuthorityProvider, StreamingInvocationHandle,
-};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey, SIGNATURE_LENGTH};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -62,19 +64,50 @@ fn target(ability: &str, args: Value) -> InvocationTarget {
 }
 
 fn smoke_local_runtime() -> Arc<LocalRuntime> {
-    LocalRuntime::new_with_receipt_signing_authority_provider(Arc::new(
-        SmokeReceiptSigningAuthorityProvider::default(),
-    ))
+    easynet_cli::daemon::axon_bridge::runtime_factory::build_local_runtime_with_receipt_provider(
+        Arc::new(SmokeRejectingKeyResolver),
+        Arc::new(SmokeCanonicalReceiptProvider::default()),
+    )
+}
+
+struct SmokeRejectingKeyResolver;
+
+impl KeyResolver for SmokeRejectingKeyResolver {
+    fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+        Err(AxonError::permission_denied(format!(
+            "smoke_key_not_configured:{agent_ura}"
+        )))
+    }
 }
 
 #[derive(Default)]
-struct SmokeReceiptSigningAuthorityProvider {
+struct SmokeCanonicalReceiptProvider {
     seen_signers: Mutex<HashMap<String, VerifyingKey>>,
 }
 
 #[async_trait::async_trait]
-impl ReceiptSigningAuthorityProvider for SmokeReceiptSigningAuthorityProvider {
-    async fn resolve(
+impl CanonicalReceiptProvider for SmokeCanonicalReceiptProvider {
+    fn verify_admission_policy(
+        &self,
+        envelope: &DescriptorBoundEnvelope,
+    ) -> Result<VerifiedAdmissionPolicy, AxonError> {
+        let binding = AuthorityBinding::Self_ {
+            principal_ura: envelope.envelope().caller.ura.clone(),
+        };
+        let mut proof = InvocationAuthorityProof::new(
+            "smoke-verified-admission",
+            Some(binding.clone()),
+            Vec::new(),
+            [0u8; 32],
+            Some(envelope.envelope().callee.clone()),
+            None,
+            "easynet-cli.smoke.canonical_receipt_provider.admission.v1",
+        );
+        proof.proof_hash = authority_proof_expected_hash(&proof);
+        VerifiedAdmissionPolicy::new(envelope, binding, proof)
+    }
+
+    async fn resolve_signing_authority(
         &self,
         callee: &AgentIdentity,
     ) -> Result<Arc<dyn ReceiptSigningAuthority>, AxonError> {
@@ -132,37 +165,19 @@ impl ReceiptSigningAuthority for SmokeReceiptSigningAuthority {
         self.verifying_key()
     }
 
-    async fn sign_canonical_receipt(
+    async fn sign_and_verify(
         &self,
         canonical_receipt: &[u8],
     ) -> Result<CalleeSignature, AxonError> {
         let signature: Signature = self.signing_key.sign(canonical_receipt);
+        self.verifying_key()
+            .verify(canonical_receipt, &signature)
+            .map_err(|_| AxonError::internal("smoke_receipt_signature_self_verify_failed"))?;
         Ok(CalleeSignature {
             algorithm: "ed25519".to_string(),
             signature: signature.to_bytes().to_vec(),
             key_id_hint: "real-user-smoke-receipt-key".to_string(),
         })
-    }
-
-    fn verify_canonical_receipt(
-        &self,
-        canonical_receipt: &[u8],
-        signature: &CalleeSignature,
-    ) -> Result<(), AxonError> {
-        if signature.algorithm != "ed25519" {
-            return Err(AxonError::invalid_argument(format!(
-                "unsupported_algorithm:{}",
-                signature.algorithm
-            )));
-        }
-        let bytes: [u8; SIGNATURE_LENGTH] = signature
-            .signature
-            .as_slice()
-            .try_into()
-            .map_err(|_| AxonError::invalid_argument("callee_signature_wrong_length"))?;
-        self.verifying_key()
-            .verify(canonical_receipt, &Signature::from_bytes(&bytes))
-            .map_err(|_| AxonError::invalid_argument("callee_signature_invalid"))
     }
 }
 
@@ -211,7 +226,7 @@ impl RuntimeSmoke {
     fn execute_stream(
         &self,
         target: InvocationTarget,
-    ) -> anyhow::Result<easynet_axon::invocation::StreamingInvocationHandle> {
+    ) -> anyhow::Result<axon_sdk::invocation::StreamingInvocationHandle> {
         if target.call_mode != CallMode::Stream {
             anyhow::bail!("execute_stream called with non-stream target");
         }

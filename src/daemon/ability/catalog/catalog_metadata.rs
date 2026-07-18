@@ -497,6 +497,9 @@ pub fn description_for(name: &str) -> &'static str {
         governance_names::INVOCATION_HISTORY_GET => {
             invocation_history_ability::get_history_description()
         }
+        governance_names::INVOCATION_RECORD_GET => {
+            invocation_history_ability::get_record_description()
+        }
         governance_names::INVOCATION_TRACE_GET => {
             invocation_history_ability::get_trace_description()
         }
@@ -729,6 +732,9 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         }
         governance_names::INVOCATION_HISTORY_GET => {
             invocation_history_ability::get_history_input_schema()
+        }
+        governance_names::INVOCATION_RECORD_GET => {
+            invocation_history_ability::get_record_input_schema()
         }
         governance_names::INVOCATION_TRACE_GET => {
             invocation_history_ability::get_trace_input_schema()
@@ -1047,6 +1053,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | agent_names::AGENT_LIST
         | governance_names::INVOCATION_HISTORY_LIST
         | governance_names::INVOCATION_HISTORY_GET
+        | governance_names::INVOCATION_RECORD_GET
         | governance_names::INVOCATION_TRACE_GET
         | governance_names::INVOCATION_HISTORY_PATH
         | governance_names::AUTHORITY_BINDING_LIST

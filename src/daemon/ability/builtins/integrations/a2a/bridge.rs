@@ -290,8 +290,11 @@ mod tests {
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
     use std::sync::OnceLock;
 
-    fn executable_test_runtime() -> Arc<easynet_axon::invocation::LocalRuntime> {
-        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None)
+    fn executable_test_runtime() -> Arc<axon_sdk::invocation::LocalRuntime> {
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        )
     }
 
     fn manifest_for(name: &str) -> crate::daemon::ability::manifest::AbilityManifest {

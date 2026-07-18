@@ -34,14 +34,14 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
     let home = SevenAxesHome::seed();
     let daemon = home.start_daemon_without_hosted_projection();
 
-    home.invoke_system_ability(
+    home.invoke_device_system_ability(
         PRINCIPAL_CREATE,
         request(json!({
             "command": command("admin-create", "bootstrap", "proof:admin-create", None, ADMIN),
             "principal_ura": ADMIN
         })),
     );
-    let admin_bound = home.invoke_system_ability(
+    let admin_bound = home.invoke_device_system_ability(
         PRINCIPAL_BIND_FIRST_KEY,
         request(json!({
             "command": command("admin-bind", "bootstrap", "proof:admin-create", Some(1), ADMIN),
@@ -50,7 +50,7 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
         })),
     );
     let admin_binding_id = binding_id_at(&admin_bound, 0);
-    home.invoke_system_ability(
+    home.invoke_device_system_ability(
         PRINCIPAL_ADD_KEY,
         request(json!({
             "command": command("admin-backup", "active_key", &admin_binding_id, Some(2), ADMIN),
@@ -61,7 +61,6 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
     let joined_admin_device = easynet_cli::core::ura::device_ura("cli", "joined-admin-phone");
     let join_receipt = home.invoke_federation_join_with_principal_proof(
         &joined_admin_device,
-        &pubkey_hex(26),
         ADMIN,
         "active_key",
         &admin_binding_id,
@@ -69,7 +68,7 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
     assert_eq!(join_receipt["membership_ura"], joined_admin_device);
     assert_eq!(join_receipt["realm"], "cli");
 
-    let enrollment = home.invoke_system_ability(
+    let enrollment = home.invoke_device_system_ability(
         PRINCIPAL_ISSUE_ENROLLMENT,
         request(json!({
             "command": command("bob-enroll", "active_key", &admin_binding_id, Some(3), ADMIN),
@@ -82,14 +81,14 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
         .expect("enrollment id")
         .to_string();
 
-    home.invoke_system_ability(
+    home.invoke_device_system_ability(
         PRINCIPAL_CREATE,
         request(json!({
             "command": command("bob-create", "enrollment", &enrollment_id, None, BOB),
             "principal_ura": BOB
         })),
     );
-    let bob_bound = home.invoke_system_ability(
+    let bob_bound = home.invoke_device_system_ability(
         PRINCIPAL_BIND_FIRST_KEY,
         request(json!({
             "command": command("bob-laptop", "enrollment", &enrollment_id, Some(1), BOB),
@@ -99,7 +98,7 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
     );
     let bob_laptop_binding_id = binding_id_at(&bob_bound, 0);
 
-    let bob_with_phone = home.invoke_system_ability(
+    let bob_with_phone = home.invoke_device_system_ability(
         PRINCIPAL_ADD_KEY,
         request(json!({
             "command": command("bob-phone", "active_key", &bob_laptop_binding_id, Some(2), BOB),
@@ -109,7 +108,7 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
     );
     let bob_phone_binding_id = binding_id_at(&bob_with_phone, 1);
 
-    let bob_rotated = home.invoke_system_ability(
+    let bob_rotated = home.invoke_device_system_ability(
         PRINCIPAL_ROTATE_KEY,
         request(json!({
             "command": command("bob-rotate", "active_key", &bob_phone_binding_id, Some(3), BOB),
@@ -124,7 +123,7 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
     );
     let bob_rotated_laptop_binding_id = binding_id_at(&bob_rotated, 2);
 
-    home.invoke_system_ability(
+    home.invoke_device_system_ability(
         PRINCIPAL_REVOKE_KEY,
         request(json!({
             "command": command("bob-revoke-phone", "active_key", &bob_rotated_laptop_binding_id, Some(4), BOB),
@@ -132,7 +131,7 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
             "binding_id": bob_phone_binding_id
         })),
     );
-    home.invoke_system_ability(
+    home.invoke_device_system_ability(
         PRINCIPAL_CONFIGURE_RECOVERY,
         request(json!({
             "command": command("bob-recovery-policy", "active_key", &bob_rotated_laptop_binding_id, Some(5), BOB),
@@ -140,7 +139,7 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
             "policy_ref": "recovery-policy:bob"
         })),
     );
-    home.invoke_system_ability(
+    home.invoke_device_system_ability(
         PRINCIPAL_RECOVER,
         request(json!({
             "command": command("bob-recover", "recovery", "recovery-policy:bob", Some(6), BOB),
@@ -153,7 +152,7 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
         })),
     );
 
-    let grant = home.invoke_system_ability(
+    let grant = home.invoke_device_system_ability(
         PRINCIPAL_ISSUE_GRANT,
         request(json!({
             "command": command("admin-delete-grant", "active_key", &admin_binding_id, Some(5), ADMIN),
@@ -166,7 +165,7 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
         .expect("grant id")
         .to_string();
 
-    let deleted = home.invoke_system_ability(
+    let deleted = home.invoke_device_system_ability(
         PRINCIPAL_DELETE,
         request(json!({
             "command": command("bob-delete", "grant", &delete_grant_id, Some(7), ADMIN),
@@ -177,7 +176,7 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
     drop(daemon);
 
     let restarted = home.start_daemon_without_hosted_projection();
-    let after_restart = home.invoke_system_ability(
+    let after_restart = home.invoke_device_system_ability(
         PRINCIPAL_GET,
         json!({
             "principal_ura": BOB
@@ -243,11 +242,6 @@ fn command(
 fn pubkey(seed: u8) -> String {
     let signing = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
     B64.encode(signing.verifying_key().to_bytes())
-}
-
-fn pubkey_hex(seed: u8) -> String {
-    let signing = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
-    hex::encode(signing.verifying_key().to_bytes())
 }
 
 fn binding_id_at(snapshot: &Value, index: usize) -> String {

@@ -1,5 +1,24 @@
 # Canonical Runtime Convergence V2 - Decisions Log
 
+## 2026-07-18
+
+- Provider source hashes, interface hashes, capability proofs, and Axon
+  revision attestations are generated together. Manual JSON repair would
+  preserve duplicated truth and is prohibited.
+- Product E2E success cannot prove canonical ownership. Public inventory,
+  package ownership, capability matrix, and source-attested conformance remain
+  mandatory alongside product smoke tests.
+- Exact-route cutover requires a dynamic mutation proof: one request must
+  commit once and expose one Axon-finalized signed receipt chain. Static route
+  scans alone are insufficient.
+- Session clean-close behavior is bounded by the module-wide progress contract,
+  not a test-local five-second scheduler assumption. The semantic assertions
+  remain strict: clean EOF returns receipt-observable stats, zero frames remain
+  zero, and an immediate close cannot be classified as healthy uptime.
+- Captured-source conformance reports are valid only when every language
+  result shares the same run nonce and tree attestation and the parity
+  validator is explicitly told to accept snapshot-attested results.
+
 ## 2026-07-17
 
 - Descriptor governed schema inputs are modeled as one projection object

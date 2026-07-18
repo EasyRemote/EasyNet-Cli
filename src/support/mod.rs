@@ -47,7 +47,7 @@
 // Architectural Position
 // ----------------------
 // Horizontal leaf layer below `cli/`, `persistence`, and `registry`
-// (all of which may consume it) and above the `easynet-axon` SDK.
+// (all of which may consume it) and above the `axon-sdk` SDK.
 // No command-specific logic lives here; only reusable plumbing.
 //
 // Operator-log convention

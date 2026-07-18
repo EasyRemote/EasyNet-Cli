@@ -113,7 +113,7 @@ pub(crate) trait McpToolStreamHandle {
     fn close(&mut self) -> Result<()>;
 }
 
-impl McpToolStreamHandle for easynet_axon::dendrite_bridge::OwnedDendriteServerStream {
+impl McpToolStreamHandle for axon_sdk::dendrite_bridge::OwnedDendriteServerStream {
     fn recv(&mut self) -> Result<Option<Vec<u8>>> {
         Ok(Self::recv(self)?)
     }

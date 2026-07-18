@@ -1,5 +1,10 @@
 # AXON-RFC-001 plan v4.1.4 — URA six-role ontology
 
+> **Historical status**: superseded by
+> `docs/spec/canonical-runtime-convergence-v2.md`. This document preserves the
+> terminology migration record and is not an active architecture or
+> terminology authority.
+
 Status: ratified by CTO 2026-05-03
 Supersedes §1 of plan v4.1.3
 

@@ -28,8 +28,8 @@ pub(crate) mod unary_dispatcher;
 
 #[cfg(feature = "axon-pb")]
 pub use request::{
-    CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationDraft,
-    InvocationTuple, KeyServiceLocalDaemonInvocationSigner, LocalDaemonInvocationSigner,
-    PrepareOptions, PreparedInvocation, SignedInvocation, SignerPolicy, SignerPolicyMode,
-    SigningMaterial,
+    CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationArgsSet,
+    InvocationArgsUnset, InvocationDraft, InvocationTuple, KeyServiceLocalDaemonInvocationSigner,
+    LocalDaemonInvocationSigner, PrepareOptions, PreparedInvocation, SignedInvocation,
+    SignerPolicy, SignerPolicyMode, SigningMaterial,
 };

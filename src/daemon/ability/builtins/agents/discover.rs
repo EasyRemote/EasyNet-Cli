@@ -633,7 +633,7 @@ impl DiscoverProviderTarget {
             args,
             CallMode::Rpc,
             self.subject_ura,
-            easynet_axon::invocation::CausalContext::None,
+            axon_sdk::invocation::CausalContext::None,
         )
     }
 }
@@ -1385,7 +1385,10 @@ mod tests {
     fn register_publishes_discover_manifest_description() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
         );
         register_for_agent(
             &mut reg,
@@ -1468,7 +1471,10 @@ mod tests {
     fn unknown_scope_is_rejected() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
         );
         register_for_agent(
             &mut reg,
@@ -1991,7 +1997,10 @@ mod tests {
         // the provider delegation exercises the same LocalRuntime boundary as
         // daemon dispatch.
         let mut reg = AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
         );
         reg.register_rpc_with_owner_and_action(
             "userx.discover",
@@ -2066,7 +2075,7 @@ mod tests {
         assert!(matches!(
             invocation_target.causal_context,
             crate::daemon::invocation::routing::target::InvocationCausalContext::Explicit(
-                easynet_axon::invocation::CausalContext::None
+                axon_sdk::invocation::CausalContext::None
             )
         ));
     }

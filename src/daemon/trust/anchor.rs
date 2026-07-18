@@ -34,7 +34,7 @@
 //
 // What this module is NOT
 // -----------------------
-// - The admission gate itself — that lives in `easynet-axon`'s
+// - The admission gate itself — that lives in `axon-sdk`'s
 //   `invocation::admission` module and is consulted from
 //   `daemon::invocation::dispatch::daemon_invocation_service` (commit 7b/9)
 // - The `realm-trust.toml` *writer* — pairing flow lives in PR-7

@@ -37,7 +37,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 
-use crate::daemon::execution::mission::context::ParentInvocationContext;
 use crate::daemon::persistence::config;
 
 pub fn root_dir() -> PathBuf {
@@ -364,10 +363,6 @@ pub struct MissionRunMeta {
     /// (self-evolution = graph) and §10 (non-CLI artefacts).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ability_graph_traces: Option<Vec<serde_json::Value>>,
-
-    /// Parent invocation context captured for EAL/plugin-driven mission runs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub invocation_context: Option<ParentInvocationContext>,
 }
 
 #[derive(Debug, Clone)]
@@ -424,7 +419,6 @@ struct MissionRunTerminalContext {
     trace_id: String,
     started_at: String,
     duration_ms: u64,
-    invocation_context: Option<ParentInvocationContext>,
 }
 
 #[derive(Debug, Clone)]
@@ -494,7 +488,6 @@ impl MissionRunTerminalTransition {
             trace_id: self.context.trace_id.clone(),
             started_at: self.context.started_at.clone(),
             status: MissionRunStatus::Running,
-            invocation_context: self.context.invocation_context.clone(),
             ..Default::default()
         }
     }
@@ -513,7 +506,6 @@ impl MissionRunTerminalTransition {
             steps_completed: self.steps_completed,
             steps_failed: self.steps_failed,
             ability_graph_traces: self.ability_graph_traces,
-            invocation_context: self.context.invocation_context,
         }
     }
 
@@ -530,7 +522,6 @@ impl MissionRunTerminalTransition {
                 trace_id: meta.trace_id,
                 started_at: meta.started_at,
                 duration_ms: meta.duration_ms,
-                invocation_context: meta.invocation_context,
             },
             status: meta.status,
             error: meta.error,
@@ -681,13 +672,8 @@ pub fn cancel_run(id: &str) -> anyhow::Result<CancelOutcome> {
 
 // ── In-process mission entry point ─────────────────────────────────────────
 //
-// `run_mission_inproc` is THE single in-process entry point for executing an
-// EAL mission source string. Every CLI verb, every agent dispatch path,
-// every MCP handler that needs to run a mission MUST call this function.
-// Adding a second mission execution path is a load-bearing PR violation —
-// see docs/easynet_ontology.tex §6.2 derivation 3 ("there is no second
-// path"). The grep check `grep -rn 'fn run_mission' src/` should report
-// exactly one production hit on this name.
+// MissionRunner is the single daemon-owned application service for executing
+// EAL. It is constructible only with an invocation-scoped child gateway.
 //
 // Layering note: mission lifecycle and persistence are runtime concerns.
 // CLI commands are adapters over this service and never own execution.
@@ -698,7 +684,7 @@ pub fn cancel_run(id: &str) -> anyhow::Result<CancelOutcome> {
 // comment in sync with the grep invariant above; a second production mission
 // execution path is a release blocker, not a TODO.
 
-/// Options for `run_mission_inproc`. Kept narrow on purpose: anything that
+/// Options for `MissionRunner::run`. Kept narrow on purpose: anything that
 /// is not strictly required by both the CLI `mission run` path and the
 /// `agent send` desugar path lives elsewhere (CLI flag handling, telemetry
 /// rendering, etc.).
@@ -710,19 +696,11 @@ pub struct MissionRunOpts {
     /// constructed mission name (`agent-send`).
     pub source_label: Option<String>,
     /// Reserved for future per-run trace export (e.g. `--trace <path>` on
-    /// `agent send`). Currently unused — `run_mission_inproc` always
+    /// `agent send`). Currently unused — the runner always
     /// writes the full trace into the run dir, and callers can read it
     /// from there.
     #[allow(dead_code)]
     pub trace_path: Option<PathBuf>,
-    /// Parent AXIOM invocation context when a mission is executing as an
-    /// ability implementation.
-    ///
-    /// What this is NOT: a second invocation constructor. The daemon stores
-    /// and propagates this value so child dispatch can preserve the parent
-    /// caller/subject/causal tuple while Axon remains the owner of canonical
-    /// invocation and receipt construction.
-    pub invocation_context: Option<ParentInvocationContext>,
     /// Optional run-level deadline for manifest-bound mission executions.
     /// CLI-authored missions normally rely on step-local EAL timeouts; an
     /// ability manifest's `timeout_seconds` is a public per-invocation SLA and
@@ -730,7 +708,7 @@ pub struct MissionRunOpts {
     pub run_timeout: Option<std::time::Duration>,
 }
 
-/// Result of a mission run. Returned by `run_mission_inproc`.
+/// Result of a mission run.
 ///
 /// Several fields are read by `cli/agent.rs::run_send` (Step 4 in the
 /// implementation plan) but not yet by `mission run`'s CLI handler. The
@@ -809,187 +787,204 @@ fn find_implicit_agent_fallback(
 
 /// THE single in-process entry point for executing an EAL mission source
 /// string. See module-level comment above for the load-bearing invariant.
-pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<MissionRunResult> {
-    // Compile.
-    let program = crate::eal::parser::parse(source)?;
-    let ir = crate::eal::runtime::planner::compile(&program)?;
+pub(crate) struct MissionRunner {
+    gateway:
+        Arc<dyn crate::daemon::execution::mission::invocation_gateway::MissionInvocationGateway>,
+}
 
-    // Reject "implicit agent fallback" — `call "x" on "<agent-name>"`
-    // in EAL traditional form, where `<agent-name>` collides with a
-    // registered agent. The traditional `call ... on ...` form is
-    // strictly device-only by language design (see parser.rs and
-    // ir.rs invariant comments). Without this check, the user's
-    // intent to call an agent silently becomes a phantom-device
-    // dispatch that fails with a confusing "node not found" error.
-    //
-    // The check happens here, in `run_mission_inproc`, because:
-    //   - the planner is registry-free by design (Step 2 invariant 2:
-    //     no `is_agent` string check at lower-time);
-    //   - the dispatcher is registry-aware but only for routing, not
-    //     for sanity checks;
-    //   - this is the single in-process mission entry point, so the
-    //     check covers every production mission.
-    //
-    // The check is a one-pass walk over the IR before persistence,
-    // so a rejection produces a hard error before any disk artifact
-    // (run dir, trace, meta) is created.
-    if let Some(conflict) = find_implicit_agent_fallback(&ir)? {
-        anyhow::bail!(
-            "step '{step_id}' uses traditional form `call ... on \"{name}\"` \
+impl MissionRunner {
+    pub(crate) fn new(
+        gateway: Arc<
+            dyn crate::daemon::execution::mission::invocation_gateway::MissionInvocationGateway,
+        >,
+    ) -> Self {
+        Self { gateway }
+    }
+
+    pub(crate) fn run(
+        &self,
+        source: &str,
+        opts: MissionRunOpts,
+    ) -> anyhow::Result<MissionRunResult> {
+        // Compile.
+        let program = crate::eal::parser::parse(source)?;
+        let ir = crate::eal::runtime::planner::compile(&program)?;
+
+        // Reject "implicit agent fallback" — `call "x" on "<agent-name>"`
+        // in EAL traditional form, where `<agent-name>` collides with a
+        // registered agent. The traditional `call ... on ...` form is
+        // strictly device-only by language design (see parser.rs and
+        // ir.rs invariant comments). Without this check, the user's
+        // intent to call an agent silently becomes a phantom-device
+        // dispatch that fails with a confusing "node not found" error.
+        //
+        // The check happens here, in `MissionRunner::run`, because:
+        //   - the planner is registry-free by design (Step 2 invariant 2:
+        //     no `is_agent` string check at lower-time);
+        //   - the dispatcher is registry-aware but only for routing, not
+        //     for sanity checks;
+        //   - this is the single in-process mission entry point, so the
+        //     check covers every production mission.
+        //
+        // The check is a one-pass walk over the IR before persistence,
+        // so a rejection produces a hard error before any disk artifact
+        // (run dir, trace, meta) is created.
+        if let Some(conflict) = find_implicit_agent_fallback(&ir)? {
+            anyhow::bail!(
+                "step '{step_id}' uses traditional form `call ... on \"{name}\"` \
              but \"{name}\" is a registered agent. The traditional form is \
              strictly device-only — to invoke an agent, use member-call form: \
              `let r = {name}.{ability}(...)`. See docs/AGENT_IDENTITY.md.",
-            step_id = conflict.step_id,
-            name = conflict.colliding_name,
-            ability = conflict.ability,
-        );
-    }
+                step_id = conflict.step_id,
+                name = conflict.colliding_name,
+                ability = conflict.ability,
+            );
+        }
 
-    // Persist source + IR. The writes are best-effort: a missed
-    // source.eal / ir.json means the on-disk audit record is incomplete,
-    // but the mission still runs. We log so an operator inspecting a
-    // partially-populated run dir can attribute the gap.
-    let run_dir = MissionRunDir::create(&ir.name)?;
-    if let Err(e) = run_dir.write_source(source) {
-        eprintln!(
-            "[easynet warn] mission run {}: write source.eal failed ({e})",
-            run_dir.path.display()
-        );
-    }
-    if let Ok(ir_json) = serde_json::to_string_pretty(&ir) {
-        if let Err(e) = run_dir.write_ir(&ir_json) {
+        // Persist source + IR. The writes are best-effort: a missed
+        // source.eal / ir.json means the on-disk audit record is incomplete,
+        // but the mission still runs. We log so an operator inspecting a
+        // partially-populated run dir can attribute the gap.
+        let run_dir = MissionRunDir::create(&ir.name)?;
+        if let Err(e) = run_dir.write_source(source) {
             eprintln!(
-                "[easynet warn] mission run {}: write ir.json failed ({e})",
+                "[easynet warn] mission run {}: write source.eal failed ({e})",
                 run_dir.path.display()
             );
         }
-    }
-    let run_id = run_dir
-        .path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_string();
+        if let Ok(ir_json) = serde_json::to_string_pretty(&ir) {
+            if let Err(e) = run_dir.write_ir(&ir_json) {
+                eprintln!(
+                    "[easynet warn] mission run {}: write ir.json failed ({e})",
+                    run_dir.path.display()
+                );
+            }
+        }
+        let run_id = run_dir
+            .path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
 
-    // Execute. The mission-context env var is set here so the dispatch
-    // invariant in
-    // `daemon::execution::mission::dispatch::send_to_agent_with_depth` can
-    // verify that every cross-agent call originates from a real mission run dir.
-    // The RAII guard restores the previous value (or removes the var)
-    // even if the interpreter panics.
-    let _ctx = MissionContextGuard::enter(&run_id, opts.invocation_context.clone());
+        // Execute. The mission-context env var is set here so the dispatch
+        // invariant in
+        // `daemon::execution::mission::dispatch::send_to_agent_with_depth` can
+        // verify that every cross-agent call originates from a real mission run dir.
+        // The RAII guard restores the previous value (or removes the var)
+        // even if the interpreter panics.
+        let _ctx = MissionContextGuard::enter(&run_id);
 
-    let state = crate::daemon::persistence::config::load()?;
-    let tenant = state.tenant_or_default();
-    let started = std::time::Instant::now();
-    let started_at = chrono::Local::now().to_rfc3339();
+        let state = crate::daemon::persistence::config::load()?;
+        let tenant = state.tenant_or_default();
+        let started = std::time::Instant::now();
+        let started_at = chrono::Local::now().to_rfc3339();
 
-    let exec = crate::eal::interpreter::execute_with_endpoint_for_trace_with_timeout(
-        &state.endpoint,
-        tenant,
-        &ir,
-        run_id.clone(),
-        opts.run_timeout,
-    );
+        let exec = crate::eal::interpreter::execute_with_gateway_for_trace_with_timeout(
+            Arc::clone(&self.gateway),
+            tenant,
+            &ir,
+            run_id.clone(),
+            opts.run_timeout,
+        );
 
-    let duration_ms = started.elapsed().as_millis() as u64;
+        let duration_ms = started.elapsed().as_millis() as u64;
 
-    let total_steps = ir.steps.len();
+        let total_steps = ir.steps.len();
 
-    match exec {
-        Ok(report) => {
-            let steps_failed = report.steps_failed;
-            let ability_graph_traces = if report.trace.ability_graph.is_empty() {
-                None
-            } else {
-                Some(report.trace.ability_graph.clone())
-            };
-            // The interpreter returns Ok even when individual steps fail
-            // — surface that as "partial" so the listing doesn't lie about
-            // a run with broken steps.
-            if let Ok(trace_json) = serde_json::to_string_pretty(&report.trace) {
-                if let Err(e) = run_dir.write_trace(&trace_json) {
+        match exec {
+            Ok(report) => {
+                let steps_failed = report.steps_failed;
+                let ability_graph_traces = if report.trace.ability_graph.is_empty() {
+                    None
+                } else {
+                    Some(report.trace.ability_graph.clone())
+                };
+                // The interpreter returns Ok even when individual steps fail
+                // — surface that as "partial" so the listing doesn't lie about
+                // a run with broken steps.
+                if let Ok(trace_json) = serde_json::to_string_pretty(&report.trace) {
+                    if let Err(e) = run_dir.write_trace(&trace_json) {
+                        eprintln!(
+                            "[easynet warn] mission run {}: write trace.json failed ({e})",
+                            run_dir.path.display()
+                        );
+                    }
+                }
+                let (meta, meta_write) =
+                    run_dir.record_terminal(MissionRunTerminalTransition::completed(
+                        MissionRunTerminalContext {
+                            name: ir.name.clone(),
+                            source_file: opts.source_label.clone(),
+                            trace_id: run_id.clone(),
+                            started_at,
+                            duration_ms: report.total_elapsed_ms,
+                        },
+                        MissionRunCompletion {
+                            steps_total: total_steps,
+                            steps_completed: report.steps_completed,
+                            steps_failed,
+                            ability_graph_traces,
+                        },
+                    ));
+                if let Err(e) = meta_write {
                     eprintln!(
-                        "[easynet warn] mission run {}: write trace.json failed ({e})",
+                        "[easynet warn] mission run {}: write meta.json failed ({e})",
                         run_dir.path.display()
                     );
                 }
-            }
-            let (meta, meta_write) =
-                run_dir.record_terminal(MissionRunTerminalTransition::completed(
-                    MissionRunTerminalContext {
-                        name: ir.name.clone(),
-                        source_file: opts.source_label.clone(),
-                        trace_id: run_id.clone(),
-                        started_at,
-                        duration_ms: report.total_elapsed_ms,
-                        invocation_context: opts.invocation_context.clone(),
-                    },
-                    MissionRunCompletion {
-                        steps_total: total_steps,
-                        steps_completed: report.steps_completed,
-                        steps_failed,
-                        ability_graph_traces,
-                    },
-                ));
-            if let Err(e) = meta_write {
-                eprintln!(
-                    "[easynet warn] mission run {}: write meta.json failed ({e})",
-                    run_dir.path.display()
-                );
-            }
 
-            // Convert ExecutionReport.outputs (HashMap<String, String>)
-            // into HashMap<String, Value> by parsing each as JSON. If a
-            // value isn't valid JSON, fall back to wrapping it as a JSON
-            // string. This makes `bound_vars["__reply"]` directly usable
-            // by the `agent send` desugar path.
-            let bound_vars: HashMap<String, serde_json::Value> = report
-                .outputs
-                .into_iter()
-                .map(|(k, raw)| {
-                    // `unwrap_or_else` would be wasted here — parsing is
-                    // the whole operation; if it fails we fall back to
-                    // wrapping `raw` as a plain JSON string. Evaluating
-                    // the fallback eagerly costs nothing.
-                    let v = serde_json::from_str::<serde_json::Value>(&raw)
-                        .unwrap_or(serde_json::Value::String(raw));
-                    (k, v)
+                // Convert ExecutionReport.outputs (HashMap<String, String>)
+                // into HashMap<String, Value> by parsing each as JSON. If a
+                // value isn't valid JSON, fall back to wrapping it as a JSON
+                // string. This makes `bound_vars["__reply"]` directly usable
+                // by the `agent send` desugar path.
+                let bound_vars: HashMap<String, serde_json::Value> = report
+                    .outputs
+                    .into_iter()
+                    .map(|(k, raw)| {
+                        // `unwrap_or_else` would be wasted here — parsing is
+                        // the whole operation; if it fails we fall back to
+                        // wrapping `raw` as a plain JSON string. Evaluating
+                        // the fallback eagerly costs nothing.
+                        let v = serde_json::from_str::<serde_json::Value>(&raw)
+                            .unwrap_or(serde_json::Value::String(raw));
+                        (k, v)
+                    })
+                    .collect();
+
+                Ok(MissionRunResult {
+                    run_dir: run_dir.path.clone(),
+                    run_id,
+                    meta,
+                    bound_vars,
+                    ok: steps_failed == 0,
                 })
-                .collect();
-
-            Ok(MissionRunResult {
-                run_dir: run_dir.path.clone(),
-                run_id,
-                meta,
-                bound_vars,
-                ok: steps_failed == 0,
-            })
-        }
-        Err(e) => {
-            let error = e.to_string();
-            let (_meta, meta_write) =
-                run_dir.record_terminal(MissionRunTerminalTransition::failed(
-                    MissionRunTerminalContext {
-                        name: ir.name.clone(),
-                        source_file: opts.source_label.clone(),
-                        trace_id: run_id,
-                        started_at,
-                        duration_ms,
-                        invocation_context: opts.invocation_context.clone(),
-                    },
-                    MissionRunFailure {
-                        steps_total: total_steps,
-                        error: error.clone(),
-                    },
-                ));
-            if let Err(write_err) = meta_write {
-                eprintln!(
-                    "[easynet warn] mission run {}: write meta.json failed ({write_err})",
-                    run_dir.path.display()
-                );
             }
-            Err(anyhow::anyhow!("mission run failed: {error}"))
+            Err(e) => {
+                let error = e.to_string();
+                let (_meta, meta_write) =
+                    run_dir.record_terminal(MissionRunTerminalTransition::failed(
+                        MissionRunTerminalContext {
+                            name: ir.name.clone(),
+                            source_file: opts.source_label.clone(),
+                            trace_id: run_id,
+                            started_at,
+                            duration_ms,
+                        },
+                        MissionRunFailure {
+                            steps_total: total_steps,
+                            error: error.clone(),
+                        },
+                    ));
+                if let Err(write_err) = meta_write {
+                    eprintln!(
+                        "[easynet warn] mission run {}: write meta.json failed ({write_err})",
+                        run_dir.path.display()
+                    );
+                }
+                Err(anyhow::anyhow!("mission run failed: {error}"))
+            }
         }
     }
 }
@@ -1019,7 +1014,7 @@ struct MissionContextGuard {
 }
 
 impl MissionContextGuard {
-    fn enter(run_id: &str, invocation_context: Option<ParentInvocationContext>) -> Self {
+    fn enter(run_id: &str) -> Self {
         // Typed thread-local only (F-028 / T5.4): nothing in-process
         // writes EASYNET_MISSION_ID anymore. The interpreter hands the
         // context to its rayon workers explicitly, and the subprocess
@@ -1035,8 +1030,7 @@ impl MissionContextGuard {
         let ctx = crate::daemon::execution::mission::context::DispatchContext::for_mission(
             run_id,
             root_dir().join(run_id),
-        )
-        .with_parent_invocation(invocation_context);
+        );
         Self {
             _ctx: crate::daemon::execution::mission::context::enter(ctx),
         }
@@ -1194,7 +1188,6 @@ mod tests {
             steps_completed: 3,
             steps_failed: 0,
             ability_graph_traces: None,
-            invocation_context: None,
         }
     }
 
@@ -1212,7 +1205,7 @@ mod tests {
         let _g = HomeGuard::new();
         std::env::remove_var("EASYNET_MISSION_ID");
         {
-            let _guard = MissionContextGuard::enter("env-free-run", None);
+            let _guard = MissionContextGuard::enter("env-free-run");
             assert!(
                 std::env::var("EASYNET_MISSION_ID").is_err(),
                 "the in-process channel is the thread-local, never the env"
@@ -1300,28 +1293,6 @@ mod tests {
             }
             CancelOutcome::AlreadyTerminal(_) => panic!("interrupted run must be settleable"),
         }
-    }
-
-    #[test]
-    fn mission_context_guard_preserves_parent_invocation_context() {
-        let _g = HomeGuard::new();
-        let _guard = MissionContextGuard::enter(
-            "mission-parent-context",
-            Some(
-                ParentInvocationContext::from_json_value(serde_json::json!({
-                    "caller": "easynet:///r/acme/agent/alice",
-                    "subject": "easynet:///r/acme/resource/doc",
-                    "causal_context": {"kind": "none"},
-                }))
-                .expect("typed parent invocation context"),
-            ),
-        );
-        let ctx = crate::daemon::execution::mission::context::current()
-            .expect("mission context installed");
-        assert_eq!(
-            ctx.parent_invocation.as_ref().unwrap().subject.as_deref(),
-            Some("easynet:///r/acme/resource/doc")
-        );
     }
 
     #[test]
@@ -1493,24 +1464,22 @@ mod tests {
         register_test_agent("claude");
 
         // Traditional form addressing a registered agent name → must
-        // be rejected by run_mission_inproc, not silently classified
+        // be rejected by MissionRunner, not silently classified
         // as a Device.
         let source = r#"
             mission "regression" {
                 let r = call "chat" on "claude" with { prompt = "hi" }
             }
         "#;
-        let result = run_mission_inproc(
-            source,
-            MissionRunOpts {
-                source_label: Some("regression".into()),
-                trace_path: None,
-                invocation_context: None,
-                run_timeout: None,
-            },
+        let program = crate::eal::parser::parse(source).expect("parse");
+        let ir = crate::eal::runtime::planner::compile(&program).expect("compile");
+        let err = find_implicit_agent_fallback(&ir)
+            .expect("registry lookup")
+            .expect("traditional form on agent name must be rejected");
+        let msg = format!(
+            "\"{}\" member-call form {}.{} docs/AGENT_IDENTITY.md",
+            err.colliding_name, err.colliding_name, err.ability
         );
-        let err = result.expect_err("traditional form on agent name must be rejected");
-        let msg = format!("{err}");
         // Error message must:
         //   1. name the colliding agent
         //   2. point at the member-call form as the correct alternative

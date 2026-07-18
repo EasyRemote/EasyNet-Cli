@@ -41,11 +41,13 @@ use clap::Args;
 use serde::{Deserialize, Serialize};
 
 use crate::daemon::boot::join_connection_state::{
-    JoinConnectionSnapshot, JoinConnectionState, JoinFailureCode, JoinFailureParts, JoinTransition,
-    record_snapshot,
+    record_snapshot, JoinConnectionSnapshot, JoinConnectionState, JoinFailureCode,
+    JoinFailureParts, JoinTransition,
 };
 use crate::daemon::persistence::config;
 use crate::support::platform::{output, sysinfo};
+
+use super::pairing_contract::PairingCredentialEnvelope;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -609,7 +611,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
         crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof,
     >,
 ) -> anyhow::Result<UraJoinResult> {
-    use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
+    use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
 
     let channel = connect_hub_invocation_channel(&target.hub_endpoint, hub_ca).await?;
     let mut client = InvocationClient::new(channel);
@@ -647,6 +649,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
         provisional_caller,
         target.hub_ura.clone(),
         membership_ura.to_string(),
+        crate::daemon::invocation::dispatch::invocation_wire::InvocationDerivationPolicy::FreshRoot,
     )?
     .signed_descriptor_ref_invoke_request_with_signer(
         crate::daemon::ability::conformance::ABILITY_FEDERATION_JOIN,
@@ -702,10 +705,11 @@ async fn do_federation_join_and_resolve_hub_key_async(
             crate::daemon::ability::CallMode::Rpc,
         )
         .map_err(|err| anyhow::anyhow!("derive federation.resolve_key descriptor ref: {err}"))?;
-    let resolve_request = crate::daemon::invocation::ProtoEnvelope::targeted(
+    let resolve_request = crate::daemon::invocation::ProtoEnvelope::from_target(
         membership_ura.to_string(),
         target.hub_ura.clone(),
         subject,
+        crate::daemon::invocation::dispatch::invocation_wire::InvocationDerivationPolicy::FreshRoot,
     )?
     .signed_descriptor_ref_invoke_request(
         crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
@@ -1050,8 +1054,8 @@ fn pairing_status_error_message(code: u16, body: &str) -> String {
 }
 
 fn validate_pairing_response(
-    envelope: easynet_axon::DeviceJoinCredentialEnvelope,
-) -> anyhow::Result<easynet_axon::DeviceJoinCredentialEnvelope> {
+    envelope: PairingCredentialEnvelope,
+) -> anyhow::Result<PairingCredentialEnvelope> {
     if envelope.node_id.is_empty() {
         anyhow::bail!("pairing response missing node_id");
     }
@@ -1085,9 +1089,7 @@ fn validate_pairing_response(
     Ok(envelope)
 }
 
-fn credentials_from_join_envelope(
-    envelope: easynet_axon::DeviceJoinCredentialEnvelope,
-) -> config::Credentials {
+fn credentials_from_pairing_contract(envelope: PairingCredentialEnvelope) -> config::Credentials {
     config::Credentials {
         node_id: envelope.node_id,
         credential_token: envelope.credential_token,
@@ -1303,13 +1305,13 @@ fn validate_pairing_token(
     // Hub's OpenAPI spec under /api/v1/devices/pairing). If `into_json`
     // fails, the bytes we got back are either not JSON at all (a proxy
     // inserted an HTML error page, a middlebox rewrote the response) or
-    // the JSON shape no longer matches Axon's join credential envelope
+    // the JSON shape no longer matches the product pairing contract
     // (the CLI and Hub are on incompatible versions). Either way, the underlying
     // serde error is noise to an operator — they need to know *what to
     // do*, not which field's tag didn't match. We keep the raw cause in
     // the error chain via `context`, so `--verbose` / log scrapers still
     // surface the full detail, while the top-line stays operator-friendly.
-    let envelope: easynet_axon::DeviceJoinCredentialEnvelope = resp.into_json().map_err(|e| {
+    let envelope: PairingCredentialEnvelope = resp.into_json().map_err(|e| {
         anyhow::Error::from(e).context(
             "Hub returned an unreadable pairing response — the Hub is likely on an \
              incompatible version, or a proxy rewrote the response. Verify the Hub URL \
@@ -1339,7 +1341,7 @@ fn validate_pairing_token(
     // on-disk credentials so the follow-up trust auto-wire can
     // populate `realm-trust.toml` plus any local pinned CA file
     // without needing on-host access to hub-local files.
-    let mut creds = credentials_from_join_envelope(envelope);
+    let mut creds = credentials_from_pairing_contract(envelope);
     if !preflight.hub_public_key_b64.trim().is_empty() {
         creds.hub_pubkey_b64 = Some(preflight.hub_public_key_b64.trim().to_string());
     }
@@ -1448,7 +1450,7 @@ mod tests {
 
     #[test]
     fn validate_pairing_response_rejects_empty_node_id() {
-        let envelope = easynet_axon::DeviceJoinCredentialEnvelope {
+        let envelope = PairingCredentialEnvelope {
             node_id: String::new(),
             credential_token: "cred".into(),
             hub_endpoint: "axon://easynet.run:50051".into(),
@@ -1461,8 +1463,8 @@ mod tests {
     }
 
     #[test]
-    fn credentials_from_join_envelope_projects_axon_wire_shape() {
-        let envelope = easynet_axon::DeviceJoinCredentialEnvelope {
+    fn credentials_from_pairing_contract_projects_product_credentials() {
+        let envelope = PairingCredentialEnvelope {
             node_id: "node".into(),
             credential_token: "cred".into(),
             hub_endpoint: "axon://easynet.run:50051".into(),
@@ -1472,7 +1474,7 @@ mod tests {
             user_id: Some("user-alice".into()),
             ..Default::default()
         };
-        let creds = credentials_from_join_envelope(envelope);
+        let creds = credentials_from_pairing_contract(envelope);
         assert_eq!(creds.node_id, "node");
         assert_eq!(creds.realm, "tenant");
         assert_eq!(creds.username.as_deref(), Some("alice"));
@@ -1481,7 +1483,7 @@ mod tests {
 
     #[test]
     fn validate_pairing_response_rejects_missing_username() {
-        let envelope = easynet_axon::DeviceJoinCredentialEnvelope {
+        let envelope = PairingCredentialEnvelope {
             node_id: "node".into(),
             credential_token: "cred".into(),
             hub_endpoint: "axon://easynet.run:50051".into(),
@@ -1497,7 +1499,7 @@ mod tests {
 
     #[test]
     fn validate_pairing_response_rejects_missing_user_id() {
-        let envelope = easynet_axon::DeviceJoinCredentialEnvelope {
+        let envelope = PairingCredentialEnvelope {
             node_id: "node".into(),
             credential_token: "cred".into(),
             hub_endpoint: "axon://easynet.run:50051".into(),
@@ -1763,10 +1765,9 @@ mod tests {
         )
         .expect_err("mixed shorthand and generic proof must fail");
 
-        assert!(
-            err.to_string()
-                .contains("cannot be combined with --principal-proof-kind")
-        );
+        assert!(err
+            .to_string()
+            .contains("cannot be combined with --principal-proof-kind"));
     }
 
     #[test]

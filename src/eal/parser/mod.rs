@@ -38,7 +38,7 @@
 //
 // If a user writes `call "chat" on "claude"` (traditional form, name
 // collides with a registered agent), the system rejects it at
-// run_mission_inproc time with an error pointing at the correct
+// MissionRunner execution with an error pointing at the correct
 // member-call form. See `cli/mission_runs.rs::find_implicit_agent_fallback`
 // and the `no_implicit_agent_fallback_*` test trio in the same file.
 //

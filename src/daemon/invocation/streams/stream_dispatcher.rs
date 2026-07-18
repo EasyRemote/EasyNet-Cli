@@ -23,15 +23,13 @@ use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
 
-use easynet_axon::invocation::{CallMode, StreamingInvocationHandle};
+use axon_sdk::invocation::{CallMode, StreamingInvocationHandle};
 use futures::Stream;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Response, Status};
 
-use easynet_axon::pb::axon::v1::{
-    Error, InvokeServerStreamRequest, InvokeStreamChunk, ResponseHeader,
-};
+use axon_sdk::pb::axon::v1::{Error, InvokeServerStreamRequest, InvokeStreamChunk, ResponseHeader};
 
 use crate::daemon::ability::dispatch::StreamSource;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
@@ -56,7 +54,7 @@ use crate::daemon::invocation::dispatch::forwarded_finalization::{
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
     status_from_axon_invoke_error, target_ura_from_envelope, BoxedDownStream,
-    FEDERATION_RESULT_CONTENT_TYPE, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
+    FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
@@ -105,22 +103,24 @@ impl StreamDispatcher {
         route: DaemonStreamRoute,
         request: &InvokeServerStreamRequest,
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
-        let Some(runtime) = self.runtime.local_runtime.as_ref() else {
+        let Some(runtime) = self.runtime.local_runtime() else {
             return Err(Status::failed_precondition(format!(
                 "InvokeStream: daemon stream route `{}` cannot run because Axon LocalRuntime \
                  is not wired at boot",
                 route.name()
             )));
         };
-        let local_self_admitted = self
+        let local_system_ingress = self
             .admission
-            .accepts_local_self_envelope(request.envelope.as_ref());
+            .accepts_local_system_envelope(request.envelope.as_ref());
         let handle =
             crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
-                Arc::clone(runtime),
+                runtime,
                 self.runtime.cancellations.clone(),
+                self.admission.clone(),
+                self.runtime.product_policy()?,
             )
-            .open_stream(route, request, local_self_admitted)
+            .open_stream(route, request, local_system_ingress)
             .await?;
         let initial_sequence = daemon_route_initial_sequence(route, request)?;
         project_local_runtime_stream(
@@ -176,7 +176,7 @@ impl StreamDispatcher {
         call_mode: CallMode,
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
         let ability = request.function_name.trim();
-        let Some(runtime) = self.runtime.local_runtime.as_ref() else {
+        let Some(runtime) = self.runtime.local_runtime() else {
             return Err(Status::failed_precondition(format!(
                 "InvokeStream: ability `{ability}` cannot run because Axon LocalRuntime \
                  is not wired at boot"
@@ -184,7 +184,7 @@ impl StreamDispatcher {
         };
         let bound_ability = RuntimeBoundAbility::from_selected_route(
             "InvokeStream",
-            runtime,
+            &runtime,
             self.directory.local_ability_catalog.as_deref(),
             &selected_route,
             call_mode,
@@ -204,11 +204,11 @@ impl StreamDispatcher {
             ability,
             &selected_route.route_ura,
         )?;
-        let local_self_admitted = self
+        let local_system_ingress = self
             .admission
-            .accepts_local_self_envelope(request.envelope.as_ref());
+            .accepts_local_system_envelope(request.envelope.as_ref());
         let wire = match request.envelope.clone() {
-            Some(envelope) if local_self_admitted => {
+            Some(envelope) if local_system_ingress => {
                 let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                     &request.metadata,
                     &envelope,
@@ -229,23 +229,37 @@ impl StreamDispatcher {
                     false,
                     ability,
                 )?;
+                let signed_descriptor_ref = bound_ability
+                    .signed_descriptor_ref_from_target(
+                        "InvokeStream",
+                        &selected_route.callee_ura,
+                        call_mode,
+                        request.target.as_ref(),
+                    )?
+                    .into_descriptor_ref();
                 crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                     envelope,
-                    selected_descriptor_ref,
+                    signed_descriptor_ref,
                     request.arguments.clone(),
                     metadata,
                 )
             }
-            None => Err(Box::new(
-                easynet_axon::invocation::AxonError::invalid_argument(
-                    "InvokeStream request missing envelope",
-                ),
-            )),
+            None => Err(Box::new(axon_sdk::invocation::AxonError::invalid_argument(
+                "InvokeStream request missing envelope",
+            ))),
         }
         .map_err(|err| status_from_axon_invoke_error("InvokeStream", ability, *err))?;
-        let handle = crate::daemon::axon_bridge::dispatch_shim::open_stream_admitted(runtime, wire)
-            .await
-            .map_err(|err| status_from_axon_invoke_error("InvokeStream", ability, err))?;
+        let product_admission = self.runtime.stage_product_admission(
+            &self.admission,
+            &wire,
+            ability,
+            CallMode::Stream,
+        )?;
+        let handle =
+            crate::daemon::axon_bridge::dispatch_shim::open_stream_admitted(&runtime, wire)
+                .await
+                .map_err(|err| status_from_axon_invoke_error("InvokeStream", ability, err))?;
+        product_admission.commit()?;
         project_local_runtime_stream(
             handle,
             ability,
@@ -272,10 +286,7 @@ impl StreamDispatcher {
         signed_envelope_for_selected_route(
             envelope,
             &selected_route,
-            request
-                .metadata
-                .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
-                .map(String::as_str),
+            request.target.as_ref(),
             &request.arguments,
         )?;
         let pending = self.sessions.pending_stream.as_ref().ok_or_else(|| {
@@ -298,15 +309,16 @@ impl StreamDispatcher {
 
         let mut handle = pending.register_pending_for(&selected_route.execution_host_ura);
         let call_id = handle.call_id();
-        let forwarded_request = easynet_axon::pb::axon::v1::InvokeRequest {
+        let forwarded_request = axon_sdk::pb::axon::v1::InvokeRequest {
             envelope: request.envelope.clone(),
+            target: request.target.clone(),
             function_name: request.function_name.clone(),
             arguments: request.arguments.clone(),
             content_type: request.content_type.clone(),
             content_envelope: request.content_envelope.clone(),
             metadata: request.metadata.clone(),
             payload_ref: request.payload_ref.clone(),
-            ..easynet_axon::pb::axon::v1::InvokeRequest::default()
+            ..axon_sdk::pb::axon::v1::InvokeRequest::default()
         };
         let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
@@ -365,7 +377,7 @@ impl StreamDispatcher {
                         let chunk = remote_stream_chunk(RemoteStreamChunkParts {
                             invocation_id: receipt.invocation_id.clone(),
                             selected_node_id: route_ura.clone(),
-                            state: easynet_axon::invocation::InvocationState::Running,
+                            state: axon_sdk::invocation::InvocationState::Running,
                             payload: Vec::new(),
                             sequence,
                             terminal: false,
@@ -394,7 +406,7 @@ impl StreamDispatcher {
                         let chunk = remote_stream_chunk(RemoteStreamChunkParts {
                             invocation_id,
                             selected_node_id: route_ura.clone(),
-                            state: easynet_axon::invocation::InvocationState::Running,
+                            state: axon_sdk::invocation::InvocationState::Running,
                             payload,
                             sequence,
                             terminal: false,
@@ -476,8 +488,8 @@ async fn project_local_runtime_stream(
             "InvokeStream `{ability}` canonical admission unavailable: {err}"
         ))
     })?;
-    let admission_wire = easynet_axon::invocation::wire::receipt_to_wire(&admission_receipt)
-        .map_err(|error| {
+    let admission_wire =
+        axon_sdk::invocation::wire::receipt_to_wire(&admission_receipt).map_err(|error| {
             Status::failed_precondition(format!("CANONICAL_ADMISSION_PROJECTION_FAILED: {error}"))
         })?;
 
@@ -528,7 +540,7 @@ async fn project_local_runtime_stream(
                         None
                     };
                     if finalized.as_ref().is_some_and(|value| {
-                        value.terminal_state != easynet_axon::invocation::InvocationState::Completed
+                        value.terminal_state != axon_sdk::invocation::InvocationState::Completed
                             || value.failure.is_some()
                     }) {
                         let _ = tx
@@ -547,7 +559,7 @@ async fn project_local_runtime_stream(
                     let state = finalized
                         .as_ref()
                         .map(|value| value.terminal_state)
-                        .unwrap_or(easynet_axon::invocation::InvocationState::Running);
+                        .unwrap_or(axon_sdk::invocation::InvocationState::Running);
                     let frame_payload = frame.payload;
                     let frame_content_type = frame.content_type;
                     let payload = if terminal && frame_payload.is_empty() {
@@ -572,7 +584,7 @@ async fn project_local_runtime_stream(
                         frame_content_type
                     };
                     let terminal_receipt = match finalized.as_ref() {
-                        Some(value) => match easynet_axon::invocation::wire::receipt_to_wire(
+                        Some(value) => match axon_sdk::invocation::wire::receipt_to_wire(
                             &value.terminal_receipt,
                         ) {
                             Ok(receipt) => Some(receipt),
@@ -635,7 +647,7 @@ async fn project_local_runtime_stream(
                         }
                     };
                     let terminal_error = finalized.failure.as_ref().unwrap_or(&err);
-                    let terminal_receipt = match easynet_axon::invocation::wire::receipt_to_wire(
+                    let terminal_receipt = match axon_sdk::invocation::wire::receipt_to_wire(
                         &finalized.terminal_receipt,
                     ) {
                         Ok(receipt) => receipt,
@@ -663,9 +675,7 @@ async fn project_local_runtime_stream(
                         admission_receipt: (!admission_receipt_sent)
                             .then(|| admission_wire.clone()),
                         terminal_receipt: Some(terminal_receipt),
-                        error: Some(easynet_axon::invocation::wire::error_to_wire(
-                            terminal_error,
-                        )),
+                        error: Some(axon_sdk::invocation::wire::error_to_wire(terminal_error)),
                         ..InvokeStreamChunk::default()
                     };
                     let _ = tx.send(Ok(chunk)).await;
@@ -1024,12 +1034,12 @@ fn local_stream_target_ura(request: &InvokeServerStreamRequest) -> Result<String
 struct RemoteStreamChunkParts {
     invocation_id: String,
     selected_node_id: String,
-    state: easynet_axon::invocation::InvocationState,
+    state: axon_sdk::invocation::InvocationState,
     payload: Vec<u8>,
     sequence: u64,
     terminal: bool,
-    admission_receipt: Option<easynet_axon::pb::axon::v1::InvocationReceipt>,
-    terminal_receipt: Option<easynet_axon::pb::axon::v1::InvocationReceipt>,
+    admission_receipt: Option<axon_sdk::pb::axon::v1::InvocationReceipt>,
+    terminal_receipt: Option<axon_sdk::pb::axon::v1::InvocationReceipt>,
     error: Option<Error>,
 }
 

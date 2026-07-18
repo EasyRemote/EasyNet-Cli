@@ -2,6 +2,64 @@ use super::*;
 
 const TEST_BIDI_ABILITY: &str = "test.bidi";
 
+#[tokio::test]
+async fn exact_bidi_route_family_registers_hub_owned_session_open() {
+    let hub_ura = crate::core::ura::hub_ura("test-realm");
+    let service = make_unregistered_service_for_route_owner(&hub_ura);
+    service
+        .register_daemon_bidi_routes(&hub_ura)
+        .await
+        .expect("register Hub exact bidi route family");
+    let runtime = service
+        .runtime
+        .local_runtime()
+        .expect("test service has shared LocalRuntime");
+    let runtime_ability = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        &hub_ura,
+        ABILITY_SESSION_OPEN,
+    )
+    .expect("session.open runtime key");
+    let options = runtime
+        .ability_options(&runtime_ability)
+        .await
+        .expect("session.open runtime options");
+    assert!(matches!(
+        options.backpressure,
+        axon_sdk::invocation::BackpressurePolicy::Block { .. }
+    ));
+    let binding =
+        crate::daemon::invocation::dispatch::descriptor_binding::RuntimeBoundAbility::from_wire_target(
+            "daemon exact bidi registration test",
+            runtime.as_ref(),
+            &hub_ura,
+            ABILITY_SESSION_OPEN,
+        )
+        .await
+        .expect("session.open must be runtime-registered under the Hub");
+    assert!(binding.supports_mode(CallMode::Bidi));
+    binding
+        .descriptor_ref_for_mode(
+            "daemon exact bidi registration test",
+            &hub_ura,
+            CallMode::Bidi,
+            None,
+        )
+        .expect("session.open must retain its governed Bidi descriptor proof");
+}
+
+#[tokio::test]
+async fn exact_bidi_route_registration_rejects_device_owner() {
+    let service = make_unregistered_service_for_route_owner(TEST_DAEMON_URA);
+    let error = service
+        .register_daemon_bidi_routes(TEST_DAEMON_URA)
+        .await
+        .expect_err("session.open cannot register under a Device owner");
+    assert!(
+        error.to_string().contains("canonical realm Hub owner"),
+        "{error}"
+    );
+}
+
 fn forwarded_binary_chunk(frame: LocalBidiHandlerFrame) -> BinaryChunk {
     match frame {
         LocalBidiHandlerFrame::Forward(frame) => match (*frame).payload {
@@ -43,7 +101,14 @@ fn extract_envelope_open_returns_inner_for_envelope_open_frame() {
         ))),
     };
     let eo = extract_envelope_open(&frame).expect("extracted");
-    assert_eq!(eo.target.as_ref().unwrap().ability_name, TEST_BIDI_ABILITY);
+    assert_eq!(
+        crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+            "test bidi frame",
+            eo.target.as_ref(),
+        )
+        .unwrap(),
+        TEST_BIDI_ABILITY
+    );
 }
 
 #[test]
@@ -235,7 +300,7 @@ fn map_local_bidi_up_payload_translates_file_transfer_eof_control() {
     let mapped = map_local_bidi_up_payload(
         LocalBidiWireKind::FileTransfer,
         UpPayload::Control(BidiControl {
-            control: Some(easynet_axon::pb::axon::v1::bidi_control::Control::Eof(true)),
+            control: Some(axon_sdk::pb::axon::v1::bidi_control::Control::Eof(true)),
         }),
     );
     match mapped {
@@ -491,7 +556,7 @@ fn validate_session_realm_rejects_malformed_ura() {
 /// back to the retired JSON BidiOpen projection.
 #[tokio::test]
 async fn remote_bidi_open_frame_is_canonical_and_fail_closed() {
-    use easynet_axon::pb::axon::v1::EnvelopeOpen;
+    use axon_sdk::pb::axon::v1::EnvelopeOpen;
 
     let svc = make_service().with_session_realm("test-realm");
     let target_ura = "easynet:///r/test-realm/device/bidi-target";
@@ -513,19 +578,21 @@ async fn remote_bidi_open_frame_is_canonical_and_fail_closed() {
             &initial_args,
             &test_device_signing_key(),
         )),
+        target: Some(
+            wire_invocation_target(
+                test_descriptor_ref(target_ura, "remote_desktop.attach"),
+                "remote_desktop.attach",
+            )
+            .expect("typed descriptor target"),
+        ),
         initial_args,
-        metadata: std::collections::HashMap::from([(
-            crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-                .to_string(),
-            test_descriptor_ref(target_ura, "remote_desktop.attach"),
-        )]),
         ..Default::default()
     };
 
     let frame = build_remote_bidi_open_frame(7, &route, &envelope_open, CallMode::Bidi)
         .expect("canonical bidi frame builds");
     match frame.frame.payload.expect("payload") {
-        easynet_axon::pb::axon::v1::invoke_bidi_down::Payload::DispatchCall(call) => {
+        axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::DispatchCall(call) => {
             assert_eq!(call.call_id, 7);
             assert!(call.open_bidi, "bidi open must set open_bidi");
             let request = call

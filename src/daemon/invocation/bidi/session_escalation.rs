@@ -82,7 +82,7 @@ pub struct EscalationRequest {
 /// separate control-plane protocol used only for bootstrap, publication, and
 /// trust synchronization; it is not an Invocation compatibility path.
 pub enum EscalationInvocation {
-    Canonical(Box<easynet_axon::pb::axon::v1::InvokeRequest>),
+    Canonical(Box<axon_sdk::pb::axon::v1::InvokeRequest>),
     DaemonControl { ability_ura: String, args: Vec<u8> },
 }
 
@@ -91,7 +91,7 @@ pub enum EscalationInvocation {
 /// while daemon-owned control requests keep their separate JSON outcome.
 #[derive(Debug, Clone)]
 pub enum EscalationReply {
-    Canonical(Box<easynet_axon::pb::axon::v1::InvokeResponse>),
+    Canonical(Box<axon_sdk::pb::axon::v1::InvokeResponse>),
     Control(RequestOutcome),
     Error(SessionRequestError),
 }
@@ -111,8 +111,8 @@ impl SessionEscalationHandle {
     /// daemon-owned session without projecting or rebuilding any tuple field.
     pub async fn escalate_invoke(
         &self,
-        request: easynet_axon::pb::axon::v1::InvokeRequest,
-    ) -> Result<easynet_axon::pb::axon::v1::InvokeResponse, SessionRequestError> {
+        request: axon_sdk::pb::axon::v1::InvokeRequest,
+    ) -> Result<axon_sdk::pb::axon::v1::InvokeResponse, SessionRequestError> {
         match self
             .escalate_invocation(
                 EscalationInvocation::Canonical(Box::new(request)),
@@ -529,8 +529,8 @@ async fn send_escalation_request(
 ) -> Result<(), String> {
     match invocation {
         EscalationInvocation::Canonical(request) => {
-            use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
-            use easynet_axon::pb::axon::v1::ReverseDispatchCall;
+            use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+            use axon_sdk::pb::axon::v1::ReverseDispatchCall;
             up_tx
                 .send_payload(UpPayload::ReverseDispatchCall(ReverseDispatchCall {
                     call_id: call_id.to_vec(),
@@ -557,9 +557,9 @@ fn build_session_request_up_chunk(
     call_id: [u8; 16],
     ability_ura: &str,
     args: &[u8],
-) -> easynet_axon::pb::axon::v1::BinaryChunk {
+) -> axon_sdk::pb::axon::v1::BinaryChunk {
     use crate::daemon::invocation::bidi::session_wire::{SessionContentEnvelope, SessionDispatch};
-    use easynet_axon::pb::axon::v1::BinaryChunk;
+    use axon_sdk::pb::axon::v1::BinaryChunk;
 
     let dispatch = SessionDispatch::Request {
         call_id,
@@ -583,7 +583,7 @@ fn build_session_request_up_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easynet_axon::pb::axon::v1::InvokeBidiUp;
+    use axon_sdk::pb::axon::v1::InvokeBidiUp;
 
     #[tokio::test]
     async fn escalate_resolves_when_correlation_completes() {
@@ -591,7 +591,7 @@ mod tests {
         // up_rx, decodes the Request frame, and feeds the
         // matching RequestResult back into the correlation table.
         let correlation = EscalationCorrelation::new();
-        let (up_tx, mut up_rx) = mpsc::channel::<easynet_axon::pb::axon::v1::InvokeBidiUp>(8);
+        let (up_tx, mut up_rx) = mpsc::channel::<axon_sdk::pb::axon::v1::InvokeBidiUp>(8);
         let handle = spawn_escalation_consumer(
             Arc::clone(&correlation),
             SessionUpSender::new(up_tx),
@@ -601,7 +601,7 @@ mod tests {
         let correlation_for_hub = Arc::clone(&correlation);
         tokio::spawn(async move {
             while let Some(frame) = up_rx.recv().await {
-                use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+                use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
                 let chunk = match frame.payload {
                     Some(UpPayload::BinaryChunk(c)) => c,
                     _ => continue,
@@ -640,7 +640,7 @@ mod tests {
         // never decode/complete. The dispatch handler must surface
         // `UpstreamTimeout` rather than hanging forever.
         let correlation = EscalationCorrelation::new();
-        let (up_tx, _up_rx_held) = mpsc::channel::<easynet_axon::pb::axon::v1::InvokeBidiUp>(8);
+        let (up_tx, _up_rx_held) = mpsc::channel::<axon_sdk::pb::axon::v1::InvokeBidiUp>(8);
         let handle = spawn_escalation_consumer(
             Arc::clone(&correlation),
             SessionUpSender::new(up_tx),
@@ -666,7 +666,7 @@ mod tests {
     #[tokio::test]
     async fn escalate_surfaces_upstream_failure_when_up_channel_closes() {
         let correlation = EscalationCorrelation::new();
-        let (up_tx, up_rx) = mpsc::channel::<easynet_axon::pb::axon::v1::InvokeBidiUp>(8);
+        let (up_tx, up_rx) = mpsc::channel::<axon_sdk::pb::axon::v1::InvokeBidiUp>(8);
         // Drop the receiver immediately so the consumer's send
         // fails on the very first item.
         drop(up_rx);
@@ -788,7 +788,7 @@ mod tests {
         let correlation_for_hub = Arc::clone(&correlation);
         tokio::spawn(async move {
             while let Some(frame) = up_rx.recv().await {
-                use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+                use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
                 let chunk = match frame.payload {
                     Some(UpPayload::BinaryChunk(c)) => c,
                     _ => continue,

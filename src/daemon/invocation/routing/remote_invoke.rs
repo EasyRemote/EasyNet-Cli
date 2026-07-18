@@ -37,10 +37,11 @@ use serde_json::{json, Value};
 use crate::daemon::invocation::dispatch::forwarded_finalization::{
     ForwardedFinalizedInvocation, ForwardedInvocationBinding,
 };
-use crate::daemon::invocation::ProtoEnvelope;
-use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
-use easynet_axon::pb::axon::v1::{InvocationState as WireInvocationState, InvokeResponse};
-use easynet_axon::ura::{parse_ura, URAKind};
+use crate::daemon::invocation::{InvocationDerivationPolicy, ProtoEnvelope};
+use axon_sdk::invocation::CausalContext;
+use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
+use axon_sdk::pb::axon::v1::{InvocationState as WireInvocationState, InvokeResponse};
+use axon_sdk::ura::{parse_ura, URAKind};
 
 /// Validate a `--node` argument as a canonical Axon Device or Hub URA.
 /// Returns the URA string when it parses; surfaces a typed error
@@ -116,7 +117,6 @@ pub(crate) struct RemoteAbilityInvocationTarget {
     ability_ura: String,
     callee_ura: String,
     public_ability: String,
-    default_subject_ura: String,
     descriptor_ref: String,
 }
 
@@ -177,7 +177,7 @@ impl RemoteAbilityInvocationTarget {
         execution_target_ura: &str,
         descriptor_ref: &str,
     ) -> anyhow::Result<Self> {
-        let canonical = easynet_axon::invocation::canonical_ability_descriptor_ref(descriptor_ref)
+        let canonical = axon_sdk::invocation::canonical_ability_descriptor_ref(descriptor_ref)
             .map_err(|err| anyhow!("invalid descriptor-bound Ability ref: {err}"))?;
         let ability_ura =
             crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(&canonical)
@@ -206,7 +206,6 @@ impl RemoteAbilityInvocationTarget {
             ability_ura: ability_ura.trim().to_string(),
             callee_ura: selector.owner_ura().to_string(),
             public_ability: selector.public_name().to_string(),
-            default_subject_ura: default_subject_ura_for_selector(selector),
             descriptor_ref,
         }
     }
@@ -225,50 +224,67 @@ impl RemoteAbilityInvocationTarget {
         &self.descriptor_ref
     }
 
-    pub(crate) fn default_subject_ura(&self) -> &str {
-        &self.default_subject_ura
+    pub(crate) fn callee_ura(&self) -> &str {
+        &self.callee_ura
     }
 }
 
-pub(crate) fn invoke_remote_target(
-    target: &RemoteAbilityInvocationTarget,
+/// Complete caller-owned facts for one descriptor-bound remote invocation.
+///
+/// The selected target supplies only the descriptor-bound `ability` and
+/// `callee`. Every remaining semantic field is mandatory here so the transport
+/// cannot recover identities, invent causal placement, or mint freshness on
+/// behalf of a public/product caller.
+pub(crate) struct RemoteInvocationRequest<'a> {
+    target: &'a RemoteAbilityInvocationTarget,
+    caller_ura: String,
+    subject_ura: String,
+    invocation_nonce: [u8; 16],
+    causal_context: CausalContext,
     args: Value,
-    caller_ura: Option<&str>,
-) -> anyhow::Result<Value> {
-    invoke_remote_target_with_timeout(target, None, args, caller_ura, &[], Duration::from_secs(30))
-}
-
-/// Forward a device-targeted call while preserving the caller's causal
-/// lineage. Used by paths that are themselves dispatching an
-/// already-placed invocation (e.g. the EAL device branch), so the
-/// receipt DAG keeps real edges instead of re-rooting at the forward hop
-/// (refactor SPEC §15.1 item 1, seven-tuple invariant). Originating CLI
-/// commands keep calling [`invoke_remote_target`], which
-/// passes no parents.
-pub(crate) fn invoke_remote_target_with_causal_parents(
-    target: &RemoteAbilityInvocationTarget,
-    args: Value,
-    caller_ura: Option<&str>,
-    causal_parents: &[Value],
-) -> anyhow::Result<Value> {
-    invoke_remote_target_with_timeout(
-        target,
-        None,
-        args,
-        caller_ura,
-        causal_parents,
-        Duration::from_secs(30),
-    )
-}
-
-pub(crate) fn invoke_remote_target_with_timeout(
-    target: &RemoteAbilityInvocationTarget,
-    subject_ura: Option<&str>,
-    args: Value,
-    caller_ura: Option<&str>,
-    causal_parents: &[Value],
     timeout: Duration,
-) -> anyhow::Result<Value> {
+}
+
+impl<'a> RemoteInvocationRequest<'a> {
+    pub(crate) fn new(
+        target: &'a RemoteAbilityInvocationTarget,
+        caller_ura: impl Into<String>,
+        subject_ura: impl Into<String>,
+        invocation_nonce: [u8; 16],
+        causal_context: CausalContext,
+        args: Value,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        let caller_ura = checked_remote_invocation_ura(caller_ura.into(), "caller")?;
+        let subject_ura = checked_remote_invocation_ura(subject_ura.into(), "subject")?;
+        if invocation_nonce == [0; 16] {
+            bail!("remote invocation nonce must not be all-zero");
+        }
+        if timeout.is_zero() {
+            bail!("remote invocation timeout must be greater than zero");
+        }
+        Ok(Self {
+            target,
+            caller_ura,
+            subject_ura,
+            invocation_nonce,
+            causal_context,
+            args,
+            timeout,
+        })
+    }
+}
+
+pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyhow::Result<Value> {
+    let RemoteInvocationRequest {
+        target,
+        caller_ura,
+        subject_ura,
+        invocation_nonce,
+        causal_context,
+        args,
+        timeout,
+    } = request;
     let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
     if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
@@ -278,16 +294,7 @@ pub(crate) fn invoke_remote_target_with_timeout(
         );
     }
 
-    let caller_ura = resolve_remote_caller_ura(caller_ura)?;
-    let subject_ura = subject_ura
-        .map(str::trim)
-        .filter(|subject| !subject.is_empty())
-        .unwrap_or_else(|| target.default_subject_ura())
-        .to_string();
-    crate::core::ura::parse_ura(&subject_ura)
-        .map_err(|err| anyhow!("invalid remote invocation subject URA `{subject_ura}`: {err}"))?;
     let arguments = serde_json::to_vec(&args).context("serialise remote invocation arguments")?;
-    let causal_context = causal_context_from_parents(causal_parents)?;
     let timeout_seconds = i32::try_from(timeout.as_secs().max(1)).unwrap_or(i32::MAX);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -305,21 +312,27 @@ pub(crate) fn invoke_remote_target_with_timeout(
                  load or provision that identity in the local key service: {err}"
             )
         })?;
-        let mut request =
-            ProtoEnvelope::targeted(caller_ura.clone(), target.callee_ura.clone(), subject_ura)?
-                .with_causal_context(causal_context)
-                .signed_descriptor_ref_invoke_request_with_signer(
-                    target.as_str(),
-                    target.descriptor_ref(),
-                    arguments,
-                    &signer,
-                )
-                .await?;
+        let mut request = ProtoEnvelope::from_target(
+            caller_ura.clone(),
+            target.callee_ura.clone(),
+            subject_ura,
+            InvocationDerivationPolicy::Explicit {
+                invocation_nonce,
+                causal_context,
+            },
+        )?
+        .signed_descriptor_ref_invoke_request_with_signer(
+            target.as_str(),
+            target.descriptor_ref(),
+            arguments,
+            &signer,
+        )
+        .await?;
         request.content_type = "application/json".to_string();
-        request.content_envelope = Some(easynet_axon::pb::axon::v1::ContentEnvelope {
+        request.content_envelope = Some(axon_sdk::pb::axon::v1::ContentEnvelope {
             content_type: "application/json".to_string(),
             encoding: "identity".to_string(),
-            ..easynet_axon::pb::axon::v1::ContentEnvelope::default()
+            ..axon_sdk::pb::axon::v1::ContentEnvelope::default()
         });
         request.timeout_seconds = timeout_seconds;
         let response_binding =
@@ -357,89 +370,21 @@ pub(crate) fn invoke_remote_target_with_timeout(
     })
 }
 
-fn resolve_remote_caller_ura(explicit: Option<&str>) -> anyhow::Result<String> {
-    if let Some(caller) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
-        crate::core::ura::parse_ura(caller)
-            .map_err(|err| anyhow!("remote caller URA `{caller}` is invalid: {err}"))?;
-        return Ok(caller.to_string());
+fn checked_remote_invocation_ura(value: String, field: &str) -> anyhow::Result<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("remote invocation {field} URA must not be empty");
     }
-    let local_daemon = crate::daemon::identity::local_invocation::local_daemon_ura();
-    if crate::core::ura::parse_ura(&local_daemon).is_ok()
-        && !is_unpaired_local_device_ura(&local_daemon)
-    {
-        return Ok(local_daemon);
-    }
-    let credentials = crate::daemon::persistence::config::load_credentials().map_err(|err| {
-        anyhow!(
-            "remote invocation requires an explicit caller identity and signer; \
-             credentials could not provide one: {err}"
-        )
-    })?;
-    let realm = credentials.realm.trim();
-    let node_id = credentials.node_id.trim();
-    if realm.is_empty() || node_id.is_empty() {
-        bail!(
-            "remote invocation requires an explicit caller identity and signer; \
-             credentials.json is missing realm or node_id"
-        );
-    }
-    Ok(crate::core::ura::device_ura(realm, node_id))
-}
-
-fn is_unpaired_local_device_ura(ura: &str) -> bool {
-    ura == crate::core::ura::device_ura(
-        crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM,
-        crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_DEVICE_ID,
-    )
-}
-
-fn causal_context_from_parents(
-    causal_parents: &[Value],
-) -> anyhow::Result<easynet_axon::pb::axon::v1::CausalContext> {
-    use easynet_axon::pb::axon::v1::{
-        causal_context, CausalContext, Empty, ReceiptList, ReceiptRef,
-    };
-
-    let mut refs = Vec::with_capacity(causal_parents.len());
-    for (index, parent) in causal_parents.iter().enumerate() {
-        let receipt_ura = parent
-            .get("receipt_ura")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("causal parent #{index} is missing receipt_ura"))?;
-        let hash_hex = parent
-            .get("receipt_hash")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("causal parent #{index} is missing receipt_hash"))?;
-        let receipt_hash = hex::decode(hash_hex)
-            .with_context(|| format!("decode causal parent #{index} receipt_hash as hex"))?;
-        if receipt_hash.len() != 32 {
-            bail!(
-                "causal parent #{index} receipt_hash must decode to 32 bytes, got {}",
-                receipt_hash.len()
-            );
-        }
-        refs.push(ReceiptRef {
-            receipt_hash,
-            receipt_ura: receipt_ura.to_string(),
-        });
-    }
-    let form = match refs.len() {
-        0 => causal_context::Form::None(Empty {}),
-        1 => causal_context::Form::Scalar(refs.remove(0)),
-        _ => causal_context::Form::List(ReceiptList { prior: refs }),
-    };
-    Ok(CausalContext { form: Some(form) })
+    crate::core::ura::parse_ura(value)
+        .map_err(|err| anyhow!("remote invocation {field} URA `{value}` is invalid: {err}"))?;
+    Ok(value.to_string())
 }
 
 pub(crate) fn ensure_completed_invoke_response(
     surface: &str,
     body: &InvokeResponse,
 ) -> anyhow::Result<()> {
-    let completed = easynet_axon::invocation::InvocationState::Completed.to_wire_i32();
+    let completed = axon_sdk::invocation::InvocationState::Completed.to_wire_i32();
     if body.state == completed {
         return Ok(());
     }
@@ -490,7 +435,7 @@ fn verify_completed_remote_invoke_response(
                 status.message(),
             )
         })?;
-    if finalized.terminal_state == easynet_axon::invocation::InvocationState::Completed {
+    if finalized.terminal_state == axon_sdk::invocation::InvocationState::Completed {
         return Ok(finalized);
     }
 
@@ -628,14 +573,6 @@ fn validate_remote_execution_target(
     }
 }
 
-fn default_subject_ura_for_selector(selector: &crate::core::ura::AbilitySelector) -> String {
-    if selector.owner_kind() == "hub" {
-        selector.ability_ura().to_string()
-    } else {
-        selector.owner_ura().to_string()
-    }
-}
-
 fn validate_remote_target_ura(target_ura: &str) -> anyhow::Result<()> {
     let parsed = parse_ura(target_ura)
         .map_err(|err| anyhow::anyhow!("invalid target URA `{target_ura}`: {err}"))?;
@@ -696,10 +633,11 @@ pub fn invoke_federation_discover_filtered(
 
     let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura();
     let subject_ura = federation_discover_subject_ura(&local_daemon_ura)?;
-    let request = ProtoEnvelope::targeted(
+    let request = ProtoEnvelope::from_target(
         local_daemon_ura.as_str(),
         local_daemon_ura.as_str(),
         subject_ura.as_str(),
+        InvocationDerivationPolicy::FreshRoot,
     )?
     .invoke_request("federation.discover", arg_bytes)?;
 
@@ -708,7 +646,7 @@ pub fn invoke_federation_discover_filtered(
         .build()
         .context("build tokio runtime for federation.discover")?;
 
-    let response: easynet_axon::pb::axon::v1::InvokeResponse = {
+    let response: axon_sdk::pb::axon::v1::InvokeResponse = {
         runtime.block_on(async move {
             let channel = crate::support::platform::local_daemon_grpc::connect_channel(
                 socket_path.clone(),
@@ -781,10 +719,11 @@ pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result
     let arg_bytes = serde_json::to_vec(&req_args).context("encode revoke args")?;
 
     let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura();
-    let request = ProtoEnvelope::targeted(
+    let request = ProtoEnvelope::from_target(
         local_daemon_ura.as_str(),
         local_daemon_ura.as_str(),
         agent_ura,
+        InvocationDerivationPolicy::FreshRoot,
     )?
     .invoke_request("federation.revoke", arg_bytes)?;
 
@@ -817,7 +756,6 @@ pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easynet_axon::pb::axon::v1::causal_context::Form;
 
     #[test]
     fn parse_node_ura_accepts_protocol_hub_identity() {
@@ -859,55 +797,64 @@ mod tests {
     }
 
     #[test]
-    fn causal_parents_become_typed_receipt_list() {
-        let parents = vec![
-            serde_json::json!({
-                "receipt_ura": "easynet:///r/realm/resource/agent.alice.worker/invocation/inv-one/receipt",
-                "receipt_hash": "11".repeat(32),
-            }),
-            serde_json::json!({
-                "receipt_ura": "easynet:///r/realm/resource/agent.alice.worker/invocation/inv-two/receipt",
-                "receipt_hash": "22".repeat(32),
-            }),
-        ];
-        let context = causal_context_from_parents(&parents).expect("typed context");
-        let Some(Form::List(list)) = context.form else {
-            panic!("expected causal list");
-        };
-        assert_eq!(list.prior.len(), 2);
-        assert_eq!(list.prior[0].receipt_hash, vec![0x11; 32]);
+    fn remote_request_preserves_explicit_tuple_facts() {
+        let descriptor = "easynet:///r/realm/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
+            "easynet:///r/realm/device/node-a",
+            descriptor,
+        )
+        .expect("target");
+        let request = RemoteInvocationRequest::new(
+            &target,
+            "easynet:///r/realm/device/caller",
+            "easynet:///r/realm/resource/device.node-a/probe/alive",
+            [0x42; 16],
+            CausalContext::None,
+            json!({"probe": true}),
+            Duration::from_secs(7),
+        )
+        .expect("complete request");
+
+        assert_eq!(request.caller_ura, "easynet:///r/realm/device/caller");
+        assert_eq!(
+            request.subject_ura,
+            "easynet:///r/realm/resource/device.node-a/probe/alive"
+        );
+        assert_eq!(request.invocation_nonce, [0x42; 16]);
+        assert_eq!(request.causal_context, CausalContext::None);
+        assert_eq!(request.timeout, Duration::from_secs(7));
     }
 
     #[test]
-    fn remote_caller_defaults_to_discovered_hub_daemon_identity_without_credentials() {
-        let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let path = crate::daemon::control::discovery::default_path();
-        crate::daemon::control::discovery::write(
-            &path,
-            &crate::daemon::control::discovery::ControlDiscovery {
-                socket_path: None,
-                pipe_name: None,
-                invocation_endpoint: None,
-                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
-                    mode: "hub".to_string(),
-                    realm: "localhost".to_string(),
-                    node_id: None,
-                }),
-                pid: std::process::id(),
-                daemon_version: "test".to_string(),
-                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
-                    crate::daemon::control::discovery::IPC_VERSION_V1,
-                ),
-                capability_flags: Vec::new(),
-                pages_port: None,
-            },
+    fn remote_request_rejects_incomplete_tuple_facts() {
+        let descriptor = "easynet:///r/realm/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
+            "easynet:///r/realm/device/node-a",
+            descriptor,
         )
-        .expect("write hub discovery");
+        .expect("target");
 
-        assert_eq!(
-            resolve_remote_caller_ura(None).expect("hub caller"),
-            crate::core::ura::hub_ura("localhost")
+        let missing_caller = RemoteInvocationRequest::new(
+            &target,
+            "",
+            target.callee_ura(),
+            [0x11; 16],
+            CausalContext::None,
+            Value::Null,
+            Duration::from_secs(1),
         );
+        assert!(missing_caller.is_err());
+
+        let zero_nonce = RemoteInvocationRequest::new(
+            &target,
+            "easynet:///r/realm/device/caller",
+            target.callee_ura(),
+            [0; 16],
+            CausalContext::None,
+            Value::Null,
+            Duration::from_secs(1),
+        );
+        assert!(zero_nonce.is_err());
     }
 
     #[test]

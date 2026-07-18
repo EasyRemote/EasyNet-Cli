@@ -34,6 +34,7 @@ pub(crate) mod join;
 pub(crate) mod llm_api;
 pub mod mission_runs;
 pub(crate) mod pages;
+pub(crate) mod pairing_contract;
 pub(crate) mod quota_cmd;
 pub mod receipt_verification;
 pub(crate) mod reset;

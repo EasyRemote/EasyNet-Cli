@@ -48,9 +48,6 @@ use easynet_cli::daemon::control::{discovery, server};
 use easynet_cli::daemon::execution::loop_instance::KernelLoopInvocationDriver;
 use easynet_cli::daemon::execution::schedule::ScheduleService;
 use easynet_cli::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
-use easynet_cli::daemon::invocation::receipts::runtime_record::{
-    RuntimeCausalContext, RuntimeInvocation,
-};
 use easynet_cli::daemon::persistence::config;
 use easynet_cli::daemon::persistence::daemon_config::{
     default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig, DaemonMode,
@@ -316,8 +313,8 @@ async fn main() -> anyhow::Result<()> {
     // Kernel — silently breaking session.list / discuss.subscribe.
     // Snapshot the sub-service handles used by the tick runner. The
     // schedule handle reads due work; the kernel handle is the C*
-    // unity entry — the tick runner constructs a RuntimeInvocation and
-    // routes through Kernel::invoke.
+    // unity entry — the tick runner constructs an SDK descriptor-bound
+    // request and routes it through Kernel::invoke.
     let schedule_for_tick = kernel.schedule_service();
     let kernel_for_tick: Arc<Kernel> = Arc::clone(&kernel);
 
@@ -414,11 +411,21 @@ async fn main() -> anyhow::Result<()> {
         receipt_authority_config =
             receipt_authority_config.with_hosted_agent_inventory(device_ura, inventory);
     }
-    let local_runtime =
+    let runtime_trust_anchor = easynet_cli::daemon::trust::cell::SharedTrustAnchor::new(Arc::new(
+        easynet_cli::daemon::trust::anchor::RealmTrustAnchor::default(),
+    ));
+    let federation_runtime = easynet_cli::daemon::invocation::build_invocation_federation_runtime(
+        &daemon_config,
+        runtime_trust_anchor.clone(),
+    )
+    .context("build canonical invocation federation providers")?;
+    let daemon_runtime =
         easynet_cli::daemon::axon_bridge::runtime_factory::build_production_local_runtime(
             receipt_authority_config,
+            federation_runtime.trusted_identity_resolver(),
         )
         .map_err(|error| anyhow::anyhow!("build owner-bound Axon receipt runtime: {error}"))?;
+    let local_runtime = daemon_runtime.runtime();
     // **Phase 5c**. The `HotAgentRegistrar` cell is constructed
     // here so it can be shared between:
     //   * the registry's `agent.start` / `.stop` handler
@@ -442,6 +449,9 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(discover_ability::DeferredDiscoverFederationResolver::new());
     let discover_federation_resolver: discover_ability::SharedDiscoverFederationResolver =
         discover_federation_resolver_cell.clone();
+    let access_control_stores = Arc::new(
+        easynet_cli::daemon::persistence::access_control::AccessControlStoreRegistry::default(),
+    );
     let built_registry = ability_catalog::build_registry_for_daemon_result(
         ability_catalog::RegistryDaemonBuildConfig {
             services: ability_catalog::RegistryBuildServices::new(
@@ -451,7 +461,8 @@ async fn main() -> anyhow::Result<()> {
                 kernel.schedule_service(),
                 kernel.loop_service(),
             )
-            .with_discover_federation_resolver(Arc::clone(&discover_federation_resolver)),
+            .with_discover_federation_resolver(Arc::clone(&discover_federation_resolver))
+            .with_access_control_stores(Arc::clone(&access_control_stores)),
             invocation_ledger: invocation_ledger.clone(),
             loaders: None,
             pages_identity,
@@ -518,7 +529,7 @@ async fn main() -> anyhow::Result<()> {
     // execution itself goes through `local_runtime`.
     let _registry = Arc::clone(&registry);
 
-    // Daemon RuntimeInvocation transport: gRPC InvocationServer.
+    // Canonical daemon Invocation transport: gRPC InvocationServer.
     // Start this BEFORE any other daemon listener binds so
     // `daemon-config.toml` is validated at the top of the boot order
     // rather than after the control socket already exists. That preserves
@@ -533,8 +544,11 @@ async fn main() -> anyhow::Result<()> {
     let session_shutdown = {
         boot_bus.emit_started("daemon-invocation-transport");
         let dependencies = easynet_cli::daemon::invocation::InvocationTransportDependencies {
-            local_runtime: Arc::clone(&local_runtime),
+            daemon_runtime: daemon_runtime.clone(),
+            federation_runtime: federation_runtime.clone(),
+            runtime_trust_anchor: runtime_trust_anchor.clone(),
             local_ability_catalog: Arc::clone(&registry),
+            access_control_stores: Arc::clone(&access_control_stores),
             invocation_cancellations: built_registry.invocation_cancellations.clone(),
             invocation_ledger,
             hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
@@ -578,8 +592,8 @@ async fn main() -> anyhow::Result<()> {
     boot_bus.emit_ok("ability-health");
 
     // Schedule tick runner. Fires due schedules every TICK_PERIOD
-    // by constructing a RuntimeInvocation adapter record per fire and routing it
-    // through Kernel::invoke. The Kernel admits the Session,
+    // by constructing a canonical descriptor-bound request per fire and routing
+    // it through Kernel::invoke. The Kernel admits the Session,
     // dispatches the agent, and terminates — Clients subscribed
     // to session.attach see the same lifecycle they would
     // see for a Client-initiated invoke.
@@ -743,7 +757,7 @@ fn cleanup_control_discovery() {
     }
 }
 
-fn open_invocation_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLedger>> {
+fn open_invocation_ledger() -> Option<Arc<axon_sdk::invocation::InvocationLedger>> {
     let config = match DaemonConfig::load(&default_config_path()) {
         Ok(config) => config,
         Err(err) => {
@@ -752,7 +766,7 @@ fn open_invocation_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLe
         }
     };
     let path = config.ledger_dir().join("invocations.redb");
-    match easynet_axon::invocation::InvocationLedger::open(&path) {
+    match axon_sdk::invocation::InvocationLedger::open(&path) {
         Ok(ledger) => Some(Arc::new(ledger)),
         Err(err) => {
             eprintln!(
@@ -766,21 +780,21 @@ fn open_invocation_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLe
 
 /// Spawn the schedule tick runner. Every `TICK_PERIOD` it asks the
 /// ScheduleService for due fires and routes each through
-/// `Kernel::invoke` as a RuntimeInvocation adapter record:
+/// `Kernel::invoke` as an SDK descriptor-bound request:
 ///
 ///   ability       = "<target_agent>.chat"
-///   caller        = local node URA
+///   caller        = `_system.local`
 ///   callee        = local node URA (v1 single-node)
 ///   subject       = schedule URA
 ///   nonce         = fresh
-///   causal_context = Null   (v1; v2 will cite prior receipt)
+///   causal_context = None   (v1; v2 will cite a canonical prior receipt)
 ///   args          = { "prompt": "scheduled fire of <id> at <time>" }
 ///
-/// Kernel::invoke admits a Session keyed by invocation_id and
+/// Kernel::invoke admits a Session keyed by Axon's invocation id and
 /// emits the lifecycle events Clients subscribe to via
-/// session.attach. Failed agent dispatches surface as
-/// `Failed(reason)` Receipts — operators see the same diagnostic
-/// they would see if they dispatched the agent manually.
+/// session.attach. Failed agent dispatches surface through Axon's signed
+/// terminal receipt, so operators see the same diagnostic they would see if
+/// they dispatched the agent manually.
 ///
 /// v1 idempotency: an in-memory `last_fire_at` map keyed by
 /// `schedule_id` keeps a fire from re-emitting on the next tick if
@@ -851,18 +865,26 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                     &format!("schedule.{}", fire.schedule_id.as_str()),
                     "",
                 );
-                let inv = match RuntimeInvocation::try_new(
-                    local_device_ura.clone(),
-                    local_device_ura,
-                    format!("{}.chat", agent),
-                    schedule_subject_ura,
-                    RuntimeCausalContext::Null,
-                    serde_json::json!({"prompt": prompt}),
-                ) {
-                    Ok(inv) => inv,
+                let payload = match serde_json::to_vec(&serde_json::json!({"prompt": prompt})) {
+                    Ok(payload) => payload,
                     Err(err) => {
                         eprintln!(
-                            "[schedule-tick] invalid invocation for {}: {err:#}",
+                            "[schedule-tick] encode invocation for {}: {err:#}",
+                            fire.schedule_id
+                        );
+                        continue;
+                    }
+                };
+                let request = match kernel.prepare_local_system_rpc(
+                    &local_device_ura,
+                    &format!("{}.chat", agent),
+                    &schedule_subject_ura,
+                    payload,
+                ) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        eprintln!(
+                            "[schedule-tick] prepare canonical invocation for {}: {err:#}",
                             fire.schedule_id
                         );
                         continue;
@@ -873,11 +895,12 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                     fire.schedule_id, agent, fire.fire_at
                 );
                 let kernel_clone = Arc::clone(&kernel);
-                tokio::task::spawn_blocking(move || match kernel_clone.invoke(inv) {
-                    Ok(receipt) => {
+                tokio::task::spawn_blocking(move || match kernel_clone.invoke(request) {
+                    Ok(finalized) => {
                         eprintln!(
                             "[schedule-tick]   receipt {} → {:?}",
-                            receipt.invocation_id, receipt.terminal
+                            finalized.terminal_receipt.invocation_id(),
+                            finalized.terminal_state
                         );
                     }
                     Err(e) => {

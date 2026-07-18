@@ -1,12 +1,10 @@
 use super::*;
 
-use crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY;
 use crate::daemon::invocation::dispatch::unary_dispatcher::require_complete_signed_remote_request;
-use easynet_axon::pb::axon::v1::{causal_context, Empty};
+use axon_sdk::pb::axon::v1::{causal_context, Empty};
 
 const CALLER: &str = "easynet:///r/test-realm/device/caller";
 const CALLEE: &str = "easynet:///r/test-realm/device/target";
-const ABILITY_URA: &str = "easynet:///r/test-realm/ability/device.target.echo";
 
 fn complete_request() -> InvokeRequest {
     let descriptor_ref = test_descriptor_ref(CALLEE, "echo");
@@ -25,7 +23,7 @@ fn complete_request() -> InvokeRequest {
                 profile: "easynet-strict-v2".to_string(),
             }),
             invocation_nonce: vec![7; 16],
-            causal_context: Some(easynet_axon::pb::axon::v1::CausalContext {
+            causal_context: Some(axon_sdk::pb::axon::v1::CausalContext {
                 form: Some(causal_context::Form::None(Empty {})),
             }),
             caller_signature: Some(CallerSignature {
@@ -35,12 +33,11 @@ fn complete_request() -> InvokeRequest {
             }),
             ..Envelope::default()
         }),
-        function_name: ABILITY_URA.to_string(),
+        target: Some(
+            wire_invocation_target(&descriptor_ref, "echo").expect("typed descriptor target"),
+        ),
+        function_name: "echo".to_string(),
         arguments: br#"{"value":1}"#.to_vec(),
-        metadata: HashMap::from([(
-            SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(),
-            descriptor_ref,
-        )]),
         ..InvokeRequest::default()
     }
 }
@@ -48,6 +45,30 @@ fn complete_request() -> InvokeRequest {
 #[test]
 fn complete_descriptor_bound_request_is_relayable() {
     require_complete_signed_remote_request(&complete_request()).expect("complete request");
+}
+
+#[test]
+fn metadata_only_descriptor_ref_is_ignored() {
+    let mut request = complete_request();
+    let descriptor_ref = test_descriptor_ref(CALLEE, "echo");
+    request.target = None;
+    request
+        .metadata
+        .insert("x-product-proof".to_string(), descriptor_ref);
+
+    let status = require_complete_signed_remote_request(&request).unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("typed_target"));
+}
+
+#[test]
+fn route_only_typed_target_is_not_relayable() {
+    let mut request = complete_request();
+    request.target = Some(wire_invocation_target("echo", "echo").unwrap());
+
+    let status = require_complete_signed_remote_request(&request).unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("complete descriptor ref"));
 }
 
 #[test]
@@ -71,6 +92,6 @@ fn descriptor_owner_mismatch_fails_closed() {
         .unwrap()
         .ura = "easynet:///r/other-realm/device/other".to_string();
     let status = require_complete_signed_remote_request(&request).unwrap_err();
-    assert_eq!(status.code(), tonic::Code::PermissionDenied);
-    assert!(status.message().contains("does not match callee"));
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("complete descriptor ref"));
 }

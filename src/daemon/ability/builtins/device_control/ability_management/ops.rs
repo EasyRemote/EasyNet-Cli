@@ -973,7 +973,11 @@ mod tests {
                 let registrar = DeviceAbilityRegistrar::new_pending_with_store(
                     DeviceAbilityStore::open_at(store_path),
                 );
-                let local_runtime = easynet_axon::invocation::LocalRuntime::new();
+                let local_runtime =
+                    crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                        crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                        None,
+                    );
                 let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(
                     &local_runtime,
                 )));

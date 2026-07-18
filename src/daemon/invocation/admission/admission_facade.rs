@@ -1,88 +1,28 @@
-// EasyNet CLI — invocation_transport — transport policy gate facade
-// ==================================================
+// EasyNet CLI - daemon product admission policy
+// ==============================================
 //
 // File: src/daemon/invocation/admission_facade.rs
-// Description: Per-RPC transport/product policy gate applied before route
-//              selection or ability execution.
+// Description: Daemon-owned authorization and quota policy evaluated through
+//              Axon's canonical receipt-provider admission seam.
 //
 // Boundary note
 // -------------
-// This facade is not an Axon LocalRuntime "already admitted" boundary.
-// A successful `verify_*` result only means the daemon transport accepted
-// the caller for routing, quota, and delegation.
-// Any request that enters Axon `LocalRuntime` must still be reconstructed
-// as a descriptor-bound public request and admitted by Axon through
-// `DescriptorBoundInvocationRequest::{externally_signed,signed}`.
+// This module never verifies caller signatures and never owns nonce/replay
+// state. Transport dispatch stages product context, Axon verifies the
+// descriptor-bound invocation, and the canonical receipt provider calls this
+// policy exactly once before handler execution. Quota uses a reservation so a
+// later Axon replay rejection rolls the provisional count back.
 //
-// What this module does
-// ---------------------
-// 1. Reads the `Envelope` from an inbound `pb::axon::v1::InvokeRequest`
-//    (or its server-stream / bidi counterpart)
-// 2. **Local self admission**: callers presenting the daemon's own URA
-//    are accepted without crypto only on the local-only IPC boundary
-// 3. **Trust-anchor membership** (always): unknown caller URAs are
-//    rejected with `permission_denied` before any structural work,
-//    so unrelated callers cannot push entries into the replay store
-// 4. **Strict signed admission by `TrustedAgent.role`**:
-//      - **Device / Backend / Hub / User** → strict 4-step §5.2 pipeline
-//          a. `validate_envelope`            (RFC 001 §5.2 step 1)
-//          b. `validate_signature_structure` (RFC 001 §5.2 step 2)
-//          c. `verify_signature` against the trust-anchor-backed
-//             `KeyResolver`                  (RFC 001 §5.2 step 3)
-//          d. `NonceReplayStore::check_and_record` against the
-//             daemon-shared store            (RFC 001 §5.2 step 4)
-// 5. Returns `Ok(())` for accept and a `tonic::Status` for reject —
-//    the only outcomes the dispatcher needs
-
-// Why strict-everywhere for public callers
-// ----------------------------------------
-// The clean architecture has no unsigned Device compatibility arm.
-// Devices, backends, hubs, and users all enter
-// through signed Axon envelopes. Daemon-local self admission is
-// reserved for the daemon's own URA on the local-only IPC boundary; it is
-// not a public caller compatibility mechanism.
-//
-// What this module does NOT do (yet)
-// ----------------------------------
-// **Receipt emission** — RFC 001 §5.3 admission-emits-receipt. Per
-// DEC-012, receipt minting is deferred to PR-10 (production canary)
-// where the receipt store and the signing key are wired together.
-// PR-7 (this commit) intentionally leaves admission as a yes/no gate
-// — receipts on the InvokeResponse remain `None` for now.
-//
-// Invariants
-// ----------
-// **Invariant 1 (caller URA required)**: Every inbound RPC must
-// carry an `Envelope` with a non-empty `caller.ura`. The dispatcher
-// receives `Status::invalid_argument` for any RPC missing this; it
-// is a wire-level requirement, not a policy choice.
-//
-// **Invariant 2 (local self admission)**: When the caller URA matches
-// the daemon's configured URA, admission accepts without consulting
-// the trust anchor or the replay store. The daemon trusts itself —
-// runtime-local control abilities and admin RPCs originate from the daemon's
-// own process over local-only IPC and need not sign.
-//
-// **Invariant 3 (strict public crypto)**: Every external caller role
-// (`Device`, `Backend`, `Hub`, and `User`) runs the full §5.2 pipeline
-// end-to-end: a missing/malformed `caller_signature` rejects with
-// `CALLER_SIGNATURE_INVALID`; a signature that fails to verify against
-// the trust anchor's public-key entry rejects with the same reason; a
-// nonce already observed inside the dedup window rejects with
-// `CALLER_NONCE_REPLAYED`.
-//
-// **Invariant 4 (replay store mutation discipline)**: The replay
-// store is mutated only after `validate_envelope` and
-// `validate_signature_structure` both pass — malformed callers
-// can never pollute the store. This is a property of
-// `easynet_axon::invocation::admission::run_descriptor_bound_admission`, which
-// orders the four steps so structure failures short-circuit before
-// the nonce hits the map.
+// `_system.local` is the only unsigned classification and is accepted only
+// when the service is bound to a local-only transport. Every external caller
+// remains under Axon's signature, replay, lifecycle, and receipt authority.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
@@ -91,13 +31,15 @@ use serde::Deserialize;
 use sha2::Digest;
 use tonic::{Code, Status};
 
-use easynet_axon::invocation::admission::{
-    now_ms as axon_now_ms, run_descriptor_bound_admission, REASON_CALLER_SIGNATURE_INVALID,
-    REASON_ENVELOPE_INCOMPLETE, REASON_NONCE_REPLAY,
+use axon_sdk::invocation::admission::{
+    now_ms as axon_now_ms, REASON_CALLER_SIGNATURE_INVALID, REASON_ENVELOPE_INCOMPLETE,
+    REASON_NONCE_REPLAY,
 };
-use easynet_axon::invocation::axiom::{CallerSignature as AxiomCallerSignature, KeyResolver};
-use easynet_axon::invocation::{
-    AxonError as InvocationError, AxonErrorKind as InvocationErrorKind,
+use axon_sdk::invocation::axiom::{authority_proof_expected_hash, KeyResolver};
+use axon_sdk::invocation::{
+    AuthorityBinding, AxonError as InvocationError, AxonErrorKind as InvocationErrorKind,
+    CallMode as AxonCallMode, DelegationProofBody, DescriptorBoundEnvelope,
+    InvocationAuthorityProof, SessionAuthorityBody, VerifiedAdmissionPolicy,
 };
 
 use crate::core::ura::{owner_local_ability_name, parse_ura, AbilitySelector, URAKind};
@@ -107,9 +49,6 @@ use crate::daemon::ability::{
 use crate::daemon::axon_bridge::wire_descriptor::{
     descriptor_bound_from_wire_parts, WireDescriptorBoundEnvelope,
 };
-use crate::daemon::federation::client::FederationClient;
-use crate::daemon::federation::peers::SharedFederatedPeers;
-use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::authority_metadata::{
     self, AuthorityMetadataError, AuthoritySubjectKind, DelegationPayload, SessionAuthorityPayload,
     DELEGATION_METADATA_KEY, REASON_AUTHORITY_EXPIRED, REASON_AUTHORITY_FORMAT_INVALID,
@@ -125,15 +64,12 @@ use crate::daemon::invocation::admission::bootstrap_authority::{
 use crate::daemon::invocation::admission::decision::{
     AccessAction, PermissionRequestStatus, SignatureDecisionReason,
 };
-use crate::daemon::invocation::admission::federated_key_resolver::{
-    FederatedKeyResolver, SharedFederatedKeyCache,
-};
+use crate::daemon::invocation::admission::federated_key_resolver::FederatedKeyResolver;
 use crate::daemon::invocation::admission::grant_matcher::{
     GrantMatchInput, PermissionEffect, PermissionGrant, PermissionGrantMatcher,
 };
 use crate::daemon::invocation::admission::hosted_agent_publication::HostedAgentPublication;
 use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
-use crate::daemon::invocation::admission::nonce_replay::SharedNonceReplayStore;
 use crate::daemon::invocation::admission::policy_gate::{
     ability_ura_for, principal_for, AdmissionPolicyContext, AdmissionPolicyGate,
 };
@@ -142,20 +78,18 @@ use crate::daemon::invocation::admission::principal_lifecycle::{
 };
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
-use crate::daemon::invocation::admission::usage_quota::{QuotaDenyReason, SharedUsageQuotaGate};
+use crate::daemon::invocation::admission::usage_quota::{
+    QuotaDenyReason, QuotaReservation, SharedUsageQuotaGate,
+};
 use crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_ADVERTISE_AGENT;
 use crate::daemon::invocation::dispatch::federation_wrappers::{
     AdvertiseAgentRequest, ABILITY_FEDERATION_JOIN, ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
-use crate::daemon::invocation::dispatch::invocation_wire::{
-    AUTHORITY_PROOF_METADATA_KEY, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
-};
-use crate::daemon::persistence::access_control::AccessControlStore;
+use crate::daemon::invocation::dispatch::invocation_wire::AUTHORITY_PROOF_METADATA_KEY;
+use crate::daemon::persistence::access_control::{AccessControlStore, AccessControlStoreRegistry};
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
 use crate::daemon::trust::cell::SharedTrustAnchor;
-use easynet_axon::pb::axon::v1::{
-    Envelope, EnvelopeOpen, InvokeRequest, InvokeServerStreamRequest, RateLimitInfo,
-};
+use axon_sdk::pb::axon::v1::{Envelope, RateLimitInfo};
 
 const REASON_AUTHORITY_REQUIRED: &str = "AUTHORITY_REQUIRED";
 const REASON_AUTHORITY_SIGNATURE_INVALID: &str = "AUTHORITY_SIGNATURE_INVALID";
@@ -176,9 +110,6 @@ const REASON_CALLER_UNKNOWN: &str = "CALLER_UNKNOWN";
 /// - `Arc<RealmTrustAnchor>` — the trust set authored by PR-7's
 ///   pairing flow and read at boot by the daemon binary
 /// - `daemon_ura` — the daemon's own canonical URA (local self admission)
-/// - `replay_store` — the daemon-shared `SharedNonceReplayStore` used by
-///   legacy transport-wrapper strict policy checks. It is not a token that
-///   lets callers bypass Axon's LocalRuntime admission.
 ///
 /// Constructed once per daemon process; cloned into per-request
 /// dispatcher tasks (clone is cheap — all fields are `Arc` or
@@ -188,39 +119,11 @@ pub struct AdmissionFacade {
     trust_anchor: SharedTrustAnchor,
     daemon_ura: Option<String>,
     ability_catalog: Option<Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>>,
-    replay_store: SharedNonceReplayStore,
-    /// **PR-N2 commit 1/N**. Cross-hub federation client used by
-    /// `FederatedKeyResolver` to dial a peer hub's
-    /// `federation.resolve_key` ability when the local trust
-    /// anchor has no entry for a cross-realm caller URA. `None`
-    /// in single-realm/test builds — the resolver collapses to
-    /// local-only behavior in that case (mirrors PR-7's
-    /// `TrustAnchorKeyResolver`).
-    federation_client: Option<Arc<dyn FederationClient>>,
-    /// **PR-N2 commit 1/N**. Snapshot cell for the operator-
-    /// curated `[daemon.federated_peers]` table. Threaded into
-    /// `FederatedKeyResolver` so a SIGHUP-driven reload (PR-N1
-    /// commit 10/N) is visible to the next admission. Defaults
-    /// to an empty cell when no federation client is wired.
-    federated_peers: SharedFederatedPeers,
-    /// **PR-N2 commit 1/N**. The local realm string used for
-    /// the same-realm-vs-cross-realm decision in
-    /// `FederatedKeyResolver`. Derived from `daemon_ura` when
-    /// not supplied directly. `None` in test builds with no
-    /// daemon URA wired.
-    self_realm: Option<String>,
-    /// **C3b** TTL cache shared across every per-admission
-    /// `FederatedKeyResolver` instance. Without this share, the
-    /// per-call resolver would build a fresh empty cache and
-    /// the TTL would deliver zero savings. Boot-time SIGHUP
-    /// handler holds a clone too so a trust-anchor reload can
-    /// flush all cached cross-realm pubkeys atomically.
-    federated_key_cache: SharedFederatedKeyCache,
-    /// Owner-bound hub signing capability used only for outbound cross-hub
-    /// `federation.resolve_key` calls emitted by FederatedKeyResolver. `None`
-    /// represents a local-only facade; any attempted cross-hub call fails
-    /// closed in the peer signer.
-    hub_signer: Option<Arc<dyn CanonicalSigner>>,
+    /// The same immutable provider instance installed in Axon's canonical
+    /// admission graph. Product policy may classify federated callers and the
+    /// `federation.resolve_key` handler may delegate to it, but neither owns a
+    /// second signature-verification path.
+    federated_keys: Option<Arc<FederatedKeyResolver>>,
     /// Explicit transport authority for local self admission. The daemon
     /// serves the same Invocation service over local-only IPC and off-box
     /// TCP/TLS; this state prevents a caller that can reach TCP and spoof the
@@ -233,6 +136,10 @@ pub struct AdmissionFacade {
     /// remain exempt here because the daemon must not throttle its own runtime
     /// control surface.
     quota: SharedUsageQuotaGate,
+    /// Process-scoped RFC-014 repository graph shared with governance
+    /// abilities. Owner journals are opened once and all hash-chain mutations
+    /// are serialized by this component.
+    access_control_stores: Arc<AccessControlStoreRegistry>,
     /// Read-only view of the daemon-owned PrincipalLifecycle aggregate.
     /// Trust-anchor key presence proves a key is known; this reader proves
     /// whether the User principal itself is currently admissible. `None` is
@@ -269,21 +176,507 @@ impl AdmissionTransportBoundary {
     }
 }
 
-struct StrictSignatureGateInput<'a> {
-    envelope: &'a Envelope,
-    ability: &'a str,
-    args: &'a [u8],
-    metadata: Option<&'a HashMap<String, String>>,
-    trust_anchor: Arc<RealmTrustAnchor>,
-    trusted_role: TrustedAgentRole,
-    descriptor: BoundAdmissionDescriptor,
-}
-
 #[derive(Debug, Clone)]
 struct BoundAdmissionDescriptor {
-    descriptor_ref: String,
     action: AccessAction,
     safe_read: bool,
+}
+
+#[derive(Clone)]
+struct VerifiedSignedAuthority<T> {
+    payload: T,
+    canonical_payload: Vec<u8>,
+    signature: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct VerifiedProductAuthority {
+    authority_id: Option<String>,
+    binding: AuthorityBinding,
+    proof_type: &'static str,
+    proof_payload: Vec<u8>,
+}
+
+impl VerifiedProductAuthority {
+    fn self_authority(principal_ura: impl Into<String>) -> Self {
+        Self {
+            authority_id: None,
+            binding: AuthorityBinding::Self_ {
+                principal_ura: principal_ura.into(),
+            },
+            proof_type: "self-authority",
+            proof_payload: Vec::new(),
+        }
+    }
+
+    fn bootstrap(
+        envelope: &axon_sdk::invocation::InvocationEnvelope,
+        authority_id: Option<String>,
+    ) -> Result<Self, Status> {
+        let realm = parse_ura(&envelope.callee.ura)
+            .map_err(|error| {
+                Status::invalid_argument(format!(
+                    "bootstrap authority callee is not a canonical URA: {error}"
+                ))
+            })?
+            .realm;
+        Ok(Self {
+            authority_id,
+            binding: AuthorityBinding::Bootstrap {
+                principal_ura: envelope.caller.ura.clone(),
+                realm,
+                ability: envelope.ability.clone(),
+            },
+            proof_type: "bootstrap-authority",
+            proof_payload: Vec::new(),
+        })
+    }
+
+    fn delegated(verified: VerifiedSignedAuthority<DelegationPayload>) -> Result<Self, Status> {
+        let authority_id = verified_delegation_authority_id(&verified.payload)?;
+        Ok(Self {
+            authority_id: Some(authority_id),
+            binding: AuthorityBinding::Delegated(DelegationProofBody {
+                issuer_ura: verified.payload.issuer_ura,
+                subject_ura: verified.payload.subject_ura,
+                caller_ura: verified.payload.caller_ura,
+                audience: verified.payload.audience,
+                scopes: verified.payload.scopes,
+                issued_at_ms: verified.payload.issued_at_ms,
+                expires_at_ms: verified.payload.expires_at_ms,
+                signature: verified.signature,
+            }),
+            proof_type: "delegated-authority",
+            proof_payload: verified.canonical_payload,
+        })
+    }
+
+    fn session(verified: VerifiedSignedAuthority<SessionAuthorityPayload>) -> Result<Self, Status> {
+        let parsed_subject = parse_ura(&verified.payload.subject_ura).map_err(|error| {
+            Status::invalid_argument(format!(
+                "session authority subject is not a canonical URA: {error}"
+            ))
+        })?;
+        let user_ura = crate::core::ura::user_ura(
+            &parsed_subject.realm,
+            &verified.payload.session_owner_user_id,
+        );
+        Ok(Self {
+            authority_id: Some(verified_session_authority_id(&verified.payload)),
+            binding: AuthorityBinding::Session(SessionAuthorityBody {
+                backend_ura: verified.payload.issuer_ura,
+                user_ura,
+                session_id: verified.payload.session_id,
+                scopes: verified.payload.scopes,
+                audiences: vec![verified.payload.audience],
+                issued_at_ms: verified.payload.issued_at_ms,
+                expires_at_ms: verified.payload.expires_at_ms,
+                signature: verified.signature,
+            }),
+            proof_type: "session-authority",
+            proof_payload: verified.canonical_payload,
+        })
+    }
+
+    fn from_authority_proof(envelope: &Envelope, proof: &AuthorityProof) -> Result<Self, Status> {
+        let caller_ura = caller_ura_required(envelope)?.to_string();
+        let issued_at_ms = DateTime::parse_from_rfc3339(&proof.issued_at)
+            .map_err(|error| {
+                Status::invalid_argument(format!(
+                    "AUTHORITY_PROOF_MISMATCH: issued_at is not RFC3339: {error}"
+                ))
+            })?
+            .timestamp_millis();
+        let expires_at_ms = DateTime::parse_from_rfc3339(&proof.expires_at)
+            .map_err(|error| {
+                Status::invalid_argument(format!(
+                    "AUTHORITY_PROOF_MISMATCH: expires_at is not RFC3339: {error}"
+                ))
+            })?
+            .timestamp_millis();
+        let encoded_signature = proof
+            .signature
+            .trim()
+            .strip_prefix("ed25519:")
+            .unwrap_or_else(|| proof.signature.trim());
+        let signature = BASE64_STANDARD.decode(encoded_signature).map_err(|error| {
+            Status::invalid_argument(format!(
+                "AUTHORITY_PROOF_MISMATCH: signature is not base64: {error}"
+            ))
+        })?;
+        Ok(Self {
+            authority_id: Some(proof.proof_id.clone()),
+            binding: AuthorityBinding::Delegated(DelegationProofBody {
+                issuer_ura: proof.issuer_ura.clone(),
+                subject_ura: proof.subject_ura.clone(),
+                caller_ura,
+                audience: proof.audience_ura.clone(),
+                scopes: vec![proof.ability_ura.clone()],
+                issued_at_ms,
+                expires_at_ms,
+                signature,
+            }),
+            proof_type: "delegated-authority",
+            proof_payload: crate::daemon::ability::canonical_json_bytes(
+                &proof.canonical_material(),
+            ),
+        })
+    }
+
+    fn authority_id(&self) -> Option<&str> {
+        self.authority_id.as_deref()
+    }
+
+    fn authority_proof(&self, envelope: &DescriptorBoundEnvelope) -> InvocationAuthorityProof {
+        let mut proof = InvocationAuthorityProof::new(
+            self.proof_type,
+            Some(self.binding.clone()),
+            self.proof_payload.clone(),
+            [0u8; 32],
+            Some(envelope.envelope().callee.clone()),
+            None,
+            "easynet-cli.product_admission.v1",
+        );
+        proof.proof_hash = authority_proof_expected_hash(&proof);
+        proof
+    }
+
+    fn into_policy(
+        self,
+        envelope: &DescriptorBoundEnvelope,
+    ) -> Result<VerifiedAdmissionPolicy, InvocationError> {
+        let proof = self.authority_proof(envelope);
+        VerifiedAdmissionPolicy::new(envelope, self.binding, proof)
+    }
+}
+
+const MAX_PENDING_PRODUCT_ADMISSIONS: usize = 4_096;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProductAdmissionIngress {
+    CallerSigned,
+    ProvisionalBootstrap,
+    TrustedLocalSystem,
+}
+
+#[derive(Clone)]
+struct ProductAdmissionInput {
+    facade: AdmissionFacade,
+    envelope: Envelope,
+    ability: String,
+    arguments: Vec<u8>,
+    metadata: HashMap<String, String>,
+    call_mode: AxonCallMode,
+    ingress: ProductAdmissionIngress,
+}
+
+struct ProductAdmissionReservation {
+    quota: Option<QuotaReservation>,
+    rate_limit: Option<RateLimitInfo>,
+}
+
+struct ProductAdmissionDecision {
+    reservation: ProductAdmissionReservation,
+    policy: VerifiedAdmissionPolicy,
+}
+
+enum ProductAdmissionState {
+    Pending,
+    Evaluating,
+    Verified(ProductAdmissionReservation),
+    Denied,
+}
+
+struct PendingProductAdmission {
+    id: u64,
+    input: ProductAdmissionInput,
+    state: ProductAdmissionState,
+}
+
+#[derive(Default)]
+struct ProductAdmissionRegistry {
+    by_envelope: HashMap<[u8; 32], VecDeque<PendingProductAdmission>>,
+    len: usize,
+}
+
+/// Request-scoped bridge from daemon transport context to Axon's synchronous
+/// canonical receipt-provider admission seam.
+///
+/// The registry carries product-only facts that are not part of the canonical
+/// descriptor-bound envelope, such as request metadata and quota policy. It
+/// never verifies signatures and never stores nonce/replay state. Axon remains
+/// the sole owner of both decisions.
+#[derive(Default)]
+pub(crate) struct DaemonProductAdmissionCoordinator {
+    registry: Mutex<ProductAdmissionRegistry>,
+    next_id: AtomicU64,
+}
+
+impl DaemonProductAdmissionCoordinator {
+    pub(crate) fn stage(
+        self: &Arc<Self>,
+        facade: &AdmissionFacade,
+        wire: &crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
+        ability: &str,
+        call_mode: AxonCallMode,
+    ) -> Result<DaemonProductAdmissionLease, Status> {
+        let caller_signature = match &wire.ingress {
+            crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ExternalSigned(_) => {
+                Some(wire_caller_signature(wire)?)
+            }
+            crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ProvisionalBootstrap(
+                _,
+            ) => Some(wire_caller_signature(wire)?),
+            crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::LocalSystem => {
+                None
+            }
+        };
+        let ingress = match &wire.ingress {
+            crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ExternalSigned(_) => {
+                ProductAdmissionIngress::CallerSigned
+            }
+            crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ProvisionalBootstrap(
+                _,
+            ) => ProductAdmissionIngress::ProvisionalBootstrap,
+            crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::LocalSystem => {
+                ProductAdmissionIngress::TrustedLocalSystem
+            }
+        };
+        self.stage_canonical(
+            facade,
+            &wire.envelope,
+            caller_signature,
+            wire.payload.clone(),
+            wire.request_metadata.clone(),
+            wire.trace_id.clone(),
+            ability,
+            call_mode,
+            ingress,
+        )
+    }
+
+    fn stage_canonical(
+        self: &Arc<Self>,
+        facade: &AdmissionFacade,
+        descriptor_bound: &DescriptorBoundEnvelope,
+        caller_signature: Option<axon_sdk::invocation::CallerSignature>,
+        arguments: Vec<u8>,
+        metadata: HashMap<String, String>,
+        request_id: String,
+        ability: &str,
+        call_mode: AxonCallMode,
+        ingress: ProductAdmissionIngress,
+    ) -> Result<DaemonProductAdmissionLease, Status> {
+        let envelope_key = axon_sdk::invocation::sha256(&descriptor_bound.canonical_bytes());
+        let envelope =
+            product_policy_envelope(descriptor_bound.envelope(), caller_signature, request_id)?;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let mut registry = self.registry.lock().map_err(|_| {
+            Status::internal("daemon product admission registry lock poisoned while staging")
+        })?;
+        if registry.len >= MAX_PENDING_PRODUCT_ADMISSIONS {
+            return Err(Status::resource_exhausted(
+                "daemon product admission registry is saturated",
+            ));
+        }
+        registry
+            .by_envelope
+            .entry(envelope_key)
+            .or_default()
+            .push_back(PendingProductAdmission {
+                id,
+                input: ProductAdmissionInput {
+                    facade: facade.clone(),
+                    envelope,
+                    ability: ability.to_string(),
+                    arguments,
+                    metadata,
+                    call_mode,
+                    ingress,
+                },
+                state: ProductAdmissionState::Pending,
+            });
+        registry.len += 1;
+        Ok(DaemonProductAdmissionLease {
+            coordinator: Arc::clone(self),
+            envelope_key,
+            id: Some(id),
+        })
+    }
+
+    fn stage_derived(
+        self: &Arc<Self>,
+        facade: &AdmissionFacade,
+        descriptor_bound: &DescriptorBoundEnvelope,
+        signed_envelope: &axon_sdk::invocation::SignedEnvelope,
+        arguments: Vec<u8>,
+        metadata: HashMap<String, String>,
+        request_id: String,
+        ability: &str,
+        call_mode: AxonCallMode,
+    ) -> Result<DaemonProductAdmissionLease, Status> {
+        let signed_descriptor_bound =
+            DescriptorBoundEnvelope::new(signed_envelope.envelope.clone()).map_err(|error| {
+                Status::invalid_argument(format!(
+                    "derived product admission signed envelope is not descriptor-bound: {error}"
+                ))
+            })?;
+        if descriptor_bound.canonical_bytes() != signed_descriptor_bound.canonical_bytes() {
+            return Err(Status::invalid_argument(
+                "derived product admission signed envelope does not match descriptor-bound request",
+            ));
+        }
+        self.stage_canonical(
+            facade,
+            descriptor_bound,
+            Some(signed_envelope.signature.clone()),
+            arguments,
+            metadata,
+            request_id,
+            ability,
+            call_mode,
+            ProductAdmissionIngress::CallerSigned,
+        )
+    }
+
+    pub(crate) fn verify_provider_policy(
+        &self,
+        envelope: &DescriptorBoundEnvelope,
+    ) -> Result<VerifiedAdmissionPolicy, InvocationError> {
+        let envelope_key = axon_sdk::invocation::sha256(&envelope.canonical_bytes());
+        let selected = {
+            let mut registry = self.registry.lock().map_err(|_| {
+                InvocationError::internal(
+                    "daemon_product_admission_registry_lock_poisoned_while_verifying",
+                )
+            })?;
+            let Some(queue) = registry.by_envelope.get_mut(&envelope_key) else {
+                return Err(InvocationError::permission_denied(
+                    "daemon_product_admission_context_missing",
+                ));
+            };
+            let pending = queue
+                .iter_mut()
+                .find(|pending| matches!(pending.state, ProductAdmissionState::Pending))
+                .ok_or_else(|| {
+                    InvocationError::permission_denied(
+                        "daemon_product_admission_context_not_pending",
+                    )
+                })?;
+            pending.state = ProductAdmissionState::Evaluating;
+            (pending.id, pending.input.clone())
+        };
+
+        let (id, input) = selected;
+        let result = input
+            .facade
+            .reserve_product_admission(&input, envelope)
+            .map_err(product_admission_status_to_axon);
+
+        let mut registry = self.registry.lock().map_err(|_| {
+            InvocationError::internal(
+                "daemon_product_admission_registry_lock_poisoned_after_verification",
+            )
+        })?;
+        let queue = registry.by_envelope.get_mut(&envelope_key).ok_or_else(|| {
+            InvocationError::internal("daemon_product_admission_context_removed_while_verifying")
+        })?;
+        let pending = queue
+            .iter_mut()
+            .find(|pending| pending.id == id)
+            .ok_or_else(|| {
+                InvocationError::internal(
+                    "daemon_product_admission_context_id_removed_while_verifying",
+                )
+            })?;
+        match result {
+            Ok(decision) => {
+                pending.state = ProductAdmissionState::Verified(decision.reservation);
+                Ok(decision.policy)
+            }
+            Err(error) => {
+                pending.state = ProductAdmissionState::Denied;
+                Err(error)
+            }
+        }
+    }
+
+    fn finish(
+        &self,
+        envelope_key: [u8; 32],
+        id: u64,
+        commit: bool,
+    ) -> Result<Option<RateLimitInfo>, Status> {
+        let state = {
+            let mut registry = self.registry.lock().map_err(|_| {
+                Status::internal("daemon product admission registry lock poisoned while finishing")
+            })?;
+            let (state, remove_key) = {
+                let queue = registry.by_envelope.get_mut(&envelope_key).ok_or_else(|| {
+                    Status::internal("daemon product admission lease has no staged context")
+                })?;
+                let offset = queue
+                    .iter()
+                    .position(|pending| pending.id == id)
+                    .ok_or_else(|| {
+                        Status::internal("daemon product admission lease id is not staged")
+                    })?;
+                let pending = queue
+                    .remove(offset)
+                    .expect("located daemon product admission must remain in queue");
+                (pending.state, queue.is_empty())
+            };
+            registry.len = registry.len.saturating_sub(1);
+            if remove_key {
+                registry.by_envelope.remove(&envelope_key);
+            }
+            state
+        };
+
+        match (commit, state) {
+            (true, ProductAdmissionState::Verified(reservation)) => {
+                if let Some(quota) = reservation.quota {
+                    quota.commit();
+                }
+                Ok(reservation.rate_limit)
+            }
+            (false, _) => Ok(None),
+            (true, ProductAdmissionState::Denied) => Err(Status::permission_denied(
+                "daemon product admission was denied before runtime launch",
+            )),
+            (true, ProductAdmissionState::Pending | ProductAdmissionState::Evaluating) => {
+                Err(Status::internal(
+                    "daemon product admission did not reach a terminal policy decision",
+                ))
+            }
+        }
+    }
+}
+
+/// Owns one staged product-policy transaction until LocalRuntime either
+/// returns an admitted handle or rejects before handler execution.
+pub(crate) struct DaemonProductAdmissionLease {
+    coordinator: Arc<DaemonProductAdmissionCoordinator>,
+    envelope_key: [u8; 32],
+    id: Option<u64>,
+}
+
+impl DaemonProductAdmissionLease {
+    pub(crate) fn commit(mut self) -> Result<Option<RateLimitInfo>, Status> {
+        let id = self
+            .id
+            .take()
+            .ok_or_else(|| Status::internal("daemon product admission lease already finished"))?;
+        self.coordinator.finish(self.envelope_key, id, true)
+    }
+}
+
+impl Drop for DaemonProductAdmissionLease {
+    fn drop(&mut self) {
+        if let Some(id) = self.id.take() {
+            let _ = self.coordinator.finish(self.envelope_key, id, false);
+        }
+    }
 }
 
 struct AuthorityProofMetadataInput<'a> {
@@ -301,22 +694,16 @@ impl std::fmt::Debug for AdmissionFacade {
         f.debug_struct("AdmissionFacade")
             .field("trust_anchor", &self.trust_anchor)
             .field("daemon_ura", &self.daemon_ura)
-            .field("replay_store", &self.replay_store)
             .field(
-                "federation_client",
+                "federated_keys",
                 &self
-                    .federation_client
+                    .federated_keys
                     .as_ref()
-                    .map(|_| "<dyn FederationClient>"),
-            )
-            .field("federated_peers", &self.federated_peers)
-            .field("self_realm", &self.self_realm)
-            .field(
-                "hub_signer",
-                &self.hub_signer.as_ref().map(|signer| signer.owner_ura()),
+                    .map(|_| "<FederatedKeyResolver>"),
             )
             .field("transport_boundary", &self.transport_boundary)
             .field("quota_configured", &self.quota.policy().is_some())
+            .field("access_control_stores", &"<AccessControlStoreRegistry>")
             .field(
                 "principal_lifecycle",
                 &self.principal_lifecycle.as_ref().map(|_| "wired"),
@@ -339,10 +726,6 @@ impl AdmissionFacade {
     /// hold a `SharedTrustAnchor` and need to share it with the
     /// register handler should use `with_trust_anchor_cell` instead.
     ///
-    /// The replay store is created fresh per facade — production
-    /// builds one facade per daemon process, so this is also one
-    /// store per daemon process (RFC 001 §5.2 step 4 invariant: one
-    /// shared dedup window across the daemon's lifetime).
     #[must_use]
     pub fn new(trust_anchor: Arc<RealmTrustAnchor>, daemon_ura: Option<String>) -> Self {
         Self::with_trust_anchor_cell(SharedTrustAnchor::new(trust_anchor), daemon_ura)
@@ -358,23 +741,30 @@ impl AdmissionFacade {
         trust_anchor: SharedTrustAnchor,
         daemon_ura: Option<String>,
     ) -> Self {
-        let self_realm = daemon_ura.as_deref().and_then(
-            crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura,
-        );
         Self {
             trust_anchor,
             daemon_ura,
             ability_catalog: None,
-            replay_store: SharedNonceReplayStore::new(),
-            federation_client: None,
-            federated_peers: SharedFederatedPeers::new(std::collections::BTreeMap::new()),
-            self_realm,
-            federated_key_cache: SharedFederatedKeyCache::new(),
-            hub_signer: None,
+            federated_keys: None,
             transport_boundary: AdmissionTransportBoundary::LocalOnlyIpc,
             quota: SharedUsageQuotaGate::disabled(),
+            access_control_stores: default_access_control_stores(),
             principal_lifecycle: None,
         }
+    }
+
+    /// Bind product admission to the same policy-store registry used by the
+    /// governance ability catalog.
+    #[must_use]
+    pub fn with_access_control_stores(mut self, stores: Arc<AccessControlStoreRegistry>) -> Self {
+        self.access_control_stores = stores;
+        self
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn access_control_stores(&self) -> Arc<AccessControlStoreRegistry> {
+        Arc::clone(&self.access_control_stores)
     }
 
     /// Bind admission to the same live descriptor catalog used for dispatch.
@@ -398,7 +788,7 @@ impl AdmissionFacade {
                 "ADMISSION_DESCRIPTOR_CATALOG_UNAVAILABLE: admission has no live ability catalog",
             )
         })?;
-        let ability = registry_ability_name_from_route(ability);
+        let public_ability = public_ability_name_from_route(ability);
         let signed_ability_ura =
             crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
                 descriptor_ref,
@@ -409,65 +799,57 @@ impl AdmissionFacade {
                 "ADMISSION_DESCRIPTOR_ROUTE_MISMATCH: signed descriptor ability `{signed_ability_ura}` is not canonical: {error}"
             ))
         })?;
-        if selector.local_registry_ability() != ability {
+        if selector.public_name() != public_ability {
             return Err(Status::invalid_argument(format!(
-                "ADMISSION_DESCRIPTOR_ROUTE_MISMATCH: signed descriptor ability `{}` does not match bound route `{ability}`",
-                selector.local_registry_ability()
+                "ADMISSION_DESCRIPTOR_ROUTE_MISMATCH: signed descriptor public ability `{}` does not match bound public route `{public_ability}`",
+                selector.public_name()
             )));
         }
         let owner = crate::daemon::axon_bridge::descriptor_ref::catalog_owner_kind_for_wire(
             selector.owner_ura(),
         )
         .map_err(axon_error_to_status)?;
-        let mut matches = catalog
-            .authority_ability_catalog_snapshot()
-            .into_iter()
-            .filter(|row| row.owner == owner)
-            .filter(|row| row.name == ability)
-            .filter(|row| row.descriptor.public_name() == selector.public_name())
-            .filter(|row| row.descriptor.call_mode() == call_mode);
-        let descriptor = matches
-            .next()
-            .ok_or_else(|| {
-                Status::failed_precondition(format!(
-                    "ADMISSION_DESCRIPTOR_MISSING: no bound descriptor for owner {:?} ability {ability:?} {call_mode:?}",
+        let descriptor = catalog
+            .public_descriptor_for_mode(&owner, &public_ability, call_mode)
+            .map_err(|error| match error {
+                crate::daemon::ability::dispatch::PublicDescriptorLookupError::Missing {
+                    ..
+                } => Status::failed_precondition(format!(
+                    "ADMISSION_DESCRIPTOR_MISSING: no bound descriptor for owner {:?} public ability {public_ability:?} {call_mode:?}",
                     owner
-                ))
+                )),
+                crate::daemon::ability::dispatch::PublicDescriptorLookupError::Ambiguous {
+                    ..
+                } => Status::failed_precondition(format!(
+                    "ADMISSION_DESCRIPTOR_AMBIGUOUS: owner {:?} public ability {public_ability:?} {call_mode:?}",
+                    owner
+                )),
             })?
-            .descriptor
             .rebind_owner_ura(selector.owner_ura())
             .map_err(|error| {
                 Status::failed_precondition(format!(
-                    "ADMISSION_DESCRIPTOR_BINDING_INVALID: bound {ability:?} descriptor cannot bind to owner `{}`: {error}",
+                    "ADMISSION_DESCRIPTOR_BINDING_INVALID: bound {public_ability:?} descriptor cannot bind to owner `{}`: {error}",
                     selector.owner_ura()
                 ))
             })?;
-        if matches.next().is_some() {
-            return Err(Status::failed_precondition(format!(
-                "ADMISSION_DESCRIPTOR_AMBIGUOUS: owner {:?} ability {ability:?} {call_mode:?}",
-                owner
-            )));
-        }
         let signed_version =
-            easynet_axon::invocation::descriptor_version_from_descriptor_ref(descriptor_ref)
+            axon_sdk::invocation::descriptor_version_from_descriptor_ref(descriptor_ref)
                 .map_err(axon_error_to_status)?;
-        let signed_hash =
-            easynet_axon::invocation::descriptor_hash_from_descriptor_ref(descriptor_ref)
-                .map_err(axon_error_to_status)?;
+        let signed_hash = axon_sdk::invocation::descriptor_hash_from_descriptor_ref(descriptor_ref)
+            .map_err(axon_error_to_status)?;
         let signed_action =
-            easynet_axon::invocation::admission_action_from_descriptor_ref(descriptor_ref)
+            axon_sdk::invocation::admission_action_from_descriptor_ref(descriptor_ref)
                 .map_err(axon_error_to_status)?;
         if signed_version != descriptor.version
             || signed_hash != descriptor.descriptor_hash_bytes()
             || signed_action != descriptor.admission_action().as_str()
         {
             return Err(Status::failed_precondition(format!(
-                "ADMISSION_DESCRIPTOR_BINDING_MISMATCH: signed descriptor does not match the bound {ability:?} contract"
+                "ADMISSION_DESCRIPTOR_BINDING_MISMATCH: signed descriptor does not match the bound {public_ability:?} contract"
             )));
         }
         let action = descriptor.admission_action().into();
         Ok(BoundAdmissionDescriptor {
-            descriptor_ref: descriptor_ref.to_string(),
             action,
             safe_read: action == AccessAction::Read,
         })
@@ -488,7 +870,7 @@ impl AdmissionFacade {
     /// authority used by strict invocation admission. Forwarding adapters use
     /// this to authenticate remote callee/host receipt signatures; they must
     /// not construct a transport-local key table.
-    pub(crate) fn receipt_key_resolver(&self) -> Arc<dyn easynet_axon::invocation::KeyResolver> {
+    pub(crate) fn receipt_key_resolver(&self) -> Arc<dyn axon_sdk::invocation::KeyResolver> {
         Arc::new(
             crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
                 self.trust_anchor.clone(),
@@ -509,19 +891,17 @@ impl AdmissionFacade {
         agent_ura: &str,
         presented_pubkey_b64: Option<&str>,
     ) -> Result<Option<String>, Status> {
-        let mut resolver = FederatedKeyResolver::new(
-            self.trust_anchor_snapshot(),
-            self.federation_client.clone(),
-            self.federated_peers.snapshot(),
-            self.self_realm.clone(),
-        )
-        .with_cache(self.federated_key_cache.clone());
-        if let Some(signer) = self.hub_signer.as_ref() {
-            resolver = resolver.with_hub_signer(Arc::clone(signer));
-        }
-        if let Some(pubkey) = presented_pubkey_b64.filter(|value| !value.is_empty()) {
-            resolver = resolver.with_presented_pubkey_b64(pubkey.to_string());
-        }
+        let Some(resolver) = self.federated_keys.as_ref() else {
+            return Ok(None);
+        };
+        let resolver = presented_pubkey_b64
+            .filter(|value| !value.is_empty())
+            .map_or_else(
+                || Arc::clone(resolver),
+                |pubkey| {
+                    Arc::new(resolver.request_scoped_with_presented_pubkey_b64(pubkey.to_string()))
+                },
+            );
         match resolver.resolve(agent_ura) {
             Ok(key) => {
                 crate::op_event!(
@@ -592,180 +972,82 @@ impl AdmissionFacade {
         self
     }
 
-    /// #185: meter a caller that already passed this transport policy
-    /// gate. MUST be called only after `verify_invoke` has returned `Ok`
-    /// for this request.
-    ///
-    /// Returns:
-    /// - `Ok(None)` — no metering applies (quota off, the caller is
-    ///   the daemon's own local self URA, or the caller is
-    ///   unmetered by policy). The response carries no `RateLimitInfo`.
-    /// - `Ok(Some(info))` — the call is within budget; `info` is the
-    ///   post-decrement quota status to surface on the response.
-    /// - `Err(status)` — the window budget is exhausted, the bounded
-    ///   store is saturated, or the key material violates the quota
-    ///   key-size contract. Exhaustion/saturation use
-    ///   `ResourceExhausted`; key contract violations use
-    ///   `InvalidArgument`.
-    pub fn check_quota(&self, request: &InvokeRequest) -> Result<Option<RateLimitInfo>, Status> {
-        let ability = request.function_name.as_str();
-        let Some(envelope) = request.envelope.as_ref() else {
-            return Ok(None);
-        };
-        let caller_ura = caller_ura_required(envelope)?;
-
-        // The daemon never meters itself on the local-only IPC boundary:
-        // runtime-local control abilities and admin RPCs use the same
-        // admission predicate as the transport policy gate.
-        if self.accepts_local_self_caller(caller_ura) {
-            return Ok(None);
-        }
-
-        let Some(decision) = self
-            .quota
-            .check_and_record(caller_ura, ability, axon_now_ms())
-        else {
-            return Ok(None);
-        };
-
-        if decision.allowed {
-            let info = RateLimitInfo {
-                quota_remaining: decision.quota_remaining,
-                quota_limit: decision.quota_limit,
-                reset_at_unix_ms: decision.reset_at_unix_ms,
-                retry_after_ms: decision.retry_after_ms,
-            };
-            return Ok(Some(info));
-        }
-        match decision.deny_reason {
-            Some(QuotaDenyReason::KeyTooLarge) => Err(Status::invalid_argument(format!(
-                "REQUEST_METADATA_INVALID: quota key too large caller={caller_ura} ability={ability}"
-            ))),
-            Some(QuotaDenyReason::StoreSaturated) => Err(Status::resource_exhausted(format!(
-                "RESOURCE_EXHAUSTED: quota store saturated caller={caller_ura} ability={ability} retry_after_ms={}",
-                decision.retry_after_ms
-            ))),
-            Some(QuotaDenyReason::BudgetExhausted) | None => {
-                Err(Status::resource_exhausted(format!(
-                    "QUOTA_EXCEEDED: caller={caller_ura} ability={ability} retry_after_ms={}",
-                    decision.retry_after_ms
-                )))
-            }
-        }
-    }
-
-    /// Snapshot the shared federated-key cache. Boot-time SIGHUP
-    /// handler clones this and calls `.flush()` after a
-    /// trust-anchor reload so a key rotation propagates without
-    /// waiting for the per-entry TTL to elapse.
-    #[must_use]
-    pub fn federated_key_cache(&self) -> SharedFederatedKeyCache {
-        self.federated_key_cache.clone()
-    }
-
-    /// Construct a facade with a caller-supplied replay store. Used
-    /// by tests that need to drive multiple facades against a single
-    /// shared store, and reserved for the eventual PR-10 work that
-    /// might split admission across listeners but keep one daemon-
-    /// wide replay window.
-    #[must_use]
-    pub fn with_replay_store(
-        trust_anchor: Arc<RealmTrustAnchor>,
-        daemon_ura: Option<String>,
-        replay_store: SharedNonceReplayStore,
-    ) -> Self {
-        let self_realm = daemon_ura.as_deref().and_then(
-            crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura,
-        );
-        Self {
-            trust_anchor: SharedTrustAnchor::new(trust_anchor),
-            daemon_ura,
-            ability_catalog: None,
-            replay_store,
-            federation_client: None,
-            federated_peers: SharedFederatedPeers::new(std::collections::BTreeMap::new()),
-            self_realm,
-            federated_key_cache: SharedFederatedKeyCache::new(),
-            hub_signer: None,
-            transport_boundary: AdmissionTransportBoundary::LocalOnlyIpc,
-            quota: SharedUsageQuotaGate::disabled(),
-            principal_lifecycle: None,
-        }
-    }
-
-    /// **PR-N2 commit 1/N**. Builder seam: wire the cross-hub
-    /// federation client + operator-curated federated_peers
-    /// cell. When set, the strict admission path constructs a
-    /// `FederatedKeyResolver` instead of `TrustAnchorKeyResolver`,
-    /// which means a cross-realm caller whose URA is missing
-    /// from the local trust anchor falls through to a
-    /// `federation.resolve_key` ability call against the peer
-    /// hub mapped by `federated_peers[caller_realm]`.
-    ///
-    /// Production daemons call this in
-    /// `start_daemon_invocation_transport` after wiring the dialer; test
-    /// / smoke setups omit it and behave as PR-7
-    /// `TrustAnchorKeyResolver` did (local-only).
-    #[must_use]
-    pub fn with_federation(
-        mut self,
-        federation_client: Arc<dyn FederationClient>,
-        federated_peers: SharedFederatedPeers,
-    ) -> Self {
-        self.federation_client = Some(federation_client);
-        self.federated_peers = federated_peers;
-        self
-    }
-
-    /// Attach the owner-bound hub signer used when admission has to ask a peer
-    /// hub for a cross-realm caller key. The key-resolver path is part of
-    /// strict admission, so the resolve-key request itself must be a signed
-    /// hub-to-hub invocation.
-    #[must_use]
-    pub fn with_hub_signer(mut self, signer: Arc<dyn CanonicalSigner>) -> Self {
-        self.hub_signer = Some(signer);
-        self
-    }
-
-    /// Verify a unary `InvokeRequest`. Returns `Ok(())` when the
-    /// caller passes this daemon transport policy gate; otherwise a
-    /// `tonic::Status` mapped per the rule set in
-    /// `run_transport_policy_gate`.
-    pub fn verify_invoke(&self, request: &InvokeRequest) -> Result<(), Status> {
-        let envelope = request
-            .envelope
-            .as_ref()
-            .ok_or_else(|| Status::invalid_argument("Invoke request missing envelope"))?;
-        self.run_transport_policy_gate(
-            envelope,
-            &request.function_name,
-            &request.arguments,
-            Some(&request.metadata),
-            crate::daemon::ability::CallMode::Rpc,
-        )
-    }
-
-    /// Apply daemon-owned authorization policy after Axon `LocalRuntime` has
-    /// already performed canonical signature verification and nonce replay
-    /// admission for this exact descriptor-bound invocation.
-    ///
-    /// This method deliberately does not verify the caller signature or touch
-    /// the facade replay store. It derives only product authorization facts
-    /// from the runtime-admitted envelope, so `LocalRuntime` remains the sole
-    /// admission/replay authority for callers of this entry point.
-    pub(crate) fn verify_runtime_admitted_invoke(
+    fn reserve_product_admission(
         &self,
-        envelope: &Envelope,
-        ability: &str,
-        args: &[u8],
-        metadata: Option<&HashMap<String, String>>,
-    ) -> Result<(), Status> {
-        let caller_ura = caller_ura_required(envelope)?;
-        if self.accepts_local_self_caller(caller_ura)
-            || (ability == ABILITY_FEDERATION_JOIN
-                && caller_ura == crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA)
-        {
-            return Ok(());
+        input: &ProductAdmissionInput,
+        admitted_envelope: &DescriptorBoundEnvelope,
+    ) -> Result<ProductAdmissionDecision, Status> {
+        let descriptor_ref = admitted_envelope.envelope().ability.as_str();
+        ensure_signed_descriptor_ref_matches_route(&input.envelope, &input.ability, descriptor_ref)
+            .map_err(|status| {
+                self.signature_denied_status(&input.envelope, &input.ability, status)
+            })?;
+        let descriptor_bound = descriptor_bound_from_wire_parts(
+            input.envelope.clone(),
+            descriptor_ref.to_string(),
+            &input.arguments,
+        )
+        .map_err(axon_error_to_status)
+        .map_err(|status| self.signature_denied_status(&input.envelope, &input.ability, status))?;
+        if descriptor_bound.envelope.canonical_bytes() != admitted_envelope.canonical_bytes() {
+            return Err(self.signature_denied_status(
+                &input.envelope,
+                &input.ability,
+                Status::permission_denied(
+                    "ADMISSION_DESCRIPTOR_BINDING_MISMATCH: staged product context does not bind the runtime envelope",
+                ),
+            ));
+        }
+        let descriptor = self.bound_admission_descriptor(
+            &input.ability,
+            daemon_call_mode(input.call_mode),
+            descriptor_ref,
+        )?;
+        let caller_ura = caller_ura_required(&input.envelope)?;
+
+        match input.ingress {
+            ProductAdmissionIngress::TrustedLocalSystem => {
+                if caller_ura != crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
+                    return Err(Status::permission_denied(
+                        "trusted local-system admission requires exact `_system.local` caller",
+                    ));
+                }
+                return product_admission_decision(
+                    admitted_envelope,
+                    VerifiedProductAuthority::self_authority(caller_ura),
+                    ProductAdmissionReservation {
+                        quota: None,
+                        rate_limit: None,
+                    },
+                );
+            }
+            ProductAdmissionIngress::ProvisionalBootstrap => {
+                Self::verify_provisional_federation_join(
+                    &input.envelope,
+                    &input.ability,
+                    &input.arguments,
+                )?;
+                reject_public_hosted_agent_delegation_metadata(Some(&input.metadata))?;
+                if descriptor.action != AccessAction::Manage {
+                    return Err(self.authority_denied_status(
+                        &input.envelope,
+                        &input.ability,
+                        Status::permission_denied(format!(
+                            "{REASON_AUTHORITY_REQUIRED}: bootstrap ability `{}` must declare manage admission action",
+                            input.ability
+                        )),
+                    ));
+                }
+                return product_admission_decision(
+                    admitted_envelope,
+                    VerifiedProductAuthority::bootstrap(admitted_envelope.envelope(), None)?,
+                    ProductAdmissionReservation {
+                        quota: None,
+                        rate_limit: None,
+                    },
+                );
+            }
+            ProductAdmissionIngress::CallerSigned => {}
         }
 
         let trust_anchor = self.trust_anchor.snapshot();
@@ -774,372 +1056,87 @@ impl AdmissionFacade {
             None if self.is_federated_caller(caller_ura) => federated_caller_role(caller_ura)
                 .ok_or_else(|| {
                     self.signature_denied_status(
-                        envelope,
-                        ability,
+                        &input.envelope,
+                        &input.ability,
                         permission_denied_unknown_caller(caller_ura),
                     )
                 })?,
             None => {
                 return Err(self.signature_denied_status(
-                    envelope,
-                    ability,
+                    &input.envelope,
+                    &input.ability,
                     permission_denied_unknown_caller(caller_ura),
                 ));
             }
         };
-        reject_public_hosted_agent_delegation_metadata(metadata)?;
-        let signed_descriptor_ref = signed_descriptor_ref_from_metadata(ability, metadata)
-            .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-        ensure_signed_descriptor_ref_matches_route(envelope, ability, &signed_descriptor_ref)
-            .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-        let descriptor_bound =
-            descriptor_bound_from_wire_parts(envelope.clone(), signed_descriptor_ref, args)
-                .map_err(axon_error_to_status)
-                .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-
-        let descriptor = self.bound_admission_descriptor(
-            ability,
-            crate::daemon::ability::CallMode::Rpc,
-            descriptor_bound.envelope.envelope().ability.as_str(),
-        )?;
-        self.enforce_runtime_admitted_policy(
-            envelope,
-            ability,
-            args,
-            metadata,
+        reject_public_hosted_agent_delegation_metadata(Some(&input.metadata))?;
+        let authority = self.enforce_runtime_admitted_policy(
+            &input.envelope,
+            &input.ability,
+            &input.arguments,
+            Some(&input.metadata),
             trust_anchor,
             trusted_role,
             descriptor.action,
             descriptor.safe_read,
             &descriptor_bound,
-        )
-    }
-
-    /// Apply daemon-owned product checks for a request that Axon already
-    /// admitted through `AuthorityBinding::Bootstrap`.
-    ///
-    /// Bootstrap callers are not trust-anchor members yet; requiring a normal
-    /// caller lookup here deadlocks the join flow that creates that membership.
-    /// The route adapter has already verified the provisional signature against
-    /// the join public key, and Axon has recorded nonce admission. This method
-    /// keeps only the product-visible tuple and descriptor invariants.
-    pub(crate) fn verify_runtime_admitted_bootstrap_invoke(
-        &self,
-        envelope: &Envelope,
-        ability: &str,
-        args: &[u8],
-        metadata: Option<&HashMap<String, String>>,
-    ) -> Result<(), Status> {
-        Self::verify_provisional_federation_join(envelope, ability, args)?;
-        reject_public_hosted_agent_delegation_metadata(metadata)?;
-        let signed_descriptor_ref = signed_descriptor_ref_from_metadata(ability, metadata)
-            .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-        ensure_signed_descriptor_ref_matches_route(envelope, ability, &signed_descriptor_ref)
-            .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-        let descriptor_bound =
-            descriptor_bound_from_wire_parts(envelope.clone(), signed_descriptor_ref, args)
-                .map_err(axon_error_to_status)
-                .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-        let descriptor = self.bound_admission_descriptor(
-            ability,
-            crate::daemon::ability::CallMode::Rpc,
-            descriptor_bound.envelope.envelope().ability.as_str(),
         )?;
-        if descriptor.action != AccessAction::Manage {
-            return Err(self.authority_denied_status(
-                envelope,
-                ability,
-                Status::permission_denied(format!(
-                    "{REASON_AUTHORITY_REQUIRED}: bootstrap ability `{ability}` must declare manage admission action"
-                )),
-            ));
-        }
-        Ok(())
-    }
 
-    /// Verify a server-stream `InvokeServerStreamRequest`. Same transport
-    /// policy rule set as `verify_invoke`; the differing wrapper is just
-    /// the proto type.
-    pub fn verify_invoke_stream(&self, request: &InvokeServerStreamRequest) -> Result<(), Status> {
-        let envelope = request
-            .envelope
-            .as_ref()
-            .ok_or_else(|| Status::invalid_argument("InvokeStream request missing envelope"))?;
-        self.run_transport_policy_gate(
-            envelope,
-            &request.function_name,
-            &request.arguments,
-            Some(&request.metadata),
-            crate::daemon::ability::CallMode::Stream,
-        )
-    }
-
-    /// Verify the frame-0 `EnvelopeOpen` of an InvokeBidi stream.
-    /// The bidi path's "ability" is `target.ability_name`, and the
-    /// "args" feed for `args_digest` is `initial_args`. If either
-    /// is missing the gate rejects with `invalid_argument`.
-    pub fn verify_envelope_for_bidi(&self, open: &EnvelopeOpen) -> Result<(), Status> {
-        let envelope = open
-            .envelope
-            .as_ref()
-            .ok_or_else(|| Status::invalid_argument("InvokeBidi frame 0 missing envelope"))?;
-        let ability = open
-            .target
-            .as_ref()
-            .map(|t| t.ability_name.as_str())
-            .filter(|n| !n.is_empty())
-            .ok_or_else(|| {
-                Status::invalid_argument(
-                    "InvokeBidi frame 0 missing target.ability_name; cannot dispatch",
-                )
-            })?;
-        self.run_transport_policy_gate(
-            envelope,
-            ability,
-            &open.initial_args,
-            Some(&open.metadata),
-            crate::daemon::ability::CallMode::Bidi,
-        )
-    }
-
-    // ── Internal pipeline ────────────────────────────────────────
-
-    /// Strict public transport policy gate.
-    ///
-    /// Order:
-    /// 1. Caller URA required (Invariant 1).
-    /// 2. Local self admission (Invariant 2).
-    /// 3. Trust-anchor membership: unknown URA → `permission_denied`.
-    /// 4. Device, Backend, Hub, and User roles all run the strict
-    ///    4-step §5.2 signature/replay pipeline.
-    fn run_transport_policy_gate(
-        &self,
-        envelope: &Envelope,
-        ability: &str,
-        args: &[u8],
-        metadata: Option<&HashMap<String, String>>,
-        call_mode: crate::daemon::ability::CallMode,
-    ) -> Result<(), Status> {
-        let caller_ura = caller_ura_required(envelope)?;
-
-        if caller_ura.starts_with("provisional:") {
-            return Self::verify_provisional_federation_join(envelope, ability, args);
-        }
-
-        // Invariant 2: local self admission. Daemon trusts itself only on the
-        // local-only IPC boundary.
-        if self.accepts_local_self_caller(caller_ura) {
-            return Ok(());
-        }
-        let route_ability = registry_ability_name_from_route(ability);
-
-        // Snapshot the trust anchor once per RPC. The snapshot is a
-        // cheap `Arc` clone; concurrent writers to the cell don't
-        // disturb the view we hold for the lookup + downstream
-        // resolver use. This is the structural reason the cell
-        // exists: a register-pubkey call mid-RPC can't make the
-        // current admission see a half-applied state.
-        let snapshot = self.trust_anchor.snapshot();
-
-        // Trust-anchor membership precedes any structural check.
-        // Unknown callers reject with `permission_denied` — the
-        // DEC-013 entry contract says "URA-not-in-trust-set" surfaces
-        // before any attempt at envelope/signature parsing, so an
-        // unrelated caller cannot waste structure-validation cycles
-        // and never has its (possibly malformed) nonce considered.
-        //
-        // **PR-N2 commit 1/N — cross-realm extension**. When the
-        // caller is in a *federated* realm (its realm is mapped in
-        // `federated_peers` AND differs from `self_realm`), the
-        // local trust anchor will NOT have an entry: the caller's
-        // identity is gated by the peer hub, not by us. In that
-        // case we route to the strict admission path with the
-        // FederatedKeyResolver, which dials the peer's
-        // `federation.resolve_key` to fetch the verifying key and
-        // runs the same RFC 001 §5.2 4-step verify. This preserves
-        // INV-1 (federated trust gate is *operator-explicit*: only
-        // realms the operator listed in `federated_peers` can
-        // bypass the local-membership reject) while opening the
-        // cross-realm signed-admission door.
-        let trusted = match snapshot.lookup(caller_ura) {
-            Some(entry) => entry,
-            None => {
-                if self.is_federated_caller(caller_ura) {
-                    let trusted_role = federated_caller_role(caller_ura).ok_or_else(|| {
-                        self.signature_denied_status(
-                            envelope,
-                            ability,
-                            permission_denied_unknown_caller(caller_ura),
-                        )
-                    })?;
-                    reject_public_hosted_agent_delegation_metadata(metadata)?;
-                    reject_missing_or_malformed_caller_signature(envelope).map_err(|status| {
-                        self.signature_denied_status(envelope, ability, status)
-                    })?;
-                    let signed_descriptor_ref = signed_descriptor_ref_from_metadata(
-                        ability, metadata,
-                    )
-                    .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-                    ensure_signed_descriptor_ref_matches_route(
-                        envelope,
-                        ability,
-                        &signed_descriptor_ref,
-                    )
-                    .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-                    let descriptor = self.bound_admission_descriptor(
-                        ability,
-                        call_mode,
-                        &signed_descriptor_ref,
-                    )?;
-                    self.run_strict_signature_gate(StrictSignatureGateInput {
-                        envelope,
-                        ability: &route_ability,
-                        args,
-                        metadata,
-                        trust_anchor: snapshot,
-                        trusted_role,
-                        descriptor: descriptor.clone(),
-                    })?;
-                    return Ok(());
-                }
-                return Err(self.signature_denied_status(
-                    envelope,
-                    ability,
-                    permission_denied_unknown_caller(caller_ura),
-                ));
-            }
-        };
-
-        match trusted.role {
-            // Public callers all run strict 4-step admission. The
-            // strict path resolves the caller's public key against
-            // the same snapshot we just consulted for membership —
-            // keeping "membership hit" and "key resolved" tied to
-            // the same trust-anchor version.
-            TrustedAgentRole::Device
-            | TrustedAgentRole::Backend
-            | TrustedAgentRole::Hub
-            | TrustedAgentRole::User => {
-                let trusted_role = trusted.role;
-                reject_public_hosted_agent_delegation_metadata(metadata)?;
-                reject_missing_or_malformed_caller_signature(envelope)
-                    .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-                let signed_descriptor_ref = signed_descriptor_ref_from_metadata(ability, metadata)
-                    .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-                ensure_signed_descriptor_ref_matches_route(
-                    envelope,
-                    ability,
-                    &signed_descriptor_ref,
-                )
-                .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-                let descriptor =
-                    self.bound_admission_descriptor(ability, call_mode, &signed_descriptor_ref)?;
-                self.run_strict_signature_gate(StrictSignatureGateInput {
-                    envelope,
-                    ability: &route_ability,
-                    args,
-                    metadata,
-                    trust_anchor: snapshot,
-                    trusted_role,
-                    descriptor,
-                })?;
-                Ok(())
-            }
-        }
-    }
-
-    /// Strict §5.2 signature/replay policy for public caller roles.
-    /// Bridges proto → descriptor-bound Axon domain types and dispatches
-    /// into `easynet_axon::invocation::admission::run_descriptor_bound_admission`
-    /// with a snapshot-backed `KeyResolver` and the daemon-shared replay
-    /// store. This must verify the same canonical bytes later consumed by
-    /// LocalRuntime; the daemon does not maintain a second signature dialect.
-    fn run_strict_signature_gate(&self, input: StrictSignatureGateInput<'_>) -> Result<(), Status> {
-        let StrictSignatureGateInput {
-            envelope,
-            ability,
-            args,
-            metadata,
-            trust_anchor,
-            trusted_role,
-            descriptor,
-        } = input;
-        if ability.is_empty() {
-            return Err(Status::invalid_argument(
-                "envelope present but ability/function_name is empty; cannot run admission",
-            ));
-        }
-        reject_missing_or_malformed_caller_signature(envelope)
-            .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-
-        let descriptor_bound = descriptor_bound_from_wire_parts(
-            envelope.clone(),
-            descriptor.descriptor_ref.clone(),
-            args,
-        )
-        .map_err(axon_error_to_status)
-        .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-        let axiom_signature = build_axiom_signature(envelope.caller_signature.as_ref())
-            .map_err(axon_error_to_status)
-            .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-
-        // DEC-EU §multi-device. User URAs are 1:N, so the resolver must
-        // key local and cross-realm lookup on the envelope-presented
-        // public key. FederatedKeyResolver now owns both paths: same-realm
-        // user calls pin against `lookup_user_by_pubkey`; cross-realm user
-        // calls forward `presented_pubkey_b64` to the peer hub's
-        // `federation.resolve_key` handler. Non-user callers keep the
-        // existing one-key local-first behavior.
-        let mut federated_resolver = FederatedKeyResolver::new(
-            Arc::clone(&trust_anchor),
-            self.federation_client.clone(),
-            self.federated_peers.snapshot(),
-            self.self_realm.clone(),
-        )
-        .with_cache(self.federated_key_cache.clone());
-        if let Some(signer) = self.hub_signer.as_ref() {
-            federated_resolver = federated_resolver.with_hub_signer(Arc::clone(signer));
-        }
-        if envelope_caller_is_user(envelope) {
-            federated_resolver = federated_resolver
-                .with_presented_pubkey_b64(envelope_presented_pubkey_b64(envelope));
-        }
-        let resolver: Box<dyn KeyResolver> = Box::new(federated_resolver);
-
-        let result = self.replay_store.with_inner(|store| {
-            run_descriptor_bound_admission(
-                &descriptor_bound.envelope,
-                &axiom_signature,
-                Some(resolver.as_ref()),
-                store,
-                axon_now_ms(),
+        if input.call_mode != AxonCallMode::Rpc
+            || !crate::daemon::invocation::admission::quota_meter::quota_meters_function(
+                &input.ability,
             )
-        });
-
-        match result {
-            // Phase 5a: SharedReceiptStore is gone. Successful
-            // admission no longer drops a synthetic
-            // `SignedInvocationReceipt` into an in-memory ring buffer;
-            // operators observe accepted invocations via the
-            // `LedgerSink`-installed `InvocationLedger` at
-            // terminal time, and rejected invocations via
-            // `op_event!` audit lines + the wire-level error
-            // their gRPC client sees.
-            Ok(()) => self.enforce_runtime_admitted_policy(
-                envelope,
-                ability,
-                args,
-                metadata,
-                trust_anchor,
-                trusted_role,
-                descriptor.action,
-                descriptor.safe_read,
-                &descriptor_bound,
-            ),
-            Err(err) => {
-                Err(self.signature_denied_status(envelope, ability, axon_error_to_status(err)))
-            }
+        {
+            return product_admission_decision(
+                admitted_envelope,
+                authority,
+                ProductAdmissionReservation {
+                    quota: None,
+                    rate_limit: None,
+                },
+            );
         }
+        let Some(quota) = self
+            .quota
+            .reserve(caller_ura, &input.ability, axon_now_ms())
+        else {
+            return product_admission_decision(
+                admitted_envelope,
+                authority,
+                ProductAdmissionReservation {
+                    quota: None,
+                    rate_limit: None,
+                },
+            );
+        };
+        let decision = quota.decision();
+        if !decision.allowed {
+            let status = quota_denied_status(caller_ura, &input.ability, decision);
+            drop(quota);
+            return Err(status);
+        }
+        product_admission_decision(
+            admitted_envelope,
+            authority,
+            ProductAdmissionReservation {
+                quota: Some(quota),
+                rate_limit: Some(RateLimitInfo {
+                    quota_remaining: decision.quota_remaining,
+                    quota_limit: decision.quota_limit,
+                    reset_at_unix_ms: decision.reset_at_unix_ms,
+                    retry_after_ms: decision.retry_after_ms,
+                }),
+            },
+        )
+    }
+
+    /// Attach the exact federated key provider already installed in Axon's
+    /// canonical admission graph. The facade may classify policy context and
+    /// serve resolve-key projections through it, but cannot replace it.
+    #[must_use]
+    pub fn with_federated_key_resolver(mut self, resolver: Arc<FederatedKeyResolver>) -> Self {
+        self.federated_keys = Some(resolver);
+        self
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1154,13 +1151,13 @@ impl AdmissionFacade {
         action: AccessAction,
         safe_read: bool,
         descriptor_bound: &WireDescriptorBoundEnvelope,
-    ) -> Result<(), Status> {
+    ) -> Result<VerifiedProductAuthority, Status> {
         self.enforce_principal_lifecycle_admission(envelope, ability, trusted_role)
             .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
         if bootstrap_authority_ability(ability) {
-            return Ok(());
+            return VerifiedProductAuthority::bootstrap(descriptor_bound.envelope.envelope(), None);
         }
-        let delegation_authority_id = verify_delegation_metadata(
+        let metadata_authority = verify_delegation_metadata(
             envelope,
             ability,
             action,
@@ -1169,7 +1166,19 @@ impl AdmissionFacade {
             axon_now_ms(),
         )
         .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
-        let authority_proof_id = self
+        let carries_authority_proof = metadata
+            .and_then(|values| values.get(AUTHORITY_PROOF_METADATA_KEY))
+            .is_some_and(|value| !value.trim().is_empty());
+        if metadata_authority.is_some() && carries_authority_proof {
+            return Err(self.authority_denied_status(
+                envelope,
+                ability,
+                Status::invalid_argument(format!(
+                    "{REASON_AUTHORITY_FORMAT_INVALID}: invocation carries multiple independent authority proofs"
+                )),
+            ));
+        }
+        let authority_proof_authority = self
             .verify_authority_proof_metadata(AuthorityProofMetadataInput {
                 envelope,
                 ability,
@@ -1200,10 +1209,17 @@ impl AdmissionFacade {
                 trust_anchor.as_ref(),
             )
             .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
-        let verified_authority_id = authority_proof_id
-            .or(delegation_authority_id)
-            .or(bootstrap_authority_id)
-            .or(hosted_agent_publication_authority_id);
+        let verified_authority_id = authority_proof_authority
+            .as_ref()
+            .and_then(VerifiedProductAuthority::authority_id)
+            .or_else(|| {
+                metadata_authority
+                    .as_ref()
+                    .and_then(VerifiedProductAuthority::authority_id)
+            })
+            .or(bootstrap_authority_id.as_deref())
+            .or(hosted_agent_publication_authority_id.as_deref())
+            .map(ToOwned::to_owned);
         AdmissionPolicyGate::verify(AdmissionPolicyContext {
             envelope,
             ability,
@@ -1212,6 +1228,7 @@ impl AdmissionFacade {
             trusted_role,
             daemon_ura: self.daemon_ura.as_deref(),
             trust_anchor: trust_anchor.as_ref(),
+            access_control_stores: self.access_control_stores.as_ref(),
             canonical_hash: Some(format!(
                 "sha256:{}",
                 hex::encode(sha2::Sha256::digest(
@@ -1226,7 +1243,22 @@ impl AdmissionFacade {
             verified_authority_id,
             rejector_ura: self.daemon_ura.clone(),
         })?;
-        Ok(())
+        if let Some(authority) = authority_proof_authority {
+            return Ok(authority);
+        }
+        if let Some(authority) = metadata_authority {
+            return Ok(authority);
+        }
+        if let Some(authority_id) = bootstrap_authority_id.or(hosted_agent_publication_authority_id)
+        {
+            return VerifiedProductAuthority::bootstrap(
+                descriptor_bound.envelope.envelope(),
+                Some(authority_id),
+            );
+        }
+        Ok(VerifiedProductAuthority::self_authority(
+            descriptor_bound.envelope.envelope().caller.ura.clone(),
+        ))
     }
 
     fn verify_hosted_agent_publication_authority(
@@ -1394,7 +1426,14 @@ impl AdmissionFacade {
             .accepts_local_self_caller(self.daemon_ura.as_deref(), caller_ura)
     }
 
-    pub(crate) fn accepts_local_self_envelope(&self, envelope: Option<&Envelope>) -> bool {
+    /// Classify the one ingress that may be reissued by
+    /// `SystemInvocationIssuer`.
+    ///
+    /// A daemon/device URA accepted by the local transport policy is still a
+    /// real caller identity and must retain its supplied signature at the
+    /// canonical runtime boundary. Only the reserved `_system.local` caller on
+    /// a local-only transport is a system-issued invocation.
+    pub(crate) fn accepts_local_system_envelope(&self, envelope: Option<&Envelope>) -> bool {
         let Some(caller_ura) = envelope
             .and_then(|envelope| envelope.caller.as_ref())
             .map(|caller| caller.ura.trim())
@@ -1402,35 +1441,16 @@ impl AdmissionFacade {
         else {
             return false;
         };
-        self.accepts_local_self_caller(caller_ura)
+        caller_ura == crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA
+            && self.accepts_local_self_caller(caller_ura)
     }
 
-    /// **PR-N2 commit 1/N**. Decide whether `caller_ura` belongs to
-    /// a federated peer realm — i.e. a realm the operator has
-    /// explicitly opted into by adding a `[daemon.federated_peers]`
-    /// map entry mapping `realm → hub_endpoint`.
-    ///
-    /// Returns `true` iff:
-    ///   - the URA parses to a non-self realm
-    ///   - the federated_peers cell holds an entry for that realm
-    ///   - a federation client is wired (without one, the strict
-    ///     path's FederatedKeyResolver has no way to dial the peer
-    ///     and would just fail closed — short-circuit here)
+    /// Classify callers against the same live peer map used by canonical
+    /// caller-key resolution.
     fn is_federated_caller(&self, caller_ura: &str) -> bool {
-        let Some(client) = self.federation_client.as_ref() else {
-            return false;
-        };
-        let _ = client; // presence-only check; resolver does the dial
-        let Some(caller_realm) = parse_realm_from_ura(caller_ura) else {
-            return false;
-        };
-        if let Some(self_realm) = self.self_realm.as_deref() {
-            if caller_realm == self_realm {
-                return false;
-            }
-        }
-        let peers = self.federated_peers.snapshot();
-        peers.contains_key(&caller_realm)
+        self.federated_keys
+            .as_ref()
+            .is_some_and(|resolver| resolver.is_configured_federated_caller(caller_ura))
     }
 
     fn signature_denied_status(
@@ -1470,7 +1490,7 @@ impl AdmissionFacade {
     fn verify_authority_proof_metadata(
         &self,
         input: AuthorityProofMetadataInput<'_>,
-    ) -> Result<Option<String>, Status> {
+    ) -> Result<Option<VerifiedProductAuthority>, Status> {
         let AuthorityProofMetadataInput {
             envelope,
             ability,
@@ -1509,47 +1529,208 @@ impl AdmissionFacade {
         let invocation_nonce = invocation_nonce_for_proof(envelope);
         let audience_ura = self.daemon_ura.as_deref().unwrap_or(callee_ura);
         let now = Utc::now();
-        let mut store =
-            AccessControlStore::open_or_create(proof.owner_user_id.clone()).map_err(|err| {
+        self.access_control_stores
+            .with_store(&proof.owner_user_id, |store| {
+                let resolver = StoreBackedAuthorityProofResolver {
+                    trust_anchor,
+                    store,
+                    now,
+                };
+                let context = AuthorityProofVerificationContext {
+                    owner_user_id: &proof.owner_user_id,
+                    principal_kind: principal.kind,
+                    principal_id: &principal.id,
+                    token_id: principal.token_id.as_deref(),
+                    callee_ura,
+                    subject_ura,
+                    ability_ura: &ability_ura,
+                    action,
+                    nonce: invocation_nonce.as_deref(),
+                    canonical_hash: Some(canonical_hash.as_str()),
+                    audience_ura,
+                    session_id: proof.session_id.as_deref(),
+                    session_owner_user_id: proof.session_owner_user_id.as_deref(),
+                    now,
+                };
+                AuthorityProofVerifier::verify(Some(&proof), &context, &resolver)
+                    .map_err(authority_proof_status)?;
+                if request_scoped_one_time_authority_proof(&proof) {
+                    store
+                        .consume_authority_proof_once(&proof.proof_id, audience_ura)
+                        .map_err(|err| {
+                            Status::permission_denied(format!(
+                                "{}: {err}",
+                                AuthorityProofDenyReason::AuthorityProofRevoked.as_str()
+                            ))
+                        })?;
+                }
+                Ok::<(), Status>(())
+            })
+            .map_err(|err| {
                 Status::internal(format!(
                     "POLICY_STORE_UNAVAILABLE: owner_user_id={} error={err}",
                     proof.owner_user_id
                 ))
-            })?;
-        let resolver = StoreBackedAuthorityProofResolver {
-            trust_anchor,
-            store: &store,
-            now,
-        };
-        let context = AuthorityProofVerificationContext {
-            owner_user_id: &proof.owner_user_id,
-            principal_kind: principal.kind,
-            principal_id: &principal.id,
-            token_id: principal.token_id.as_deref(),
-            callee_ura,
-            subject_ura,
-            ability_ura: &ability_ura,
-            action,
-            nonce: invocation_nonce.as_deref(),
-            canonical_hash: Some(canonical_hash.as_str()),
-            audience_ura,
-            session_id: proof.session_id.as_deref(),
-            session_owner_user_id: proof.session_owner_user_id.as_deref(),
-            now,
-        };
-        AuthorityProofVerifier::verify(Some(&proof), &context, &resolver)
-            .map_err(authority_proof_status)?;
-        if request_scoped_one_time_authority_proof(&proof) {
-            store
-                .consume_authority_proof_once(&proof.proof_id, audience_ura)
-                .map_err(|err| {
-                    Status::permission_denied(format!(
-                        "{}: {err}",
-                        AuthorityProofDenyReason::AuthorityProofRevoked.as_str()
-                    ))
-                })?;
+            })??;
+        VerifiedProductAuthority::from_authority_proof(envelope, &proof).map(Some)
+    }
+}
+
+/// Daemon-owned capability for applying the exact same product-policy
+/// transaction to a runtime-derived child as to a carrier-delivered request.
+///
+/// Axon owns child derivation, signatures, replay, lifecycle, and receipts.
+/// This object contributes only the downstream product policy and quota
+/// context that cannot be encoded in the canonical descriptor-bound envelope.
+#[derive(Clone)]
+pub(crate) struct DaemonDerivedInvocationAdmission {
+    facade: AdmissionFacade,
+    coordinator: Arc<DaemonProductAdmissionCoordinator>,
+}
+
+impl DaemonDerivedInvocationAdmission {
+    pub(crate) fn new(
+        facade: AdmissionFacade,
+        coordinator: Arc<DaemonProductAdmissionCoordinator>,
+    ) -> Self {
+        Self {
+            facade,
+            coordinator,
         }
-        Ok(Some(proof.proof_id))
+    }
+
+    pub(crate) fn stage(
+        &self,
+        descriptor_bound: &DescriptorBoundEnvelope,
+        signed_envelope: &axon_sdk::invocation::SignedEnvelope,
+        arguments: Vec<u8>,
+        metadata: HashMap<String, String>,
+        request_id: String,
+        ability: &str,
+        call_mode: AxonCallMode,
+    ) -> Result<DaemonProductAdmissionLease, Status> {
+        self.coordinator.stage_derived(
+            &self.facade,
+            descriptor_bound,
+            signed_envelope,
+            arguments,
+            metadata,
+            request_id,
+            ability,
+            call_mode,
+        )
+    }
+}
+
+fn default_access_control_stores() -> Arc<AccessControlStoreRegistry> {
+    #[cfg(test)]
+    {
+        Arc::new(AccessControlStoreRegistry::ephemeral())
+    }
+    #[cfg(not(test))]
+    {
+        Arc::new(AccessControlStoreRegistry::default())
+    }
+}
+
+fn product_admission_decision(
+    envelope: &DescriptorBoundEnvelope,
+    authority: VerifiedProductAuthority,
+    reservation: ProductAdmissionReservation,
+) -> Result<ProductAdmissionDecision, Status> {
+    let policy = authority
+        .into_policy(envelope)
+        .map_err(axon_error_to_status)?;
+    Ok(ProductAdmissionDecision {
+        reservation,
+        policy,
+    })
+}
+
+fn product_policy_envelope(
+    admitted: &axon_sdk::invocation::InvocationEnvelope,
+    caller_signature: Option<axon_sdk::invocation::CallerSignature>,
+    request_id: String,
+) -> Result<Envelope, Status> {
+    axon_sdk::invocation::project_wire_envelope(
+        admitted,
+        axon_sdk::invocation::WireEnvelopeMetadata {
+            request_id,
+            caller_signature,
+            ..axon_sdk::invocation::WireEnvelopeMetadata::default()
+        },
+    )
+    .map_err(|error| {
+        Status::internal(format!(
+            "project admitted canonical envelope for product policy: {error}"
+        ))
+    })
+}
+
+fn wire_caller_signature(
+    wire: &crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
+) -> Result<axon_sdk::invocation::CallerSignature, Status> {
+    match &wire.ingress {
+        crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ExternalSigned(
+            signature,
+        )
+        | crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::ProvisionalBootstrap(
+            signature,
+        ) => Ok(signature.clone()),
+        crate::daemon::axon_bridge::dispatch_shim::WireDispatchIngress::LocalSystem => Err(
+            Status::internal("trusted local-system ingress has no caller signature"),
+        ),
+    }
+}
+
+fn daemon_call_mode(call_mode: AxonCallMode) -> crate::daemon::ability::CallMode {
+    match call_mode {
+        AxonCallMode::Rpc => crate::daemon::ability::CallMode::Rpc,
+        AxonCallMode::Stream => crate::daemon::ability::CallMode::Stream,
+        AxonCallMode::Bidi => crate::daemon::ability::CallMode::Bidi,
+    }
+}
+
+fn quota_denied_status(
+    caller_ura: &str,
+    ability: &str,
+    decision: crate::daemon::invocation::admission::usage_quota::QuotaDecision,
+) -> Status {
+    match decision.deny_reason {
+        Some(QuotaDenyReason::KeyTooLarge) => Status::invalid_argument(format!(
+            "REQUEST_METADATA_INVALID: quota key too large caller={caller_ura} ability={ability}"
+        )),
+        Some(QuotaDenyReason::StoreSaturated) => Status::resource_exhausted(format!(
+            "RESOURCE_EXHAUSTED: quota store saturated caller={caller_ura} ability={ability} retry_after_ms={}",
+            decision.retry_after_ms
+        )),
+        Some(QuotaDenyReason::BudgetExhausted) | None => Status::resource_exhausted(format!(
+            "QUOTA_EXCEEDED: caller={caller_ura} ability={ability} retry_after_ms={}",
+            decision.retry_after_ms
+        )),
+    }
+}
+
+fn product_admission_status_to_axon(status: Status) -> InvocationError {
+    let detail = status.message().to_string();
+    match status.code() {
+        Code::Cancelled => InvocationError::cancelled(detail),
+        Code::DeadlineExceeded => InvocationError::deadline_exceeded(detail),
+        Code::InvalidArgument | Code::OutOfRange => InvocationError::invalid_argument(detail),
+        Code::ResourceExhausted => InvocationError::resource_exhausted(detail),
+        Code::Unavailable => InvocationError::unavailable(detail),
+        Code::PermissionDenied | Code::Unauthenticated => {
+            InvocationError::permission_denied(detail)
+        }
+        Code::Ok
+        | Code::Unknown
+        | Code::NotFound
+        | Code::AlreadyExists
+        | Code::FailedPrecondition
+        | Code::Aborted
+        | Code::Unimplemented
+        | Code::Internal
+        | Code::DataLoss => InvocationError::internal(detail),
     }
 }
 
@@ -1737,7 +1918,7 @@ fn status_with_code(code: Code, message: String) -> Status {
 }
 
 fn identity_ura_for_diagnostic(
-    identity: Option<&easynet_axon::pb::axon::v1::AgentIdentity>,
+    identity: Option<&axon_sdk::pb::axon::v1::AgentIdentity>,
 ) -> Option<String> {
     identity
         .map(|identity| identity.ura.trim())
@@ -1770,6 +1951,7 @@ fn ability_ura_for_diagnostic(envelope: &Envelope, ability: &str) -> String {
 /// register under `.../device/<id>`. Reuse the same realm parser as
 /// `identity.register_pubkey` so all canonical role tails stay
 /// accepted and retired aliases stay rejected.
+#[cfg(test)]
 fn parse_realm_from_ura(ura: &str) -> Option<String> {
     crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura(ura)
 }
@@ -1800,7 +1982,7 @@ fn bootstrap_authority_ability(ability: &str) -> bool {
     )
 }
 
-fn registry_ability_name_from_route(ability: &str) -> String {
+fn public_ability_name_from_route(ability: &str) -> String {
     let trimmed = ability.trim();
     let ability_ura = trimmed
         .split_once('@')
@@ -1834,7 +2016,7 @@ fn verify_delegation_metadata(
     metadata: Option<&HashMap<String, String>>,
     trust_anchor: &RealmTrustAnchor,
     now_ms: i64,
-) -> Result<Option<String>, Status> {
+) -> Result<Option<VerifiedProductAuthority>, Status> {
     let raw_delegation = metadata.and_then(|m| {
         m.get(DELEGATION_METADATA_KEY)
             .map(String::as_str)
@@ -1852,14 +2034,16 @@ fn verify_delegation_metadata(
                  and `{SESSION_AUTHORITY_METADATA_KEY}`"
         ))),
         (Some(raw_proof), None) => {
-            let payload = parse_and_verify_delegation_proof(raw_proof, trust_anchor, now_ms)?;
-            verify_delegation_bindings(&payload, envelope, ability)?;
-            Ok(Some(verified_delegation_authority_id(&payload)?))
+            let verified =
+                parse_and_verify_delegation_proof(raw_proof, trust_anchor, now_ms)?;
+            verify_delegation_bindings(&verified.payload, envelope, ability)?;
+            VerifiedProductAuthority::delegated(verified).map(Some)
         }
         (None, Some(raw_session)) => {
-            let payload = parse_and_verify_session_authority(raw_session, trust_anchor, now_ms)?;
-            verify_session_authority_bindings(&payload, envelope, ability, action)?;
-            Ok(Some(verified_session_authority_id(&payload)))
+            let verified =
+                parse_and_verify_session_authority(raw_session, trust_anchor, now_ms)?;
+            verify_session_authority_bindings(&verified.payload, envelope, ability, action)?;
+            VerifiedProductAuthority::session(verified).map(Some)
         }
         (None, None) => {
             if envelope_requires_authority(envelope) {
@@ -1877,7 +2061,7 @@ fn parse_and_verify_session_authority(
     raw_authority: &str,
     trust_anchor: &RealmTrustAnchor,
     now_ms: i64,
-) -> Result<SessionAuthorityPayload, Status> {
+) -> Result<VerifiedSignedAuthority<SessionAuthorityPayload>, Status> {
     let wire = BASE64_STANDARD.decode(raw_authority).map_err(|err| {
         Status::invalid_argument(format!(
             "{REASON_AUTHORITY_FORMAT_INVALID}: session authority base64 decode failed: {err}"
@@ -1915,7 +2099,11 @@ fn parse_and_verify_session_authority(
     })?;
     verify_delegation_signature(&issuer.public_key_b64, &payload_bytes, &signature)?;
 
-    Ok(payload)
+    Ok(VerifiedSignedAuthority {
+        payload,
+        canonical_payload: payload_bytes,
+        signature,
+    })
 }
 
 fn verify_session_authority_bindings(
@@ -2118,7 +2306,7 @@ fn parse_and_verify_delegation_proof(
     raw_proof: &str,
     trust_anchor: &RealmTrustAnchor,
     now_ms: i64,
-) -> Result<DelegationPayload, Status> {
+) -> Result<VerifiedSignedAuthority<DelegationPayload>, Status> {
     let wire = BASE64_STANDARD.decode(raw_proof).map_err(|err| {
         Status::invalid_argument(format!(
             "{REASON_AUTHORITY_FORMAT_INVALID}: metadata base64 decode failed: {err}"
@@ -2156,7 +2344,11 @@ fn parse_and_verify_delegation_proof(
     })?;
     verify_delegation_signature(&issuer.public_key_b64, &payload_bytes, &signature)?;
 
-    Ok(payload)
+    Ok(VerifiedSignedAuthority {
+        payload,
+        canonical_payload: payload_bytes,
+        signature,
+    })
 }
 
 fn envelope_requires_authority(envelope: &Envelope) -> bool {
@@ -2362,28 +2554,6 @@ fn reject_public_hosted_agent_delegation_metadata(
     )))
 }
 
-fn reject_missing_or_malformed_caller_signature(envelope: &Envelope) -> Result<(), Status> {
-    let Some(signature) = envelope.caller_signature.as_ref() else {
-        return Err(Status::invalid_argument(format!(
-            "{REASON_CALLER_SIGNATURE_INVALID}:{}",
-            SignatureDecisionReason::CallerSignatureMissing.as_str()
-        )));
-    };
-    if signature.algorithm.trim().is_empty() {
-        return Err(Status::invalid_argument(format!(
-            "{REASON_CALLER_SIGNATURE_INVALID}:{}:signature_algorithm_empty",
-            SignatureDecisionReason::CallerSignatureMissing.as_str()
-        )));
-    }
-    if signature.signature.is_empty() {
-        return Err(Status::invalid_argument(format!(
-            "{REASON_CALLER_SIGNATURE_INVALID}:{}:signature_bytes_empty",
-            SignatureDecisionReason::CallerSignatureMissing.as_str()
-        )));
-    }
-    Ok(())
-}
-
 /// Map an axon-SDK invocation `AxonError` (the kind admission
 /// emits) to a `tonic::Status`. The mapping preserves the canonical
 /// reason (e.g. `CALLER_SIGNATURE_INVALID`) inside the status
@@ -2409,26 +2579,6 @@ fn axon_error_to_status(err: InvocationError) -> Status {
             InvocationErrorKind::Internal => Status::internal(detail),
         },
     }
-}
-
-fn signed_descriptor_ref_from_metadata(
-    route_ability: &str,
-    metadata: Option<&HashMap<String, String>>,
-) -> Result<String, Status> {
-    let Some(value) = metadata
-        .and_then(|metadata| metadata.get(SIGNED_DESCRIPTOR_REF_METADATA_KEY))
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Err(Status::invalid_argument(format!(
-            "{}: signed public Invoke for `{route_ability}` is missing `{SIGNED_DESCRIPTOR_REF_METADATA_KEY}`; \
-             route name and descriptor-bound signature target must be explicit"
-            ,
-            SignatureDecisionReason::SignedDescriptorRefMissing.as_str()
-        )));
-    };
-    Ok(value.to_string())
 }
 
 fn ensure_signed_descriptor_ref_matches_route(
@@ -2470,1716 +2620,183 @@ fn ensure_signed_descriptor_ref_matches_route(
     Ok(())
 }
 
-/// Build the axiom-side `CallerSignature` from the proto field. A
-/// missing field is the "no signature carried" case — admission
-/// step 2 (`validate_signature_structure`) will reject it with
-/// `signature_algorithm_empty`, which is the correct wire-visible
-/// outcome.
-fn build_axiom_signature(
-    proto: Option<&easynet_axon::pb::axon::v1::CallerSignature>,
-) -> Result<AxiomCallerSignature, InvocationError> {
-    Ok(match proto {
-        Some(sig) => AxiomCallerSignature {
-            algorithm: sig.algorithm.clone(),
-            signature: sig.signature.clone(),
-            key_id_hint: sig.key_id_hint.clone(),
-        },
-        None => AxiomCallerSignature {
-            algorithm: String::new(),
-            signature: Vec::new(),
-            key_id_hint: String::new(),
-        },
-    })
-}
-
-/// DEC-EU §multi-device: returns true iff `envelope.caller.ura`
-/// parses to a User-kind URA. Gates whether `run_strict_signature_gate`
-/// pins the `FederatedKeyResolver` to the envelope-presented pubkey.
-fn envelope_caller_is_user(envelope: &Envelope) -> bool {
-    let Some(caller) = envelope.caller.as_ref() else {
-        return false;
-    };
-    matches!(
-        crate::core::ura::parse_ura(&caller.ura).map(|p| p.kind),
-        Ok(crate::core::ura::URAKind::User)
-    )
-}
-
-/// DEC-EU §multi-device: read the public key the envelope presented
-/// via `caller_signature.key_id_hint`. The backend encodes the
-/// signer's raw 32-byte Ed25519 verifying key as base64 and stores
-/// it in this field; the daemon admission gate trims and returns it
-/// verbatim so `FederatedKeyResolver` can pin the verify key to
-/// exactly the one the browser used to sign.
-///
-/// The pubkey hint is `key_id_hint` not a new proto field because
-/// `types.proto` already documents `key_id_hint` as "non-trustworthy
-/// hint, verifiers MUST resolve independently" — exactly our use:
-/// the daemon doesn't trust the hint blindly, it confirms the hint's
-/// pubkey is registered under the Caller URA in `realm-trust.toml`
-/// before treating it as the verify key.
-///
-/// Empty when the envelope is hub / device / backend-signed (those
-/// callers don't need pubkey disambiguation), or when the caller
-/// neglected to set the hint (a programming error; downstream
-/// `FederatedKeyResolver` surfaces `CALLER_KEY_NOT_FOUND` and admission
-/// rejects).
-fn envelope_presented_pubkey_b64(envelope: &Envelope) -> String {
-    envelope
-        .caller_signature
-        .as_ref()
-        .map(|sig| sig.key_id_hint.trim().to_string())
-        .unwrap_or_default()
-}
-
-// (PR-N2 commit 1/N) The local-only `TrustAnchorKeyResolver`
-// was deleted in favour of `FederatedKeyResolver`, which
-// short-circuits to identical local behavior when no
-// federation client is wired and falls through to a peer
-// hub's `federation.resolve_key` ability when it is. See
-// `daemon::invocation::admission::federated_key_resolver`.
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::commands::test_support::HomeGuard;
-    use crate::daemon::invocation::admission::decision::{
-        PermissionLifetime, PermissionRequest, PrincipalKind,
-    };
-    use crate::daemon::invocation::admission::grant_matcher::{
-        PermissionGrantLifetime, PermissionGrantState,
-    };
-    use crate::daemon::invocation::admission::principal_lifecycle::{
-        PrincipalLifecycleContext, ABILITY_PRINCIPAL_BIND_FIRST_KEY, ABILITY_PRINCIPAL_CREATE,
-        ABILITY_PRINCIPAL_DELETE, ABILITY_PRINCIPAL_ISSUE_GRANT, ABILITY_PRINCIPAL_SUSPEND,
-    };
-    use crate::daemon::invocation::admission::runtime_trust::RuntimeTrustContext;
-    use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
+    use crate::daemon::federation::client::{FederationClient, FederationClientError, HubEndpoint};
+    use crate::daemon::federation::peers::SharedFederatedPeers;
     use crate::daemon::trust::cell::SharedTrustAnchor;
-    use easynet_axon::pb::axon::v1::CallerSignature as PbCallerSignature;
-    use ed25519_dalek::{Signer, SigningKey};
+    use axon_sdk::invocation::{
+        sha256, AgentIdentity, CausalContext, InvocationEnvelope, SubjectIdentity, UraProfile,
+    };
+    use axon_sdk::pb::axon::v1::{InvokeRequest, InvokeResponse};
+    use std::collections::BTreeMap;
 
-    fn test_rpc_handler() -> crate::daemon::ability::dispatch::LocalRpcHandler {
-        Arc::new(|_args| Ok(serde_json::json!({"ok": true})))
-    }
+    const TEST_DESCRIPTOR_REF: &str = "easynet:///r/policy/ability/policy.worker.run@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
 
-    fn admission_test_manifest(name: &str) -> crate::daemon::ability::manifest::AbilityManifest {
-        crate::daemon::ability::manifest::AbilityManifest::new(
-            name,
-            "Admission facade test ability.",
-            serde_json::json!({"type": "object"}),
-        )
-        .expect("admission test manifest")
-        .with_admission_action("invoke")
-        .expect("admission test manifest action")
-    }
-
-    fn test_ability_catalog() -> Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog> {
-        let catalog = crate::daemon::ability::catalog::build_system_registry();
-        catalog
-            .hot_register_rpc_with_spec(
-                "self.echo",
-                crate::daemon::ability::dispatch::OwnerKind::Hub,
-                admission_test_manifest("echo"),
-                test_rpc_handler(),
-            )
-            .expect("register self.echo admission test descriptor");
-        catalog
-    }
-
-    fn admission_facade(
-        trust_anchor: Arc<RealmTrustAnchor>,
-        daemon_ura: Option<String>,
-    ) -> AdmissionFacade {
-        AdmissionFacade::new(trust_anchor, daemon_ura).with_ability_catalog(test_ability_catalog())
-    }
-
-    fn admission_facade_with_cell(
-        trust_anchor: SharedTrustAnchor,
-        daemon_ura: Option<String>,
-    ) -> AdmissionFacade {
-        AdmissionFacade::with_trust_anchor_cell(trust_anchor, daemon_ura)
-            .with_ability_catalog(test_ability_catalog())
-    }
-
-    fn hub_ura(realm: &str) -> String {
-        crate::core::ura::hub_ura(realm)
-    }
-
-    fn envelope_with_caller(ura: &str) -> Envelope {
-        let daemon_ura = hub_ura("realm");
-        let subject_ura = default_subject_for(&daemon_ura, "self.echo");
-        let mut envelope =
-            crate::daemon::invocation::ProtoEnvelope::targeted(ura, &daemon_ura, &subject_ura)
-                .expect("valid unsigned test envelope")
-                .into_inner();
-        envelope.invocation_nonce = vec![0x11u8; 16];
-        envelope.caller_signature = None;
-        envelope
-    }
-
-    fn invoke_request(envelope: Option<Envelope>) -> InvokeRequest {
-        InvokeRequest {
-            envelope,
-            function_name: "self.echo".to_string(),
-            arguments: b"{}".to_vec(),
-            ..InvokeRequest::default()
-        }
-    }
-
-    fn entry_with_role(ura: &str, public_key_b64: String, role: TrustedAgentRole) -> TrustedAgent {
-        TrustedAgent {
-            agent_ura: ura.to_string(),
-            public_key_b64,
-            role,
-            added_at_unix_ms: 1_714_492_800_000,
-            origin_realm: None,
-            hub_endpoint: None,
-            tls_ca_pem_path: None,
-        }
-    }
-
-    fn backend_entry(ura: &str, public_key_b64: String) -> TrustedAgent {
-        entry_with_role(ura, public_key_b64, TrustedAgentRole::Backend)
-    }
-
-    fn device_entry(ura: &str, public_key_b64: String) -> TrustedAgent {
-        entry_with_role(ura, public_key_b64, TrustedAgentRole::Device)
-    }
-
-    /// Anchor populated with `Backend`-role entries (zero-bytes
-    /// public key — tests that exercise the strict path supply a
-    /// real key separately). Backend role keeps the strict §5.2
-    /// pipeline live for these tests after DEC-013.
-    fn backend_anchor(uras: &[&str]) -> Arc<RealmTrustAnchor> {
-        Arc::new(
-            RealmTrustAnchor::from_entries(
-                uras.iter()
-                    .map(|u| {
-                        backend_entry(
-                            u,
-                            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-                        )
-                    })
-                    .collect(),
-            )
-            .expect("test anchor"),
-        )
-    }
-
-    fn default_subject_for(callee_ura: &str, ability: &str) -> String {
-        crate::core::ura::owner_ability_ura(callee_ura, ability)
-            .expect("test callee must own the signed ability")
-    }
-
-    fn descriptor_ref_for_mode(
-        callee_ura: &str,
-        ability: &str,
-        call_mode: crate::daemon::ability::CallMode,
-    ) -> String {
-        let catalog = test_ability_catalog();
-        let registry_ability = registry_ability_name_from_route(ability);
-        let ability_ura =
-            crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, ability)
-                .expect("test ability URA");
-        let selector = AbilitySelector::parse(&ability_ura).expect("test ability selector");
-        let owner = crate::daemon::axon_bridge::descriptor_ref::catalog_owner_kind_for_wire(
-            selector.owner_ura(),
-        )
-        .expect("test descriptor owner kind");
-        let mut matches = catalog
-            .authority_ability_catalog_snapshot()
-            .into_iter()
-            .filter(|row| row.owner == owner)
-            .filter(|row| row.name == registry_ability)
-            .filter(|row| row.descriptor.public_name() == selector.public_name())
-            .filter(|row| row.descriptor.call_mode() == call_mode);
-        let descriptor = matches
-            .next()
-            .unwrap_or_else(|| {
-                panic!(
-                    "test catalog missing {call_mode:?} descriptor for owner {:?} ability {:?}",
-                    owner, registry_ability
-                )
-            })
-            .descriptor
-            .rebind_owner_ura(selector.owner_ura())
-            .expect("test descriptor owner rebind");
-        assert!(
-            matches.next().is_none(),
-            "test catalog has ambiguous {call_mode:?} descriptor for owner {:?} ability {:?}",
-            owner,
-            registry_ability
-        );
-        let descriptor_binding =
-            crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire(
-                &descriptor.version,
-                descriptor.descriptor_hash_bytes(),
-                descriptor.admission_action().as_str(),
-            )
-            .expect("test descriptor binding");
-        crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
-            callee_ura,
-            ability,
-            &descriptor_binding,
-        )
-        .expect("test descriptor ref")
-    }
-
-    fn descriptor_ref_for(callee_ura: &str, ability: &str) -> String {
-        descriptor_ref_for_mode(callee_ura, ability, crate::daemon::ability::CallMode::Rpc)
-    }
-
-    fn assert_policy_denied(err: &Status) {
-        assert_eq!(err.code(), tonic::Code::PermissionDenied);
-        assert!(
-            err.message().contains("POLICY_DENIED"),
-            "expected RFC-014 policy denial, got: {}",
-            err.message()
-        );
-    }
-
-    fn assert_signature_denied(err: &Status, reason: &str) {
-        assert!(
-            err.message().contains("SIGNATURE_DENIED"),
-            "expected RFC-014 signature denial, got: {}",
-            err.message()
-        );
-        assert!(
-            err.message().contains(reason),
-            "expected signature reason {reason}, got: {}",
-            err.message()
-        );
-    }
-
-    /// Build an envelope+signature pair that admits cleanly. `nonce`
-    /// is variable so distinct tests don't collide on the daemon-
-    /// shared replay store.
-    fn signed_request_with_nonce(
-        caller_ura: &str,
-        callee_ura: &str,
-        ability: &str,
-        args: &[u8],
-        signing_key: &SigningKey,
-        nonce: [u8; 16],
-    ) -> InvokeRequest {
-        let subject_ura = default_subject_for(callee_ura, ability);
-        signed_request_with_subject_and_nonce_for_mode(
-            caller_ura,
-            callee_ura,
-            &subject_ura,
-            ability,
-            args,
-            signing_key,
-            nonce,
-            crate::daemon::ability::CallMode::Rpc,
-        )
-    }
-
-    fn signed_request_with_subject_and_nonce(
+    fn receipt_policy_envelope(
         caller_ura: &str,
         callee_ura: &str,
         subject_ura: &str,
-        ability: &str,
-        args: &[u8],
-        signing_key: &SigningKey,
-        nonce: [u8; 16],
-    ) -> InvokeRequest {
-        signed_request_with_subject_and_nonce_for_mode(
-            caller_ura,
-            callee_ura,
-            subject_ura,
-            ability,
-            args,
-            signing_key,
-            nonce,
-            crate::daemon::ability::CallMode::Rpc,
-        )
+    ) -> DescriptorBoundEnvelope {
+        DescriptorBoundEnvelope::new(InvocationEnvelope {
+            caller: AgentIdentity::new(caller_ura, UraProfile::StrictV2),
+            callee: AgentIdentity::new(callee_ura, UraProfile::StrictV2),
+            subject: SubjectIdentity::new(subject_ura, UraProfile::StrictV2),
+            ability: TEST_DESCRIPTOR_REF.to_string(),
+            args_digest: sha256(b"{}"),
+            invocation_nonce: [0x42; 16],
+            causal_context: CausalContext::None,
+        })
+        .expect("test receipt policy envelope must be descriptor-bound")
     }
 
-    fn signed_request_with_subject_and_nonce_for_mode(
-        caller_ura: &str,
-        callee_ura: &str,
-        subject_ura: &str,
-        ability: &str,
-        args: &[u8],
-        signing_key: &SigningKey,
-        nonce: [u8; 16],
-        call_mode: crate::daemon::ability::CallMode,
-    ) -> InvokeRequest {
-        let mut envelope =
-            crate::daemon::invocation::ProtoEnvelope::targeted(caller_ura, callee_ura, subject_ura)
-                .expect("valid signed test envelope")
-                .into_inner();
-        envelope.invocation_nonce = nonce.to_vec();
-        let descriptor_ref = descriptor_ref_for_mode(callee_ura, ability, call_mode);
-        let descriptor_bound =
-            descriptor_bound_from_wire_parts(envelope.clone(), descriptor_ref.clone(), args)
-                .expect("descriptor-bound signed test envelope");
-        let sig = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());
-        envelope.caller_signature = Some(PbCallerSignature {
-            algorithm: "ed25519".to_string(),
-            signature: sig.to_bytes().to_vec(),
-            key_id_hint: String::new(),
-        });
-        InvokeRequest {
-            envelope: Some(envelope),
-            function_name: ability.to_string(),
-            arguments: args.to_vec(),
-            metadata: HashMap::from([(
-                crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-                    .to_string(),
-                descriptor_ref,
-            )]),
-            ..InvokeRequest::default()
-        }
+    fn assert_complete_non_self_policy(
+        authority: VerifiedProductAuthority,
+        envelope: &DescriptorBoundEnvelope,
+        expected_form: &str,
+    ) {
+        assert_eq!(authority.binding.form(), expected_form);
+        assert_ne!(authority.binding.form(), "self");
+        let proof = authority.authority_proof(envelope);
+        assert_eq!(proof.binding.as_ref(), Some(&authority.binding));
+        assert_ne!(proof.proof_hash, [0u8; 32]);
+        assert_eq!(proof.proof_hash, authority_proof_expected_hash(&proof));
+        proof
+            .validate_complete()
+            .expect("verified product authority must produce complete receipt proof facts");
+        authority
+            .into_policy(envelope)
+            .expect("complete product authority must construct canonical admission policy");
     }
 
-    fn lifecycle_command(id: &str, kind: &str, expected_version: Option<u64>) -> serde_json::Value {
-        lifecycle_command_with_ref(id, kind, &format!("proof:{id}"), expected_version)
-    }
-
-    fn lifecycle_command_with_ref(
-        id: &str,
-        kind: &str,
-        reference: &str,
-        expected_version: Option<u64>,
-    ) -> serde_json::Value {
-        lifecycle_command_for_actor_with_ref(
-            "easynet:///r/realm/user/admin",
-            id,
-            kind,
-            reference,
-            expected_version,
-        )
-    }
-
-    fn lifecycle_command_for_actor_with_ref(
-        actor_ura: &str,
-        id: &str,
-        kind: &str,
-        reference: &str,
-        expected_version: Option<u64>,
-    ) -> serde_json::Value {
-        let mut command = serde_json::json!({
-            "actor_ura": actor_ura,
-            "idempotency_key": id,
-            "proof": {"kind": kind, "reference": reference},
-        });
-        if let Some(version) = expected_version {
-            command["expected_version"] = serde_json::json!(version);
-        }
-        command
-    }
-
-    fn lifecycle_handle(
-        ctx: &PrincipalLifecycleContext,
-        ability: &'static str,
-        request: serde_json::Value,
-    ) -> serde_json::Value {
-        let body = ctx
-            .handle(
-                ability,
-                serde_json::to_vec(&serde_json::json!({ "request": request }))
-                    .expect("lifecycle request json")
-                    .as_slice(),
-            )
-            .expect("lifecycle transition");
-        serde_json::from_slice(&body).expect("lifecycle response json")
-    }
-
-    fn lifecycle_context_for_admission(
-        dir: &tempfile::TempDir,
-    ) -> (RuntimeTrustContext, PrincipalLifecycleContext) {
-        let runtime_trust = RuntimeTrustContext {
-            daemon_realm: "realm".to_string(),
-            trust_anchor_path: dir.path().join("realm-trust.toml"),
-            cell: SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default())),
-        };
-        let lifecycle = PrincipalLifecycleContext::from_runtime_trust(runtime_trust.clone());
-        (runtime_trust, lifecycle)
-    }
-
-    fn signed_session_authority_metadata(
-        payload: &SessionAuthorityPayload,
-        signing_key: &SigningKey,
-    ) -> String {
-        let payload_bytes = authority_metadata::canonical_authority_payload_bytes(payload)
-            .expect("canonical session authority payload");
-        let signature = signing_key.sign(&payload_bytes);
-        let wire = serde_json::json!({
-            "payload": payload,
-            "signature": BASE64_STANDARD.encode(signature.to_bytes()),
-        });
-        BASE64_STANDARD.encode(serde_json::to_vec(&wire).expect("session authority wire json"))
-    }
-
-    fn test_session_authority_payload(
-        caller_ura: &str,
-        callee_ura: &str,
-        owner_user_id: &str,
-        ability: &str,
-    ) -> SessionAuthorityPayload {
-        SessionAuthorityPayload {
-            issuer_ura: caller_ura.to_string(),
-            session_id: "sa-test-session".to_string(),
-            session_owner_user_id: owner_user_id.to_string(),
-            creator_principal_id: caller_ura.to_string(),
-            callee_ura: callee_ura.to_string(),
-            subject_ura: crate::core::ura::resource_dot_ura(
-                "realm",
-                &format!("user.{owner_user_id}"),
-                "session/sa-test-session",
-            ),
+    #[test]
+    fn delegated_admission_produces_complete_non_self_receipt_policy() {
+        let caller_ura = "easynet:///r/policy/agent/alice.delegate";
+        let callee_ura = "easynet:///r/policy/agent/service.worker";
+        let subject_ura = "easynet:///r/policy/resource/user.bob/document/report";
+        let payload = DelegationPayload {
+            issuer_ura: "easynet:///r/policy/user/alice".to_string(),
+            subject_ura: subject_ura.to_string(),
+            caller_ura: caller_ura.to_string(),
             audience: callee_ura.to_string(),
-            scopes: vec![ability.to_string()],
-            allowed_actions: vec![AccessAction::Invoke.as_str().to_string()],
-            allowed_followup_abilities: vec![ability.to_string()],
-            issued_at_ms: 1_714_492_800_000,
-            expires_at_ms: 4_102_444_800_000,
+            scopes: vec!["run".to_string()],
+            issued_at_ms: 1_700_000_000_000,
+            expires_at_ms: 1_800_000_000_000,
+        };
+        let canonical_payload =
+            authority_metadata::canonical_authority_payload_bytes(&payload).expect("payload");
+        let authority = VerifiedProductAuthority::delegated(VerifiedSignedAuthority {
+            payload,
+            canonical_payload,
+            signature: vec![0x31; ed25519_dalek::SIGNATURE_LENGTH],
+        })
+        .expect("verified delegation must project to generic authority");
+        let envelope = receipt_policy_envelope(caller_ura, callee_ura, subject_ura);
+
+        assert_complete_non_self_policy(authority, &envelope, "delegated");
+    }
+
+    #[test]
+    fn session_admission_produces_complete_non_self_receipt_policy() {
+        let caller_ura = "easynet:///r/policy/hub";
+        let callee_ura = "easynet:///r/policy/agent/service.worker";
+        let subject_ura = "easynet:///r/policy/resource/user.alice/session/session-42";
+        let payload = SessionAuthorityPayload {
+            issuer_ura: caller_ura.to_string(),
+            session_id: "session-42".to_string(),
+            session_owner_user_id: "alice".to_string(),
+            creator_principal_id: "backend".to_string(),
+            callee_ura: callee_ura.to_string(),
+            subject_ura: subject_ura.to_string(),
+            audience: callee_ura.to_string(),
+            scopes: vec!["run".to_string()],
+            allowed_actions: vec!["invoke".to_string()],
+            allowed_followup_abilities: vec!["run".to_string()],
+            issued_at_ms: 1_700_000_000_000,
+            expires_at_ms: 1_800_000_000_000,
+        };
+        let canonical_payload =
+            authority_metadata::canonical_authority_payload_bytes(&payload).expect("payload");
+        let authority = VerifiedProductAuthority::session(VerifiedSignedAuthority {
+            payload,
+            canonical_payload,
+            signature: vec![0x52; ed25519_dalek::SIGNATURE_LENGTH],
+        })
+        .expect("verified session must project to generic authority");
+        let envelope = receipt_policy_envelope(caller_ura, callee_ura, subject_ura);
+
+        assert_complete_non_self_policy(authority, &envelope, "session");
+    }
+
+    struct RejectingFederationClient;
+
+    #[async_trait::async_trait]
+    impl FederationClient for RejectingFederationClient {
+        async fn invoke(
+            &self,
+            target_hub_endpoint: &HubEndpoint,
+            _request: InvokeRequest,
+        ) -> Result<InvokeResponse, FederationClientError> {
+            Err(FederationClientError::DialFailed {
+                endpoint: target_hub_endpoint.clone(),
+                detail: "admission classification test does not perform network I/O".to_string(),
+            })
         }
     }
 
-    // ── URA/local self gate ────────────────────────────────────────
-
-    #[test]
-    fn empty_anchor_rejects_external_caller_with_permission_denied() {
-        // DEC-013: trust-anchor membership is the first non-local-self
-        // check, so a URA not in the anchor short-circuits to
-        // permission_denied without ever exercising the §5.2
-        // pipeline.
-        let facade = admission_facade(Arc::new(RealmTrustAnchor::default()), None);
-        let req = invoke_request(Some(envelope_with_caller(
-            "easynet:///r/realm/agent/test.external",
-        )));
-        let err = facade.verify_invoke(&req).expect_err("must reject");
-        assert_eq!(err.code(), tonic::Code::PermissionDenied);
-        assert_signature_denied(&err, SignatureDecisionReason::CallerKeyNotFound.as_str());
-        assert!(
-            err.message().contains("not in the realm trust anchor"),
-            "rejection message must call out membership miss, got: {}",
-            err.message()
+    fn federated_facade() -> AdmissionFacade {
+        let mut peers = BTreeMap::new();
+        peers.insert(
+            "peer-realm".to_string(),
+            "https://peer-realm.example:50443".to_string(),
         );
-    }
-
-    #[test]
-    fn missing_envelope_returns_invalid_argument() {
-        let facade = admission_facade(Arc::new(RealmTrustAnchor::default()), None);
-        let req = invoke_request(None);
-        let err = facade.verify_invoke(&req).expect_err("must reject");
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(err.message().contains("missing envelope"));
-    }
-
-    #[test]
-    fn missing_caller_ura_returns_invalid_argument() {
-        let facade = admission_facade(Arc::new(RealmTrustAnchor::default()), None);
-        let req = invoke_request(Some(Envelope::default()));
-        let err = facade.verify_invoke(&req).expect_err("must reject");
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(err.message().contains("caller URA required"));
-    }
-
-    #[test]
-    fn local_self_daemon_ura_skips_public_anchor_and_replay() {
-        let facade = admission_facade(
-            Arc::new(RealmTrustAnchor::default()),
-            Some(hub_ura("realm")),
-        );
-        let daemon_ura = hub_ura("realm");
-        let req = invoke_request(Some(envelope_with_caller(&daemon_ura)));
-        facade
-            .verify_invoke(&req)
-            .expect("local self daemon URA admitted without public crypto");
-        // Local self admission must not pollute the replay store.
-        assert!(facade.replay_store.is_empty());
-    }
-
-    #[test]
-    fn local_system_self_admission_skips_public_anchor_and_replay() {
-        let facade = admission_facade(
-            Arc::new(RealmTrustAnchor::default()),
-            Some(hub_ura("realm")),
-        );
-        let req = invoke_request(Some(envelope_with_caller(
-            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-        )));
-
-        facade
-            .verify_invoke(&req)
-            .expect("local-only IPC local system caller admitted without realm trust anchor");
-        assert!(facade.replay_store.is_empty());
-    }
-
-    #[test]
-    fn local_self_repeat_remains_admitted() {
-        // A daemon may invoke runtime-local control abilities many times with
-        // the same body; local self admission never triggers the replay path.
-        let facade = admission_facade(
-            Arc::new(RealmTrustAnchor::default()),
-            Some(hub_ura("realm")),
-        );
-        let daemon_ura = hub_ura("realm");
-        let req = invoke_request(Some(envelope_with_caller(&daemon_ura)));
-        for _ in 0..3 {
-            facade
-                .verify_invoke(&req)
-                .expect("every local self call admitted");
-        }
-        assert!(facade.replay_store.is_empty());
-    }
-
-    #[test]
-    fn off_box_facade_does_not_accept_local_system_self_admission() {
-        let req = invoke_request(Some(envelope_with_caller(
-            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-        )));
-        let facade = admission_facade(
-            Arc::new(RealmTrustAnchor::default()),
-            Some(hub_ura("realm")),
+        let trust = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
+        let resolver = Arc::new(FederatedKeyResolver::new(
+            trust.clone(),
+            Some(Arc::new(RejectingFederationClient)),
+            SharedFederatedPeers::new(peers),
+            Some("self-realm".to_string()),
+        ));
+        AdmissionFacade::with_trust_anchor_cell(
+            trust,
+            Some(crate::core::ura::hub_ura("self-realm")),
         )
-        .with_transport_boundary(AdmissionTransportBoundary::OffBoxStrict);
-
-        let err = facade
-            .verify_invoke(&req)
-            .expect_err("off-box facade must not accept local system self admission");
-        assert_eq!(err.code(), tonic::Code::PermissionDenied);
-        assert!(
-            err.message().contains("not in the realm trust anchor"),
-            "{}",
-            err.message()
-        );
-        assert!(facade.replay_store.is_empty());
+        .with_federated_key_resolver(resolver)
     }
 
     #[test]
     fn off_box_facade_does_not_accept_daemon_ura_spoof_as_local_self() {
-        // #66: the same DaemonInvocationService is served over a
-        // local-only IPC socket and an off-box TCP+TLS socket. An unsigned
-        // envelope spoofing the daemon's own URA is admitted by the former and
-        // rejected by the latter with no replay pollution on either path.
-        let daemon_ura = hub_ura("realm");
-        let req = invoke_request(Some(envelope_with_caller(&daemon_ura)));
-
-        let uds_facade = admission_facade(
-            Arc::new(RealmTrustAnchor::default()),
-            Some(daemon_ura.clone()),
-        );
-        uds_facade
-            .verify_invoke(&req)
-            .expect("local-only IPC admits the daemon's own URA");
-
-        let tcp_facade = admission_facade(Arc::new(RealmTrustAnchor::default()), Some(daemon_ura))
-            .with_transport_boundary(AdmissionTransportBoundary::OffBoxStrict);
-        let err = tcp_facade
-            .verify_invoke(&req)
-            .expect_err("off-box facade must not accept local self admission");
-        // The spoofed daemon URA is not in the (empty) trust anchor, so
-        // the strict path rejects it as an unknown caller rather than
-        // silently admitting it.
-        assert_eq!(err.code(), tonic::Code::PermissionDenied);
-        assert_signature_denied(&err, SignatureDecisionReason::CallerKeyNotFound.as_str());
         assert!(
-            tcp_facade.replay_store.is_empty(),
-            "an unknown-caller reject must never touch the replay store"
-        );
-    }
-
-    #[test]
-    fn trusted_unsigned_caller_returns_signature_denied_payload() {
-        let caller_ura = hub_ura("trusted-unsigned");
-        let daemon_ura = hub_ura("realm");
-        let facade = admission_facade(backend_anchor(&[&caller_ura]), Some(daemon_ura));
-        let req = invoke_request(Some(envelope_with_caller(&caller_ura)));
-
-        let err = facade
-            .verify_invoke(&req)
-            .expect_err("trusted public caller still needs a signature");
-
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert_signature_denied(
-            &err,
-            SignatureDecisionReason::CallerSignatureMissing.as_str(),
-        );
-        assert!(
-            err.message().contains(REASON_CALLER_SIGNATURE_INVALID),
-            "legacy signature reason should remain inspectable: {}",
-            err.message()
-        );
-    }
-
-    #[test]
-    fn session_authority_admits_descriptor_bound_resource_owned_by_session_user() {
-        let caller_ura = hub_ura("session-authority-caller");
-        let callee_ura = hub_ura("realm");
-        let payload =
-            test_session_authority_payload(&caller_ura, &callee_ura, "alice", "namespace.resolve");
-        let admitted = crate::daemon::invocation::ProtoEnvelope::targeted(
-            &caller_ura,
-            &callee_ura,
-            "easynet:///r/realm/resource/user.alice/invoke/namespace.resolve",
-        )
-        .expect("descriptor-bound subject")
-        .into_inner();
-
-        verify_session_authority_bindings(
-            &payload,
-            &admitted,
-            "namespace.resolve",
-            AccessAction::Invoke,
-        )
-        .expect("resource subject owned by session user should be admitted");
-
-        let rejected = crate::daemon::invocation::ProtoEnvelope::targeted(
-            &caller_ura,
-            &callee_ura,
-            "easynet:///r/realm/resource/user.bob/invoke/namespace.resolve",
-        )
-        .expect("descriptor-bound subject")
-        .into_inner();
-        let err = verify_session_authority_bindings(
-            &payload,
-            &rejected,
-            "namespace.resolve",
-            AccessAction::Invoke,
-        )
-        .expect_err("resource subject owned by another user must be rejected");
-        assert!(
-            err.message().contains(REASON_AUTHORITY_SUBJECT_MISMATCH),
-            "expected subject mismatch, got: {}",
-            err.message()
-        );
-    }
-
-    #[test]
-    fn session_authority_scope_matches_descriptor_ref_public_ability() {
-        let caller_ura = hub_ura("session-authority-caller");
-        let callee_ura = hub_ura("realm");
-        let payload =
-            test_session_authority_payload(&caller_ura, &callee_ura, "alice", "identity.*");
-        let envelope = crate::daemon::invocation::ProtoEnvelope::targeted(
-            &caller_ura,
-            &callee_ura,
-            "easynet:///r/realm/resource/user.alice/invoke/identity.register_pubkey",
-        )
-        .expect("descriptor-bound subject")
-        .into_inner();
-        let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
-            &callee_ura,
-            "identity.register_pubkey",
-        )
-        .expect("identity ability URA");
-        let descriptor_ref = descriptor_ref_for(&callee_ura, "identity.register_pubkey");
-
-        verify_session_authority_bindings(
-            &payload,
-            &envelope,
-            &descriptor_ref,
-            AccessAction::Invoke,
-        )
-        .expect("identity.* should admit descriptor-ref identity.register_pubkey");
-        assert_eq!(
-            ability_ura_for_diagnostic(&envelope, &descriptor_ref),
-            ability_ura
-        );
-    }
-
-    #[test]
-    fn verified_session_authority_metadata_admits_namespace_resolve_refetch() {
-        let _home = HomeGuard::new();
-        let caller_key = SigningKey::from_bytes(&[0x63u8; 32]);
-        let caller_ura = hub_ura("backend-session-authority");
-        let caller_pub_b64 = BASE64_STANDARD.encode(caller_key.verifying_key().to_bytes());
-        let callee_ura = hub_ura("realm");
-        let subject_ura = "easynet:///r/realm/resource/user.alice/invoke/namespace.resolve";
-        let mut req = signed_request_with_subject_and_nonce(
-            &caller_ura,
-            &callee_ura,
-            subject_ura,
-            "namespace.resolve",
-            b"{}",
-            &caller_key,
-            [0x63; 16],
-        );
-        let mut payload =
-            test_session_authority_payload(&caller_ura, &callee_ura, "alice", "namespace.resolve");
-        payload.allowed_actions = vec![AccessAction::Read.as_str().to_string()];
-        req.metadata.insert(
-            SESSION_AUTHORITY_METADATA_KEY.to_string(),
-            signed_session_authority_metadata(&payload, &caller_key),
-        );
-
-        let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, caller_pub_b64)])
-                .expect("trust anchor"),
-        );
-        let facade = admission_facade(trust, Some(callee_ura));
-
-        facade
-            .verify_invoke(&req)
-            .expect("verified session authority should admit namespace.resolve refetch");
-    }
-
-    #[test]
-    fn metadata_authority_proof_admits_and_consumes_one_time_proof() {
-        let _home = HomeGuard::new();
-        let owner_user_id = "alice";
-        let owner_ura = crate::core::ura::user_ura("realm", owner_user_id);
-        let daemon_ura = hub_ura("realm");
-        let caller_ura = hub_ura("authority-proof-caller");
-        let caller_key = SigningKey::from_bytes(&[0x51u8; 32]);
-        let owner_key = SigningKey::from_bytes(&[0x52u8; 32]);
-        let caller_pub_b64 = BASE64_STANDARD.encode(caller_key.verifying_key().to_bytes());
-        let owner_pub_b64 = BASE64_STANDARD.encode(owner_key.verifying_key().to_bytes());
-        let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![
-                backend_entry(&caller_ura, caller_pub_b64),
-                entry_with_role(&owner_ura, owner_pub_b64, TrustedAgentRole::User),
-            ])
-            .expect("trust anchor"),
-        );
-        let subject_ura = "easynet:///r/realm/resource/user.alice/authority-proof-target";
-        let mut req = signed_request_with_subject_and_nonce(
-            &caller_ura,
-            &daemon_ura,
-            subject_ura,
-            "self.echo",
-            b"{}",
-            &caller_key,
-            [0x5a; 16],
-        );
-        let descriptor_ref = req
-            .metadata
-            .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
-            .expect("signed descriptor ref")
-            .clone();
-        let descriptor_bound = descriptor_bound_from_wire_parts(
-            req.envelope.clone().expect("envelope"),
-            descriptor_ref,
-            &req.arguments,
-        )
-        .expect("descriptor-bound request");
-        let canonical_hash = format!(
-            "sha256:{}",
-            hex::encode(sha2::Sha256::digest(
-                descriptor_bound.envelope.canonical_bytes()
-            ))
-        );
-        let request = PermissionRequest {
-            request_id: "req-proof-1".to_string(),
-            owner_user_id: owner_user_id.to_string(),
-            caller_ura: caller_ura.clone(),
-            principal_kind: PrincipalKind::Service,
-            principal_id: caller_ura.clone(),
-            token_id: None,
-            token_class: None,
-            callee_ura: daemon_ura.clone(),
-            subject_ura: subject_ura.to_string(),
-            ability_ura: crate::core::ura::owner_ability_ura(&daemon_ura, "self.echo")
-                .expect("ability ura"),
-            action: AccessAction::Invoke,
-            nonce: None,
-            canonical_hash: Some(canonical_hash.clone()),
-            requested_lifetimes: vec![PermissionLifetime::Once],
-            status: PermissionRequestStatus::Pending,
-            created_at: "2026-07-09T00:00:00Z".to_string(),
-            expires_at: "2099-01-01T00:00:00Z".to_string(),
-            resolver_ura: None,
-            resolved_lifetime: None,
-            created_grant_id: None,
-            authority_proof_id: None,
-            resolved_at: None,
-            decision_reason: None,
-        };
-        let mut proof = AuthorityProof {
-            proof_id: "proof-metadata-1".to_string(),
-            grant_id: None,
-            permission_request_id: Some(request.request_id.clone()),
-            owner_user_id: owner_user_id.to_string(),
-            principal_kind: PrincipalKind::Service,
-            principal_id: caller_ura.clone(),
-            token_id: None,
-            callee_ura: request.callee_ura.clone(),
-            subject_ura: request.subject_ura.clone(),
-            ability_ura: request.ability_ura.clone(),
-            action: request.action,
-            nonce: None,
-            canonical_hash: Some(canonical_hash),
-            session_id: None,
-            session_owner_user_id: None,
-            allowed_followup_abilities: vec![],
-            session_expires_at: None,
-            issued_at: "2026-07-09T00:00:10Z".to_string(),
-            expires_at: "2099-01-01T00:00:00Z".to_string(),
-            issuer_ura: owner_ura.clone(),
-            audience_ura: daemon_ura.clone(),
-            signature: String::new(),
-        };
-        let signature = owner_key.sign(&crate::daemon::ability::canonical_json_bytes(
-            &proof.canonical_material(),
-        ));
-        proof.signature = format!("ed25519:{}", BASE64_STANDARD.encode(signature.to_bytes()));
-
-        let mut store =
-            AccessControlStore::open_or_create(owner_user_id).expect("open access store");
-        store
-            .upsert_permission_request(request.clone(), &caller_ura)
-            .expect("create request");
-        let mut approved = request;
-        approved.status = PermissionRequestStatus::Approved;
-        approved.resolved_lifetime = Some(PermissionLifetime::Once);
-        store
-            .resolve_permission_request_with_authority_proof(approved, proof.clone(), &owner_ura)
-            .expect("approve proof");
-        req.metadata.insert(
-            AUTHORITY_PROOF_METADATA_KEY.to_string(),
-            serde_json::to_string(&proof).expect("proof json"),
-        );
-
-        let facade = admission_facade(trust, Some(daemon_ura));
-        facade
-            .verify_invoke(&req)
-            .expect("verified authority proof admits invocation");
-
-        let reopened =
-            AccessControlStore::open_or_create(owner_user_id).expect("reopen access store");
-        assert!(
-            reopened.proof_consumed("proof-metadata-1"),
-            "one-time proof must be durably consumed"
-        );
-    }
-
-    #[test]
-    fn grant_backed_authority_proof_requires_matching_grant_scope() {
-        let now = DateTime::parse_from_rfc3339("2026-07-09T00:00:00Z")
-            .expect("time")
-            .with_timezone(&Utc);
-        let subject_ura = "easynet:///r/realm/resource/user.alice/screen";
-        let ability_ura = "easynet:///r/realm/ability/hub.remote_desktop.attach";
-        let grant = PermissionGrant {
-            grant_id: "grant-rdp-stream".to_string(),
-            owner_user_id: "alice".to_string(),
-            principal_kind: PrincipalKind::Service,
-            principal_id: "easynet:///r/other/hub".to_string(),
-            token_id: None,
-            token_class: None,
-            callee_ura: Some("easynet:///r/realm/hub".to_string()),
-            subject_ura_pattern: Some(subject_ura.to_string()),
-            ability_ura_pattern: Some(ability_ura.to_string()),
-            actions: vec![AccessAction::Stream],
-            constraints: None,
-            effect: PermissionEffect::Allow,
-            lifetime: PermissionGrantLifetime::Ttl,
-            state: PermissionGrantState::Active,
-            expires_at: Some("2099-01-01T00:00:00Z".to_string()),
-            review_required_after: None,
-            last_reviewed_at: None,
-            last_used_at: None,
-            created_by: "easynet:///r/realm/user/alice".to_string(),
-            created_at: "2026-07-09T00:00:00Z".to_string(),
-            updated_at: None,
-            revoked_at: None,
-            reason: None,
-        };
-        let mut proof = AuthorityProof {
-            proof_id: "proof-grant-1".to_string(),
-            grant_id: Some(grant.grant_id.clone()),
-            permission_request_id: None,
-            owner_user_id: "alice".to_string(),
-            principal_kind: PrincipalKind::Service,
-            principal_id: grant.principal_id.clone(),
-            token_id: None,
-            callee_ura: "easynet:///r/realm/hub".to_string(),
-            subject_ura: subject_ura.to_string(),
-            ability_ura: ability_ura.to_string(),
-            action: AccessAction::Stream,
-            nonce: None,
-            canonical_hash: Some("sha256:abc".to_string()),
-            session_id: None,
-            session_owner_user_id: None,
-            allowed_followup_abilities: vec![],
-            session_expires_at: None,
-            issued_at: "2026-07-09T00:00:00Z".to_string(),
-            expires_at: "2099-01-01T00:00:00Z".to_string(),
-            issuer_ura: "easynet:///r/realm/user/alice".to_string(),
-            audience_ura: "easynet:///r/realm/hub".to_string(),
-            signature: "ed25519:test".to_string(),
-        };
-
-        assert!(
-            grant_authorizes_proof(&grant, &proof, now),
-            "matching grant-backed proof should inherit the referenced grant scope"
-        );
-        proof.subject_ura = "easynet:///r/realm/resource/user.alice/other-screen".to_string();
-        assert!(
-            !grant_authorizes_proof(&grant, &proof, now),
-            "proof must not borrow liveness from a grant with a different subject scope"
-        );
-    }
-
-    // ── #185 usage quota ───────────────────────────────────────────
-
-    #[test]
-    fn quota_off_leaves_response_unmetered() {
-        let facade = admission_facade(Arc::new(RealmTrustAnchor::default()), None);
-        let req = invoke_request(Some(envelope_with_caller("easynet:///r/realm/agent/a.b")));
-        assert_eq!(
-            facade.check_quota(&req).expect("no metering configured"),
-            None,
-            "without [daemon.quota] the gate must not attach RateLimitInfo"
-        );
-    }
-
-    #[test]
-    fn quota_meters_then_exhausts_external_caller() {
-        use crate::daemon::invocation::admission::usage_quota::SharedUsageQuotaGate;
-        use crate::daemon::persistence::daemon_config::QuotaConfig;
-
-        let caller = "easynet:///r/realm/agent/a.b";
-        let config = QuotaConfig::new(2, 10_000, std::collections::BTreeMap::new());
-        let facade = admission_facade(Arc::new(RealmTrustAnchor::default()), None)
-            .with_quota_gate(SharedUsageQuotaGate::from_policy(Some(config)));
-        let req = invoke_request(Some(envelope_with_caller(caller)));
-
-        // First two calls are within the cap and surface decreasing
-        // remaining budget.
-        let first = facade.check_quota(&req).expect("first within cap");
-        assert_eq!(first.as_ref().map(|i| i.quota_remaining), Some(1));
-        let second = facade.check_quota(&req).expect("second within cap");
-        assert_eq!(second.as_ref().map(|i| i.quota_remaining), Some(0));
-
-        // Third exceeds the cap → ResourceExhausted with the wire
-        // reason and a retry hint.
-        let err = facade.check_quota(&req).expect_err("third over cap");
-        assert_eq!(err.code(), tonic::Code::ResourceExhausted);
-        assert!(
-            err.message().contains("QUOTA_EXCEEDED"),
-            "wire reason must be QUOTA_EXCEEDED, got: {}",
-            err.message()
-        );
-    }
-
-    #[test]
-    fn quota_exempts_local_self_caller() {
-        use crate::daemon::invocation::admission::usage_quota::SharedUsageQuotaGate;
-        use crate::daemon::persistence::daemon_config::QuotaConfig;
-
-        let daemon_ura = hub_ura("realm");
-        // A cap of 1, but the daemon calling itself over local-only IPC must
-        // never be metered; otherwise it could self-throttle runtime control.
-        let config = QuotaConfig::new(1, 10_000, std::collections::BTreeMap::new());
-        let facade = admission_facade(
-            Arc::new(RealmTrustAnchor::default()),
-            Some(daemon_ura.clone()),
-        )
-        .with_quota_gate(SharedUsageQuotaGate::from_policy(Some(config)));
-        let req = invoke_request(Some(envelope_with_caller(&daemon_ura)));
-
-        for _ in 0..5 {
-            assert_eq!(
-                facade
-                    .check_quota(&req)
-                    .expect("local self never throttled"),
-                None,
-                "the daemon's own URA is exempt from quota"
-            );
-        }
-    }
-
-    #[test]
-    fn quota_rejects_oversized_ability_key_as_invalid_argument() {
-        use crate::daemon::invocation::admission::usage_quota::{
-            SharedUsageQuotaGate, MAX_QUOTA_ABILITY_NAME_BYTES,
-        };
-        use crate::daemon::persistence::daemon_config::QuotaConfig;
-
-        let caller = "easynet:///r/realm/agent/a.b";
-        let config = QuotaConfig::new(1, 10_000, std::collections::BTreeMap::new());
-        let facade = admission_facade(Arc::new(RealmTrustAnchor::default()), None)
-            .with_quota_gate(SharedUsageQuotaGate::from_policy(Some(config)));
-        let mut req = invoke_request(Some(envelope_with_caller(caller)));
-        let ability = "a".repeat(MAX_QUOTA_ABILITY_NAME_BYTES + 1);
-        req.function_name = ability;
-
-        let err = facade
-            .check_quota(&req)
-            .expect_err("oversized quota key must be rejected");
-
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(
-            err.message().contains("REQUEST_METADATA_INVALID"),
-            "wire reason must name quota key bound, got: {}",
-            err.message()
-        );
-    }
-
-    // ── Full §5.2 pipeline ─────────────────────────────────────────
-
-    #[test]
-    fn unsigned_external_caller_rejected_with_signature_missing_reason() {
-        // PR-7 LB-05 callout: this is the new wire-visible behaviour
-        // that breaks the unsigned-envelope PR-6 e2e until commit
-        // 7/N restores it with a signed payload.
-        //
-        // Caller URA shape note: trust-anchor entries under the
-        // Backend role MUST be hub URAs (`from_entries` enforces
-        // role-URA canonicality). We model the external caller as
-        // a peer-realm hub so the URA shape is contract-valid while
-        // the realm distinction keeps it outside the daemon's
-        // local self admission path.
-        let peer_hub = hub_ura("peer-realm");
-        let facade = admission_facade(backend_anchor(&[peer_hub.as_str()]), Some(hub_ura("realm")));
-        let req = invoke_request(Some(envelope_with_caller(&peer_hub)));
-        let err = facade.verify_invoke(&req).expect_err("must reject");
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(
-            err.message().contains(REASON_CALLER_SIGNATURE_INVALID),
-            "wire reason must be AXON_CALLER_SIGNATURE_INVALID, got: {}",
-            err.message()
-        );
-    }
-
-    #[test]
-    fn signed_caller_with_trust_anchor_entry_admitted() {
-        let signing_key = SigningKey::from_bytes(&[0x42u8; 32]);
-        let pub_key = signing_key.verifying_key();
-        let pub_key_b64 = BASE64_STANDARD.encode(pub_key.to_bytes());
-
-        // Backend-role trust entries MUST be hub URAs per
-        // `canonical_ura_for_role`. We use distinct peer-realm hub
-        // URAs across tests so the daemon-shared replay store sees
-        // distinct (caller, nonce) pairs even when tests interleave.
-        let caller_ura = hub_ura("peer-signer-a");
-        let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, pub_key_b64)])
-                .expect("anchor"),
-        );
-
-        let daemon_ura = hub_ura("realm");
-        let facade = admission_facade(trust, Some(daemon_ura.clone()));
-
-        let req = signed_request_with_nonce(
-            &caller_ura,
-            &daemon_ura,
-            "self.echo",
-            b"{}",
-            &signing_key,
-            [0x11u8; 16],
-        );
-        let err = facade
-            .verify_invoke(&req)
-            .expect_err("signed non-owner caller reaches RFC-014 policy and is denied");
-        assert_policy_denied(&err);
-        // Signature/replay admission ran before RFC-014 policy denied.
-        assert_eq!(facade.replay_store.len(), 1);
-    }
-
-    #[test]
-    fn principal_lifecycle_admission_denies_suspended_user_even_when_key_remains_trusted() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let (runtime_trust, lifecycle) = lifecycle_context_for_admission(&dir);
-        let signing_key = SigningKey::from_bytes(&[0x71u8; 32]);
-        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let user_ura = "easynet:///r/realm/user/alice";
-
-        lifecycle_handle(
-            &lifecycle,
-            ABILITY_PRINCIPAL_CREATE,
-            serde_json::json!({
-                "command": lifecycle_command("create-alice", "bootstrap", None),
-                "principal_ura": user_ura,
-            }),
-        );
-        let first = lifecycle_handle(
-            &lifecycle,
-            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
-            serde_json::json!({
-                "command": lifecycle_command_with_ref(
-                    "bind-alice",
-                    "bootstrap",
-                    "proof:create-alice",
-                    Some(1)
-                ),
-                "principal_ura": user_ura,
-                "public_key_b64": pub_key_b64,
-            }),
-        );
-        let binding_id = first["principal"]["bindings"][0]["binding_id"]
-            .as_str()
-            .expect("binding id");
-        lifecycle_handle(
-            &lifecycle,
-            ABILITY_PRINCIPAL_SUSPEND,
-            serde_json::json!({
-                "command": lifecycle_command_for_actor_with_ref(
-                    user_ura,
-                    "suspend-alice",
-                    "active_key",
-                    binding_id,
-                    Some(2)
-                ),
-                "principal_ura": user_ura,
-            }),
-        );
-
-        assert!(
-            runtime_trust
-                .cell
-                .snapshot()
-                .lookup_user_by_pubkey(user_ura, &pub_key_b64)
-                .is_some(),
-            "suspend changes principal state; it must not masquerade as key revocation"
-        );
-
-        let daemon_ura = hub_ura("realm");
-        let facade =
-            admission_facade_with_cell(runtime_trust.cell.clone(), Some(daemon_ura.clone()))
-                .with_principal_lifecycle_reader(lifecycle.reader());
-        let mut req = signed_request_with_nonce(
-            user_ura,
-            &daemon_ura,
-            "self.echo",
-            b"{}",
-            &signing_key,
-            [0x71u8; 16],
-        );
-        req.envelope
-            .as_mut()
-            .and_then(|envelope| envelope.caller_signature.as_mut())
-            .expect("caller signature")
-            .key_id_hint = pub_key_b64;
-
-        let err = facade
-            .verify_invoke(&req)
-            .expect_err("suspended principal must be denied");
-        assert_eq!(err.code(), tonic::Code::PermissionDenied);
-        assert!(
-            err.message().contains("PRINCIPAL_LIFECYCLE_DENIED"),
-            "expected lifecycle denial, got: {}",
-            err.message()
-        );
-        assert!(
-            err.message().contains("AUTHORITY_DENIED"),
-            "lifecycle state is an authority/admission denial, got: {}",
-            err.message()
-        );
-    }
-
-    #[test]
-    fn principal_lifecycle_admission_denies_deleted_user_even_when_key_remains_trusted() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let (runtime_trust, lifecycle) = lifecycle_context_for_admission(&dir);
-        let signing_key = SigningKey::from_bytes(&[0x72u8; 32]);
-        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let user_ura = "easynet:///r/realm/user/bob";
-
-        lifecycle_handle(
-            &lifecycle,
-            ABILITY_PRINCIPAL_CREATE,
-            serde_json::json!({
-                "command": lifecycle_command("create-bob", "bootstrap", None),
-                "principal_ura": user_ura,
-            }),
-        );
-        let first = lifecycle_handle(
-            &lifecycle,
-            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
-            serde_json::json!({
-                "command": lifecycle_command_with_ref(
-                    "bind-bob",
-                    "bootstrap",
-                    "proof:create-bob",
-                    Some(1)
-                ),
-                "principal_ura": user_ura,
-                "public_key_b64": pub_key_b64,
-            }),
-        );
-        let binding_id = first["principal"]["bindings"][0]["binding_id"]
-            .as_str()
-            .expect("binding id");
-        let grant = lifecycle_handle(
-            &lifecycle,
-            ABILITY_PRINCIPAL_ISSUE_GRANT,
-            serde_json::json!({
-                "command": lifecycle_command_for_actor_with_ref(
-                    user_ura,
-                    "grant-delete-bob",
-                    "active_key",
-                    binding_id,
-                    Some(2)
-                ),
-                "principal_ura": user_ura,
-                "actions": [ABILITY_PRINCIPAL_DELETE],
-            }),
-        );
-        let grant_id = grant["principal"]["grants"][0]["grant_id"]
-            .as_str()
-            .expect("grant id");
-        lifecycle_handle(
-            &lifecycle,
-            ABILITY_PRINCIPAL_DELETE,
-            serde_json::json!({
-                "command": lifecycle_command_for_actor_with_ref(
-                    user_ura,
-                    "delete-bob",
-                    "grant",
-                    grant_id,
-                    Some(3)
-                ),
-                "principal_ura": user_ura,
-            }),
-        );
-
-        assert!(
-            runtime_trust
-                .cell
-                .snapshot()
-                .lookup_user_by_pubkey(user_ura, &pub_key_b64)
-                .is_some(),
-            "delete is lifecycle terminality; key inventory remains a projection until explicit revocation"
-        );
-
-        let daemon_ura = hub_ura("realm");
-        let facade =
-            admission_facade_with_cell(runtime_trust.cell.clone(), Some(daemon_ura.clone()))
-                .with_principal_lifecycle_reader(lifecycle.reader());
-        let mut req = signed_request_with_nonce(
-            user_ura,
-            &daemon_ura,
-            "self.echo",
-            b"{}",
-            &signing_key,
-            [0x72u8; 16],
-        );
-        req.envelope
-            .as_mut()
-            .and_then(|envelope| envelope.caller_signature.as_mut())
-            .expect("caller signature")
-            .key_id_hint = pub_key_b64;
-
-        let err = facade
-            .verify_invoke(&req)
-            .expect_err("deleted principal must be denied");
-        assert_eq!(err.code(), tonic::Code::PermissionDenied);
-        assert!(
-            err.message().contains("PRINCIPAL_LIFECYCLE_DENIED"),
-            "expected lifecycle denial, got: {}",
-            err.message()
-        );
-    }
-
-    #[test]
-    fn public_signed_caller_cannot_inject_hosted_agent_delegation_metadata() {
-        let signing_key = SigningKey::from_bytes(&[0x43u8; 32]);
-        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_ura = hub_ura("peer-hosted-delegation-spoof");
-        let daemon_ura = crate::core::ura::device_ura("realm", "device-A");
-        let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, pub_key_b64)])
-                .expect("anchor"),
-        );
-        let facade = admission_facade(trust, Some(daemon_ura.clone()));
-        let mut req = signed_request_with_nonce(
-            &caller_ura,
-            &daemon_ura,
-            "meta.teach",
-            b"{}",
-            &signing_key,
-            [0x43u8; 16],
-        );
-        req.metadata.insert(
-            HOSTED_AGENT_DELEGATION_METADATA_KEY.to_string(),
-            r#"{"kind":"hosted_agent","agent_ura":"easynet:///r/realm/agent/a","signing_authority":"host_device","wire_caller_ura":"ignored","wire_callee_ura":"ignored","wire_subject_ura":"ignored","ability":"meta.teach"}"#.to_string(),
-        );
-
-        let err = facade
-            .verify_invoke(&req)
-            .expect_err("public ingress must reject hosted-agent delegation metadata");
-        assert_eq!(err.code(), tonic::Code::PermissionDenied);
-        assert!(
-            err.message()
-                .contains(REASON_HOSTED_AGENT_DELEGATION_LOCAL_ONLY),
-            "{}",
-            err.message()
-        );
-        assert!(
-            facade.replay_store.is_empty(),
-            "local-only hosted delegation rejection must happen before nonce recording"
-        );
-    }
-
-    #[test]
-    fn public_signed_caller_cannot_inject_hosted_agent_delegation_request() {
-        let signing_key = SigningKey::from_bytes(&[0x44u8; 32]);
-        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_ura = hub_ura("peer-hosted-delegation-request-spoof");
-        let daemon_ura = crate::core::ura::device_ura("realm", "device-A");
-        let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, pub_key_b64)])
-                .expect("anchor"),
-        );
-        let facade = admission_facade(trust, Some(daemon_ura.clone()));
-        let mut req = signed_request_with_nonce(
-            &caller_ura,
-            &daemon_ura,
-            "meta.teach",
-            b"{}",
-            &signing_key,
-            [0x44u8; 16],
-        );
-        let request = crate::daemon::ability::HostedAgentDelegationRequest::new(
-            crate::core::ura::agent_ura("realm", "u", "a"),
-        )
-        .expect("valid delegation request");
-        req.metadata.insert(
-            HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
-            request.metadata_value().expect("request metadata"),
-        );
-
-        let err = facade
-            .verify_invoke(&req)
-            .expect_err("public ingress must reject hosted-agent delegation requests");
-        assert_eq!(err.code(), tonic::Code::PermissionDenied);
-        assert!(
-            err.message()
-                .contains(REASON_HOSTED_AGENT_DELEGATION_LOCAL_ONLY),
-            "{}",
-            err.message()
-        );
-        assert!(
-            facade.replay_store.is_empty(),
-            "local-only hosted delegation request rejection must happen before nonce recording"
-        );
-    }
-
-    #[test]
-    fn local_self_admission_may_carry_hosted_agent_delegation_metadata() {
-        let daemon_ura = hub_ura("realm");
-        let facade = admission_facade(Arc::new(RealmTrustAnchor::default()), Some(daemon_ura));
-        let mut req = invoke_request(Some(envelope_with_caller(
-            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-        )));
-        req.metadata.insert(
-            HOSTED_AGENT_DELEGATION_METADATA_KEY.to_string(),
-            r#"{"kind":"hosted_agent"}"#.to_string(),
-        );
-
-        facade
-            .verify_invoke(&req)
-            .expect("local self admission may carry hosted-agent delegation metadata");
-        assert!(facade.replay_store.is_empty());
-    }
-
-    #[test]
-    fn local_self_admission_may_carry_hosted_agent_delegation_request() {
-        let daemon_ura = hub_ura("realm");
-        let facade = admission_facade(Arc::new(RealmTrustAnchor::default()), Some(daemon_ura));
-        let mut req = invoke_request(Some(envelope_with_caller(
-            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-        )));
-        let request = crate::daemon::ability::HostedAgentDelegationRequest::new(
-            crate::core::ura::agent_ura("realm", "u", "a"),
-        )
-        .expect("valid delegation request");
-        req.metadata.insert(
-            HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
-            request.metadata_value().expect("request metadata"),
-        );
-
-        facade
-            .verify_invoke(&req)
-            .expect("local self admission may carry hosted-agent delegation requests");
-        assert!(facade.replay_store.is_empty());
-    }
-
-    // Phase 5a removed the four receipt-store local tests
-    // (`strict_admission_records_receipt`,
-    //  `loopback_admission_does_not_record_receipt`,
-    //  `replay_rejection_records_rejected_receipt`,
-    //  `device_ura_only_records_annotated_receipt`).
-    // Successful admission is now observed via the
-    // `LedgerSink`-installed `InvocationLedger` at terminal time;
-    // rejected admission is observed via the wire-level gRPC
-    // error their caller sees. The behavioural contracts those
-    // tests pinned ("admission accepts signed callers", "local self admission
-    // does not enter replay", "replay is rejected with
-    // `NONCE_REPLAY`") remain covered by the
-    // signed-caller accept/reject sites in
-    // the other test functions below — those still exercise the
-    // accept / reject paths, they just stop asserting on the now-
-    // deleted ring buffer.
-
-    #[test]
-    fn copied_signed_request_with_cancel_metadata_is_replay_rejected() {
-        let signing_key = SigningKey::from_bytes(&[0x99u8; 32]);
-        let pub_key = signing_key.verifying_key();
-        let pub_key_b64 = BASE64_STANDARD.encode(pub_key.to_bytes());
-
-        let caller_ura = hub_ura("peer-replay");
-        let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, pub_key_b64)])
-                .expect("anchor"),
-        );
-        let daemon_ura = hub_ura("realm");
-        let facade = admission_facade(trust, Some(daemon_ura.clone()));
-
-        let req = signed_request_with_nonce(
-            &caller_ura,
-            &daemon_ura,
-            "self.echo",
-            b"{}",
-            &signing_key,
-            [0x22u8; 16],
-        );
-        let err = facade
-            .verify_invoke(&req)
-            .expect_err("first signed non-owner call reaches policy deny");
-        assert_policy_denied(&err);
-
-        assert_eq!(facade.replay_store.len(), 1);
-
-        let mut copied = req;
-        copied.metadata.insert(
-            "x-easynet-invocation-lifecycle-control".to_string(),
-            "cancel".to_string(),
-        );
-        copied.metadata.insert(
-            "x-easynet-invocation-cancel-reason".to_string(),
-            "tampered stop".to_string(),
-        );
-        let err = facade
-            .verify_invoke(&copied)
-            .expect_err("unsigned metadata must not bypass nonce replay admission");
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(
-            err.message().contains(REASON_NONCE_REPLAY),
-            "wire reason must be CALLER_NONCE_REPLAYED, got: {}",
-            err.message()
-        );
-    }
-
-    #[test]
-    fn signed_invocation_cancel_command_replay_is_rejected() {
-        let signing_key = SigningKey::from_bytes(&[0x54u8; 32]);
-        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_ura = hub_ura("peer-cancel-replay");
-        let daemon_ura = hub_ura("realm");
-        let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, pub_key_b64)])
-                .expect("anchor"),
-        );
-        let facade = admission_facade(trust, Some(daemon_ura.clone()));
-        let request = signed_request_with_nonce(
-            &caller_ura,
-            &daemon_ura,
-            crate::daemon::invocation::dispatch::cancellation::ABILITY_INVOCATION_CANCEL,
-            br#"{"target_lifecycle_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","reason":"stop"}"#,
-            &signing_key,
-            [0x23u8; 16],
-        );
-
-        let _first = facade.verify_invoke(&request);
-        assert_eq!(facade.replay_store.len(), 1);
-
-        let replay = facade
-            .verify_invoke(&request)
-            .expect_err("cancel command nonce replay must reject");
-        assert_eq!(replay.code(), tonic::Code::InvalidArgument);
-        assert!(replay.message().contains(REASON_NONCE_REPLAY));
-    }
-
-    #[test]
-    fn signed_caller_with_wrong_key_rejected() {
-        // Trust anchor lists a different public key than the
-        // signer's. verify_signature fails; admission propagates
-        // CALLER_SIGNATURE_INVALID.
-        let signing_key = SigningKey::from_bytes(&[0x55u8; 32]);
-        let other_key = SigningKey::from_bytes(&[0x66u8; 32]);
-        let other_pub_b64 = BASE64_STANDARD.encode(other_key.verifying_key().to_bytes());
-
-        let caller_ura = hub_ura("peer-wrong-key");
-        let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, other_pub_b64)])
-                .expect("anchor"),
-        );
-        let daemon_ura = hub_ura("realm");
-        let facade = admission_facade(trust, Some(daemon_ura.clone()));
-
-        let req = signed_request_with_nonce(
-            &caller_ura,
-            &daemon_ura,
-            "self.echo",
-            b"{}",
-            &signing_key,
-            [0x33u8; 16],
-        );
-        let err = facade
-            .verify_invoke(&req)
-            .expect_err("wrong-key signature must reject");
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(err.message().contains(REASON_CALLER_SIGNATURE_INVALID));
-        // Failed crypto verify must not record the nonce.
-        assert!(facade.replay_store.is_empty());
-    }
-
-    #[test]
-    fn signed_caller_unknown_ura_rejected_with_permission_denied() {
-        // DEC-013: a caller URA absent from the trust anchor never
-        // reaches the §5.2 pipeline; membership miss short-circuits
-        // to permission_denied. The signature is valid in shape but
-        // we never bother verifying it — the trust-anchor lookup is
-        // the gating check.
-        let signing_key = SigningKey::from_bytes(&[0x77u8; 32]);
-        let trust = Arc::new(RealmTrustAnchor::default());
-        let daemon_ura = hub_ura("realm");
-        let facade = admission_facade(trust, Some(daemon_ura.clone()));
-
-        let req = signed_request_with_nonce(
-            "easynet:///r/realm/agent/test.uninvited",
-            &daemon_ura,
-            "self.echo",
-            b"{}",
-            &signing_key,
-            [0x44u8; 16],
-        );
-        let err = facade
-            .verify_invoke(&req)
-            .expect_err("unknown caller URA must reject");
-        assert_eq!(err.code(), tonic::Code::PermissionDenied);
-        assert!(err.message().contains("not in the realm trust anchor"));
-    }
-
-    #[test]
-    fn invoke_stream_uses_same_pipeline() {
-        let signing_key = SigningKey::from_bytes(&[0x88u8; 32]);
-        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_ura = hub_ura("peer-streamer");
-        let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, pub_key_b64)])
-                .expect("anchor"),
-        );
-        let daemon_ura = hub_ura("realm");
-        let facade = admission_facade(trust, Some(daemon_ura.clone()));
-
-        let stream_ability = "federation.subscribe_directory";
-        let stream_subject = default_subject_for(&daemon_ura, stream_ability);
-        let req = signed_request_with_subject_and_nonce_for_mode(
-            &caller_ura,
-            &daemon_ura,
-            &stream_subject,
-            stream_ability,
-            b"{}",
-            &signing_key,
-            [0x55u8; 16],
-            crate::daemon::ability::CallMode::Stream,
-        );
-        let stream_req = InvokeServerStreamRequest {
-            envelope: req.envelope.clone(),
-            function_name: req.function_name.clone(),
-            arguments: req.arguments.clone(),
-            metadata: req.metadata.clone(),
-            ..InvokeServerStreamRequest::default()
-        };
-        let err = facade
-            .verify_invoke_stream(&stream_req)
-            .expect_err("stream call reaches RFC-014 policy and is denied");
-        assert_policy_denied(&err);
-    }
-
-    #[test]
-    fn shared_replay_store_serialises_dual_facades() {
-        // Two facades sharing one replay store reject each other's
-        // replays — the daemon-wide dedup window holds across any
-        // listener split that PR-10 might introduce.
-        let signing_key = SigningKey::from_bytes(&[0xAAu8; 32]);
-        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_ura = hub_ura("peer-shared");
-        let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, pub_key_b64)])
-                .expect("anchor"),
-        );
-
-        let store = SharedNonceReplayStore::new();
-        let daemon_ura = hub_ura("realm");
-        let catalog = test_ability_catalog();
-        let facade_a = AdmissionFacade::with_replay_store(
-            Arc::clone(&trust),
-            Some(daemon_ura.clone()),
-            store.clone(),
-        )
-        .with_ability_catalog(Arc::clone(&catalog));
-        let facade_b = AdmissionFacade::with_replay_store(
-            Arc::clone(&trust),
-            Some(daemon_ura.clone()),
-            store.clone(),
-        )
-        .with_ability_catalog(catalog);
-
-        let req = signed_request_with_nonce(
-            &caller_ura,
-            &daemon_ura,
-            "self.echo",
-            b"{}",
-            &signing_key,
-            [0x66u8; 16],
-        );
-        let err = facade_a
-            .verify_invoke(&req)
-            .expect_err("facade A records nonce before policy deny");
-        assert_policy_denied(&err);
-        let err = facade_b
-            .verify_invoke(&req)
-            .expect_err("facade B must reject the replayed nonce");
-        assert!(err.message().contains(REASON_NONCE_REPLAY));
-    }
-
-    // ── Strict public admission by role ───────────────────────────
-
-    /// Anchor with one Device-role entry. The all-zero public key is
-    /// enough for unsigned-rejection tests because structure validation
-    /// fails before public-key resolution.
-    fn device_anchor(ura: &str) -> Arc<RealmTrustAnchor> {
-        Arc::new(
-            RealmTrustAnchor::from_entries(vec![device_entry(
-                ura,
-                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-            )])
-            .expect("anchor"),
-        )
-    }
-
-    struct NoopFederationClient;
-
-    #[async_trait::async_trait]
-    impl crate::daemon::federation::client::FederationClient for NoopFederationClient {
-        async fn invoke(
-            &self,
-            _target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
-            _request: InvokeRequest,
-        ) -> Result<
-            easynet_axon::pb::axon::v1::InvokeResponse,
-            crate::daemon::federation::client::FederationClientError,
-        > {
-            Err(
-                crate::daemon::federation::client::FederationClientError::DialFailed {
-                    endpoint: "https://noop.test:50443".to_string(),
-                    detail: "noop test client".to_string(),
-                },
+            !AdmissionTransportBoundary::OffBoxStrict.accepts_local_self_caller(
+                Some("easynet:///r/test/device/daemon"),
+                "easynet:///r/test/device/daemon",
             )
-        }
+        );
     }
 
     #[test]
-    fn parse_realm_from_ura_accepts_canonical_hub_and_device_shapes() {
-        assert_eq!(
-            parse_realm_from_ura(&hub_ura("peer-realm")),
-            Some("peer-realm".to_string())
+    fn off_box_facade_does_not_accept_local_system_self_admission() {
+        assert!(
+            !AdmissionTransportBoundary::OffBoxStrict.accepts_local_self_caller(
+                Some("easynet:///r/test/device/daemon"),
+                crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+            )
         );
-        assert_eq!(
-            parse_realm_from_ura("easynet:///r/peer-realm/device/device-123"),
-            Some("peer-realm".to_string())
-        );
+    }
+
+    #[test]
+    fn federated_caller_classification_accepts_only_canonical_peer_identities() {
+        let facade = federated_facade();
+
+        assert!(facade.is_federated_caller("easynet:///r/peer-realm/hub"));
+        assert!(!facade.is_federated_caller("easynet:///r/peer-realm/hub/extra"));
+        assert!(!facade.is_federated_caller("easynet:///r/self-realm/hub"));
+        assert!(!facade.is_federated_caller("easynet:///r/unknown-realm/hub"));
+    }
+
+    #[test]
+    fn admission_realm_extraction_uses_the_canonical_ura_parser() {
         assert_eq!(
             parse_realm_from_ura("easynet:///r/peer-realm/hub"),
             Some("peer-realm".to_string())
@@ -4191,188 +2808,59 @@ mod tests {
     }
 
     #[test]
-    fn is_federated_caller_accepts_canonical_hub_ura() {
-        let facade = admission_facade(
-            Arc::new(RealmTrustAnchor::default()),
-            Some(hub_ura("local-realm")),
+    fn agent_descriptor_admission_binds_public_route_not_execution_key() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let device_ura = crate::core::ura::device_ura("admission-test", "device-a");
+        let agent_ura = crate::core::ura::agent_ura("admission-test", "local", "testbot");
+        let authority =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+                device_ura,
+                [agent_ura],
+            )
+            .expect("hosted Agent authority context");
+        let mut catalog = crate::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            authority,
+        );
+        crate::daemon::ability::builtins::agents::discover::register_for_agent(
+            &mut catalog,
+            "testbot".to_string(),
+            crate::daemon::persistence::agent_registry::AgentRegistry::default,
+            Arc::new(std::sync::OnceLock::new()),
+        );
+        let descriptor = catalog
+            .public_descriptor_for_mode(
+                &crate::daemon::ability::dispatch::OwnerKind::Agent("testbot".to_string()),
+                "discover",
+                crate::daemon::ability::CallMode::Rpc,
+            )
+            .expect("agent public descriptor");
+        let ability_ura = descriptor
+            .canonical_ability_ura()
+            .expect("agent descriptor has canonical ability URA");
+        let descriptor_ref = axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
+            "{}@{}#{}!{}",
+            ability_ura,
+            descriptor.version,
+            hex::encode(descriptor.descriptor_hash_bytes()),
+            descriptor.admission_action().as_str()
+        ))
+        .expect("canonical agent descriptor ref");
+        let facade = AdmissionFacade::with_trust_anchor_cell(
+            SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default())),
+            None,
         )
-        .with_federation(
-            Arc::new(NoopFederationClient),
-            SharedFederatedPeers::new(std::collections::BTreeMap::from([(
-                "peer-realm".to_string(),
-                "https://peer.example:50443".to_string(),
-            )])),
-        );
-        assert!(facade.is_federated_caller(&hub_ura("peer-realm")));
-        assert!(facade.is_federated_caller("easynet:///r/peer-realm/hub"));
-        assert!(!facade.is_federated_caller("easynet:///r/peer-realm/hub/extra"));
-    }
+        .with_ability_catalog(Arc::new(catalog));
 
-    #[test]
-    fn federated_caller_role_preserves_canonical_principal_kind() {
-        assert_eq!(
-            federated_caller_role("easynet:///r/peer-realm/device/device-123"),
-            Some(TrustedAgentRole::Device)
-        );
-        assert_eq!(
-            federated_caller_role("easynet:///r/peer-realm/user/alice"),
-            Some(TrustedAgentRole::User)
-        );
-        assert_eq!(
-            federated_caller_role("easynet:///r/peer-realm/hub"),
-            Some(TrustedAgentRole::Hub)
-        );
-        assert_eq!(
-            federated_caller_role("easynet:///r/peer-realm/resource/user.alice/x"),
-            None
-        );
-    }
-
-    #[test]
-    fn device_role_rejects_unsigned_envelope() {
-        let caller_ura = "easynet:///r/realm/device/device-A";
-        let facade = admission_facade(device_anchor(caller_ura), Some(hub_ura("realm")));
-        let req = invoke_request(Some(envelope_with_caller(caller_ura)));
-
-        let err = facade
-            .verify_invoke(&req)
-            .expect_err("device path must reject unsigned envelopes");
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(
-            err.message().contains(REASON_CALLER_SIGNATURE_INVALID),
-            "wire reason must be AXON_CALLER_SIGNATURE_INVALID, got: {}",
-            err.message(),
-        );
-        assert!(
-            facade.replay_store.is_empty(),
-            "structure failures must not record nonces",
-        );
-    }
-
-    #[test]
-    fn device_role_rejects_repeated_unsigned_envelopes_without_nonce_mutation() {
-        let caller_ura = "easynet:///r/realm/device/device-B";
-        let facade = admission_facade(device_anchor(caller_ura), Some(hub_ura("realm")));
-        let req = invoke_request(Some(envelope_with_caller(caller_ura)));
-        for _ in 0..3 {
-            let err = facade
-                .verify_invoke(&req)
-                .expect_err("each unsigned device call rejects before replay");
-            assert_eq!(err.code(), tonic::Code::InvalidArgument);
-            assert!(err.message().contains(REASON_CALLER_SIGNATURE_INVALID));
-        }
-        assert!(facade.replay_store.is_empty());
-    }
-
-    #[test]
-    fn device_role_uses_strict_path_when_signature_is_present() {
-        let signing_key = SigningKey::from_bytes(&[0xAB_u8; 32]);
-        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
-        let caller_ura = "easynet:///r/realm/device/device-signed";
-        let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![device_entry(caller_ura, pub_key_b64)])
-                .expect("anchor"),
-        );
-        let facade = admission_facade(trust, Some(hub_ura("realm")));
-
-        let req = signed_request_with_nonce(
-            caller_ura,
-            caller_ura,
-            // The Device-owned RPC contract exercises the unary admission
-            // path without fabricating an RPC descriptor for the Bidi-only
-            // session.open runtime-admin carrier.
-            "session.list",
-            b"{}",
-            &signing_key,
-            [0x5Au8; 16],
-        );
-        let err = facade
-            .verify_invoke(&req)
-            .expect_err("signed device caller reaches RFC-014 policy and is denied");
-        assert_policy_denied(&err);
-        assert_eq!(facade.replay_store.len(), 1);
-
-        let err = facade
-            .verify_invoke(&req)
-            .expect_err("replayed signed device nonce must reject");
-        assert!(err.message().contains(REASON_NONCE_REPLAY));
-    }
-
-    #[test]
-    fn role_dispatch_keeps_backend_and_device_strict() {
-        // Two callers in the same anchor: one Backend, one Device.
-        // Both callers go through strict §5.2; role dispatch no
-        // longer carries a Device-specific unsigned compatibility arm.
-        let backend_signing = SigningKey::from_bytes(&[0xC0u8; 32]);
-        let backend_pub_b64 = BASE64_STANDARD.encode(backend_signing.verifying_key().to_bytes());
-        let device_signing = SigningKey::from_bytes(&[0xC1u8; 32]);
-        let device_pub_b64 = BASE64_STANDARD.encode(device_signing.verifying_key().to_bytes());
-        // Backend role demands a hub URA per `canonical_ura_for_role`,
-        // and the strict pipeline must NOT be short-circuited by the
-        // local self admission path — so we route the caller through a
-        // peer-realm hub URA. The daemon's self URA (set below as
-        // the second `admission_facade` arg) stays in the local
-        // `realm` so caller_ura != self_ura and the strict path runs.
-        let backend_ura = hub_ura("peer-role-dispatch");
-        let device_ura = "easynet:///r/realm/device/device-C";
-
-        let trust = Arc::new(
-            RealmTrustAnchor::from_entries(vec![
-                backend_entry(&backend_ura, backend_pub_b64),
-                device_entry(device_ura, device_pub_b64),
-            ])
-            .expect("anchor"),
-        );
-        let daemon_ura = hub_ura("realm");
-        let facade = admission_facade(trust, Some(daemon_ura.clone()));
-
-        // Device caller, unsigned: rejects strict.
-        let device_req = invoke_request(Some(envelope_with_caller(device_ura)));
-        let err = facade
-            .verify_invoke(&device_req)
-            .expect_err("device arm rejects unsigned");
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
-
-        // Device caller, properly signed: admits strict and records
-        // the nonce in the replay store.
-        let device_signed = signed_request_with_nonce(
-            device_ura,
-            &daemon_ura,
-            "self.echo",
-            b"{}",
-            &device_signing,
-            [0xC2u8; 16],
-        );
-        let err = facade
-            .verify_invoke(&device_signed)
-            .expect_err("device arm reaches RFC-014 policy after signature");
-        assert_policy_denied(&err);
-
-        // Backend caller, unsigned: rejects strict.
-        let backend_unsigned = invoke_request(Some(envelope_with_caller(&backend_ura)));
-        let err = facade
-            .verify_invoke(&backend_unsigned)
-            .expect_err("backend arm rejects unsigned");
-        assert_eq!(err.code(), tonic::Code::InvalidArgument);
-
-        // Backend caller, properly signed: admits strict and records
-        // the nonce in the replay store.
-        let backend_signed = signed_request_with_nonce(
-            &backend_ura,
-            &daemon_ura,
-            "self.echo",
-            b"{}",
-            &backend_signing,
-            [0xD0u8; 16],
-        );
-        let err = facade
-            .verify_invoke(&backend_signed)
-            .expect_err("backend arm reaches RFC-014 policy after signature");
-        assert_policy_denied(&err);
-        assert_eq!(
-            facade.replay_store.len(),
-            2,
-            "both signed public callers should hit the replay store",
-        );
+        facade
+            .bound_admission_descriptor(
+                "discover",
+                crate::daemon::ability::CallMode::Rpc,
+                &descriptor_ref,
+            )
+            .expect("public discover route must bind the qualified execution descriptor");
     }
 }

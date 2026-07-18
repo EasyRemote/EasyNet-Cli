@@ -36,7 +36,7 @@
 use std::collections::HashMap;
 
 use crate::core::domain::NodeId;
-use easynet_axon::invocation::CausalContext;
+use axon_sdk::invocation::CausalContext;
 use serde_json::Value;
 
 /// Descriptor-bound local invocation target for a canonical Ability URA.

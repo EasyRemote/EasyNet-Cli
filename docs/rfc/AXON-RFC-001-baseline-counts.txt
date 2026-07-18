@@ -31,7 +31,7 @@ Rule 5 — No legacy SSH/exec compatibility env var
 
 Rule 6 — Hosted Agent receipt schema (deferred to P4)
   [info] receipt schema lands in P4
-Rule 7 — local-agents.json hosted URI persistence (deferred to P4)
+Rule 7 — local-agents.json hosted URA persistence (deferred to P4)
   [info] persistence lands in P4
 Rule 8 — admission_internal kernel-local (deferred to P3)
   [ ok ] admission_internal accepted from external (heuristic)        0

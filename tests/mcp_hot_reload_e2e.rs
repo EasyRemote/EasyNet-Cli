@@ -17,7 +17,9 @@
 
 use std::sync::Arc;
 
-use easynet_axon::invocation::LocalRuntime;
+#[path = "support/runtime_fixture.rs"]
+mod runtime_fixture;
+
 use easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::{
     refresh_server_dynamic, RegistryRefreshSink,
 };
@@ -38,7 +40,7 @@ fn registry_for_mcp_owner() -> AxonAbilityCatalog {
         )
         .expect("MCP owner must be hosted by the test Device authority");
     AxonAbilityCatalog::new_with_runtime_and_authority_context(
-        LocalRuntime::new(),
+        runtime_fixture::rejecting_runtime(),
         authority_context,
     )
 }
@@ -141,7 +143,8 @@ async fn list_changed_push_triggers_dynamic_refresh() {
             "Initial tool",
             serde_json::json!({"type": "object"}),
         )
-        .unwrap();
+        .and_then(|manifest| manifest.with_admission_action("stream"))
+        .expect("preloaded MCP stream manifest must satisfy canonical admission");
         // Boot-reflected tools register as stream handlers (mirrors
         // `register_one_tool_dynamic`). For the diff to detect the
         // unchanged-vs-removed split we don't actually need the

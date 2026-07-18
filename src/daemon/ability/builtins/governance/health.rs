@@ -115,7 +115,10 @@ mod tests {
         // dispatcher, dispatch a Local target, observe the echo.
         // This is the smoke path the v1 daemon's startup hits.
         let mut reg = AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
         );
         register(&mut reg);
         let dispatcher = Arc::new(reg);

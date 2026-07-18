@@ -28,17 +28,21 @@
 
 #[path = "key_service_fixture.rs"]
 mod key_service_fixture;
+#[path = "support/runtime_fixture.rs"]
+mod runtime_fixture;
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use easynet_axon::invocation::{
-    sha256, AgentIdentity, AxonError, CalleeSignature, LocalRuntime, ReceiptSigningAuthority,
-    ReceiptSigningAuthorityProvider,
+use axon_sdk::invocation::axiom::authority_proof_expected_hash;
+use axon_sdk::invocation::{
+    sha256, AgentIdentity, AuthorityBinding, AxonError, CalleeSignature, CanonicalReceiptProvider,
+    DescriptorBoundEnvelope, InvocationAuthorityProof, LocalRuntime, ReceiptSigningAuthority,
+    VerifiedAdmissionPolicy,
 };
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey, SIGNATURE_LENGTH};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde_json::{json, Value};
 
 use easynet_cli::core::ura;
@@ -125,21 +129,18 @@ fn registry_for_pages_owner(
 
 fn configured_local_runtime(realm: &str, user: &str) -> Arc<LocalRuntime> {
     let pages_agent = ura::agent_ura(realm, user, "pages");
-    let runtime = LocalRuntime::new_with_receipt_signing_authority_provider(Arc::new(
-        PagesReceiptSigningAuthorityProvider::for_owner(pages_agent),
-    ));
-    easynet_cli::daemon::axon_bridge::runtime_factory::configure_local_runtime(
-        &runtime, None, None,
-    );
-    runtime
+    easynet_cli::daemon::axon_bridge::runtime_factory::build_local_runtime_with_receipt_provider(
+        runtime_fixture::rejecting_key_resolver(),
+        Arc::new(PagesCanonicalReceiptProvider::for_owner(pages_agent)),
+    )
 }
 
-struct PagesReceiptSigningAuthorityProvider {
+struct PagesCanonicalReceiptProvider {
     allowed_owner: String,
     seen_signers: Mutex<HashMap<String, VerifyingKey>>,
 }
 
-impl PagesReceiptSigningAuthorityProvider {
+impl PagesCanonicalReceiptProvider {
     fn for_owner(owner: String) -> Self {
         Self {
             allowed_owner: owner,
@@ -149,8 +150,28 @@ impl PagesReceiptSigningAuthorityProvider {
 }
 
 #[async_trait::async_trait]
-impl ReceiptSigningAuthorityProvider for PagesReceiptSigningAuthorityProvider {
-    async fn resolve(
+impl CanonicalReceiptProvider for PagesCanonicalReceiptProvider {
+    fn verify_admission_policy(
+        &self,
+        envelope: &DescriptorBoundEnvelope,
+    ) -> Result<VerifiedAdmissionPolicy, AxonError> {
+        let binding = AuthorityBinding::Self_ {
+            principal_ura: envelope.envelope().caller.ura.clone(),
+        };
+        let mut proof = InvocationAuthorityProof::new(
+            "pages-test-verified-admission",
+            Some(binding.clone()),
+            Vec::new(),
+            [0u8; 32],
+            Some(envelope.envelope().callee.clone()),
+            None,
+            "easynet-cli.pages-test.canonical_receipt_provider.admission.v1",
+        );
+        proof.proof_hash = authority_proof_expected_hash(&proof);
+        VerifiedAdmissionPolicy::new(envelope, binding, proof)
+    }
+
+    async fn resolve_signing_authority(
         &self,
         callee: &AgentIdentity,
     ) -> Result<Arc<dyn ReceiptSigningAuthority>, AxonError> {
@@ -211,37 +232,19 @@ impl ReceiptSigningAuthority for PagesReceiptSigningAuthority {
         self.verifying_key()
     }
 
-    async fn sign_canonical_receipt(
+    async fn sign_and_verify(
         &self,
         canonical_receipt: &[u8],
     ) -> Result<CalleeSignature, AxonError> {
         let signature: Signature = self.signing_key.sign(canonical_receipt);
+        self.verifying_key()
+            .verify(canonical_receipt, &signature)
+            .map_err(|_| AxonError::internal("pages_test_receipt_signature_self_verify_failed"))?;
         Ok(CalleeSignature {
             algorithm: "ed25519".to_string(),
             signature: signature.to_bytes().to_vec(),
             key_id_hint: "pages-integration-test-receipt-key".to_string(),
         })
-    }
-
-    fn verify_canonical_receipt(
-        &self,
-        canonical_receipt: &[u8],
-        signature: &CalleeSignature,
-    ) -> Result<(), AxonError> {
-        if signature.algorithm != "ed25519" {
-            return Err(AxonError::invalid_argument(format!(
-                "unsupported_algorithm:{}",
-                signature.algorithm
-            )));
-        }
-        let bytes: [u8; SIGNATURE_LENGTH] = signature
-            .signature
-            .as_slice()
-            .try_into()
-            .map_err(|_| AxonError::invalid_argument("callee_signature_wrong_length"))?;
-        self.verifying_key()
-            .verify(canonical_receipt, &Signature::from_bytes(&bytes))
-            .map_err(|_| AxonError::invalid_argument("callee_signature_invalid"))
     }
 }
 

@@ -82,6 +82,9 @@ use crate::daemon::invocation::bidi::session_wire::{RequestOutcome, SessionReque
 use crate::daemon::invocation::admission::admission_facade::{
     AdmissionFacade, AdmissionTransportBoundary,
 };
+use crate::daemon::invocation::admission::federated_key_resolver::{
+    FederatedKeyResolver, SharedFederatedKeyCache,
+};
 use crate::daemon::invocation::admission::principal_lifecycle::{
     principal_lifecycle_store_path_for_trust_anchor, PrincipalLifecycleReader,
 };
@@ -117,6 +120,109 @@ use trust::{
     load_trust_anchor_from, reload_daemon_config_cells_from, reload_trust_anchor_cell_from,
     upsert_hub_identity,
 };
+
+/// One provider graph shared by Axon's canonical caller authentication,
+/// daemon product policy, cross-hub routing, and SIGHUP reload.
+///
+/// The graph is complete before `LocalRuntime` is constructed. It therefore
+/// cannot drift into the former shape where Axon admitted against a local-only
+/// resolver while the daemon facade held a separate federated resolver.
+#[derive(Clone)]
+pub struct InvocationFederationRuntime {
+    resolver: Arc<FederatedKeyResolver>,
+    client: Option<Arc<dyn crate::daemon::federation::client::FederationClient>>,
+    peers: crate::daemon::federation::peers::SharedFederatedPeers,
+    cache: SharedFederatedKeyCache,
+    hub_signer: Option<Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>>,
+}
+
+impl InvocationFederationRuntime {
+    #[must_use]
+    pub fn trusted_identity_resolver(&self) -> Arc<dyn axon_sdk::invocation::KeyResolver> {
+        self.resolver.clone()
+    }
+
+    fn resolver(&self) -> Arc<FederatedKeyResolver> {
+        Arc::clone(&self.resolver)
+    }
+
+    fn client(&self) -> Option<Arc<dyn crate::daemon::federation::client::FederationClient>> {
+        self.client.clone()
+    }
+
+    fn peers(&self) -> crate::daemon::federation::peers::SharedFederatedPeers {
+        self.peers.clone()
+    }
+
+    fn cache(&self) -> SharedFederatedKeyCache {
+        self.cache.clone()
+    }
+
+    fn hub_signer(
+        &self,
+    ) -> Option<Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>> {
+        self.hub_signer.clone()
+    }
+
+    #[cfg(test)]
+    fn local_only(trust_anchor: SharedTrustAnchor, realm: impl Into<String>) -> Self {
+        let peers = crate::daemon::federation::peers::SharedFederatedPeers::default();
+        let cache = SharedFederatedKeyCache::new();
+        let resolver = Arc::new(
+            FederatedKeyResolver::new(trust_anchor, None, peers.clone(), Some(realm.into()))
+                .with_cache(cache.clone()),
+        );
+        Self {
+            resolver,
+            client: None,
+            peers,
+            cache,
+            hub_signer: None,
+        }
+    }
+}
+
+pub fn build_invocation_federation_runtime(
+    config: &DaemonConfig,
+    trust_anchor: SharedTrustAnchor,
+) -> anyhow::Result<InvocationFederationRuntime> {
+    let capabilities = InvocationModeCapabilities::for_mode(config.mode());
+    let peers = crate::daemon::federation::peers::SharedFederatedPeers::new(
+        config.federated_peers().clone(),
+    );
+    let cache = SharedFederatedKeyCache::new();
+    let client = capabilities.hub_runtime.then(|| {
+        Arc::new(
+            crate::daemon::federation::client::CrossHubDialer::with_trust_anchor_cell(
+                trust_anchor.clone(),
+            ),
+        ) as Arc<dyn crate::daemon::federation::client::FederationClient>
+    });
+    let hub_signer = if capabilities.hub_runtime {
+        Some(load_runtime_signer(&crate::core::ura::hub_ura(
+            config.realm(),
+        ))?)
+    } else {
+        None
+    };
+    let mut resolver = FederatedKeyResolver::new(
+        trust_anchor,
+        client.clone(),
+        peers.clone(),
+        Some(config.realm().to_string()),
+    )
+    .with_cache(cache.clone());
+    if let Some(signer) = hub_signer.as_ref() {
+        resolver = resolver.with_hub_signer(Arc::clone(signer));
+    }
+    Ok(InvocationFederationRuntime {
+        resolver: Arc::new(resolver),
+        client,
+        peers,
+        cache,
+        hub_signer,
+    })
+}
 
 /// Maximum decoded gRPC message size for InvocationServer/Client on
 /// both directions. tonic's default cap is 4 MiB which aborted
@@ -229,11 +335,15 @@ impl SessionShutdown {
 /// must be shared with the rest of daemon boot.
 #[derive(Clone)]
 pub struct InvocationTransportDependencies {
-    pub local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+    pub daemon_runtime: crate::daemon::axon_bridge::runtime_factory::DaemonRuntimeAssembly,
+    pub federation_runtime: InvocationFederationRuntime,
+    pub runtime_trust_anchor: SharedTrustAnchor,
     pub local_ability_catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
+    pub access_control_stores:
+        Arc<crate::daemon::persistence::access_control::AccessControlStoreRegistry>,
     pub invocation_cancellations:
         crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry,
-    pub invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
+    pub invocation_ledger: Option<Arc<axon_sdk::invocation::InvocationLedger>>,
     pub hot_agent_registrar_cell:
         Arc<crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell>,
     pub plugin_runtime_manager: Option<Arc<crate::daemon::plugins::PluginRuntimeManager>>,
@@ -249,8 +359,11 @@ pub fn start_daemon_invocation_transport(
     dependencies: InvocationTransportDependencies,
 ) -> anyhow::Result<SessionShutdown> {
     let InvocationTransportDependencies {
-        local_runtime,
+        daemon_runtime,
+        federation_runtime,
+        runtime_trust_anchor,
         local_ability_catalog,
+        access_control_stores,
         invocation_cancellations,
         invocation_ledger,
         hot_agent_registrar_cell,
@@ -258,6 +371,8 @@ pub fn start_daemon_invocation_transport(
         hub_published_abilities,
         discover_federation_resolver,
     } = dependencies;
+    let local_runtime = daemon_runtime.runtime();
+    let runtime_admission_key_resolver = daemon_runtime.admission_graph();
 
     let config_path = expand_home(DEFAULT_DAEMON_CONFIG_PATH);
     let config = DaemonConfig::load(&config_path).with_context(|| {
@@ -276,12 +391,7 @@ pub fn start_daemon_invocation_transport(
             config.mode().as_str()
         );
     }
-    let hub_signer = if capabilities.hub_runtime {
-        let hub_ura = crate::core::ura::hub_ura(config.realm());
-        Some(load_runtime_signer(&hub_ura)?)
-    } else {
-        None
-    };
+    let hub_signer = federation_runtime.hub_signer();
     let daemon_ura = transport_daemon_ura(config.mode(), config.realm(), daemon_identity.as_ref());
     // PR-7 commit 7/N adds an env-override seam: production deploys
     // use `/etc/easynet/realm-trust.toml`; tests / smoke runs set
@@ -306,7 +416,8 @@ pub fn start_daemon_invocation_transport(
     // register call atomically writes the file and republishes the
     // cell so the next admission sees the new entry without a daemon
     // restart.
-    let trust_anchor_cell = SharedTrustAnchor::new(Arc::new(trust_anchor));
+    runtime_trust_anchor.replace(Arc::new(trust_anchor));
+    let trust_anchor_cell = runtime_trust_anchor;
     let presence = Arc::new(PresenceRegistry::new());
     let advertised_agents = Arc::new(
         crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore::new(),
@@ -352,9 +463,7 @@ pub fn start_daemon_invocation_transport(
     // DaemonInvocationService (for cross-hub `canonical_invoke`
     // routing) and the AdmissionFacade (for `FederatedKeyResolver`
     // cross-realm signature verify against peer hubs).
-    let federated_peers_cell = crate::daemon::federation::peers::SharedFederatedPeers::new(
-        config.federated_peers().clone(),
-    );
+    let federated_peers_cell = federation_runtime.peers();
 
     // **PR-N3 commit N3-3 + N3-4**. The cross-realm directory
     // cell. Lives at the daemon scope so any consumer of the
@@ -380,28 +489,15 @@ pub fn start_daemon_invocation_transport(
     // resolved via `federation.resolve_key` against the peer hub.
     // Device-mode daemons never originate federation calls, so
     // both surfaces stay local-only.
-    let dialer: Option<Arc<dyn crate::daemon::federation::client::FederationClient>> =
-        if capabilities.hub_runtime {
-            Some(Arc::new(
-                crate::daemon::federation::client::CrossHubDialer::with_trust_anchor_cell(
-                    trust_anchor_cell.clone(),
-                ),
-            ))
-        } else {
-            None
-        };
+    let dialer = federation_runtime.client();
     let mut admission =
-        AdmissionFacade::with_trust_anchor_cell(trust_anchor_cell.clone(), daemon_ura.clone());
+        AdmissionFacade::with_trust_anchor_cell(trust_anchor_cell.clone(), daemon_ura.clone())
+            .with_access_control_stores(access_control_stores);
     admission = admission.with_ability_catalog(Arc::clone(&local_ability_catalog));
     admission = admission.with_principal_lifecycle_reader(PrincipalLifecycleReader::new(
         principal_lifecycle_store_path_for_trust_anchor(&trust_anchor_path),
     ));
-    if let Some(client) = dialer.clone() {
-        admission = admission.with_federation(client, federated_peers_cell.clone());
-    }
-    if let Some(signer) = hub_signer.as_ref() {
-        admission = admission.with_hub_signer(Arc::clone(signer));
-    }
+    admission = admission.with_federated_key_resolver(federation_runtime.resolver());
     // #185: one hot-swappable quota gate is shared by both listeners.
     // The gate exists even when quota starts disabled so SIGHUP can
     // enable, disable, or retune `[daemon.quota]` without rebuilding
@@ -413,7 +509,10 @@ pub fn start_daemon_invocation_transport(
     // so the unified SIGHUP reload task (below) can flush
     // cached cross-realm pubkeys after every reload (key
     // rotation must not wait for the 5-min per-entry TTL).
-    let federated_key_cache = admission.federated_key_cache();
+    let federated_key_cache = federation_runtime.cache();
+    daemon_runtime
+        .bind_derived_invocation_admission(local_ability_catalog.as_ref(), admission.clone())
+        .context("bind daemon-derived Invocation product admission before transport publication")?;
     // **Unified SIGHUP reload coordinator** (replaces the
     // previous independent tasks). One task, one signal
     // listener, processes trust-anchor reload + federated_peers
@@ -462,11 +561,11 @@ pub fn start_daemon_invocation_transport(
     // open at `<ledger_dir>/invocations.redb`. Open failure leaves
     // the slot `None`; invocation observation then reports that no ledger
     // is wired and Axon runs without a persistence sink.
-    let resolved_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>> =
+    let resolved_ledger: Option<Arc<axon_sdk::invocation::InvocationLedger>> =
         match invocation_ledger {
             Some(ledger) => Some(ledger),
             None => {
-                match easynet_axon::invocation::InvocationLedger::open(
+                match axon_sdk::invocation::InvocationLedger::open(
                     config.ledger_dir().join("invocations.redb"),
                 ) {
                     Ok(ledger) => Some(Arc::new(ledger)),
@@ -492,30 +591,25 @@ pub fn start_daemon_invocation_transport(
     //
     // The daemon creates the Axon `LocalRuntime` before building
     // abilities, so registration lands directly in the runtime.
-    // This transport only installs transport-plane configuration:
-    //   * a `RealmTrustAnchorKeyResolver` over the SAME
-    //     `trust_anchor_cell` admission uses, so signature
-    //     verification inside Axon's descriptor-bound request
-    //     admission sees hot-reload edits immediately;
+    // The runtime was constructed with a `RealmTrustAnchorKeyResolver` over
+    // the SAME `trust_anchor_cell` admission uses, so signature verification
+    // inside Axon's descriptor-bound request admission sees hot-reload edits
+    // immediately. This transport installs only:
     //   * a `LedgerSink` over the SAME ledger handle exposed read-only
     //     through the dispatch service, keeping Axon as the sole receipt
     //     persistence writer.
     //
-    crate::daemon::axon_bridge::runtime_factory::configure_local_runtime(
+    crate::daemon::axon_bridge::runtime_factory::install_ledger_sink(
         &local_runtime,
-        Some(Arc::new(
-            crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
-                trust_anchor_cell.clone(),
-            ),
-        )),
         resolved_ledger.clone(),
     );
     let hub_ura = crate::core::ura::hub_ura(config.realm());
     if let Err(err) = futures::executor::block_on(
-        crate::daemon::axon_bridge::runtime_admin::install_bootstrap_self_identity_admin(
+        crate::daemon::axon_bridge::runtime_admin::register_runtime_bootstrap_identity_ability(
             &local_runtime,
             local_ability_catalog.as_ref(),
             &hub_ura,
+            runtime_admission_key_resolver.bootstrap_identity_provider(),
         ),
     ) {
         let err_msg = err.to_string();
@@ -524,7 +618,7 @@ pub fn start_daemon_invocation_transport(
             kind = axon_local_runtime_admin_install_failed,
             level = "warn",
             error = err_msg,
-            message = "failed to install descriptor-bound Axon SDK runtime.bootstrap_self_identity admin ability",
+            message = "failed to register CLI-owned descriptor-bound runtime.bootstrap_self_identity ability",
         );
     }
 
@@ -569,7 +663,7 @@ pub fn start_daemon_invocation_transport(
             }
         });
 
-    service = service.with_local_runtime(Arc::clone(&local_runtime));
+    service = service.with_daemon_runtime(daemon_runtime.clone());
     service = service.with_ability_wire_registry(Arc::clone(&ability_wire_registry));
 
     if let Some(signer) = hub_signer.as_ref() {
@@ -665,47 +759,20 @@ pub fn start_daemon_invocation_transport(
         .context("register daemon exact unary routes in shared Axon LocalRuntime")?;
     futures::executor::block_on(service.register_daemon_stream_routes(daemon_route_owner))
         .context("register daemon exact stream routes in shared Axon LocalRuntime")?;
+    if capabilities.hub_runtime {
+        futures::executor::block_on(service.register_daemon_bidi_routes(daemon_route_owner))
+            .context("register daemon exact bidi routes in shared Axon LocalRuntime")?;
+    }
 
-    // **PR-N3 commit N3-3.1**. Spawn the polling task that
-    // populates the federated directory cell by calling each
-    // peer's `federation.discover` ability on a fixed cadence.
-    // Cadence is 5 seconds — fast enough for the spec §八
-    // scenario (4) "new peer SIGHUP appears in <agent>.discover
-    // within ~5s" + slow enough that peer hubs aren't pounded.
-    // The task reads the federated_peers cell each round so a
-    // SIGHUP-driven add/drop is naturally picked up; no
-    // separate add/drop signalling needed.
-    if let Some(client) = dialer.clone() {
-        // **Streaming-only directory federation**. The
-        // streaming supervisor (PR-N3 N3-streaming-4) watches
-        // the federated_peers cell and spawns one
-        // `subscribe_directory_v2` subscriber per entry. Every
-        // current peer hub runs the same daemon binary which
-        // serves v2 unconditionally, so the legacy poll task
-        // (`spawn_federated_directory_poll_task`) is dead code
-        // in production — its dual-path required a race-fix
-        // (PR-N3 N3-streaming-10) and contributed nothing once
-        // the streaming supervisor stabilised. The standalone
-        // `poll_once` helper stays available for a future
-        // "operator manual poll" CLI command but is no longer
-        // wired into boot.
-        //
-        // Use the daemon's own URA as the subscribe-stream
-        // envelope's caller. Falls back to a generic CLI-style
-        // URA when the daemon has no credentials yet (test /
-        // smoke builds) so the peer's strict-admission still
-        // sees a non-empty caller field. The fallback uses the
-        // v4.1.5 device shape (`r/cli/device/local`) — the
-        // legacy CLI agent-placeholder shape would fail the
-        // strict parser (§A.URA-3: agent tail needs a dot).
-        let supervisor_caller_ura = daemon_ura
-            .clone()
-            .unwrap_or_else(|| "easynet:///r/cli/device/local".to_string());
+    if let (Some(client), Some(signer)) = (dialer.clone(), hub_signer.clone()) {
+        let request_issuer =
+            crate::daemon::federation::directory::FederatedDirectorySubscriptionIssuer::new(signer)
+                .context("bind canonical federated directory subscription authority")?;
         spawn_federated_directory_streaming_supervisor(
             client,
             federated_peers_cell.clone(),
             federated_directory_cell.clone(),
-            supervisor_caller_ura,
+            request_issuer,
         );
     }
 
@@ -776,7 +843,7 @@ pub fn start_daemon_invocation_transport(
                 identity,
                 hub_ca_pem_path,
                 escalation_state,
-                local_runtime: Arc::clone(&local_runtime),
+                daemon_runtime: daemon_runtime.clone(),
                 local_ability_catalog: Arc::clone(&local_ability_catalog),
                 ability_wire_registry: Arc::clone(&ability_wire_registry),
                 admission: session_admission.clone(),
@@ -1058,7 +1125,7 @@ struct SessionSupervisorConfig {
     identity: DaemonIdentity,
     hub_ca_pem_path: Option<std::path::PathBuf>,
     escalation_state: Option<DeviceEscalationState>,
-    local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+    daemon_runtime: crate::daemon::axon_bridge::runtime_factory::DaemonRuntimeAssembly,
     local_ability_catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
     ability_wire_registry: Arc<crate::daemon::ability::wire::AbilityWireRegistry>,
     admission: AdmissionFacade,
@@ -1074,14 +1141,13 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
         identity,
         hub_ca_pem_path,
         escalation_state,
-        local_runtime,
+        daemon_runtime,
         local_ability_catalog,
         ability_wire_registry,
         admission,
         hub_published_abilities,
         user_trust_sync,
     } = config;
-
     // Directory publication is an immutable view of the same committed
     // control-plane rows used by local route admission and dispatch.
     let ability_descriptors =
@@ -1134,8 +1200,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
     if let Some(correlation) = correlation {
         local_dispatcher = local_dispatcher.with_escalation_correlation(correlation);
     }
-    local_dispatcher = local_dispatcher.with_local_runtime(Arc::clone(&local_runtime));
-    local_dispatcher = local_dispatcher.with_admission_policy(admission);
+    local_dispatcher = local_dispatcher.with_runtime_admission(daemon_runtime, admission);
     local_dispatcher =
         local_dispatcher.with_ability_wire_registry(Arc::clone(&ability_wire_registry));
     // Cross-device origin-caller claims: warm the anchor from the hub
@@ -1363,65 +1428,6 @@ fn spawn_unified_sighup_reload_task(
 ) {
 }
 
-/// **PR-N3 commit N3-3.1**. Spawn the cross-realm directory
-/// poll task. Kept available for a future "operator manual
-/// poll" CLI surface, but no longer wired into boot — the
-/// streaming supervisor handles every peer in production.
-///
-/// Calls `federation_directory::poll_once` every 5s against
-/// every entry in the live `SharedFederatedPeers` cell
-/// snapshot. The task reads the cell each round, so a SIGHUP-
-/// driven federated_peers reload is naturally picked up — peers
-/// added show up in the next poll, peers removed are dropped on
-/// the round after the SIGHUP.
-///
-/// Per-peer failures (dial dropped, parse error) surface as
-/// stderr trace; the task does not retry mid-round, just waits
-/// for the next interval.
-#[allow(dead_code)]
-fn spawn_federated_directory_poll_task(
-    federation_client: Arc<dyn crate::daemon::federation::client::FederationClient>,
-    federated_peers_cell: crate::daemon::federation::peers::SharedFederatedPeers,
-    daemon_ura: Option<String>,
-    federated_directory_cell: crate::daemon::federation::directory::SharedFederatedDirectoryView,
-) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
-        // Skip the immediate-fire on first tick so the daemon
-        // doesn't hammer peers during boot before they're up.
-        // The first real poll fires 5s after spawn.
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            let peers = federated_peers_cell.snapshot();
-            if peers.is_empty() {
-                continue;
-            }
-            let outcome = crate::daemon::federation::directory::poll_once(
-                federation_client.as_ref(),
-                &peers,
-                daemon_ura.as_deref(),
-                &federated_directory_cell,
-            )
-            .await;
-            for (realm, err) in &outcome.failed_peers {
-                // `realm: &String`, `err: impl Display`. Pass through
-                // verbatim so the op-event field renders as
-                // `peer_realm=tenant-a` (auto-quoted only if whitespace)
-                // instead of Rust's `"tenant-a"` Debug literal.
-                let err_msg = err.to_string();
-                crate::op_event!(
-                    component = federation_directory,
-                    kind = poll_peer_failed,
-                    peer_realm = realm,
-                    error = err_msg,
-                );
-            }
-        }
-    });
-}
-
 /// **PR-N3 commit N3-streaming-4**. Spawn a watcher task that
 /// observes the live `SharedFederatedPeers` cell and maintains
 /// one streaming subscriber task per peer. New peers (added
@@ -1443,7 +1449,7 @@ fn spawn_federated_directory_streaming_supervisor(
     federation_client: Arc<dyn crate::daemon::federation::client::FederationClient>,
     federated_peers_cell: crate::daemon::federation::peers::SharedFederatedPeers,
     federated_directory_cell: crate::daemon::federation::directory::SharedFederatedDirectoryView,
-    caller_ura: String,
+    request_issuer: crate::daemon::federation::directory::FederatedDirectorySubscriptionIssuer,
 ) {
     tokio::spawn(async move {
         // peer_realm -> oneshot::Sender that cancels the
@@ -1470,14 +1476,14 @@ fn spawn_federated_directory_streaming_supervisor(
                         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
                         let realm_owned = peer_realm.to_string();
                         let endpoint_owned = peer_hub_endpoint.to_string();
-                        let caller_owned = caller_ura.clone();
+                        let request_issuer = request_issuer.clone();
                         let client_clone = Arc::clone(&federation_client_outer);
                         let cell_clone = directory_cell_outer.clone();
                         tokio::spawn(async move {
                             crate::daemon::federation::directory::run_per_peer_supervisor(
                                 realm_owned,
                                 endpoint_owned,
-                                caller_owned,
+                                request_issuer,
                                 client_clone,
                                 cell_clone,
                                 cancel_rx,
@@ -1550,10 +1556,26 @@ mod tests {
     use super::*;
 
     fn test_invocation_transport_dependencies() -> InvocationTransportDependencies {
+        let trust_anchor = SharedTrustAnchor::new(Arc::new(
+            crate::daemon::trust::anchor::RealmTrustAnchor::default(),
+        ));
+        let runtime =
+            crate::daemon::axon_bridge::runtime_factory::build_test_daemon_runtime_assembly(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            );
         InvocationTransportDependencies {
-            local_runtime: easynet_axon::invocation::LocalRuntime::new(),
+            daemon_runtime: runtime,
+            federation_runtime: InvocationFederationRuntime::local_only(
+                trust_anchor.clone(),
+                "test-realm",
+            ),
+            runtime_trust_anchor: trust_anchor,
             local_ability_catalog: Arc::new(
                 crate::daemon::ability::dispatch::AxonAbilityCatalog::new(),
+            ),
+            access_control_stores: Arc::new(
+                crate::daemon::persistence::access_control::AccessControlStoreRegistry::ephemeral(),
             ),
             invocation_cancellations: Default::default(),
             invocation_ledger: None,

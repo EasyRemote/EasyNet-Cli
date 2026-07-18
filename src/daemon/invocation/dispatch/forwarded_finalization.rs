@@ -7,10 +7,10 @@
 
 use std::sync::Arc;
 
-use easynet_axon::invocation::{
+use axon_sdk::invocation::{
     sha256, InvocationState, KeyResolver, SignedInvocationReceipt, VerifiedFinalizationCheckpoints,
 };
-use easynet_axon::pb::axon::v1::{
+use axon_sdk::pb::axon::v1::{
     Envelope, Error, InvocationReceipt as WireInvocationReceipt, InvokeRequest, InvokeResponse,
     ResponseHeader,
 };
@@ -19,8 +19,6 @@ use tonic::Status;
 use crate::daemon::invocation::receipts::finalization_projection::{
     self, FinalizationProjectionError, ReceiptCheckpointStage,
 };
-
-use super::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ForwardedInvocationBinding {
@@ -35,18 +33,18 @@ impl ForwardedInvocationBinding {
             .envelope
             .clone()
             .ok_or_else(|| invalid("forwarded invocation is missing its seven-tuple envelope"))?;
-        let ability_binding = request
-            .metadata
-            .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                invalid(format!(
-                    "forwarded invocation is missing `{SIGNED_DESCRIPTOR_REF_METADATA_KEY}`"
-                ))
-            })?
-            .to_string();
+        let callee_ura = envelope
+            .callee
+            .as_ref()
+            .map(|callee| callee.ura.trim())
+            .filter(|ura| !ura.is_empty())
+            .ok_or_else(|| invalid("forwarded invocation is missing its callee binding"))?;
+        let ability_binding = super::invocation_wire::descriptor_ref_from_invocation_target(
+            "forwarded invocation",
+            callee_ura,
+            request.target.as_ref(),
+        )
+        .map_err(|status| invalid(status.message()))?;
         Ok(Self {
             envelope,
             ability_binding,
@@ -81,9 +79,9 @@ impl ForwardedFinalizedInvocation {
         binding: &ForwardedInvocationBinding,
         verified: VerifiedFinalizationCheckpoints,
     ) -> Result<Self, Status> {
-        let admission = easynet_axon::invocation::wire::receipt_to_wire(verified.admission())
+        let admission = axon_sdk::invocation::wire::receipt_to_wire(verified.admission())
             .map_err(|error| invalid(format!("project verified admission checkpoint: {error}")))?;
-        let terminal = easynet_axon::invocation::wire::receipt_to_wire(verified.terminal())
+        let terminal = axon_sdk::invocation::wire::receipt_to_wire(verified.terminal())
             .map_err(|error| invalid(format!("project verified terminal checkpoint: {error}")))?;
         Self::verify_structure(binding, admission, terminal)
     }
@@ -199,7 +197,7 @@ impl ForwardedFinalizationVerifier {
             self.resolver.as_ref(),
             ReceiptCheckpointStage::Admission,
         )?;
-        let canonical = easynet_axon::invocation::wire::receipt_to_wire(&receipt)
+        let canonical = axon_sdk::invocation::wire::receipt_to_wire(&receipt)
             .map_err(|error| invalid(format!("project verified admission checkpoint: {error}")))?;
         verify_admission(&self.binding, &canonical)?;
         self.admission = Some(receipt);
@@ -288,11 +286,12 @@ fn verify_admission(
         ));
     }
     verify_request_binding(binding, receipt, "admission")?;
-    if receipt.output_hash.iter().any(|byte| *byte != 0) {
-        return Err(invalid(
-            "admission checkpoint must not bind a terminal output hash",
-        ));
-    }
+    let computed_output_hash = sha256(&receipt.payload);
+    require_hash(
+        "admission.output_hash",
+        &receipt.output_hash,
+        Some(&computed_output_hash),
+    )?;
     Ok(())
 }
 
@@ -437,13 +436,24 @@ fn invalid(message: impl Into<String>) -> Status {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easynet_axon::pb::axon::v1::{
+    use axon_sdk::pb::axon::v1::{
         causal_context, AgentIdentity, AuthorityBinding, CalleeSignature, CausalContext, Empty,
         EntityRef, InvocationAuthorityProof, SubjectIdentity,
     };
     use ed25519_dalek::VerifyingKey;
 
-    const DESCRIPTOR: &str = "easynet:///r/acme/device/callee/ability/job.run@1.0.0";
+    const CALLEE: &str = "easynet:///r/acme/device/callee";
+
+    fn descriptor_ref() -> String {
+        let binding = crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire(
+            "1.0.0", [0xaa; 32], "invoke",
+        )
+        .expect("test descriptor binding");
+        crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            CALLEE, "job.run", &binding,
+        )
+        .expect("test descriptor ref")
+    }
 
     struct RejectingResolver;
 
@@ -451,15 +461,15 @@ mod tests {
         fn resolve(
             &self,
             _agent_ura: &str,
-        ) -> Result<VerifyingKey, easynet_axon::invocation::AxonError> {
-            Err(easynet_axon::invocation::AxonError::permission_denied(
+        ) -> Result<VerifyingKey, axon_sdk::invocation::AxonError> {
+            Err(axon_sdk::invocation::AxonError::permission_denied(
                 "test resolver rejects forged receipt",
             ))
         }
     }
 
     fn request() -> InvokeRequest {
-        let mut request = InvokeRequest {
+        InvokeRequest {
             envelope: Some(Envelope {
                 caller: Some(agent("easynet:///r/acme/agent/caller")),
                 callee: Some(agent("easynet:///r/acme/device/callee")),
@@ -473,15 +483,17 @@ mod tests {
                 }),
                 ..Envelope::default()
             }),
+            target: Some(
+                crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+                    descriptor_ref(),
+                    "job.run",
+                )
+                .unwrap(),
+            ),
             function_name: "job.run".to_string(),
             arguments: b"{}".to_vec(),
             ..InvokeRequest::default()
-        };
-        request.metadata.insert(
-            SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(),
-            DESCRIPTOR.to_string(),
-        );
-        request
+        }
     }
 
     fn agent(ura: &str) -> AgentIdentity {
@@ -515,7 +527,7 @@ mod tests {
                 ..CalleeSignature::default()
             }),
             authority_binding: Some(AuthorityBinding::default()),
-            ability_binding: DESCRIPTOR.to_string(),
+            ability_binding: descriptor_ref(),
             subject_ref: Some(EntityRef {
                 ura: "easynet:///r/acme/resource/job/1".to_string(),
                 profile: "easynet-strict-v2".to_string(),
@@ -527,11 +539,7 @@ mod tests {
             runtime_env: "test".to_string(),
             authority_proof: Some(InvocationAuthorityProof::default()),
             input_hash: sha256(&request.arguments).to_vec(),
-            output_hash: if state.is_terminal() {
-                sha256(payload).to_vec()
-            } else {
-                vec![0; 32]
-            },
+            output_hash: sha256(payload).to_vec(),
             ..WireInvocationReceipt::default()
         }
     }
@@ -556,6 +564,19 @@ mod tests {
         let error = ForwardedFinalizedInvocation::verify_structure(&binding, admission, terminal)
             .expect_err("changed nonce must fail closed");
         assert!(error.message().contains("seven-tuple"));
+    }
+
+    #[test]
+    fn rejects_admission_payload_not_bound_by_output_hash() {
+        let binding = ForwardedInvocationBinding::from_request(&request()).unwrap();
+        let mut admission = checkpoint(InvocationState::Admitted, 1, b"");
+        admission.payload = b"tampered admission payload".to_vec();
+        let terminal = checkpoint(InvocationState::Completed, 5, b"done");
+
+        let error = ForwardedFinalizedInvocation::verify_structure(&binding, admission, terminal)
+            .expect_err("admission payload must remain bound to its proof facts");
+
+        assert!(error.message().contains("admission.output_hash"));
     }
 
     #[test]
@@ -618,7 +639,7 @@ mod tests {
             ..Error::default()
         });
 
-        easynet_axon::invocation::wire::try_receipt_from_wire(terminal)
+        axon_sdk::invocation::wire::try_receipt_from_wire(terminal)
             .expect_err("forged wire receipt must not enter the trusted domain");
     }
 }

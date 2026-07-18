@@ -17,10 +17,13 @@
 //! from inside the CLI crate; Phase 1+ can begin the actual
 //! migration.
 
+#[path = "support/runtime_fixture.rs"]
+mod runtime_fixture;
+
 use std::sync::Arc;
 use std::time::Duration;
 
-use easynet_axon::invocation::{
+use axon_sdk::invocation::{
     fresh_nonce, make_ability, sign_descriptor_bound_invocation, signing_key_from_bytes,
     AbilityOptions, AgentIdentity, AxonError, BidiInputFrame, CallMode, CallerSignature,
     CausalContext, DescriptorBoundEnvelope, DescriptorBoundEnvelopeParts,
@@ -36,7 +39,7 @@ const SMOKE_IMPL_HASH: [u8; 32] = [0x22; 32];
 const SMOKE_DESCRIPTOR_HASH: [u8; 32] = [0x33; 32];
 
 fn agent(ura: &str) -> AgentIdentity {
-    AgentIdentity::new(ura, UraProfile::EasynetStrictV2)
+    AgentIdentity::new(ura, UraProfile::StrictV2)
 }
 
 fn caller_ura() -> String {
@@ -87,9 +90,8 @@ async fn build_runtime() -> (
     let signing_key = signing_key_from_bytes(&[0x42; 32]);
     let verifying_key = signing_key.verifying_key();
 
-    let rt = LocalRuntime::new();
+    let rt = runtime_fixture::runtime_with_key_resolver(Arc::new(FixedKey(verifying_key)));
     rt.set_ledger_sink(LedgerSink::new(Arc::clone(&ledger)));
-    rt.set_admission_key_resolver(Arc::new(FixedKey(verifying_key)));
 
     (rt, ledger, temp, signing_key)
 }
@@ -213,10 +215,11 @@ async fn axon_bidi_invoke_externally_signed_persists_to_ledger() {
     assert_eq!(
         r.ability_name,
         format!(
-            "{}@{}",
+            "{}@{}#{}!invoke",
             easynet_cli::core::ura::owner_ability_ura(&callee_ura(), "test.echo_bidi")
                 .expect("callee-owned ability URA"),
-            DEFAULT_ABILITY_DESCRIPTOR_VERSION
+            DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            hex::encode(SMOKE_DESCRIPTOR_HASH),
         )
     );
     assert_eq!(r.state, "completed");
@@ -253,15 +256,13 @@ async fn axon_externally_signed_rejects_args_digest_mismatch() {
     // Note: `Result::expect_err` needs `Debug` on the Ok arm, but
     // `InvocationHandle` doesn't implement Debug, so we match
     // by hand instead.
-    let outcome = rt
-        .invoke_descriptor_bound_externally_signed_async(
-            envelope,
-            signature,
-            b"tampered".to_vec(),
-            None,
-            None,
-        )
-        .await;
+    let request = DescriptorBoundInvocationRequest::externally_signed(
+        CallMode::Rpc,
+        envelope,
+        signature,
+        b"tampered".to_vec(),
+    );
+    let outcome = rt.invoke_descriptor_bound_request_async(request).await;
     let err = match outcome {
         Err(e) => e,
         Ok(_) => panic!("args_digest mismatch must be rejected, but invoke returned Ok"),
@@ -298,9 +299,13 @@ async fn axon_call_mode_gate_rejects_rpc_call_to_bidi_ability() {
     // Calling via the RPC entry should fail at the call-mode gate
     // BEFORE admission — so the nonce is never recorded and a
     // subsequent BIDI call with the same nonce would still succeed.
-    let outcome = rt
-        .invoke_descriptor_bound_externally_signed_async(envelope, signature, payload, None, None)
-        .await;
+    let request = DescriptorBoundInvocationRequest::externally_signed(
+        CallMode::Rpc,
+        envelope,
+        signature,
+        payload,
+    );
+    let outcome = rt.invoke_descriptor_bound_request_async(request).await;
     let err = match outcome {
         Err(e) => e,
         Ok(_) => panic!("RPC call to BIDI-only ability must be rejected"),

@@ -48,12 +48,7 @@ fn usage_e2e_rides_receipt_to_ledger_to_watch_terminal() {
     // the runtime actually registered — proving the version threads
     // manifest -> control plane -> runtime proof binding -> wire envelope ->
     // receipt, rather than a fabricated default stamped at the wire boundary.
-    let expected_echo_ability_ref = format!(
-        "{}@{}",
-        easynet_cli::core::ura::owner_ability_ura(&home.testbot_ura, "echo")
-            .expect("mint testbot echo ability URA"),
-        TESTBOT_ECHO_DESCRIPTOR_VERSION
-    );
+    let expected_echo_ability_ref = home.testbot_echo_descriptor_ref();
     let invocation_ura = meta["invocation_ura"]
         .as_str()
         .expect("envelope echo carries invocation_ura")
@@ -90,7 +85,10 @@ fn usage_e2e_rides_receipt_to_ledger_to_watch_terminal() {
         .as_object()
         .expect("terminal receipt must expose descriptor/runtime proof facts");
     assert_eq!(proof["descriptor_version"], TESTBOT_ECHO_DESCRIPTOR_VERSION);
-    assert_eq!(proof["runtime_env"], "axon-local-runtime-rs");
+    assert_eq!(
+        proof["runtime_env"],
+        axon_sdk::invocation::RUST_LOCAL_RUNTIME_ENVIRONMENT
+    );
     assert_eq!(
         proof["ability_binding"].as_str(),
         Some(expected_echo_ability_ref.as_str())

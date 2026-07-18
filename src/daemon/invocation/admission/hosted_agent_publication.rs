@@ -8,7 +8,7 @@
 
 use thiserror::Error;
 
-use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, SubjectIdentity};
+use axon_sdk::pb::axon::v1::Envelope;
 
 use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::invocation::dispatch::federation_wrappers::AdvertiseAgentRequest;
@@ -38,7 +38,24 @@ impl HostedAgentPublication {
             .map(|subject| subject.ura.trim())
             .filter(|ura| !ura.is_empty())
             .ok_or(HostedAgentPublicationError::MissingIdentity("subject"))?;
+        Self::verify_identity_binding(
+            caller_device_ura,
+            callee_ura,
+            subject_ura,
+            request,
+            trust_anchor,
+            daemon_ura,
+        )
+    }
 
+    fn verify_identity_binding(
+        caller_device_ura: &str,
+        callee_ura: &str,
+        subject_ura: &str,
+        request: &AdvertiseAgentRequest,
+        trust_anchor: &RealmTrustAnchor,
+        daemon_ura: Option<&str>,
+    ) -> Result<Self, HostedAgentPublicationError> {
         let caller = parse_ura(caller_device_ura).map_err(|_| {
             HostedAgentPublicationError::InvalidIdentity("caller must be a canonical device URA")
         })?;
@@ -143,22 +160,14 @@ impl HostedAgentPublication {
         request: &AdvertiseAgentRequest,
         trust_anchor: &RealmTrustAnchor,
     ) -> Result<Self, HostedAgentPublicationError> {
-        let envelope = Envelope {
-            caller: Some(AgentIdentity {
-                ura: caller_device_ura.to_string(),
-                profile: String::new(),
-            }),
-            callee: Some(AgentIdentity {
-                ura: hub_ura.to_string(),
-                profile: String::new(),
-            }),
-            subject: Some(SubjectIdentity {
-                ura: request.agent_ura.clone(),
-                profile: String::new(),
-            }),
-            ..Envelope::default()
-        };
-        Self::verify(&envelope, request, trust_anchor, Some(hub_ura))
+        Self::verify_identity_binding(
+            caller_device_ura,
+            hub_ura,
+            &request.agent_ura,
+            request,
+            trust_anchor,
+            Some(hub_ura),
+        )
     }
 
     pub(crate) fn owner_user_id(&self) -> &str {
@@ -188,7 +197,7 @@ impl HostedAgentPublication {
 }
 
 fn required_agent_ura<'a>(
-    identity: Option<&'a easynet_axon::pb::axon::v1::AgentIdentity>,
+    identity: Option<&'a axon_sdk::pb::axon::v1::AgentIdentity>,
     role: &'static str,
 ) -> Result<&'a str, HostedAgentPublicationError> {
     identity
@@ -223,7 +232,7 @@ mod tests {
     use crate::daemon::invocation::dispatch::federation_wrappers::{
         AdvertiseAgentRequest, AdvertiseSigningAuthorityRequest,
     };
-    use easynet_axon::pb::axon::v1::{AgentIdentity, SubjectIdentity};
+    use axon_sdk::pb::axon::v1::{AgentIdentity, SubjectIdentity};
 
     fn envelope(subject: &str) -> Envelope {
         Envelope {

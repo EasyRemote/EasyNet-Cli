@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use easynet_axon::invocation::{
+use axon_sdk::invocation::{
     ability_ura_from_descriptor_ref as axon_ability_ura_from_descriptor_ref,
     canonical_ability_descriptor_ref, AxonError, CallMode as AxonInvocationCallMode, LocalRuntime,
 };
@@ -105,7 +105,12 @@ pub(crate) async fn registered_descriptor_binding(
              runtime (ability_not_found)"
             ))
         })?;
-    let proof = options.proof_for_mode(mode);
+    let proof = options.proof_for_mode(mode).ok_or_else(|| {
+        DescriptorBindingError::VersionUnbound(format!(
+            "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
+             version: runtime registration has no {mode:?} descriptor proof"
+        ))
+    })?;
     let version = proof.descriptor_version;
     if version.trim().is_empty() {
         return Err(DescriptorBindingError::VersionUnbound(format!(
@@ -168,33 +173,18 @@ pub(crate) fn catalog_descriptor_binding_for_wire(
     })?;
     let catalog = crate::daemon::ability::catalog::build_system_registry();
     let owner = catalog_owner_kind_for_wire(selector.owner_ura())?;
-    let mut matches = catalog
-        .authority_ability_catalog_snapshot()
-        .into_iter()
-        .filter(|row| row.owner == owner)
-        .filter(|row| row.name == selector.local_registry_ability())
-        .filter(|row| row.descriptor.public_name() == selector.public_name())
-        .filter(|row| row.descriptor.call_mode() == call_mode);
-    let record = matches.next().ok_or_else(|| {
-        AxonError::invalid_argument(format!(
-            "descriptor-bound ability `{}` has no system catalog descriptor for owner `{}` \
-             in {:?}; callers must provide an explicit descriptor-bound Ability ref",
-            selector.public_name(),
-            selector.owner_ura(),
-            call_mode
-        ))
-    })?;
-    if matches.next().is_some() {
-        return Err(AxonError::invalid_argument(format!(
-            "descriptor-bound ability `{}` is ambiguous in the system catalog for owner `{}` \
-             in {:?}",
-            selector.public_name(),
-            selector.owner_ura(),
-            call_mode
-        )));
-    }
-    let descriptor = record
-        .descriptor
+    let descriptor = catalog
+        .public_descriptor_for_mode(&owner, selector.public_name(), call_mode)
+        .map_err(|error| {
+            AxonError::invalid_argument(format!(
+                "descriptor-bound ability `{}` cannot resolve a unique system catalog descriptor \
+                 for owner `{}` in {:?}: {error}; callers must provide an explicit \
+                 descriptor-bound Ability ref",
+                selector.public_name(),
+                selector.owner_ura(),
+                call_mode
+            ))
+        })?
         .rebind_owner_ura(selector.owner_ura())
         .map_err(|err| {
             AxonError::invalid_argument(format!(

@@ -403,11 +403,9 @@ mod tests {
         };
         let matcher = PermissionGrantMatcher::new(&grants);
 
-        assert!(
-            matcher
-                .find_active(&input, PermissionEffect::Allow)
-                .is_none()
-        );
+        assert!(matcher
+            .find_active(&input, PermissionEffect::Allow)
+            .is_none());
         assert_eq!(
             matcher
                 .find_reconfirmation_required(&input)

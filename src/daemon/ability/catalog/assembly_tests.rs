@@ -11,7 +11,14 @@ use crate::daemon::persistence::agent_registry::AgentRegistry;
 use std::sync::Arc;
 
 fn registry_config_for_agents(agents: &AgentRegistry) -> RegistryBuildConfig<'_> {
-    RegistryBuildConfig::new(RegistryBuildServices::fresh(), agents)
+    let mut config = RegistryBuildConfig::new(RegistryBuildServices::fresh(), agents);
+    config.local_runtime = Some(
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        ),
+    );
+    config
 }
 
 fn sha256_hex_for_test(bytes: &[u8]) -> String {
@@ -34,17 +41,6 @@ fn provider_backed_voice_capability_state_evidence(
             executable_delivery_evidence: false,
         },
     )
-}
-
-fn is_session_open_device_carrier_template(
-    row: &crate::daemon::ability::dispatch::AuthorityAbilityCatalogSnapshotRow,
-) -> bool {
-    row.name == crate::daemon::ability::names::device_control::SESSION_OPEN
-        && row.owner == crate::daemon::ability::dispatch::OwnerKind::Device
-        && row.descriptor.owner_ura
-            == super::runtime_admin_contracts::SESSION_OPEN_TEMPLATE_DEVICE_URA
-        && row.descriptor.call_mode() == crate::daemon::ability::CallMode::Bidi
-        && row.descriptor.admission_action().as_str() == "stream"
 }
 
 /// Seed `local-agents.json` with the canonical hosted-agent identities the
@@ -950,7 +946,10 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let agents = AgentRegistry::default();
     let hub_ura = crate::core::ura::hub_ura("hub-only");
-    let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None);
+    let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+        crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+        None,
+    );
     let mut config = registry_config_for_agents(&agents);
     config.local_runtime = Some(Arc::clone(&runtime));
     config.authority_context = Some(
@@ -969,21 +968,25 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
     let leaked_rows: Vec<_> = rows
         .iter()
         .filter(|row| {
-            !(row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub
-                && row.descriptor.owner_ura == hub_ura)
-                && !is_session_open_device_carrier_template(row)
+            row.owner != crate::daemon::ability::dispatch::OwnerKind::Hub
+                || row.descriptor.owner_ura != hub_ura
         })
         .collect();
     assert!(
         leaked_rows.is_empty(),
-        "Hub registry leaked a non-Hub authority row outside the session.open Device carrier template: {leaked_rows:?}"
+        "Hub registry leaked a non-Hub authority row: {leaked_rows:?}"
     );
     assert_eq!(
         rows.iter()
-            .filter(|row| is_session_open_device_carrier_template(row))
+            .filter(|row| {
+                row.name == crate::daemon::ability::names::device_control::SESSION_OPEN
+                    && row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub
+                    && row.descriptor.owner_ura == hub_ura
+                    && row.descriptor.call_mode() == crate::daemon::ability::CallMode::Bidi
+            })
             .count(),
         1,
-        "Hub registry must retain exactly one session.open Device carrier template"
+        "Hub registry must retain exactly one Hub-owned session.open descriptor"
     );
     let exclusions = registry.static_authority_exclusion_snapshot();
     assert!(
@@ -1059,6 +1062,12 @@ fn hub_daemon_builder_does_not_read_device_agent_transaction_state() {
     .expect("write invalid Device teach-transaction sentinel");
 
     let mut config = RegistryDaemonBuildConfig::new(RegistryBuildServices::fresh());
+    config.local_runtime = Some(
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        ),
+    );
     config.authority_context = Some(
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
             crate::core::ura::hub_ura("hub-only"),
@@ -1069,9 +1078,9 @@ fn hub_daemon_builder_does_not_read_device_agent_transaction_state() {
         .expect("Hub daemon builder must not parse Device agent transaction state");
     let rows = built.catalog.authority_ability_catalog_snapshot();
     assert!(
-        rows.iter().all(|row| row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub
-            || is_session_open_device_carrier_template(row)),
-        "Hub daemon builder leaked Device/Agent state outside the session.open carrier template: {rows:?}"
+        rows.iter()
+            .all(|row| row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub),
+        "Hub daemon builder leaked Device/Agent state: {rows:?}"
     );
     assert!(built
         .catalog
@@ -1087,6 +1096,12 @@ fn hub_daemon_builder_does_not_read_device_agent_transaction_state() {
 fn hub_daemon_builder_starts_without_publishing_unprovided_voice_capabilities() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let mut config = RegistryDaemonBuildConfig::new(RegistryBuildServices::fresh());
+    config.local_runtime = Some(
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        ),
+    );
     config.authority_context = Some(
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
             crate::core::ura::hub_ura("voice-provider-required"),
@@ -1118,9 +1133,14 @@ fn device_daemon_builder_refuses_corrupt_agent_registry() {
     std::fs::write(state_dir.join("agents.json"), b"not-json")
         .expect("write corrupt agent registry");
 
-    let result = build_registry_for_daemon_result(RegistryDaemonBuildConfig::new(
-        RegistryBuildServices::fresh(),
-    ));
+    let mut config = RegistryDaemonBuildConfig::new(RegistryBuildServices::fresh());
+    config.local_runtime = Some(
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        ),
+    );
+    let result = build_registry_for_daemon_result(config);
     assert!(
         result.is_err(),
         "device daemon boot must not hide corrupt durable agent state"

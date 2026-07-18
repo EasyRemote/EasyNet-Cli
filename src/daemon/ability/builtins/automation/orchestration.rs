@@ -102,6 +102,69 @@ struct OrchestrationService {
     agent_sessions: Mutex<HashMap<(String, String), String>>,
 }
 
+struct DiscussRoundRequest {
+    room_id: String,
+    agents: Vec<String>,
+    max_cycles: u32,
+    topic: Option<String>,
+    roles: HashMap<String, String>,
+}
+
+impl DiscussRoundRequest {
+    fn parse(args: &Value) -> anyhow::Result<Self> {
+        let room_id = args
+            .get("room_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("mission.discuss_round: `room_id` is required"))?
+            .to_string();
+        let agents = args
+            .get("agents")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                anyhow::anyhow!("mission.discuss_round: `agents` (array of strings) is required")
+            })?
+            .iter()
+            .filter_map(Value::as_str)
+            .map(String::from)
+            .collect::<Vec<_>>();
+        if agents.is_empty() {
+            anyhow::bail!("mission.discuss_round: `agents` must contain at least one name");
+        }
+        let max_cycles = args
+            .get("max_cycles")
+            .and_then(Value::as_u64)
+            .map(|n| n.min(HARD_MAX_CYCLES as u64) as u32)
+            .unwrap_or(DEFAULT_MAX_CYCLES);
+        if max_cycles == 0 {
+            anyhow::bail!("mission.discuss_round: `max_cycles` must be ≥ 1");
+        }
+        let topic = args
+            .get("topic")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let roles = args
+            .get("roles")
+            .and_then(Value::as_object)
+            .map(|roles| {
+                roles
+                    .iter()
+                    .filter_map(|(agent, role)| {
+                        role.as_str().map(|role| (agent.clone(), role.to_string()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(Self {
+            room_id,
+            agents,
+            max_cycles,
+            topic,
+            roles,
+        })
+    }
+}
+
 impl OrchestrationService {
     fn new(discuss: Arc<DiscussService>) -> Self {
         Self {
@@ -136,13 +199,14 @@ pub fn register(reg: &mut AxonAbilityCatalog, discuss: Arc<DiscussService>) {
         "mission.discuss_round",
         OwnerKind::Device,
         Arc::new(move |envelope, args| {
+            let request = DiscussRoundRequest::parse(&args)?;
             let runtime = runtime.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("mission.discuss_round execution requires the shared Axon runtime")
             })?;
             let gateway: Arc<dyn MissionInvocationGateway> = Arc::new(
                 DaemonMissionInvocationGateway::from_envelope(&envelope, Arc::clone(runtime))?,
             );
-            service.discuss_round(gateway, args)
+            service.discuss_round(gateway, request)
         }),
     );
 }
@@ -153,55 +217,15 @@ impl OrchestrationService {
     fn discuss_round(
         self: &Arc<Self>,
         invocation_gateway: Arc<dyn MissionInvocationGateway>,
-        args: Value,
+        request: DiscussRoundRequest,
     ) -> anyhow::Result<Value> {
-        let room_id = args
-            .get("room_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("mission.discuss_round: `room_id` is required"))?
-            .to_string();
-        let agents: Vec<String> = args
-            .get("agents")
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
-                anyhow::anyhow!("mission.discuss_round: `agents` (array of strings) is required")
-            })?
-            .iter()
-            .filter_map(Value::as_str)
-            .map(String::from)
-            .collect();
-        if agents.is_empty() {
-            anyhow::bail!("mission.discuss_round: `agents` must contain at least one name");
-        }
-        let max_cycles = args
-            .get("max_cycles")
-            .and_then(Value::as_u64)
-            .map(|n| n.min(HARD_MAX_CYCLES as u64) as u32)
-            .unwrap_or(DEFAULT_MAX_CYCLES);
-        if max_cycles == 0 {
-            anyhow::bail!("mission.discuss_round: `max_cycles` must be ≥ 1");
-        }
-
-        let topic = args
-            .get("topic")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-
-        // Optional caller-supplied role assignments. Shape:
-        // `{ "<agent>": "<role description>", ... }`. When an agent
-        // appears in this map its first-cycle prompt skips the
-        // self-nomination block and tells it the role is already
-        // chosen by the operator. Absent entries trigger the
-        // self-nomination prompt path.
-        let roles: HashMap<String, String> = args
-            .get("roles")
-            .and_then(Value::as_object)
-            .map(|m| {
-                m.iter()
-                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let DiscussRoundRequest {
+            room_id,
+            agents,
+            max_cycles,
+            topic,
+            roles,
+        } = request;
 
         let mut errors: Vec<Value> = Vec::new();
         let mut speakers_per_cycle: Vec<Vec<String>> = Vec::new();
@@ -406,7 +430,8 @@ impl OrchestrationService {
                 "chat",
                 chat_args,
             ))
-            .map_err(|err| format!("invoke {qualified_chat} through daemon Invocation: {err}"))?;
+            .map_err(|err| format!("invoke {qualified_chat} through daemon Invocation: {err}"))?
+            .value;
 
         // Capture the (possibly newly minted) session_id for next
         // cycle. Driver may echo the caller's id (resume) or mint a
@@ -658,15 +683,28 @@ mod tests {
     }
 
     impl MissionInvocationGateway for RecordingInvocationGateway {
-        fn invoke(&self, request: MissionInvocationRequest) -> anyhow::Result<Value> {
+        fn invoke(
+            &self,
+            request: MissionInvocationRequest,
+        ) -> anyhow::Result<
+            crate::daemon::execution::mission::invocation_gateway::MissionInvocationOutcome,
+        > {
             self.calls.lock().expect("record calls").push((
                 request.ability().to_string(),
                 request.hosted_agent_name().map(str::to_string),
             ));
-            Ok(json!({
-                "reply": "gateway-routed response",
-                "session_id": "session-1",
-            }))
+            Ok(
+                crate::daemon::execution::mission::invocation_gateway::MissionInvocationOutcome {
+                    value: json!({
+                        "reply": "gateway-routed response",
+                        "session_id": "session-1",
+                    }),
+                    invocation: crate::daemon::execution::mission::invocation_gateway::MissionInvocationRecord::for_test(
+                        "alice.chat",
+                        0x62,
+                    ),
+                },
+            )
         }
     }
 

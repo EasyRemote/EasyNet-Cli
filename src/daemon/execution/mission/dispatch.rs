@@ -383,7 +383,6 @@ pub fn send_to_agent_with_depth_and_progress(
             depth: d,
             mission_run_dir: None,
             origin_agent: None,
-            parent_invocation: None,
         })
         .or_else(context::current);
 
@@ -557,10 +556,6 @@ pub fn send_to_agent_with_depth_and_progress(
         // context, or the root agent name inside a mission.
         "origin_agent": active.origin_agent.clone(),
         "mission_id": active.mission_id.clone(),
-        "parent_invocation": active
-            .parent_invocation
-            .as_ref()
-            .map(|ctx| ctx.to_json_value()),
         "context_present": context.is_some(),
     });
     if let Err(e) = session.writer().emit("admitted", Some(admitted_payload)) {
@@ -1683,7 +1678,7 @@ mod tests {
         // HomeGuard-equivalent tempdir redirect) or a shared
         // tempdir by default. Open a bare PersistentLog on the
         // same dir the dispatch wrote to and read by id.
-        use easynet_axon::invocation::persistence::PersistentLog;
+        use axon_sdk::invocation::persistence::PersistentLog;
         let log = PersistentLog::new(None);
         Some(log.read_events(&meta.invocation_id, 0))
     }
@@ -1792,7 +1787,7 @@ mod tests {
         let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json");
-        use easynet_axon::invocation::persistence::PersistentLog;
+        use axon_sdk::invocation::persistence::PersistentLog;
         let log = PersistentLog::new(None);
         let idx = log
             .read_index(&meta.invocation_id)
@@ -1963,7 +1958,7 @@ mod tests {
         let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json");
-        use easynet_axon::invocation::persistence::PersistentLog;
+        use axon_sdk::invocation::persistence::PersistentLog;
         let log = PersistentLog::new(None);
         let expected_path = log.events_path(&meta.invocation_id);
         assert!(

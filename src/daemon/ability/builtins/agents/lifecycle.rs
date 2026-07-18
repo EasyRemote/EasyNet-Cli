@@ -3647,7 +3647,7 @@ mod tests {
 
     struct ReadyHotRegistrarFixture {
         cell: SharedHotRegistrarCell,
-        runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+        runtime: Arc<axon_sdk::invocation::LocalRuntime>,
         catalog: Arc<AxonAbilityCatalog>,
     }
 
@@ -3667,7 +3667,10 @@ mod tests {
                     crate::daemon::ability::builtins::agents::discover::DetachedDiscoverFederationResolver,
                 ),
             );
-        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None);
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
         registrar
             .set_runtime(Arc::clone(&runtime))
             .expect("test runtime wired once");

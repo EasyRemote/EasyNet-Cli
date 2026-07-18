@@ -16,8 +16,8 @@ runner. Same family as the `P4.10` HomeGuard fix from earlier work
 `cargo test --lib -- --test-threads=1` (single-threaded):
 ```
 test result: FAILED. 846 passed; 2 failed
-  runtime::agents::fleet_lifecycle_ability::tests::start_agent_persists_and_returns_canonical_uri
-  runtime::agents::fleet_lifecycle_ability::tests::stop_agent_by_uri_extracts_name_tail
+  runtime::agents::fleet_lifecycle_ability::tests::start_agent_persists_and_returns_canonical_ura
+  runtime::agents::fleet_lifecycle_ability::tests::stop_agent_by_ura_extracts_name_tail
 ```
 Two tests fail deterministically, even alone. They are wrong tests
 (or wrong handlers); not a race.
@@ -87,7 +87,7 @@ Two paths, in order of preference:
    tests cannot run in parallel without lying about their isolation.
 
 The two deterministic failers (`start_agent_persists_and_returns…`
-and `stop_agent_by_uri_extracts_name_tail`) are independent bugs in
+and `stop_agent_by_ura_extracts_name_tail`) are independent bugs in
 the handler logic — they fail even alone. Those need their own fix:
 the assertion lines are 292 and 375 in `fleet_lifecycle_ability.rs`.
 

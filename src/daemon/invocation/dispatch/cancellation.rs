@@ -8,7 +8,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use easynet_axon::invocation::{AxonError, DescriptorBoundEnvelope, InvocationHandle};
+use axon_sdk::invocation::{AxonError, DescriptorBoundEnvelope, InvocationHandle};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 

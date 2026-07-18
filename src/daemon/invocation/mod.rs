@@ -82,7 +82,8 @@ pub mod streams;
 
 #[cfg(feature = "axon-pb")]
 pub use crate::daemon::boot::invocation::{
-    start_daemon_invocation_transport, InvocationTransportDependencies, SessionShutdown,
+    build_invocation_federation_runtime, start_daemon_invocation_transport,
+    InvocationFederationRuntime, InvocationTransportDependencies, SessionShutdown,
 };
 #[cfg(feature = "axon-pb")]
 pub use admission::admission_facade::AdmissionFacade;
@@ -97,11 +98,13 @@ pub use bidi::session_wire::SessionDispatch;
 #[cfg(feature = "axon-pb")]
 pub use dispatch::daemon_invocation_service::DaemonInvocationService;
 #[cfg(feature = "axon-pb")]
-pub use dispatch::invocation_wire::{ProtoEnvelope, DEFAULT_URA_PROFILE};
+pub use dispatch::invocation_wire::{
+    InvocationDerivationPolicy, ProtoEnvelope, DEFAULT_URA_PROFILE,
+};
 #[cfg(feature = "axon-pb")]
 pub use dispatch::{
-    CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationDraft,
-    InvocationTuple, KeyServiceLocalDaemonInvocationSigner, LocalDaemonInvocationSigner,
-    PrepareOptions, PreparedInvocation, SignedInvocation, SignerPolicy, SignerPolicyMode,
-    SigningMaterial,
+    CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationArgsSet,
+    InvocationArgsUnset, InvocationDraft, InvocationTuple, KeyServiceLocalDaemonInvocationSigner,
+    LocalDaemonInvocationSigner, PrepareOptions, PreparedInvocation, SignedInvocation,
+    SignerPolicy, SignerPolicyMode, SigningMaterial,
 };

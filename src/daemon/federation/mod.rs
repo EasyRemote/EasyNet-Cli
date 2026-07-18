@@ -17,3 +17,4 @@ pub mod directory_reader;
 pub mod peers;
 pub mod read_model;
 pub mod resolver;
+pub(crate) mod wire_contract;

@@ -406,6 +406,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "axon-sdk"
+version = "0.129.22"
+dependencies = [
+ "async-trait",
+ "axon-ura",
+ "base64",
+ "chacha20poly1305",
+ "ed25519-dalek",
+ "futures",
+ "hex",
+ "hkdf",
+ "hmac",
+ "libc",
+ "libloading",
+ "prost",
+ "prost-build",
+ "prost-types",
+ "protoc-bin-vendored",
+ "rand 0.8.6",
+ "redb",
+ "serde",
+ "serde_jcs",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "tracing",
+ "uuid",
+ "x25519-dalek",
+]
+
+[[package]]
 name = "axon-ura"
 version = "0.129.22"
 
@@ -1615,6 +1649,7 @@ dependencies = [
  "anyhow",
  "argon2",
  "async-trait",
+ "axon-sdk",
  "axum",
  "base64",
  "block2",
@@ -1632,7 +1667,6 @@ dependencies = [
  "dialoguer",
  "dirs",
  "dispatch2",
- "easynet-axon",
  "ed25519-dalek",
  "flate2",
  "fs2",
@@ -1696,38 +1730,6 @@ dependencies = [
  "webrtc",
  "windows-sys 0.61.2",
  "xcap",
-]
-
-[[package]]
-name = "easynet-axon"
-version = "0.129.22"
-dependencies = [
- "async-trait",
- "axon-ura",
- "base64",
- "chacha20poly1305",
- "ed25519-dalek",
- "futures",
- "hex",
- "libc",
- "libloading",
- "prost",
- "prost-build",
- "prost-types",
- "protoc-bin-vendored",
- "rand 0.8.6",
- "redb",
- "serde",
- "serde_jcs",
- "serde_json",
- "sha2",
- "thiserror 2.0.18",
- "tokio",
- "tonic",
- "tonic-build",
- "tracing",
- "uuid",
- "x25519-dalek",
 ]
 
 [[package]]

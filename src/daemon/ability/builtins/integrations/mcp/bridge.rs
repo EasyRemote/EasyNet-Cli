@@ -311,7 +311,10 @@ mod tests {
 
     fn executable_test_catalog() -> AxonAbilityCatalog {
         AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
         )
     }
 

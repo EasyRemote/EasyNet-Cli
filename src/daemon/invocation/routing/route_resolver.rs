@@ -26,8 +26,8 @@
 
 use std::collections::HashMap;
 
+use axon_sdk::invocation::CallMode;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use easynet_axon::invocation::CallMode;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot;
@@ -44,7 +44,7 @@ use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentHostedPlacementProjection,
 };
 
-use easynet_axon::pb::axon::v1 as axon_pb;
+use axon_sdk::pb::axon::v1 as axon_pb;
 
 const DEFAULT_DIRECTORY_LIMIT: usize = 50;
 const MAX_DIRECTORY_LIMIT: usize = 500;
@@ -1395,7 +1395,7 @@ fn ability_selector_from_descriptor_ref(
     descriptor_ref: &str,
 ) -> Option<crate::core::ura::AbilitySelector> {
     let descriptor_ref =
-        easynet_axon::invocation::canonical_ability_descriptor_ref(descriptor_ref).ok()?;
+        axon_sdk::invocation::canonical_ability_descriptor_ref(descriptor_ref).ok()?;
     let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
         &descriptor_ref,
     )
@@ -1533,7 +1533,7 @@ fn is_ability_ura(value: &str) -> bool {
 }
 
 fn is_descriptor_ref(value: &str) -> bool {
-    easynet_axon::invocation::canonical_ability_descriptor_ref(value).is_ok()
+    axon_sdk::invocation::canonical_ability_descriptor_ref(value).is_ok()
 }
 
 fn looks_like_descriptor_ref(value: &str) -> bool {
@@ -1898,7 +1898,7 @@ mod tests {
     }
 
     fn descriptor_ref_for_test(ability_ura: &str) -> String {
-        easynet_axon::invocation::canonical_ability_descriptor_ref(&format!(
+        axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
             "{ability_ura}@1.0.0#{}!invoke",
             "a".repeat(64)
         ))
@@ -2285,7 +2285,10 @@ mod tests {
 
         let mut live_catalog =
             crate::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
-                easynet_axon::invocation::LocalRuntime::new(),
+                crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                    crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                    None,
+                ),
                 crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
                     owner_ura.clone(),
                 )

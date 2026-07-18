@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use easynet_axon::pb::axon::v1::{invocation_client::InvocationClient, InvokeRequest};
+use axon_sdk::pb::axon::v1::{invocation_client::InvocationClient, InvokeRequest};
 use tonic::{transport::Channel, Status};
 
 use super::heartbeat::spawn_federation_heartbeat;
@@ -644,50 +644,9 @@ pub(super) async fn signed_prelude_request(
     let hub_ura = session_hub_ura(caller_ura)?;
     let descriptor_subject_ura =
         descriptor_prelude_subject_ura(&hub_ura, subject_ura, function_name)?;
-    let mut request = crate::daemon::invocation::ProtoEnvelope::targeted(
-        caller_ura,
-        hub_ura,
-        descriptor_subject_ura,
-    )
-    .and_then(|env| env.invoke_request(function_name, arguments))
-    .map_err(|e| Status::invalid_argument(format!("{function_name} prelude: {e}")))?;
-    sign_descriptor_bound_prelude_request(&mut request, function_name, signer).await?;
-    Ok(request)
-}
-
-async fn sign_descriptor_bound_prelude_request(
-    request: &mut InvokeRequest,
-    function_name: &str,
-    signer: &dyn CanonicalSigner,
-) -> Result<(), Status> {
-    let envelope = request.envelope.as_mut().ok_or_else(|| {
-        Status::internal(format!("{function_name} prelude request missing envelope"))
-    })?;
-    let caller_ura = envelope
-        .caller
-        .as_ref()
-        .map(|caller| caller.ura.trim().to_string())
-        .filter(|ura| !ura.is_empty())
-        .ok_or_else(|| Status::internal(format!("{function_name} prelude missing caller URA")))?;
-    if caller_ura != signer.owner_ura() {
-        return Err(Status::failed_precondition(format!(
-            "{function_name} prelude caller `{caller_ura}` does not match bound signer `{}`",
-            signer.owner_ura()
-        )));
-    }
-    let callee_ura = envelope
-        .callee
-        .as_ref()
-        .map(|callee| callee.ura.trim())
-        .filter(|ura| !ura.is_empty())
-        .ok_or_else(|| Status::internal(format!("{function_name} prelude missing callee URA")))?;
-    // `function_name` is a bare ability name (`federation.advertise_abilities`),
-    // NOT a descriptor ref. Build the canonical ref from the system catalog
-    // descriptor rebound to the callee hub URA; default-version-only signing
-    // would omit the descriptor digest and admission action Axon now verifies.
     let descriptor_ref =
         crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
-            callee_ura,
+            &hub_ura,
             function_name,
             crate::daemon::ability::CallMode::Rpc,
         )
@@ -696,31 +655,21 @@ async fn sign_descriptor_bound_prelude_request(
                 "{function_name} prelude signing requires an explicit descriptor ref: {err}"
             ))
         })?;
-    let descriptor_bound =
-        crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
-            envelope.clone(),
-            descriptor_ref.clone(),
-            &request.arguments,
-        )
-        .map_err(|err| {
-            Status::internal(format!(
-                "{function_name} prelude descriptor-bound envelope failed: {err}"
-            ))
-        })?;
-    let caller_signature =
-        crate::daemon::invocation::caller_signature::sign_canonical_caller_signature(
-            signer,
-            &descriptor_bound.envelope.canonical_bytes(),
-        )
-        .await
-        .map_err(|err| signing_identity_status(function_name, err))?;
-    envelope.caller_signature = Some(caller_signature);
-    request.metadata.insert(
-        crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-            .to_string(),
+    crate::daemon::invocation::ProtoEnvelope::from_target(
+        caller_ura,
+        hub_ura,
+        descriptor_subject_ura,
+        crate::daemon::invocation::dispatch::invocation_wire::InvocationDerivationPolicy::FreshRoot,
+    )
+    .map_err(|error| Status::invalid_argument(format!("{function_name} prelude: {error}")))?
+    .signed_descriptor_ref_invoke_request_with_signer(
+        function_name,
         descriptor_ref,
-    );
-    Ok(())
+        arguments,
+        signer,
+    )
+    .await
+    .map_err(|error| Status::failed_precondition(format!("{function_name} prelude: {error}")))
 }
 
 fn signing_identity_status(
@@ -1158,9 +1107,9 @@ async fn publish_paired_user_keys_prelude(
 
 pub(super) async fn invoke_prelude_unary(
     client: &mut InvocationClient<Channel>,
-    request: easynet_axon::pb::axon::v1::InvokeRequest,
+    request: axon_sdk::pb::axon::v1::InvokeRequest,
     ability_name: &str,
-) -> Result<easynet_axon::pb::axon::v1::InvokeResponse, tonic::Status> {
+) -> Result<axon_sdk::pb::axon::v1::InvokeResponse, tonic::Status> {
     let response = client.invoke(request).await?.into_inner();
     if let Some(error) = response.error.as_ref() {
         let message = if error.code.is_empty() {

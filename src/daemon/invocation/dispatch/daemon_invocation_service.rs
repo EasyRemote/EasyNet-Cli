@@ -35,13 +35,14 @@
 // JSON-encoded shape captured by PR-4's schema-compat baselines
 // per DEC-001 + DEC-003.
 //
-// gRPC status-code policy
-// -----------------------
-// Three classes of failure surface back to the caller. Pick one
-// class per failure site; do not improvise. Future arms added to
-// this file MUST match the policy below — the policy is the only
-// way a reviewer can tell, without reading the call stack, what
-// the caller is being told.
+// Failure projection policy
+// -------------------------
+// Once a unary invocation enters the canonical runtime, operational
+// rejection and terminal failure are projected as `InvokeResponse`
+// with state `Failed` and a typed protocol error. gRPC `Status` is
+// reserved for failures that prevent construction or projection of
+// that canonical outcome. Stream and bidi setup failures remain
+// transport statuses until their invocation handle exists.
 //
 //   * `Status::internal` — the daemon, the wire, or a backing
 //     dependency (tonic streaming, serialisation, the
@@ -53,7 +54,7 @@
 //   * `Status::invalid_argument` — the caller violated the wire
 //     protocol or sent a malformed request that admission
 //     accepted but dispatch cannot honour. Frame-0 sequence not
-//     zero, EnvelopeOpen missing `target.ability_name`, non-
+//     zero, EnvelopeOpen missing a typed target function name, non-
 //     STRICT bidi stream ordering, etc. The caller can fix this
 //     by changing the request.
 //
@@ -103,9 +104,6 @@ use std::sync::Arc;
 use futures::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::daemon::ability::builtins::governance::invocation_history::{
-    record_by_args, trace_by_args, ABILITY_INVOCATION_RECORD_GET, ABILITY_TRACE_GET,
-};
 use crate::daemon::ability::CallMode;
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::peers::SharedFederatedPeers;
@@ -122,7 +120,6 @@ use crate::daemon::invocation::admission::principal_lifecycle::{
     ABILITY_PRINCIPAL_REVOKE_GRANT, ABILITY_PRINCIPAL_REVOKE_KEY, ABILITY_PRINCIPAL_ROTATE_KEY,
     ABILITY_PRINCIPAL_SUSPEND,
 };
-use crate::daemon::invocation::admission::quota_meter::quota_meters_request;
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::admission::target_gate::TargetGate;
@@ -131,8 +128,8 @@ use crate::daemon::invocation::bidi::bidi_dispatcher::{
 };
 use crate::daemon::invocation::bidi::session_initiator::ABILITY_SESSION_OPEN;
 use crate::daemon::invocation::dispatch::deps::{
-    DirectoryPlane, FederationDial, IdentityPlane, RegisterPubkeyContext, RuntimePlane,
-    SessionPlane,
+    DirectoryPlane, FederationDial, IdentityPlane, RegisterPubkeyContext, RuntimeBinding,
+    RuntimePlane, SessionPlane,
 };
 use crate::daemon::invocation::dispatch::federation_wrappers::{
     ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
@@ -143,7 +140,7 @@ use crate::daemon::invocation::dispatch::federation_wrappers::{
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2, ABILITY_NAMESPACE_PROXY_RESOLVE,
     ABILITY_NAMESPACE_RESOLVE,
 };
-use crate::daemon::invocation::dispatch::invocation_wire::{wrap_json_response, BoxedDownStream};
+use crate::daemon::invocation::dispatch::invocation_wire::BoxedDownStream;
 use crate::daemon::invocation::dispatch::unary_dispatcher::UnaryDispatcher;
 use crate::daemon::invocation::streams::stream_dispatcher::StreamDispatcher;
 
@@ -319,13 +316,14 @@ impl DaemonStreamRoute {
 pub(crate) const DAEMON_INVOCATION_STREAM_ROUTES: &[DaemonStreamRoute] = DaemonStreamRoute::ALL;
 
 /// Production bidirectional daemon Invocation routes served by exact frame-0
-/// `EnvelopeOpen.target.ability_name` matches in [`Invocation::invoke_bidi`].
+/// `EnvelopeOpen.target.typed_target.ability.function_name` matches in
+/// [`Invocation::invoke_bidi`].
 ///
 /// This is the bidi peer of [`DaemonUnaryRoute`] and [`DaemonStreamRoute`].
-/// `session.open` still owns a product carrier lifecycle, but it must stay in
-/// the same typed route inventory as the other daemon ability routes so route
-/// ownership, baseline conformance, and future LocalRuntime cutover cannot
-/// drift through hand-written string lists.
+/// `session.open` owns a product carrier lifecycle behind its descriptor-bound
+/// LocalRuntime registration. Keeping it in this typed inventory makes route
+/// ownership, registration, and dispatch mechanically identical to the other
+/// exact daemon route families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DaemonBidiRoute {
     SessionOpen,
@@ -359,7 +357,7 @@ pub(crate) const DAEMON_INVOCATION_BIDI_ROUTES: &[DaemonBidiRoute] = DaemonBidiR
 
 pub(crate) fn dispatch_function_name_for_route_table(
     function_name: &str,
-    envelope: Option<&easynet_axon::pb::axon::v1::Envelope>,
+    envelope: Option<&axon_sdk::pb::axon::v1::Envelope>,
 ) -> String {
     descriptor_ref_public_name_for_callee(function_name, envelope)
         .unwrap_or_else(|| function_name.to_string())
@@ -367,7 +365,7 @@ pub(crate) fn dispatch_function_name_for_route_table(
 
 fn descriptor_ref_public_name_for_callee(
     function_name: &str,
-    envelope: Option<&easynet_axon::pb::axon::v1::Envelope>,
+    envelope: Option<&axon_sdk::pb::axon::v1::Envelope>,
 ) -> Option<String> {
     let callee_ura = envelope?
         .callee
@@ -375,7 +373,7 @@ fn descriptor_ref_public_name_for_callee(
         .map(|callee| callee.ura.trim())
         .filter(|callee| !callee.is_empty())?;
     let descriptor_ref =
-        easynet_axon::invocation::canonical_ability_descriptor_ref(function_name).ok()?;
+        axon_sdk::invocation::canonical_ability_descriptor_ref(function_name).ok()?;
     let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
         &descriptor_ref,
     )
@@ -387,8 +385,8 @@ fn descriptor_ref_public_name_for_callee(
     Some(selector.public_name().to_string())
 }
 
-use easynet_axon::pb::axon::v1::invocation_server::Invocation;
-use easynet_axon::pb::axon::v1::{
+use axon_sdk::pb::axon::v1::invocation_server::Invocation;
+use axon_sdk::pb::axon::v1::{
     InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse, InvokeServerStreamRequest,
     InvokeStreamChunk,
 };
@@ -399,10 +397,11 @@ use easynet_axon::pb::axon::v1::{
 ///
 /// - `presence` — the `PresenceRegistry` consulted by federation
 ///   wrappers (resolve / canonical_invoke / revoke / heartbeat /
-///   subscribe_directory) and by the future `session.open` accept
-///   path in PR-2
-/// - `admission` — the transport policy facade consulted at the start
-///   of every RPC method, before any dispatch.
+///   subscribe_directory) and owned for `session.open` lifecycle mutation by
+///   the registered Hub provider
+/// - `admission` — the legacy generic-route transport policy facade.
+///   Descriptor-bound exact routes enter LocalRuntime directly; their product
+///   policy runs behind the registered provider after canonical admission.
 ///
 /// Future-shape (commit 8/9 onward) will add:
 /// `ability_dispatch: Arc<AxonAbilityCatalog>` for the unmatched-
@@ -415,8 +414,8 @@ use easynet_axon::pb::axon::v1::{
 /// `Option<String>`; clone is cheap.
 #[derive(Clone)]
 pub struct DaemonInvocationService {
-    /// Transport policy gate consulted at the start of every RPC method,
-    /// before any plane is touched.
+    /// Transport policy gate retained by route families that have not yet
+    /// converged on descriptor-bound exact-route admission.
     admission: AdmissionFacade,
     /// Directory read plane: presence, hosted-agent rows, ability
     /// catalogs, federated directory view. See [`DirectoryPlane`].
@@ -435,12 +434,17 @@ pub struct DaemonInvocationService {
     runtime: RuntimePlane,
     /// Exact-route provider installation lifecycle shared by every clone of
     /// this service. The cell transitions once from uninitialized to either a
-    /// fully registered owner or a terminal installation failure.
-    daemon_unary_route_registration: Arc<tokio::sync::OnceCell<Result<String, String>>>,
+    /// fully registered, sorted authority-root set or a terminal installation
+    /// failure.
+    daemon_unary_route_registration: Arc<tokio::sync::OnceCell<Result<Vec<String>, String>>>,
     /// Exact stream-route provider installation lifecycle. Kept separate from
     /// unary registration so a failed stream cutover cannot be mistaken for a
     /// partially valid all-route runtime surface.
     daemon_stream_route_registration: Arc<tokio::sync::OnceCell<Result<String, String>>>,
+    /// Exact bidi-route provider installation lifecycle. Hub listeners may
+    /// become reachable only after this cell records the complete route
+    /// inventory under the Hub owner.
+    daemon_bidi_route_registration: Arc<tokio::sync::OnceCell<Result<String, String>>>,
     /// Strong owner for live exact stream route pumps. Runtime-registered
     /// providers keep only a weak reference, so dropping the service tears
     /// down product stream bridges without weakening Axon's admission owner.
@@ -489,23 +493,48 @@ impl std::fmt::Debug for DaemonInvocationService {
             )
             .field(
                 "local_runtime",
-                &self
-                    .runtime
-                    .local_runtime
-                    .as_ref()
-                    .map(|_| "<axon LocalRuntime>"),
+                &self.runtime.local_runtime().map(|_| "<axon LocalRuntime>"),
             )
             .finish()
     }
 }
 
+fn normalize_daemon_route_owners(
+    owner_uras: &[String],
+) -> Result<Vec<String>, axon_sdk::invocation::AxonError> {
+    let mut normalized = std::collections::BTreeSet::new();
+    for owner_ura in owner_uras {
+        let owner_ura = owner_ura.trim();
+        if owner_ura.is_empty() {
+            return Err(axon_sdk::invocation::AxonError::invalid_argument(
+                "daemon unary route owner URA must not be empty",
+            ));
+        }
+        let parsed = crate::core::ura::parse_ura(owner_ura).map_err(|error| {
+            axon_sdk::invocation::AxonError::invalid_argument(format!(
+                "daemon unary route owner URA is invalid: {error}"
+            ))
+        })?;
+        if !matches!(
+            parsed.kind,
+            crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Hub
+        ) {
+            return Err(axon_sdk::invocation::AxonError::invalid_argument(
+                "daemon unary route owner must be a canonical Device or Hub URA",
+            ));
+        }
+        normalized.insert(owner_ura.to_string());
+    }
+    Ok(normalized.into_iter().collect())
+}
+
 impl DaemonInvocationService {
-    /// Construct a service against the supplied presence registry
-    /// and transport policy facade. Production callers wire one registry
-    /// per daemon process and share it via `Arc` between the
-    /// service, the `session.open` accept loop (PR-2), and any
-    /// audit-log subscriber. The policy facade is constructed
-    /// from `RealmTrustAnchor::load_or_empty(...)` at daemon boot.
+    /// Construct a service against the supplied presence registry and generic
+    /// transport policy facade. Production callers wire one registry per
+    /// daemon process and share it via `Arc` between the service, the
+    /// descriptor-bound `session.open` provider, and audit subscribers. The
+    /// policy facade is constructed from the reloadable realm trust anchor at
+    /// daemon boot.
     ///
     /// Session-routed calls require a `PendingDispatchMap`; use
     /// `with_pending(...)` to attach one.
@@ -545,13 +574,14 @@ impl DaemonInvocationService {
                 session_realm: None,
             },
             runtime: RuntimePlane {
-                local_runtime: None,
+                binding: RuntimeBinding::Unconfigured,
                 invocation_ledger: None,
                 ability_wire: Arc::new(crate::daemon::ability::wire::AbilityWireRegistry::core()),
                 cancellations: Default::default(),
             },
             daemon_unary_route_registration: Arc::new(tokio::sync::OnceCell::new()),
             daemon_stream_route_registration: Arc::new(tokio::sync::OnceCell::new()),
+            daemon_bidi_route_registration: Arc::new(tokio::sync::OnceCell::new()),
             daemon_stream_route_lifecycle: Arc::new(()),
         }
     }
@@ -586,72 +616,6 @@ impl DaemonInvocationService {
     ) -> Self {
         self.directory.local_ability_catalog = Some(catalog);
         self
-    }
-
-    /// Side-effect-free `invocation.record.get`: fetch one ledger record by
-    /// request id or invocation URA off the in-process ledger handle and return
-    /// it as JSON.
-    ///
-    /// Services the out-of-process CLI's observe-my-own-request read without
-    /// dispatching a second invocation (which would corrupt the audit trail)
-    /// and without opening the daemon-owned redb from a second process (which
-    /// redb forbids via its exclusive lock). The caller (`skip_ledger_record`)
-    /// guarantees this writes no ledger row. A `null` record is a valid
-    /// "not yet projected" answer, not an error.
-    fn dispatch_invocation_record_get(
-        &self,
-        arguments: &[u8],
-    ) -> Result<Response<InvokeResponse>, Status> {
-        let request: serde_json::Value = serde_json::from_slice(arguments).map_err(|err| {
-            Status::invalid_argument(format!(
-                "invocation.record.get: failed to decode JSON arguments: {err}"
-            ))
-        })?;
-        let Some(ledger) = self.runtime.invocation_ledger.as_ref() else {
-            return Err(Status::failed_precondition(
-                "invocation.record.get: daemon has no invocation ledger wired",
-            ));
-        };
-        let record = record_by_args(ledger, &request).map_err(|err| {
-            let msg = err.to_string();
-            if msg.contains("request_id must not be empty")
-                || msg.starts_with("expected ")
-                || msg.contains("key must")
-            {
-                Status::invalid_argument(msg)
-            } else {
-                Status::internal(msg)
-            }
-        })?;
-        wrap_json_response(&serde_json::json!({ "record": record }))
-    }
-
-    /// Side-effect-free `invocation.trace.get`: fetch one ledger trace graph
-    /// without dispatching an Axon ability and without appending an observation
-    /// row to the ledger being watched.
-    fn dispatch_invocation_trace_get(
-        &self,
-        arguments: &[u8],
-    ) -> Result<Response<InvokeResponse>, Status> {
-        let request: serde_json::Value = serde_json::from_slice(arguments).map_err(|err| {
-            Status::invalid_argument(format!(
-                "invocation.trace.get: failed to decode JSON arguments: {err}"
-            ))
-        })?;
-        let Some(ledger) = self.runtime.invocation_ledger.as_ref() else {
-            return Err(Status::failed_precondition(
-                "invocation.trace.get: daemon has no invocation ledger wired",
-            ));
-        };
-        let trace = trace_by_args(ledger, &request).map_err(|err| {
-            let msg = err.to_string();
-            if msg.starts_with("expected ") || msg.contains("key must") {
-                Status::invalid_argument(msg)
-            } else {
-                Status::internal(msg)
-            }
-        })?;
-        wrap_json_response(&trace)
     }
 
     /// Resolve-first gate shared by the unary/stream/bidi dispatch
@@ -699,41 +663,66 @@ impl DaemonInvocationService {
     pub async fn register_daemon_unary_routes(
         &self,
         owner_ura: &str,
-    ) -> Result<(), easynet_axon::invocation::AxonError> {
-        let owner_ura = owner_ura.trim();
-        if owner_ura.is_empty() {
-            return Err(easynet_axon::invocation::AxonError::invalid_argument(
-                "daemon unary route owner URA must not be empty",
+    ) -> Result<(), axon_sdk::invocation::AxonError> {
+        self.register_daemon_unary_routes_for_owners(&[owner_ura.to_string()])
+            .await
+    }
+
+    /// Install one atomic exact-route family for every local daemon authority
+    /// root represented by the live catalog.
+    ///
+    /// Combined-authority harnesses and future explicitly supported combined
+    /// deployments use this entry point. Repeating the same normalized owner
+    /// set is idempotent; attempting to mutate the set after installation
+    /// fails closed.
+    pub async fn register_daemon_unary_routes_for_owners(
+        &self,
+        owner_uras: &[String],
+    ) -> Result<(), axon_sdk::invocation::AxonError> {
+        let owner_uras = normalize_daemon_route_owners(owner_uras)?;
+        if owner_uras.is_empty() {
+            return Err(axon_sdk::invocation::AxonError::invalid_argument(
+                "daemon unary route owner set must not be empty",
             ));
         }
         let registration = self
             .daemon_unary_route_registration
             .get_or_init(|| async {
-                let runtime = self.runtime.local_runtime.as_ref().ok_or_else(|| {
+                let runtime = self.runtime.local_runtime().ok_or_else(|| {
                     "daemon unary route registration requires shared LocalRuntime".to_string()
                 })?;
                 let catalog = self.directory.local_ability_catalog.as_ref().ok_or_else(|| {
                     "daemon unary route registration requires live ability catalog".to_string()
                 })?;
                 let unary = self.unary_dispatcher();
+                let product_policy = self
+                    .runtime
+                    .product_policy()
+                    .map_err(|status| status.to_string())?;
                 crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
-                    Arc::clone(runtime),
+                    runtime,
                     self.runtime.cancellations.clone(),
+                    self.admission.clone(),
+                    product_policy,
                 )
-                .register(owner_ura, catalog.as_ref(), unary.daemon_route_provider())
+                .register_for_owners(
+                    &owner_uras,
+                    catalog.as_ref(),
+                    unary.daemon_route_provider(),
+                )
                 .await
                 .map_err(|error| error.to_string())?;
-                Ok(owner_ura.to_string())
+                Ok(owner_uras.clone())
             })
             .await;
         match registration {
-            Ok(registered_owner) if registered_owner == owner_ura => Ok(()),
-            Ok(registered_owner) => Err(easynet_axon::invocation::AxonError::invalid_argument(
-                format!(
-                    "daemon unary routes are registered for `{registered_owner}`, not `{owner_ura}`"
-                ),
-            )),
-            Err(error) => Err(easynet_axon::invocation::AxonError::internal(format!(
+            Ok(registered_owners) if registered_owners == &owner_uras => Ok(()),
+            Ok(registered_owners) => {
+                Err(axon_sdk::invocation::AxonError::invalid_argument(format!(
+                    "daemon unary routes are registered for {registered_owners:?}, not {owner_uras:?}"
+                )))
+            }
+            Err(error) => Err(axon_sdk::invocation::AxonError::internal(format!(
                 "daemon unary route registration failed: {error}"
             ))),
         }
@@ -744,26 +733,32 @@ impl DaemonInvocationService {
     pub async fn register_daemon_stream_routes(
         &self,
         owner_ura: &str,
-    ) -> Result<(), easynet_axon::invocation::AxonError> {
+    ) -> Result<(), axon_sdk::invocation::AxonError> {
         let owner_ura = owner_ura.trim();
         if owner_ura.is_empty() {
-            return Err(easynet_axon::invocation::AxonError::invalid_argument(
+            return Err(axon_sdk::invocation::AxonError::invalid_argument(
                 "daemon stream route owner URA must not be empty",
             ));
         }
         let registration = self
             .daemon_stream_route_registration
             .get_or_init(|| async {
-                let runtime = self.runtime.local_runtime.as_ref().ok_or_else(|| {
+                let runtime = self.runtime.local_runtime().ok_or_else(|| {
                     "daemon stream route registration requires shared LocalRuntime".to_string()
                 })?;
                 let catalog = self.directory.local_ability_catalog.as_ref().ok_or_else(|| {
                     "daemon stream route registration requires live ability catalog".to_string()
                 })?;
                 let streams = self.stream_dispatcher();
+                let product_policy = self
+                    .runtime
+                    .product_policy()
+                    .map_err(|status| status.to_string())?;
                 crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
-                    Arc::clone(runtime),
+                    runtime,
                     self.runtime.cancellations.clone(),
+                    self.admission.clone(),
+                    product_policy,
                 )
                 .register_streams(owner_ura, catalog.as_ref(), streams.daemon_route_provider())
                 .await
@@ -773,13 +768,69 @@ impl DaemonInvocationService {
             .await;
         match registration {
             Ok(registered_owner) if registered_owner == owner_ura => Ok(()),
-            Ok(registered_owner) => Err(easynet_axon::invocation::AxonError::invalid_argument(
+            Ok(registered_owner) => Err(axon_sdk::invocation::AxonError::invalid_argument(
                 format!(
                     "daemon stream routes are registered for `{registered_owner}`, not `{owner_ura}`"
                 ),
             )),
-            Err(error) => Err(easynet_axon::invocation::AxonError::internal(format!(
+            Err(error) => Err(axon_sdk::invocation::AxonError::internal(format!(
                 "daemon stream route registration failed: {error}"
+            ))),
+        }
+    }
+
+    /// Install every exact bidi route as a descriptor-bound Hub ability before
+    /// invocation listeners become reachable.
+    pub async fn register_daemon_bidi_routes(
+        &self,
+        owner_ura: &str,
+    ) -> Result<(), axon_sdk::invocation::AxonError> {
+        let owner_ura = owner_ura.trim();
+        let parsed = crate::core::ura::parse_ura(owner_ura).map_err(|error| {
+            axon_sdk::invocation::AxonError::invalid_argument(format!(
+                "daemon bidi route owner URA is invalid: {error}"
+            ))
+        })?;
+        if parsed.kind != crate::core::ura::URAKind::Hub {
+            return Err(axon_sdk::invocation::AxonError::invalid_argument(
+                "daemon exact bidi routes require the canonical realm Hub owner",
+            ));
+        }
+        let registration = self
+            .daemon_bidi_route_registration
+            .get_or_init(|| async {
+                let runtime = self.runtime.local_runtime().ok_or_else(|| {
+                    "daemon bidi route registration requires shared LocalRuntime".to_string()
+                })?;
+                let catalog = self.directory.local_ability_catalog.as_ref().ok_or_else(|| {
+                    "daemon bidi route registration requires live ability catalog".to_string()
+                })?;
+                let bidi = self.bidi_dispatcher();
+                let product_policy = self
+                    .runtime
+                    .product_policy()
+                    .map_err(|status| status.to_string())?;
+                crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
+                    runtime,
+                    self.runtime.cancellations.clone(),
+                    self.admission.clone(),
+                    product_policy,
+                )
+                .register_bidis(owner_ura, catalog.as_ref(), bidi.daemon_route_provider())
+                .await
+                .map_err(|error| error.to_string())?;
+                Ok(owner_ura.to_string())
+            })
+            .await;
+        match registration {
+            Ok(registered_owner) if registered_owner == owner_ura => Ok(()),
+            Ok(registered_owner) => {
+                Err(axon_sdk::invocation::AxonError::invalid_argument(format!(
+                    "daemon bidi routes are registered for `{registered_owner}`, not `{owner_ura}`"
+                )))
+            }
+            Err(error) => Err(axon_sdk::invocation::AxonError::internal(format!(
+                "daemon bidi route registration failed: {error}"
             ))),
         }
     }
@@ -819,11 +870,23 @@ impl DaemonInvocationService {
             let proof = crate::daemon::invocation::dispatch::daemon_route_runtime::ProvisionalJoinProof::verify(
                 route, request,
             )?;
-            return Ok(DaemonRouteIngress::Bootstrap(proof));
+            let key_provider = self
+                .runtime
+                .daemon_admission_graph()
+                .ok_or_else(|| {
+                    Status::failed_precondition(
+                        "federation.join provisional bootstrap requires the LocalRuntime admission resolver",
+                    )
+                })?
+                .provisional_bootstrap_provider();
+            return Ok(DaemonRouteIngress::Bootstrap {
+                proof,
+                key_provider,
+            });
         }
 
         if envelope.caller_signature.is_none()
-            && self.admission.accepts_local_self_envelope(Some(envelope))
+            && self.admission.accepts_local_system_envelope(Some(envelope))
         {
             return Ok(DaemonRouteIngress::TrustedLocalSystem);
         }
@@ -849,10 +912,9 @@ impl DaemonInvocationService {
     /// `DaemonInvocationService::new(presence, admission)` callers
     /// stay source-compatible.
     ///
-    /// PR-3 ownership (this commit). PR-2's `session.open`
-    /// accept handler will share the same `Arc<PendingDispatchMap>`
-    /// to call `complete(call_id, ...)` when target devices send
-    /// `Result` frames back up their session streams.
+    /// The descriptor-bound `session.open` provider shares this
+    /// `Arc<PendingDispatchMap>` to settle typed results returned by target
+    /// devices over their session carriers.
     #[must_use]
     pub fn with_pending(mut self, pending: Arc<PendingDispatchMap>) -> Self {
         // Spawn a presence-event watcher that fail-fasts every
@@ -972,7 +1034,6 @@ impl DaemonInvocationService {
     /// peer-envelope rewrites. No private material enters dispatch.
     #[must_use]
     pub fn with_hub_signer(mut self, signer: Arc<dyn CanonicalSigner>) -> Self {
-        self.admission = self.admission.with_hub_signer(Arc::clone(&signer));
         self.federation.hub_signer = Some(signer);
         self
     }
@@ -1006,7 +1067,7 @@ impl DaemonInvocationService {
     #[must_use]
     pub fn with_invocation_ledger(
         mut self,
-        ledger: Arc<easynet_axon::invocation::InvocationLedger>,
+        ledger: Arc<axon_sdk::invocation::InvocationLedger>,
     ) -> Self {
         self.runtime.invocation_ledger = Some(ledger);
         self
@@ -1023,14 +1084,14 @@ impl DaemonInvocationService {
         self
     }
 
-    /// Attach the shared Axon `LocalRuntime`. Boot installs its key resolver
-    /// and ledger sink before exposing the Invocation service.
+    /// Attach the complete daemon runtime assembly. Product route registration
+    /// cannot observe a runtime without its construction-time policy graph.
     #[must_use]
-    pub fn with_local_runtime(
+    pub fn with_daemon_runtime(
         mut self,
-        runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+        assembly: crate::daemon::axon_bridge::runtime_factory::DaemonRuntimeAssembly,
     ) -> Self {
-        self.runtime.local_runtime = Some(runtime);
+        self.runtime.binding = RuntimeBinding::Daemon(assembly);
         self
     }
 
@@ -1172,68 +1233,35 @@ impl Invocation for DaemonInvocationService {
         let route_function =
             dispatch_function_name_for_route_table(function, inner.envelope.as_ref());
         let daemon_route = DaemonUnaryRoute::from_function(&route_function);
-        let daemon_route_ingress = if let Some(route) = daemon_route {
-            Some(self.daemon_route_ingress(route, &inner)?)
-        } else {
-            self.admission.verify_invoke(&inner)?;
-            None
-        };
-        // #185: meter the caller after the transport policy gate. This
-        // is not an Axon runtime-admitted token; descriptor-bound local
-        // dispatch still enters LocalRuntime through public Axon
-        // admission below. A throttled caller is rejected here with
-        // `ResourceExhausted` before any dispatch work.
-        let rate_limit = if daemon_route.is_none() && quota_meters_request(&inner) {
-            match self.admission.check_quota(&inner) {
-                Ok(info) => info,
-                Err(err) => return Err(err),
-            }
-        } else {
-            None
-        };
+        let daemon_route_ingress = daemon_route
+            .map(|route| self.daemon_route_ingress(route, &inner))
+            .transpose()?;
 
         let unary = self.unary_dispatcher();
-        let result = if route_function == ABILITY_INVOCATION_RECORD_GET {
-            self.dispatch_invocation_record_get(&inner.arguments)
-        } else if route_function == ABILITY_TRACE_GET {
-            self.dispatch_invocation_trace_get(&inner.arguments)
-        } else {
-            match daemon_route {
-                Some(route) => {
-                    self.dispatch_daemon_unary_route(
-                        route,
-                        &inner,
-                        daemon_route_ingress.expect("exact route ingress must be classified"),
-                    )
-                    .await
-                }
-                None if DaemonStreamRoute::from_function(&route_function).is_some() => {
-                    Err(Status::invalid_argument(format!(
-                        "{route_function} is a server-stream ability and must be invoked via InvokeStream, not Invoke"
-                    )))
-                }
-                // Catch-all user abilities must pass through namespace.resolve
-                // before Axon LocalRuntime dispatch. The runtime executes the
-                // selected route; it is not a resolver fallback.
-                None => {
-                    let (r, _runtime_started) =
-                        unary.dispatch_local_rpc_selected_route(&inner).await;
-                    r
-                }
+        let result = match daemon_route {
+            Some(route) => {
+                self.dispatch_daemon_unary_route(
+                    route,
+                    &inner,
+                    daemon_route_ingress.expect("exact route ingress must be classified"),
+                )
+                .await
+            }
+            None if DaemonStreamRoute::from_function(&route_function).is_some() => {
+                Err(Status::invalid_argument(format!(
+                    "{route_function} is a server-stream ability and must be invoked via InvokeStream, not Invoke"
+                )))
+            }
+            // Catch-all user abilities must pass through namespace.resolve
+            // before Axon LocalRuntime dispatch. The runtime executes the
+            // selected route; it is not a resolver fallback.
+            None => {
+                let (r, _runtime_started) =
+                    unary.dispatch_local_rpc_selected_route(&inner).await;
+                r
             }
         };
-        // #185: attach the caller's post-decrement quota status to the
-        // successful response in one place, rather than threading it
-        // through every dispatch arm's `InvokeResponse` builder. `None`
-        // when the caller is unmetered / local self / quota is off, in
-        // which case the wire shape is unchanged.
-        match (result, rate_limit) {
-            (Ok(mut response), Some(info)) => {
-                response.get_mut().rate_limit = Some(info);
-                Ok(response)
-            }
-            (other, _) => other,
-        }
+        result
     }
 
     type InvokeStreamStream = BoxedDownStream<InvokeStreamChunk>;
@@ -1247,7 +1275,6 @@ impl Invocation for DaemonInvocationService {
         request: Request<InvokeServerStreamRequest>,
     ) -> Result<Response<Self::InvokeStreamStream>, Status> {
         let inner = request.into_inner();
-        self.admission.verify_invoke_stream(&inner)?;
         let function = inner.function_name.as_str();
         let route_function =
             dispatch_function_name_for_route_table(function, inner.envelope.as_ref());
@@ -1262,7 +1289,7 @@ impl Invocation for DaemonInvocationService {
     type InvokeBidiStream = BoxedDownStream<InvokeBidiDown>;
 
     /// Spec §2.1 reference. Routes by frame-0
-    /// `EnvelopeOpen.target.ability_name`:
+    /// `EnvelopeOpen.target.typed_target.ability.function_name`:
     ///
     /// - `session.open` accepts a long-lived reverse channel.
     /// - registered builtin/plugin bidi abilities use their declared wire
@@ -1281,28 +1308,21 @@ impl Invocation for DaemonInvocationService {
         };
 
         let envelope_open = validate_and_extract_bidi_frame0(&frame0)?;
-        // PR-7: full §5.2 admission for the bidi path. The facade
-        // checks envelope presence + caller URA, runs the four-step
-        // pipeline (envelope/structure/verify/replay), and rejects
-        // with the canonical wire reasons. Ability name + initial
-        // args feed `args_digest` exactly the way unary/server-stream
-        // requests do.
-        self.admission.verify_envelope_for_bidi(envelope_open)?;
+        let ability_name =
+            crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                "InvokeBidi frame 0",
+                envelope_open.target.as_ref(),
+            )?;
 
-        let ability_name = envelope_open
-            .target
-            .as_ref()
-            .map(|t| t.ability_name.as_str())
-            .filter(|n| !n.is_empty())
-            .ok_or_else(|| {
-                Status::invalid_argument(
-                    "InvokeBidi frame 0 missing target.ability_name; cannot dispatch",
-                )
-            })?;
-
-        self.bidi_dispatcher()
-            .dispatch(ability_name, envelope_open, up)
-            .await
+        let dispatcher = self.bidi_dispatcher();
+        match DaemonBidiRoute::from_function(ability_name) {
+            Some(route) => {
+                dispatcher
+                    .dispatch_daemon_route_runtime(route, envelope_open, up)
+                    .await
+            }
+            None => dispatcher.dispatch(ability_name, envelope_open, up).await,
+        }
     }
 }
 

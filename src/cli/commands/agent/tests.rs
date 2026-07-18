@@ -57,7 +57,10 @@ fn invoke_agent_command_fixture(
     ability: &str,
     args: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None);
+    let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+        crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+        None,
+    );
     let dispatch_handle = Arc::new(OnceLock::new());
     let registrar = crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRegistrar::new_pending(
         Arc::new(Vec::new()),

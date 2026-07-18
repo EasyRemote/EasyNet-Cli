@@ -16,12 +16,13 @@ fn registry() -> PresenceRegistry {
 #[tokio::test]
 async fn negotiated_insert_remembers_contract_and_surfaces_prior_nonce() {
     let reg = registry();
+    let canonical_version = SessionContract::canonical().version;
     let (tx1, _rx1) = tokio::sync::mpsc::channel(1);
     let first = reg.insert_negotiated(
         "easynet:///r/t/device/d1".into(),
         tx1,
         SessionContract {
-            version: 1,
+            version: canonical_version,
             claimant_boot_nonce: vec![1; 16],
         },
     );
@@ -30,7 +31,7 @@ async fn negotiated_insert_remembers_contract_and_surfaces_prior_nonce() {
     assert_eq!(
         reg.lookup_dispatch_session("easynet:///r/t/device/d1")
             .map(|session| session.contract_version),
-        Some(1)
+        Some(canonical_version)
     );
 
     // A different claimant displacing the slot surfaces the prior
@@ -41,7 +42,7 @@ async fn negotiated_insert_remembers_contract_and_surfaces_prior_nonce() {
         "easynet:///r/t/device/d1".into(),
         tx2,
         SessionContract {
-            version: 0,
+            version: canonical_version + 1,
             claimant_boot_nonce: vec![2; 16],
         },
     );
@@ -50,12 +51,12 @@ async fn negotiated_insert_remembers_contract_and_surfaces_prior_nonce() {
     assert_eq!(
         reg.lookup_dispatch_session("easynet:///r/t/device/d1")
             .map(|session| session.contract_version),
-        Some(0)
+        Some(canonical_version + 1)
     );
 }
 
 #[tokio::test]
-async fn legacy_insert_tracked_registers_contract_v0() {
+async fn insert_tracked_registers_canonical_contract() {
     let reg = registry();
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let r = reg.insert_tracked("easynet:///r/t/device/d2".into(), tx);
@@ -63,7 +64,7 @@ async fn legacy_insert_tracked_registers_contract_v0() {
     assert_eq!(
         reg.lookup_dispatch_session("easynet:///r/t/device/d2")
             .map(|session| session.contract_version),
-        Some(0)
+        Some(SessionContract::canonical().version)
     );
 }
 

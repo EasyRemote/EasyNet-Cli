@@ -90,8 +90,8 @@ impl RuntimeErrorStage {
     }
 
     #[cfg(feature = "axon-pb")]
-    pub fn to_axon_pb(self) -> easynet_axon::pb::axon::v1::ErrorStage {
-        use easynet_axon::pb::axon::v1::ErrorStage;
+    pub fn to_axon_pb(self) -> axon_sdk::pb::axon::v1::ErrorStage {
+        use axon_sdk::pb::axon::v1::ErrorStage;
 
         match self {
             Self::CallerAuthentication => ErrorStage::CallerAuthentication,
@@ -144,8 +144,8 @@ impl RuntimeSecurityClass {
     }
 
     #[cfg(feature = "axon-pb")]
-    pub fn to_axon_pb(self) -> easynet_axon::pb::axon::v1::SecurityClass {
-        use easynet_axon::pb::axon::v1::SecurityClass;
+    pub fn to_axon_pb(self) -> axon_sdk::pb::axon::v1::SecurityClass {
+        use axon_sdk::pb::axon::v1::SecurityClass;
 
         match self {
             Self::Unspecified => SecurityClass::Unspecified,

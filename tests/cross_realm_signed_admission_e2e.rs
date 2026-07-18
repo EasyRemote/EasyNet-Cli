@@ -5,15 +5,13 @@
 // Description: In-process two-daemon test where daemon B admits a
 //              signed envelope from a caller in realm-A's trust set
 //              by dialling A's `federation.resolve_key` ability via
-//              the FederatedKeyResolver wired into B's
-//              AdmissionFacade.
+//              the FederatedKeyResolver shared by B's Axon runtime
+//              and product-policy facade.
 //
 // Why this test exists
 // --------------------
-// PR-N2 commit 1/N landed the FederatedKeyResolver + AdmissionFacade
-// swap; commit 2/N landed the peer-side `federation.resolve_key`
-// handler. Together they unblock cross-realm strict admission, but
-// neither commit proves end-to-end:
+// The runtime and product policy must share one caller-key provider.
+// This test proves the resulting cross-realm strict admission end to end:
 //
 //   "daemon B receives an envelope signed by a key it has never seen,
 //    fetches the key from A, runs the §5.2 4-step verify, and admits."
@@ -21,14 +19,14 @@
 // This integration test is that proof. The chain:
 //
 //   1. Test mints `device-A`'s Ed25519 keypair.
-//   2. Daemon A boots with realm-a trust set = [device-A]; daemon A
-//      serves `federation.resolve_key` from this anchor.
+//   2. Daemon A boots with device-A and daemon B's Hub signer in its
+//      trust set, then serves `federation.resolve_key` through LocalRuntime.
 //   3. Daemon B boots with realm-b trust set = empty; daemon B's
-//      AdmissionFacade is wired with a `FederatedKeyResolver` whose
+//      runtime and AdmissionFacade share a `FederatedKeyResolver` whose
 //      federation client is an in-process forwarder into daemon A,
 //      and whose `federated_peers = {realm-a → "in-process-A"}`.
-//   4. Test signs an envelope for ability `self.echo` with caller =
-//      device-A's URA, callee = daemon B's URA.
+//   4. Test signs the registered `federation.status` descriptor with
+//      caller = device-A's URA, callee = daemon B's URA.
 //   5. Test calls `daemon_b.invoke(signed_request)`.
 //   6. Daemon B's admission gate runs strict path → FederatedKey-
 //      Resolver:
@@ -39,9 +37,8 @@
 //        d. A returns `{public_key_b64: <device-A's pubkey>}`
 //        e. B builds VerifyingKey, admission's 4-step verify
 //           accepts.
-//   7. Daemon B dispatches `self.echo` (which is unimplemented in
-//      this minimal test, but admission already passed — that's
-//      what the test asserts).
+//   7. Daemon B reaches product policy for the real registered route;
+//      the policy denial carries the verified signature key id.
 //
 // What this test does NOT exercise
 // --------------------------------
@@ -61,34 +58,41 @@
 
 use std::sync::Arc;
 
+#[path = "support/runtime_fixture.rs"]
+mod runtime_fixture;
+
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use sha2::Digest as _;
 
-use easynet_axon::invocation::axiom::{
+use axon_sdk::invocation::axiom::{
     sign_descriptor_bound_invocation, AgentIdentity as AxiomAgentIdentity, CausalContext,
     DescriptorBoundEnvelope, InvocationEnvelope, SubjectIdentity, UraProfile,
 };
-use easynet_axon::invocation::LocalRuntime;
-use easynet_axon::pb::axon::v1::invocation_server::Invocation;
-use easynet_axon::pb::axon::v1::{
-    AgentIdentity as PbAgentIdentity, CallerSignature as PbCallerSignature, Envelope,
-    InvokeRequest, InvokeResponse, SubjectIdentity as PbSubjectIdentity,
+use axon_sdk::invocation::{ErrorCode, KeyResolver};
+use axon_sdk::pb::axon::v1::invocation_server::Invocation;
+use axon_sdk::pb::axon::v1::{
+    invocation_target, AbilityTarget, AgentIdentity as PbAgentIdentity,
+    CallerSignature as PbCallerSignature, Envelope, Error as PbError, ErrorStage as PbErrorStage,
+    InvocationState, InvocationTarget, InvokeRequest, InvokeResponse,
+    SecurityClass as PbSecurityClass, SubjectIdentity as PbSubjectIdentity,
 };
-use easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
+use easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext;
 use easynet_cli::daemon::federation::client::{
     FederationClient, FederationClientError, HubEndpoint,
 };
 use easynet_cli::daemon::federation::peers::SharedFederatedPeers;
 use easynet_cli::daemon::identity::self_identity::{CanonicalSigner, SelfIdentityError};
 use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use easynet_cli::daemon::invocation::admission::federated_key_resolver::FederatedKeyResolver;
 use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
 use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
+use easynet_cli::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_STATUS;
 use easynet_cli::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+use easynet_cli::daemon::trust::cell::SharedTrustAnchor;
 
 const REALM_B_HUB_SIGNING_SEED: [u8; 32] = [0xB0; 32];
-const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-ref";
 
 /// In-process federation client that forwards every `invoke`
 /// to a target `DaemonInvocationService`. Used so daemon B's
@@ -101,16 +105,10 @@ const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-re
 /// (it just looks for the key); the forwarder ignores it because
 /// there's only one peer in the test fixture.
 ///
-/// The forwarder also stamps daemon A's loopback URA as the request
-/// envelope's caller. Production cross-hub dialling sends a signed
-/// envelope from one hub's identity to another (PR-N5 territory);
-/// in-process here we use loopback bypass — daemon A's admission
-/// recognises its own URA as `caller.ura` and skips the membership
-/// gate, exactly the same fast-path operators see when a daemon
-/// dispatches an ability against itself.
+/// The forwarder preserves the signed Hub-to-Hub request generated by
+/// `PeerInvokeRequest`; only the network transport is replaced.
 struct InProcessForwarder {
     peer: Arc<DaemonInvocationService>,
-    peer_loopback_ura: String,
 }
 
 #[async_trait]
@@ -118,27 +116,8 @@ impl FederationClient for InProcessForwarder {
     async fn invoke(
         &self,
         _target_hub_endpoint: &HubEndpoint,
-        mut request: InvokeRequest,
+        request: InvokeRequest,
     ) -> Result<InvokeResponse, FederationClientError> {
-        // Stamp loopback: daemon A admits its own URA without
-        // running the strict pipeline, so the resolve_key lookup
-        // proceeds straight to the trust-anchor read.
-        let loopback_envelope = Envelope {
-            caller: Some(PbAgentIdentity {
-                ura: self.peer_loopback_ura.clone(),
-                profile: "easynet-strict-v2".to_string(),
-            }),
-            callee: Some(PbAgentIdentity {
-                ura: self.peer_loopback_ura.clone(),
-                profile: "easynet-strict-v2".to_string(),
-            }),
-            subject: Some(PbSubjectIdentity {
-                ura: self.peer_loopback_ura.clone(),
-                profile: "easynet-strict-v2".to_string(),
-            }),
-            ..Envelope::default()
-        };
-        request.envelope = Some(loopback_envelope);
         let response = self
             .peer
             .invoke(tonic::Request::new(request))
@@ -178,30 +157,98 @@ fn test_hub_signer(realm: &str) -> Arc<dyn CanonicalSigner> {
     })
 }
 
+async fn hub_service(
+    realm: &str,
+    trust: SharedTrustAnchor,
+    federated_keys: Arc<FederatedKeyResolver>,
+) -> (
+    DaemonInvocationService,
+    Arc<easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog>,
+) {
+    let daemon_ura = easynet_cli::core::ura::hub_ura(realm);
+    let runtime_keys: Arc<dyn KeyResolver> = federated_keys.clone();
+    let daemon_runtime = runtime_fixture::daemon_runtime_with_key_resolver(runtime_keys);
+    let runtime = daemon_runtime.runtime();
+    let agents = easynet_cli::daemon::persistence::agent_registry::AgentRegistry::default();
+    let authority = AbilityAuthorityContext::for_hub_authority_root(daemon_ura.clone())
+        .expect("hub authority context");
+    let mut config =
+        easynet_cli::daemon::ability::catalog::RegistryBuildConfig::new_with_authority_context(
+            easynet_cli::daemon::ability::catalog::RegistryBuildServices::fresh(),
+            &agents,
+            authority,
+        );
+    config.local_runtime = Some(runtime);
+    let catalog =
+        easynet_cli::daemon::ability::catalog::build_registry_with_services_result(config)
+            .expect("build descriptor-bound hub catalog")
+            .catalog;
+    let admission = AdmissionFacade::with_trust_anchor_cell(trust, Some(daemon_ura.clone()))
+        .with_ability_catalog(Arc::clone(&catalog))
+        .with_federated_key_resolver(federated_keys);
+    let service = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
+        .with_session_realm(realm)
+        .with_daemon_runtime(daemon_runtime)
+        .with_local_ability_catalog(Arc::clone(&catalog));
+    service
+        .register_daemon_unary_routes(&daemon_ura)
+        .await
+        .expect("register descriptor-bound daemon routes");
+    (service, catalog)
+}
+
+fn descriptor_ref(
+    catalog: &easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog,
+    owner_ura: &str,
+    ability: &str,
+) -> String {
+    let mut matches = catalog
+        .authority_ability_catalog_snapshot()
+        .into_iter()
+        .filter(|row| row.name == ability)
+        .filter(|row| row.descriptor.call_mode() == easynet_cli::daemon::ability::CallMode::Rpc);
+    let descriptor = matches
+        .next()
+        .unwrap_or_else(|| panic!("hub catalog missing RPC descriptor for {ability}"))
+        .descriptor
+        .rebind_owner_ura(owner_ura)
+        .expect("hub descriptor owner binding");
+    assert!(
+        matches.next().is_none(),
+        "hub catalog has ambiguous RPC descriptor for {ability}"
+    );
+    format!(
+        "{}@{}#{}!{}",
+        descriptor
+            .canonical_ability_ura()
+            .expect("hub descriptor ability URA"),
+        descriptor.version,
+        hex::encode(descriptor.descriptor_hash_bytes()),
+        descriptor.admission_action().as_str(),
+    )
+}
+
 /// Mirrors the production descriptor-bound signing path so admission
 /// verifies exactly the bytes the test signed.
 fn signed_request(
     caller_ura: &str,
     callee_ura: &str,
     ability: &str,
+    ability_ref: &str,
     args: &[u8],
     signing_key: &SigningKey,
     nonce: [u8; 16],
 ) -> InvokeRequest {
-    let subject_ura = easynet_cli::core::ura::owner_ability_ura(callee_ura, ability)
-        .expect("callee-owned descriptor ability subject");
-    let subject = SubjectIdentity::new(&subject_ura, UraProfile::EasynetStrictV2);
-    let ability_ref = format!(
-        "{}@{}",
-        easynet_cli::core::ura::owner_ability_ura(callee_ura, ability)
-            .expect("callee-owned descriptor ability"),
-        DEFAULT_ABILITY_DESCRIPTOR_VERSION
-    );
+    let subject_ura = ability_ref
+        .split_once('@')
+        .map(|(ability_ura, _)| ability_ura.to_string())
+        .expect("descriptor ref carries version");
+    let subject = SubjectIdentity::new(&subject_ura, UraProfile::StrictV2);
     let axiom_env = InvocationEnvelope {
-        caller: AxiomAgentIdentity::new(caller_ura, UraProfile::EasynetStrictV2),
-        callee: AxiomAgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2),
+        caller: AxiomAgentIdentity::new(caller_ura, UraProfile::StrictV2),
+        callee: AxiomAgentIdentity::new(callee_ura, UraProfile::StrictV2),
         subject: subject.clone(),
-        ability: ability_ref.clone(),
+        ability: ability_ref.to_string(),
         args_digest: sha2::Sha256::digest(args).into(),
         invocation_nonce: nonce,
         causal_context: CausalContext::None,
@@ -236,14 +283,41 @@ fn signed_request(
 
     InvokeRequest {
         envelope: Some(envelope),
+        target: Some(InvocationTarget {
+            typed_target: Some(invocation_target::TypedTarget::Ability(AbilityTarget {
+                ability_name: ability_ref.to_string(),
+                function_name: ability.to_string(),
+            })),
+            ..InvocationTarget::default()
+        }),
         function_name: ability.to_string(),
         arguments: args.to_vec(),
-        metadata: std::collections::HashMap::from([(
-            SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(),
-            ability_ref,
-        )]),
         ..InvokeRequest::default()
     }
+}
+
+fn expect_canonical_in_band_failure(
+    result: Result<tonic::Response<InvokeResponse>, tonic::Status>,
+    expected_code: ErrorCode,
+    expectation: &str,
+) -> PbError {
+    let response = result
+        .unwrap_or_else(|status| panic!("{expectation}: unexpected transport error: {status}"))
+        .into_inner();
+    assert_eq!(
+        response.state,
+        InvocationState::Failed as i32,
+        "{expectation}: invocation must reach the canonical failed state"
+    );
+    let error = response
+        .error
+        .unwrap_or_else(|| panic!("{expectation}: failed response must carry a typed error"));
+    assert_eq!(
+        error.code,
+        expected_code.as_str(),
+        "{expectation}: wrong canonical error: {error:?}"
+    );
+    error
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -258,7 +332,8 @@ async fn cross_realm_signed_caller_resolves_key_before_policy_or_dispatch() {
     let device_a_key = SigningKey::from_bytes(&[0xA1u8; 32]);
     let device_a_pubkey_b64 = BASE64_STANDARD.encode(device_a_key.verifying_key().to_bytes());
 
-    // ── Daemon A: trust set = [device-A]; serves resolve_key ──
+    // Daemon A trusts both device-A and daemon B's Hub signing authority.
+    // The in-process federation hop preserves B's real signed request.
     let mut daemon_a_anchor_inner = RealmTrustAnchor::default();
     daemon_a_anchor_inner
         .append_agent(TrustedAgent {
@@ -271,15 +346,30 @@ async fn cross_realm_signed_caller_resolves_key_before_policy_or_dispatch() {
             tls_ca_pem_path: None,
         })
         .expect("append device-A");
-    let daemon_a_anchor = Arc::new(daemon_a_anchor_inner);
-    let daemon_a_admission = AdmissionFacade::new(
-        daemon_a_anchor,
-        Some(easynet_cli::core::ura::hub_ura(REALM_A)),
-    );
-    let daemon_a = Arc::new(
-        DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_a_admission)
-            .with_session_realm(REALM_A),
-    );
+    daemon_a_anchor_inner
+        .append_agent(TrustedAgent {
+            agent_ura: daemon_b_ura.clone(),
+            public_key_b64: BASE64_STANDARD.encode(
+                SigningKey::from_bytes(&REALM_B_HUB_SIGNING_SEED)
+                    .verifying_key()
+                    .to_bytes(),
+            ),
+            role: TrustedAgentRole::Hub,
+            added_at_unix_ms: 1_714_492_800_000,
+            origin_realm: Some(REALM_B.to_string()),
+            hub_endpoint: Some("in-process-B".to_string()),
+            tls_ca_pem_path: None,
+        })
+        .expect("append daemon B hub");
+    let daemon_a_trust = SharedTrustAnchor::new(Arc::new(daemon_a_anchor_inner));
+    let daemon_a_keys = Arc::new(FederatedKeyResolver::new(
+        daemon_a_trust.clone(),
+        None,
+        SharedFederatedPeers::default(),
+        Some(REALM_A.to_string()),
+    ));
+    let (daemon_a, _) = hub_service(REALM_A, daemon_a_trust, daemon_a_keys).await;
+    let daemon_a = Arc::new(daemon_a);
 
     // ── Daemon B: empty trust + federated_peers → daemon A ──
     // Build the in-process forwarder, register it as B's
@@ -288,90 +378,56 @@ async fn cross_realm_signed_caller_resolves_key_before_policy_or_dispatch() {
     // any caller in realm-a.
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
-        peer_loopback_ura: easynet_cli::core::ura::hub_ura(REALM_A),
     });
     let mut peers = std::collections::BTreeMap::new();
     peers.insert(REALM_A.to_string(), PEER_HUB_URA.to_string());
     let peers_cell = SharedFederatedPeers::new(peers);
 
-    let daemon_b_admission = AdmissionFacade::new(
-        Arc::new(RealmTrustAnchor::default()),
-        Some(daemon_b_ura.clone()),
-    )
-    .with_federation(Arc::clone(&federation_client), peers_cell.clone())
-    .with_hub_signer(test_hub_signer(REALM_B));
-    let daemon_b = DaemonInvocationService::new(
-        Arc::new(PresenceRegistry::new()),
-        daemon_b_admission.clone(),
-    )
-    .with_session_realm(REALM_B)
-    .with_local_runtime(LocalRuntime::new());
-
-    // ── Build a signed `self.echo` invocation from device-A ──
-    // device-A signs over the canonical bytes; daemon B's
-    // admission fetches the signing pubkey from daemon A and
-    // verifies the signature.
-    //
-    // `self.echo` does not need to actually be implemented for the
-    // test — admission acceptance is the assertion target. Daemon B
-    // has an empty LocalRuntime wired, so resolve-first dispatch now
-    // reaches either the authority policy gate or resolve-first dispatch
-    // after caller authentication. Both are downstream of federated key
-    // resolution and signature verification.
+    let daemon_b_trust = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
+    let daemon_b_keys = Arc::new(
+        FederatedKeyResolver::new(
+            daemon_b_trust.clone(),
+            Some(Arc::clone(&federation_client)),
+            peers_cell,
+            Some(REALM_B.to_string()),
+        )
+        .with_hub_signer(test_hub_signer(REALM_B)),
+    );
+    let (daemon_b, catalog_b) = hub_service(REALM_B, daemon_b_trust, daemon_b_keys).await;
+    let signed_descriptor = descriptor_ref(&catalog_b, &daemon_b_ura, ABILITY_FEDERATION_STATUS);
     let signed = signed_request(
         DEVICE_A_URA,
         &daemon_b_ura,
-        "self.echo",
+        ABILITY_FEDERATION_STATUS,
+        &signed_descriptor,
         b"{}",
         &device_a_key,
         [0x33u8; 16],
     );
 
-    // ── Drive: daemon B's admission must accept ──
-    let outcome = daemon_b.invoke(tonic::Request::new(signed)).await;
-    match outcome {
-        Ok(_) => {
-            // Daemon B happens to admit + dispatch + complete. The
-            // test only requires admission acceptance, but if a
-            // working dispatcher returns Ok we accept that too.
-        }
-        Err(status) => {
-            let route_negative = status.code() == tonic::Code::FailedPrecondition
-                && status.message().contains("ROUTE_NEGATIVE")
-                && status.message().contains("NEGATIVE_REASON_NODATA");
-            let policy_after_signature = status.code() == tonic::Code::PermissionDenied
-                && status.message().contains("POLICY_DENIED")
-                && status.message().contains("signature_key_id");
-            assert!(
-                route_negative || policy_after_signature,
-                "expected a policy/route outcome downstream of caller signature verification, got code={:?} message={}",
-                status.code(),
-                status.message()
-            );
-        }
-    }
+    let policy_denial = expect_canonical_in_band_failure(
+        daemon_b.invoke(tonic::Request::new(signed)).await,
+        ErrorCode::AbilityForbidden,
+        "unowned cross-realm device must reach product policy after authentication",
+    );
+    assert!(
+        policy_denial.message.contains("POLICY_DENIED")
+            && policy_denial.message.contains("signature_key_id"),
+        "valid federated signature must be verified before product policy, got {}",
+        policy_denial.message,
+    );
 
-    // Phase 5a (SharedReceiptStore deletion): the original
-    // PR-10 commit 5/N assertion was that B's admission recorded
-    // exactly one `"admitted"` receipt naming device-A as caller.
-    // That ring-buffer is gone — admission success is now observable
-    // through the dispatch outcome assertions above (the call passed
-    // admission and reached the resolve-first NODATA arm, which proves
-    // the caller's signature verified and the nonce was accepted).
-    // Audit-trail-level persistence of "who admitted what"
-    // moved to the `InvocationLedger` rows the `LedgerSink` writes
-    // at terminal time; this test scenario doesn't reach terminal
-    // (intentionally — it stops at admission), so no ledger row is
-    // expected here either.
+    // The request intentionally stops at product policy. No handler starts and
+    // no terminal ledger row is expected; the policy evidence above proves the
+    // descriptor-bound caller authentication stage completed.
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
     // Counter-test: same shape as above but `federated_peers` is
     // empty. The FederatedKeyResolver must NOT dial (operator did
-    // not opt into resolving realm-a). Admission rejects with
-    // `caller_signature_invalid` (the wire surface for "URA not
-    // trusted").
+    // not opt into resolving realm-a). Canonical admission rejects with
+    // `CALLER_KEY_NOT_FOUND`.
     const REALM_B: &str = "realm-b";
     const DEVICE_A_URA: &str = "easynet:///r/realm-a/device/device-A";
     let daemon_b_ura = easynet_cli::core::ura::hub_ura(REALM_B);
@@ -397,33 +453,36 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
     let federation_client: Arc<dyn FederationClient> = Arc::new(DialFailedClient);
     let peers_cell = SharedFederatedPeers::new(std::collections::BTreeMap::new());
 
-    let daemon_b_admission = AdmissionFacade::new(
-        Arc::new(RealmTrustAnchor::default()),
-        Some(daemon_b_ura.clone()),
-    )
-    .with_federation(federation_client, peers_cell);
-    let daemon_b =
-        DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_b_admission)
-            .with_session_realm(REALM_B);
+    let daemon_b_trust = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
+    let daemon_b_keys = Arc::new(
+        FederatedKeyResolver::new(
+            daemon_b_trust.clone(),
+            Some(federation_client),
+            peers_cell,
+            Some(REALM_B.to_string()),
+        )
+        .with_hub_signer(test_hub_signer(REALM_B)),
+    );
+    let (daemon_b, catalog_b) = hub_service(REALM_B, daemon_b_trust, daemon_b_keys).await;
+    let signed_descriptor = descriptor_ref(&catalog_b, &daemon_b_ura, ABILITY_FEDERATION_STATUS);
 
     let signed = signed_request(
         DEVICE_A_URA,
         &daemon_b_ura,
-        "self.echo",
+        ABILITY_FEDERATION_STATUS,
+        &signed_descriptor,
         b"{}",
         &device_a_key,
         [0x44u8; 16],
     );
 
-    let err = daemon_b
-        .invoke(tonic::Request::new(signed))
-        .await
-        .expect_err("must reject — no federated peer entry");
-    // The wire-stable reject reason for "URA not trusted" rolls up
-    // to `PermissionDenied` (the trust anchor membership gate)
-    // when the URA is missing locally and the resolver collapses to
-    // local-only. INV-4 fail-closed by construction.
-    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    let error = expect_canonical_in_band_failure(
+        daemon_b.invoke(tonic::Request::new(signed)).await,
+        ErrorCode::CallerKeyNotFound,
+        "missing peer authority must reject before route dispatch",
+    );
+    assert_eq!(error.stage, PbErrorStage::CallerAuthentication as i32);
+    assert_eq!(error.security_class, PbSecurityClass::Identity as i32);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -469,67 +528,68 @@ async fn cross_realm_forged_signature_rejected_after_key_resolves() {
             tls_ca_pem_path: None,
         })
         .expect("append device-A");
-    let daemon_a = Arc::new(
-        DaemonInvocationService::new(
-            Arc::new(PresenceRegistry::new()),
-            AdmissionFacade::new(
-                Arc::new(daemon_a_anchor_inner),
-                Some(easynet_cli::core::ura::hub_ura(REALM_A)),
+    daemon_a_anchor_inner
+        .append_agent(TrustedAgent {
+            agent_ura: daemon_b_ura.clone(),
+            public_key_b64: BASE64_STANDARD.encode(
+                SigningKey::from_bytes(&REALM_B_HUB_SIGNING_SEED)
+                    .verifying_key()
+                    .to_bytes(),
             ),
-        )
-        .with_session_realm(REALM_A),
-    );
+            role: TrustedAgentRole::Hub,
+            added_at_unix_ms: 1_714_492_800_000,
+            origin_realm: Some(REALM_B.to_string()),
+            hub_endpoint: Some("in-process-B".to_string()),
+            tls_ca_pem_path: None,
+        })
+        .expect("append daemon B hub");
+    let daemon_a_trust = SharedTrustAnchor::new(Arc::new(daemon_a_anchor_inner));
+    let daemon_a_keys = Arc::new(FederatedKeyResolver::new(
+        daemon_a_trust.clone(),
+        None,
+        SharedFederatedPeers::default(),
+        Some(REALM_A.to_string()),
+    ));
+    let (daemon_a, _) = hub_service(REALM_A, daemon_a_trust, daemon_a_keys).await;
+    let daemon_a = Arc::new(daemon_a);
 
     // ── Daemon B: empty trust + federated_peers → daemon A ──
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
-        peer_loopback_ura: easynet_cli::core::ura::hub_ura(REALM_A),
     });
     let mut peers = std::collections::BTreeMap::new();
     peers.insert(REALM_A.to_string(), PEER_HUB_URA.to_string());
     let peers_cell = SharedFederatedPeers::new(peers);
 
-    let daemon_b_admission = AdmissionFacade::new(
-        Arc::new(RealmTrustAnchor::default()),
-        Some(daemon_b_ura.clone()),
-    )
-    .with_federation(Arc::clone(&federation_client), peers_cell)
-    .with_hub_signer(test_hub_signer(REALM_B));
-    let daemon_b =
-        DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_b_admission)
-            .with_session_realm(REALM_B)
-            .with_local_runtime(LocalRuntime::new());
+    let daemon_b_trust = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
+    let daemon_b_keys = Arc::new(
+        FederatedKeyResolver::new(
+            daemon_b_trust.clone(),
+            Some(Arc::clone(&federation_client)),
+            peers_cell,
+            Some(REALM_B.to_string()),
+        )
+        .with_hub_signer(test_hub_signer(REALM_B)),
+    );
+    let (daemon_b, catalog_b) = hub_service(REALM_B, daemon_b_trust, daemon_b_keys).await;
+    let signed_descriptor = descriptor_ref(&catalog_b, &daemon_b_ura, ABILITY_FEDERATION_STATUS);
 
     // Forge: caller = device-A, but signed with the attacker's key.
     let forged = signed_request(
         DEVICE_A_URA,
         &daemon_b_ura,
-        "self.echo",
+        ABILITY_FEDERATION_STATUS,
+        &signed_descriptor,
         b"{}",
         &attacker_key,
         [0x55u8; 16],
     );
 
-    let err = daemon_b
-        .invoke(tonic::Request::new(forged))
-        .await
-        .expect_err("a forged signature must be rejected, not admitted");
-    // It must fail at the §5.2 signature-verification step, NOT at
-    // dispatch. A `NotFound` here would mean admission wrongly passed
-    // a forged signature and fell through to the (unimplemented)
-    // ability — the exact failure this test guards against.
-    assert_ne!(
-        err.code(),
-        tonic::Code::NotFound,
-        "forged signature reached dispatch — the crypto gate did not verify it",
+    let error = expect_canonical_in_band_failure(
+        daemon_b.invoke(tonic::Request::new(forged)).await,
+        ErrorCode::CallerSignatureInvalid,
+        "forged signature must fail canonical caller authentication",
     );
-    assert!(
-        matches!(
-            err.code(),
-            tonic::Code::PermissionDenied | tonic::Code::InvalidArgument
-        ),
-        "forged signature must reject with a §5.2 admission code, got code={:?} message={}",
-        err.code(),
-        err.message(),
-    );
+    assert_eq!(error.stage, PbErrorStage::CallerAuthentication as i32);
+    assert_eq!(error.security_class, PbSecurityClass::Authentication as i32);
 }

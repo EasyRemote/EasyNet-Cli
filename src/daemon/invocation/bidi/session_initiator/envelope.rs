@@ -1,14 +1,10 @@
-use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
-use easynet_axon::pb::axon::v1::{
-    AgentIdentity, Envelope, EnvelopeOpen, InvokeBidiUp, StreamDescriptor, SubjectIdentity,
-};
-use rand::RngCore as _;
+use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+use axon_sdk::pb::axon::v1::{EnvelopeOpen, InvokeBidiUp, StreamDescriptor};
 
 use super::{
     claimant_boot_nonce, ABILITY_SESSION_OPEN, DEVICE_DISPATCH_CONTRACT_VERSION, SESSION_STREAM_ID,
 };
 use crate::daemon::identity::self_identity::{CanonicalSigner, SelfIdentityError};
-use crate::daemon::invocation::DEFAULT_URA_PROFILE;
 
 /// Build the EnvelopeOpen frame 0 a device sends to open
 /// `session.open`. Public so PR-2 commit 1/N's hub-side
@@ -19,74 +15,58 @@ pub async fn build_session_envelope_open(
     signer: &dyn CanonicalSigner,
 ) -> Result<InvokeBidiUp, SelfIdentityError> {
     let caller_ura = signer.owner_ura();
+    let caller = crate::core::ura::parse_ura(caller_ura).map_err(|error| {
+        SelfIdentityError::Unexpected(format!(
+            "session.open caller URA `{caller_ura}` is invalid: {error}"
+        ))
+    })?;
+    let hub_ura = crate::core::ura::hub_ura(&caller.realm);
     let initial_args = Vec::new();
 
-    let mut envelope = Envelope {
-        caller: Some(AgentIdentity {
-            ura: caller_ura.to_string(),
-            profile: DEFAULT_URA_PROFILE.to_string(),
-        }),
-        // `session.open` is the device presenting its own long-
-        // lived reverse channel; callee + subject both point at the
-        // caller device so the signed tuple is stable and self-
-        // describing even before a future hub-URA contract lands.
-        callee: Some(AgentIdentity {
-            ura: caller_ura.to_string(),
-            profile: DEFAULT_URA_PROFILE.to_string(),
-        }),
-        subject: Some(SubjectIdentity {
-            ura: caller_ura.to_string(),
-            profile: DEFAULT_URA_PROFILE.to_string(),
-        }),
-        ..Envelope::default()
-    };
-
-    // Descriptor-bound frame-0 signing (mirrors the unary prelude in
-    // `prelude.rs::sign_descriptor_bound_prelude_request`). The hub's tightened
-    // bidi ingress runs the SAME strict signature gate as unary and rejects an
-    // empty `EnvelopeOpen.metadata` with "signed public Invoke for `session.open`
-    // is missing `x-easynet-signed-descriptor-ref`". `session.open`'s callee ==
-    // caller device URA (above), so the descriptor ref's owner matches the route
-    // by construction, and the gate re-derives the exact canonical bytes we sign
-    // here via `descriptor_bound_from_wire_parts`. Signing the old axiom bytes
-    // (the previous `sign_envelope_with_seed` path) would satisfy the metadata
-    // presence check but fail signature verification — the sign target MUST be
-    // the descriptor-bound canonical bytes.
+    // Descriptor-bound frame-0 signing mirrors the unary prelude. The
+    // descriptor owner and callee are the realm Hub, while the Device remains
+    // the signed caller and subject. The canonical typed target carries the
+    // descriptor ref; route and product metadata remain separate. The gate
+    // re-derives these exact canonical bytes through
+    // `descriptor_bound_from_wire_parts`; signing the old axiom bytes would
+    // satisfy metadata presence but fail signature verification.
     let descriptor_ref =
         crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
-            caller_ura,
+            &hub_ura,
             ABILITY_SESSION_OPEN,
             crate::daemon::ability::CallMode::Bidi,
         )
-        .expect("session.open descriptor ref is well-formed for the device's own URA");
-    let mut nonce = [0_u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut nonce);
-    envelope.invocation_nonce = nonce.to_vec();
-    let descriptor_bound =
-        crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
-            envelope.clone(),
-            descriptor_ref.clone(),
-            &initial_args,
-        )
-        .expect("session.open descriptor-bound envelope is complete");
-    let caller_signature =
-        crate::daemon::invocation::caller_signature::sign_canonical_caller_signature(
-            signer,
-            &descriptor_bound.envelope.canonical_bytes(),
-        )
-        .await?;
-    let mac = caller_signature.signature.clone();
-    envelope.caller_signature = Some(caller_signature);
-    let mut session_metadata = std::collections::HashMap::new();
-    session_metadata.insert(
-        crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-            .to_string(),
-        descriptor_ref,
-    );
-    let target = crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
-        ABILITY_SESSION_OPEN,
+        .expect("session.open descriptor ref is well-formed for the realm Hub URA");
+    let request = crate::daemon::invocation::ProtoEnvelope::from_target(
+        caller_ura,
+        &hub_ura,
+        caller_ura,
+        crate::daemon::invocation::InvocationDerivationPolicy::FreshRoot,
     )
-    .map_err(|err| SelfIdentityError::Unexpected(format!("session.open target: {err}")))?;
+    .map_err(|error| SelfIdentityError::Unexpected(format!("session.open envelope: {error}")))?
+    .signed_descriptor_ref_invoke_request_with_signer(
+        ABILITY_SESSION_OPEN,
+        descriptor_ref,
+        initial_args.clone(),
+        signer,
+    )
+    .await
+    .map_err(|error| SelfIdentityError::Unexpected(format!("session.open signing: {error}")))?;
+    let envelope = request.envelope.ok_or_else(|| {
+        SelfIdentityError::Unexpected("session.open builder omitted envelope".to_string())
+    })?;
+    let target = request.target.ok_or_else(|| {
+        SelfIdentityError::Unexpected("session.open builder omitted typed target".to_string())
+    })?;
+    let mac = envelope
+        .caller_signature
+        .as_ref()
+        .map(|signature| signature.signature.clone())
+        .ok_or_else(|| {
+            SelfIdentityError::Unexpected(
+                "session.open builder omitted caller signature".to_string(),
+            )
+        })?;
     Ok(InvokeBidiUp {
         sequence: 0,
         mac,
@@ -99,15 +79,14 @@ pub async fn build_session_envelope_open(
                 content_type: "application/json".to_string(),
                 ..StreamDescriptor::default()
             }],
-            // Carrier negotiation + claimant fingerprint (DEC-F004 /
-            // T2.1 step 3, T1.2): declare contract v1 and this
-            // process's boot nonce. A pre-carrier hub ignores the
-            // unknown field (proto3) and the session runs as v0.
-            session_ext: Some(easynet_axon::pb::axon::v1::SessionOpenExt {
+            // Canonical carrier negotiation + claimant fingerprint
+            // (DEC-F004 / T2.1 step 3, T1.2). Contract v1 is mandatory;
+            // the Hub provider rejects absent or retired v0 negotiation.
+            session_ext: Some(axon_sdk::pb::axon::v1::SessionOpenExt {
                 contract_version: DEVICE_DISPATCH_CONTRACT_VERSION,
                 claimant_boot_nonce: claimant_boot_nonce().to_vec(),
             }),
-            metadata: session_metadata,
+            metadata: request.metadata,
             ..EnvelopeOpen::default()
         })),
     })

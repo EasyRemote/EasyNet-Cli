@@ -34,17 +34,15 @@ use std::sync::Arc;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use tonic::{Response, Status};
 
-use easynet_axon::invocation::{AbilityContext, AuthorityBinding, AxonError, CallMode};
-use easynet_axon::pb::axon::v1::{
-    AgentIdentity, CallerSignature, Envelope, InvokeRequest, InvokeResponse, ResponseHeader,
-    SubjectIdentity,
-};
+use axon_sdk::invocation::{AbilityContext, AxonError, CallMode};
+use axon_sdk::pb::axon::v1::{Envelope, InvokeRequest, InvokeResponse, ResponseHeader};
 
 use std::collections::BTreeMap;
 
 use crate::daemon::federation::client::FederationClientError;
 use crate::daemon::federation::directory::now_unix_ms;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use crate::daemon::invocation::admission::decision::SignatureDecisionReason;
 use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
 use crate::daemon::invocation::admission::hosted_agent_publication::HostedAgentPublication;
 use crate::daemon::invocation::admission::list_user_pubkeys::handle as handle_list_user_pubkeys;
@@ -82,8 +80,8 @@ use crate::daemon::invocation::dispatch::forwarded_finalization::{
     ForwardedFinalizedInvocation, ForwardedInvocationBinding,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
-    encode_json_payload, parse_json_args, status_from_axon_invoke_error, target_ura_from_envelope,
-    FEDERATION_RESULT_CONTENT_TYPE, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
+    descriptor_ref_from_invocation_target, encode_json_payload, parse_json_args,
+    status_from_axon_invoke_error, target_ura_from_envelope, FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, DelegatedInvokeRoute, SelectedInvokeRoute,
@@ -91,8 +89,6 @@ use crate::daemon::invocation::routing::route_resolver::{
 use crate::daemon::trust::anchor::{TrustedAgentRole, TrustedPrincipalOwner};
 
 pub(crate) fn rpc_dispatch_outcome_response(
-    ability: &str,
-    failure_prefix: &str,
     outcome: crate::daemon::axon_bridge::dispatch_shim::RpcDispatchOutcome,
 ) -> (Result<Response<InvokeResponse>, Status>, bool) {
     let crate::daemon::axon_bridge::dispatch_shim::RpcDispatchOutcome {
@@ -105,20 +101,9 @@ pub(crate) fn rpc_dispatch_outcome_response(
         ..
     } = outcome;
     let axon_started = invocation_id.is_some();
-    if let Some(err) = error
-        .as_ref()
-        .filter(|_| admission_receipt.is_none() || terminal_receipt.is_none())
-    {
-        let status = status_from_axon_invoke_error(
-            &format!("local-rpc axon dispatch: {failure_prefix}"),
-            ability,
-            err.clone(),
-        );
-        return (Err(status), axon_started);
-    }
     let admission_receipt = match admission_receipt
         .as_ref()
-        .map(easynet_axon::invocation::wire::receipt_to_wire)
+        .map(axon_sdk::invocation::wire::receipt_to_wire)
         .transpose()
     {
         Ok(receipt) => receipt,
@@ -133,7 +118,7 @@ pub(crate) fn rpc_dispatch_outcome_response(
     };
     let terminal_receipt = match terminal_receipt
         .as_ref()
-        .map(easynet_axon::invocation::wire::receipt_to_wire)
+        .map(axon_sdk::invocation::wire::receipt_to_wire)
         .transpose()
     {
         Ok(receipt) => receipt,
@@ -158,13 +143,51 @@ pub(crate) fn rpc_dispatch_outcome_response(
             state: state.to_wire_i32(),
             error: error
                 .as_ref()
-                .map(easynet_axon::invocation::wire::error_to_wire),
+                .map(axon_sdk::invocation::wire::error_to_wire),
             admission_receipt,
             terminal_receipt,
             ..InvokeResponse::default()
         })),
         axon_started,
     )
+}
+
+#[cfg(test)]
+mod rpc_dispatch_outcome_response_tests {
+    use super::*;
+    use axon_sdk::invocation::{AxonError, ErrorCode, ErrorStage, InvocationState, SecurityClass};
+
+    #[test]
+    fn pre_admission_rejection_remains_an_in_band_failed_outcome() {
+        let error = AxonError::invalid_argument("AXON_CALLER_SIGNATURE_INVALID")
+            .with_code(ErrorCode::CallerSignatureInvalid)
+            .with_stage(ErrorStage::CallerAuthentication)
+            .with_security_class(SecurityClass::Authentication)
+            .with_message("ed25519_signature_wrong_length");
+        let (response, axon_started) = rpc_dispatch_outcome_response(
+            crate::daemon::axon_bridge::dispatch_shim::RpcDispatchOutcome {
+                invocation_id: None,
+                state: InvocationState::Failed,
+                payload_bytes: Vec::new(),
+                error: Some(error),
+                admission_receipt: None,
+                terminal_receipt: None,
+            },
+        );
+
+        let response = response.expect("pre-admission rejection must remain in-band");
+        let response = response.into_inner();
+        assert!(!axon_started);
+        assert_eq!(response.state, InvocationState::Failed.to_wire_i32());
+        assert!(response.admission_receipt.is_none());
+        assert!(response.terminal_receipt.is_none());
+        let error = response.error.expect("typed rejection");
+        assert_eq!(error.code, ErrorCode::CallerSignatureInvalid.as_str());
+        assert_eq!(
+            error.stage,
+            axon_sdk::pb::axon::v1::ErrorStage::CallerAuthentication as i32
+        );
+    }
 }
 
 fn validate_federation_join_request(
@@ -306,37 +329,6 @@ impl DaemonUnaryRouteProvider {
     ) -> Result<Vec<u8>, AxonError> {
         let arguments = context.payload.as_slice();
         let envelope = runtime_context_envelope(&context)?;
-        match context.authority_binding() {
-            AuthorityBinding::Bootstrap { .. } => self
-                .dispatcher
-                .admission
-                .verify_runtime_admitted_bootstrap_invoke(
-                    &envelope,
-                    route.name(),
-                    arguments,
-                    Some(&context.request_metadata),
-                ),
-            _ => self.dispatcher.admission.verify_runtime_admitted_invoke(
-                &envelope,
-                route.name(),
-                arguments,
-                Some(&context.request_metadata),
-            ),
-        }
-        .map_err(product_status_to_axon_error)?;
-        let admitted_request = InvokeRequest {
-            function_name: route.name().to_string(),
-            arguments: arguments.to_vec(),
-            envelope: Some(envelope.clone()),
-            metadata: context.request_metadata.clone(),
-            ..InvokeRequest::default()
-        };
-        if crate::daemon::invocation::admission::quota_meter::quota_meters_function(route.name()) {
-            self.dispatcher
-                .admission
-                .check_quota(&admitted_request)
-                .map_err(product_status_to_axon_error)?;
-        }
         match route {
             DaemonUnaryRoute::FederationJoin => self.dispatcher.dispatch_federation_join(arguments),
             DaemonUnaryRoute::FederationAdvertiseAgent => self
@@ -412,32 +404,14 @@ fn runtime_context_envelope(context: &AbilityContext) -> Result<Envelope, AxonEr
     let signed = context.signed_envelope().ok_or_else(|| {
         AxonError::internal("daemon unary route provider missing admitted signed envelope")
     })?;
-    let envelope = &signed.envelope;
-    Ok(Envelope {
-        caller: Some(AgentIdentity {
-            ura: envelope.caller.ura.clone(),
-            profile: envelope.caller.profile.as_str().to_string(),
-        }),
-        callee: Some(AgentIdentity {
-            ura: envelope.callee.ura.clone(),
-            profile: envelope.callee.profile.as_str().to_string(),
-        }),
-        subject: Some(SubjectIdentity {
-            ura: envelope.subject.ura.clone(),
-            profile: envelope.subject.profile.as_str().to_string(),
-        }),
-        invocation_nonce: envelope.invocation_nonce.to_vec(),
-        causal_context: Some(easynet_axon::invocation::wire::causal_context_to_wire(
-            &envelope.causal_context,
-        )),
-        caller_signature: Some(CallerSignature {
-            algorithm: signed.signature.algorithm.clone(),
-            signature: signed.signature.signature.clone(),
-            key_id_hint: signed.signature.key_id_hint.clone(),
-        }),
-        request_id: context.invocation_id.clone(),
-        ..Envelope::default()
-    })
+    axon_sdk::invocation::project_wire_envelope(
+        &signed.envelope,
+        axon_sdk::invocation::WireEnvelopeMetadata {
+            request_id: context.invocation_id.clone(),
+            caller_signature: Some(signed.signature.clone()),
+            ..axon_sdk::invocation::WireEnvelopeMetadata::default()
+        },
+    )
 }
 
 impl UnaryDispatcher {
@@ -471,15 +445,17 @@ impl UnaryDispatcher {
         request: &InvokeRequest,
         ingress: crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteIngress,
     ) -> Result<Response<InvokeResponse>, Status> {
-        let runtime = self.runtime.local_runtime.as_ref().ok_or_else(|| {
+        let runtime = self.runtime.local_runtime().ok_or_else(|| {
             Status::failed_precondition(format!(
                 "easynet-daemon: exact route `{}` cannot run because Axon LocalRuntime is not wired at boot",
                 route.name()
             ))
         })?;
         crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
-            Arc::clone(runtime),
+            runtime,
             self.runtime.cancellations.clone(),
+            self.admission.clone(),
+            self.runtime.product_policy()?,
         )
         .dispatch(route, request, ingress)
         .await
@@ -772,7 +748,7 @@ impl UnaryDispatcher {
                 false,
             );
         }
-        let Some(runtime) = self.runtime.local_runtime.as_ref() else {
+        let Some(runtime) = self.runtime.local_runtime() else {
             return (
                 Err(Status::failed_precondition(format!(
                     "easynet-daemon: ability `{ability}` cannot run because Axon LocalRuntime \
@@ -783,7 +759,7 @@ impl UnaryDispatcher {
         };
         let bound_ability = match RuntimeBoundAbility::from_selected_route(
             "easynet-daemon",
-            runtime,
+            &runtime,
             self.directory.local_ability_catalog.as_deref(),
             &selected_route,
             call_mode,
@@ -821,11 +797,11 @@ impl UnaryDispatcher {
             execution_host_ura = selected_route.execution_host_ura.as_str(),
             route_ura = selected_route.route_ura.as_str(),
         );
-        let local_self_admitted = self
+        let local_system_ingress = self
             .admission
-            .accepts_local_self_envelope(request.envelope.as_ref());
+            .accepts_local_system_envelope(request.envelope.as_ref());
         let wire = match request.envelope.clone() {
-            Some(envelope) if local_self_admitted => {
+            Some(envelope) if local_system_ingress => {
                 let metadata = match HostedAgentDelegationIssuer::materialize_request_metadata(
                     &request.metadata,
                     &envelope,
@@ -852,23 +828,13 @@ impl UnaryDispatcher {
                     Ok(metadata) => metadata,
                     Err(status) => return (Err(status), false),
                 };
-                let signed_descriptor_ref = match bound_ability.signed_descriptor_ref_from_metadata(
+                let signed_descriptor_ref = match bound_ability.signed_descriptor_ref_from_target(
                     "Invoke",
                     &selected_route.callee_ura,
                     call_mode,
-                    &metadata,
+                    request.target.as_ref(),
                 ) {
-                    Ok(Some(ref_)) => ref_.into_descriptor_ref(),
-                    Ok(None) => {
-                        return (
-                            Err(Status::invalid_argument(format!(
-                                "Invoke: signed public Invoke for `{ability}` is missing `{}`; \
-                                 route name and descriptor-bound signature target must be explicit",
-                                crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-                            ))),
-                            false,
-                        );
-                    }
+                    Ok(ref_) => ref_.into_descriptor_ref(),
                     Err(status) => return (Err(status), false),
                 };
                 crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
@@ -878,11 +844,9 @@ impl UnaryDispatcher {
                     metadata,
                 )
             }
-            None => Err(Box::new(
-                easynet_axon::invocation::AxonError::invalid_argument(
-                    "Invoke request missing envelope",
-                ),
-            )),
+            None => Err(Box::new(axon_sdk::invocation::AxonError::invalid_argument(
+                "Invoke request missing envelope",
+            ))),
         };
         let wire = match wire {
             Ok(wire) => wire,
@@ -893,13 +857,35 @@ impl UnaryDispatcher {
                 );
             }
         };
+        let product_admission = match self.runtime.stage_product_admission(
+            &self.admission,
+            &wire,
+            ability,
+            CallMode::Rpc,
+        ) {
+            Ok(lease) => lease,
+            Err(status) => return (Err(status), false),
+        };
         let outcome = crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_admitted(
-            runtime,
+            &runtime,
             wire,
             &self.runtime.cancellations,
         )
         .await;
-        rpc_dispatch_outcome_response(ability, "ability", outcome)
+        let runtime_started = outcome.invocation_id.is_some();
+        let rate_limit = if runtime_started {
+            match product_admission.commit() {
+                Ok(rate_limit) => rate_limit,
+                Err(status) => return (Err(status), true),
+            }
+        } else {
+            None
+        };
+        let (mut response, axon_started) = rpc_dispatch_outcome_response(outcome);
+        if let (Ok(response), Some(rate_limit)) = (&mut response, rate_limit) {
+            response.get_mut().rate_limit = Some(rate_limit);
+        }
+        (response, axon_started)
     }
 
     pub(crate) fn dispatch_register_device_pubkey(
@@ -1765,10 +1751,7 @@ impl UnaryDispatcher {
         signed_envelope_for_selected_route(
             envelope,
             selected_route,
-            request
-                .metadata
-                .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
-                .map(String::as_str),
+            request.target.as_ref(),
             &request.arguments,
         )?;
         let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
@@ -1888,24 +1871,15 @@ pub(crate) fn require_complete_signed_remote_request(
             "remote Invoke from `{caller}` carries an empty caller signature"
         )));
     }
-    let descriptor_ref = request
-        .metadata
-        .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            Status::invalid_argument(format!(
-                "SIGNED_DESCRIPTOR_REF_MISSING: remote Invoke requires \
-                 `{SIGNED_DESCRIPTOR_REF_METADATA_KEY}`"
-            ))
-        })?;
-    let descriptor_ref = easynet_axon::invocation::canonical_ability_descriptor_ref(descriptor_ref)
-        .map_err(|err| {
-            Status::invalid_argument(format!(
-                "remote Invoke descriptor ref `{descriptor_ref}` is invalid: {err}"
-            ))
-        })?;
+    let descriptor_ref =
+        descriptor_ref_from_invocation_target("remote Invoke", callee, request.target.as_ref())
+            .map_err(|status| {
+                Status::invalid_argument(format!(
+                    "{}: {}",
+                    SignatureDecisionReason::SignedDescriptorRefMissing.as_str(),
+                    status.message()
+                ))
+            })?;
     let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
         &descriptor_ref,
     )

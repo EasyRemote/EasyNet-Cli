@@ -8,7 +8,7 @@
 //              daemon invocation, so every descriptor grant/import is
 //              admitted, ledgered, and receipted.
 //
-//              `learn` rides `invoke_local_ability_with_invocation_meta`
+//              `learn` rides `invoke_local_ability_target_with_invocation_meta`
 //              with subject = the granted descriptor URA: the
 //              seven-tuple names the thing being transferred
 //              (spec 0.1-7).
@@ -19,13 +19,16 @@
 use anyhow::Context;
 use clap::Args;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::daemon::ability::builtins::governance::teach::{ACQUIRE, FORGET, TEACH};
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, HostedAgentNameLookupError,
 };
-use crate::support::platform::local_invoke::invoke_local_ability_with_hosted_agent_delegation;
+use crate::support::platform::local_invoke::{
+    invoke_local_ability_target_with_hosted_agent_delegation, LocalAbilityTarget,
+    LocalSystemInvocationContext,
+};
 use crate::support::platform::output;
 
 /// Typed projection of the `meta.teach` daemon response. Parsing the
@@ -219,13 +222,10 @@ fn require_committed_forget_status(status: &str) -> anyhow::Result<()> {
 /// Compute half of `teach` (e2e surface).
 pub fn execute_teach(args: &TeachArgs) -> anyhow::Result<Value> {
     let subject = resolve_owner_ability_subject(&args.ability)?;
-    invoke_local_ability_with_hosted_agent_delegation(
+    invoke_descriptor_mutation(
         TEACH,
         json!({ "ability": args.ability, "learner_ura": args.to }),
-        Some(subject.ability_ura.clone()),
-        &[],
-        None,
-        None,
+        &subject.ability_ura,
         &subject.owner_ura,
     )
     .map(|(resp, _meta)| resp)
@@ -237,13 +237,10 @@ pub fn execute_forget(args: &ForgetArgs) -> anyhow::Result<Value> {
     let agent_ura = resolve_learner_ura(&args.agent)?;
     let subject_ura = crate::core::ura::owner_ability_ura(&agent_ura, &args.ability)
         .ok_or_else(|| anyhow::anyhow!("could not mint descriptor URA for forgotten ability"))?;
-    invoke_local_ability_with_hosted_agent_delegation(
+    invoke_descriptor_mutation(
         FORGET,
         json!({ "ability": args.ability, "agent": args.agent }),
-        Some(subject_ura),
-        &[],
-        None,
-        None,
+        &subject_ura,
         &agent_ura,
     )
     .map(|(resp, _meta)| resp)
@@ -272,16 +269,39 @@ pub fn run_teach(args: TeachArgs) -> anyhow::Result<()> {
 /// plus the invocation envelope echo.
 pub fn execute_learn(args: &LearnArgs) -> anyhow::Result<(Value, Value)> {
     let learner_ura = resolve_learner_ura(&args.learner)?;
-    invoke_local_ability_with_hosted_agent_delegation(
+    invoke_descriptor_mutation(
         ACQUIRE,
         json!({ "ability_ura": args.ability_ura, "learner": args.learner }),
-        Some(args.ability_ura.clone()),
-        &[],
-        None,
-        None,
+        &args.ability_ura,
         &learner_ura,
     )
     .context("import the granted descriptor")
+}
+
+fn invoke_descriptor_mutation(
+    ability: &str,
+    args: Value,
+    subject_ura: &str,
+    hosted_agent_ura: &str,
+) -> anyhow::Result<(Value, Value)> {
+    let target = LocalAbilityTarget::new(
+        ability,
+        crate::daemon::identity::local_invocation::local_daemon_ura(),
+        subject_ura,
+    )?;
+    let context = LocalSystemInvocationContext::new(
+        subject_ura,
+        axon_sdk::invocation::fresh_nonce(),
+        &[],
+        std::time::Duration::from_secs(30),
+        None,
+    )?;
+    invoke_local_ability_target_with_hosted_agent_delegation(
+        &target,
+        args,
+        context,
+        hosted_agent_ura,
+    )
 }
 
 fn resolve_learner_ura(learner: &str) -> anyhow::Result<String> {
@@ -391,10 +411,9 @@ mod tests {
 
         assert!(!gate.bypassed);
         assert!(gate.prompt.contains("mentor.quote"));
-        assert!(
-            gate.prompt
-                .contains("easynet:///r/default/agent/user.student")
-        );
+        assert!(gate
+            .prompt
+            .contains("easynet:///r/default/agent/user.student"));
     }
 
     #[test]
@@ -433,11 +452,9 @@ mod tests {
             parse_descriptor_transaction_status("committed_runtime_degraded", "import").unwrap(),
             DescriptorTransactionStatus::CommittedRuntimeDegraded
         );
-        assert!(
-            parse_descriptor_transaction_status("unknown", "import")
-                .unwrap_err()
-                .to_string()
-                .contains("unsupported transaction status")
-        );
+        assert!(parse_descriptor_transaction_status("unknown", "import")
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported transaction status"));
     }
 }

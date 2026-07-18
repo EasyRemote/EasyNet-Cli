@@ -167,7 +167,10 @@ mod tests {
     fn capture_tracks_hot_control_plane_commits_without_mutating_prior_snapshot() {
         let owner_ura = "easynet:///r/acme/device/node-a";
         let catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            easynet_axon::invocation::LocalRuntime::new(),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
             AbilityAuthorityContext::for_device_authority_root(owner_ura)
                 .expect("device authority context"),
         );

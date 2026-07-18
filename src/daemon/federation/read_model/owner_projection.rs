@@ -582,6 +582,58 @@ fn summaries_from_descriptors(
         .collect()
 }
 
+/// Project governed daemon descriptors into the canonical federation summary
+/// JSON shape. Product fixtures and outbound adapters use this boundary instead
+/// of copying descriptor hashing, mode geometry, or tag aggregation rules.
+pub fn canonical_summary_values_from_descriptors(
+    owner_ura: &str,
+    descriptors: &[AbilityDescriptor],
+) -> Result<Vec<Value>, String> {
+    summaries_from_descriptors(owner_ura, descriptors).map(|summaries| {
+        summaries
+            .iter()
+            .map(canonical_summary_json)
+            .collect::<Vec<_>>()
+    })
+}
+
+/// Compute the canonical owner-projection digest from admitted summary JSON.
+///
+/// Parsing through `AbilityProjectionSummary` rejects incomplete or drifted
+/// summary shapes before hashing, keeping the digest authority in this module.
+pub fn canonical_projection_digest_from_values(
+    owner_ura: &str,
+    host_device_ura: &str,
+    generation: u64,
+    projection_revision: u64,
+    lease_expires_unix_ms: i64,
+    summaries: &[Value],
+) -> Result<String, String> {
+    let summaries = summaries
+        .iter()
+        .map(|value| {
+            let summary: AbilityProjectionSummary = serde_json::from_value(value.clone())
+                .map_err(|error| format!("invalid ability projection summary: {error}"))?;
+            if summary.owner_ura != owner_ura {
+                return Err(format!(
+                    "ability projection owner `{}` does not match `{owner_ura}`",
+                    summary.owner_ura
+                ));
+            }
+            validate_mode_geometry(&summary)?;
+            Ok(summary)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(projection_digest(
+        owner_ura,
+        host_device_ura,
+        generation,
+        projection_revision,
+        lease_expires_unix_ms,
+        &summaries,
+    ))
+}
+
 fn merge_ability_summaries(
     mut summaries: Vec<AbilityProjectionSummary>,
 ) -> Result<AbilityProjectionSummary, String> {

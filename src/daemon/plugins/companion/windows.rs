@@ -247,8 +247,7 @@ fn installed_windows_exe_path(plan: &DesktopCompanionPlan, source_exe: &Path) ->
 
 fn installed_windows_app_dir(plan: &DesktopCompanionPlan, source_exe: &Path) -> PathBuf {
     let app_name = source_exe.file_stem().unwrap_or_default();
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
+    plan.user_home
         .join(".easynet/apps")
         .join(&plan.package_id)
         .join(&plan.package_version)
@@ -402,6 +401,7 @@ mod tests {
             package_version: version.to_string(),
             display_name: "EasyNet Tray".to_string(),
             package_root: PathBuf::from("/tmp/pkg"),
+            user_home: PathBuf::from("/tmp/home"),
             platform: "windows".to_string(),
             spec: PlatformCompanionSpec::Windows {
                 exe,

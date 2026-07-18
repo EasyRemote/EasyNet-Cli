@@ -40,6 +40,7 @@
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
@@ -72,10 +73,10 @@ pub const ABILITY_CANCEL: &str = crate::daemon::ability::names::automation::MISS
 /// know which to pick, the receipts diverged, and the duplicate
 /// names doubled the meta-discovery surface for no win.
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_envelope_and_owner(
         "mission.run",
         OwnerKind::Device,
-        Arc::new(move |args: Value| run_handler(args)),
+        Arc::new(move |env, args: Value| run_handler(env, args)),
     );
     reg.register_rpc_with_owner(
         "mission.track",
@@ -114,11 +115,23 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 ///   * Compile failure (EAL parse / planner reject)        → Err
 ///   * Implicit-agent-fallback collision                    → Err
 ///   * Step dispatch failure inside the mission             → Err
-///     (mission_runs::run_mission_inproc bubbles the typed step
+///     (MissionRunner bubbles the typed step
 ///     error verbatim)
 ///   * Empty / missing `source`                              → Err with
 ///     a precise "source must be a non-empty string"
-fn run_handler(args: Value) -> anyhow::Result<Value> {
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct MissionRunResponse {
+    pub(crate) ok: bool,
+    pub(crate) run_id: String,
+    pub(crate) run_dir: String,
+    pub(crate) outputs: serde_json::Map<String, Value>,
+    pub(crate) meta: crate::daemon::execution::mission::orchestration::MissionRunMeta,
+}
+
+fn run_handler(
+    env: crate::daemon::ability::dispatch::EnvelopeContext,
+    args: Value,
+) -> anyhow::Result<Value> {
     let source = args
         .get("source")
         .and_then(Value::as_str)
@@ -136,21 +149,23 @@ fn run_handler(args: Value) -> anyhow::Result<Value> {
     let opts = crate::daemon::execution::mission::orchestration::MissionRunOpts {
         source_label: Some(label),
         trace_path: None,
-        invocation_context: None,
         run_timeout: None,
     };
 
-    let result =
-        crate::daemon::execution::mission::orchestration::run_mission_inproc(&source, opts)?;
+    let gateway = Arc::new(
+        crate::daemon::execution::mission::invocation_gateway::DaemonMissionInvocationGateway::from_admitted_envelope(&env)?,
+    );
+    let result = crate::daemon::execution::mission::orchestration::MissionRunner::new(gateway)
+        .run(&source, opts)?;
     let outputs_json: serde_json::Map<String, Value> = result.bound_vars.into_iter().collect();
-    let meta_json = serde_json::to_value(&result.meta).unwrap_or(Value::Null);
-    Ok(json!({
-        "ok": result.ok,
-        "run_id": result.run_id,
-        "run_dir": result.run_dir.to_string_lossy(),
-        "outputs": Value::Object(outputs_json),
-        "meta": meta_json,
-    }))
+    serde_json::to_value(MissionRunResponse {
+        ok: result.ok,
+        run_id: result.run_id,
+        run_dir: result.run_dir.to_string_lossy().into_owned(),
+        outputs: outputs_json,
+        meta: result.meta,
+    })
+    .map_err(Into::into)
 }
 
 /// `easynet.track` handler.
@@ -322,19 +337,26 @@ pub fn cancel_input_schema() -> Value {
 mod tests {
     use super::*;
 
+    fn test_envelope() -> crate::daemon::ability::dispatch::EnvelopeContext {
+        crate::daemon::ability::dispatch::EnvelopeContext::for_test(
+            "easynet:///r/test/agent/caller",
+            "easynet:///r/test/resource/mission",
+        )
+    }
+
     /// Empty `source` is a caller bug, not a transient. Surface it
     /// loud so the LLM sees a precise error and reframes its tool
     /// call rather than retrying with the same input.
     #[test]
     fn rejects_missing_source() {
-        let err = run_handler(json!({})).unwrap_err();
+        let err = run_handler(test_envelope(), json!({})).unwrap_err();
         assert!(err.to_string().contains("`source`"));
     }
 
     /// Whitespace-only source must fail the same way as missing.
     #[test]
     fn rejects_blank_source() {
-        let err = run_handler(json!({"source": "   "})).unwrap_err();
+        let err = run_handler(test_envelope(), json!({"source": "   "})).unwrap_err();
         assert!(err.to_string().contains("`source`"));
     }
 
@@ -342,7 +364,7 @@ mod tests {
     /// by accident) hits the type guard, not the EAL parser.
     #[test]
     fn rejects_non_string_source() {
-        let err = run_handler(json!({"source": 42})).unwrap_err();
+        let err = run_handler(test_envelope(), json!({"source": 42})).unwrap_err();
         assert!(err.to_string().contains("non-empty string"));
     }
 
@@ -358,7 +380,7 @@ mod tests {
         // error message on a deliberately-broken source: the
         // run dir name will include the default label string.
         // Smoke-only — full coverage is in the e2e flow.
-        let _ = run_handler(json!({"source": "this is not eal"}));
+        let _ = run_handler(test_envelope(), json!({"source": "this is not eal"}));
     }
 
     /// Track requires `run_id`. Same arg-shape rules as run.

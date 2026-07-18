@@ -5,7 +5,7 @@
 // Description: CLI façade for Axon-owned URA builders and parser.
 //
 // URA is protocol state owned by Axon. This file deliberately contains
-// no grammar implementation; it re-exports `easynet_axon::ura` and
+// no grammar implementation; it re-exports `axon_sdk::ura` and
 // centralizes the few CLI-local projections that sit immediately on top
 // of Axon's canonical builders. Existing CLI modules can keep using
 // `crate::core::ura::*` while the source of truth remains in Axon SDK.
@@ -36,7 +36,7 @@
 //   The guard at `tests/scripts/test_no_raw_ura_construction.sh` exists
 //   to keep that invariant enforceable.
 
-pub use easynet_axon::ura::*;
+pub use axon_sdk::ura::*;
 
 pub mod provisional;
 
@@ -69,7 +69,7 @@ pub fn realm_prefix_ura(realm: &str) -> anyhow::Result<String> {
 /// public ability name, and local registry dispatch key.
 ///
 /// What this is not: it is not a URA parser or grammar copy. Parsing
-/// still belongs to Axon (`easynet_axon::ura::parse_ura`); this type
+/// still belongs to Axon (`axon_sdk::ura::parse_ura`); this type
 /// only packages the CLI daemon projection that otherwise tends to be
 /// hand-written at each call site.
 #[derive(Debug, Clone, PartialEq, Eq)]

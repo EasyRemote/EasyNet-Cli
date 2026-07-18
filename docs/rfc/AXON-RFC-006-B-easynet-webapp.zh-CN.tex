@@ -459,7 +459,7 @@ canonical state——它在 agent workspace 中、归 agent 所有，仅在守�
 state_type:  easynet.web_app
 
 state_key:
-    (realm: string, owner_agent_uri: string, app_slug: string)
+    (realm: string, owner_agent_ura: string, app_slug: string)
 
 URA 形态：
   easynet:///r/<realm>/agent/<owner>/web_app/<slug>
@@ -1363,7 +1363,7 @@ TR-INV-5（runtime 叠加独立）            & runtime 崩溃不触动 canonica
 TR-INV-7（multi-view 一等公民）          & human（HTML+API+WS）与 agent\_view 都已实现              & \S\ref{sec:hub-routing}, \S\ref{sec:agent-view} \\
 TR-INV-8（cross-state-space 矩阵）       & canonical $\times$ runtime 准入被强制                    & \S\ref{sec:state-machine} \\
 TR-INV-11（URA-receipt 可追踪）          & \texttt{/\_\_easynet/receipts} + state\_key 索引          & \S\ref{sec:e2e} \\
-TR-INV-12（principal/human-anon）        & Hub 在每个请求上铸造该 URI                                & \S\ref{sec:hub-routing} \\
+TR-INV-12（principal/human-anon）        & Hub 在每个请求上铸造该 URA                                & \S\ref{sec:hub-routing} \\
 TR-INV-13（caller\_context）             & 由请求头填充；记录到 operational receipt                  & \S\ref{sec:hub-routing}, \S\ref{sec:e2e} \\
 WB-INV-1（仅从 blob 服务）              & Hub 永不读项目 dist/                                      & \S\ref{sec:project} \\
 WB-INV-2（api/actions 面强制）          & Hub 拒绝未列出 verb 并返 404                              & \S\ref{sec:project} \\

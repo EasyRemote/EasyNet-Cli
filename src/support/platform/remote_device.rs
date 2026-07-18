@@ -33,17 +33,29 @@
 use anyhow::anyhow;
 use serde_json::Value;
 
-/// Best-effort caller URA for federation-forwarded requests.
+/// Resolve the explicit signing identity for a CLI-originated remote request.
 ///
-/// When local credentials are present and non-empty, returns the
-/// canonical device URA for this caller. Otherwise returns `None` and
-/// the lower-level federation helper falls back to its own synthetic
-/// `easynet:///r/cli/device/local` caller.
-pub(crate) fn caller_device_ura_from_credentials() -> Option<String> {
-    crate::daemon::persistence::config::load_credentials()
-        .ok()
-        .filter(|creds| !creds.realm.trim().is_empty() && !creds.node_id.trim().is_empty())
-        .map(|creds| crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
+/// Remote dispatch has no synthetic caller. An unpaired or incomplete CLI
+/// identity is rejected before request construction because no canonical signer
+/// can own that invocation tuple.
+pub(crate) fn require_caller_device_ura_from_credentials() -> anyhow::Result<String> {
+    let credentials = crate::daemon::persistence::config::load_credentials().map_err(|error| {
+        anyhow!("remote invocation requires paired device credentials: {error}")
+    })?;
+    caller_device_ura(&credentials)
+}
+
+pub(crate) fn caller_device_ura(
+    credentials: &crate::daemon::persistence::config::Credentials,
+) -> anyhow::Result<String> {
+    let realm = credentials.realm.trim();
+    let node_id = credentials.node_id.trim();
+    if realm.is_empty() || node_id.is_empty() {
+        return Err(anyhow!(
+            "remote invocation requires paired device credentials with non-empty realm and node_id"
+        ));
+    }
+    Ok(crate::core::ura::device_ura(realm, node_id))
 }
 
 /// Resolve a CLI `node` argument into a canonical device URA.

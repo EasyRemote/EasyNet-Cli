@@ -12,8 +12,6 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use easynet_axon::pb::axon::v1::InvokeRequest;
-
 use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
@@ -56,8 +54,4 @@ fn is_quota_exempt_system_ability(function: &str) -> bool {
 
 pub(crate) fn quota_meters_function(function: &str) -> bool {
     !is_quota_exempt_system_ability(function)
-}
-
-pub(crate) fn quota_meters_request(request: &InvokeRequest) -> bool {
-    quota_meters_function(request.function_name.as_str())
 }

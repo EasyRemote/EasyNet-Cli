@@ -30,7 +30,7 @@ proto-gen = ["dep:prost-types", "dep:prost-build"]
 # forwarding, and live discovery all depend on it. The SDK owns Axon proto
 # codegen; CLI must not compile `../EasyNet-Axon/.../proto` directly.
 axon-pb = [
-    "easynet-axon/grpc",
+    "axon-sdk/grpc",
     "dep:tonic",
     # PR-N1 commit 8/N CLI bridge needs the UDS-over-tonic adapters.
     "dep:tower",
@@ -150,9 +150,9 @@ async-trait = "0.1"
 # Promoted from a transitive dep (already pulled in via tonic) to a
 # direct dep so the daemon's surface use is documented in Cargo.toml.
 tokio-stream = { version = "0.1", features = ["sync", "net"] }
-easynet-axon = { path = "../EasyNet-Axon/sdk/rust" }
+axon-sdk = { path = "../EasyNet-Axon/sdk/rust" }
 # Skill-install adapter needs tarball extraction + hex encoding of
-# the content_hash digest. Kept as direct deps (not via easynet-axon)
+# the content_hash digest. Kept as direct deps (not via axon-sdk)
 # because the skill subcommand is self-contained.
 flate2 = "1"
 gethostname = "0.5"
@@ -223,7 +223,7 @@ rtc = { version = "0.20.0-alpha.1", optional = true }
 toml = "0.8"
 toml_edit = "0.23"
 # Tokio adopted in PR-7 (Commit 1) as a transitive-to-direct dependency.
-# `easynet-axon` already pulls in tokio; this entry adds `sync` + `rt-multi-thread`
+# `axon-sdk` already pulls in tokio; this entry adds `sync` + `rt-multi-thread`
 # features CLI needs directly for broadcast::channel and multi-thread
 # runtime (Commit 2 flips main.rs to #[tokio::main]).
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "fs", "io-util", "time", "net", "signal", "process"] }
@@ -394,7 +394,7 @@ objc2-video-toolbox = { version = "0.3", features = [
 ], optional = true }
 
 [dev-dependencies]
-easynet-axon = { path = "../EasyNet-Axon/sdk/rust" }
+axon-sdk = { path = "../EasyNet-Axon/sdk/rust" }
 # Paused-clock tests (`#[tokio::test(start_paused = true)]`) let the
 # invocation-transport reply-deadline tests fire the 60s timer
 # instantly instead of sleeping it for real. Test builds only.
@@ -441,7 +441,7 @@ optional = true
 
 # tonic runtime dependency for Invocation server/client plumbing and
 # `tonic::Status`. The generated Axon message/stub types now come from
-# `easynet-axon/grpc`, not from this crate's build script.
+# `axon-sdk/grpc`, not from this crate's build script.
 [dependencies.tonic]
 version = "0.12"
 # `tls-roots` adds the rustls-native-certs probe so dialing

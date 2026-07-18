@@ -29,10 +29,11 @@
 
 use std::collections::HashMap;
 
-use easynet_axon::invocation::{
-    fresh_nonce, AgentIdentity, AxonError, CallMode as AxonInvocationCallMode, CallerSignature,
-    CausalContext, DescriptorBoundEnvelope, DescriptorBoundEnvelopeParts,
-    DescriptorBoundInvocationRequest, EntityRef, SubjectIdentity, UraProfile,
+use axon_sdk::invocation::{
+    AgentIdentity, AxonError, CallMode as AxonInvocationCallMode, CallerSignature,
+    CanonicalEnvelopeBuilder, CausalContext, DescriptorBoundEnvelope,
+    DescriptorBoundInvocationRequest, EntityRef, InvocationDerivationPolicy, SubjectIdentity,
+    UraProfile,
 };
 
 use crate::daemon::identity::local_invocation::{
@@ -204,21 +205,19 @@ impl SystemInvocationIssuer {
         payload: &[u8],
         causal_context: CausalContext,
     ) -> Result<DescriptorBoundEnvelope, AxonError> {
-        let callee = AgentIdentity::new(callee_ura.to_string(), UraProfile::EasynetStrictV2);
+        let callee = AgentIdentity::new(callee_ura.to_string(), UraProfile::StrictV2);
         let subject = Self::subject_identity(subject_ura)?;
-        DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
-            caller: system_agent_identity(),
+        CanonicalEnvelopeBuilder::new(
+            system_agent_identity(),
             callee,
-            ability: ability_descriptor_ref,
             subject,
-            invocation_nonce: fresh_nonce(),
-            causal_context,
-            args_bytes: payload,
-        })
+            InvocationDerivationPolicy::FreshWithCausalContext(causal_context),
+        )?
+        .descriptor_bound_envelope(ability_descriptor_ref, payload)
     }
 
     fn subject_identity(subject_ura: &str) -> Result<SubjectIdentity, AxonError> {
-        let subject = SubjectIdentity::new(subject_ura.to_string(), UraProfile::EasynetStrictV2);
+        let subject = SubjectIdentity::new(subject_ura.to_string(), UraProfile::StrictV2);
         EntityRef::try_from_subject_identity(&subject).map_err(|err| {
             AxonError::invalid_argument(format!(
                 "local system invocation subject `{subject_ura}` is not descriptor-bound: {err}"

@@ -343,10 +343,10 @@ impl AgentRegisteredRuntimeProjection {
     }
 
     pub(crate) fn ability_manifest_path(&self, ability: &str) -> Option<PathBuf> {
-        self.entry
-            .root_path
-            .as_ref()
-            .map(|root| root.join("abilities").join(format!("{ability}.ability.toml")))
+        self.entry.root_path.as_ref().map(|root| {
+            root.join("abilities")
+                .join(format!("{ability}.ability.toml"))
+        })
     }
 }
 

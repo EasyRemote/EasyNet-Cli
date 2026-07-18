@@ -1,5 +1,40 @@
 # Canonical Runtime Convergence V2 - Verification Matrix
 
+## 2026-07-18 Final Convergence Run
+
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`: passed,
+  including locked Go/Python proto codegen and byte-for-byte schema derivation.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tools/scripts/check-sdk-conformance-reports.sh`: passed for Rust,
+  C ABI, Go, Python, Node, Java, and Swift from one captured source snapshot.
+- `EASYNET_SDK_PARITY_ALLOW_SNAPSHOT_RESULTS=1
+  EASYNET_SDK_PARITY_RESULTS_DIR=target/sdk-conformance-live-results
+  bash tools/scripts/check-sdk-parity-matrix.sh`: passed.
+- `bash tools/scripts/check-python-sdk-static-contract.sh`: passed Ruff and
+  strict mypy.
+- `cargo fmt --all -- --check` and `git diff --check`: passed.
+- `cargo test -q --lib --features axon-pb`: passed, 4059 tests; 3 explicitly
+  ignored; 0 failed.
+- Product mutation uniqueness test: passed; one persisted version increment,
+  one command-log entry, and one invocation id across admission receipt,
+  terminal receipt, and response header.
+- Cross-geometry admission-before-mutation test: passed for unary, stream, and
+  bidi.
+- Daemon stream/bidi service suites: stream 15 passed and 1 explicitly ignored;
+  bidi 36 passed.
+- `go test ./...` under `sdk/go`: passed.
+- Python direct runtime, stream, bidi, transport, runtime, and runtime-ability
+  suites: 179 tests and 82 subtests passed.
+- EasyRemote product smoke: 308 passed, 4 skipped.
+- EasyNet backend `go test ./...`: passed.
+- Live Go and Python daemon smoke: unary, typed terminal failure, runtime
+  events, and stream paths passed.
+- Standalone Hub PrincipalLifecycle: TCP+TLS recovery, backend live account
+  flow, and browser HTTP to live daemon E2E passed.
+
+The three Rust ignored tests and four EasyRemote skipped tests remain visible;
+they were not counted as executed evidence.
+
 ## Descriptor Projection Slice
 
 Commands run on 2026-07-17:

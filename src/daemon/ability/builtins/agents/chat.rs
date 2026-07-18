@@ -84,7 +84,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::daemon::execution::mission::dispatch::{AgentResponse, DriverOverrides, ToolCall};
@@ -271,7 +271,7 @@ pub fn register_for_agent(
                         crate::daemon::ability::descriptors::AdmissionAction::Invoke.as_str(),
                     )
                     .expect("agent executor manifest accepts invoke admission_action");
-                reg.register_rpc_with_spec(&ability_name, owner.clone(), manifest, h);
+                reg.register_rpc_with_envelope_and_spec(&ability_name, owner.clone(), manifest, h);
             }
         }
     }
@@ -341,8 +341,8 @@ pub(crate) fn build_agent_ability_handler(
     entry: AgentEntry,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
     bare_ability: String,
-) -> crate::daemon::ability::dispatch::LocalRpcHandler {
-    Arc::new(move |args: Value| {
+) -> crate::daemon::ability::dispatch::LocalRpcHandlerWithEnvelope {
+    Arc::new(move |env, args: Value| {
         // Re-read this agent's manifests at invoke time so edits made
         // post-boot change the executor binding without a daemon restart.
         let matching_manifest =
@@ -370,8 +370,11 @@ pub(crate) fn build_agent_ability_handler(
                         )
                     }
                     crate::daemon::ability::manifest::AbilityExec::Eal(spec) => {
-                        crate::daemon::execution::mission::executors::eal::run_eal_exec(
-                            spec, &args, timeout,
+                        let gateway = Arc::new(
+                            crate::daemon::execution::mission::invocation_gateway::DaemonMissionInvocationGateway::from_admitted_envelope(&env)?,
+                        );
+                        crate::daemon::execution::mission::executors::eal::run_eal_exec_with_gateway(
+                            spec, &args, gateway, timeout,
                         )
                     }
                     crate::daemon::ability::manifest::AbilityExec::Mcp(spec) => {
@@ -2422,34 +2425,23 @@ mod tests {
 
     #[test]
     fn kernel_invoke_routes_chat_through_registered_handler() {
-        use crate::daemon::boot::kernel::Kernel;
         use crate::daemon::boot::kernel::api::KernelApi;
-        use crate::daemon::invocation::receipts::runtime_record::{
-            RuntimeCausalContext, RuntimeInvocation,
-        };
-        use easynet_axon::invocation::{
-            AxonError, KeyResolver, make_ability, sign_descriptor_bound_invocation,
-            signing_key_from_bytes,
-        };
-        use ed25519_dalek::VerifyingKey;
+        use crate::daemon::boot::kernel::Kernel;
+        use axon_sdk::invocation::{make_ability, InvocationState};
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-
-        struct FixedKey(VerifyingKey);
-        impl KeyResolver for FixedKey {
-            fn resolve(&self, _agent_ura: &str) -> Result<VerifyingKey, AxonError> {
-                Ok(self.0)
-            }
-        }
 
         // Fake chat handler — increments a counter on every call so we
         // can prove the registered handler is the one that fired.
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_for_handler = Arc::clone(&counter);
-        let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None);
-        let chat_options = easynet_axon::invocation::AbilityOptions::default()
-            .with_modes(easynet_axon::invocation::AbilityCallModes::RPC)
+        let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
+        let chat_options = axon_sdk::invocation::AbilityOptions::default()
+            .with_modes(axon_sdk::invocation::AbilityCallModes::RPC)
             .with_descriptor_proof(
                 crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
                 "invoke",
@@ -2473,7 +2465,7 @@ mod tests {
                     async move {
                         counter_for_handler.fetch_add(1, Ordering::SeqCst);
                         serde_json::to_vec(&json!({"reply": "fake"})).map_err(|err| {
-                            easynet_axon::invocation::AxonError::internal(format!(
+                            axon_sdk::invocation::AxonError::internal(format!(
                                 "encode fake chat reply: {err}"
                             ))
                         })
@@ -2484,43 +2476,20 @@ mod tests {
             crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
         )
         .expect("register runtime chat ability");
-        let signing_key = signing_key_from_bytes(&[0x42; 32]);
-        rt.set_admission_key_resolver(Arc::new(FixedKey(signing_key.verifying_key())));
-
         let kernel = Kernel::new();
         kernel.set_local_runtime(Arc::clone(&rt));
 
         let device_ura = crate::core::ura::device_ura("localhost", "a");
-        let mut inv = RuntimeInvocation {
-            caller: device_ura.clone(),
-            callee: device_ura.clone(),
-            ability: "alice.chat".into(),
-            subject: device_ura,
-            nonce_hex: "aa".repeat(16),
-            causal_context: RuntimeCausalContext::Null,
-            args: json!({"prompt": "hi"}),
-            caller_signature: None,
-        };
-        let descriptor_binding =
-            crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire(
-                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-                [0x33; 32],
-                "invoke",
+        let request = kernel
+            .prepare_local_system_rpc(
+                &device_ura,
+                "alice.chat",
+                &device_ura,
+                serde_json::to_vec(&json!({"prompt": "hi"})).unwrap(),
             )
-            .expect("test descriptor binding");
-        let (envelope, _) = inv
-            .axon_descriptor_bound_envelope(&descriptor_binding)
-            .expect("descriptor-bound envelope");
-        let signature = sign_descriptor_bound_invocation(&signing_key, &envelope, "test-key");
-        inv.caller_signature = Some(signature.signature);
-        let receipt = kernel.invoke(inv).expect("invoke ok");
-        assert!(
-            matches!(
-                receipt.terminal,
-                crate::daemon::invocation::receipts::runtime_record::TerminalState::Succeeded
-            ),
-            "unexpected terminal receipt: {receipt:?}"
-        );
+            .expect("canonical descriptor-bound request");
+        let finalized = kernel.invoke(request).expect("invoke ok");
+        assert_eq!(finalized.terminal_state, InvocationState::Completed);
         assert_eq!(
             counter.load(Ordering::SeqCst),
             1,
@@ -3014,8 +2983,14 @@ model = "sonnet"
         let handler =
             build_agent_ability_handler("alice".to_string(), entry, loaders, "echo".to_string());
 
-        let envelope = handler(json!({ "value": "hello" }))
-            .expect("shell exec must succeed for printf %s hello");
+        let envelope = handler(
+            crate::daemon::ability::dispatch::EnvelopeContext::for_test(
+                "easynet:///r/test/agent/caller",
+                "easynet:///r/test/resource/shell",
+            ),
+            json!({ "value": "hello" }),
+        )
+        .expect("shell exec must succeed for printf %s hello");
 
         assert_eq!(
             envelope.get("fulfilled_by").and_then(|v| v.as_str()),

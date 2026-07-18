@@ -77,7 +77,7 @@ human-readable summary; the JSON Schema files are normative.
 - Descriptor delta: `schemas/descriptor/transition_descriptor.schema.json`
 
 Existing AbilityDescriptor fields (plan v4.1.1 §1.6: `name`,
-`owner_agent_uri`, `visibility`, `scope_subjects[]`, `scope_agents[]`,
+`owner_agent_ura`, `visibility`, `scope_subjects[]`, `scope_agents[]`,
 `source`, `schema_summary`, `hints`) are unchanged.
 
 ### §2.1 — AbilityDescriptor delta

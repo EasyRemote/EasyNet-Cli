@@ -16,9 +16,9 @@
 //   IdentityPlane  — "what realm/trust-write surface does this daemon own?"
 //   RuntimePlane   — "how do local abilities execute and get audited?"
 //
-// Admission stays a first-class field on the service: it is the gate
-// every RPC method consults before any plane is touched, not a
-// dependency of one domain.
+// Product admission stays a first-class policy capability on the service, but
+// executes through RuntimePlane's receipt-provider coordinator at Axon's
+// canonical admission boundary.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -151,14 +151,14 @@ pub(crate) struct IdentityPlane {
 /// invocation ledger, and the daemon-owned bidi wire profile registry.
 #[derive(Clone)]
 pub(crate) struct RuntimePlane {
-    /// Shared Axon `LocalRuntime` built at daemon boot; direct unary,
-    /// stream, bidi, and self-targeted federation dispatch all enter
-    /// through this handle.
-    pub(crate) local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
+    /// Explicit runtime binding state. A canonical-only runtime cannot carry
+    /// daemon routes because it has no daemon admission graph; a daemon
+    /// assembly always carries the exact graph installed at construction.
+    pub(crate) binding: RuntimeBinding,
     /// Workspace-scoped invocation ledger
     /// (`<ledger_dir>/invocations.redb`); complete unary records are
     /// written through the Axon SDK object.
-    pub(crate) invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
+    pub(crate) invocation_ledger: Option<Arc<axon_sdk::invocation::InvocationLedger>>,
     /// Daemon-owned local bidi wire profile registry, projected from
     /// plugin wire metadata at boot.
     pub(crate) ability_wire: Arc<AbilityWireRegistry>,
@@ -166,4 +166,61 @@ pub(crate) struct RuntimePlane {
     /// lifecycle that can produce terminal proof.
     pub(crate) cancellations:
         crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry,
+}
+
+#[derive(Clone, Default)]
+pub(crate) enum RuntimeBinding {
+    #[default]
+    Unconfigured,
+    Daemon(crate::daemon::axon_bridge::runtime_factory::DaemonRuntimeAssembly),
+}
+
+impl RuntimePlane {
+    pub(crate) fn local_runtime(&self) -> Option<Arc<axon_sdk::invocation::LocalRuntime>> {
+        match &self.binding {
+            RuntimeBinding::Unconfigured => None,
+            RuntimeBinding::Daemon(assembly) => Some(assembly.runtime()),
+        }
+    }
+
+    pub(crate) fn daemon_admission_graph(
+        &self,
+    ) -> Option<Arc<crate::daemon::axon_bridge::runtime_factory::DaemonRuntimeAdmissionGraph>> {
+        match &self.binding {
+            RuntimeBinding::Daemon(assembly) => Some(assembly.admission_graph()),
+            RuntimeBinding::Unconfigured => None,
+        }
+    }
+
+    pub(crate) fn product_policy(
+        &self,
+    ) -> Result<
+        Arc<
+            crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionCoordinator,
+        >,
+        tonic::Status,
+    >{
+        self.daemon_admission_graph()
+            .as_ref()
+            .map(|graph| graph.product_policy())
+            .ok_or_else(|| {
+                tonic::Status::failed_precondition(
+                    "daemon LocalRuntime product admission graph is not wired",
+                )
+            })
+    }
+
+    pub(crate) fn stage_product_admission(
+        &self,
+        facade: &crate::daemon::invocation::admission::admission_facade::AdmissionFacade,
+        wire: &crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
+        ability: &str,
+        call_mode: axon_sdk::invocation::CallMode,
+    ) -> Result<
+        crate::daemon::invocation::admission::admission_facade::DaemonProductAdmissionLease,
+        tonic::Status,
+    > {
+        self.product_policy()?
+            .stage(facade, wire, ability, call_mode)
+    }
 }

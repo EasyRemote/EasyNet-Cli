@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde_json::json;
 
-use easynet_axon::invocation::{CausalContext, ReceiptRef};
+use axon_sdk::invocation::{CausalContext, ReceiptRef};
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
 use crate::daemon::ability::dispatch::EnvelopeContext;

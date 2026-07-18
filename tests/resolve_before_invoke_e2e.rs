@@ -37,13 +37,15 @@
 
 use std::io::Write;
 use std::sync::Arc;
+
+#[path = "support/runtime_fixture.rs"]
+mod runtime_fixture;
 use std::time::Duration;
 
+use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
+use axon_sdk::pb::axon::v1::invocation_server::InvocationServer;
+use axon_sdk::pb::axon::v1::InvokeRequest;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use easynet_axon::invocation::LocalRuntime;
-use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
-use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
-use easynet_axon::pb::axon::v1::InvokeRequest;
 use easynet_cli::daemon::ability::descriptors::{AbilityDescriptor, CallMode};
 use easynet_cli::daemon::ability::dispatch::{
     AbilityAuthorityContext, AxonAbilityCatalog, OwnerKind,
@@ -54,7 +56,9 @@ use easynet_cli::daemon::invocation::admission::admission_facade::{
 };
 use easynet_cli::daemon::invocation::bidi::state::presence::{PresenceRegistry, SessionContract};
 use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
-use easynet_cli::daemon::invocation::dispatch::invocation_wire::ProtoEnvelope;
+use easynet_cli::daemon::invocation::dispatch::invocation_wire::{
+    InvocationDerivationPolicy, ProtoEnvelope,
+};
 use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use serde_json::json;
@@ -168,7 +172,16 @@ added_at_unix_ms = 0
         .expect("write trust toml");
     drop(f);
 
-    let runtime = LocalRuntime::new();
+    let trust_anchor =
+        Arc::new(RealmTrustAnchor::try_load_strict(&trust_path).expect("load trust anchor"));
+    let shared_trust_anchor =
+        easynet_cli::daemon::trust::cell::SharedTrustAnchor::new(trust_anchor);
+    let daemon_runtime = runtime_fixture::daemon_runtime_with_key_resolver(Arc::new(
+        easynet_cli::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
+            shared_trust_anchor.clone(),
+        ),
+    ));
+    let runtime = daemon_runtime.runtime();
     let authority_context = AbilityAuthorityContext::for_combined_authority_roots(DEVICE_URA)
         .expect("combined Device+Hub authority");
     let agents = easynet_cli::daemon::persistence::agent_registry::AgentRegistry::default();
@@ -183,7 +196,6 @@ added_at_unix_ms = 0
         easynet_cli::daemon::ability::catalog::build_registry_with_services_result(catalog_config)
             .expect("assemble production-shaped test ability catalog")
             .catalog;
-    let trust_anchor = RealmTrustAnchor::try_load_strict(&trust_path).expect("load trust anchor");
     let presence = Arc::new(PresenceRegistry::new());
     let advertised_agents = Arc::new(
         easynet_cli::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore::new(),
@@ -191,12 +203,13 @@ added_at_unix_ms = 0
     let ability_catalog_store = Arc::new(
         easynet_cli::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new(),
     );
-    let admission = AdmissionFacade::new(Arc::new(trust_anchor), Some(HUB_URA.to_string()))
-        .with_ability_catalog(Arc::clone(&catalog));
+    let admission =
+        AdmissionFacade::with_trust_anchor_cell(shared_trust_anchor, Some(HUB_URA.to_string()))
+            .with_ability_catalog(Arc::clone(&catalog));
 
     let service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_session_realm(REALM)
-        .with_local_runtime(runtime)
+        .with_daemon_runtime(daemon_runtime)
         .with_transport_boundary(AdmissionTransportBoundary::LocalOnlyIpc)
         .with_directory_read_models(advertised_agents, Arc::clone(&ability_catalog_store))
         .with_local_ability_catalog(Arc::clone(&catalog));
@@ -281,10 +294,15 @@ fn invoke_with_subject(
     let signer = device_signer();
     let descriptor_ref = fixture_descriptor_ref(catalog, callee_ura, function_name);
     Request::new(
-        ProtoEnvelope::targeted(DEVICE_URA, callee_ura, subject_ura)
-            .expect("valid invoke envelope")
-            .signed_descriptor_ref_invoke_request(function_name, descriptor_ref, arguments, &signer)
-            .expect("valid signed invoke request"),
+        ProtoEnvelope::from_target(
+            DEVICE_URA,
+            callee_ura,
+            subject_ura,
+            InvocationDerivationPolicy::FreshRoot,
+        )
+        .expect("valid invoke envelope")
+        .signed_descriptor_ref_invoke_request(function_name, descriptor_ref, arguments, &signer)
+        .expect("valid signed invoke request"),
     )
 }
 
@@ -297,7 +315,7 @@ fn fixture_descriptor_ref(
     let ability_ura = descriptor
         .canonical_ability_ura()
         .expect("fixture descriptor has canonical ability URA");
-    easynet_axon::invocation::canonical_ability_descriptor_ref(&format!(
+    axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
         "{}@{}#{}!{}",
         ability_ura,
         descriptor.version,

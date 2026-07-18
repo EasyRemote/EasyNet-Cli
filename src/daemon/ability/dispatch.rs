@@ -6,7 +6,7 @@
 //              Axon abilities. `AxonAbilityCatalog` preserves the
 //              existing module-level `register(&mut catalog)` API,
 //              but every registered handler is written through to
-//              `easynet_axon::invocation::LocalRuntime` when the
+//              `axon_sdk::invocation::LocalRuntime` when the
 //              daemon builds the catalogue. Production invocation
 //              paths execute through that runtime; direct catalogue
 //              execution helpers are test-only compatibility probes.
@@ -16,10 +16,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::Context as _;
-use easynet_axon::invocation::{
+use axon_sdk::invocation::{
     make_ability, AbilityCallModes, AbilityContext, AbilityFn, AbilityOptions, AxonError,
     CallMode as AxonCallMode, LocalRuntime,
 };
@@ -114,6 +114,12 @@ pub struct EnvelopeContext {
 #[derive(Clone)]
 struct RuntimeInvocationContext {
     context: Arc<AbilityContext>,
+    runtime: Arc<LocalRuntime>,
+    derived_admission: Option<
+        Arc<
+            dyn crate::daemon::execution::mission::invocation_gateway::MissionChildAdmissionProvider,
+        >,
+    >,
 }
 
 impl std::fmt::Debug for RuntimeInvocationContext {
@@ -144,7 +150,7 @@ pub struct EnvelopeCallerSignature {
 }
 
 impl EnvelopeCallerSignature {
-    fn from_axon(signature: &easynet_axon::invocation::CallerSignature) -> Self {
+    fn from_axon(signature: &axon_sdk::invocation::CallerSignature) -> Self {
         Self {
             algorithm: signature.algorithm.clone(),
             key_id_hint: signature.key_id_hint.clone(),
@@ -213,8 +219,21 @@ impl EnvelopeContext {
     /// dispatch. Only the Axon adapter can construct this capability; handler
     /// arguments and persisted envelope projections cannot recreate it.
     #[must_use]
-    fn with_runtime_invocation_context(mut self, context: Arc<AbilityContext>) -> Self {
-        self.runtime_invocation_context = Some(RuntimeInvocationContext { context });
+    fn with_runtime_invocation_context(
+        mut self,
+        context: Arc<AbilityContext>,
+        runtime: Arc<LocalRuntime>,
+        derived_admission: Option<
+            Arc<
+                dyn crate::daemon::execution::mission::invocation_gateway::MissionChildAdmissionProvider,
+            >,
+        >,
+    ) -> Self {
+        self.runtime_invocation_context = Some(RuntimeInvocationContext {
+            context,
+            runtime,
+            derived_admission,
+        });
         self
     }
 
@@ -339,6 +358,30 @@ impl EnvelopeContext {
         self.runtime_invocation_context
             .as_ref()
             .map(|capability| Arc::clone(&capability.context))
+    }
+
+    /// Return the exact runtime that admitted this handler invocation.
+    ///
+    /// Child dispatch must use this instance. Rebuilding a runtime or loading
+    /// another signer would create a second invocation authority.
+    pub(crate) fn shared_runtime(&self) -> Option<Arc<LocalRuntime>> {
+        self.runtime_invocation_context
+            .as_ref()
+            .map(|capability| Arc::clone(&capability.runtime))
+    }
+
+    /// Return the daemon product-policy capability bound to the exact runtime
+    /// host that admitted this invocation.
+    pub(crate) fn derived_invocation_admission(
+        &self,
+    ) -> Option<
+        Arc<
+            dyn crate::daemon::execution::mission::invocation_gateway::MissionChildAdmissionProvider,
+        >,
+    >{
+        self.runtime_invocation_context
+            .as_ref()
+            .and_then(|capability| capability.derived_admission.as_ref().map(Arc::clone))
     }
 
     #[must_use]
@@ -869,8 +912,21 @@ fn parse_hosted_agent_delegation_context(
     .map_err(|err| AxonError::invalid_argument(format!("hosted_agent_delegation: {err}")))
 }
 
+#[derive(Clone)]
+struct RuntimeHandlerContext {
+    runtime: Arc<LocalRuntime>,
+    derived_admission: Arc<
+        OnceLock<
+            Arc<
+                dyn crate::daemon::execution::mission::invocation_gateway::MissionChildAdmissionProvider,
+            >,
+        >,
+    >,
+}
+
 async fn envelope_context_from_axon(
     ctx: &Arc<AbilityContext>,
+    runtime_host: Option<RuntimeHandlerContext>,
 ) -> Result<EnvelopeContext, AxonError> {
     let signed = ctx.signed_envelope().cloned().ok_or_else(|| {
         AxonError::internal(format!(
@@ -919,8 +975,15 @@ async fn envelope_context_from_axon(
         caller_signature,
     })
     .map(|context| {
+        let context = match runtime_host {
+            Some(runtime_host) => context.with_runtime_invocation_context(
+                Arc::clone(ctx),
+                runtime_host.runtime,
+                runtime_host.derived_admission.get().map(Arc::clone),
+            ),
+            None => context,
+        };
         context
-            .with_runtime_invocation_context(Arc::clone(ctx))
             .with_hosted_agent_delegation(hosted_agent_delegation)
             .with_session_authority(session_authority)
     })
@@ -931,17 +994,17 @@ async fn envelope_context_from_axon(
     })
 }
 
-fn causal_context_to_json(causal: &easynet_axon::invocation::CausalContext) -> serde_json::Value {
+fn causal_context_to_json(causal: &axon_sdk::invocation::CausalContext) -> serde_json::Value {
     match causal {
-        easynet_axon::invocation::CausalContext::None => {
+        axon_sdk::invocation::CausalContext::None => {
             serde_json::json!({"kind": "none"})
         }
-        easynet_axon::invocation::CausalContext::Scalar(receipt) => serde_json::json!({
+        axon_sdk::invocation::CausalContext::Scalar(receipt) => serde_json::json!({
             "kind": "scalar",
             "receipt_hash": hex::encode(receipt.receipt_hash),
             "receipt_ura": receipt.receipt_ura,
         }),
-        easynet_axon::invocation::CausalContext::List(receipts) => {
+        axon_sdk::invocation::CausalContext::List(receipts) => {
             let receipts: Vec<_> = receipts
                 .iter()
                 .map(|receipt| {
@@ -953,7 +1016,7 @@ fn causal_context_to_json(causal: &easynet_axon::invocation::CausalContext) -> s
                 .collect();
             serde_json::json!({"kind": "list", "receipts": receipts})
         }
-        easynet_axon::invocation::CausalContext::Merkle { root, proof_ura } => {
+        axon_sdk::invocation::CausalContext::Merkle { root, proof_ura } => {
             serde_json::json!({
                 "kind": "merkle",
                 "root": hex::encode(root),
@@ -963,12 +1026,16 @@ fn causal_context_to_json(causal: &easynet_axon::invocation::CausalContext) -> s
     }
 }
 
-fn rpc_env_handler_to_ability_fn(handler: LocalRpcHandlerWithEnvelope) -> AbilityFn {
+fn rpc_env_handler_to_ability_fn(
+    handler: LocalRpcHandlerWithEnvelope,
+    runtime_host: RuntimeHandlerContext,
+) -> AbilityFn {
     make_ability(move |ctx| {
         let handler = Arc::clone(&handler);
+        let runtime_host = runtime_host.clone();
         async move {
             let value = payload_to_json_value(&ctx.payload).map_err(|e| *e)?;
-            let env = envelope_context_from_axon(&ctx).await?;
+            let env = envelope_context_from_axon(&ctx, Some(runtime_host)).await?;
             let result = tokio::task::spawn_blocking(move || handler(env, value))
                 .await
                 .map_err(|err| {
@@ -1054,12 +1121,16 @@ fn stream_handler_to_ability_fn(handler: LocalStreamHandler) -> AbilityFn {
     })
 }
 
-fn stream_env_handler_to_ability_fn(handler: LocalStreamHandlerWithEnvelope) -> AbilityFn {
+fn stream_env_handler_to_ability_fn(
+    handler: LocalStreamHandlerWithEnvelope,
+    runtime_host: Option<RuntimeHandlerContext>,
+) -> AbilityFn {
     make_ability(move |ctx| {
         let handler = Arc::clone(&handler);
+        let runtime_host = runtime_host.clone();
         async move {
             let value = payload_to_json_value(&ctx.payload).map_err(|e| *e)?;
-            let env = envelope_context_from_axon(&ctx).await?;
+            let env = envelope_context_from_axon(&ctx, runtime_host).await?;
             let source = tokio::task::spawn_blocking(move || handler(env, value))
                 .await
                 .map_err(|err| {
@@ -1092,7 +1163,7 @@ pub(crate) fn stream_env_ability_with_options(
         bidi: false,
     };
     (
-        stream_env_handler_to_ability_fn(handler),
+        stream_env_handler_to_ability_fn(handler, None),
         AbilityOptions::default().with_modes(modes),
     )
 }
@@ -1161,12 +1232,16 @@ fn bidi_handler_to_ability_fn(handler: LocalBidiHandler) -> AbilityFn {
     })
 }
 
-fn bidi_env_handler_to_ability_fn(handler: LocalBidiHandlerWithEnvelope) -> AbilityFn {
+fn bidi_env_handler_to_ability_fn(
+    handler: LocalBidiHandlerWithEnvelope,
+    runtime_host: RuntimeHandlerContext,
+) -> AbilityFn {
     make_ability(move |ctx| {
         let handler = Arc::clone(&handler);
+        let runtime_host = runtime_host.clone();
         async move {
             let value = payload_to_json_value(&ctx.payload).map_err(|e| *e)?;
-            let env = envelope_context_from_axon(&ctx).await?;
+            let env = envelope_context_from_axon(&ctx, Some(runtime_host)).await?;
             let source = handler(env, value).map_err(|err| {
                 AxonError::internal(format!(
                     "local_runtime_adapter: env bidi handler returned error: {err}"
@@ -1177,15 +1252,34 @@ fn bidi_env_handler_to_ability_fn(handler: LocalBidiHandlerWithEnvelope) -> Abil
     })
 }
 
-fn runtime_handler_set_to_ability_fn(name: String, handlers: RuntimeHandlerSet) -> AbilityFn {
+fn runtime_handler_set_to_ability_fn(
+    name: String,
+    handlers: RuntimeHandlerSet,
+    runtime: Arc<LocalRuntime>,
+    derived_admission: Arc<
+        OnceLock<
+            Arc<
+                dyn crate::daemon::execution::mission::invocation_gateway::MissionChildAdmissionProvider,
+            >,
+        >,
+    >,
+) -> AbilityFn {
+    let runtime_host = RuntimeHandlerContext {
+        runtime,
+        derived_admission,
+    };
     let rpc_fn = handlers.rpc.map(rpc_handler_to_ability_fn);
     let stream_fn = handlers.stream.map(stream_handler_to_ability_fn);
     let bidi_fn = handlers.bidi.map(bidi_handler_to_ability_fn);
-    let rpc_env_fn = handlers.rpc_with_env.map(rpc_env_handler_to_ability_fn);
+    let rpc_env_fn = handlers
+        .rpc_with_env
+        .map(|handler| rpc_env_handler_to_ability_fn(handler, runtime_host.clone()));
     let stream_env_fn = handlers
         .stream_with_env
-        .map(stream_env_handler_to_ability_fn);
-    let bidi_env_fn = handlers.bidi_with_env.map(bidi_env_handler_to_ability_fn);
+        .map(|handler| stream_env_handler_to_ability_fn(handler, Some(runtime_host.clone())));
+    let bidi_env_fn = handlers
+        .bidi_with_env
+        .map(|handler| bidi_env_handler_to_ability_fn(handler, runtime_host));
 
     make_ability(move |ctx| {
         let mode = ctx.call_mode;
@@ -2317,6 +2411,33 @@ pub struct AuthorityAbilityCatalogSnapshotRow {
     pub descriptor: AbilityDescriptor,
 }
 
+/// Failure to resolve one canonical public descriptor from the committed
+/// control-plane catalogue.
+///
+/// Public ability identity is `(owner, public_name, call_mode)`. The execution
+/// registry key is deliberately excluded: Agent-owned handlers use qualified
+/// local keys such as `testbot.discover` while their signed public descriptor
+/// remains `discover`.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PublicDescriptorLookupError {
+    #[error(
+        "no public descriptor for owner {owner:?}, ability {public_name:?}, mode {call_mode:?}"
+    )]
+    Missing {
+        owner: OwnerKind,
+        public_name: String,
+        call_mode: DescriptorCallMode,
+    },
+    #[error(
+        "ambiguous public descriptor for owner {owner:?}, ability {public_name:?}, mode {call_mode:?}"
+    )]
+    Ambiguous {
+        owner: OwnerKind,
+        public_name: String,
+        call_mode: DescriptorCallMode,
+    },
+}
+
 /// Axon ability catalogue. Keyed by full ability name. v1 shape is
 /// a `BTreeMap` for deterministic iteration order; the catalogue is
 /// read-mostly (built once at daemon start, queried for metadata), so
@@ -2338,6 +2459,17 @@ pub struct AxonAbilityCatalog {
     /// metadata-only catalogue; executable callers must use `new_with_runtime`
     /// with a signer-configured runtime.
     runtime: Option<Arc<LocalRuntime>>,
+    /// Late-bound daemon policy capability shared by every envelope-aware
+    /// runtime adapter. Catalog assembly precedes `AdmissionFacade` assembly
+    /// because the facade validates against this catalog; boot closes that
+    /// dependency cycle exactly once before publishing any listener.
+    derived_invocation_admission: Arc<
+        OnceLock<
+            Arc<
+                dyn crate::daemon::execution::mission::invocation_gateway::MissionChildAdmissionProvider,
+            >,
+        >,
+    >,
     // ── Execution index (SPEC §9.1.A) ────────────────────────
     // This is a PURE EXECUTION INDEX, not a metadata store. Canonical owner /
     // authority / governed-descriptor / call-mode truth lives ONLY in `control_plane`,
@@ -3429,6 +3561,10 @@ impl std::fmt::Debug for AxonAbilityCatalog {
             .field("bidi_with_env_count", &static_counts.bidi_with_env)
             .field("control_plane_count", &control_plane_count)
             .field("dynamic_execution_count", &dynamic_count)
+            .field(
+                "derived_invocation_admission_bound",
+                &self.derived_invocation_admission.get().is_some(),
+            )
             .finish()
     }
 }
@@ -3450,6 +3586,7 @@ impl AxonAbilityCatalog {
     ) -> Self {
         Self {
             runtime: None,
+            derived_invocation_admission: Arc::new(OnceLock::new()),
             execution_index: std::sync::RwLock::new(ExecutionIndex::default()),
             authority_context,
             static_authority_exclusions: BTreeMap::new(),
@@ -3488,6 +3625,7 @@ impl AxonAbilityCatalog {
     ) -> Self {
         Self {
             runtime: Some(runtime),
+            derived_invocation_admission: Arc::new(OnceLock::new()),
             execution_index: std::sync::RwLock::new(ExecutionIndex::default()),
             authority_context,
             static_authority_exclusions: BTreeMap::new(),
@@ -3500,6 +3638,23 @@ impl AxonAbilityCatalog {
     /// constructed for daemon boot.
     pub fn runtime(&self) -> Option<Arc<LocalRuntime>> {
         self.runtime.as_ref().map(Arc::clone)
+    }
+
+    /// Close the daemon catalog/admission construction cycle before any
+    /// invocation can enter this runtime.
+    pub(crate) fn bind_derived_invocation_admission(
+        &self,
+        admission: Arc<
+            dyn crate::daemon::execution::mission::invocation_gateway::MissionChildAdmissionProvider,
+        >,
+    ) -> anyhow::Result<()> {
+        self.derived_invocation_admission
+            .set(admission)
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "daemon derived Invocation admission capability already has an owner"
+                )
+            })
     }
 
     pub(crate) fn authority_set_label(&self) -> &'static str {
@@ -3710,34 +3865,6 @@ impl AxonAbilityCatalog {
                 )
             })?;
         let authority_scope = self.resolve_authority_scope_for_owner(ability, owner)?;
-        self.register_control_plane_with_scope_and_semantics_result(
-            ability,
-            authority_scope,
-            Some(manifest),
-            call_mode,
-            receipt_semantics,
-            implementation,
-        )
-        .map(|_| ())
-    }
-
-    /// Register a governed descriptor-only control-plane record under an
-    /// explicit authority scope.
-    ///
-    /// Use this only for daemon transport contracts whose descriptor owner is
-    /// not this process's local runtime owner. `session.open` is the motivating
-    /// case: the Hub serves the Bidi route, but the signed descriptor owner is
-    /// the connecting Device, so the catalog needs a Device-scoped template
-    /// without installing any Device product handlers on the Hub.
-    pub(crate) fn register_control_plane_descriptor_with_scope(
-        &self,
-        ability: &str,
-        authority_scope: AuthorityScope,
-        manifest: &crate::daemon::ability::manifest::AbilityManifest,
-        call_mode: DescriptorCallMode,
-        receipt_semantics: ReceiptSemantics,
-        implementation: &ControlPlaneImplementation,
-    ) -> anyhow::Result<()> {
         self.register_control_plane_with_scope_and_semantics_result(
             ability,
             authority_scope,
@@ -4320,9 +4447,17 @@ impl AxonAbilityCatalog {
                 continue;
             }
             let options = self.runtime_options_for(&control_plane_key, modes)?;
+            let Some(runtime) = self.runtime.as_ref().cloned() else {
+                continue;
+            };
             self.replace_runtime_ability(
                 &control_plane_key,
-                runtime_handler_set_to_ability_fn(name.to_string(), handlers),
+                runtime_handler_set_to_ability_fn(
+                    name.to_string(),
+                    handlers,
+                    runtime,
+                    Arc::clone(&self.derived_invocation_admission),
+                ),
                 options,
             )?;
         }
@@ -4340,9 +4475,17 @@ impl AxonAbilityCatalog {
         }
         let control_plane_key = self.handler_control_plane_key(name)?;
         let options = self.runtime_options_for(&control_plane_key, modes)?;
+        let Some(runtime) = self.runtime.as_ref().cloned() else {
+            return Ok(());
+        };
         self.replace_runtime_ability(
             &control_plane_key,
-            runtime_handler_set_to_ability_fn(name.to_string(), handlers),
+            runtime_handler_set_to_ability_fn(
+                name.to_string(),
+                handlers,
+                runtime,
+                Arc::clone(&self.derived_invocation_admission),
+            ),
             options,
         )
     }
@@ -5154,6 +5297,25 @@ impl AxonAbilityCatalog {
         .commit(self)
     }
 
+    pub fn hot_register_rpc_with_envelope_spec_and_authority_scope(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        authority_scope: AuthorityScope,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
+        handler: LocalRpcHandlerWithEnvelope,
+    ) -> anyhow::Result<()> {
+        DynamicRegistration::rpc_with_envelope_and_spec_and_impl(
+            ability,
+            owner,
+            manifest,
+            handler,
+            ControlPlaneImplementation::native_daemon(),
+        )
+        .with_authority_scope(authority_scope)
+        .commit(self)
+    }
+
     /// Hot-register an envelope-aware stream handler with explicit owner and
     /// registry manifest in the dynamic execution row.
     pub fn hot_register_stream_with_envelope_and_spec(
@@ -5363,6 +5525,50 @@ impl AxonAbilityCatalog {
                 }
             })
             .collect()
+    }
+
+    /// Authority planes hosted by this catalogue's runtime.
+    ///
+    /// Registration modules use this projection when one generic daemon
+    /// ability must exist on every local runtime authority. The underlying
+    /// authority-set state remains owned by `AbilityAuthorityContext`.
+    pub(crate) fn local_runtime_owners(&self) -> Vec<OwnerKind> {
+        self.authority_context.local_runtime_owners()
+    }
+
+    /// Resolve the unique descriptor for a protocol-visible ability identity.
+    ///
+    /// The catalogue owns this projection so admission, descriptor-ref
+    /// construction, and future protocol boundaries cannot independently
+    /// reinterpret an execution registry key as a public ability name.
+    pub(crate) fn public_descriptor_for_mode(
+        &self,
+        owner: &OwnerKind,
+        public_name: &str,
+        call_mode: DescriptorCallMode,
+    ) -> Result<AbilityDescriptor, PublicDescriptorLookupError> {
+        let mut matches = self
+            .authority_ability_catalog_snapshot()
+            .into_iter()
+            .filter(|row| &row.owner == owner)
+            .filter(|row| row.descriptor.public_name() == public_name)
+            .filter(|row| row.descriptor.call_mode() == call_mode);
+        let descriptor = matches
+            .next()
+            .ok_or_else(|| PublicDescriptorLookupError::Missing {
+                owner: owner.clone(),
+                public_name: public_name.to_string(),
+                call_mode,
+            })?
+            .descriptor;
+        if matches.next().is_some() {
+            return Err(PublicDescriptorLookupError::Ambiguous {
+                owner: owner.clone(),
+                public_name: public_name.to_string(),
+                call_mode,
+            });
+        }
+        Ok(descriptor)
     }
 
     /// Returns Some when an RPC handler is registered for `ability`.
@@ -5636,7 +5842,7 @@ fn runtime_stream_source(
 ) -> anyhow::Result<StreamSource> {
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
-        .name(format!("easynet-axon-stream-{}", target.ability))
+        .name(format!("axon-sdk-stream-{}", target.ability))
         .spawn(move || {
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -5738,7 +5944,7 @@ fn runtime_bidi_source(
 ) -> anyhow::Result<BidiSource> {
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
-        .name(format!("easynet-axon-bidi-{}", target.ability))
+        .name(format!("axon-sdk-bidi-{}", target.ability))
         .spawn(move || {
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -5811,7 +6017,7 @@ fn runtime_bidi_source(
                         let Ok(payload) = json_value_to_payload(&value) else {
                             continue;
                         };
-                        let frame = easynet_axon::invocation::BidiInputFrame::new(payload)
+                        let frame = axon_sdk::invocation::BidiInputFrame::new(payload)
                             .with_content_type("application/json");
                         if runtime_input.send(frame).await.is_err() {
                             break;
@@ -5869,7 +6075,10 @@ mod tests {
     }
 
     fn test_runtime() -> Arc<LocalRuntime> {
-        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None)
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        )
     }
 
     fn combined_catalog() -> AxonAbilityCatalog {
@@ -7431,7 +7640,9 @@ mod tests {
             .expect("runtime key");
         let options =
             block_on_runtime_sync(runtime.ability_options(&runtime_key)).expect("runtime options");
-        let proof = options.proof_for_mode(AxonCallMode::Rpc);
+        let proof = options
+            .proof_for_mode(AxonCallMode::Rpc)
+            .expect("registered RPC carries descriptor proof");
 
         assert_eq!(
             proof.descriptor_version,
@@ -7439,7 +7650,7 @@ mod tests {
         );
         assert_eq!(proof.schema_hash, record.descriptor().schema_hash_bytes());
         assert_eq!(proof.impl_hash, record.implementation().impl_hash());
-        assert!(!proof.is_unbound());
+        assert!(proof.is_bound());
     }
 
     #[test]
@@ -7493,7 +7704,9 @@ mod tests {
         let runtime_key = control_plane_key.runtime_key().expect("runtime key");
         let options =
             block_on_runtime_sync(runtime.ability_options(&runtime_key)).expect("runtime options");
-        let proof = options.proof_for_mode(AxonCallMode::Rpc);
+        let proof = options
+            .proof_for_mode(AxonCallMode::Rpc)
+            .expect("versioned RPC carries descriptor proof");
 
         assert_eq!(record.descriptor().version, "2.0.0");
         assert_eq!(proof.descriptor_version, "2.0.0");
@@ -7699,8 +7912,12 @@ mod tests {
             .expect("runtime rpc key");
         let options =
             block_on_runtime_sync(runtime.ability_options(&rpc_key)).expect("runtime options");
-        let rpc_proof = options.proof_for_mode(AxonCallMode::Rpc);
-        let stream_proof = options.proof_for_mode(AxonCallMode::Stream);
+        let rpc_proof = options
+            .proof_for_mode(AxonCallMode::Rpc)
+            .expect("RPC mode carries descriptor proof");
+        let stream_proof = options
+            .proof_for_mode(AxonCallMode::Stream)
+            .expect("Stream mode carries descriptor proof");
 
         assert_eq!(
             rpc_proof.descriptor_version,

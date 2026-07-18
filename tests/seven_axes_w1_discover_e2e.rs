@@ -31,24 +31,16 @@
 
 mod seven_axes_fixture;
 
-use std::path::Path;
-use std::time::Duration;
-
-use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_cli::cli::discover::{
     self, DiscoverArgs, DiscoverScopeMode, OutputFormat, SourceWindowMode,
 };
-use easynet_cli::daemon::identity::self_identity::KeyringClient;
-use easynet_cli::daemon::invocation::dispatch::invocation_wire::ProtoEnvelope;
+use easynet_cli::daemon::ability::descriptors::{
+    AbilityDescriptor, AbilityHints, AdmissionAction, Visibility,
+};
 use easynet_cli::daemon::persistence::config;
-use serde_json::Value;
 use seven_axes_fixture::SevenAxesHome;
-use sha2::{Digest as _, Sha256};
-use tonic::transport::{Channel, Endpoint, Uri};
 
 const REMOTE_PUBLIC_NAME: &str = "remote-file-reader";
-const SYSTEM_DESCRIPTOR_VERSION: &str = "1.0.0";
-const STEP_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn args(intent: &str) -> DiscoverArgs {
     DiscoverArgs {
@@ -62,91 +54,8 @@ fn args(intent: &str) -> DiscoverArgs {
     }
 }
 
-async fn connect_to_daemon(socket_path: &Path) -> Channel {
-    let socket_path = socket_path.to_path_buf();
-    Endpoint::try_from("http://[::]:50051")
-        .expect("dummy endpoint")
-        .connect_with_connector(tower::service_fn(move |_: Uri| {
-            let path = socket_path.clone();
-            async move {
-                let stream = tokio::net::UnixStream::connect(path).await?;
-                Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(stream))
-            }
-        }))
-        .await
-        .expect("connect to daemon")
-}
-
-fn invoke_daemon_ability(
-    socket_path: &Path,
-    caller_ura: &str,
-    callee_ura: &str,
-    subject_ura: &str,
-    function_name: &str,
-    args: serde_json::Value,
-) -> serde_json::Value {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("test runtime");
-    rt.block_on(async {
-        let mut client = InvocationClient::new(connect_to_daemon(socket_path).await);
-        let arguments = serde_json::to_vec(&args).expect("encode daemon invoke args");
-        let descriptor_ref = descriptor_ref(callee_ura, function_name, SYSTEM_DESCRIPTOR_VERSION);
-        let signer = KeyringClient::default_path();
-        let request = ProtoEnvelope::targeted(caller_ura, callee_ura, subject_ura)
-            .expect("valid signed daemon invoke envelope")
-            .signed_descriptor_ref_invoke_request(function_name, descriptor_ref, arguments, &signer)
-            .expect("valid signed daemon invoke request");
-        let response =
-            tokio::time::timeout(STEP_TIMEOUT, client.invoke(tonic::Request::new(request)))
-                .await
-                .expect("daemon invoke must not hang")
-                .expect("daemon invoke must succeed")
-                .into_inner();
-        serde_json::from_slice(&response.result).expect("daemon result must be JSON")
-    })
-}
-
-fn descriptor_ref(callee_ura: &str, function_name: &str, version: &str) -> String {
-    format!(
-        "{}@{version}",
-        easynet_cli::core::ura::owner_ability_ura(callee_ura, function_name)
-            .expect("fixture ability URA")
-    )
-}
-
-fn projection_digest(
-    owner_ura: &str,
-    host_device_ura: &str,
-    projection_revision: u64,
-    lease_expires_unix_ms: i64,
-    summaries: &[Value],
-) -> String {
-    let mut ability_values = summaries.to_vec();
-    ability_values
-        .sort_by_key(|value| serde_json::to_string(value).expect("projection summary serializes"));
-    ability_values.dedup_by(|a, b| {
-        serde_json::to_string(a).expect("projection summary serializes")
-            == serde_json::to_string(b).expect("projection summary serializes")
-    });
-    let canonical = serde_json::json!({
-        "owner_ura": owner_ura,
-        "host_device_ura": host_device_ura,
-        "projection_revision": projection_revision,
-        "lease_expires_unix_ms": lease_expires_unix_ms,
-        "abilities": ability_values,
-    });
-    let bytes = serde_json::to_vec(&canonical).expect("projection digest serializes");
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hex::encode(hasher.finalize())
-}
-
 fn advertise_remote_user_tier_ability(
-    socket_path: &Path,
-    caller_ura: &str,
-    hub_ura: &str,
+    home: &SevenAxesHome,
     host_device_ura: &str,
     owner_ura: &str,
     projection_revision: u64,
@@ -154,73 +63,34 @@ fn advertise_remote_user_tier_ability(
     let ability_ura = easynet_cli::core::ura::owner_ability_ura(owner_ura, REMOTE_PUBLIC_NAME)
         .expect("mint remote ability URA");
 
-    invoke_daemon_ability(
-        socket_path,
-        caller_ura,
-        hub_ura,
+    let descriptor = AbilityDescriptor::new(
+        REMOTE_PUBLIC_NAME,
         owner_ura,
-        "federation.advertise_agent",
-        serde_json::json!({
-            "agent_ura": owner_ura,
-            "public_key_hex": "",
-            "signing_authority": {
-                "kind": "hosted_by",
-                "host_ura": host_device_ura,
-            },
-            "host_node_id": "local",
-        }),
-    );
-
-    let ability_summary = serde_json::json!({
-        "ability_ura": ability_ura,
-        "owner_ura": owner_ura,
-        "namespace": "remote",
-        "local_name": REMOTE_PUBLIC_NAME,
-        "descriptor_revision": "sha256:remote-worker-descriptor",
-        "schema_ref": null,
-        "schema_hash": null,
-        "policy_ref": "visibility:PUBLIC",
-        "route_summary_ref": null,
-        "tags": ["remote", "file"],
-        "callable_summary": {
-            "public_name": REMOTE_PUBLIC_NAME,
-            "description": "read a remote file from another owner",
-            "call_mode": "rpc",
-            "receipt_semantics": {
-                "kind": "operational"
-            },
-            "input_fields": [],
-            "flags": {
-                "read_only": true,
-                "destructive": false,
-                "idempotent": true,
-                "streaming_only": false,
-                "bidi_only": false,
-            }
-        }
+        Visibility::Public,
+        AdmissionAction::Invoke,
+    )
+    .expect("build synthetic governed remote descriptor")
+    .with_description("read a remote file from another owner")
+    .with_source("seven-axes:remote-file-reader")
+    .with_hints(AbilityHints {
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        streaming_only: false,
+        bidi_only: false,
     });
-    let digest = projection_digest(
-        owner_ura,
+    let ability_summary =
+        easynet_cli::daemon::federation::read_model::owner_projection::
+            canonical_summary_values_from_descriptors(owner_ura, &[descriptor])
+                .expect("synthetic remote descriptor must project canonically")
+                .into_iter()
+                .next()
+                .expect("one descriptor must produce one projection summary");
+    home.advertise_hosted_agent_projection(
         host_device_ura,
-        projection_revision,
-        0,
-        std::slice::from_ref(&ability_summary),
-    );
-
-    invoke_daemon_ability(
-        socket_path,
-        caller_ura,
-        hub_ura,
         owner_ura,
-        "federation.advertise_abilities",
-        serde_json::json!({
-            "owner_ura": owner_ura,
-            "host_device_ura": host_device_ura,
-            "projection_revision": projection_revision,
-            "projection_digest": digest,
-            "lease_expires_unix_ms": 0,
-            "ability_summaries": [ability_summary],
-        }),
+        projection_revision,
+        vec![ability_summary],
     );
 
     ability_ura
@@ -299,14 +169,8 @@ fn discover_e2e_local_scope_and_typed_federation_degradation() {
     // through the public federation advertise abilities, then the
     // normal `<agent>.discover(scope=user)` path calls
     // `federation.resolve` over the daemon Invocation surface.
-    let remote_ura = advertise_remote_user_tier_ability(
-        &home.socket_path,
-        &home.loopback_caller,
-        &home.hub_ura,
-        &home.loopback_caller,
-        &home.testbot_ura,
-        2,
-    );
+    let remote_ura =
+        advertise_remote_user_tier_ability(&home, &home.loopback_caller, &home.testbot_ura, 2);
     let user_scope =
         discover::execute(&args("remote file")).expect("discover user tier through local hub");
     assert_eq!(

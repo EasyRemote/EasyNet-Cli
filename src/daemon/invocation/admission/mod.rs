@@ -22,8 +22,6 @@ pub(crate) mod identity_write_gate;
 #[cfg(feature = "axon-pb")]
 pub mod list_user_pubkeys;
 #[cfg(feature = "axon-pb")]
-pub(crate) mod nonce_replay;
-#[cfg(feature = "axon-pb")]
 pub(crate) mod owner_projection_publication;
 pub mod owner_resolution;
 #[cfg(feature = "axon-pb")]

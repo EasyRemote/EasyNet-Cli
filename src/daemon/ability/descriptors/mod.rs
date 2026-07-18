@@ -237,11 +237,11 @@ impl CallMode {
         }
     }
 
-    pub fn axon_call_mode(self) -> easynet_axon::invocation::axiom::AbilityCallMode {
+    pub fn axon_call_mode(self) -> axon_sdk::invocation::axiom::AbilityCallMode {
         match self {
-            Self::Rpc => easynet_axon::invocation::axiom::AbilityCallMode::Unary,
-            Self::Stream => easynet_axon::invocation::axiom::AbilityCallMode::ServerStream,
-            Self::Bidi => easynet_axon::invocation::axiom::AbilityCallMode::Bidi,
+            Self::Rpc => axon_sdk::invocation::axiom::AbilityCallMode::Unary,
+            Self::Stream => axon_sdk::invocation::axiom::AbilityCallMode::ServerStream,
+            Self::Bidi => axon_sdk::invocation::axiom::AbilityCallMode::Bidi,
         }
     }
 }
@@ -393,7 +393,7 @@ pub fn governed_access_policy_summary(
 pub fn schema_hash_for_governed_summary(summary: &Value) -> SchemaHash {
     let empty = Value::Object(Default::default());
     SchemaHash(
-        easynet_axon::invocation::axiom::ability_schema_hash(summary, &empty)
+        axon_sdk::invocation::axiom::ability_schema_hash(summary, &empty)
             .expect("Axon ability schema hash must serialize JSON schema values"),
     )
 }
@@ -405,7 +405,7 @@ pub fn descriptor_hash_for_ability_ura_parts(
     call_mode: CallMode,
     schema_hash: SchemaHash,
 ) -> DescriptorHash {
-    let descriptor = easynet_axon::invocation::axiom::CanonicalAbilityDescriptor {
+    let descriptor = axon_sdk::invocation::axiom::CanonicalAbilityDescriptor {
         ability_ura: ability_ura.to_string(),
         name: name.to_string(),
         version: version.to_string(),
@@ -413,7 +413,7 @@ pub fn descriptor_hash_for_ability_ura_parts(
         schema_hash: schema_hash.0,
         descriptor_hash: [0u8; 32],
     };
-    DescriptorHash(easynet_axon::invocation::axiom::ability_descriptor_hash(
+    DescriptorHash(axon_sdk::invocation::axiom::ability_descriptor_hash(
         &descriptor,
     ))
 }

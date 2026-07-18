@@ -23,36 +23,49 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+
 use std::time::{Duration, Instant};
 
-use easynet_axon::invocation::LocalRuntime;
-use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
-use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
+use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
+use axon_sdk::pb::axon::v1::invocation_server::InvocationServer;
 use easynet_cli::daemon::ability::catalog::{
     build_registry_with_services_result, RegistryBuildConfig, RegistryBuildServices,
 };
-use easynet_cli::daemon::identity::self_identity::KeyringClient;
+use easynet_cli::daemon::identity::self_identity::{
+    CanonicalSigner, KeyringClient, SelfIdentity, SelfIdentityError,
+};
 use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
 use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
-use easynet_cli::daemon::invocation::dispatch::invocation_wire::ProtoEnvelope;
+use easynet_cli::daemon::invocation::dispatch::invocation_wire::{
+    InvocationDerivationPolicy, ProtoEnvelope,
+};
 use easynet_cli::daemon::persistence::config::{self, RuntimeKind, RuntimeState};
 use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use easynet_cli::daemon::trust::cell::SharedTrustAnchor;
 use easynet_cli::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver;
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::{json, Value};
-use sha2::{Digest as _, Sha256};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::{Channel, Endpoint, Server, Uri};
 
 pub const TESTBOT_ECHO_DESCRIPTOR_VERSION: &str = "2.3.0";
-const FIXTURE_SYSTEM_DESCRIPTOR_VERSION: &str = "1.0.0";
+
+#[derive(Clone, Debug, PartialEq)]
+struct FixtureDescriptorEntry {
+    descriptor_ref: String,
+    descriptor: easynet_cli::daemon::ability::descriptors::AbilityDescriptor,
+}
+
+type DescriptorRefIndex = Arc<RwLock<BTreeMap<(String, String), FixtureDescriptorEntry>>>;
+const FIXTURE_HOSTED_AGENT_GENERATION: u64 = 1;
 
 /// A seeded HOME: env pointed, product files written. Keep it alive
 /// for the whole test — dropping it deletes the tempdir.
@@ -76,13 +89,14 @@ pub struct SevenAxesHome {
     /// redb is single-writer, and restart-persistence tests bounce
     /// the daemon while the database (like all state) belongs to the
     /// HOME, not to the process.
-    pub ledger: Arc<easynet_axon::invocation::InvocationLedger>,
+    pub ledger: Arc<axon_sdk::invocation::InvocationLedger>,
     /// Canonical URA of the second seeded agent (`zlearner` — named
     /// to sort AFTER `testbot` so ladder resolution and self-tier
     /// attribution in the W1 assertions stay put). Publishes no
     /// abilities of its own; exists to learn (W3 T3.3).
     #[allow(dead_code)]
     pub zlearner_ura: String,
+    descriptor_refs: DescriptorRefIndex,
 }
 
 /// A running in-process daemon; dropping it shuts the server down
@@ -94,6 +108,40 @@ pub struct TestDaemon {
 
 struct TestKeyring {
     child: Child,
+}
+
+struct FixtureCanonicalSigner {
+    owner_ura: String,
+    signing_owner_ura: String,
+    public_key: VerifyingKey,
+    provider: Arc<dyn SelfIdentity>,
+}
+
+#[async_trait::async_trait]
+impl CanonicalSigner for FixtureCanonicalSigner {
+    fn owner_ura(&self) -> &str {
+        &self.owner_ura
+    }
+
+    async fn sign_canonical(&self, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError> {
+        let provider = Arc::clone(&self.provider);
+        let signing_owner_ura = self.signing_owner_ura.clone();
+        let public_key = self.public_key;
+        let canonical_bytes = canonical_bytes.to_vec();
+        tokio::task::spawn_blocking(move || {
+            provider.sign_bound(&signing_owner_ura, &public_key, &canonical_bytes)
+        })
+        .await
+        .map_err(|error| {
+            SelfIdentityError::Transport(format!(
+                "fixture key-service signing worker terminated unexpectedly: {error}"
+            ))
+        })?
+    }
+
+    fn signing_public_key(&self) -> Result<VerifyingKey, SelfIdentityError> {
+        Ok(self.public_key)
+    }
 }
 
 impl Drop for TestDaemon {
@@ -236,6 +284,7 @@ impl SevenAxesHome {
         let hub_ura = easynet_cli::core::ura::hub_ura("cli");
         let testbot_ura = easynet_cli::core::ura::agent_ura("cli", "local", "testbot");
         let zlearner_ura = easynet_cli::core::ura::agent_ura("cli", "local", "zlearner");
+        let descriptor_refs = Arc::new(RwLock::new(BTreeMap::new()));
         let (keyring, trusted_public_key_b64) = start_test_keyring(loopback_caller.clone());
         std::fs::write(
             state_dir.join("local-agents.json"),
@@ -284,8 +333,7 @@ added_at_unix_ms = 0
         let ledger_path = easynet_cli::daemon::persistence::daemon_config::default_ledger_dir()
             .join("invocations.redb");
         let ledger = Arc::new(
-            easynet_axon::invocation::InvocationLedger::open(&ledger_path)
-                .expect("open test ledger"),
+            axon_sdk::invocation::InvocationLedger::open(&ledger_path).expect("open test ledger"),
         );
         config::save(&RuntimeState {
             endpoint: socket_path.display().to_string(),
@@ -322,6 +370,7 @@ added_at_unix_ms = 0
             testbot_ura,
             zlearner_ura,
             ledger,
+            descriptor_refs,
         }
     }
 
@@ -331,6 +380,11 @@ added_at_unix_ms = 0
     pub fn source_descriptor_ura(&self) -> String {
         easynet_cli::core::ura::owner_ability_ura(&self.testbot_ura, "weather-probe")
             .expect("mint source descriptor URA")
+    }
+
+    #[allow(dead_code)]
+    pub fn testbot_echo_descriptor_ref(&self) -> String {
+        require_descriptor_ref(&self.descriptor_refs, &self.testbot_ura, "echo")
     }
 
     /// Drive a real `testbot.echo` unary invocation through the daemon
@@ -343,7 +397,8 @@ added_at_unix_ms = 0
         let callee = self.testbot_ura.clone();
         let ability_ura = easynet_cli::core::ura::owner_ability_ura(&self.testbot_ura, "echo")
             .expect("mint testbot echo ability URA");
-        let descriptor_ref = format!("{ability_ura}@{TESTBOT_ECHO_DESCRIPTOR_VERSION}");
+        let descriptor_ref =
+            require_descriptor_ref(&self.descriptor_refs, &self.testbot_ura, "echo");
         let (_value, request_id, terminal_receipt) = invoke_daemon_ability(
             &self.socket_path,
             &self.loopback_caller,
@@ -359,10 +414,10 @@ added_at_unix_ms = 0
         );
 
         let mut record = Value::Null;
-        let history_descriptor_ref = fixture_descriptor_ref(
+        let history_descriptor_ref = require_descriptor_ref(
+            &self.descriptor_refs,
             &self.hub_ura,
             "invocation.record.get",
-            FIXTURE_SYSTEM_DESCRIPTOR_VERSION,
         );
         for _ in 0..10 {
             let (history, _, _) = invoke_daemon_ability(
@@ -401,27 +456,46 @@ added_at_unix_ms = 0
         })
     }
 
-    /// Invoke one daemon-owned system ability through the same descriptor-ref
-    /// gRPC surface as production callers. This is intentionally generic so
-    /// E2E files can exercise daemon providers without poking provider structs
-    /// directly.
+    /// Invoke one Device-owned system ability through the same descriptor-ref
+    /// gRPC surface as production callers.
     #[allow(dead_code)]
-    pub fn invoke_system_ability(&self, function_name: &str, args: Value) -> Value {
-        let descriptor_ref = fixture_descriptor_ref(
-            &self.hub_ura,
-            function_name,
-            FIXTURE_SYSTEM_DESCRIPTOR_VERSION,
-        );
+    pub fn invoke_device_system_ability(&self, function_name: &str, args: Value) -> Value {
+        let descriptor_ref =
+            require_descriptor_ref(&self.descriptor_refs, &self.loopback_caller, function_name);
         let (value, _, _) = invoke_daemon_ability(
             &self.socket_path,
             &self.loopback_caller,
-            &self.hub_ura,
+            &self.loopback_caller,
             &self.loopback_caller,
             function_name,
             descriptor_ref.as_str(),
             args,
         );
         value
+    }
+
+    /// Publish one hosted Agent identity and its complete ability projection
+    /// through the live daemon descriptors. The generation is shared by both
+    /// writes because they describe one durable Agent incarnation.
+    #[allow(dead_code)]
+    pub fn advertise_hosted_agent_projection(
+        &self,
+        host_device_ura: &str,
+        owner_ura: &str,
+        projection_revision: u64,
+        ability_summaries: Vec<Value>,
+    ) {
+        advertise_hosted_agent_projection(
+            &self.socket_path,
+            &self.loopback_caller,
+            &self.hub_ura,
+            host_device_ura,
+            owner_ura,
+            FIXTURE_HOSTED_AGENT_GENERATION,
+            projection_revision,
+            ability_summaries,
+            &self.descriptor_refs,
+        );
     }
 
     /// Invoke `federation.join` through the real daemon gRPC surface with the
@@ -431,7 +505,6 @@ added_at_unix_ms = 0
     pub fn invoke_federation_join_with_principal_proof(
         &self,
         membership_ura: &str,
-        public_key_hex: &str,
         principal_ura: &str,
         proof_kind: &str,
         proof_ref: &str,
@@ -440,10 +513,10 @@ added_at_unix_ms = 0
             &self.socket_path,
             &self.hub_ura,
             membership_ura,
-            public_key_hex,
             principal_ura,
             proof_kind,
             proof_ref,
+            &self.descriptor_refs,
         )
     }
 
@@ -461,6 +534,8 @@ added_at_unix_ms = 0
             &self.trust_path,
             self.loopback_caller.clone(),
             self.hub_ura.clone(),
+            vec![self.testbot_ura.clone(), self.zlearner_ura.clone()],
+            Arc::clone(&self.descriptor_refs),
             Arc::clone(&self.ledger),
             true,
         )
@@ -477,6 +552,8 @@ added_at_unix_ms = 0
             &self.trust_path,
             self.loopback_caller.clone(),
             self.hub_ura.clone(),
+            vec![self.testbot_ura.clone(), self.zlearner_ura.clone()],
+            Arc::clone(&self.descriptor_refs),
             Arc::clone(&self.ledger),
             false,
         )
@@ -509,7 +586,7 @@ fn invoke_daemon_ability(
 ) -> (
     Value,
     String,
-    Option<easynet_axon::pb::axon::v1::InvocationReceipt>,
+    Option<axon_sdk::pb::axon::v1::InvocationReceipt>,
 ) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -519,7 +596,12 @@ fn invoke_daemon_ability(
         let mut client = InvocationClient::new(connect_to_daemon(socket_path).await);
         let arguments = serde_json::to_vec(&args).expect("encode daemon invoke args");
         let signer = KeyringClient::default_path();
-        let envelope = ProtoEnvelope::targeted(caller_ura, callee_ura, subject_ura)
+        let envelope = ProtoEnvelope::from_target(
+            caller_ura,
+            callee_ura,
+            subject_ura,
+            InvocationDerivationPolicy::FreshRoot,
+        )
             .expect("valid seven-axes invoke envelope");
         let request = envelope
             .signed_descriptor_ref_invoke_request(
@@ -556,7 +638,7 @@ fn invoke_daemon_ability(
     })
 }
 
-fn receipt_proof_facts_value(receipt: &easynet_axon::pb::axon::v1::InvocationReceipt) -> Value {
+fn receipt_proof_facts_value(receipt: &axon_sdk::pb::axon::v1::InvocationReceipt) -> Value {
     json!({
         "descriptor_version": receipt.descriptor_version.as_str(),
         "schema_hash": hex::encode(&receipt.schema_hash),
@@ -574,10 +656,10 @@ fn invoke_federation_join_with_principal_proof(
     socket_path: &Path,
     hub_ura: &str,
     membership_ura: &str,
-    public_key_hex: &str,
     principal_ura: &str,
     proof_kind: &str,
     proof_ref: &str,
+    descriptor_refs: &DescriptorRefIndex,
 ) -> Value {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -585,16 +667,21 @@ fn invoke_federation_join_with_principal_proof(
         .expect("test runtime");
     rt.block_on(async {
         let mut client = InvocationClient::new(connect_to_daemon(socket_path).await);
-        let public_key = hex::decode(public_key_hex).expect("join public key hex decodes");
+        let key_service = Arc::new(KeyringClient::default_path());
+        let public_key = key_service
+            .ensure(membership_ura)
+            .expect("ensure joined member identity inside key service");
+        let public_key_bytes = public_key.to_bytes();
+        let public_key_hex = hex::encode(public_key_bytes);
         let provisional_caller =
-            easynet_cli::core::ura::provisional::provisional_ura_for_pubkey(&public_key);
+            easynet_cli::core::ura::provisional::provisional_ura_for_pubkey(&public_key_bytes);
         let realm = easynet_cli::core::ura::parse_ura(hub_ura)
             .expect("fixture hub URA parses")
             .realm;
         let arguments = serde_json::to_vec(&json!({
             "membership_ura": membership_ura,
             "realm": realm,
-            "public_key_hex": public_key_hex,
+            "public_key_hex": &public_key_hex,
             "principal_enrollment": {
                 "principal_ura": principal_ura,
                 "proof": {
@@ -604,14 +691,28 @@ fn invoke_federation_join_with_principal_proof(
             }
         }))
         .expect("encode federation.join args");
-        let request =
-            ProtoEnvelope::federation_join_genesis(provisional_caller, hub_ura, membership_ura)
-                .expect("valid federation.join genesis envelope")
-                .invoke_request(
-                    easynet_cli::daemon::ability::conformance::ABILITY_FEDERATION_JOIN,
-                    arguments,
-                )
-                .expect("valid federation.join invoke request");
+        let descriptor_ref = require_descriptor_ref(descriptor_refs, hub_ura, "federation.join");
+        let signer = FixtureCanonicalSigner {
+            owner_ura: provisional_caller.clone(),
+            signing_owner_ura: membership_ura.to_string(),
+            public_key,
+            provider: key_service,
+        };
+        let request = ProtoEnvelope::federation_join_genesis(
+            provisional_caller,
+            hub_ura,
+            membership_ura,
+            InvocationDerivationPolicy::FreshRoot,
+        )
+        .expect("valid federation.join genesis envelope")
+        .signed_descriptor_ref_invoke_request_with_signer(
+            easynet_cli::daemon::ability::conformance::ABILITY_FEDERATION_JOIN,
+            descriptor_ref,
+            arguments,
+            &signer,
+        )
+        .await
+        .expect("valid federation.join invoke request");
         let response = tokio::time::timeout(
             Duration::from_secs(10),
             client.invoke(tonic::Request::new(request)),
@@ -624,12 +725,87 @@ fn invoke_federation_join_with_principal_proof(
     })
 }
 
-fn fixture_descriptor_ref(callee_ura: &str, function_name: &str, version: &str) -> String {
-    format!(
-        "{}@{version}",
-        easynet_cli::core::ura::owner_ability_ura(callee_ura, function_name)
-            .expect("fixture ability URA")
-    )
+fn live_rpc_descriptor_refs(
+    catalog: &easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog,
+) -> BTreeMap<(String, String), FixtureDescriptorEntry> {
+    let mut refs = BTreeMap::new();
+    for row in catalog
+        .authority_ability_catalog_snapshot()
+        .into_iter()
+        .filter(|row| row.descriptor.call_mode() == easynet_cli::daemon::ability::CallMode::Rpc)
+    {
+        let ability_ura = row
+            .descriptor
+            .canonical_ability_ura()
+            .expect("live descriptor must have a canonical Ability URA");
+        let selector = easynet_cli::core::ura::AbilitySelector::parse(&ability_ura)
+            .expect("live descriptor Ability URA must expose its owner");
+        let descriptor_ref = axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
+            "{}@{}#{}!{}",
+            ability_ura,
+            row.descriptor.version,
+            hex::encode(row.descriptor.descriptor_hash_bytes()),
+            row.descriptor.admission_action().as_str(),
+        ))
+        .expect("live descriptor must form a canonical descriptor ref");
+        let public_name = row.descriptor.public_name();
+        let entry = FixtureDescriptorEntry {
+            descriptor_ref,
+            descriptor: row.descriptor,
+        };
+        for name in [row.name.clone(), public_name, ability_ura.clone()] {
+            let key = (selector.owner_ura().to_string(), name);
+            if let Some(existing) = refs.insert(key.clone(), entry.clone()) {
+                assert_eq!(
+                    existing, entry,
+                    "live RPC descriptor index is ambiguous for {key:?}"
+                );
+            }
+        }
+    }
+    refs
+}
+
+fn require_descriptor_ref(
+    descriptor_refs: &DescriptorRefIndex,
+    callee_ura: &str,
+    function_name: &str,
+) -> String {
+    descriptor_refs
+        .read()
+        .expect("seven-axes descriptor-ref index lock")
+        .get(&(callee_ura.to_string(), function_name.to_string()))
+        .unwrap_or_else(|| {
+            panic!(
+                "live catalog has no RPC descriptor ref for `{function_name}` under `{callee_ura}`"
+            )
+        })
+        .descriptor_ref
+        .clone()
+}
+
+fn require_projection_summary(
+    descriptor_refs: &DescriptorRefIndex,
+    callee_ura: &str,
+    function_name: &str,
+) -> Value {
+    let descriptor = descriptor_refs
+        .read()
+        .expect("seven-axes descriptor-ref index lock")
+        .get(&(callee_ura.to_string(), function_name.to_string()))
+        .unwrap_or_else(|| {
+            panic!(
+                "live catalog has no projection summary for `{function_name}` under `{callee_ura}`"
+            )
+        })
+        .descriptor
+        .clone();
+    easynet_cli::daemon::federation::read_model::owner_projection::
+        canonical_summary_values_from_descriptors(callee_ura, &[descriptor])
+        .expect("selected hosted-agent descriptor must project canonically")
+        .into_iter()
+        .next()
+        .expect("one selected descriptor must produce one projection summary")
 }
 
 fn seed_hosted_agent_projection(
@@ -638,12 +814,36 @@ fn seed_hosted_agent_projection(
     hub_ura: &str,
     host_device_ura: &str,
     agent_ura: &str,
+    descriptor_refs: &DescriptorRefIndex,
 ) {
-    let advertise_agent_descriptor_ref = fixture_descriptor_ref(
+    let ability_summary = require_projection_summary(descriptor_refs, agent_ura, "echo");
+    advertise_hosted_agent_projection(
+        socket_path,
+        caller_ura,
         hub_ura,
-        "federation.advertise_agent",
-        FIXTURE_SYSTEM_DESCRIPTOR_VERSION,
+        host_device_ura,
+        agent_ura,
+        FIXTURE_HOSTED_AGENT_GENERATION,
+        1,
+        vec![ability_summary],
+        descriptor_refs,
     );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn advertise_hosted_agent_projection(
+    socket_path: &Path,
+    caller_ura: &str,
+    hub_ura: &str,
+    host_device_ura: &str,
+    agent_ura: &str,
+    generation: u64,
+    projection_revision: u64,
+    ability_summaries: Vec<Value>,
+    descriptor_refs: &DescriptorRefIndex,
+) {
+    let advertise_agent_descriptor_ref =
+        require_descriptor_ref(descriptor_refs, hub_ura, "federation.advertise_agent");
     let (agent_resp, _, _) = invoke_daemon_ability(
         socket_path,
         caller_ura,
@@ -653,6 +853,7 @@ fn seed_hosted_agent_projection(
         advertise_agent_descriptor_ref.as_str(),
         json!({
             "agent_ura": agent_ura,
+            "generation": generation,
             "public_key_hex": "",
             "host_node_id": "local",
             "signing_authority": {
@@ -666,59 +867,19 @@ fn seed_hosted_agent_projection(
         "fixture hosted-agent advertise must ack: {agent_resp}"
     );
 
-    let public_name = easynet_cli::core::ura::owner_local_ability_name(agent_ura, "echo");
-    let ability_ura = easynet_cli::core::ura::owner_ability_ura(agent_ura, &public_name)
-        .expect("fixture echo ability URA");
-    let route_summary_ref = format!("route-ref::{ability_ura}");
-    let (namespace, local_name) = public_name
-        .rsplit_once('.')
-        .map(|(namespace, local)| (namespace.to_string(), local.to_string()))
-        .unwrap_or_else(|| (String::new(), public_name.clone()));
-    let callable_summary = json!({
-        "public_name": public_name,
-        "description": "echo one short string for deterministic mission tests",
-        "call_mode": "rpc",
-        "receipt_semantics": {
-            "kind": "operational"
-        },
-        "input_fields": [{
-            "name": "message",
-            "required": false,
-            "value_type": "string"
-        }],
-        "flags": {
-            "read_only": false,
-            "destructive": false,
-            "idempotent": true,
-            "streaming_only": false,
-            "bidi_only": false
-        }
-    });
-    let ability_summary = json!({
-        "ability_ura": ability_ura,
-        "owner_ura": agent_ura,
-        "namespace": namespace,
-        "local_name": local_name,
-        "descriptor_revision": "sha256:seven-axes-fixture-echo-descriptor",
-        "schema_ref": null,
-        "schema_hash": null,
-        "policy_ref": "visibility:private",
-        "route_summary_ref": route_summary_ref,
-        "tags": ["class:query", "source:seven-axes-fixture"],
-        "callable_summary": callable_summary
-    });
-    let projection_digest = fixture_projection_digest(
-        agent_ura,
-        host_device_ura,
-        1,
-        0,
-        std::slice::from_ref(&ability_summary),
-    );
-    let advertise_abilities_descriptor_ref = fixture_descriptor_ref(
-        hub_ura,
-        "federation.advertise_abilities",
-        FIXTURE_SYSTEM_DESCRIPTOR_VERSION,
-    );
+    let projection_digest =
+        easynet_cli::daemon::federation::read_model::owner_projection::
+            canonical_projection_digest_from_values(
+                agent_ura,
+                host_device_ura,
+                generation,
+                projection_revision,
+                0,
+                &ability_summaries,
+            )
+            .expect("fixture projection summaries must be canonical");
+    let advertise_abilities_descriptor_ref =
+        require_descriptor_ref(descriptor_refs, hub_ura, "federation.advertise_abilities");
     let (abilities_resp, _, _) = invoke_daemon_ability(
         socket_path,
         caller_ura,
@@ -730,10 +891,11 @@ fn seed_hosted_agent_projection(
             "agent_ura": agent_ura,
             "owner_ura": agent_ura,
             "host_device_ura": host_device_ura,
-            "projection_revision": 1,
+            "generation": generation,
+            "projection_revision": projection_revision,
             "projection_digest": projection_digest,
             "lease_expires_unix_ms": 0,
-            "ability_summaries": [ability_summary]
+            "ability_summaries": ability_summaries
         }),
     );
     assert_eq!(
@@ -746,40 +908,14 @@ fn seed_hosted_agent_projection(
     );
 }
 
-fn fixture_projection_digest(
-    owner_ura: &str,
-    host_device_ura: &str,
-    projection_revision: u64,
-    lease_expires_unix_ms: i64,
-    summaries: &[Value],
-) -> String {
-    let mut ability_values = summaries.to_vec();
-    ability_values.sort_by_key(|value| {
-        serde_json::to_string(value).expect("fixture projection summary serializes")
-    });
-    ability_values.dedup_by(|a, b| {
-        serde_json::to_string(a).expect("fixture projection summary serializes")
-            == serde_json::to_string(b).expect("fixture projection summary serializes")
-    });
-    let canonical = json!({
-        "owner_ura": owner_ura,
-        "host_device_ura": host_device_ura,
-        "projection_revision": projection_revision,
-        "lease_expires_unix_ms": lease_expires_unix_ms,
-        "abilities": ability_values,
-    });
-    let bytes = serde_json::to_vec(&canonical).expect("fixture projection digest serializes");
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hex::encode(hasher.finalize())
-}
-
 fn start_daemon_at(
     socket_path: &Path,
     trust_path: &Path,
     daemon_ura: String,
     hub_ura: String,
-    ledger: Arc<easynet_axon::invocation::InvocationLedger>,
+    hosted_agent_uras: Vec<String>,
+    descriptor_refs: DescriptorRefIndex,
+    ledger: Arc<axon_sdk::invocation::InvocationLedger>,
     publish_hosted_projection: bool,
 ) -> TestDaemon {
     let agents = easynet_cli::daemon::persistence::agent_registry::load_agents()
@@ -792,6 +928,29 @@ fn start_daemon_at(
     let trust_anchor =
         Arc::new(RealmTrustAnchor::try_load_strict(trust_path).expect("load test trust anchor"));
     let shared_trust_anchor = SharedTrustAnchor::new(Arc::clone(&trust_anchor));
+    let authority_context =
+        easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots_with_hosted_agents(
+            daemon_ura.clone(),
+            hosted_agent_uras,
+        )
+        .expect("seven-axes fixture authority roots must be canonical");
+    let hosted_inventory = authority_context
+        .hosted_agent_signing_inventory()
+        .expect("combined fixture authority must own hosted-Agent signing inventory");
+    let key_service = KeyringClient::default_path();
+    easynet_cli::daemon::identity::self_identity::ensure_daemon_local_system_identity(&key_service)
+        .expect("seed fixture daemon-local signing owner");
+    for owner_ura in [daemon_ura.as_str(), hub_ura.as_str()] {
+        key_service
+            .ensure(owner_ura)
+            .unwrap_or_else(|error| panic!("seed fixture signing owner `{owner_ura}`: {error}"));
+    }
+    let receipt_authority_config =
+        easynet_cli::daemon::axon_bridge::runtime_factory::ProductionReceiptAuthorityConfig::new([
+            daemon_ura.clone(),
+            hub_ura.clone(),
+        ])
+        .with_hosted_agent_inventory(daemon_ura.clone(), hosted_inventory);
 
     // ONE ledger handle (owned by the HOME fixture) for both halves:
     // the service WRITES unary records through it, and the registry's
@@ -799,15 +958,17 @@ fn start_daemon_at(
     // through the same Arc — redb is single-writer; a second open of
     // the same file would split the truth (and a daemon restart would
     // deadlock on the lock).
-    let runtime = LocalRuntime::new();
-    // Production sink wiring (`configure_local_runtime`, same as
-    // daemon boot): Axon-routed unary invokes persist their terminal
-    // records through the SDK-canonical `LedgerSink` — one writer.
-    easynet_cli::daemon::axon_bridge::runtime_factory::configure_local_runtime(
+    let daemon_runtime =
+        easynet_cli::daemon::axon_bridge::runtime_factory::build_production_local_runtime(
+            receipt_authority_config,
+            Arc::new(RealmTrustAnchorKeyResolver::new(
+                shared_trust_anchor.clone(),
+            )),
+        )
+        .expect("build seven-axes owner-bound daemon runtime");
+    let runtime = daemon_runtime.runtime();
+    easynet_cli::daemon::axon_bridge::runtime_factory::install_ledger_sink(
         &runtime,
-        Some(Arc::new(RealmTrustAnchorKeyResolver::new(
-            shared_trust_anchor.clone(),
-        ))),
         Some(Arc::clone(&ledger)),
     );
     let presence = Arc::new(PresenceRegistry::new());
@@ -828,7 +989,8 @@ fn start_daemon_at(
     );
     let services =
         RegistryBuildServices::fresh().with_discover_federation_resolver(discover_resolver);
-    let mut config = RegistryBuildConfig::new(services, &agents);
+    let mut config =
+        RegistryBuildConfig::new_with_authority_context(services, &agents, authority_context);
     let hot_agent_registrar_cell: Arc<
         easynet_cli::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell,
     > = Arc::new(std::sync::OnceLock::new());
@@ -838,6 +1000,10 @@ fn start_daemon_at(
     let built_registry =
         build_registry_with_services_result(config).expect("assemble seven-axes fixture catalog");
     let catalog = Arc::clone(&built_registry.catalog);
+    *descriptor_refs
+        .write()
+        .expect("seven-axes descriptor-ref index lock") =
+        live_rpc_descriptor_refs(catalog.as_ref());
     local_catalog_cell
         .set(Arc::clone(&catalog))
         .expect("fixture local catalog cell has one writer");
@@ -861,13 +1027,23 @@ fn start_daemon_at(
     }
 
     let admission =
-        AdmissionFacade::with_trust_anchor_cell(shared_trust_anchor.clone(), Some(hub_ura.clone()));
+        AdmissionFacade::with_trust_anchor_cell(shared_trust_anchor.clone(), Some(hub_ura.clone()))
+            .with_ability_catalog(Arc::clone(&catalog));
+    daemon_runtime
+        .bind_derived_invocation_admission(catalog.as_ref(), admission.clone())
+        .expect("bind seven-axes derived Invocation product admission");
     let service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_directory_read_models(advertised_agents, ability_catalog)
         .with_local_ability_catalog(Arc::clone(&catalog))
-        .with_local_runtime(runtime)
+        .with_daemon_runtime(daemon_runtime)
         .with_invocation_ledger(ledger)
         .with_register_pubkey("cli", trust_path, shared_trust_anchor);
+    futures::executor::block_on(
+        service.register_daemon_unary_routes_for_owners(&[daemon_ura.clone(), hub_ura.clone()]),
+    )
+    .expect("register seven-axes daemon exact unary routes for both authority roots");
+    futures::executor::block_on(service.register_daemon_stream_routes(&hub_ura))
+        .expect("register seven-axes daemon exact stream routes");
 
     // A restart binds the same UDS path again; remove the stale node.
     let _ = std::fs::remove_file(socket_path);
@@ -924,6 +1100,7 @@ fn start_daemon_at(
             &hub_ura,
             &daemon_ura,
             &easynet_cli::core::ura::agent_ura("cli", "local", "testbot"),
+            &descriptor_refs,
         );
     }
 

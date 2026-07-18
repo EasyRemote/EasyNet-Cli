@@ -5,7 +5,7 @@
 // =============================
 //
 // File: src/eal/interpreter.rs
-// Description: Client-side execution engine for Mission IR v2 (temporary — target: MissionControl v2).
+// Description: Daemon-owned execution engine for Mission IR v2.
 //
 // Execution Model:
 //   Phases execute sequentially (data-flow barriers between them).
@@ -168,8 +168,8 @@ pub struct ExecutionTrace {
     /// ledger receipt anchors) for steps lowered onto the daemon
     /// Invocation surface, in execution order. The receipt-level
     /// ability graph: nodes are the records' `ability` names, edges
-    /// come from each record's `causal_context.parents`. Empty when
-    /// no step produced an invocation record (offline run).
+    /// come from each record's canonical causal context. Empty when
+    /// no step completed successfully.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ability_graph: Vec<Value>,
     /// Ordered archival records produced by EAL `emit` statements.
@@ -212,9 +212,8 @@ pub struct StepTrace {
     /// Seven-tuple Axon invocation record for this step when it was
     /// lowered onto the daemon Invocation surface: envelope echo
     /// (caller/callee/ability/subject/nonce/causal_context) plus the
-    /// ledger-assigned invocation_ura, trace_id, and receipt anchors.
-    /// None for receipt-less dispatch paths (in-process fallback,
-    /// agent CLI) — absence is recorded, never fabricated.
+    /// ledger-assigned invocation_ura and receipt anchors. None only
+    /// when the step was never successfully dispatched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invocation: Option<Value>,
     /// Mirrors `IrStep::input_refs` — kept as a `BTreeMap` for the same
@@ -277,9 +276,9 @@ pub struct ExecutionReport {
 
 pub(super) struct CapturedResult {
     pub(super) value: Vec<u8>,
-    /// Seven-tuple invocation record for the step that produced this
-    /// binding, when the step was lowered onto the daemon's Axon
-    /// Invocation surface (None for in-process fallback dispatch).
-    /// Downstream steps read this to name their causal parents.
-    pub(super) invocation: Option<Value>,
+    /// Mandatory child Invocation record for the step that produced
+    /// this binding. Downstream joins retain its verified terminal
+    /// receipt as typed dependency evidence.
+    pub(super) invocation:
+        crate::daemon::execution::mission::invocation_gateway::MissionInvocationRecord,
 }

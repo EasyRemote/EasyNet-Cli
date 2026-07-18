@@ -455,7 +455,7 @@ pub struct InvocationToolTrace {
 
 impl InvocationToolTrace {
     /// Project the daemon invocation `_meta` echo (see
-    /// `local_daemon_grpc::invoke_local_daemon_ability_with_invocation_meta`)
+    /// `local_daemon_grpc::invoke_local_daemon_ability_targeted_with_invocation_meta`)
     /// onto the driver-facing trace object.
     fn from_daemon_meta(
         meta: &crate::support::platform::local_invoke::VerifiedLocalInvocationMeta,
@@ -534,13 +534,15 @@ impl DaemonLocalInvoker {
         serde_json::Value,
         crate::support::platform::local_invoke::VerifiedLocalInvocationMeta,
     )> {
-        crate::support::platform::local_invoke::invoke_local_ability_target_with_invocation_meta(
-            target,
-            args,
-            None,
+        let context = crate::support::platform::local_invoke::LocalSystemInvocationContext::new(
+            target.default_subject_ura(),
+            axon_sdk::invocation::fresh_nonce(),
             &[],
-            Some(std::time::Duration::from_secs(30)),
+            std::time::Duration::from_secs(30),
             None,
+        )?;
+        crate::support::platform::local_invoke::invoke_local_ability_target_with_invocation_meta(
+            target, args, context,
         )
     }
 }

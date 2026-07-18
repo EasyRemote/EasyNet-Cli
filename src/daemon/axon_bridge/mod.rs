@@ -9,7 +9,7 @@
 //!     deleted in Phase 5a — `LedgerSink` is now the canonical
 //!     persistence surface for runtime outcomes).
 //!
-//! Axon's `easynet_axon::invocation` module already defines the
+//! Axon's `axon_sdk::invocation` module already defines the
 //! canonical implementations of every one of those concerns —
 //! `LocalRuntime`, `invoke_externally_signed_*`, `LedgerSink`,
 //! `KeyResolver`. The bridge layer here is the gradual handoff:

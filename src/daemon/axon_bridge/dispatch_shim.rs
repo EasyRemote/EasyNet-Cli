@@ -5,11 +5,7 @@
 //! ----
 //! Keep one descriptor-bound execution path for every daemon ingress:
 //!
-//!   1. Take the wire pieces (`pb::axon::v1::Envelope` from
-//!      `EnvelopeOpen.envelope` + `target.ability_name` from
-//!      `EnvelopeOpen.target` + `initial_args` bytes from
-//!      `EnvelopeOpen.initial_args` + the signed-caller envelope's
-//!      `caller_signature`).
+//!   1. Take the already-extracted descriptor-bound wire pieces.
 //!   2. Reassemble the canonical 7-tuple via Axon's
 //!      `InvocationEnvelope::from_wire_parts` — the helper Axon ships
 //!      precisely so every wire-receiving consumer agrees on what
@@ -30,12 +26,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use easynet_axon::invocation::{
-    AuthorityBinding, AxonError, BidiInvocationHandle, CallMode as AxonInvocationCallMode,
-    CallerSignature, CausalContext, DescriptorBoundEnvelope, DescriptorBoundInvocationRequest,
-    InvocationHandle, InvocationState, LocalRuntime, StreamingInvocationHandle,
+use axon_sdk::invocation::{
+    AxonError, BidiInvocationHandle, CallMode as AxonInvocationCallMode, CallerSignature,
+    CausalContext, DescriptorBoundEnvelope, DescriptorBoundInvocationRequest, InvocationHandle,
+    InvocationState, LocalRuntime, StreamingInvocationHandle,
 };
-use easynet_axon::pb::axon::v1 as pb;
+use axon_sdk::pb::axon::v1 as pb;
 
 use crate::daemon::axon_bridge::descriptor_ref::{
     ability_descriptor_ref_for_wire, ability_ura_for_wire, registered_descriptor_binding,
@@ -51,12 +47,9 @@ use crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_part
 pub enum WireDispatchIngress {
     /// Caller-supplied signature that Axon must verify.
     ExternalSigned(CallerSignature),
-    /// Caller-supplied bootstrap signature already verified against the
-    /// bootstrap payload's public key by the host policy gate.
-    BootstrapPreverified {
-        signature: CallerSignature,
-        authority_binding: AuthorityBinding,
-    },
+    /// First-join signature whose candidate key is leased into the CLI
+    /// admission resolver for canonical Axon verification.
+    ProvisionalBootstrap(CallerSignature),
     /// Explicit daemon/session-local dispatch signed by `_system.local`.
     LocalSystem,
 }
@@ -75,6 +68,8 @@ pub struct WireDispatch {
     /// runtime so the ledger record carries it.
     pub trace_id: String,
     local_system_authority: Option<LocalSystemAuthority>,
+    provisional_key_lease:
+        Option<crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyLease>,
 }
 
 #[derive(Debug)]
@@ -118,6 +113,7 @@ fn dispatch_from_wire_parts(
         trace_id: reassembled.trace_id,
         local_system_authority: matches!(policy, WireIngressPolicy::LocalSystem)
             .then_some(LocalSystemAuthority),
+        provisional_key_lease: None,
     })
 }
 
@@ -167,12 +163,13 @@ pub(crate) fn local_system_from_wire_parts(
     )
 }
 
-pub fn bootstrap_preverified_from_wire_parts(
+pub(crate) fn provisional_bootstrap_from_wire_parts(
     envelope: pb::Envelope,
     target_ability_name: String,
     initial_args: Vec<u8>,
     request_metadata: HashMap<String, String>,
-    authority_binding: AuthorityBinding,
+    public_key: [u8; 32],
+    key_provider: &Arc<crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyProvider>,
 ) -> Result<WireDispatch, Box<AxonError>> {
     let reassembled =
         descriptor_bound_from_wire_parts(envelope.clone(), target_ability_name, &initial_args)
@@ -182,23 +179,35 @@ pub fn bootstrap_preverified_from_wire_parts(
         .clone()
         .ok_or_else(|| AxonError::invalid_argument("wire envelope missing caller_signature"))?
         .into();
+    let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&public_key).map_err(|error| {
+        Box::new(AxonError::invalid_argument(format!(
+            "provisional_bootstrap_public_key:{error}"
+        )))
+    })?;
+    let provisional_key_lease = key_provider
+        .lease_candidate(&reassembled.envelope.envelope().caller.ura, verifying_key)
+        .map_err(Box::new)?;
     Ok(WireDispatch {
         envelope: reassembled.envelope,
-        ingress: WireDispatchIngress::BootstrapPreverified {
-            signature,
-            authority_binding,
-        },
+        ingress: WireDispatchIngress::ProvisionalBootstrap(signature),
         payload: initial_args,
         request_metadata,
         trace_id: reassembled.trace_id,
         local_system_authority: None,
+        provisional_key_lease: Some(provisional_key_lease),
     })
+}
+
+struct PreparedWireDispatch {
+    request: DescriptorBoundInvocationRequest,
+    _provisional_key_lease:
+        Option<crate::daemon::axon_bridge::runtime_admin::ProvisionalBootstrapKeyLease>,
 }
 
 fn request_for_wire_dispatch(
     mode: AxonInvocationCallMode,
     wire: WireDispatch,
-) -> Result<DescriptorBoundInvocationRequest, AxonError> {
+) -> Result<PreparedWireDispatch, AxonError> {
     let WireDispatch {
         envelope,
         ingress,
@@ -206,6 +215,7 @@ fn request_for_wire_dispatch(
         request_metadata,
         trace_id,
         local_system_authority,
+        provisional_key_lease,
     } = wire;
     let ingress = match ingress {
         WireDispatchIngress::ExternalSigned(signature) => LocalRuntimeIngress::ExternalSigned {
@@ -213,19 +223,12 @@ fn request_for_wire_dispatch(
             signature,
             payload,
         },
-        WireDispatchIngress::BootstrapPreverified {
-            signature,
-            authority_binding,
-        } => {
-            return Ok(DescriptorBoundInvocationRequest::bootstrap_preverified(
-                mode,
+        WireDispatchIngress::ProvisionalBootstrap(signature) => {
+            LocalRuntimeIngress::ExternalSigned {
                 envelope,
                 signature,
                 payload,
-                authority_binding,
-            )?
-            .with_trace_id(trace_id)
-            .with_request_metadata(request_metadata));
+            }
         }
         WireDispatchIngress::LocalSystem => {
             local_system_authority.ok_or_else(|| {
@@ -233,44 +236,31 @@ fn request_for_wire_dispatch(
                     "local system dispatch requires trusted-local transport authority",
                 )
             })?;
-            return SystemInvocationIssuer::request_for_complete_envelope(
+            let request = SystemInvocationIssuer::request_for_complete_envelope(
                 mode,
                 envelope,
                 payload,
                 LocalRuntimeRequestOptions::default()
                     .with_trace_id(trace_id)
                     .with_request_metadata(request_metadata),
-            );
+            )?;
+            return Ok(PreparedWireDispatch {
+                request,
+                _provisional_key_lease: provisional_key_lease,
+            });
         }
     };
-    LocalRuntimeRequestFactory::request_for(
+    let request = LocalRuntimeRequestFactory::request_for(
         mode,
         ingress,
         LocalRuntimeRequestOptions::default()
             .with_trace_id(trace_id)
             .with_request_metadata(request_metadata),
-    )
-}
-
-pub fn external_signed_from_envelope_open(
-    envelope_open: &pb::EnvelopeOpen,
-) -> Result<WireDispatch, Box<AxonError>> {
-    let ability = envelope_open
-        .target
-        .as_ref()
-        .map(|target| target.ability_name.clone())
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| AxonError::invalid_argument("wire envelope missing target ability"))?;
-    let envelope = envelope_open
-        .envelope
-        .clone()
-        .ok_or_else(|| AxonError::invalid_argument("wire envelope missing envelope"))?;
-    external_signed_from_wire_parts(
-        envelope,
-        ability,
-        envelope_open.initial_args.clone(),
-        envelope_open.metadata.clone(),
-    )
+    )?;
+    Ok(PreparedWireDispatch {
+        request,
+        _provisional_key_lease: provisional_key_lease,
+    })
 }
 
 /// One terminal outcome from an Axon-driven RPC dispatch.
@@ -289,10 +279,10 @@ pub struct RpcDispatchOutcome {
     pub error: Option<AxonError>,
     /// Admission receipt minted by Axon for the descriptor-bound call,
     /// when admission reached the runtime.
-    pub admission_receipt: Option<easynet_axon::invocation::SignedInvocationReceipt>,
+    pub admission_receipt: Option<axon_sdk::invocation::SignedInvocationReceipt>,
     /// Terminal execution receipt, when the runtime minted one —
     /// carried back to the hub on carrier-v1 sessions (DEC-F004).
-    pub terminal_receipt: Option<easynet_axon::invocation::SignedInvocationReceipt>,
+    pub terminal_receipt: Option<axon_sdk::invocation::SignedInvocationReceipt>,
 }
 
 /// Drain an `InvocationHandle` through Axon's canonical finalization view.
@@ -345,8 +335,8 @@ async fn dispatch_rpc(
     cancellations: &crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry,
 ) -> RpcDispatchOutcome {
     let lifecycle_envelope = wire.envelope.clone();
-    let request = match request_for_wire_dispatch(AxonInvocationCallMode::Rpc, wire) {
-        Ok(request) => request,
+    let prepared = match request_for_wire_dispatch(AxonInvocationCallMode::Rpc, wire) {
+        Ok(prepared) => prepared,
         Err(err) => {
             return RpcDispatchOutcome {
                 invocation_id: None,
@@ -358,7 +348,9 @@ async fn dispatch_rpc(
             };
         }
     };
-    let result = runtime.invoke_descriptor_bound_request_async(request).await;
+    let result = runtime
+        .invoke_descriptor_bound_request_async(prepared.request)
+        .await;
     match result {
         Ok((handle, _signed)) => {
             let lifecycle_key = match cancellations.register(&lifecycle_envelope, handle.clone()) {
@@ -425,9 +417,9 @@ async fn open_stream(
     runtime: &Arc<LocalRuntime>,
     wire: WireDispatch,
 ) -> Result<StreamingInvocationHandle, AxonError> {
-    let request = request_for_wire_dispatch(AxonInvocationCallMode::Stream, wire)?;
+    let prepared = request_for_wire_dispatch(AxonInvocationCallMode::Stream, wire)?;
     let (handle, _signed) = runtime
-        .invoke_descriptor_bound_stream_request_async(request)
+        .invoke_descriptor_bound_stream_request_async(prepared.request)
         .await?;
     Ok(handle)
 }
@@ -487,9 +479,9 @@ async fn open_bidi(
     runtime: &Arc<LocalRuntime>,
     wire: WireDispatch,
 ) -> Result<BidiInvocationHandle, AxonError> {
-    let request = request_for_wire_dispatch(AxonInvocationCallMode::Bidi, wire)?;
+    let prepared = request_for_wire_dispatch(AxonInvocationCallMode::Bidi, wire)?;
     let (handle, _signed) = runtime
-        .invoke_descriptor_bound_bidi_request_async(request)
+        .invoke_descriptor_bound_bidi_request_async(prepared.request)
         .await?;
     Ok(handle)
 }
@@ -590,7 +582,7 @@ mod tests {
 
     use crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire;
 
-    use easynet_axon::invocation::{
+    use axon_sdk::invocation::{
         fresh_nonce, make_ability, sha256, sign_descriptor_bound_invocation,
         signing_key_from_bytes, AbilityCallModes, AbilityOptions, AgentIdentity, AxonError,
         CausalContext, DescriptorBoundEnvelope, DescriptorBoundEnvelopeParts, InvocationLedger,
@@ -647,7 +639,7 @@ mod tests {
         let ledger = Arc::new(InvocationLedger::open(temp.path().join("inv.redb")).unwrap());
         let sk = signing_key_from_bytes(&[0x77; 32]);
         let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-            Some(Arc::new(FixedKey(sk.verifying_key()))),
+            Arc::new(FixedKey(sk.verifying_key())),
             Some(Arc::clone(&ledger)),
         );
         (rt, ledger, sk, temp)
@@ -662,10 +654,8 @@ mod tests {
         // canonical bytes signed over), then project back into wire
         // form. This mirrors the shape an upstream client would have
         // produced.
-        let caller_sdk =
-            AgentIdentity::new("easynet:///r/t/agent/u.alice", UraProfile::EasynetStrictV2);
-        let callee_sdk =
-            AgentIdentity::new("easynet:///r/t/device/host", UraProfile::EasynetStrictV2);
+        let caller_sdk = AgentIdentity::new("easynet:///r/t/agent/u.alice", UraProfile::StrictV2);
+        let callee_sdk = AgentIdentity::new("easynet:///r/t/device/host", UraProfile::StrictV2);
         let subject_sdk = SubjectIdentity::from_callee(&callee_sdk);
         let nonce = fresh_nonce();
         let ability_ref = ability_descriptor_ref_for_wire(
@@ -875,7 +865,7 @@ mod tests {
         let signing_key = signing_key_from_bytes(&[0x24; 32]);
         let verifying_key = signing_key.verifying_key();
         let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-            Some(Arc::new(FixedKey(verifying_key))),
+            Arc::new(FixedKey(verifying_key)),
             Some(Arc::clone(&ledger)),
         );
 
@@ -891,12 +881,12 @@ mod tests {
 
         let caller_sdk = AgentIdentity::new(
             "easynet:///r/hub-a.local/user/ad5a2619-4c49-459d-a862-a41111cc646d",
-            UraProfile::EasynetStrictV2,
+            UraProfile::StrictV2,
         );
-        let callee_sdk = AgentIdentity::new(callee_ura, UraProfile::EasynetStrictV2);
+        let callee_sdk = AgentIdentity::new(callee_ura, UraProfile::StrictV2);
         let subject_sdk = SubjectIdentity::new(
             "easynet:///r/hub-a.local/resource/user.ad5a2619-4c49-459d-a862-a41111cc646d/invoke/shell.run",
-            UraProfile::EasynetStrictV2,
+            UraProfile::StrictV2,
         );
         let ability_ref = ability_descriptor_ref_for_wire(
             &callee_sdk.ura,
@@ -1053,17 +1043,25 @@ mod tests {
 
     #[tokio::test]
     async fn external_wire_rejects_missing_or_unprojectable_subject() {
+        let callee_ura = "easynet:///r/t/device/h";
+        let ability = ability_descriptor_ref_for_wire(
+            callee_ura,
+            "x",
+            &descriptor_binding_for_wire(WIRE_TEST_DESCRIPTOR_VERSION, [0x33; 32], "invoke")
+                .expect("descriptor binding"),
+        )
+        .expect("descriptor ref");
         let base = || pb::Envelope {
             caller: Some(pb::AgentIdentity {
                 ura: "easynet:///r/t/agent/u.x".to_string(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             callee: Some(pb::AgentIdentity {
-                ura: "easynet:///r/t/device/h".to_string(),
+                ura: callee_ura.to_string(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             subject: Some(pb::SubjectIdentity {
-                ura: "easynet:///r/t/device/h".to_string(),
+                ura: callee_ura.to_string(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             invocation_nonce: vec![0; 16],
@@ -1077,7 +1075,7 @@ mod tests {
         missing_subject.subject = None;
         let err = external_signed_from_wire_parts(
             missing_subject,
-            "x".to_string(),
+            ability.clone(),
             Vec::new(),
             Default::default(),
         )
@@ -1091,7 +1089,7 @@ mod tests {
         });
         let err = external_signed_from_wire_parts(
             unsupported_subject,
-            "x".to_string(),
+            ability,
             Vec::new(),
             Default::default(),
         )

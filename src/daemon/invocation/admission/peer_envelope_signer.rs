@@ -23,14 +23,12 @@
 
 use tonic::Status;
 
-use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentity};
+use axon_sdk::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentity};
 
 use crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts;
 use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura;
-use crate::daemon::invocation::dispatch::invocation_wire::{
-    try_entity_ref, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
-};
+use crate::daemon::invocation::dispatch::invocation_wire::try_entity_ref;
 
 pub(crate) struct PeerInvokeRequest<'a> {
     caller_envelope: Option<&'a Envelope>,
@@ -74,17 +72,22 @@ impl<'a> PeerInvokeRequest<'a> {
         )
         .await?;
 
-        let mut request = InvokeRequest {
+        let target = crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+            &descriptor_ref,
+            self.function_name,
+        )
+        .map_err(|error| {
+            Status::invalid_argument(format!(
+                "cross-hub canonical_invoke target is invalid: {error}"
+            ))
+        })?;
+        Ok(InvokeRequest {
             envelope: Some(envelope),
+            target: Some(target),
             function_name: self.function_name.to_string(),
             arguments: self.arguments,
             ..InvokeRequest::default()
-        };
-        request.metadata.insert(
-            SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(),
-            descriptor_ref,
-        );
-        Ok(request)
+        })
     }
 }
 
@@ -430,12 +433,15 @@ mod tests {
             );
             assert!(envelope.caller_signature.is_some());
             assert_eq!(
-                request
-                    .metadata
-                    .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
-                    .map(String::as_str),
-                Some(expected_descriptor_ref.as_str())
+                crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
+                    "test peer request",
+                    &crate::core::ura::hub_ura("peer"),
+                    request.target.as_ref(),
+                )
+                .unwrap(),
+                expected_descriptor_ref
             );
+            assert!(request.metadata.is_empty());
         }
     }
 
@@ -457,9 +463,9 @@ mod tests {
                 profile: crate::daemon::invocation::DEFAULT_URA_PROFILE.to_string(),
             }),
             invocation_nonce: vec![9u8; 16],
-            causal_context: Some(easynet_axon::pb::axon::v1::CausalContext {
-                form: Some(easynet_axon::pb::axon::v1::causal_context::Form::Scalar(
-                    easynet_axon::pb::axon::v1::ReceiptRef {
+            causal_context: Some(axon_sdk::pb::axon::v1::CausalContext {
+                form: Some(axon_sdk::pb::axon::v1::causal_context::Form::Scalar(
+                    axon_sdk::pb::axon::v1::ReceiptRef {
                         receipt_hash: vec![7u8; 32],
                         receipt_ura: "easynet:///r/local/resource/agent.peer.signer/invocation/parent/receipt"
                             .to_string(),
@@ -499,7 +505,7 @@ mod tests {
             .expect("signature covers descriptor-bound canonical bytes");
         assert!(matches!(
             env.causal_context.and_then(|ctx| ctx.form),
-            Some(easynet_axon::pb::axon::v1::causal_context::Form::Scalar(_))
+            Some(axon_sdk::pb::axon::v1::causal_context::Form::Scalar(_))
         ));
     }
 

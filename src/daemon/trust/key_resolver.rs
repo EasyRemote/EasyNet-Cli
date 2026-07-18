@@ -1,16 +1,16 @@
-//! `RealmTrustAnchor` -> `easynet_axon::invocation::KeyResolver`.
+//! `RealmTrustAnchor` -> `axon_sdk::invocation::KeyResolver`.
 //!
 //! This is a daemon-trust adapter: the daemon owns `RealmTrustAnchor`
 //! and its hot-reload cell, while Axon's `LocalRuntime` only needs a
 //! `KeyResolver` trait object.
 
+use axon_sdk::invocation::{AxonError, ErrorCode, ErrorStage, KeyResolver, SecurityClass};
 use base64::{engine::general_purpose::STANDARD as B64_STANDARD, Engine as _};
-use easynet_axon::invocation::{AxonError, KeyResolver};
 use ed25519_dalek::VerifyingKey;
 
 use crate::daemon::trust::cell::SharedTrustAnchor;
 
-/// `easynet_axon::invocation::KeyResolver` wired to the daemon's
+/// `axon_sdk::invocation::KeyResolver` wired to the daemon's
 /// `SharedTrustAnchor`.
 pub struct RealmTrustAnchorKeyResolver {
     trust_anchor: SharedTrustAnchor,
@@ -23,24 +23,34 @@ impl RealmTrustAnchorKeyResolver {
     }
 }
 
+fn caller_key_unavailable(agent_ura: &str, detail: impl Into<String>) -> AxonError {
+    AxonError::invalid_argument(ErrorCode::CallerKeyNotFound.as_str())
+        .with_code(ErrorCode::CallerKeyNotFound)
+        .with_stage(ErrorStage::CallerAuthentication)
+        .with_security_class(SecurityClass::Identity)
+        .with_message(format!(
+            "realm_trust_anchor: caller {agent_ura}: {}",
+            detail.into()
+        ))
+}
+
 fn decode_pubkey(public_key_b64: &str, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
     let raw = B64_STANDARD
         .decode(public_key_b64.as_bytes())
         .map_err(|err| {
-            AxonError::permission_denied(format!(
-                "realm_trust_anchor: pubkey base64 invalid for {agent_ura}: {err}"
-            ))
+            caller_key_unavailable(agent_ura, format!("pubkey base64 invalid: {err}"))
         })?;
     let bytes: [u8; 32] = raw.as_slice().try_into().map_err(|_| {
-        AxonError::permission_denied(format!(
-            "realm_trust_anchor: pubkey for {agent_ura} is {} bytes; expected 32",
-            raw.len()
-        ))
+        caller_key_unavailable(
+            agent_ura,
+            format!("pubkey is {} bytes; expected 32", raw.len()),
+        )
     })?;
     VerifyingKey::from_bytes(&bytes).map_err(|err| {
-        AxonError::permission_denied(format!(
-            "realm_trust_anchor: pubkey for {agent_ura} is not a valid Ed25519 point: {err}"
-        ))
+        caller_key_unavailable(
+            agent_ura,
+            format!("pubkey is not a valid Ed25519 point: {err}"),
+        )
     })
 }
 
@@ -48,9 +58,10 @@ impl KeyResolver for RealmTrustAnchorKeyResolver {
     fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
         let anchor = self.trust_anchor.snapshot();
         let entry = anchor.lookup(agent_ura).ok_or_else(|| {
-            AxonError::permission_denied(format!(
-                "realm_trust_anchor: no entry for caller {agent_ura}"
-            ))
+            caller_key_unavailable(
+                agent_ura,
+                "caller is not in the realm trust anchor; no trust-anchor entry",
+            )
         })?;
         decode_pubkey(&entry.public_key_b64, agent_ura)
     }
@@ -70,13 +81,11 @@ impl KeyResolver for RealmTrustAnchorKeyResolver {
         }
         let keys: Vec<VerifyingKey> = user_rows
             .iter()
-            .take(easynet_axon::invocation::MAX_KEYS_PER_AGENT_URA)
+            .take(axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA)
             .filter_map(|row| decode_pubkey(&row.public_key_b64, agent_ura).ok())
             .collect();
         if keys.is_empty() {
-            return Err(AxonError::permission_denied(format!(
-                "realm_trust_anchor: no decodable user key for caller {agent_ura}"
-            )));
+            return Err(caller_key_unavailable(agent_ura, "no decodable user key"));
         }
         Ok(keys)
     }
@@ -119,7 +128,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_returns_permission_denied_for_unknown_agent() {
+    fn resolve_returns_typed_caller_key_failure_for_unknown_agent() {
         let signing_key = SigningKey::from_bytes(&[0x22; 32]);
         let anchor = make_anchor_with("easynet:///r/test/device/d1", &signing_key);
         let resolver = RealmTrustAnchorKeyResolver::new(anchor);
@@ -127,8 +136,11 @@ mod tests {
         let err = resolver
             .resolve("easynet:///r/test/device/UNKNOWN")
             .expect_err("unknown agent must reject");
+        assert_eq!(err.code, ErrorCode::CallerKeyNotFound);
+        assert_eq!(err.stage, Some(ErrorStage::CallerAuthentication));
+        assert_eq!(err.security_class, Some(SecurityClass::Identity));
         assert!(
-            err.to_string().contains("no entry for caller"),
+            err.to_string().contains("no trust-anchor entry"),
             "diagnostic must name the missing URA: {err}"
         );
     }

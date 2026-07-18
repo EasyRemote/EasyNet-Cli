@@ -20,9 +20,9 @@ use crate::daemon::ability::builtins::governance::invocation_history::{
 };
 use crate::support::platform::output::{self, OutputFormat};
 
-type InvocationRecord = easynet_axon::invocation::InvocationLedgerRecord;
-type TraceEdge = easynet_axon::invocation::InvocationTraceEdge;
-type TraceGraph = easynet_axon::invocation::InvocationTraceGraph;
+type InvocationRecord = axon_sdk::invocation::InvocationLedgerRecord;
+type TraceEdge = axon_sdk::invocation::InvocationTraceEdge;
+type TraceGraph = axon_sdk::invocation::InvocationTraceGraph;
 
 #[derive(Debug, Args)]
 pub struct InvocationArgs {
@@ -654,13 +654,11 @@ mod tests {
 
     // ── `invocation stats` aggregation (F-051) ──────────────────
 
-    fn stats_record(
+    fn test_record_builder(
         ability: &str,
         state: &str,
-        error_code: Option<&str>,
-        elapsed_ms: Option<u64>,
-    ) -> InvocationRecord {
-        let mut b = easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
+    ) -> axon_sdk::invocation::InvocationLedgerRecordBuilder {
+        axon_sdk::invocation::InvocationLedgerRecordBuilder::new()
             .invocation_ura("easynet:///r/test/resource/alice.invocations/i-1")
             .request_id("req-1")
             .caller_ura("easynet:///r/test/device/caller")
@@ -670,13 +668,23 @@ mod tests {
             .ability_name(ability)
             .state(state)
             .started_unix_ms(1_700_000_000_000_i64)
-            .args(easynet_axon::invocation::LedgerEventPayload::Digest {
+            .authority_form("self")
+            .args(axon_sdk::invocation::LedgerEventPayload::Digest {
                 content_type: "application/json".to_string(),
                 sha256: "0".repeat(64),
                 size_bytes: 2,
-            });
+            })
+    }
+
+    fn stats_record(
+        ability: &str,
+        state: &str,
+        error_code: Option<&str>,
+        elapsed_ms: Option<u64>,
+    ) -> InvocationRecord {
+        let mut b = test_record_builder(ability, state);
         if let Some(code) = error_code {
-            b = b.error(easynet_axon::invocation::LedgerErrorRecord {
+            b = b.error(axon_sdk::invocation::LedgerErrorRecord {
                 source: "test".to_string(),
                 code: code.to_string(),
                 message: "boom".to_string(),
@@ -692,30 +700,16 @@ mod tests {
 
     #[test]
     fn show_record_json_reports_usage_attestation() {
-        let record = easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
-            .invocation_ura("easynet:///r/test/resource/alice.invocations/i-1")
-            .request_id("req-1")
-            .caller_ura("easynet:///r/test/device/caller")
-            .callee_ura("easynet:///r/test/device/callee")
-            .subject_ura("easynet:///r/test/device/callee")
-            .ability_ura("easynet:///r/test/ability/device.callee.fs.read")
-            .ability_name("fs.read")
-            .state("completed")
-            .started_unix_ms(1_700_000_000_000_i64)
-            .usage(easynet_axon::invocation::axiom::InvocationUsage {
+        let record = test_record_builder("fs.read", "completed")
+            .usage(axon_sdk::invocation::axiom::InvocationUsage {
                 tokens_in: 11,
                 tokens_out: 7,
                 duration_ms: 29,
                 external_calls: 2,
             })
-            .receipt_chain(easynet_axon::invocation::InvocationReceiptChainSummary {
+            .receipt_chain(axon_sdk::invocation::InvocationReceiptChainSummary {
                 verified: true,
                 ..Default::default()
-            })
-            .args(easynet_axon::invocation::LedgerEventPayload::Digest {
-                content_type: "application/json".to_string(),
-                sha256: "0".repeat(64),
-                size_bytes: 2,
             })
             .build()
             .expect("show test record");

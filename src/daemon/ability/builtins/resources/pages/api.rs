@@ -425,7 +425,10 @@ mod tests {
                 )
                 .expect("pages API test hosted Agent authority is canonical");
             let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-                crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+                crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                    crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                    None,
+                ),
                 authority_context,
             );
             reg.register_rpc_with_owner_and_action(

@@ -57,8 +57,8 @@ use tonic::transport::{Channel, Endpoint};
 
 use crate::daemon::trust::anchor::RealmTrustAnchor;
 use crate::daemon::trust::cell::SharedTrustAnchor;
-use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
-use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
+use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
+use axon_sdk::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
 
 /// PR-N1 commit 9/N: how the dialer reads the trust anchor on
 /// every dial. Two flavours:
@@ -870,7 +870,7 @@ impl CrossHubDialer {
     /// stays focused on the dial decision; this function is
     /// the JSON-decode side of the wire.
     fn stream_chunks_to_directory_events(
-        inner: tonic::Streaming<easynet_axon::pb::axon::v1::InvokeStreamChunk>,
+        inner: tonic::Streaming<axon_sdk::pb::axon::v1::InvokeStreamChunk>,
         target_hub_endpoint: HubEndpoint,
     ) -> impl futures::Stream<Item = crate::daemon::federation::directory::DirectoryEvent> + Send
     {
@@ -939,7 +939,7 @@ mod tests {
 
     use super::*;
     use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
-    use easynet_axon::pb::axon::v1::ResponseHeader;
+    use axon_sdk::pb::axon::v1::ResponseHeader;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Mutex;
@@ -1012,7 +1012,7 @@ mod tests {
                 status: "completed".to_string(),
                 ..ResponseHeader::default()
             }),
-            state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+            state: axon_sdk::invocation::InvocationState::Completed.to_wire_i32(),
             ..InvokeResponse::default()
         }
     }
@@ -1748,7 +1748,7 @@ SxYwtVK19IHR+6r7EBBCBg5D0fpPsH/xFsEWhdKVscezZ/W6m2iSQASUsCqSuQ22
             .expect("canned response delivered");
         assert_eq!(
             resp.state,
-            easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
+            axon_sdk::invocation::InvocationState::Completed.to_wire_i32()
         );
         assert_eq!(
             resp.header.as_ref().expect("header present").status,

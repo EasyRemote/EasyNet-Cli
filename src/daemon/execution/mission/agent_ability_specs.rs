@@ -158,7 +158,6 @@ impl AgentAbilitySpec {
     pub fn description(&self) -> &str {
         &self.description
     }
-
 }
 
 /// Build the ability list for one agent entry.

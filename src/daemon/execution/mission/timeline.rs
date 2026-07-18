@@ -4,7 +4,7 @@
 // File: src/daemon/execution/mission/timeline.rs
 // Description: Per-invocation event timeline. Composes two things:
 //
-//   1. A disk-backed append-only event log (`easynet_axon::invocation::
+//   1. A disk-backed append-only event log (`axon_sdk::invocation::
 //      persistence::PersistentLog`) which honours AXIOM P1–P6
 //      (append-only ordering, fsync-before-notify, offset read,
 //      terminal idempotence, explicit eviction, crash consistency).
@@ -47,7 +47,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use easynet_axon::invocation::persistence::PersistentLog;
+use axon_sdk::invocation::persistence::PersistentLog;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::broadcast;
