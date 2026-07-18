@@ -5,7 +5,11 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 CONFORMANCE_REPORTS_SCRIPT="${SDK_CUTOVER_CONFORMANCE_REPORTS_SCRIPT:-$SELF_DIR/check-sdk-conformance-reports.sh}"
 PARITY_MATRIX_SCRIPT="${SDK_CUTOVER_PARITY_MATRIX_SCRIPT:-$SELF_DIR/check-sdk-parity-matrix.sh}"
-PYTHON_BIN="${PYTHON:-python3}"
+source "$REPO_ROOT/sdk/conformance/toolchain_path.sh"
+source "$REPO_ROOT/sdk/conformance/python_toolchain.sh"
+resolve_sdk_toolchain_path "$REPO_ROOT"
+resolve_sdk_python_toolchain "$REPO_ROOT" pytest
+PYTHON_BIN="$SDK_CONFORMANCE_PYTHON"
 
 # Reuse the PrincipalLifecycle E2E root contract. Sourcing defines the resolver
 # without executing the focused E2E.

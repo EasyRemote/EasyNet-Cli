@@ -4,7 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AXON_ROOT="${EASYNET_AXON_ROOT:-$ROOT/../EasyNet-Axon}"
 CANONICAL_LIFECYCLE_AXON_ROOT="$AXON_ROOT"
-PYTHON_BIN="${PYTHON:-python3}"
+source "$ROOT/sdk/conformance/toolchain_path.sh"
+source "$ROOT/sdk/conformance/python_toolchain.sh"
+resolve_sdk_toolchain_path "$ROOT"
+resolve_sdk_python_toolchain "$ROOT"
+PYTHON_BIN="$SDK_CONFORMANCE_PYTHON"
 MANIFEST="$ROOT/sdk/conformance/canonical-public-api.json"
 MATRIX="$ROOT/sdk/conformance/sdk-parity-matrix.json"
 EDGE_ADAPTER_POLICY="$ROOT/sdk/conformance/edge_adapter_policy.py"
@@ -1449,17 +1453,34 @@ PY
     local root="$1"
     local cli_root="$2"
     local checker="$AXON_ROOT/scripts/checks/check_proto_derivation.sh"
+    local sync_owner="$AXON_ROOT/scripts/proto/sync_canonical_proto.sh"
+    local codegen_provisioner="$AXON_ROOT/scripts/proto/ensure_codegen_toolchain.sh"
+    local codegen_lock="$AXON_ROOT/scripts/proto/codegen-requirements.lock"
     if [[ ! -f "$checker" ]]; then
       fail "self-test requires real Axon proto derivation gate: ${checker#$AXON_ROOT/}"
     fi
+    if [[ ! -x "$sync_owner" ]]; then
+      fail "self-test requires real Axon proto sync owner: ${sync_owner#$AXON_ROOT/}"
+    fi
+    if [[ ! -x "$codegen_provisioner" || ! -f "$codegen_lock" ]]; then
+      fail "self-test requires the locked Axon proto codegen toolchain"
+    fi
 
     mkdir -p "$root/scripts/checks" \
+      "$root/scripts/proto" \
       "$root/core/proto/axon/v1" \
       "$root/sdk/rust/proto/axon/v1" \
       "$root/core/runtime-rs/client-sdk/src" \
       "$cli_root/sdk/go/internal/axonpb" \
       "$cli_root/sdk/python/easynet_sdk/_axon_pb/axon/v1"
     cp "$checker" "$root/scripts/checks/check_proto_derivation.sh"
+    cp "$sync_owner" "$root/scripts/proto/sync_canonical_proto.sh"
+    cp "$codegen_provisioner" "$root/scripts/proto/ensure_codegen_toolchain.sh"
+    cp "$codegen_lock" "$root/scripts/proto/codegen-requirements.lock"
+    chmod +x \
+      "$root/scripts/checks/check_proto_derivation.sh" \
+      "$root/scripts/proto/sync_canonical_proto.sh" \
+      "$root/scripts/proto/ensure_codegen_toolchain.sh"
     touch \
       "$cli_root/sdk/python/easynet_sdk/_axon_pb/__init__.py" \
       "$cli_root/sdk/python/easynet_sdk/_axon_pb/axon/__init__.py" \

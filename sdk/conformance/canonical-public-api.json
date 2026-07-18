@@ -624,6 +624,16 @@
       "InvocationHandle",
       "InvocationHandleEvent",
       "InvocationLedgerRecord",
+      "InvocationLifecycleAccepted",
+      "InvocationLifecycleAdmitted",
+      "InvocationLifecycleCancelled",
+      "InvocationLifecycleCompleted",
+      "InvocationLifecycleDispatched",
+      "InvocationLifecycleFailed",
+      "InvocationLifecycleRunning",
+      "InvocationLifecycleState",
+      "InvocationLifecycleTimedOut",
+      "InvocationLifecycleUnspecified",
       "InvocationReceiptAnchor",
       "InvocationReceiptChainSummary",
       "InvocationResult",
@@ -732,6 +742,7 @@
       "ParseDirectoryEntry",
       "ParseDirectoryEvent",
       "ParseErrorCode",
+      "ParseInvocationLifecycleState",
       "ParseURA",
       "ParseURAParts",
       "ParsedAbility",
@@ -2060,6 +2071,7 @@
       "BidiSession.MaxBufferedFrames",
       "BidiSession.Receive",
       "BidiSession.ReceivedFrames",
+      "BidiSession.RuntimeState",
       "BidiSession.Send",
       "BidiSession.SentFrames",
       "BidiSession.SessionID",
@@ -2368,6 +2380,7 @@
       "InvocationHandleEvent.Sequence",
       "InvocationHandleEvent.State",
       "InvocationHandleEvent.Terminal",
+      "InvocationLifecycleState.IsTerminal",
       "InvocationResult.AdmissionReceipt",
       "InvocationResult.AdmissionReceiptSummary",
       "InvocationResult.ElapsedMS",
@@ -2862,6 +2875,7 @@
       "RuntimeReceipt.InputHashHex",
       "RuntimeReceipt.InvocationID",
       "RuntimeReceipt.InvocationNonceBase64",
+      "RuntimeReceipt.LifecycleState",
       "RuntimeReceipt.OutputHashHex",
       "RuntimeReceipt.ParentReceipts",
       "RuntimeReceipt.PayloadBase64",
@@ -3127,6 +3141,7 @@
       "StreamHandle.Events",
       "StreamHandle.MaxBufferedEvents",
       "StreamHandle.Next",
+      "StreamHandle.RuntimeState",
       "StreamHandle.State",
       "StreamHandle.StreamID",
       "StreamHandle.TerminalEvent",
@@ -3620,6 +3635,7 @@
       "BidiSession.max_buffered_frames",
       "BidiSession.receive",
       "BidiSession.received_frames",
+      "BidiSession.runtime_state",
       "BidiSession.send",
       "BidiSession.sent_frames",
       "BidiSession.session_id",
@@ -4001,6 +4017,7 @@
       "InvocationLifecycleState.RUNNING",
       "InvocationLifecycleState.TIMED_OUT",
       "InvocationLifecycleState.UNSPECIFIED",
+      "InvocationLifecycleState.from_wire_name",
       "InvocationLifecycleState.is_terminal",
       "InvocationObjectAdapter.bidi",
       "InvocationObjectAdapter.build_invocation",
@@ -4544,6 +4561,7 @@
       "RuntimeReceipt.input_hash_hex",
       "RuntimeReceipt.invocation_id",
       "RuntimeReceipt.invocation_nonce_base64",
+      "RuntimeReceipt.lifecycle_state",
       "RuntimeReceipt.output_hash_hex",
       "RuntimeReceipt.parent_receipts",
       "RuntimeReceipt.payload_base64",
@@ -4810,6 +4828,7 @@
       "StreamHandle.from_json",
       "StreamHandle.max_buffered_events",
       "StreamHandle.next",
+      "StreamHandle.runtime_state",
       "StreamHandle.state",
       "StreamHandle.stream_id",
       "StreamHandle.terminal_event",
@@ -10984,6 +11003,7 @@
           "BidiSession.MaxBufferedFrames",
           "BidiSession.Receive",
           "BidiSession.ReceivedFrames",
+          "BidiSession.RuntimeState",
           "BidiSession.Send",
           "BidiSession.SentFrames",
           "BidiSession.SessionID",
@@ -11057,6 +11077,7 @@
           "BidiSession.max_buffered_frames",
           "BidiSession.receive",
           "BidiSession.received_frames",
+          "BidiSession.runtime_state",
           "BidiSession.send",
           "BidiSession.sent_frames",
           "BidiSession.session_id",
@@ -14542,12 +14563,22 @@
           "DiscoverOptions",
           "DiscoverRuntimeHost",
           "Endpoints",
+          "InvocationLifecycleAccepted",
+          "InvocationLifecycleAdmitted",
+          "InvocationLifecycleCancelled",
+          "InvocationLifecycleCompleted",
+          "InvocationLifecycleDispatched",
+          "InvocationLifecycleFailed",
+          "InvocationLifecycleRunning",
+          "InvocationLifecycleTimedOut",
+          "InvocationLifecycleUnspecified",
           "ModeBoth",
           "NewEndpointsFromJSON",
           "NewRuntimeHost",
           "NewRuntimeHostAdminClient",
           "NewRuntimeLifecycleStatusFromJSON",
           "NewRuntimeRecoveryReportFromJSON",
+          "ParseInvocationLifecycleState",
           "RuntimeConfigInvalid",
           "RuntimeControlOnly",
           "RuntimeControlReady",
@@ -14955,6 +14986,7 @@
           "StreamHandle.Events",
           "StreamHandle.MaxBufferedEvents",
           "StreamHandle.Next",
+          "StreamHandle.RuntimeState",
           "StreamHandle.State",
           "StreamHandle.StreamID",
           "StreamHandle.TerminalEvent",
@@ -15021,6 +15053,7 @@
           "StreamHandle.events",
           "StreamHandle.max_buffered_events",
           "StreamHandle.next",
+          "StreamHandle.runtime_state",
           "StreamHandle.state",
           "StreamHandle.stream_id",
           "StreamHandle.terminal_event",
@@ -15263,6 +15296,7 @@
           "RuntimeReceipt.InputHashHex",
           "RuntimeReceipt.InvocationID",
           "RuntimeReceipt.InvocationNonceBase64",
+          "RuntimeReceipt.LifecycleState",
           "RuntimeReceipt.OutputHashHex",
           "RuntimeReceipt.ParentReceipts",
           "RuntimeReceipt.PayloadBase64",
@@ -15352,6 +15386,7 @@
           "RuntimeReceipt.input_hash_hex",
           "RuntimeReceipt.invocation_id",
           "RuntimeReceipt.invocation_nonce_base64",
+          "RuntimeReceipt.lifecycle_state",
           "RuntimeReceipt.output_hash_hex",
           "RuntimeReceipt.parent_receipts",
           "RuntimeReceipt.payload_base64",
@@ -15889,6 +15924,7 @@
           "InvocationFailure",
           "InvocationHandle",
           "InvocationHandleEvent",
+          "InvocationLifecycleState",
           "InvocationResult",
           "NewInvocationCancelFromJSON",
           "NewInvocationHandleFromJSON",
@@ -15924,6 +15960,7 @@
           "InvocationHandleEvent.Sequence",
           "InvocationHandleEvent.State",
           "InvocationHandleEvent.Terminal",
+          "InvocationLifecycleState.IsTerminal",
           "InvocationResult.ElapsedMS",
           "InvocationResult.Failure",
           "InvocationResult.InvocationID",
@@ -16031,6 +16068,7 @@
           "InvocationLifecycleState.RUNNING",
           "InvocationLifecycleState.TIMED_OUT",
           "InvocationLifecycleState.UNSPECIFIED",
+          "InvocationLifecycleState.from_wire_name",
           "InvocationLifecycleState.is_terminal",
           "InvocationResult.admission_receipt",
           "InvocationResult.admission_receipt_summary",
@@ -16290,7 +16328,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
           "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
@@ -16342,7 +16380,7 @@
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
           "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
           "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
@@ -16396,7 +16434,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
           "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
@@ -16438,7 +16476,7 @@
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
           "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
           "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
@@ -16482,7 +16520,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
           "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
@@ -16534,7 +16572,7 @@
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
           "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
           "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
@@ -16588,7 +16626,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
           "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
@@ -16665,7 +16703,7 @@
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
           "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
           "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
@@ -16739,195 +16777,195 @@
     "stream": {
       "go": {
         "implementation": {
-          "identity": "direct_runtime_provider",
+          "identity": "cabi_runtime_provider",
           "owner_path": "sdk/go/",
-          "path": "sdk/go/direct_runtime.go",
-          "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
-          "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "path": "sdk/go/cabi_runtime.go",
+          "sha256": "ab6620f6a7b30aaddec6f85144c498bdfae916fe9cab71d01155267f3fa92914",
+          "interface": "CABIRuntimeTransport",
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
             "case_id": "stream/backpressure_bound",
             "action": "overflow_bidi_callback_queue",
-            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+            "selector": "TestCABIRuntimeProviderEnforcesCallbackBackpressure"
           },
           {
             "case_id": "stream/backpressure_bound",
             "action": "overflow_stream_callback_queue",
-            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+            "selector": "TestCABIRuntimeProviderEnforcesCallbackBackpressure"
           },
           {
             "case_id": "stream/backpressure_bound",
             "action": "project_bidi_backpressure_terminal",
-            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+            "selector": "TestCABIRuntimeProviderEnforcesCallbackBackpressure"
           },
           {
             "case_id": "stream/backpressure_bound",
             "action": "project_stream_backpressure_terminal",
-            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+            "selector": "TestCABIRuntimeProviderEnforcesCallbackBackpressure"
           },
           {
             "case_id": "stream/cancel_request",
             "action": "open_stream",
-            "selector": "TestConformanceStreamCancelRequestIsNonTerminal"
+            "selector": "TestCABIRuntimeProviderRequestsStreamCancelBeforeCanonicalTerminal"
           },
           {
             "case_id": "stream/cancel_request",
             "action": "reject_synthetic_terminal_cancel_ack",
-            "selector": "TestConformanceStreamCancelRequestIsNonTerminal"
+            "selector": "TestCABIRuntimeProviderRequestsStreamCancelBeforeCanonicalTerminal"
           },
           {
             "case_id": "stream/cancel_request",
             "action": "request_stream_cancel",
-            "selector": "TestConformanceStreamCancelRequestIsNonTerminal"
+            "selector": "TestCABIRuntimeProviderRequestsStreamCancelBeforeCanonicalTerminal"
           },
           {
             "case_id": "stream/deadline_owner",
             "action": "observe_stream_typed_timeout",
-            "selector": "TestDirectRuntimeStreamDeadlineIsTypedTimeout"
+            "selector": "TestCABIRuntimeProviderOwnsStreamReceiveDeadline"
           },
           {
             "case_id": "stream/deadline_owner",
             "action": "open_stream_with_deadline",
-            "selector": "TestDirectRuntimeStreamDeadlineIsTypedTimeout"
+            "selector": "TestCABIRuntimeProviderOwnsStreamReceiveDeadline"
           },
           {
             "case_id": "stream/deadline_owner",
             "action": "release_timed_out_stream",
-            "selector": "TestDirectRuntimeStreamDeadlineIsTypedTimeout"
+            "selector": "TestCABIRuntimeProviderOwnsStreamReceiveDeadline"
           },
           {
             "case_id": "stream/deadline_owner",
             "action": "retry_stream_after_deadline_cleanup",
-            "selector": "TestDirectRuntimeStreamDeadlineIsTypedTimeout"
+            "selector": "TestCABIRuntimeProviderOwnsStreamReceiveDeadline"
           },
           {
             "case_id": "stream/dispatch_provider",
             "action": "dispatch_stream_draft",
-            "selector": "TestDirectRuntimeTransportStreamsOverUnixSocket"
+            "selector": "TestCABIRuntimeProviderDispatchesStreamBeforeTerminal"
           },
           {
             "case_id": "stream/dispatch_provider",
             "action": "observe_stream_runtime_selection",
-            "selector": "TestDirectRuntimeTransportStreamsOverUnixSocket"
+            "selector": "TestCABIRuntimeProviderDispatchesStreamBeforeTerminal"
           },
           {
             "case_id": "stream/dispatch_provider",
             "action": "observe_stream_terminal_after_dispatch",
-            "selector": "TestDirectRuntimeTransportStreamsOverUnixSocket"
+            "selector": "TestCABIRuntimeProviderDispatchesStreamBeforeTerminal"
           },
           {
             "case_id": "stream/order_terminal",
             "action": "close_stream",
-            "selector": "TestStreamHandleOrdersEventsAndClosesAfterTerminal"
+            "selector": "TestCABIRuntimeProviderPreservesStreamOrderAndSingleTerminal"
           },
           {
             "case_id": "stream/order_terminal",
             "action": "open_stream",
-            "selector": "TestStreamHandleOrdersEventsAndClosesAfterTerminal"
+            "selector": "TestCABIRuntimeProviderPreservesStreamOrderAndSingleTerminal"
           },
           {
             "case_id": "stream/order_terminal",
             "action": "project_stream_terminal_event",
-            "selector": "TestStreamHandleOrdersEventsAndClosesAfterTerminal"
+            "selector": "TestCABIRuntimeProviderPreservesStreamOrderAndSingleTerminal"
           }
         ]
       },
       "python": {
         "implementation": {
-          "identity": "direct_runtime_provider",
+          "identity": "cabi_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
-          "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
-          "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "path": "sdk/python/easynet_sdk/_cabi.py",
+          "sha256": "e10e75ad1961e48007168884420d4c82a6beb5beb93a1fcbeea86f039bbfca66",
+          "interface": "CABIRuntimeTransport",
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
             "case_id": "stream/backpressure_bound",
             "action": "overflow_bidi_callback_queue",
-            "selector": "test_stream_and_bidi_backpressure_bounds"
+            "selector": "test_cabi_provider_enforces_callback_backpressure"
           },
           {
             "case_id": "stream/backpressure_bound",
             "action": "overflow_stream_callback_queue",
-            "selector": "test_stream_and_bidi_backpressure_bounds"
+            "selector": "test_cabi_provider_enforces_callback_backpressure"
           },
           {
             "case_id": "stream/backpressure_bound",
             "action": "project_bidi_backpressure_terminal",
-            "selector": "test_stream_and_bidi_backpressure_bounds"
+            "selector": "test_cabi_provider_enforces_callback_backpressure"
           },
           {
             "case_id": "stream/backpressure_bound",
             "action": "project_stream_backpressure_terminal",
-            "selector": "test_stream_and_bidi_backpressure_bounds"
+            "selector": "test_cabi_provider_enforces_callback_backpressure"
           },
           {
             "case_id": "stream/cancel_request",
             "action": "open_stream",
-            "selector": "test_stream_cancel_request_is_non_terminal"
+            "selector": "test_cabi_provider_requests_stream_cancel_before_canonical_terminal"
           },
           {
             "case_id": "stream/cancel_request",
             "action": "reject_synthetic_terminal_cancel_ack",
-            "selector": "test_stream_cancel_request_is_non_terminal"
+            "selector": "test_cabi_provider_requests_stream_cancel_before_canonical_terminal"
           },
           {
             "case_id": "stream/cancel_request",
             "action": "request_stream_cancel",
-            "selector": "test_stream_cancel_request_is_non_terminal"
+            "selector": "test_cabi_provider_requests_stream_cancel_before_canonical_terminal"
           },
           {
             "case_id": "stream/deadline_owner",
             "action": "observe_stream_typed_timeout",
-            "selector": "test_direct_runtime_stream_deadline_is_typed_timeout"
+            "selector": "test_cabi_provider_owns_stream_receive_deadline"
           },
           {
             "case_id": "stream/deadline_owner",
             "action": "open_stream_with_deadline",
-            "selector": "test_direct_runtime_stream_deadline_is_typed_timeout"
+            "selector": "test_cabi_provider_owns_stream_receive_deadline"
           },
           {
             "case_id": "stream/deadline_owner",
             "action": "release_timed_out_stream",
-            "selector": "test_direct_runtime_stream_deadline_is_typed_timeout"
+            "selector": "test_cabi_provider_owns_stream_receive_deadline"
           },
           {
             "case_id": "stream/deadline_owner",
             "action": "retry_stream_after_deadline_cleanup",
-            "selector": "test_direct_runtime_stream_deadline_is_typed_timeout"
+            "selector": "test_cabi_provider_owns_stream_receive_deadline"
           },
           {
             "case_id": "stream/dispatch_provider",
             "action": "dispatch_stream_draft",
-            "selector": "test_direct_runtime_stream_provider_json_uses_terminal_receipt"
+            "selector": "test_cabi_provider_dispatches_stream_before_terminal"
           },
           {
             "case_id": "stream/dispatch_provider",
             "action": "observe_stream_runtime_selection",
-            "selector": "test_direct_runtime_stream_provider_json_uses_terminal_receipt"
+            "selector": "test_cabi_provider_dispatches_stream_before_terminal"
           },
           {
             "case_id": "stream/dispatch_provider",
             "action": "observe_stream_terminal_after_dispatch",
-            "selector": "test_direct_runtime_stream_provider_json_uses_terminal_receipt"
+            "selector": "test_cabi_provider_dispatches_stream_before_terminal"
           },
           {
             "case_id": "stream/order_terminal",
             "action": "close_stream",
-            "selector": "test_stream_orders_events_and_closes_after_terminal"
+            "selector": "test_cabi_provider_preserves_stream_order_and_single_terminal"
           },
           {
             "case_id": "stream/order_terminal",
             "action": "open_stream",
-            "selector": "test_stream_orders_events_and_closes_after_terminal"
+            "selector": "test_cabi_provider_preserves_stream_order_and_single_terminal"
           },
           {
             "case_id": "stream/order_terminal",
             "action": "project_stream_terminal_event",
-            "selector": "test_stream_orders_events_and_closes_after_terminal"
+            "selector": "test_cabi_provider_preserves_stream_order_and_single_terminal"
           }
         ]
       }
@@ -16940,7 +16978,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
           "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
@@ -17017,7 +17055,7 @@
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
           "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
           "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
@@ -17091,245 +17129,245 @@
     "bidi": {
       "go": {
         "implementation": {
-          "identity": "direct_runtime_provider",
+          "identity": "cabi_runtime_provider",
           "owner_path": "sdk/go/",
-          "path": "sdk/go/direct_runtime.go",
-          "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
-          "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "path": "sdk/go/cabi_runtime.go",
+          "sha256": "ab6620f6a7b30aaddec6f85144c498bdfae916fe9cab71d01155267f3fa92914",
+          "interface": "CABIRuntimeTransport",
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
             "case_id": "bidi/cancel_request",
             "action": "open_bidi",
-            "selector": "TestConformanceBidiCancelRequestIsNonTerminal"
+            "selector": "TestCABIRuntimeProviderRequestsBidiCancelBeforeCanonicalTerminal"
           },
           {
             "case_id": "bidi/cancel_request",
             "action": "reject_synthetic_terminal_cancel_ack",
-            "selector": "TestConformanceBidiCancelRequestIsNonTerminal"
+            "selector": "TestCABIRuntimeProviderRequestsBidiCancelBeforeCanonicalTerminal"
           },
           {
             "case_id": "bidi/cancel_request",
             "action": "release_bidi_after_cancel_request",
-            "selector": "TestConformanceBidiCancelRequestIsNonTerminal"
+            "selector": "TestCABIRuntimeProviderRequestsBidiCancelBeforeCanonicalTerminal"
           },
           {
             "case_id": "bidi/cancel_request",
             "action": "request_bidi_cancel",
-            "selector": "TestConformanceBidiCancelRequestIsNonTerminal"
+            "selector": "TestCABIRuntimeProviderRequestsBidiCancelBeforeCanonicalTerminal"
           },
           {
             "case_id": "bidi/close_send_not_cancel",
             "action": "close_bidi",
-            "selector": "TestBidiCloseSendDiffersFromCancel"
+            "selector": "TestCABIRuntimeProviderKeepsCloseSendDistinctFromCancel"
           },
           {
             "case_id": "bidi/close_send_not_cancel",
             "action": "close_bidi_send",
-            "selector": "TestBidiCloseSendDiffersFromCancel"
+            "selector": "TestCABIRuntimeProviderKeepsCloseSendDistinctFromCancel"
           },
           {
             "case_id": "bidi/close_send_not_cancel",
             "action": "open_bidi",
-            "selector": "TestBidiCloseSendDiffersFromCancel"
+            "selector": "TestCABIRuntimeProviderKeepsCloseSendDistinctFromCancel"
           },
           {
             "case_id": "bidi/close_send_not_cancel",
             "action": "project_bidi_terminal_frame",
-            "selector": "TestBidiCloseSendDiffersFromCancel"
+            "selector": "TestCABIRuntimeProviderKeepsCloseSendDistinctFromCancel"
           },
           {
             "case_id": "bidi/close_send_not_cancel",
             "action": "send_bidi_after_close_send",
-            "selector": "TestBidiCloseSendDiffersFromCancel"
+            "selector": "TestCABIRuntimeProviderKeepsCloseSendDistinctFromCancel"
           },
           {
             "case_id": "bidi/deadline_owner",
             "action": "observe_bidi_typed_timeout",
-            "selector": "TestDirectRuntimeBidiDeadlineIsTypedTimeout"
+            "selector": "TestCABIRuntimeProviderOwnsBidiReceiveDeadline"
           },
           {
             "case_id": "bidi/deadline_owner",
             "action": "open_bidi_with_deadline",
-            "selector": "TestDirectRuntimeBidiDeadlineIsTypedTimeout"
+            "selector": "TestCABIRuntimeProviderOwnsBidiReceiveDeadline"
           },
           {
             "case_id": "bidi/deadline_owner",
             "action": "release_timed_out_bidi",
-            "selector": "TestDirectRuntimeBidiDeadlineIsTypedTimeout"
+            "selector": "TestCABIRuntimeProviderOwnsBidiReceiveDeadline"
           },
           {
             "case_id": "bidi/deadline_owner",
             "action": "retry_bidi_after_deadline_cleanup",
-            "selector": "TestDirectRuntimeBidiDeadlineIsTypedTimeout"
+            "selector": "TestCABIRuntimeProviderOwnsBidiReceiveDeadline"
           },
           {
             "case_id": "bidi/dispatch_provider",
             "action": "dispatch_bidi_draft",
-            "selector": "TestDirectRuntimeTransportBidiOverUnixSocket"
+            "selector": "TestCABIRuntimeProviderDispatchesBidiBeforeTerminal"
           },
           {
             "case_id": "bidi/dispatch_provider",
             "action": "observe_bidi_provider_frame_after_dispatch",
-            "selector": "TestDirectRuntimeTransportBidiOverUnixSocket"
+            "selector": "TestCABIRuntimeProviderDispatchesBidiBeforeTerminal"
           },
           {
             "case_id": "bidi/dispatch_provider",
             "action": "observe_bidi_terminal_after_dispatch",
-            "selector": "TestDirectRuntimeTransportBidiOverUnixSocket"
+            "selector": "TestCABIRuntimeProviderDispatchesBidiBeforeTerminal"
           },
           {
             "case_id": "bidi/frame0_required",
             "action": "open_bidi_without_frame0",
-            "selector": "TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry"
+            "selector": "TestCABIRuntimeProviderRejectsMissingBidiFrameZero"
           },
           {
             "case_id": "bidi/frame0_required",
             "action": "reject_before_runtime_session_entry",
-            "selector": "TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry"
+            "selector": "TestCABIRuntimeProviderRejectsMissingBidiFrameZero"
           },
           {
             "case_id": "stream/backpressure_bound",
             "action": "overflow_bidi_callback_queue",
-            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+            "selector": "TestCABIRuntimeProviderEnforcesCallbackBackpressure"
           },
           {
             "case_id": "stream/backpressure_bound",
             "action": "overflow_stream_callback_queue",
-            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+            "selector": "TestCABIRuntimeProviderEnforcesCallbackBackpressure"
           },
           {
             "case_id": "stream/backpressure_bound",
             "action": "project_bidi_backpressure_terminal",
-            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+            "selector": "TestCABIRuntimeProviderEnforcesCallbackBackpressure"
           },
           {
             "case_id": "stream/backpressure_bound",
             "action": "project_stream_backpressure_terminal",
-            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+            "selector": "TestCABIRuntimeProviderEnforcesCallbackBackpressure"
           }
         ]
       },
       "python": {
         "implementation": {
-          "identity": "direct_runtime_provider",
+          "identity": "cabi_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
-          "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
-          "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "path": "sdk/python/easynet_sdk/_cabi.py",
+          "sha256": "e10e75ad1961e48007168884420d4c82a6beb5beb93a1fcbeea86f039bbfca66",
+          "interface": "CABIRuntimeTransport",
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
             "case_id": "bidi/cancel_request",
             "action": "open_bidi",
-            "selector": "test_bidi_cancel_request_is_non_terminal"
+            "selector": "test_cabi_provider_requests_bidi_cancel_before_canonical_terminal"
           },
           {
             "case_id": "bidi/cancel_request",
             "action": "reject_synthetic_terminal_cancel_ack",
-            "selector": "test_bidi_cancel_request_is_non_terminal"
+            "selector": "test_cabi_provider_requests_bidi_cancel_before_canonical_terminal"
           },
           {
             "case_id": "bidi/cancel_request",
             "action": "release_bidi_after_cancel_request",
-            "selector": "test_bidi_cancel_request_is_non_terminal"
+            "selector": "test_cabi_provider_requests_bidi_cancel_before_canonical_terminal"
           },
           {
             "case_id": "bidi/cancel_request",
             "action": "request_bidi_cancel",
-            "selector": "test_bidi_cancel_request_is_non_terminal"
+            "selector": "test_cabi_provider_requests_bidi_cancel_before_canonical_terminal"
           },
           {
             "case_id": "bidi/close_send_not_cancel",
             "action": "close_bidi",
-            "selector": "test_close_send_differs_from_cancel"
+            "selector": "test_cabi_provider_keeps_close_send_distinct_from_cancel"
           },
           {
             "case_id": "bidi/close_send_not_cancel",
             "action": "close_bidi_send",
-            "selector": "test_close_send_differs_from_cancel"
+            "selector": "test_cabi_provider_keeps_close_send_distinct_from_cancel"
           },
           {
             "case_id": "bidi/close_send_not_cancel",
             "action": "open_bidi",
-            "selector": "test_close_send_differs_from_cancel"
+            "selector": "test_cabi_provider_keeps_close_send_distinct_from_cancel"
           },
           {
             "case_id": "bidi/close_send_not_cancel",
             "action": "project_bidi_terminal_frame",
-            "selector": "test_close_send_differs_from_cancel"
+            "selector": "test_cabi_provider_keeps_close_send_distinct_from_cancel"
           },
           {
             "case_id": "bidi/close_send_not_cancel",
             "action": "send_bidi_after_close_send",
-            "selector": "test_close_send_differs_from_cancel"
+            "selector": "test_cabi_provider_keeps_close_send_distinct_from_cancel"
           },
           {
             "case_id": "bidi/deadline_owner",
             "action": "observe_bidi_typed_timeout",
-            "selector": "test_direct_runtime_bidi_deadline_is_typed_timeout"
+            "selector": "test_cabi_provider_owns_bidi_receive_deadline"
           },
           {
             "case_id": "bidi/deadline_owner",
             "action": "open_bidi_with_deadline",
-            "selector": "test_direct_runtime_bidi_deadline_is_typed_timeout"
+            "selector": "test_cabi_provider_owns_bidi_receive_deadline"
           },
           {
             "case_id": "bidi/deadline_owner",
             "action": "release_timed_out_bidi",
-            "selector": "test_direct_runtime_bidi_deadline_is_typed_timeout"
+            "selector": "test_cabi_provider_owns_bidi_receive_deadline"
           },
           {
             "case_id": "bidi/deadline_owner",
             "action": "retry_bidi_after_deadline_cleanup",
-            "selector": "test_direct_runtime_bidi_deadline_is_typed_timeout"
+            "selector": "test_cabi_provider_owns_bidi_receive_deadline"
           },
           {
             "case_id": "bidi/dispatch_provider",
             "action": "dispatch_bidi_draft",
-            "selector": "test_direct_runtime_bidi_provider_json_uses_terminal_receipt"
+            "selector": "test_cabi_provider_dispatches_bidi_before_terminal"
           },
           {
             "case_id": "bidi/dispatch_provider",
             "action": "observe_bidi_provider_frame_after_dispatch",
-            "selector": "test_direct_runtime_bidi_provider_json_uses_terminal_receipt"
+            "selector": "test_cabi_provider_dispatches_bidi_before_terminal"
           },
           {
             "case_id": "bidi/dispatch_provider",
             "action": "observe_bidi_terminal_after_dispatch",
-            "selector": "test_direct_runtime_bidi_provider_json_uses_terminal_receipt"
+            "selector": "test_cabi_provider_dispatches_bidi_before_terminal"
           },
           {
             "case_id": "bidi/frame0_required",
             "action": "open_bidi_without_frame0",
-            "selector": "test_direct_bidi_rejects_missing_frame0_before_session_entry"
+            "selector": "test_cabi_provider_rejects_missing_bidi_frame_zero"
           },
           {
             "case_id": "bidi/frame0_required",
             "action": "reject_before_runtime_session_entry",
-            "selector": "test_direct_bidi_rejects_missing_frame0_before_session_entry"
+            "selector": "test_cabi_provider_rejects_missing_bidi_frame_zero"
           },
           {
             "case_id": "stream/backpressure_bound",
             "action": "overflow_bidi_callback_queue",
-            "selector": "test_stream_and_bidi_backpressure_bounds"
+            "selector": "test_cabi_provider_enforces_callback_backpressure"
           },
           {
             "case_id": "stream/backpressure_bound",
             "action": "overflow_stream_callback_queue",
-            "selector": "test_stream_and_bidi_backpressure_bounds"
+            "selector": "test_cabi_provider_enforces_callback_backpressure"
           },
           {
             "case_id": "stream/backpressure_bound",
             "action": "project_bidi_backpressure_terminal",
-            "selector": "test_stream_and_bidi_backpressure_bounds"
+            "selector": "test_cabi_provider_enforces_callback_backpressure"
           },
           {
             "case_id": "stream/backpressure_bound",
             "action": "project_stream_backpressure_terminal",
-            "selector": "test_stream_and_bidi_backpressure_bounds"
+            "selector": "test_cabi_provider_enforces_callback_backpressure"
           }
         ]
       }
@@ -17337,12 +17375,12 @@
     "ability_invocation_facade": {
       "go": {
         "implementation": {
-          "identity": "runtime_ability_facade",
+          "identity": "ability_invocation_facade",
           "owner_path": "sdk/go/",
           "path": "sdk/go/runtime_ability.go",
           "sha256": "3941a5b9fd90830c48855e39d3d21dfb7e8b25ae75127643b7958cfdd822ce1e",
           "interface": "RuntimeAbilityClient",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
@@ -17469,7 +17507,7 @@
           "path": "sdk/python/easynet_sdk/ability_invocation.py",
           "sha256": "c72ee40799da0c664b1ab06405b9f3f114db0d17db0713883e666759523e8f90",
           "interface": "AbilityInvocationClient",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
@@ -17598,7 +17636,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
           "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
@@ -17640,7 +17678,7 @@
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
           "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
           "interface": "RuntimeConnector",
-          "revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
         },
         "step_evidence": [
           {
@@ -18738,6 +18776,7 @@
       "BidiSession.MaxBufferedFrames": "42972921a3b0ee881a228196d8731ce31d057880c431ca7565832400e2601ccd",
       "BidiSession.Receive": "2d10b3b2c25305ac4ffe51abbf5dfc338b4ffb0ecfde5a76287fc446e40ec675",
       "BidiSession.ReceivedFrames": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1",
+      "BidiSession.RuntimeState": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68",
       "BidiSession.Send": "9352bcb2ece59c9455f3af83d69a88d901a7d79f292814a2cd024ce0a186c2f7",
       "BidiSession.SentFrames": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1",
       "BidiSession.SessionID": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
@@ -19315,6 +19354,17 @@
       "InvocationHandleEvent.State": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "InvocationHandleEvent.Terminal": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a",
       "InvocationLedgerRecord": "742482fa1d32c186917df5be8296eaba62d0f128a921715caba0547603430b07",
+      "InvocationLifecycleAccepted": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3",
+      "InvocationLifecycleAdmitted": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d",
+      "InvocationLifecycleCancelled": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56",
+      "InvocationLifecycleCompleted": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758",
+      "InvocationLifecycleDispatched": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2",
+      "InvocationLifecycleFailed": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7",
+      "InvocationLifecycleRunning": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40",
+      "InvocationLifecycleState": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
+      "InvocationLifecycleState.IsTerminal": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a",
+      "InvocationLifecycleTimedOut": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914",
+      "InvocationLifecycleUnspecified": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391",
       "InvocationReceiptAnchor": "63170d3f1ebd0c88bb72fac4bd78424f0016a7b1cb767eb8d06e2c22fe82b6dc",
       "InvocationReceiptChainSummary": "56f2798f9eebd4a57786491601bded81b5d46d98ee7dcdcebc5856c3ee142a10",
       "InvocationResult": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
@@ -19555,6 +19605,7 @@
       "ParseDirectoryEntry": "096fb3f73878da52c00d3d09ec95853b0b4c26bd10c78a8c1dae85d6228fb947",
       "ParseDirectoryEvent": "ef5c283c775fc321d38ed7482902539ecffd28f71e4c148157edcb7ce7c336c4",
       "ParseErrorCode": "0ed251e58ba44a39f9bb4489b0897eda97714abaa426b26cd80c2a633a3b1d3e",
+      "ParseInvocationLifecycleState": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3",
       "ParseURA": "14c6a492b159e3131d38855fad1920faf1d1a647a949b12546f228a8db2da4ed",
       "ParseURAParts": "d11edc67a1aa1edb8107f4aa870327fa79a8c3155ddc376bb6ca75ed46b91bde",
       "ParsedAbility": "89ce73b53f90061a1e9a492ac2a2e6870389361c4d03e8f3640293ec725b0d25",
@@ -20096,6 +20147,7 @@
       "RuntimeReceipt.InputHashHex": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RuntimeReceipt.InvocationID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RuntimeReceipt.InvocationNonceBase64": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
+      "RuntimeReceipt.LifecycleState": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302",
       "RuntimeReceipt.OutputHashHex": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RuntimeReceipt.ParentReceipts": "6331f7e54bdd628168f66b9db7fa6ef601e5267f41b2590a1d9ad527c6c48b8a",
       "RuntimeReceipt.PayloadBase64": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
@@ -20419,6 +20471,7 @@
       "StreamHandle.Events": "9a09885890b0f0de6aa011e4388b29ea89aed3a80ca528760f680721b2f7377f",
       "StreamHandle.MaxBufferedEvents": "42972921a3b0ee881a228196d8731ce31d057880c431ca7565832400e2601ccd",
       "StreamHandle.Next": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099",
+      "StreamHandle.RuntimeState": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93",
       "StreamHandle.State": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93",
       "StreamHandle.StreamID": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "StreamHandle.TerminalEvent": "59153d154c7738159475d55a899ad55454107d69ab5d8926822d383583154db3",
@@ -20987,19 +21040,20 @@
       "BidiOutcome.session_id": "8560b2473d6859e52710e9ec7f6660f1fe743f4c53d80552156f96b11d8214a3",
       "BidiOutcome.state": "e7b3a2513a6c2b1f40e499d1a537e81be30574d340653369643b6bbcfeaecd6c",
       "BidiOutcome.terminal": "30d72b0cb2f24a12f30ebba7243c1137c081850d6a42a5c74e4261146f1b237f",
-      "BidiSession": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d",
-      "BidiSession.cancel": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c",
-      "BidiSession.close": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94",
-      "BidiSession.close_send": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb",
+      "BidiSession": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70",
+      "BidiSession.cancel": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74",
+      "BidiSession.close": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86",
+      "BidiSession.close_send": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77",
       "BidiSession.from_json": "17e2b5713a828a1ec5a91023d57084d296905f5fa4ddaa68e30571ddb6a61f1d",
       "BidiSession.max_buffered_frames": "3fece62ee089c966c5665b3144a62f7ffec5829e3e7b5622993416ad68977043",
-      "BidiSession.receive": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216",
+      "BidiSession.receive": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304",
       "BidiSession.received_frames": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b",
-      "BidiSession.send": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001",
+      "BidiSession.runtime_state": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412",
+      "BidiSession.send": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f",
       "BidiSession.sent_frames": "c851680df1e23164a31869a3ccca6b6f938ce365c6f19260a3d88bca8bd594cb",
       "BidiSession.session_id": "8560b2473d6859e52710e9ec7f6660f1fe743f4c53d80552156f96b11d8214a3",
       "BidiSession.state": "d585863787177a4e239dd3ccfa454bbfff5d380f6e2b449a2cd19609a41a00b6",
-      "BidiSession.terminal_frame": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de",
+      "BidiSession.terminal_frame": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a",
       "BidiSession.transport": "290d9bc22ac9ccac281e67127f536c98f4400b31f3560c3e3a9d7a4b7258f3f8",
       "BidiSessionAdapter": "3cbab7e8c7ddf188d9bcf13213b086971e7c8cffb28979b8cb58f6e45d48ded2",
       "BidiSessionAdapter.cancel": "058474ddbe78b305fccf00397e1333c34486ed66ee01c9cf1536525f89b517b8",
@@ -21495,7 +21549,7 @@
       "InvocationLedgerRecord.trace_id": "03d7e6faba324de2e0e517760388ff5eafe8cab83dc6957ea88b41fa3fabdec1",
       "InvocationLedgerRecord.usage": "6b883dfe05ef3e4fdb17e3c552af514ef1572d3d8098060b263dadcdf36b4122",
       "InvocationLedgerRecord.visibility": "9fc15f616a5acab7929573e25e063c92c0b25377c0da51a2bd77308f06ac052f",
-      "InvocationLifecycleState": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90",
+      "InvocationLifecycleState": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3",
       "InvocationLifecycleState.ACCEPTED": "b09a1053eafabe0226548ced0120c4ead1942ce40bd5fb483ed7fbb19c0a5892",
       "InvocationLifecycleState.ADMITTED": "9e1601125338d14bbaa93a3c863bbd41b0baafaf9b4e8dd8aa44d9797adf5ff3",
       "InvocationLifecycleState.CANCELLED": "0f667eb264f0769b90eec60327c68fb360538b06903ccca60c4ccc4007b00558",
@@ -21505,6 +21559,7 @@
       "InvocationLifecycleState.RUNNING": "054cd01c20f06ffde8fe6c98529267926c3aaf096b705ae4de099b6ca68ce6d0",
       "InvocationLifecycleState.TIMED_OUT": "49b27322fd67d9766215e9ec82d73afb2566406f8958a68472139f9e9f995a56",
       "InvocationLifecycleState.UNSPECIFIED": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6",
+      "InvocationLifecycleState.from_wire_name": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe",
       "InvocationLifecycleState.is_terminal": "4b096ea4f492161fdb91b3f3215c0109ffddc3e9bdca420e060c4616f59e46aa",
       "InvocationObjectAdapter": "0ea34f4a01d6a8f0fa461f26819b1fd4afdbad23543c47bba6c22e0666636de8",
       "InvocationObjectAdapter.bidi": "ff1d4c19f1c5bda2b694e5892b0e3d69231c0d595b8e003dfad5d6cc180c486c",
@@ -22145,7 +22200,7 @@
       "RuntimeReadiness.lifecycle_state": "044e286b60d382303017641654f42c1a9f976147b0f7bd6ab9427eb52c4f9242",
       "RuntimeReadiness.messages": "2a4966c647cc1a870bee85864135b96b2e7fb987628956c7ba7232741b90be3a",
       "RuntimeReadiness.ready": "7c456ebf1ff4b45467134a8b48eaa86e57748c46401a4ba16a61a43602166cb8",
-      "RuntimeReceipt": "f56152e720b50ec2da568e9a3ce02f6a01a047e9cf48c22196388023562db9f5",
+      "RuntimeReceipt": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8",
       "RuntimeReceipt.ability_binding": "c2530cf1997f67cec32ee41c6532207f8e54a98bf0e21670a1dc4c0b3716a26d",
       "RuntimeReceipt.authority_binding": "1c02afca84b9f00bf8363dd707f37576fd4d56b5d5b71b33b5ed688fa0d61eaf",
       "RuntimeReceipt.authority_binding_kind": "7420740be59c5dd4e50b4c8dcd2b5d9e537afc56f6d9395a72d42ee8c5421314",
@@ -22168,6 +22223,7 @@
       "RuntimeReceipt.input_hash_hex": "0bbfe12875f3c5e1218bc7cf982054a4d4655a3bd5cc70ec652bfb0b61fd0cbb",
       "RuntimeReceipt.invocation_id": "fcd0f94c05a3ac592d12c81828f8201a52a5ad61ed73d32f573075c59628a13a",
       "RuntimeReceipt.invocation_nonce_base64": "8a5dbde1516bf007a303123e9da17c0431b4172eb4fbc9f2ac1f6ac6c8366374",
+      "RuntimeReceipt.lifecycle_state": "2e4ea9cc7e7db9cc31c3ca634de41db0974f2e17d2446c112232b5d7b32ad705",
       "RuntimeReceipt.output_hash_hex": "880f1bfa0069eb35b11896e03e28bef48694a6485785c523348b92195e8d44e8",
       "RuntimeReceipt.parent_receipts": "ee7174e0588c27a13cc28d1e8ed257ab21b6b28eda116a4baef63ad381f30f08",
       "RuntimeReceipt.payload_base64": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f",
@@ -22190,7 +22246,7 @@
       "RuntimeReceipt.to_json_dict": "5b4cdd43ec5246a90c5889394b1d1cb4f9d087d443b0ec36a0e5be3723df8e29",
       "RuntimeReceipt.usage": "4a431c4168679aafa50f828d1b9198b05dd191ea4cb9307c6a447d1e0245d8dd",
       "RuntimeReceipt.validate_proof_facts": "bfabb9feee81db3df56141740d1faffc311f800d44f26b4c654a2e873457c3ce",
-      "RuntimeReceipt.validate_summary": "405ecdd2f4ec8559b2851273d01de760d416201e7eb82f6654cb6d69bfbbd4e3",
+      "RuntimeReceipt.validate_summary": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429",
       "RuntimeReceiptAgentBinding": "0674055c2cf05da9859f79850926083bc1524a19e712387f1857e934b76fba31",
       "RuntimeReceiptAgentBinding.profile": "221b38e18308a16f8131a568b327e020d585c1bd1c12042772263845500c32aa",
       "RuntimeReceiptAgentBinding.ura": "80f41a6fa966df5deadc60f6b52860cfa4cbf63f9c474fc0f6f01bc555488d65",
@@ -22467,16 +22523,17 @@
       "StreamEvent.terminal": "49bf11e88f0575ba2774194666bb3011b8e2936217f1c28a77770390c390a672",
       "StreamEvent.terminal_receipt": "a8162fe5cc0b582c483d8902b6004f8fbdb67e1023d5ebe3510ff818051e06d7",
       "StreamEvent.transport_terminal": "993efdda602d23c48e917f0c3509e5d9c2ef4c1e59d36614acc0c1fb7eb9f672",
-      "StreamHandle": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7",
-      "StreamHandle.cancel": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48",
-      "StreamHandle.close": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493",
+      "StreamHandle": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92",
+      "StreamHandle.cancel": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695",
+      "StreamHandle.close": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589",
       "StreamHandle.events": "dcb6d458daae438058efc490fc470741580e89cda6c9ede1881c9ae39cb8b111",
       "StreamHandle.from_json": "1cad0dd84649e105e9fa636f1482d35a259f02d31c9ef1493bd2939c9abc6353",
       "StreamHandle.max_buffered_events": "82073cc3af67401d2aee1d0de7fa046825c035019efdc802d687754307cd44a5",
-      "StreamHandle.next": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e",
+      "StreamHandle.next": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891",
+      "StreamHandle.runtime_state": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7",
       "StreamHandle.state": "45da429165fea81af87c3c336dd16ad936643719aec7d2a1a1952cede41cbf56",
       "StreamHandle.stream_id": "eb1cc7c438d6ba3be2d98e5eb4ff4f33a66a803abf6a5663bf5caff806f6df04",
-      "StreamHandle.terminal_event": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987",
+      "StreamHandle.terminal_event": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510",
       "StreamHandle.transport": "73a546071924ce6161dd9d820e20e5037f8ea735daca8680bc3d87a482db1618",
       "StreamState": "41e8f913855c1c703da1d9eff56752b45c268d3c45ebbb477fbc5bdad7ee50d7",
       "StreamState.CANCELLED": "1a48ae3fc1ac566d109a572996164ffc7cb6595c804532616107e8aaf914d181",
@@ -24579,13 +24636,13 @@
     }
   ],
   "dependency_revisions": {
-    "axon_sdk": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+    "axon_sdk": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
   },
   "provider_implementations": [
     {
       "language": "go",
       "identity": "direct_runtime_provider",
-      "production_owner": "EasyNet daemon provider",
+      "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/direct_runtime.go",
       "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
@@ -24598,16 +24655,14 @@
         "runtime_connection",
         "runtime_lifecycle",
         "terminal_receipt_facts",
-        "unary_invoke",
-        "stream",
-        "bidi"
+        "unary_invoke"
       ],
-      "axon_revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+      "axon_revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
     },
     {
       "language": "python",
       "identity": "direct_runtime_provider",
-      "production_owner": "EasyNet daemon provider",
+      "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/direct_runtime.py",
       "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
@@ -24620,16 +24675,46 @@
         "runtime_connection",
         "runtime_lifecycle",
         "terminal_receipt_facts",
-        "unary_invoke",
-        "stream",
-        "bidi"
+        "unary_invoke"
       ],
-      "axon_revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+      "axon_revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
     },
     {
       "language": "go",
-      "identity": "runtime_ability_facade",
-      "production_owner": "EasyNet daemon provider",
+      "identity": "cabi_runtime_provider",
+      "production_owner": "canonical runtime provider",
+      "owner_path": "sdk/go/",
+      "path": "sdk/go/cabi_runtime.go",
+      "sha256": "ab6620f6a7b30aaddec6f85144c498bdfae916fe9cab71d01155267f3fa92914",
+      "interface": "CABIRuntimeTransport",
+      "interface_path": "sdk/go/cabi_runtime.go",
+      "interface_sha256": "ab6620f6a7b30aaddec6f85144c498bdfae916fe9cab71d01155267f3fa92914",
+      "capability_ids": [
+        "stream",
+        "bidi"
+      ],
+      "axon_revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+    },
+    {
+      "language": "python",
+      "identity": "cabi_runtime_provider",
+      "production_owner": "canonical runtime provider",
+      "owner_path": "sdk/python/easynet_sdk/",
+      "path": "sdk/python/easynet_sdk/_cabi.py",
+      "sha256": "e10e75ad1961e48007168884420d4c82a6beb5beb93a1fcbeea86f039bbfca66",
+      "interface": "CABIRuntimeTransport",
+      "interface_path": "sdk/python/easynet_sdk/_cabi.py",
+      "interface_sha256": "e10e75ad1961e48007168884420d4c82a6beb5beb93a1fcbeea86f039bbfca66",
+      "capability_ids": [
+        "stream",
+        "bidi"
+      ],
+      "axon_revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+    },
+    {
+      "language": "go",
+      "identity": "ability_invocation_facade",
+      "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/runtime_ability.go",
       "sha256": "3941a5b9fd90830c48855e39d3d21dfb7e8b25ae75127643b7958cfdd822ce1e",
@@ -24639,12 +24724,12 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+      "axon_revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
     },
     {
       "language": "python",
       "identity": "ability_invocation_facade",
-      "production_owner": "EasyNet daemon provider",
+      "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/ability_invocation.py",
       "sha256": "c72ee40799da0c664b1ab06405b9f3f114db0d17db0713883e666759523e8f90",
@@ -24654,14 +24739,14 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "43cec35329fe51a300f1eb0b7476eb78d62d698b"
+      "axon_revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
     }
   ],
   "inventory_source_revisions": {
-    "rust": "43cec35329fe51a300f1eb0b7476eb78d62d698b",
+    "rust": "9752a8c57b05b0def9c42104d034cfce5cdd64a3",
     "c_abi": "current_checkout",
     "go": "current_checkout",
-    "python": "43cec35329fe51a300f1eb0b7476eb78d62d698b",
+    "python": "9752a8c57b05b0def9c42104d034cfce5cdd64a3",
     "node": "current_checkout",
     "java": "current_checkout",
     "swift": "current_checkout"

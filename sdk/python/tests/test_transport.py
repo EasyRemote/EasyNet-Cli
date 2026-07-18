@@ -607,7 +607,12 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                     "sequence": 1,
                     "kind": "terminal",
                     "terminal": True,
-                    "terminal_receipt": {"receipt_ura": "easynet:///r/test/receipt"},
+                    "terminal_receipt": {
+                        "receipt_ura": (
+                            "easynet:///r/test/resource/agent.test.sdk/"
+                            "invocation/invocation-1/receipt"
+                        )
+                    },
                 }
             ]
         )

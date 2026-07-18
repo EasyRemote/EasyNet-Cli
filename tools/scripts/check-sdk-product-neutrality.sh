@@ -6,7 +6,11 @@ cd "$ROOT"
 CONCEPTS="${SDK_CONCEPT_MANIFEST:-$ROOT/sdk/conformance/canonical-public-api.json}"
 CONCEPT_VALIDATOR="$ROOT/sdk/conformance/sdk_concepts.py"
 EDGE_ADAPTER_POLICY="$ROOT/sdk/conformance/edge_adapter_policy.py"
-PYTHON_BIN="${PYTHON:-python3}"
+source "$ROOT/sdk/conformance/python_toolchain.sh"
+source "$ROOT/sdk/conformance/toolchain_path.sh"
+resolve_sdk_toolchain_path "$ROOT"
+resolve_sdk_python_toolchain "$ROOT"
+PYTHON_BIN="$SDK_CONFORMANCE_PYTHON"
 
 fail() {
   echo "sdk-product-neutrality: $*" >&2

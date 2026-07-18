@@ -6,6 +6,7 @@ from easynet_sdk import (
     ConnectOptions,
     DaemonControl,
     ErrorCode,
+    BidiFrame,
     BidiState,
     BidiStreamDescriptor,
     RuntimeHostRole,
@@ -22,6 +23,7 @@ from easynet_sdk._cabi import (
     CABIRuntimeTransport,
     CLILibrary,
     EXPECTED_ABI_VERSION,
+    MAX_CABI_CALLBACK_QUEUE,
     _platform_library_candidates,
     _project_cabi_ordered_event,
 )
@@ -101,10 +103,14 @@ class FakeRawCABI:
         self.handle_frees: list[tuple[int, int]] = []
         self.stream_closes: list[int] = []
         self.stream_cancels: list[int] = []
+        self.stream_callbacks: dict[int, tuple[object, object]] = {}
         self.bidi_sends: list[dict[str, object]] = []
         self.bidi_close_sends: list[int] = []
         self.bidi_closes: list[int] = []
         self.bidi_cancels: list[int] = []
+        self.bidi_callbacks: dict[int, tuple[object, object]] = {}
+        self.bidi_open_requests: list[dict[str, object]] = []
+        self.overflow_callbacks = False
         self.daemon_starts: list[dict[str, object]] = []
         self.daemon_attaches: list[dict[str, object]] = []
         self.daemon_discovers: list[dict[str, object]] = []
@@ -403,33 +409,88 @@ class FakeRawCABI:
     ) -> int:
         _ = handle, invocation_json
         out_stream_id._obj.value = 4001
-        self._callback(
-            callback,
-            user_data,
-            b'{"sequence":1,"kind":"terminal","terminal":true}',
-        )
+        self.stream_callbacks[4001] = (callback, user_data)
+        if self.overflow_callbacks:
+            for sequence in range(1, MAX_CABI_CALLBACK_QUEUE + 2):
+                self._callback(
+                    callback,
+                    user_data,
+                    json.dumps(
+                        {
+                            "sequence": sequence,
+                            "kind": "data",
+                            "state": "Open",
+                            "terminal": False,
+                        },
+                        separators=(",", ":"),
+                    ).encode("utf-8"),
+                )
+        else:
+            self._callback(
+                callback,
+                user_data,
+                b'{"sequence":1,"kind":"data","state":"Open",'
+                b'"terminal":false,"payload_json":{"provider":"cabi"}}',
+            )
         return 0
 
     def _invocation_stream_cancel(self, handle, stream_id) -> int:
         _ = handle
-        self.stream_cancels.append(int(stream_id.value))
+        native_id = int(stream_id.value)
+        self.stream_cancels.append(native_id)
+        callback_state = self.stream_callbacks.get(native_id)
+        if callback_state is not None:
+            self._callback(
+                *callback_state,
+                b'{"sequence":2,"kind":"terminal","state":"Cancelled",'
+                b'"terminal":true,"terminal_receipt":'
+                b'{"state":"Cancelled","cleanup_complete":true}}',
+            )
         return 0
 
     def _invocation_stream_close(self, handle, stream_id) -> int:
         _ = handle
-        self.stream_closes.append(int(stream_id.value))
+        native_id = int(stream_id.value)
+        self.stream_closes.append(native_id)
+        self.stream_callbacks.pop(native_id, None)
         return 0
 
     def _invocation_bidi_open(
         self, handle, invocation_json, callback, user_data, out_bidi_id
     ) -> int:
-        _ = handle, invocation_json
+        _ = handle
+        request = json.loads(invocation_json.value.decode("utf-8"))
+        self.bidi_open_requests.append(request)
+        if not request.get("bidi_streams"):
+            self.last_error_json = (
+                b'{"code":"INVALID_ARGUMENT","stage":"cabi","message":'
+                b'"bidi frame0 is required","retry":"never","details":{}}'
+            )
+            return 1
         out_bidi_id._obj.value = 5001
-        self._callback(
-            callback,
-            user_data,
-            b'{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true}',
-        )
+        self.bidi_callbacks[5001] = (callback, user_data)
+        if self.overflow_callbacks:
+            for sequence in range(1, MAX_CABI_CALLBACK_QUEUE + 2):
+                self._callback(
+                    callback,
+                    user_data,
+                    json.dumps(
+                        {
+                            "sequence": sequence,
+                            "kind": "data",
+                            "stream_id": 1,
+                            "terminal": False,
+                        },
+                        separators=(",", ":"),
+                    ).encode("utf-8"),
+                )
+        else:
+            self._callback(
+                callback,
+                user_data,
+                b'{"sequence":1,"kind":"data","stream_id":1,'
+                b'"terminal":false,"payload_json":{"provider":"cabi"}}',
+            )
         return 0
 
     def _invocation_bidi_send(self, handle, bidi_id, frame_json) -> int:
@@ -444,12 +505,23 @@ class FakeRawCABI:
 
     def _invocation_bidi_close(self, handle, bidi_id) -> int:
         _ = handle
-        self.bidi_closes.append(int(bidi_id.value))
+        native_id = int(bidi_id.value)
+        self.bidi_closes.append(native_id)
+        self.bidi_callbacks.pop(native_id, None)
         return 0
 
     def _invocation_bidi_cancel(self, handle, bidi_id) -> int:
         _ = handle
-        self.bidi_cancels.append(int(bidi_id.value))
+        native_id = int(bidi_id.value)
+        self.bidi_cancels.append(native_id)
+        callback_state = self.bidi_callbacks.get(native_id)
+        if callback_state is not None:
+            self._callback(
+                *callback_state,
+                b'{"sequence":2,"kind":"terminal","stream_id":1,'
+                b'"terminal":true,"terminal_receipt":'
+                b'{"state":"Cancelled","cleanup_complete":true}}',
+            )
         return 0
 
 
@@ -572,24 +644,119 @@ class CABITransportTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
 
-    def test_cabi_stream_and_bidi_cancel_are_non_terminal_requests(self) -> None:
+    def test_cabi_provider_requests_stream_cancel_before_canonical_terminal(
+        self,
+    ) -> None:
+        raw, stream_provider, stream_cancel, stream_terminal, stream = (
+            self._observe_stream_lifecycle()
+        )
+
+        self.assertFalse(stream_provider.terminal)
+        self.assertEqual(stream_cancel.state, StreamState.CANCEL_REQUESTED)
+        self.assertFalse(stream_cancel.cancelled)
+        self.assertFalse(stream_cancel.terminal)
+        self.assertTrue(stream_terminal.terminal)
+        self.assertIsNotNone(stream_terminal.terminal_receipt)
+        self.assertEqual(raw.stream_cancels, [4001])
+        self.assertEqual(stream.runtime_state, StreamState.TERMINAL_FRAME_SEEN)
+
+    def test_cabi_provider_dispatches_stream_before_terminal(self) -> None:
+        _, stream_provider, _, stream_terminal, _ = self._observe_stream_lifecycle()
+
+        self.assertFalse(stream_provider.terminal)
+        self.assertEqual(stream_provider.payload_json, {"provider": "cabi"})
+        self.assertLess(stream_provider.sequence, stream_terminal.sequence)
+        self.assertIsNotNone(stream_terminal.terminal_receipt)
+
+    def test_cabi_provider_preserves_stream_order_and_single_terminal(self) -> None:
+        _, stream_provider, _, stream_terminal, stream = (
+            self._observe_stream_lifecycle()
+        )
+
+        self.assertEqual(stream_provider.sequence, 1)
+        self.assertEqual(stream_terminal.sequence, 2)
+        self.assertEqual(len(stream.events), 2)
+        self.assertEqual(sum(event.terminal for event in stream.events), 1)
+        self.assertEqual(stream.state, StreamState.CLOSED)
+        self.assertEqual(stream.runtime_state, StreamState.TERMINAL_FRAME_SEEN)
+
+    def test_cabi_provider_requests_bidi_cancel_before_canonical_terminal(
+        self,
+    ) -> None:
+        raw, bidi_provider, bidi_cancel, bidi_terminal, session = (
+            self._observe_bidi_lifecycle()
+        )
+
+        self.assertFalse(bidi_provider.terminal)
+        self.assertEqual(bidi_cancel.state, BidiState.CANCEL_REQUESTED)
+        self.assertFalse(bidi_cancel.terminal)
+        self.assertTrue(bidi_terminal.terminal)
+        self.assertIsNotNone(bidi_terminal.terminal_receipt)
+        self.assertEqual(raw.bidi_cancels, [5001])
+        self.assertEqual(session.runtime_state, BidiState.TERMINAL)
+
+    def test_cabi_provider_dispatches_bidi_before_terminal(self) -> None:
+        _, bidi_provider, _, bidi_terminal, session = self._observe_bidi_lifecycle()
+
+        self.assertFalse(bidi_provider.terminal)
+        self.assertEqual(bidi_provider.payload_json, {"provider": "cabi"})
+        self.assertIsNotNone(bidi_terminal.terminal_receipt)
+        self.assertEqual(session.state, BidiState.CLOSED)
+        self.assertEqual(session.runtime_state, BidiState.TERMINAL)
+
+    def _observe_stream_lifecycle(self):
         raw = FakeRawCABI()
         runtime = RuntimeClient(
             CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
         )
+        self.addCleanup(runtime.close)
 
         stream = runtime.invoke_stream(complete_draft())
+        stream_provider = stream.next()
         stream_cancel = stream.cancel("client stop")
-
-        self.assertEqual(stream_cancel.state, StreamState.CANCEL_REQUESTED)
-        self.assertFalse(stream_cancel.cancelled)
-        self.assertFalse(stream_cancel.terminal)
-        self.assertEqual(stream.state, StreamState.CANCEL_REQUESTED)
         stream_terminal = stream.next()
-        self.assertTrue(stream_terminal.terminal)
-        self.assertEqual(stream.state, StreamState.TERMINAL_FRAME_SEEN)
-        self.assertEqual(raw.stream_cancels, [4001])
-        self.assertEqual(raw.stream_closes, [])
+        stream.close()
+        return raw, stream_provider, stream_cancel, stream_terminal, stream
+
+    def _observe_bidi_lifecycle(self):
+        raw = FakeRawCABI()
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+        )
+        self.addCleanup(runtime.close)
+        session = runtime.open_bidi(
+            complete_draft(),
+            (
+                BidiStreamDescriptor(
+                    stream_id=1, content_type="application/json", ordering="STRICT"
+                ),
+            ),
+        )
+        bidi_provider = session.receive()
+        bidi_cancel = session.cancel("client stop")
+        bidi_terminal = session.receive()
+        session.close()
+        return raw, bidi_provider, bidi_cancel, bidi_terminal, session
+
+    def test_cabi_provider_enforces_callback_backpressure(self) -> None:
+        raw = FakeRawCABI()
+        raw.overflow_callbacks = True
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+        )
+        self.addCleanup(runtime.close)
+
+        stream = runtime.invoke_stream(complete_draft())
+        stream_failure = stream.next()
+
+        self._assert_backpressure_failure(
+            stream_failure.terminal,
+            stream_failure.transport_terminal,
+            stream_failure.error,
+        )
+        self.assertEqual(stream.state, StreamState.FAILED)
+        self.assertEqual(stream.runtime_state, StreamState.OPEN)
+        stream.close()
 
         session = runtime.open_bidi(
             complete_draft(),
@@ -599,16 +766,127 @@ class CABITransportTests(unittest.TestCase):
                 ),
             ),
         )
-        bidi_cancel = session.cancel("client stop")
+        bidi_failure = session.receive()
 
-        self.assertEqual(bidi_cancel.state, BidiState.CANCEL_REQUESTED)
-        self.assertFalse(bidi_cancel.terminal)
-        self.assertEqual(session.state, BidiState.CANCEL_REQUESTED)
-        bidi_terminal = session.receive()
-        self.assertTrue(bidi_terminal.terminal)
-        self.assertEqual(session.state, BidiState.TERMINAL)
-        self.assertEqual(raw.bidi_cancels, [5001])
-        self.assertEqual(raw.bidi_closes, [])
+        self._assert_backpressure_failure(
+            bidi_failure.terminal,
+            bidi_failure.transport_terminal,
+            bidi_failure.error,
+        )
+        self.assertEqual(session.state, BidiState.FAILED)
+        self.assertEqual(session.runtime_state, BidiState.OPEN)
+        session.close()
+
+    def test_cabi_provider_owns_stream_receive_deadline(self) -> None:
+        raw = FakeRawCABI()
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+        )
+        self.addCleanup(runtime.close)
+
+        stream = runtime.invoke_stream(complete_draft())
+        stream.next()
+        with self.assertRaises(SDKError) as stream_timeout:
+            stream.next(timeout=0.01)
+        self.assertEqual(stream_timeout.exception.code, ErrorCode.TIMEOUT)
+        self.assertEqual(stream.runtime_state, StreamState.OPEN)
+        stream.close()
+        retry_stream = runtime.invoke_stream(complete_draft())
+        self.assertFalse(retry_stream.next().terminal)
+        retry_stream.close()
+
+    def test_cabi_provider_owns_bidi_receive_deadline(self) -> None:
+        raw = FakeRawCABI()
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+        )
+        self.addCleanup(runtime.close)
+        session = runtime.open_bidi(
+            complete_draft(),
+            (
+                BidiStreamDescriptor(
+                    stream_id=1, content_type="application/json", ordering="STRICT"
+                ),
+            ),
+        )
+        session.receive()
+        with self.assertRaises(SDKError) as bidi_timeout:
+            session.receive(timeout=0.01)
+        self.assertEqual(bidi_timeout.exception.code, ErrorCode.TIMEOUT)
+        self.assertEqual(session.runtime_state, BidiState.OPEN)
+        session.close()
+        retry_bidi = runtime.open_bidi(
+            complete_draft(),
+            (
+                BidiStreamDescriptor(
+                    stream_id=1, content_type="application/json", ordering="STRICT"
+                ),
+            ),
+        )
+        self.assertFalse(retry_bidi.receive().terminal)
+        retry_bidi.close()
+
+    def test_cabi_provider_keeps_close_send_distinct_from_cancel(self) -> None:
+        raw = FakeRawCABI()
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+        )
+        self.addCleanup(runtime.close)
+        session = runtime.open_bidi(
+            complete_draft(),
+            (
+                BidiStreamDescriptor(
+                    stream_id=1, content_type="application/json", ordering="STRICT"
+                ),
+            ),
+        )
+
+        outcome = session.close_send()
+
+        self.assertFalse(outcome.terminal)
+        self.assertEqual(outcome.state, BidiState.HALF_CLOSED_LOCAL)
+        self.assertEqual(session.runtime_state, BidiState.HALF_CLOSED_LOCAL)
+        self.assertEqual(raw.bidi_close_sends, [5001])
+        self.assertEqual(raw.bidi_cancels, [])
+        self.assertFalse(session.receive().terminal)
+        with self.assertRaises(SDKError) as send_after_close:
+            session.send(BidiFrame(sequence=1, kind="data", stream_id=1))
+        self.assertEqual(send_after_close.exception.code, ErrorCode.CANCELLED)
+        with self.assertRaises(SDKError) as receive_timeout:
+            session.receive(timeout=0.01)
+        self.assertEqual(receive_timeout.exception.code, ErrorCode.TIMEOUT)
+        self.assertEqual(raw.bidi_cancels, [])
+        session.close()
+        self.assertEqual(session.runtime_state, BidiState.HALF_CLOSED_LOCAL)
+
+    def test_cabi_provider_rejects_missing_bidi_frame_zero(self) -> None:
+        raw = FakeRawCABI()
+        runtime = RuntimeClient(
+            CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+        )
+        self.addCleanup(runtime.close)
+
+        with self.assertRaises(SDKError) as raised:
+            runtime.open_bidi(complete_draft(), ())
+
+        self.assertEqual(raised.exception.code, ErrorCode.INVALID_ARGUMENT)
+        self.assertEqual(raw.bidi_open_requests, [])
+
+    def _assert_backpressure_failure(
+        self, terminal: bool, transport_terminal: bool, error: object
+    ) -> None:
+        self.assertFalse(terminal)
+        self.assertTrue(transport_terminal)
+        self.assertIsInstance(error, dict)
+        assert isinstance(error, dict)
+        self.assertEqual(error["code"], ErrorCode.ADMISSION_DENIED)
+        self.assertEqual(error["retry"], "after_backoff")
+        details = error["details"]
+        self.assertIsInstance(details, dict)
+        assert isinstance(details, dict)
+        self.assertEqual(details["wire_code"], "RESOURCE_EXHAUSTED")
+        self.assertEqual(details["reason"], "callback_queue_overflow")
+        self.assertTrue(details["bounded_queue"])
 
 
 if __name__ == "__main__":

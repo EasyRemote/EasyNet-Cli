@@ -936,6 +936,22 @@ func (r RuntimeReceipt) HasCausalAnchor() bool {
 	return strings.TrimSpace(r.ReceiptURA) != "" && strings.TrimSpace(r.SelfHashHex) != ""
 }
 
+// LifecycleState returns the canonical typed state carried by this receipt.
+// Receipt projections must never use UNSPECIFIED as a fallback.
+func (r RuntimeReceipt) LifecycleState() (InvocationLifecycleState, error) {
+	state, err := ParseInvocationLifecycleState(r.State)
+	if err != nil {
+		return InvocationLifecycleUnspecified, err
+	}
+	if state == InvocationLifecycleUnspecified {
+		return InvocationLifecycleUnspecified, invalidRuntimePayload(
+			"runtime receipt lifecycle state must not be UNSPECIFIED",
+			nil,
+		)
+	}
+	return state, nil
+}
+
 func (r RuntimeReceipt) ValidateSummary() error {
 	if r.Raw == nil {
 		return invalidRuntimePayload("runtime receipt summary is missing raw proof projection", nil)
@@ -962,6 +978,9 @@ func (r RuntimeReceipt) ValidateSummary() error {
 	}
 	if strings.TrimSpace(r.State) == "" {
 		return invalidRuntimePayload("runtime receipt summary is missing state", nil)
+	}
+	if _, err := r.LifecycleState(); err != nil {
+		return err
 	}
 	if _, err := r.PrevReceiptHash(); err != nil {
 		return err
@@ -1866,7 +1885,11 @@ func validateInvocationResultReceiptPresence(
 	if ok {
 		return invalidRuntimePayload("successful invocation result requires canonical receipt checkpoints", nil)
 	}
-	if normalizeRuntimeReceiptState(terminalState) != "failed" {
+	state, err := ParseInvocationLifecycleState(terminalState)
+	if err != nil {
+		return err
+	}
+	if state != InvocationLifecycleFailed {
 		return invalidRuntimePayload("receipt-free invocation result must use terminal_state Failed", nil)
 	}
 	if failure == nil || !isCanonicalPreAdmissionErrorStage(failure.stage) {
@@ -1910,14 +1933,17 @@ func validateInvocationResultReceiptTopology(
 			nil,
 		)
 	}
-	admissionState := normalizeRuntimeReceiptState(admission.State)
-	if admissionState != "admitted" {
+	admissionState, err := admission.LifecycleState()
+	if err != nil {
+		return err
+	}
+	if admissionState != InvocationLifecycleAdmitted {
 		return invalidRuntimePayload(
 			"admission_receipt does not carry a canonical admission state",
 			nil,
 		)
 	}
-	if normalizeRuntimeReceiptState(admission.ReceiptType) != "admitted" {
+	if admission.ReceiptType != canonicalReceiptType(admissionState) {
 		return invalidRuntimePayload(
 			"admission_receipt does not carry canonical receipt_type admitted",
 			nil,
@@ -1929,28 +1955,33 @@ func validateInvocationResultReceiptTopology(
 			nil,
 		)
 	}
-	terminalReceiptState := normalizeRuntimeReceiptState(terminal.State)
-	switch terminalReceiptState {
-	case "completed", "failed", "timedout", "cancelled":
-	default:
+	terminalReceiptState, err := terminal.LifecycleState()
+	if err != nil {
+		return err
+	}
+	if !terminalReceiptState.IsTerminal() {
 		return invalidRuntimePayload(
 			"terminal_receipt does not carry a canonical terminal state",
 			nil,
 		)
 	}
-	if normalizeRuntimeReceiptState(terminal.ReceiptType) != terminalReceiptState {
+	if terminal.ReceiptType != canonicalReceiptType(terminalReceiptState) {
 		return invalidRuntimePayload(
 			"terminal_receipt receipt_type does not match its terminal state",
 			nil,
 		)
 	}
-	if terminalReceiptState != normalizeRuntimeReceiptState(terminalState) {
+	resultTerminalState, err := ParseInvocationLifecycleState(terminalState)
+	if err != nil {
+		return err
+	}
+	if terminalReceiptState != resultTerminalState {
 		return invalidRuntimePayload(
 			"terminal_receipt state does not match invocation terminal_state",
 			nil,
 		)
 	}
-	if ok != (terminalReceiptState == "completed") {
+	if ok != (terminalReceiptState == InvocationLifecycleCompleted) {
 		return invalidRuntimePayload(
 			"invocation result ok flag does not match terminal receipt state",
 			nil,
@@ -2014,8 +2045,27 @@ func validateInvocationResultReceiptTopology(
 	return nil
 }
 
-func normalizeRuntimeReceiptState(state string) string {
-	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(state), "_", ""))
+func canonicalReceiptType(state InvocationLifecycleState) string {
+	switch state {
+	case InvocationLifecycleAccepted:
+		return "accepted"
+	case InvocationLifecycleAdmitted:
+		return "admitted"
+	case InvocationLifecycleDispatched:
+		return "dispatched"
+	case InvocationLifecycleRunning:
+		return "running"
+	case InvocationLifecycleCompleted:
+		return "completed"
+	case InvocationLifecycleFailed:
+		return "failed"
+	case InvocationLifecycleTimedOut:
+		return "timed_out"
+	case InvocationLifecycleCancelled:
+		return "cancelled"
+	default:
+		return ""
+	}
 }
 
 func decodeRuntimeReceiptSummary(raw json.RawMessage) (*RuntimeReceipt, error) {

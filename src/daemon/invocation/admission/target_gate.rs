@@ -25,6 +25,7 @@ use tonic::Status;
 
 use crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot;
 use crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts;
+use crate::daemon::federation::resolver_contract::NegativeReason;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::child_invocation_builder::{
     ChildInvocationAuthority, ChildInvocationBuildFailure, ChildInvocationBuildInput,
@@ -425,7 +426,7 @@ pub(crate) fn route_negative_message(failure: &ResolveRouteFailure) -> String {
 }
 
 pub(crate) fn route_negative_status(failure: ResolveRouteFailure) -> Status {
-    use axon_sdk::pb::axon::v1::NegativeReason;
+    use NegativeReason;
 
     let message = route_negative_message(&failure);
     match failure.reason {
@@ -579,9 +580,10 @@ fn status_from_child_invocation_failure(failure: ChildInvocationBuildFailure) ->
 #[cfg(test)]
 mod tests {
     use super::{local_runtime_authority_ura, route_negative_status};
+    use crate::daemon::federation::resolver_contract::NegativeReason;
     use crate::daemon::invocation::routing::route_resolver::ResolveRouteFailure;
 
-    fn negative_status(reason: axon_sdk::pb::axon::v1::NegativeReason) -> tonic::Status {
+    fn negative_status(reason: NegativeReason) -> tonic::Status {
         route_negative_status(ResolveRouteFailure {
             query_name: "easynet:///r/acme/device/node-a#skill.list".to_string(),
             reason,
@@ -591,8 +593,6 @@ mod tests {
 
     #[test]
     fn resolver_absence_maps_to_not_found() {
-        use axon_sdk::pb::axon::v1::NegativeReason;
-
         for reason in [NegativeReason::Nxdomain, NegativeReason::Nodata] {
             assert_eq!(negative_status(reason).code(), tonic::Code::NotFound);
         }
@@ -600,8 +600,6 @@ mod tests {
 
     #[test]
     fn resolver_policy_and_capacity_reasons_keep_typed_transport_codes() {
-        use axon_sdk::pb::axon::v1::NegativeReason;
-
         assert_eq!(
             negative_status(NegativeReason::Unauthorized).code(),
             tonic::Code::PermissionDenied
@@ -622,8 +620,6 @@ mod tests {
 
     #[test]
     fn resolver_placement_reasons_remain_failed_precondition() {
-        use axon_sdk::pb::axon::v1::NegativeReason;
-
         for reason in [
             NegativeReason::Unspecified,
             NegativeReason::Noroute,

@@ -862,7 +862,7 @@ fn execution_key(binding: &ExecutionBinding) -> (String, String) {
     (binding.language.clone(), binding.case_id.clone())
 }
 
-const GO_CONFORMANCE_BUILD_TAGS: &str = "easynet_direct_runtime";
+const GO_CONFORMANCE_BUILD_TAGS: &str = "easynet_direct_runtime,easynet_cabi";
 
 fn execute_go_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterExecution> {
     let pattern = format!("^{}$", regex::escape(&binding.selector));

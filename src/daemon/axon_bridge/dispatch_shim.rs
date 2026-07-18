@@ -41,6 +41,7 @@ use crate::daemon::axon_bridge::local_runtime_request::{
     SystemInvocationIssuer,
 };
 use crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts;
+use crate::daemon::invocation::dispatch::cancellation::RegisteredInvocationLifecycle;
 
 /// Explicit admission class for a wire-shaped LocalRuntime dispatch.
 #[derive(Debug)]
@@ -353,14 +354,22 @@ async fn dispatch_rpc(
         .await;
     match result {
         Ok((handle, _signed)) => {
-            let lifecycle_key = match cancellations.register(&lifecycle_envelope, handle.clone()) {
-                Ok(key) => key,
-                Err(err) => return cancellation_error_outcome(err),
+            let lifecycle = match RegisteredInvocationLifecycle::register(
+                cancellations.clone(),
+                &lifecycle_envelope,
+                handle.clone(),
+            ) {
+                Ok(lifecycle) => lifecycle,
+                Err(err) => {
+                    let _ = handle.cancel("rpc lifecycle registration failed").await;
+                    let _ = handle.finalized().await;
+                    return cancellation_error_outcome(err);
+                }
             };
             let outcome = drain_to_outcome(handle.clone()).await;
-            if outcome.terminal_receipt.is_some() {
-                cancellations.mark_terminal(&lifecycle_key, handle);
-            }
+            // The lifecycle token is the only authority allowed to retain the
+            // canonical terminal transition in the cancellation registry.
+            let _ = lifecycle.finalized().await;
             outcome
         }
         Err(err) => RpcDispatchOutcome {

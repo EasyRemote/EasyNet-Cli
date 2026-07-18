@@ -1,5 +1,7 @@
 import json
+import threading
 import unittest
+from collections.abc import Callable
 
 from easynet_sdk import (
     BidiFrame,
@@ -55,6 +57,65 @@ class UnsupportedCancelBidiTransport(MemoryBidiTransport):
         )
 
 
+class InterruptedSendBidiTransport(MemoryBidiTransport):
+    def send(self, frame_json: bytes) -> bytes:
+        del frame_json
+        raise TimeoutError("send deadline elapsed")
+
+
+class InterruptedCloseSendBidiTransport(MemoryBidiTransport):
+    def close_send(self) -> bytes:
+        raise SDKError(
+            code=ErrorCode.TIMEOUT,
+            stage="test",
+            retry=RetryHint.SAFE,
+            message="close-send deadline elapsed",
+        )
+
+
+class InterruptedCancelBidiTransport(MemoryBidiTransport):
+    def cancel(self, reason: str) -> bytes:
+        del reason
+        raise SDKError(
+            code=ErrorCode.CANCELLED,
+            stage="test",
+            retry=RetryHint.NEVER,
+            message="cancel request interrupted",
+        )
+
+
+class ConcurrentCancelBidiTransport(MemoryBidiTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.recv_started = threading.Event()
+        self.terminal_ready = threading.Event()
+
+    def recv(self, timeout: float | None = None) -> bytes:
+        self.recv_started.set()
+        if not self.terminal_ready.wait(timeout=timeout or 1.0):
+            raise TimeoutError("terminal frame was not released")
+        return (
+            b'{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,'
+            b'"terminal_receipt":{"receipt_id":"cancelled-1"}}'
+        )
+
+    def cancel(self, reason: str) -> bytes:
+        self.cancel_reason = reason
+        self.terminal_ready.set()
+        return self.cancel_reply
+
+
+def _capture_result(
+    operation: Callable[[], BidiFrame],
+    results: list[BidiFrame],
+    errors: list[BaseException],
+) -> None:
+    try:
+        results.append(operation())
+    except BaseException as exc:
+        errors.append(exc)
+
+
 def new_session(transport: MemoryBidiTransport) -> BidiSession:
     return BidiSession.from_json(
         transport,
@@ -92,6 +153,33 @@ class BidiTests(unittest.TestCase):
         self.assertEqual(ack.sequence, 1)
         self.assertEqual(received.sequence, 1)
         self.assertEqual(session.state, BidiState.OPEN)
+
+    def test_local_operation_interruptions_preserve_open_state(self) -> None:
+        operations: tuple[
+            tuple[MemoryBidiTransport, Callable[[BidiSession], object]], ...
+        ] = (
+            (
+                InterruptedSendBidiTransport(),
+                lambda session: session.send(
+                    BidiFrame(sequence=1, kind="data", stream_id=1)
+                ),
+            ),
+            (
+                InterruptedCloseSendBidiTransport(),
+                lambda session: session.close_send(),
+            ),
+            (
+                InterruptedCancelBidiTransport(),
+                lambda session: session.cancel("client stop"),
+            ),
+        )
+        for transport, operation in operations:
+            with self.subTest(transport=type(transport).__name__):
+                session = new_session(transport)
+                with self.assertRaises((SDKError, TimeoutError)):
+                    operation(session)
+                self.assertEqual(session.state, BidiState.OPEN)
+                self.assertEqual(session.runtime_state, BidiState.OPEN)
 
     def test_bidi_frame_preserves_finalization_checkpoints(self) -> None:
         frame = BidiFrame.from_json(
@@ -148,21 +236,34 @@ class BidiTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, ErrorCode.CANCELLED)
         self.assertEqual(session.state, BidiState.HALF_CLOSED_LOCAL)
 
-    def test_remote_close_then_local_close_send_reaches_terminal(self) -> None:
+    def test_half_close_waits_for_canonical_terminal_frame(self) -> None:
         transport = MemoryBidiTransport(
-            [b'{"sequence":1,"kind":"remote_close_send","stream_id":1}']
+            [
+                b'{"sequence":1,"kind":"remote_close_send","stream_id":1}',
+                b'{"sequence":2,"kind":"terminal","stream_id":1,"terminal":true,'
+                b'"terminal_receipt":{"receipt_id":"completed-1"}}',
+            ]
         )
         session = new_session(transport)
 
         frame = session.receive()
         outcome = session.close_send()
+        with self.assertRaises(SDKError):
+            session.terminal_frame()
+        terminal = session.receive()
         session.close()
 
         self.assertEqual(frame.kind, "remote_close_send")
-        self.assertEqual(outcome.state, BidiState.TERMINAL)
-        self.assertTrue(outcome.terminal)
+        self.assertEqual(outcome.state, BidiState.HALF_CLOSED_LOCAL)
+        self.assertFalse(outcome.terminal)
+        self.assertTrue(terminal.terminal)
+        self.assertEqual(
+            terminal.terminal_receipt,
+            {"receipt_id": "completed-1"},
+        )
         self.assertTrue(transport.closed)
         self.assertEqual(session.state, BidiState.CLOSED)
+        self.assertEqual(session.runtime_state, BidiState.TERMINAL)
 
     def test_terminal_frame_projects_schema_shape(self) -> None:
         transport = MemoryBidiTransport(
@@ -214,6 +315,7 @@ class BidiTests(unittest.TestCase):
         session.close()
         self.assertTrue(transport.closed)
         self.assertEqual(session.state, BidiState.CLOSED)
+        self.assertEqual(session.runtime_state, BidiState.CANCEL_REQUESTED)
 
     def test_cancel_rejects_terminal_outcome(self) -> None:
         transport = MemoryBidiTransport()
@@ -238,6 +340,54 @@ class BidiTests(unittest.TestCase):
         session.close()
         self.assertTrue(session.transport.closed)
         self.assertEqual(session.state, BidiState.CLOSED)
+        self.assertEqual(session.runtime_state, BidiState.OPEN)
+
+    def test_cancel_while_receiving_preserves_canonical_terminal(self) -> None:
+        transport = ConcurrentCancelBidiTransport()
+        session = new_session(transport)
+        received: list[BidiFrame] = []
+        errors: list[BaseException] = []
+        receiver = threading.Thread(
+            target=lambda: _capture_result(session.receive, received, errors),
+            daemon=True,
+        )
+        receiver.start()
+        self.assertTrue(transport.recv_started.wait(timeout=1.0))
+
+        outcome = session.cancel("client disconnected")
+        receiver.join(timeout=1.0)
+
+        self.assertFalse(receiver.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(outcome.state, BidiState.CANCEL_REQUESTED)
+        self.assertEqual(len(received), 1)
+        self.assertTrue(received[0].terminal)
+        self.assertEqual(session.state, BidiState.TERMINAL)
+        self.assertEqual(
+            session.terminal_frame().terminal_receipt,
+            {"receipt_id": "cancelled-1"},
+        )
+
+    def test_second_concurrent_receiver_is_rejected(self) -> None:
+        transport = ConcurrentCancelBidiTransport()
+        session = new_session(transport)
+        received: list[BidiFrame] = []
+        errors: list[BaseException] = []
+        receiver = threading.Thread(
+            target=lambda: _capture_result(session.receive, received, errors),
+            daemon=True,
+        )
+        receiver.start()
+        self.assertTrue(transport.recv_started.wait(timeout=1.0))
+
+        with self.assertRaises(SDKError):
+            session.receive()
+
+        transport.terminal_ready.set()
+        receiver.join(timeout=1.0)
+        self.assertFalse(receiver.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(received), 1)
 
     def test_receive_buffer_bound(self) -> None:
         transport = MemoryBidiTransport(

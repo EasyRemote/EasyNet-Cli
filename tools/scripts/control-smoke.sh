@@ -24,7 +24,7 @@ done
 
 if [ ! -x "$DAEMON_BIN" ] || [ ! -x "$CLI_BIN" ]; then
   echo "[smoke] building easynet + easynet-daemon (debug, product defaults)..."
-  (cd "$REPO_ROOT" && cargo build --bin easynet --bin easynet-daemon)
+  "$REPO_ROOT/tools/scripts/build-daemon-process-set.sh" --bin easynet
 fi
 
 pkill -f "$DAEMON_BIN" 2>/dev/null || true

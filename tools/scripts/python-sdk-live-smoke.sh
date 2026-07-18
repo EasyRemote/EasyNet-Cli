@@ -2,7 +2,7 @@
 # python-sdk-live-smoke.sh — live daemon smoke through the Python SDK facade
 # =========================================================================
 #
-# Builds generic C ABI v5 `libeasynet_cli` and `easynet-daemon`, starts a hermetic daemon through
+# Builds generic C ABI v5 and the complete daemon process set, starts a hermetic daemon through
 # `easynet_sdk.CABIDaemonTransport`, then exercises Runtime Core unary, stream,
 # stream, prepare/sign/submit, and typed terminal failure paths through the Python SDK
 # object model.
@@ -76,8 +76,8 @@ esac
 
 LIB_PATH="$REPO_ROOT/target/debug/libeasynet_cli.${LIB_EXT}"
 
-echo "[python-sdk-live-smoke] rebuilding libeasynet_cli + easynet-daemon..."
-(cd "$REPO_ROOT" && cargo build --lib --bin easynet-daemon)
+echo "[python-sdk-live-smoke] rebuilding libeasynet_cli + daemon process set..."
+"$REPO_ROOT/tools/scripts/build-daemon-process-set.sh" --lib
 
 SMOKE_HOME="$(mktemp -d "/tmp/easynet-python-sdk-smoke.XXXXXX")"
 cleanup() {

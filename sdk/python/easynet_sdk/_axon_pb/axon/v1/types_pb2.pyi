@@ -413,7 +413,7 @@ class _TrustLevelEnumTypeWrapper(google.protobuf.internal.enum_type_wrapper._Enu
     TRUST_LEVEL_ELEVATED: _TrustLevel.ValueType  # 4
     """sensitive operations allowed"""
     TRUST_LEVEL_PRIVILEGED: _TrustLevel.ValueType  # 5
-    """ability installation allowed"""
+    """sensitive runtime operations allowed"""
 
 class TrustLevel(_TrustLevel, metaclass=_TrustLevelEnumTypeWrapper): ...
 
@@ -427,7 +427,7 @@ TRUST_LEVEL_STANDARD: TrustLevel.ValueType  # 3
 TRUST_LEVEL_ELEVATED: TrustLevel.ValueType  # 4
 """sensitive operations allowed"""
 TRUST_LEVEL_PRIVILEGED: TrustLevel.ValueType  # 5
-"""ability installation allowed"""
+"""sensitive runtime operations allowed"""
 global___TrustLevel = TrustLevel
 
 class _NodeRole:
@@ -464,68 +464,6 @@ NODE_ROLE_FULL: NodeRole.ValueType  # 1
 NODE_ROLE_ORCHESTRATOR: NodeRole.ValueType  # 2
 NODE_ROLE_WORKER: NodeRole.ValueType  # 3
 global___NodeRole = NodeRole
-
-class _CapabilityState:
-    ValueType = typing.NewType("ValueType", builtins.int)
-    V: typing_extensions.TypeAlias = ValueType
-
-class _CapabilityStateEnumTypeWrapper(google.protobuf.internal.enum_type_wrapper._EnumTypeWrapper[_CapabilityState.ValueType], builtins.type):
-    DESCRIPTOR: google.protobuf.descriptor.EnumDescriptor
-    CAPABILITY_STATE_UNSPECIFIED: _CapabilityState.ValueType  # 0
-    CAPABILITY_STATE_RECEIVED: _CapabilityState.ValueType  # 1
-    """payload received, not yet verified"""
-    CAPABILITY_STATE_VERIFIED: _CapabilityState.ValueType  # 2
-    """signature + requirements checked"""
-    CAPABILITY_STATE_ADMITTED: _CapabilityState.ValueType  # 3
-    """policy passed"""
-    CAPABILITY_STATE_INSTALLING: _CapabilityState.ValueType  # 4
-    """deploying to node"""
-    CAPABILITY_STATE_INSTALLED: _CapabilityState.ValueType  # 5
-    """code deployed, not yet live"""
-    CAPABILITY_STATE_ACTIVATED: _CapabilityState.ValueType  # 6
-    """live, accepting invocations"""
-    CAPABILITY_STATE_DEACTIVATED: _CapabilityState.ValueType  # 7
-    """suspended/paused — can be re-activated"""
-    CAPABILITY_STATE_ROLLED_BACK: _CapabilityState.ValueType  # 8
-    """reverted to previous version"""
-    CAPABILITY_STATE_REVOKED: _CapabilityState.ValueType  # 9
-    """permanently removed (terminal)"""
-
-class CapabilityState(_CapabilityState, metaclass=_CapabilityStateEnumTypeWrapper):
-    """Capability installation state machine:
-    Received → Verified → Admitted → Installing → Installed → Activated
-                                                            ↕ Deactivated (suspended)
-                                                            → RolledBack
-                                                            → Revoked
-
-    DEACTIVATED serves as the "suspended" state: an ability can be re-activated
-    from DEACTIVATED without re-installation. This is the canonical way to
-    temporarily pause an ability. Transitions:
-      ACTIVATED   → DEACTIVATED  (pause/suspend)
-      DEACTIVATED → ACTIVATED    (resume)
-      DEACTIVATED → REVOKED      (permanent removal)
-    """
-
-CAPABILITY_STATE_UNSPECIFIED: CapabilityState.ValueType  # 0
-CAPABILITY_STATE_RECEIVED: CapabilityState.ValueType  # 1
-"""payload received, not yet verified"""
-CAPABILITY_STATE_VERIFIED: CapabilityState.ValueType  # 2
-"""signature + requirements checked"""
-CAPABILITY_STATE_ADMITTED: CapabilityState.ValueType  # 3
-"""policy passed"""
-CAPABILITY_STATE_INSTALLING: CapabilityState.ValueType  # 4
-"""deploying to node"""
-CAPABILITY_STATE_INSTALLED: CapabilityState.ValueType  # 5
-"""code deployed, not yet live"""
-CAPABILITY_STATE_ACTIVATED: CapabilityState.ValueType  # 6
-"""live, accepting invocations"""
-CAPABILITY_STATE_DEACTIVATED: CapabilityState.ValueType  # 7
-"""suspended/paused — can be re-activated"""
-CAPABILITY_STATE_ROLLED_BACK: CapabilityState.ValueType  # 8
-"""reverted to previous version"""
-CAPABILITY_STATE_REVOKED: CapabilityState.ValueType  # 9
-"""permanently removed (terminal)"""
-global___CapabilityState = CapabilityState
 
 class _InvocationState:
     ValueType = typing.NewType("ValueType", builtins.int)
@@ -2233,45 +2171,6 @@ class ResourceSnapshot(google.protobuf.message.Message):
 global___ResourceSnapshot = ResourceSnapshot
 
 @typing.final
-class DeviceMeta(google.protobuf.message.Message):
-    """Device hardware and OS metadata.
-    Populated on registration, updated on heartbeat if changed.
-    """
-
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    OS_FIELD_NUMBER: builtins.int
-    OS_VERSION_FIELD_NUMBER: builtins.int
-    HARDWARE_MODEL_FIELD_NUMBER: builtins.int
-    ARCHITECTURE_FIELD_NUMBER: builtins.int
-    NETWORK_TYPE_FIELD_NUMBER: builtins.int
-    HOSTNAME_FIELD_NUMBER: builtins.int
-    os: builtins.str
-    """"linux" | "android" | "ios" | "macos" | "windows" """
-    os_version: builtins.str
-    """"14.2", "24.04" """
-    hardware_model: builtins.str
-    """"Raspberry Pi 4B", "iPhone 15 Pro", "MacBook Pro M3" """
-    architecture: builtins.str
-    """"arm64" | "x86_64" | "riscv64" """
-    network_type: builtins.str
-    """"wifi" | "ethernet" | "lte" | "5g" | "offline" """
-    hostname: builtins.str
-    def __init__(
-        self,
-        *,
-        os: builtins.str = ...,
-        os_version: builtins.str = ...,
-        hardware_model: builtins.str = ...,
-        architecture: builtins.str = ...,
-        network_type: builtins.str = ...,
-        hostname: builtins.str = ...,
-    ) -> None: ...
-    def ClearField(self, field_name: typing.Literal["architecture", b"architecture", "hardware_model", b"hardware_model", "hostname", b"hostname", "network_type", b"network_type", "os", b"os", "os_version", b"os_version"]) -> None: ...
-
-global___DeviceMeta = DeviceMeta
-
-@typing.final
 class NodeDescriptor(google.protobuf.message.Message):
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
@@ -2302,9 +2201,6 @@ class NodeDescriptor(google.protobuf.message.Message):
     RESOURCES_FIELD_NUMBER: builtins.int
     REGISTERED_AT_UNIX_MS_FIELD_NUMBER: builtins.int
     LAST_HEARTBEAT_UNIX_MS_FIELD_NUMBER: builtins.int
-    OWNER_ID_FIELD_NUMBER: builtins.int
-    DEVICE_GROUP_FIELD_NUMBER: builtins.int
-    DEVICE_FIELD_NUMBER: builtins.int
     ONLINE_FIELD_NUMBER: builtins.int
     LAST_SEEN_UNIX_MS_FIELD_NUMBER: builtins.int
     ROLE_FIELD_NUMBER: builtins.int
@@ -2315,12 +2211,6 @@ class NodeDescriptor(google.protobuf.message.Message):
     trust_level: global___TrustLevel.ValueType
     registered_at_unix_ms: builtins.int
     last_heartbeat_unix_ms: builtins.int
-    owner_id: builtins.str
-    """─── Device ownership & identity ──────────────────────
-    principal_id of the owning user (structured, not labels)
-    """
-    device_group: builtins.str
-    """"home" | "office" | "lab" | custom group name"""
     online: builtins.bool
     """─── Presence ─────────────────────────────────────────
     online=true means the node heartbeat is within timeout window.
@@ -2350,10 +2240,6 @@ class NodeDescriptor(google.protobuf.message.Message):
 
     @property
     def resources(self) -> global___ResourceSnapshot: ...
-    @property
-    def device(self) -> global___DeviceMeta:
-        """device hardware/OS metadata"""
-
     def __init__(
         self,
         *,
@@ -2368,99 +2254,14 @@ class NodeDescriptor(google.protobuf.message.Message):
         resources: global___ResourceSnapshot | None = ...,
         registered_at_unix_ms: builtins.int = ...,
         last_heartbeat_unix_ms: builtins.int = ...,
-        owner_id: builtins.str = ...,
-        device_group: builtins.str = ...,
-        device: global___DeviceMeta | None = ...,
         online: builtins.bool = ...,
         last_seen_unix_ms: builtins.int = ...,
         role: global___NodeRole.ValueType = ...,
     ) -> None: ...
-    def HasField(self, field_name: typing.Literal["device", b"device", "resources", b"resources"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["abilities", b"abilities", "device", b"device", "device_group", b"device_group", "display_name", b"display_name", "functions", b"functions", "labels", b"labels", "last_heartbeat_unix_ms", b"last_heartbeat_unix_ms", "last_seen_unix_ms", b"last_seen_unix_ms", "node_id", b"node_id", "online", b"online", "owner_id", b"owner_id", "registered_at_unix_ms", b"registered_at_unix_ms", "resources", b"resources", "role", b"role", "state", b"state", "tenant_id", b"tenant_id", "trust_level", b"trust_level"]) -> None: ...
+    def HasField(self, field_name: typing.Literal["resources", b"resources"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["abilities", b"abilities", "display_name", b"display_name", "functions", b"functions", "labels", b"labels", "last_heartbeat_unix_ms", b"last_heartbeat_unix_ms", "last_seen_unix_ms", b"last_seen_unix_ms", "node_id", b"node_id", "online", b"online", "registered_at_unix_ms", b"registered_at_unix_ms", "resources", b"resources", "role", b"role", "state", b"state", "tenant_id", b"tenant_id", "trust_level", b"trust_level"]) -> None: ...
 
 global___NodeDescriptor = NodeDescriptor
-
-@typing.final
-class CapabilityPackageRef(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    PACKAGE_ID_FIELD_NUMBER: builtins.int
-    VERSION_FIELD_NUMBER: builtins.int
-    DIGEST_FIELD_NUMBER: builtins.int
-    package_id: builtins.str
-    version: builtins.str
-    """semver"""
-    digest: builtins.str
-    """sha256 of payload"""
-    def __init__(
-        self,
-        *,
-        package_id: builtins.str = ...,
-        version: builtins.str = ...,
-        digest: builtins.str = ...,
-    ) -> None: ...
-    def ClearField(self, field_name: typing.Literal["digest", b"digest", "package_id", b"package_id", "version", b"version"]) -> None: ...
-
-global___CapabilityPackageRef = CapabilityPackageRef
-
-@typing.final
-class CapabilityDescriptor(google.protobuf.message.Message):
-    DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-    @typing.final
-    class RequirementsEntry(google.protobuf.message.Message):
-        DESCRIPTOR: google.protobuf.descriptor.Descriptor
-
-        KEY_FIELD_NUMBER: builtins.int
-        VALUE_FIELD_NUMBER: builtins.int
-        key: builtins.str
-        value: builtins.str
-        def __init__(
-            self,
-            *,
-            key: builtins.str = ...,
-            value: builtins.str = ...,
-        ) -> None: ...
-        def ClearField(self, field_name: typing.Literal["key", b"key", "value", b"value"]) -> None: ...
-
-    ABILITY_ID_FIELD_NUMBER: builtins.int
-    NAME_FIELD_NUMBER: builtins.int
-    VERSION_FIELD_NUMBER: builtins.int
-    TAGS_FIELD_NUMBER: builtins.int
-    REQUIREMENTS_FIELD_NUMBER: builtins.int
-    SIGNATURE_FIELD_NUMBER: builtins.int
-    PUBLISHER_ID_FIELD_NUMBER: builtins.int
-    PUBLISHED_AT_UNIX_MS_FIELD_NUMBER: builtins.int
-    ability_id: builtins.str
-    name: builtins.str
-    version: builtins.str
-    signature: builtins.bytes
-    """Ed25519 over payload hash"""
-    publisher_id: builtins.str
-    published_at_unix_ms: builtins.int
-    @property
-    def tags(self) -> google.protobuf.internal.containers.RepeatedScalarFieldContainer[builtins.str]:
-        """"vision", "audio", "sensor", etc."""
-
-    @property
-    def requirements(self) -> google.protobuf.internal.containers.ScalarMap[builtins.str, builtins.str]:
-        """"gpu": "required", "os": "linux" """
-
-    def __init__(
-        self,
-        *,
-        ability_id: builtins.str = ...,
-        name: builtins.str = ...,
-        version: builtins.str = ...,
-        tags: collections.abc.Iterable[builtins.str] | None = ...,
-        requirements: collections.abc.Mapping[builtins.str, builtins.str] | None = ...,
-        signature: builtins.bytes = ...,
-        publisher_id: builtins.str = ...,
-        published_at_unix_ms: builtins.int = ...,
-    ) -> None: ...
-    def ClearField(self, field_name: typing.Literal["ability_id", b"ability_id", "name", b"name", "published_at_unix_ms", b"published_at_unix_ms", "publisher_id", b"publisher_id", "requirements", b"requirements", "signature", b"signature", "tags", b"tags", "version", b"version"]) -> None: ...
-
-global___CapabilityDescriptor = CapabilityDescriptor
 
 @typing.final
 class AbilityTarget(google.protobuf.message.Message):

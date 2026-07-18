@@ -7,8 +7,10 @@ VALIDATOR="$REPO_ROOT/sdk/conformance/sdk_matrix.py"
 MATRIX="${1:-$REPO_ROOT/sdk/conformance/sdk-parity-matrix.json}"
 REQUESTED_LANGUAGES="${EASYNET_SDK_PARITY_LANGUAGES:-}"
 source "$REPO_ROOT/sdk/conformance/python_toolchain.sh"
+source "$REPO_ROOT/sdk/conformance/toolchain_path.sh"
 
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
+resolve_sdk_toolchain_path "$REPO_ROOT"
 resolve_sdk_python_toolchain "$REPO_ROOT" pytest
 
 if [[ "${1:-}" == "--self-test" ]]; then

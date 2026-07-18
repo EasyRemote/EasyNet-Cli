@@ -24,7 +24,9 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::BTreeMap;
-use std::time::{Duration, Instant};
+#[cfg(feature = "axon-pb")]
+use std::time::Duration;
+use std::time::Instant;
 
 use serde_json::{json, Value};
 

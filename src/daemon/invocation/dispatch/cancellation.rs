@@ -8,7 +8,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use axon_sdk::invocation::{AxonError, DescriptorBoundEnvelope, InvocationHandle};
+use axon_sdk::invocation::{
+    AxonError, DescriptorBoundEnvelope, FinalizedInvocation, InvocationHandle,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
@@ -65,6 +67,50 @@ struct LifecycleAuthority {
 #[derive(Clone, Default)]
 pub struct InvocationCancellationRegistry {
     inner: Arc<Mutex<RegistryState>>,
+}
+
+/// Registration token binding one admitted descriptor-bound envelope to its
+/// Axon lifecycle handle. Transport adapters retain this token until canonical
+/// finalization, then transition the registry entry to its replayable terminal
+/// state. Local carrier close never performs this transition.
+#[derive(Clone)]
+pub(crate) struct RegisteredInvocationLifecycle {
+    registry: InvocationCancellationRegistry,
+    key: String,
+    handle: InvocationHandle,
+}
+
+impl RegisteredInvocationLifecycle {
+    pub(crate) fn register(
+        registry: InvocationCancellationRegistry,
+        envelope: &DescriptorBoundEnvelope,
+        handle: InvocationHandle,
+    ) -> Result<Self, InvocationCancellationError> {
+        let key = registry.register(envelope, handle.clone())?;
+        Ok(Self {
+            registry,
+            key,
+            handle,
+        })
+    }
+
+    fn mark_terminal(&self) {
+        self.registry.mark_terminal(&self.key, self.handle.clone());
+    }
+
+    pub(crate) async fn finalized(&self) -> Result<FinalizedInvocation, AxonError> {
+        let finalized = self.handle.finalized().await?;
+        self.mark_terminal();
+        Ok(finalized)
+    }
+
+    pub(crate) async fn cancel_and_finalize(
+        &self,
+        reason: impl Into<String>,
+    ) -> Result<FinalizedInvocation, AxonError> {
+        self.handle.cancel(reason).await?;
+        self.finalized().await
+    }
 }
 
 #[derive(Default)]
@@ -150,7 +196,7 @@ impl InvocationCancellationRegistry {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    pub fn register(
+    fn register(
         &self,
         envelope: &DescriptorBoundEnvelope,
         handle: InvocationHandle,
@@ -174,7 +220,7 @@ impl InvocationCancellationRegistry {
         Ok(key)
     }
 
-    pub fn mark_terminal(&self, key: &str, handle: InvocationHandle) {
+    fn mark_terminal(&self, key: &str, handle: InvocationHandle) {
         let mut state = self.lock();
         let Some(entry) = state.entries.remove(key) else {
             return;

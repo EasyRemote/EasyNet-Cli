@@ -56,7 +56,7 @@ done
 
 if [ ! -x "$DAEMON_BIN" ] || [ ! -x "$CLI_BIN" ]; then
   echo "[chat-smoke] building easynet + easynet-daemon (debug, product defaults)..."
-  (cd "$REPO_ROOT" && cargo build --bin easynet --bin easynet-daemon)
+  "$REPO_ROOT/tools/scripts/build-daemon-process-set.sh" --bin easynet
 fi
 
 # Detect mode: pick the first agent name from the registry if present,

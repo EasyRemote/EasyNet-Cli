@@ -10,6 +10,7 @@ from easynet_sdk import (
     ErrorCode,
     InvocationBuilder,
     InvocationHandle,
+    InvocationLifecycleState,
     InvocationResult,
     InvocationSignature,
     PrepareOptions,
@@ -292,14 +293,10 @@ def canonical_runtime_receipt_pair(
     invocation_id: str,
     terminal_state: str = "Completed",
 ) -> tuple[dict[str, object], dict[str, object]]:
-    terminal_types = {
-        "completed": "completed",
-        "failed": "failed",
-        "timedout": "timed_out",
-        "cancelled": "cancelled",
-    }
-    normalized_state = terminal_state.strip().replace("_", "").lower()
-    terminal_type = terminal_types[normalized_state]
+    state = InvocationLifecycleState.from_wire_name(terminal_state)
+    if not state.is_terminal:
+        raise ValueError(f"unsupported terminal fixture state: {terminal_state}")
+    terminal_type = state.name.lower()
     admission = canonical_runtime_receipt(invocation_id, "admitted", "Admitted", 0)
     terminal = canonical_runtime_receipt(
         invocation_id,
@@ -470,8 +467,10 @@ class RuntimeTests(unittest.TestCase):
         mutations = (
             ("admission state", "state", "Running"),
             ("admission receipt type", "receipt_type", "completed"),
+            ("admission receipt type case", "receipt_type", "Admitted"),
             ("terminal state", "state", "Failed"),
             ("terminal receipt type", "receipt_type", "failed"),
+            ("terminal receipt type case", "receipt_type", "Completed"),
             ("terminal index", "index", 0),
             ("terminal cleanup", "cleanup_complete", False),
             ("terminal timestamp", "timestamp_unix_ms", 0),
@@ -507,6 +506,23 @@ class RuntimeTests(unittest.TestCase):
                         )
                     )
                 self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        admission, terminal = canonical_runtime_receipt_pair("inv-1")
+        with self.assertRaises(SDKError) as caught:
+            InvocationResult.from_json(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "tuple": complete_draft().to_json_dict(),
+                        "invocation_id": "inv-1",
+                        "terminal_state": " Completed ",
+                        "admission_receipt": admission,
+                        "terminal_receipt": terminal,
+                        "error": None,
+                    }
+                )
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_invocation_result_accepts_non_adjacent_finalization_checkpoints(
         self,
@@ -624,7 +640,9 @@ class RuntimeTests(unittest.TestCase):
             RuntimeReceipt.from_mapping(receipt)
 
         receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
-        receipt["host_attestation_base64"] = base64.b64encode(bytes([0x73]) * 64).decode()
+        receipt["host_attestation_base64"] = base64.b64encode(
+            bytes([0x73]) * 64
+        ).decode()
         with self.assertRaises(SDKError, msg="self signer with attestation"):
             RuntimeReceipt.from_mapping(receipt)
 
@@ -709,12 +727,12 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_runtime_receipt_proof_facts_required(self) -> None:
-        complete = canonical_runtime_receipt("inv-1", "1", "2", 1)
+        complete = canonical_runtime_receipt("inv-1", "completed", "completed", 1)
         complete["self_hash_hex"] = "aa" * 32
         receipt = RuntimeReceipt.from_required_mapping(complete)
 
-        self.assertEqual(receipt.receipt_type, "1")
-        self.assertEqual(receipt.state, "2")
+        self.assertEqual(receipt.receipt_type, "completed")
+        self.assertEqual(receipt.state, "completed")
         self.assertEqual(receipt.prev_receipt_hash(), bytes(32))
         self.assertEqual(receipt.self_receipt_hash(), b"\xaa" * 32)
 
@@ -724,6 +742,26 @@ class RuntimeTests(unittest.TestCase):
             RuntimeReceipt.from_required_mapping(incomplete)
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_runtime_receipt_owns_fail_closed_lifecycle_projection(self) -> None:
+        receipt = RuntimeReceipt.from_required_mapping(
+            canonical_runtime_receipt("inv-state", "completed", "completed", 1)
+        )
+
+        self.assertIs(receipt.lifecycle_state, InvocationLifecycleState.COMPLETED)
+        self.assertTrue(receipt.lifecycle_state.is_terminal)
+
+        for invalid in ("invented_state", " completed ", "5", "UNSPECIFIED", 5):
+            malformed = canonical_runtime_receipt(
+                "inv-state",
+                "completed",
+                "completed",
+                1,
+            )
+            malformed["state"] = invalid
+            with self.subTest(state=invalid), self.assertRaises(SDKError) as caught:
+                RuntimeReceipt.from_required_mapping(malformed)
+            self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_runtime_receipt_projects_complete_typed_facts(self) -> None:
         complete = canonical_runtime_receipt("inv-typed", "completed", "completed", 1)
@@ -859,7 +897,9 @@ class RuntimeTests(unittest.TestCase):
     def test_runtime_receipt_accepts_binding_hash_proof_without_payload_or_signature(
         self,
     ) -> None:
-        complete = canonical_runtime_receipt("inv-empty-proof", "completed", "completed", 1)
+        complete = canonical_runtime_receipt(
+            "inv-empty-proof", "completed", "completed", 1
+        )
         proof = complete["authority_proof"]
         assert isinstance(proof, dict)
         proof["proof_payload_base64"] = ""

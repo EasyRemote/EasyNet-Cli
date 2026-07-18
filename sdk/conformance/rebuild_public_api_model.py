@@ -30,6 +30,7 @@ from sdk_concepts import (
 ROOT = Path(__file__).resolve().parents[2]
 MODEL = ROOT / "sdk/conformance/canonical-public-api.json"
 MATRIX = ROOT / "sdk/conformance/sdk-parity-matrix.json"
+EXECUTION_MANIFEST = ROOT / "sdk/conformance/runner/execution-manifest.json"
 LANGUAGES = ["rust", "c_abi", "go", "python", "node", "java", "swift"]
 
 # Ordered semantic rules are deliberately narrow. An item matching no rule is an
@@ -371,6 +372,19 @@ def refresh_provider_proof_implementations(model: dict[str, Any]) -> None:
     implementations = model.get("provider_implementations")
     if not isinstance(proofs, dict) or not isinstance(implementations, list):
         raise ValueError("provider proofs and implementations are required")
+    manifest = json.loads(EXECUTION_MANIFEST.read_text(encoding="utf-8"))
+    manifest_bindings: dict[tuple[str, str], str] = {}
+    for binding in manifest.get("bindings", []):
+        if not isinstance(binding, dict):
+            raise ValueError("invalid execution manifest binding")
+        key = (binding.get("language"), binding.get("case_id"))
+        selector = binding.get("selector")
+        if (
+            not all(isinstance(value, str) and value for value in (*key, selector))
+            or key in manifest_bindings
+        ):
+            raise ValueError(f"invalid or duplicate execution manifest binding: {key}")
+        manifest_bindings[key] = selector
 
     for capability_id, languages in proofs.items():
         if not isinstance(languages, dict):
@@ -398,6 +412,19 @@ def refresh_provider_proof_implementations(model: dict[str, Any]) -> None:
                 "interface": implementation["interface"],
                 "revision": implementation["axon_revision"],
             }
+            for step in proof.get("step_evidence", []):
+                if not isinstance(step, dict):
+                    raise ValueError(
+                        f"invalid provider proof step: {capability_id}:{language}"
+                    )
+                key = (language, step.get("case_id"))
+                selector = manifest_bindings.get(key)
+                if selector is None:
+                    raise ValueError(
+                        "provider proof step is not execution-bound: "
+                        f"{capability_id}:{language}:{step.get('case_id')}"
+                    )
+                step["selector"] = selector
 
 
 def main() -> int:
@@ -577,9 +604,8 @@ def main() -> int:
         "runtime_lifecycle",
         "terminal_receipt_facts",
         "unary_invoke",
-        "stream",
-        "bidi",
     ]
+    stream_provider_capabilities = ["stream", "bidi"]
     ability_provider_capabilities = ["ability_invocation_facade"]
     provider_specs = [
         (
@@ -602,7 +628,25 @@ def main() -> int:
         ),
         (
             "go",
-            "runtime_ability_facade",
+            "cabi_runtime_provider",
+            "sdk/go/",
+            "sdk/go/cabi_runtime.go",
+            "CABIRuntimeTransport",
+            "sdk/go/cabi_runtime.go",
+            stream_provider_capabilities,
+        ),
+        (
+            "python",
+            "cabi_runtime_provider",
+            "sdk/python/easynet_sdk/",
+            "sdk/python/easynet_sdk/_cabi.py",
+            "CABIRuntimeTransport",
+            "sdk/python/easynet_sdk/_cabi.py",
+            stream_provider_capabilities,
+        ),
+        (
+            "go",
+            "ability_invocation_facade",
             "sdk/go/",
             "sdk/go/runtime_ability.go",
             "RuntimeAbilityClient",
@@ -635,7 +679,7 @@ def main() -> int:
             {
                 "language": language,
                 "identity": identity,
-                "production_owner": "EasyNet daemon provider",
+                "production_owner": "canonical runtime provider",
                 "owner_path": owner_path,
                 "path": path,
                 "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),

@@ -29,6 +29,7 @@ _CALLBACK_REGISTRY_LOCK = threading.Lock()
 _CALLBACK_INBOXES: dict[int, "_CallbackInbox"] = {}
 _NEXT_CALLBACK_TOKEN = 1
 
+
 class CLILibrary:
     """Typed binding for the generic EasyNet-Cli C ABI v5 surface."""
 
@@ -48,7 +49,9 @@ class CLILibrary:
             if found:
                 candidates.append(found)
             candidates.extend(
-                name for name in _platform_library_candidates() if name not in candidates
+                name
+                for name in _platform_library_candidates()
+                if name not in candidates
             )
         if not candidates:
             raise _transport_error("libeasynet_cli was not found")
@@ -309,7 +312,9 @@ class CLILibrary:
         self._raise_for_code(code)
         return int(out_bidi_id.value)
 
-    def invocation_bidi_send(self, handle: int, bidi_id: int, frame_json: bytes) -> None:
+    def invocation_bidi_send(
+        self, handle: int, bidi_id: int, frame_json: bytes
+    ) -> None:
         code = int(
             self._raw.easynet_invocation_bidi_send(
                 ctypes.c_uint64(handle),
@@ -358,7 +363,10 @@ class CLILibrary:
         self._raw.easynet_error_json.restype = ctypes.c_int32
         self._raw.easynet_string_free.argtypes = [ctypes.c_void_p]
         self._raw.easynet_string_free.restype = None
-        self._raw.easynet_init.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint64)]
+        self._raw.easynet_init.argtypes = [
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_uint64),
+        ]
         self._raw.easynet_init.restype = ctypes.c_int32
         self._raw.easynet_shutdown.argtypes = [ctypes.c_uint64]
         self._raw.easynet_shutdown.restype = ctypes.c_int32
@@ -1014,11 +1022,11 @@ class CABIRuntimeTransport:
         handle_id = control._adapter_handle_id()
         return self.lib.invocation_handle_await(self._require_open(), handle_id)
 
-    def cancel_handle(
-        self, control: InvocationControlCapability, reason: str
-    ) -> bytes:
+    def cancel_handle(self, control: InvocationControlCapability, reason: str) -> bytes:
         handle_id = control._adapter_handle_id()
-        return self.lib.invocation_handle_cancel(self._require_open(), handle_id, reason)
+        return self.lib.invocation_handle_cancel(
+            self._require_open(), handle_id, reason
+        )
 
     def handle_events(self, control: InvocationControlCapability) -> bytes:
         handle_id = control._adapter_handle_id()
@@ -1363,38 +1371,37 @@ class _CallbackInbox:
     _queue: queue_module.Queue[bytes | None] = field(init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _closed: bool = False
-    _failure: SDKError | None = None
+    _failure: bytes | None = None
+    _failure_delivered: bool = False
 
     def __post_init__(self) -> None:
         self._queue = queue_module.Queue(maxsize=self.max_items)
 
     def push(self, raw: bytes) -> None:
         with self._lock:
-            if self._closed or self._failure is not None:
+            if self._closed:
                 return
             try:
                 self._queue.put_nowait(raw)
             except queue_module.Full:
-                self._failure = SDKError(
-                    code=ErrorCode.PROTOCOL,
-                    stage="cabi",
-                    retry=RetryHint.NEVER,
-                    message="C ABI callback queue limit exceeded",
-                )
+                self._failure = _callback_backpressure_failure()
+                self._closed = True
 
     def recv(self, timeout: float | None = None) -> bytes:
         with self._lock:
-            failure = self._failure
-        if failure is not None:
-            raise failure
+            if self._failure is not None and not self._failure_delivered:
+                self._failure_delivered = True
+                return self._failure
         try:
             item = self._queue.get(timeout=timeout)
         except queue_module.Empty:
-            raise TimeoutError("no C ABI callback frame within timeout") from None
-        with self._lock:
-            failure = self._failure
-        if failure is not None:
-            raise failure
+            raise SDKError(
+                code=ErrorCode.TIMEOUT,
+                stage="cabi",
+                retry=RetryHint.SAFE,
+                retryable=True,
+                message="no C ABI callback frame within timeout",
+            ) from None
         if item is None:
             raise _closed_error("C ABI callback inbox is closed")
         return item
@@ -1408,6 +1415,28 @@ class _CallbackInbox:
                 self._queue.put_nowait(None)
             except queue_module.Full:
                 pass
+
+
+def _callback_backpressure_failure() -> bytes:
+    return _json_bytes(
+        {
+            "kind": "error",
+            "state": "Failed",
+            "terminal": False,
+            "transport_terminal": True,
+            "error": {
+                "code": "ADMISSION_DENIED",
+                "stage": "cabi_callback",
+                "message": "C ABI callback queue limit exceeded",
+                "retry": "after_backoff",
+                "details": {
+                    "wire_code": "RESOURCE_EXHAUSTED",
+                    "reason": "callback_queue_overflow",
+                    "bounded_queue": True,
+                },
+            },
+        }
+    )
 
 
 def _register_callback_inbox(inbox: _CallbackInbox) -> int:
@@ -1577,7 +1606,9 @@ def _runtime_endpoints_from_cabi(decoded: dict[str, object]) -> dict[str, object
     raw_endpoints = decoded.get("endpoints")
     if isinstance(raw_endpoints, dict):
         return {
-            "control_endpoint": _optional_json_string(raw_endpoints, "control_endpoint"),
+            "control_endpoint": _optional_json_string(
+                raw_endpoints, "control_endpoint"
+            ),
             "invocation_endpoint": _optional_json_string(
                 raw_endpoints, "invocation_endpoint"
             ),
@@ -1697,9 +1728,7 @@ def _required_string(decoded: dict[str, object], field_name: str) -> str:
     return value
 
 
-def _required_object(
-    decoded: dict[str, object], field_name: str
-) -> dict[str, object]:
+def _required_object(decoded: dict[str, object], field_name: str) -> dict[str, object]:
     value = decoded.get(field_name)
     if not isinstance(value, dict):
         raise SDKError(

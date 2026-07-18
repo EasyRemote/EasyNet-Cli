@@ -19,6 +19,24 @@ type unsupportedCancelBidiTransport struct {
 	memoryBidiTransport
 }
 
+type interruptedSendBidiTransport struct {
+	memoryBidiTransport
+}
+
+type interruptedCloseSendBidiTransport struct {
+	memoryBidiTransport
+}
+
+type interruptedCancelBidiTransport struct {
+	memoryBidiTransport
+}
+
+type concurrentCancelBidiTransport struct {
+	memoryBidiTransport
+	recvStarted chan struct{}
+	releaseRecv chan struct{}
+}
+
 func (*unsupportedCancelBidiTransport) Cancel(context.Context, string) ([]byte, error) {
 	return nil, &SDKError{
 		Code:      ErrNotImplemented,
@@ -27,6 +45,43 @@ func (*unsupportedCancelBidiTransport) Cancel(context.Context, string) ([]byte, 
 		Retryable: false,
 		Message:   "bidi cancellation unsupported",
 	}
+}
+
+func (*interruptedSendBidiTransport) Send(context.Context, []byte) ([]byte, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func (*interruptedCloseSendBidiTransport) CloseSend(context.Context) ([]byte, error) {
+	return nil, &SDKError{
+		Code:      ErrTimeout,
+		Stage:     "test",
+		Retry:     RetrySafe,
+		Retryable: true,
+		Message:   "close-send deadline elapsed",
+	}
+}
+
+func (*interruptedCancelBidiTransport) Cancel(context.Context, string) ([]byte, error) {
+	return nil, &SDKError{
+		Code:      ErrCancelled,
+		Stage:     "test",
+		Retry:     RetryNever,
+		Retryable: false,
+		Message:   "cancel request interrupted",
+	}
+}
+
+func newConcurrentCancelBidiTransport() *concurrentCancelBidiTransport {
+	return &concurrentCancelBidiTransport{
+		recvStarted: make(chan struct{}),
+		releaseRecv: make(chan struct{}),
+	}
+}
+
+func (t *concurrentCancelBidiTransport) Recv(context.Context) ([]byte, error) {
+	close(t.recvStarted)
+	<-t.releaseRecv
+	return []byte(`{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,"terminal_receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}`), nil
 }
 
 func (m *memoryBidiTransport) Send(ctx context.Context, frameJSON []byte) ([]byte, error) {
@@ -64,13 +119,61 @@ func (m *memoryBidiTransport) Cancel(ctx context.Context, reason string) ([]byte
 	return []byte(`{"session_id":"bidi-1","state":"CancelRequested","terminal":false,"reason":"client stop"}`), nil
 }
 
-func newTestBidiSession(t *testing.T, transport *memoryBidiTransport) *BidiSession {
+func newTestBidiSession(t *testing.T, transport BidiTransport) *BidiSession {
 	t.Helper()
 	session, err := NewBidiSessionFromJSON(transport, []byte(`{"session_id":"bidi-1","state":"Open","max_buffered_frames":4}`))
 	if err != nil {
 		t.Fatalf("NewBidiSessionFromJSON: %v", err)
 	}
 	return session
+}
+
+func TestBidiLocalOperationInterruptionsPreserveOpenState(t *testing.T) {
+	frame, err := NewBidiBinaryFrame(1, 1, []byte("hello"), "text/plain")
+	if err != nil {
+		t.Fatalf("NewBidiBinaryFrame: %v", err)
+	}
+	tests := map[string]struct {
+		transport BidiTransport
+		operation func(*BidiSession) error
+	}{
+		"send": {
+			transport: &interruptedSendBidiTransport{},
+			operation: func(session *BidiSession) error {
+				_, err := session.Send(context.Background(), frame)
+				return err
+			},
+		},
+		"close-send": {
+			transport: &interruptedCloseSendBidiTransport{},
+			operation: func(session *BidiSession) error {
+				_, err := session.CloseSend(context.Background())
+				return err
+			},
+		},
+		"cancel": {
+			transport: &interruptedCancelBidiTransport{},
+			operation: func(session *BidiSession) error {
+				_, err := session.Cancel(context.Background(), "client stop")
+				return err
+			},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			session := newTestBidiSession(t, test.transport)
+			if err := test.operation(session); err == nil {
+				t.Fatal("operation accepted a local interruption")
+			}
+			if session.State() != BidiOpen || session.RuntimeState() != BidiOpen {
+				t.Fatalf(
+					"local interruption changed runtime state: state=%s runtime_state=%s",
+					session.State(),
+					session.RuntimeState(),
+				)
+			}
+		})
+	}
 }
 
 func TestBidiSessionSendsAndReceivesOrderedFrames(t *testing.T) {
@@ -223,6 +326,9 @@ func TestBidiRemoteAndLocalHalfCloseWaitForTerminalReceipt(t *testing.T) {
 	if !transport.closed || session.State() != BidiClosed {
 		t.Fatalf("not closed: transport=%v state=%s", transport.closed, session.State())
 	}
+	if session.RuntimeState() != BidiTerminal {
+		t.Fatalf("runtime state = %s, want Terminal after local close", session.RuntimeState())
+	}
 }
 
 func TestBidiTerminalFrameProjectsSchemaShape(t *testing.T) {
@@ -290,6 +396,9 @@ func TestBidiCancelIsNonTerminalRequest(t *testing.T) {
 	if !transport.closed || session.State() != BidiClosed {
 		t.Fatalf("bidi close after cancel did not release transport: closed=%v state=%s", transport.closed, session.State())
 	}
+	if session.RuntimeState() != BidiCancelRequested {
+		t.Fatalf("runtime state = %s, want CancelRequested after local close", session.RuntimeState())
+	}
 }
 
 func TestBidiCancelRejectsTerminalOutcome(t *testing.T) {
@@ -324,6 +433,76 @@ func TestBidiUnsupportedCancelPreservesOpenState(t *testing.T) {
 	}
 	if !transport.closed || session.State() != BidiClosed {
 		t.Fatalf("local release failed: closed=%v state=%s", transport.closed, session.State())
+	}
+	if session.RuntimeState() != BidiOpen {
+		t.Fatalf("runtime state = %s, want Open after local close", session.RuntimeState())
+	}
+}
+
+func TestBidiCancelWhileReceivingWaitsForCanonicalTerminal(t *testing.T) {
+	transport := newConcurrentCancelBidiTransport()
+	session, err := NewBidiSessionFromJSON(transport, []byte(`{"session_id":"bidi-1","state":"Open","max_buffered_frames":4}`))
+	if err != nil {
+		t.Fatalf("NewBidiSessionFromJSON: %v", err)
+	}
+
+	received := make(chan BidiFrame, 1)
+	receiveErrors := make(chan error, 1)
+	go func() {
+		frame, receiveErr := session.Receive(context.Background())
+		if receiveErr != nil {
+			receiveErrors <- receiveErr
+			return
+		}
+		received <- frame
+	}()
+	<-transport.recvStarted
+
+	outcome, err := session.Cancel(context.Background(), "client stop")
+	if err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if outcome.State() != BidiCancelRequested || outcome.Terminal() {
+		t.Fatalf("cancel outcome = %#v", outcome)
+	}
+	close(transport.releaseRecv)
+
+	select {
+	case receiveErr := <-receiveErrors:
+		t.Fatalf("Receive after cancel request: %v", receiveErr)
+	case frame := <-received:
+		if !frame.Terminal() {
+			t.Fatalf("received frame is not terminal: %#v", frame)
+		}
+	}
+	if session.State() != BidiTerminal {
+		t.Fatalf("state = %s, want %s", session.State(), BidiTerminal)
+	}
+	if _, err := session.TerminalFrame(); err != nil {
+		t.Fatalf("TerminalFrame after cancel drain: %v", err)
+	}
+}
+
+func TestBidiRejectsSecondConcurrentReceiver(t *testing.T) {
+	transport := newConcurrentCancelBidiTransport()
+	session, err := NewBidiSessionFromJSON(transport, []byte(`{"session_id":"bidi-1","state":"Open","max_buffered_frames":4}`))
+	if err != nil {
+		t.Fatalf("NewBidiSessionFromJSON: %v", err)
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, receiveErr := session.Receive(context.Background())
+		firstDone <- receiveErr
+	}()
+	<-transport.recvStarted
+
+	if _, err := session.Receive(context.Background()); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("second Receive error = %v, want %s", err, ErrInvalidArgument)
+	}
+	close(transport.releaseRecv)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first Receive: %v", err)
 	}
 }
 

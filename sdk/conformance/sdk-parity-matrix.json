@@ -54698,6 +54698,10 @@
           "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
         },
         {
+          "item": "BidiSession.RuntimeState",
+          "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
+        },
+        {
           "item": "BidiSession.Send",
           "sha256": "9352bcb2ece59c9455f3af83d69a88d901a7d79f292814a2cd024ce0a186c2f7"
         },
@@ -55017,6 +55021,10 @@
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
             },
             {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
+            },
+            {
               "item": "BidiSession.Send",
               "sha256": "9352bcb2ece59c9455f3af83d69a88d901a7d79f292814a2cd024ce0a186c2f7"
             },
@@ -55334,6 +55342,10 @@
             {
               "item": "BidiSession.ReceivedFrames",
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
+            },
+            {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
             },
             {
               "item": "BidiSession.Send",
@@ -55655,6 +55667,10 @@
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
             },
             {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
+            },
+            {
               "item": "BidiSession.Send",
               "sha256": "9352bcb2ece59c9455f3af83d69a88d901a7d79f292814a2cd024ce0a186c2f7"
             },
@@ -55972,6 +55988,10 @@
             {
               "item": "BidiSession.ReceivedFrames",
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
+            },
+            {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
             },
             {
               "item": "BidiSession.Send",
@@ -56293,6 +56313,10 @@
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
             },
             {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
+            },
+            {
               "item": "BidiSession.Send",
               "sha256": "9352bcb2ece59c9455f3af83d69a88d901a7d79f292814a2cd024ce0a186c2f7"
             },
@@ -56610,6 +56634,10 @@
             {
               "item": "BidiSession.ReceivedFrames",
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
+            },
+            {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
             },
             {
               "item": "BidiSession.Send",
@@ -56931,6 +56959,10 @@
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
             },
             {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
+            },
+            {
               "item": "BidiSession.Send",
               "sha256": "9352bcb2ece59c9455f3af83d69a88d901a7d79f292814a2cd024ce0a186c2f7"
             },
@@ -57248,6 +57280,10 @@
             {
               "item": "BidiSession.ReceivedFrames",
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
+            },
+            {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
             },
             {
               "item": "BidiSession.Send",
@@ -57569,6 +57605,10 @@
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
             },
             {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
+            },
+            {
               "item": "BidiSession.Send",
               "sha256": "9352bcb2ece59c9455f3af83d69a88d901a7d79f292814a2cd024ce0a186c2f7"
             },
@@ -57886,6 +57926,10 @@
             {
               "item": "BidiSession.ReceivedFrames",
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
+            },
+            {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
             },
             {
               "item": "BidiSession.Send",
@@ -58207,6 +58251,10 @@
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
             },
             {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
+            },
+            {
               "item": "BidiSession.Send",
               "sha256": "9352bcb2ece59c9455f3af83d69a88d901a7d79f292814a2cd024ce0a186c2f7"
             },
@@ -58524,6 +58572,10 @@
             {
               "item": "BidiSession.ReceivedFrames",
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
+            },
+            {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
             },
             {
               "item": "BidiSession.Send",
@@ -58845,6 +58897,10 @@
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
             },
             {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
+            },
+            {
               "item": "BidiSession.Send",
               "sha256": "9352bcb2ece59c9455f3af83d69a88d901a7d79f292814a2cd024ce0a186c2f7"
             },
@@ -59162,6 +59218,10 @@
             {
               "item": "BidiSession.ReceivedFrames",
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
+            },
+            {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
             },
             {
               "item": "BidiSession.Send",
@@ -59483,6 +59543,10 @@
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
             },
             {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
+            },
+            {
               "item": "BidiSession.Send",
               "sha256": "9352bcb2ece59c9455f3af83d69a88d901a7d79f292814a2cd024ce0a186c2f7"
             },
@@ -59800,6 +59864,10 @@
             {
               "item": "BidiSession.ReceivedFrames",
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
+            },
+            {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
             },
             {
               "item": "BidiSession.Send",
@@ -60121,6 +60189,10 @@
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
             },
             {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
+            },
+            {
               "item": "BidiSession.Send",
               "sha256": "9352bcb2ece59c9455f3af83d69a88d901a7d79f292814a2cd024ce0a186c2f7"
             },
@@ -60438,6 +60510,10 @@
             {
               "item": "BidiSession.ReceivedFrames",
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
+            },
+            {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
             },
             {
               "item": "BidiSession.Send",
@@ -60759,6 +60835,10 @@
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
             },
             {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
+            },
+            {
               "item": "BidiSession.Send",
               "sha256": "9352bcb2ece59c9455f3af83d69a88d901a7d79f292814a2cd024ce0a186c2f7"
             },
@@ -61076,6 +61156,10 @@
             {
               "item": "BidiSession.ReceivedFrames",
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
+            },
+            {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
             },
             {
               "item": "BidiSession.Send",
@@ -61397,6 +61481,10 @@
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
             },
             {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
+            },
+            {
               "item": "BidiSession.Send",
               "sha256": "9352bcb2ece59c9455f3af83d69a88d901a7d79f292814a2cd024ce0a186c2f7"
             },
@@ -61716,6 +61804,10 @@
               "sha256": "da2e74f206abb31a985f95587bdc44b80ee39fd0e5c21d80aaf29d60b52826e1"
             },
             {
+              "item": "BidiSession.RuntimeState",
+              "sha256": "2bd09ca0ef5cf212c2da7e100e31d78643f1f493271fd6e12195856f5d13ff68"
+            },
+            {
               "item": "BidiSession.Send",
               "sha256": "9352bcb2ece59c9455f3af83d69a88d901a7d79f292814a2cd024ce0a186c2f7"
             },
@@ -61878,7 +61970,7 @@
         },
         {
           "item": "BidiSession",
-          "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+          "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
         },
         {
           "item": "BidiSessionAdapter",
@@ -61982,15 +62074,15 @@
         },
         {
           "item": "BidiSession.cancel",
-          "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+          "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
         },
         {
           "item": "BidiSession.close",
-          "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+          "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
         },
         {
           "item": "BidiSession.close_send",
-          "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+          "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
         },
         {
           "item": "BidiSession.max_buffered_frames",
@@ -61998,15 +62090,19 @@
         },
         {
           "item": "BidiSession.receive",
-          "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+          "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
         },
         {
           "item": "BidiSession.received_frames",
           "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
         },
         {
+          "item": "BidiSession.runtime_state",
+          "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+        },
+        {
           "item": "BidiSession.send",
-          "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+          "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
         },
         {
           "item": "BidiSession.sent_frames",
@@ -62022,7 +62118,7 @@
         },
         {
           "item": "BidiSession.terminal_frame",
-          "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+          "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
         },
         {
           "item": "BidiSession.transport",
@@ -62209,7 +62305,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -62313,15 +62409,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -62329,15 +62425,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -62353,7 +62453,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -62540,7 +62640,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -62644,15 +62744,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -62660,15 +62760,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -62684,7 +62788,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -62871,7 +62975,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -62975,15 +63079,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -62991,15 +63095,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -63015,7 +63123,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -63202,7 +63310,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -63306,15 +63414,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -63322,15 +63430,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -63346,7 +63458,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -63533,7 +63645,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -63637,15 +63749,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -63653,15 +63765,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -63677,7 +63793,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -63864,7 +63980,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -63968,15 +64084,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -63984,15 +64100,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -64008,7 +64128,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -64195,7 +64315,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -64299,15 +64419,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -64315,15 +64435,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -64339,7 +64463,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -64526,7 +64650,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -64630,15 +64754,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -64646,15 +64770,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -64670,7 +64798,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -64857,7 +64985,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -64961,15 +65089,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -64977,15 +65105,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -65001,7 +65133,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -65188,7 +65320,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -65292,15 +65424,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -65308,15 +65440,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -65332,7 +65468,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -65519,7 +65655,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -65623,15 +65759,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -65639,15 +65775,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -65663,7 +65803,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -65850,7 +65990,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -65954,15 +66094,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -65970,15 +66110,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -65994,7 +66138,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -66181,7 +66325,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -66285,15 +66429,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -66301,15 +66445,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -66325,7 +66473,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -66512,7 +66660,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -66616,15 +66764,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -66632,15 +66780,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -66656,7 +66808,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -66843,7 +66995,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -66947,15 +67099,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -66963,15 +67115,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -66987,7 +67143,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -67174,7 +67330,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -67278,15 +67434,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -67294,15 +67450,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -67318,7 +67478,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -67505,7 +67665,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -67609,15 +67769,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -67625,15 +67785,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -67649,7 +67813,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -67836,7 +68000,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -67940,15 +68104,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -67956,15 +68120,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -67980,7 +68148,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -68167,7 +68335,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -68271,15 +68439,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -68287,15 +68455,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -68311,7 +68483,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -68498,7 +68670,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -68602,15 +68774,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -68618,15 +68790,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -68642,7 +68818,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -68829,7 +69005,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -68933,15 +69109,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -68949,15 +69125,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -68973,7 +69153,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -69160,7 +69340,7 @@
             },
             {
               "item": "BidiSession",
-              "sha256": "765299fc3f74e458bbc7cd738b67b6db3a951fd9a8e9eb7a763eead74397e79d"
+              "sha256": "e288f80363972cbe6401490d372a0b2d5d7ac16ddc72e3bfb3e975b03bb20e70"
             },
             {
               "item": "BidiSessionAdapter",
@@ -69264,15 +69444,15 @@
             },
             {
               "item": "BidiSession.cancel",
-              "sha256": "ce16a81648da78a786ae3b8bbd49cf4115113837c6464ea00e54c2f1cc71231c"
+              "sha256": "d92abfec3def3e17cd67c046b9ee91ee690e115ba2d289ab8e1bd2ad1a229f74"
             },
             {
               "item": "BidiSession.close",
-              "sha256": "fe8a7f09ee3c352763367433e3821234f20a496b87d78946d8f5cedc75146f94"
+              "sha256": "d8e31fcbfeaa8f5f09e56e9ea8f49aeaf395a13162525fcefaec14cb3d421a86"
             },
             {
               "item": "BidiSession.close_send",
-              "sha256": "f7dbe0a90a3465a834eeb425079c9daf95f364216206177e1768236c6fc0e7bb"
+              "sha256": "5da9285590dae1454b4cc33e8aa9af8a8554d6236c7b238c2c62f95945edfd77"
             },
             {
               "item": "BidiSession.max_buffered_frames",
@@ -69280,15 +69460,19 @@
             },
             {
               "item": "BidiSession.receive",
-              "sha256": "11c6593cd6b0cd94f70ab32266c9910f6e2f09c86d26c7e9f8b9879789492216"
+              "sha256": "50392163d02e3d3030f176ae5fc3f5970d5cc2ba8ceb154bbe2ce5a9111a1304"
             },
             {
               "item": "BidiSession.received_frames",
               "sha256": "8ec1859241b0e004d5f0054695353b93e2a3e9dd54bc0b63f790912a2ab96e8b"
             },
             {
+              "item": "BidiSession.runtime_state",
+              "sha256": "bb1f8fa915ec12d5c2ba8607107085269396a625face91626c9702e92f80f412"
+            },
+            {
               "item": "BidiSession.send",
-              "sha256": "21412092f57bcd1b6819d2632294cf9860cd79eae3c8d55f7bb5d72f7321b001"
+              "sha256": "5a006c1ebd47ed24925cc46395de6dc8a5a6c368b8010c756161b89ccf282d4f"
             },
             {
               "item": "BidiSession.sent_frames",
@@ -69304,7 +69488,7 @@
             },
             {
               "item": "BidiSession.terminal_frame",
-              "sha256": "8cdbe3fd4491eaa095fa6d49f50ea575e79bef3ca3fd06ada0362fca076585de"
+              "sha256": "2c4f78fb7aac3d40460530b93d045405ba4715e8621a2d10b08ad393dd13d28a"
             },
             {
               "item": "BidiSession.transport",
@@ -184975,6 +185159,42 @@
           "sha256": "04695c05a7ceba10597be01960efcfcd0c82594820264a02a19e81b1a2f02c38"
         },
         {
+          "item": "InvocationLifecycleAccepted",
+          "sha256": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3"
+        },
+        {
+          "item": "InvocationLifecycleAdmitted",
+          "sha256": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d"
+        },
+        {
+          "item": "InvocationLifecycleCancelled",
+          "sha256": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56"
+        },
+        {
+          "item": "InvocationLifecycleCompleted",
+          "sha256": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758"
+        },
+        {
+          "item": "InvocationLifecycleDispatched",
+          "sha256": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2"
+        },
+        {
+          "item": "InvocationLifecycleFailed",
+          "sha256": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7"
+        },
+        {
+          "item": "InvocationLifecycleRunning",
+          "sha256": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40"
+        },
+        {
+          "item": "InvocationLifecycleTimedOut",
+          "sha256": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914"
+        },
+        {
+          "item": "InvocationLifecycleUnspecified",
+          "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
+        },
+        {
           "item": "ModeBoth",
           "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
         },
@@ -184997,6 +185217,10 @@
         {
           "item": "NewRuntimeRecoveryReportFromJSON",
           "sha256": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3"
+        },
+        {
+          "item": "ParseInvocationLifecycleState",
+          "sha256": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3"
         },
         {
           "item": "RuntimeConfigInvalid",
@@ -185538,6 +185762,42 @@
               "sha256": "04695c05a7ceba10597be01960efcfcd0c82594820264a02a19e81b1a2f02c38"
             },
             {
+              "item": "InvocationLifecycleAccepted",
+              "sha256": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3"
+            },
+            {
+              "item": "InvocationLifecycleAdmitted",
+              "sha256": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d"
+            },
+            {
+              "item": "InvocationLifecycleCancelled",
+              "sha256": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56"
+            },
+            {
+              "item": "InvocationLifecycleCompleted",
+              "sha256": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758"
+            },
+            {
+              "item": "InvocationLifecycleDispatched",
+              "sha256": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2"
+            },
+            {
+              "item": "InvocationLifecycleFailed",
+              "sha256": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7"
+            },
+            {
+              "item": "InvocationLifecycleRunning",
+              "sha256": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40"
+            },
+            {
+              "item": "InvocationLifecycleTimedOut",
+              "sha256": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914"
+            },
+            {
+              "item": "InvocationLifecycleUnspecified",
+              "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
+            },
+            {
               "item": "ModeBoth",
               "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
@@ -185560,6 +185820,10 @@
             {
               "item": "NewRuntimeRecoveryReportFromJSON",
               "sha256": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3"
+            },
+            {
+              "item": "ParseInvocationLifecycleState",
+              "sha256": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3"
             },
             {
               "item": "RuntimeConfigInvalid",
@@ -186101,6 +186365,42 @@
               "sha256": "04695c05a7ceba10597be01960efcfcd0c82594820264a02a19e81b1a2f02c38"
             },
             {
+              "item": "InvocationLifecycleAccepted",
+              "sha256": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3"
+            },
+            {
+              "item": "InvocationLifecycleAdmitted",
+              "sha256": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d"
+            },
+            {
+              "item": "InvocationLifecycleCancelled",
+              "sha256": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56"
+            },
+            {
+              "item": "InvocationLifecycleCompleted",
+              "sha256": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758"
+            },
+            {
+              "item": "InvocationLifecycleDispatched",
+              "sha256": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2"
+            },
+            {
+              "item": "InvocationLifecycleFailed",
+              "sha256": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7"
+            },
+            {
+              "item": "InvocationLifecycleRunning",
+              "sha256": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40"
+            },
+            {
+              "item": "InvocationLifecycleTimedOut",
+              "sha256": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914"
+            },
+            {
+              "item": "InvocationLifecycleUnspecified",
+              "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
+            },
+            {
               "item": "ModeBoth",
               "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
@@ -186123,6 +186423,10 @@
             {
               "item": "NewRuntimeRecoveryReportFromJSON",
               "sha256": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3"
+            },
+            {
+              "item": "ParseInvocationLifecycleState",
+              "sha256": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3"
             },
             {
               "item": "RuntimeConfigInvalid",
@@ -186664,6 +186968,42 @@
               "sha256": "04695c05a7ceba10597be01960efcfcd0c82594820264a02a19e81b1a2f02c38"
             },
             {
+              "item": "InvocationLifecycleAccepted",
+              "sha256": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3"
+            },
+            {
+              "item": "InvocationLifecycleAdmitted",
+              "sha256": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d"
+            },
+            {
+              "item": "InvocationLifecycleCancelled",
+              "sha256": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56"
+            },
+            {
+              "item": "InvocationLifecycleCompleted",
+              "sha256": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758"
+            },
+            {
+              "item": "InvocationLifecycleDispatched",
+              "sha256": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2"
+            },
+            {
+              "item": "InvocationLifecycleFailed",
+              "sha256": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7"
+            },
+            {
+              "item": "InvocationLifecycleRunning",
+              "sha256": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40"
+            },
+            {
+              "item": "InvocationLifecycleTimedOut",
+              "sha256": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914"
+            },
+            {
+              "item": "InvocationLifecycleUnspecified",
+              "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
+            },
+            {
               "item": "ModeBoth",
               "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
@@ -186686,6 +187026,10 @@
             {
               "item": "NewRuntimeRecoveryReportFromJSON",
               "sha256": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3"
+            },
+            {
+              "item": "ParseInvocationLifecycleState",
+              "sha256": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3"
             },
             {
               "item": "RuntimeConfigInvalid",
@@ -187227,6 +187571,42 @@
               "sha256": "04695c05a7ceba10597be01960efcfcd0c82594820264a02a19e81b1a2f02c38"
             },
             {
+              "item": "InvocationLifecycleAccepted",
+              "sha256": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3"
+            },
+            {
+              "item": "InvocationLifecycleAdmitted",
+              "sha256": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d"
+            },
+            {
+              "item": "InvocationLifecycleCancelled",
+              "sha256": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56"
+            },
+            {
+              "item": "InvocationLifecycleCompleted",
+              "sha256": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758"
+            },
+            {
+              "item": "InvocationLifecycleDispatched",
+              "sha256": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2"
+            },
+            {
+              "item": "InvocationLifecycleFailed",
+              "sha256": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7"
+            },
+            {
+              "item": "InvocationLifecycleRunning",
+              "sha256": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40"
+            },
+            {
+              "item": "InvocationLifecycleTimedOut",
+              "sha256": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914"
+            },
+            {
+              "item": "InvocationLifecycleUnspecified",
+              "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
+            },
+            {
               "item": "ModeBoth",
               "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
@@ -187249,6 +187629,10 @@
             {
               "item": "NewRuntimeRecoveryReportFromJSON",
               "sha256": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3"
+            },
+            {
+              "item": "ParseInvocationLifecycleState",
+              "sha256": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3"
             },
             {
               "item": "RuntimeConfigInvalid",
@@ -187790,6 +188174,42 @@
               "sha256": "04695c05a7ceba10597be01960efcfcd0c82594820264a02a19e81b1a2f02c38"
             },
             {
+              "item": "InvocationLifecycleAccepted",
+              "sha256": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3"
+            },
+            {
+              "item": "InvocationLifecycleAdmitted",
+              "sha256": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d"
+            },
+            {
+              "item": "InvocationLifecycleCancelled",
+              "sha256": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56"
+            },
+            {
+              "item": "InvocationLifecycleCompleted",
+              "sha256": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758"
+            },
+            {
+              "item": "InvocationLifecycleDispatched",
+              "sha256": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2"
+            },
+            {
+              "item": "InvocationLifecycleFailed",
+              "sha256": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7"
+            },
+            {
+              "item": "InvocationLifecycleRunning",
+              "sha256": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40"
+            },
+            {
+              "item": "InvocationLifecycleTimedOut",
+              "sha256": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914"
+            },
+            {
+              "item": "InvocationLifecycleUnspecified",
+              "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
+            },
+            {
               "item": "ModeBoth",
               "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
@@ -187812,6 +188232,10 @@
             {
               "item": "NewRuntimeRecoveryReportFromJSON",
               "sha256": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3"
+            },
+            {
+              "item": "ParseInvocationLifecycleState",
+              "sha256": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3"
             },
             {
               "item": "RuntimeConfigInvalid",
@@ -188353,6 +188777,42 @@
               "sha256": "04695c05a7ceba10597be01960efcfcd0c82594820264a02a19e81b1a2f02c38"
             },
             {
+              "item": "InvocationLifecycleAccepted",
+              "sha256": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3"
+            },
+            {
+              "item": "InvocationLifecycleAdmitted",
+              "sha256": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d"
+            },
+            {
+              "item": "InvocationLifecycleCancelled",
+              "sha256": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56"
+            },
+            {
+              "item": "InvocationLifecycleCompleted",
+              "sha256": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758"
+            },
+            {
+              "item": "InvocationLifecycleDispatched",
+              "sha256": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2"
+            },
+            {
+              "item": "InvocationLifecycleFailed",
+              "sha256": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7"
+            },
+            {
+              "item": "InvocationLifecycleRunning",
+              "sha256": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40"
+            },
+            {
+              "item": "InvocationLifecycleTimedOut",
+              "sha256": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914"
+            },
+            {
+              "item": "InvocationLifecycleUnspecified",
+              "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
+            },
+            {
               "item": "ModeBoth",
               "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
@@ -188375,6 +188835,10 @@
             {
               "item": "NewRuntimeRecoveryReportFromJSON",
               "sha256": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3"
+            },
+            {
+              "item": "ParseInvocationLifecycleState",
+              "sha256": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3"
             },
             {
               "item": "RuntimeConfigInvalid",
@@ -188916,6 +189380,42 @@
               "sha256": "04695c05a7ceba10597be01960efcfcd0c82594820264a02a19e81b1a2f02c38"
             },
             {
+              "item": "InvocationLifecycleAccepted",
+              "sha256": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3"
+            },
+            {
+              "item": "InvocationLifecycleAdmitted",
+              "sha256": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d"
+            },
+            {
+              "item": "InvocationLifecycleCancelled",
+              "sha256": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56"
+            },
+            {
+              "item": "InvocationLifecycleCompleted",
+              "sha256": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758"
+            },
+            {
+              "item": "InvocationLifecycleDispatched",
+              "sha256": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2"
+            },
+            {
+              "item": "InvocationLifecycleFailed",
+              "sha256": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7"
+            },
+            {
+              "item": "InvocationLifecycleRunning",
+              "sha256": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40"
+            },
+            {
+              "item": "InvocationLifecycleTimedOut",
+              "sha256": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914"
+            },
+            {
+              "item": "InvocationLifecycleUnspecified",
+              "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
+            },
+            {
               "item": "ModeBoth",
               "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
@@ -188938,6 +189438,10 @@
             {
               "item": "NewRuntimeRecoveryReportFromJSON",
               "sha256": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3"
+            },
+            {
+              "item": "ParseInvocationLifecycleState",
+              "sha256": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3"
             },
             {
               "item": "RuntimeConfigInvalid",
@@ -189479,6 +189983,42 @@
               "sha256": "04695c05a7ceba10597be01960efcfcd0c82594820264a02a19e81b1a2f02c38"
             },
             {
+              "item": "InvocationLifecycleAccepted",
+              "sha256": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3"
+            },
+            {
+              "item": "InvocationLifecycleAdmitted",
+              "sha256": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d"
+            },
+            {
+              "item": "InvocationLifecycleCancelled",
+              "sha256": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56"
+            },
+            {
+              "item": "InvocationLifecycleCompleted",
+              "sha256": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758"
+            },
+            {
+              "item": "InvocationLifecycleDispatched",
+              "sha256": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2"
+            },
+            {
+              "item": "InvocationLifecycleFailed",
+              "sha256": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7"
+            },
+            {
+              "item": "InvocationLifecycleRunning",
+              "sha256": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40"
+            },
+            {
+              "item": "InvocationLifecycleTimedOut",
+              "sha256": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914"
+            },
+            {
+              "item": "InvocationLifecycleUnspecified",
+              "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
+            },
+            {
               "item": "ModeBoth",
               "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
@@ -189501,6 +190041,10 @@
             {
               "item": "NewRuntimeRecoveryReportFromJSON",
               "sha256": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3"
+            },
+            {
+              "item": "ParseInvocationLifecycleState",
+              "sha256": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3"
             },
             {
               "item": "RuntimeConfigInvalid",
@@ -190042,6 +190586,42 @@
               "sha256": "04695c05a7ceba10597be01960efcfcd0c82594820264a02a19e81b1a2f02c38"
             },
             {
+              "item": "InvocationLifecycleAccepted",
+              "sha256": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3"
+            },
+            {
+              "item": "InvocationLifecycleAdmitted",
+              "sha256": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d"
+            },
+            {
+              "item": "InvocationLifecycleCancelled",
+              "sha256": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56"
+            },
+            {
+              "item": "InvocationLifecycleCompleted",
+              "sha256": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758"
+            },
+            {
+              "item": "InvocationLifecycleDispatched",
+              "sha256": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2"
+            },
+            {
+              "item": "InvocationLifecycleFailed",
+              "sha256": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7"
+            },
+            {
+              "item": "InvocationLifecycleRunning",
+              "sha256": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40"
+            },
+            {
+              "item": "InvocationLifecycleTimedOut",
+              "sha256": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914"
+            },
+            {
+              "item": "InvocationLifecycleUnspecified",
+              "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
+            },
+            {
               "item": "ModeBoth",
               "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
@@ -190064,6 +190644,10 @@
             {
               "item": "NewRuntimeRecoveryReportFromJSON",
               "sha256": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3"
+            },
+            {
+              "item": "ParseInvocationLifecycleState",
+              "sha256": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3"
             },
             {
               "item": "RuntimeConfigInvalid",
@@ -190605,6 +191189,42 @@
               "sha256": "04695c05a7ceba10597be01960efcfcd0c82594820264a02a19e81b1a2f02c38"
             },
             {
+              "item": "InvocationLifecycleAccepted",
+              "sha256": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3"
+            },
+            {
+              "item": "InvocationLifecycleAdmitted",
+              "sha256": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d"
+            },
+            {
+              "item": "InvocationLifecycleCancelled",
+              "sha256": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56"
+            },
+            {
+              "item": "InvocationLifecycleCompleted",
+              "sha256": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758"
+            },
+            {
+              "item": "InvocationLifecycleDispatched",
+              "sha256": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2"
+            },
+            {
+              "item": "InvocationLifecycleFailed",
+              "sha256": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7"
+            },
+            {
+              "item": "InvocationLifecycleRunning",
+              "sha256": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40"
+            },
+            {
+              "item": "InvocationLifecycleTimedOut",
+              "sha256": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914"
+            },
+            {
+              "item": "InvocationLifecycleUnspecified",
+              "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
+            },
+            {
               "item": "ModeBoth",
               "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
@@ -190627,6 +191247,10 @@
             {
               "item": "NewRuntimeRecoveryReportFromJSON",
               "sha256": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3"
+            },
+            {
+              "item": "ParseInvocationLifecycleState",
+              "sha256": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3"
             },
             {
               "item": "RuntimeConfigInvalid",
@@ -191168,6 +191792,42 @@
               "sha256": "04695c05a7ceba10597be01960efcfcd0c82594820264a02a19e81b1a2f02c38"
             },
             {
+              "item": "InvocationLifecycleAccepted",
+              "sha256": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3"
+            },
+            {
+              "item": "InvocationLifecycleAdmitted",
+              "sha256": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d"
+            },
+            {
+              "item": "InvocationLifecycleCancelled",
+              "sha256": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56"
+            },
+            {
+              "item": "InvocationLifecycleCompleted",
+              "sha256": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758"
+            },
+            {
+              "item": "InvocationLifecycleDispatched",
+              "sha256": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2"
+            },
+            {
+              "item": "InvocationLifecycleFailed",
+              "sha256": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7"
+            },
+            {
+              "item": "InvocationLifecycleRunning",
+              "sha256": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40"
+            },
+            {
+              "item": "InvocationLifecycleTimedOut",
+              "sha256": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914"
+            },
+            {
+              "item": "InvocationLifecycleUnspecified",
+              "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
+            },
+            {
               "item": "ModeBoth",
               "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
@@ -191190,6 +191850,10 @@
             {
               "item": "NewRuntimeRecoveryReportFromJSON",
               "sha256": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3"
+            },
+            {
+              "item": "ParseInvocationLifecycleState",
+              "sha256": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3"
             },
             {
               "item": "RuntimeConfigInvalid",
@@ -191731,6 +192395,42 @@
               "sha256": "04695c05a7ceba10597be01960efcfcd0c82594820264a02a19e81b1a2f02c38"
             },
             {
+              "item": "InvocationLifecycleAccepted",
+              "sha256": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3"
+            },
+            {
+              "item": "InvocationLifecycleAdmitted",
+              "sha256": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d"
+            },
+            {
+              "item": "InvocationLifecycleCancelled",
+              "sha256": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56"
+            },
+            {
+              "item": "InvocationLifecycleCompleted",
+              "sha256": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758"
+            },
+            {
+              "item": "InvocationLifecycleDispatched",
+              "sha256": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2"
+            },
+            {
+              "item": "InvocationLifecycleFailed",
+              "sha256": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7"
+            },
+            {
+              "item": "InvocationLifecycleRunning",
+              "sha256": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40"
+            },
+            {
+              "item": "InvocationLifecycleTimedOut",
+              "sha256": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914"
+            },
+            {
+              "item": "InvocationLifecycleUnspecified",
+              "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
+            },
+            {
               "item": "ModeBoth",
               "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
@@ -191753,6 +192453,10 @@
             {
               "item": "NewRuntimeRecoveryReportFromJSON",
               "sha256": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3"
+            },
+            {
+              "item": "ParseInvocationLifecycleState",
+              "sha256": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3"
             },
             {
               "item": "RuntimeConfigInvalid",
@@ -192294,6 +192998,42 @@
               "sha256": "04695c05a7ceba10597be01960efcfcd0c82594820264a02a19e81b1a2f02c38"
             },
             {
+              "item": "InvocationLifecycleAccepted",
+              "sha256": "09cf623c6a58534ad9dca99af6bd784049bf0ee90d2742760183b63c312132a3"
+            },
+            {
+              "item": "InvocationLifecycleAdmitted",
+              "sha256": "f3fadcba0021bbfdc06173535aefaeed0d923682734ccb3b0dcd68a0b853537d"
+            },
+            {
+              "item": "InvocationLifecycleCancelled",
+              "sha256": "b414b5f12b7820433787a4ba07df29e452d4ecff6e95e7bed22447de27cd6d56"
+            },
+            {
+              "item": "InvocationLifecycleCompleted",
+              "sha256": "2e391902e0fe26217f8c073c86fa0184b6b2c51620fb9107fccf2f7572760758"
+            },
+            {
+              "item": "InvocationLifecycleDispatched",
+              "sha256": "74b1daeb01abe3d66578f13c4fc7b5967f858f6a6664d2777c1bba6e53f61bf2"
+            },
+            {
+              "item": "InvocationLifecycleFailed",
+              "sha256": "dbf7afa732270a31d00725a35b6d9af89e3977ec72d0ed3b96d25653a26d61a7"
+            },
+            {
+              "item": "InvocationLifecycleRunning",
+              "sha256": "c90eefaaebcb4c3c0ff83a16793ec0ed9bf9d1dc68e65ee6e6a9f93e19450d40"
+            },
+            {
+              "item": "InvocationLifecycleTimedOut",
+              "sha256": "c5611c23ebdf2018f3289c8e5421af6cf492219ab91422211ffe493323157914"
+            },
+            {
+              "item": "InvocationLifecycleUnspecified",
+              "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
+            },
+            {
               "item": "ModeBoth",
               "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
@@ -192316,6 +193056,10 @@
             {
               "item": "NewRuntimeRecoveryReportFromJSON",
               "sha256": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3"
+            },
+            {
+              "item": "ParseInvocationLifecycleState",
+              "sha256": "5462bb81c0c0716ae17c5de1fd613d4d21b56fcc8196cbda8b6ad2dd551d5ce3"
             },
             {
               "item": "RuntimeConfigInvalid",
@@ -205596,6 +206340,10 @@
           "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
         },
         {
+          "item": "StreamHandle.RuntimeState",
+          "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
+        },
+        {
           "item": "StreamHandle.State",
           "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
         },
@@ -205855,6 +206603,10 @@
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
             },
             {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
+            },
+            {
               "item": "StreamHandle.State",
               "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
@@ -206112,6 +206864,10 @@
             {
               "item": "StreamHandle.Next",
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
+            },
+            {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
             {
               "item": "StreamHandle.State",
@@ -206373,6 +207129,10 @@
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
             },
             {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
+            },
+            {
               "item": "StreamHandle.State",
               "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
@@ -206632,6 +207392,10 @@
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
             },
             {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
+            },
+            {
               "item": "StreamHandle.State",
               "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
@@ -206889,6 +207653,10 @@
             {
               "item": "StreamHandle.Next",
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
+            },
+            {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
             {
               "item": "StreamHandle.State",
@@ -207150,6 +207918,10 @@
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
             },
             {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
+            },
+            {
               "item": "StreamHandle.State",
               "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
@@ -207407,6 +208179,10 @@
             {
               "item": "StreamHandle.Next",
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
+            },
+            {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
             {
               "item": "StreamHandle.State",
@@ -207668,6 +208444,10 @@
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
             },
             {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
+            },
+            {
               "item": "StreamHandle.State",
               "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
@@ -207925,6 +208705,10 @@
             {
               "item": "StreamHandle.Next",
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
+            },
+            {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
             {
               "item": "StreamHandle.State",
@@ -208186,6 +208970,10 @@
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
             },
             {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
+            },
+            {
               "item": "StreamHandle.State",
               "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
@@ -208443,6 +209231,10 @@
             {
               "item": "StreamHandle.Next",
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
+            },
+            {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
             {
               "item": "StreamHandle.State",
@@ -208704,6 +209496,10 @@
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
             },
             {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
+            },
+            {
               "item": "StreamHandle.State",
               "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
@@ -208961,6 +209757,10 @@
             {
               "item": "StreamHandle.Next",
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
+            },
+            {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
             {
               "item": "StreamHandle.State",
@@ -209222,6 +210022,10 @@
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
             },
             {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
+            },
+            {
               "item": "StreamHandle.State",
               "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
@@ -209479,6 +210283,10 @@
             {
               "item": "StreamHandle.Next",
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
+            },
+            {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
             {
               "item": "StreamHandle.State",
@@ -209740,6 +210548,10 @@
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
             },
             {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
+            },
+            {
               "item": "StreamHandle.State",
               "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
@@ -209999,6 +210811,10 @@
               "sha256": "9850f2b7f3e3c769f94f6e1706336db1a6e0369a4e5819c2b8cc8bc134ad5099"
             },
             {
+              "item": "StreamHandle.RuntimeState",
+              "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
+            },
+            {
               "item": "StreamHandle.State",
               "sha256": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93"
             },
@@ -210108,7 +210924,7 @@
         },
         {
           "item": "StreamHandle",
-          "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+          "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
         },
         {
           "item": "StreamState",
@@ -210240,11 +211056,11 @@
         },
         {
           "item": "StreamHandle.cancel",
-          "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+          "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
         },
         {
           "item": "StreamHandle.close",
-          "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+          "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
         },
         {
           "item": "StreamHandle.events",
@@ -210256,7 +211072,11 @@
         },
         {
           "item": "StreamHandle.next",
-          "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+          "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+        },
+        {
+          "item": "StreamHandle.runtime_state",
+          "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
         },
         {
           "item": "StreamHandle.state",
@@ -210268,7 +211088,7 @@
         },
         {
           "item": "StreamHandle.terminal_event",
-          "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+          "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
         },
         {
           "item": "StreamHandle.transport",
@@ -210379,7 +211199,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -210511,11 +211331,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -210527,7 +211347,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -210539,7 +211363,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -210650,7 +211474,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -210782,11 +211606,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -210798,7 +211622,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -210810,7 +211638,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -210921,7 +211749,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -211053,11 +211881,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -211069,7 +211897,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -211081,7 +211913,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -211192,7 +212024,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -211324,11 +212156,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -211340,7 +212172,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -211352,7 +212188,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -211463,7 +212299,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -211595,11 +212431,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -211611,7 +212447,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -211623,7 +212463,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -211734,7 +212574,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -211866,11 +212706,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -211882,7 +212722,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -211894,7 +212738,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -212005,7 +212849,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -212137,11 +212981,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -212153,7 +212997,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -212165,7 +213013,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -212276,7 +213124,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -212408,11 +213256,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -212424,7 +213272,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -212436,7 +213288,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -212547,7 +213399,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -212679,11 +213531,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -212695,7 +213547,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -212707,7 +213563,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -212818,7 +213674,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -212950,11 +213806,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -212966,7 +213822,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -212978,7 +213838,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -213089,7 +213949,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -213221,11 +214081,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -213237,7 +214097,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -213249,7 +214113,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -213360,7 +214224,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -213492,11 +214356,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -213508,7 +214372,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -213520,7 +214388,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -213631,7 +214499,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -213763,11 +214631,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -213779,7 +214647,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -213791,7 +214663,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -213902,7 +214774,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -214034,11 +214906,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -214050,7 +214922,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -214062,7 +214938,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -214173,7 +215049,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -214305,11 +215181,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -214321,7 +215197,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -214333,7 +215213,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -214444,7 +215324,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -214576,11 +215456,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -214592,7 +215472,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -214604,7 +215488,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -214715,7 +215599,7 @@
             },
             {
               "item": "StreamHandle",
-              "sha256": "ac8578d0e7884c5cf0d1768e1a738cdaac1eff342d45aef5416dc473204267b7"
+              "sha256": "4a59ec2031c714082e4ee9c5c143817c8f865ac646304b7555b03173b9c11f92"
             },
             {
               "item": "StreamState",
@@ -214847,11 +215731,11 @@
             },
             {
               "item": "StreamHandle.cancel",
-              "sha256": "6e165e8c76a2ed44011715af7b8c16d925351571705c90b5a1cd20a86065ac48"
+              "sha256": "7ef075fb6de13589b17a9c49b12a6004a7df259fc8614bf4cce115a40cc7a695"
             },
             {
               "item": "StreamHandle.close",
-              "sha256": "3eb84a3529de83f80cfcb06310655da55c30dcbfe5d0e49e36e47f6f5d619493"
+              "sha256": "390d29838c011b8e0ae6048a6dbc945b6a34f95218a482c8a7cdd7814cddf589"
             },
             {
               "item": "StreamHandle.events",
@@ -214863,7 +215747,11 @@
             },
             {
               "item": "StreamHandle.next",
-              "sha256": "ef245f0cb97205b4722fea80fe3c22db177b2f6c2078e284615224e67488118e"
+              "sha256": "502e7952d577007221a31fc613ae109ffc0eea3e74414e0156e1fbda45198891"
+            },
+            {
+              "item": "StreamHandle.runtime_state",
+              "sha256": "fb12dea0d5dd334933589a20590db61c83197e32f5d91b1339b53ec0f2a816d7"
             },
             {
               "item": "StreamHandle.state",
@@ -214875,7 +215763,7 @@
             },
             {
               "item": "StreamHandle.terminal_event",
-              "sha256": "e38b826a07ae093db68459af4acdd8b03fa08acf9a96cb223d29ecf1b3825987"
+              "sha256": "3cc0bff297f788f4b839fc88bc760c7ccdb5b3184f789adee9ec7184eb0dc510"
             },
             {
               "item": "StreamHandle.transport",
@@ -224839,6 +225727,10 @@
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
+          "item": "RuntimeReceipt.LifecycleState",
+          "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+        },
+        {
           "item": "RuntimeReceipt.OutputHashHex",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
@@ -225190,6 +226082,10 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "RuntimeReceipt.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "RuntimeReceipt.OutputHashHex",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -225539,6 +226435,10 @@
             {
               "item": "RuntimeReceipt.InvocationNonceBase64",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeReceipt.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
             },
             {
               "item": "RuntimeReceipt.OutputHashHex",
@@ -225892,6 +226792,10 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "RuntimeReceipt.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "RuntimeReceipt.OutputHashHex",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -226241,6 +227145,10 @@
             {
               "item": "RuntimeReceipt.InvocationNonceBase64",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeReceipt.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
             },
             {
               "item": "RuntimeReceipt.OutputHashHex",
@@ -226594,6 +227502,10 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "RuntimeReceipt.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "RuntimeReceipt.OutputHashHex",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -226943,6 +227855,10 @@
             {
               "item": "RuntimeReceipt.InvocationNonceBase64",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeReceipt.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
             },
             {
               "item": "RuntimeReceipt.OutputHashHex",
@@ -227171,7 +228087,7 @@
       "shape_evidence": [
         {
           "item": "RuntimeReceipt",
-          "sha256": "f56152e720b50ec2da568e9a3ce02f6a01a047e9cf48c22196388023562db9f5"
+          "sha256": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8"
         },
         {
           "item": "RuntimeReceiptAgentBinding",
@@ -227294,6 +228210,10 @@
           "sha256": "8a5dbde1516bf007a303123e9da17c0431b4172eb4fbc9f2ac1f6ac6c8366374"
         },
         {
+          "item": "RuntimeReceipt.lifecycle_state",
+          "sha256": "2e4ea9cc7e7db9cc31c3ca634de41db0974f2e17d2446c112232b5d7b32ad705"
+        },
+        {
           "item": "RuntimeReceipt.output_hash_hex",
           "sha256": "880f1bfa0069eb35b11896e03e28bef48694a6485785c523348b92195e8d44e8"
         },
@@ -227383,7 +228303,7 @@
         },
         {
           "item": "RuntimeReceipt.validate_summary",
-          "sha256": "405ecdd2f4ec8559b2851273d01de760d416201e7eb82f6654cb6d69bfbbd4e3"
+          "sha256": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429"
         },
         {
           "item": "RuntimeReceiptAgentBinding.profile",
@@ -227510,7 +228430,7 @@
           "items": [
             {
               "item": "RuntimeReceipt",
-              "sha256": "f56152e720b50ec2da568e9a3ce02f6a01a047e9cf48c22196388023562db9f5"
+              "sha256": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8"
             },
             {
               "item": "RuntimeReceiptAgentBinding",
@@ -227633,6 +228553,10 @@
               "sha256": "8a5dbde1516bf007a303123e9da17c0431b4172eb4fbc9f2ac1f6ac6c8366374"
             },
             {
+              "item": "RuntimeReceipt.lifecycle_state",
+              "sha256": "2e4ea9cc7e7db9cc31c3ca634de41db0974f2e17d2446c112232b5d7b32ad705"
+            },
+            {
               "item": "RuntimeReceipt.output_hash_hex",
               "sha256": "880f1bfa0069eb35b11896e03e28bef48694a6485785c523348b92195e8d44e8"
             },
@@ -227722,7 +228646,7 @@
             },
             {
               "item": "RuntimeReceipt.validate_summary",
-              "sha256": "405ecdd2f4ec8559b2851273d01de760d416201e7eb82f6654cb6d69bfbbd4e3"
+              "sha256": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429"
             },
             {
               "item": "RuntimeReceiptAgentBinding.profile",
@@ -227849,7 +228773,7 @@
           "items": [
             {
               "item": "RuntimeReceipt",
-              "sha256": "f56152e720b50ec2da568e9a3ce02f6a01a047e9cf48c22196388023562db9f5"
+              "sha256": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8"
             },
             {
               "item": "RuntimeReceiptAgentBinding",
@@ -227972,6 +228896,10 @@
               "sha256": "8a5dbde1516bf007a303123e9da17c0431b4172eb4fbc9f2ac1f6ac6c8366374"
             },
             {
+              "item": "RuntimeReceipt.lifecycle_state",
+              "sha256": "2e4ea9cc7e7db9cc31c3ca634de41db0974f2e17d2446c112232b5d7b32ad705"
+            },
+            {
               "item": "RuntimeReceipt.output_hash_hex",
               "sha256": "880f1bfa0069eb35b11896e03e28bef48694a6485785c523348b92195e8d44e8"
             },
@@ -228061,7 +228989,7 @@
             },
             {
               "item": "RuntimeReceipt.validate_summary",
-              "sha256": "405ecdd2f4ec8559b2851273d01de760d416201e7eb82f6654cb6d69bfbbd4e3"
+              "sha256": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429"
             },
             {
               "item": "RuntimeReceiptAgentBinding.profile",
@@ -228188,7 +229116,7 @@
           "items": [
             {
               "item": "RuntimeReceipt",
-              "sha256": "f56152e720b50ec2da568e9a3ce02f6a01a047e9cf48c22196388023562db9f5"
+              "sha256": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8"
             },
             {
               "item": "RuntimeReceiptAgentBinding",
@@ -228311,6 +229239,10 @@
               "sha256": "8a5dbde1516bf007a303123e9da17c0431b4172eb4fbc9f2ac1f6ac6c8366374"
             },
             {
+              "item": "RuntimeReceipt.lifecycle_state",
+              "sha256": "2e4ea9cc7e7db9cc31c3ca634de41db0974f2e17d2446c112232b5d7b32ad705"
+            },
+            {
               "item": "RuntimeReceipt.output_hash_hex",
               "sha256": "880f1bfa0069eb35b11896e03e28bef48694a6485785c523348b92195e8d44e8"
             },
@@ -228400,7 +229332,7 @@
             },
             {
               "item": "RuntimeReceipt.validate_summary",
-              "sha256": "405ecdd2f4ec8559b2851273d01de760d416201e7eb82f6654cb6d69bfbbd4e3"
+              "sha256": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429"
             },
             {
               "item": "RuntimeReceiptAgentBinding.profile",
@@ -228527,7 +229459,7 @@
           "items": [
             {
               "item": "RuntimeReceipt",
-              "sha256": "f56152e720b50ec2da568e9a3ce02f6a01a047e9cf48c22196388023562db9f5"
+              "sha256": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8"
             },
             {
               "item": "RuntimeReceiptAgentBinding",
@@ -228650,6 +229582,10 @@
               "sha256": "8a5dbde1516bf007a303123e9da17c0431b4172eb4fbc9f2ac1f6ac6c8366374"
             },
             {
+              "item": "RuntimeReceipt.lifecycle_state",
+              "sha256": "2e4ea9cc7e7db9cc31c3ca634de41db0974f2e17d2446c112232b5d7b32ad705"
+            },
+            {
               "item": "RuntimeReceipt.output_hash_hex",
               "sha256": "880f1bfa0069eb35b11896e03e28bef48694a6485785c523348b92195e8d44e8"
             },
@@ -228739,7 +229675,7 @@
             },
             {
               "item": "RuntimeReceipt.validate_summary",
-              "sha256": "405ecdd2f4ec8559b2851273d01de760d416201e7eb82f6654cb6d69bfbbd4e3"
+              "sha256": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429"
             },
             {
               "item": "RuntimeReceiptAgentBinding.profile",
@@ -228866,7 +229802,7 @@
           "items": [
             {
               "item": "RuntimeReceipt",
-              "sha256": "f56152e720b50ec2da568e9a3ce02f6a01a047e9cf48c22196388023562db9f5"
+              "sha256": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8"
             },
             {
               "item": "RuntimeReceiptAgentBinding",
@@ -228989,6 +229925,10 @@
               "sha256": "8a5dbde1516bf007a303123e9da17c0431b4172eb4fbc9f2ac1f6ac6c8366374"
             },
             {
+              "item": "RuntimeReceipt.lifecycle_state",
+              "sha256": "2e4ea9cc7e7db9cc31c3ca634de41db0974f2e17d2446c112232b5d7b32ad705"
+            },
+            {
               "item": "RuntimeReceipt.output_hash_hex",
               "sha256": "880f1bfa0069eb35b11896e03e28bef48694a6485785c523348b92195e8d44e8"
             },
@@ -229078,7 +230018,7 @@
             },
             {
               "item": "RuntimeReceipt.validate_summary",
-              "sha256": "405ecdd2f4ec8559b2851273d01de760d416201e7eb82f6654cb6d69bfbbd4e3"
+              "sha256": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429"
             },
             {
               "item": "RuntimeReceiptAgentBinding.profile",
@@ -229205,7 +230145,7 @@
           "items": [
             {
               "item": "RuntimeReceipt",
-              "sha256": "f56152e720b50ec2da568e9a3ce02f6a01a047e9cf48c22196388023562db9f5"
+              "sha256": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8"
             },
             {
               "item": "RuntimeReceiptAgentBinding",
@@ -229328,6 +230268,10 @@
               "sha256": "8a5dbde1516bf007a303123e9da17c0431b4172eb4fbc9f2ac1f6ac6c8366374"
             },
             {
+              "item": "RuntimeReceipt.lifecycle_state",
+              "sha256": "2e4ea9cc7e7db9cc31c3ca634de41db0974f2e17d2446c112232b5d7b32ad705"
+            },
+            {
               "item": "RuntimeReceipt.output_hash_hex",
               "sha256": "880f1bfa0069eb35b11896e03e28bef48694a6485785c523348b92195e8d44e8"
             },
@@ -229417,7 +230361,7 @@
             },
             {
               "item": "RuntimeReceipt.validate_summary",
-              "sha256": "405ecdd2f4ec8559b2851273d01de760d416201e7eb82f6654cb6d69bfbbd4e3"
+              "sha256": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429"
             },
             {
               "item": "RuntimeReceiptAgentBinding.profile",
@@ -257683,6 +258627,10 @@
           "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
         },
         {
+          "item": "InvocationLifecycleState",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
           "item": "InvocationResult",
           "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
         },
@@ -257812,6 +258760,10 @@
         },
         {
           "item": "InvocationHandleEvent.Terminal",
+          "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
+        },
+        {
+          "item": "InvocationLifecycleState.IsTerminal",
           "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
         },
         {
@@ -258054,6 +259006,10 @@
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
+              "item": "InvocationLifecycleState",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "InvocationResult",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -258183,6 +259139,10 @@
             },
             {
               "item": "InvocationHandleEvent.Terminal",
+              "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
+            },
+            {
+              "item": "InvocationLifecycleState.IsTerminal",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
             {
@@ -258425,6 +259385,10 @@
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
+              "item": "InvocationLifecycleState",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "InvocationResult",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -258554,6 +259518,10 @@
             },
             {
               "item": "InvocationHandleEvent.Terminal",
+              "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
+            },
+            {
+              "item": "InvocationLifecycleState.IsTerminal",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
             {
@@ -258796,6 +259764,10 @@
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
+              "item": "InvocationLifecycleState",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "InvocationResult",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -258925,6 +259897,10 @@
             },
             {
               "item": "InvocationHandleEvent.Terminal",
+              "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
+            },
+            {
+              "item": "InvocationLifecycleState.IsTerminal",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
             {
@@ -259167,6 +260143,10 @@
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
+              "item": "InvocationLifecycleState",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "InvocationResult",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -259296,6 +260276,10 @@
             },
             {
               "item": "InvocationHandleEvent.Terminal",
+              "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
+            },
+            {
+              "item": "InvocationLifecycleState.IsTerminal",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
             {
@@ -259538,6 +260522,10 @@
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
+              "item": "InvocationLifecycleState",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "InvocationResult",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -259667,6 +260655,10 @@
             },
             {
               "item": "InvocationHandleEvent.Terminal",
+              "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
+            },
+            {
+              "item": "InvocationLifecycleState.IsTerminal",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
             {
@@ -259909,6 +260901,10 @@
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
+              "item": "InvocationLifecycleState",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "InvocationResult",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -260038,6 +261034,10 @@
             },
             {
               "item": "InvocationHandleEvent.Terminal",
+              "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
+            },
+            {
+              "item": "InvocationLifecycleState.IsTerminal",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
             {
@@ -260280,6 +261280,10 @@
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
+              "item": "InvocationLifecycleState",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "InvocationResult",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -260409,6 +261413,10 @@
             },
             {
               "item": "InvocationHandleEvent.Terminal",
+              "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
+            },
+            {
+              "item": "InvocationLifecycleState.IsTerminal",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
             {
@@ -260651,6 +261659,10 @@
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
+              "item": "InvocationLifecycleState",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "InvocationResult",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -260780,6 +261792,10 @@
             },
             {
               "item": "InvocationHandleEvent.Terminal",
+              "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
+            },
+            {
+              "item": "InvocationLifecycleState.IsTerminal",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
             {
@@ -261022,6 +262038,10 @@
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
+              "item": "InvocationLifecycleState",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "InvocationResult",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -261151,6 +262171,10 @@
             },
             {
               "item": "InvocationHandleEvent.Terminal",
+              "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
+            },
+            {
+              "item": "InvocationLifecycleState.IsTerminal",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
             {
@@ -261393,6 +262417,10 @@
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
+              "item": "InvocationLifecycleState",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "InvocationResult",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -261522,6 +262550,10 @@
             },
             {
               "item": "InvocationHandleEvent.Terminal",
+              "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
+            },
+            {
+              "item": "InvocationLifecycleState.IsTerminal",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
             {
@@ -261764,6 +262796,10 @@
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
+              "item": "InvocationLifecycleState",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "InvocationResult",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -261893,6 +262929,10 @@
             },
             {
               "item": "InvocationHandleEvent.Terminal",
+              "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
+            },
+            {
+              "item": "InvocationLifecycleState.IsTerminal",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
             {
@@ -262135,6 +263175,10 @@
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
+              "item": "InvocationLifecycleState",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "InvocationResult",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -262264,6 +263308,10 @@
             },
             {
               "item": "InvocationHandleEvent.Terminal",
+              "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
+            },
+            {
+              "item": "InvocationLifecycleState.IsTerminal",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
             {
@@ -262506,6 +263554,10 @@
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
+              "item": "InvocationLifecycleState",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "InvocationResult",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -262635,6 +263687,10 @@
             },
             {
               "item": "InvocationHandleEvent.Terminal",
+              "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
+            },
+            {
+              "item": "InvocationLifecycleState.IsTerminal",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
             {
@@ -262885,7 +263941,7 @@
         },
         {
           "item": "InvocationLifecycleState",
-          "sha256": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90"
+          "sha256": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3"
         },
         {
           "item": "InvocationResult",
@@ -263058,6 +264114,10 @@
         {
           "item": "InvocationLifecycleState.UNSPECIFIED",
           "sha256": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6"
+        },
+        {
+          "item": "InvocationLifecycleState.from_wire_name",
+          "sha256": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe"
         },
         {
           "item": "InvocationLifecycleState.is_terminal",
@@ -263312,7 +264372,7 @@
             },
             {
               "item": "InvocationLifecycleState",
-              "sha256": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90"
+              "sha256": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3"
             },
             {
               "item": "InvocationResult",
@@ -263485,6 +264545,10 @@
             {
               "item": "InvocationLifecycleState.UNSPECIFIED",
               "sha256": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6"
+            },
+            {
+              "item": "InvocationLifecycleState.from_wire_name",
+              "sha256": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe"
             },
             {
               "item": "InvocationLifecycleState.is_terminal",
@@ -263739,7 +264803,7 @@
             },
             {
               "item": "InvocationLifecycleState",
-              "sha256": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90"
+              "sha256": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3"
             },
             {
               "item": "InvocationResult",
@@ -263912,6 +264976,10 @@
             {
               "item": "InvocationLifecycleState.UNSPECIFIED",
               "sha256": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6"
+            },
+            {
+              "item": "InvocationLifecycleState.from_wire_name",
+              "sha256": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe"
             },
             {
               "item": "InvocationLifecycleState.is_terminal",
@@ -264166,7 +265234,7 @@
             },
             {
               "item": "InvocationLifecycleState",
-              "sha256": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90"
+              "sha256": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3"
             },
             {
               "item": "InvocationResult",
@@ -264339,6 +265407,10 @@
             {
               "item": "InvocationLifecycleState.UNSPECIFIED",
               "sha256": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6"
+            },
+            {
+              "item": "InvocationLifecycleState.from_wire_name",
+              "sha256": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe"
             },
             {
               "item": "InvocationLifecycleState.is_terminal",
@@ -264593,7 +265665,7 @@
             },
             {
               "item": "InvocationLifecycleState",
-              "sha256": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90"
+              "sha256": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3"
             },
             {
               "item": "InvocationResult",
@@ -264766,6 +265838,10 @@
             {
               "item": "InvocationLifecycleState.UNSPECIFIED",
               "sha256": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6"
+            },
+            {
+              "item": "InvocationLifecycleState.from_wire_name",
+              "sha256": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe"
             },
             {
               "item": "InvocationLifecycleState.is_terminal",
@@ -265020,7 +266096,7 @@
             },
             {
               "item": "InvocationLifecycleState",
-              "sha256": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90"
+              "sha256": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3"
             },
             {
               "item": "InvocationResult",
@@ -265193,6 +266269,10 @@
             {
               "item": "InvocationLifecycleState.UNSPECIFIED",
               "sha256": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6"
+            },
+            {
+              "item": "InvocationLifecycleState.from_wire_name",
+              "sha256": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe"
             },
             {
               "item": "InvocationLifecycleState.is_terminal",
@@ -265447,7 +266527,7 @@
             },
             {
               "item": "InvocationLifecycleState",
-              "sha256": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90"
+              "sha256": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3"
             },
             {
               "item": "InvocationResult",
@@ -265620,6 +266700,10 @@
             {
               "item": "InvocationLifecycleState.UNSPECIFIED",
               "sha256": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6"
+            },
+            {
+              "item": "InvocationLifecycleState.from_wire_name",
+              "sha256": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe"
             },
             {
               "item": "InvocationLifecycleState.is_terminal",
@@ -265874,7 +266958,7 @@
             },
             {
               "item": "InvocationLifecycleState",
-              "sha256": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90"
+              "sha256": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3"
             },
             {
               "item": "InvocationResult",
@@ -266047,6 +267131,10 @@
             {
               "item": "InvocationLifecycleState.UNSPECIFIED",
               "sha256": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6"
+            },
+            {
+              "item": "InvocationLifecycleState.from_wire_name",
+              "sha256": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe"
             },
             {
               "item": "InvocationLifecycleState.is_terminal",
@@ -266301,7 +267389,7 @@
             },
             {
               "item": "InvocationLifecycleState",
-              "sha256": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90"
+              "sha256": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3"
             },
             {
               "item": "InvocationResult",
@@ -266474,6 +267562,10 @@
             {
               "item": "InvocationLifecycleState.UNSPECIFIED",
               "sha256": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6"
+            },
+            {
+              "item": "InvocationLifecycleState.from_wire_name",
+              "sha256": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe"
             },
             {
               "item": "InvocationLifecycleState.is_terminal",
@@ -266728,7 +267820,7 @@
             },
             {
               "item": "InvocationLifecycleState",
-              "sha256": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90"
+              "sha256": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3"
             },
             {
               "item": "InvocationResult",
@@ -266901,6 +267993,10 @@
             {
               "item": "InvocationLifecycleState.UNSPECIFIED",
               "sha256": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6"
+            },
+            {
+              "item": "InvocationLifecycleState.from_wire_name",
+              "sha256": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe"
             },
             {
               "item": "InvocationLifecycleState.is_terminal",
@@ -267155,7 +268251,7 @@
             },
             {
               "item": "InvocationLifecycleState",
-              "sha256": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90"
+              "sha256": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3"
             },
             {
               "item": "InvocationResult",
@@ -267328,6 +268424,10 @@
             {
               "item": "InvocationLifecycleState.UNSPECIFIED",
               "sha256": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6"
+            },
+            {
+              "item": "InvocationLifecycleState.from_wire_name",
+              "sha256": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe"
             },
             {
               "item": "InvocationLifecycleState.is_terminal",
@@ -267582,7 +268682,7 @@
             },
             {
               "item": "InvocationLifecycleState",
-              "sha256": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90"
+              "sha256": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3"
             },
             {
               "item": "InvocationResult",
@@ -267755,6 +268855,10 @@
             {
               "item": "InvocationLifecycleState.UNSPECIFIED",
               "sha256": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6"
+            },
+            {
+              "item": "InvocationLifecycleState.from_wire_name",
+              "sha256": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe"
             },
             {
               "item": "InvocationLifecycleState.is_terminal",
@@ -268009,7 +269113,7 @@
             },
             {
               "item": "InvocationLifecycleState",
-              "sha256": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90"
+              "sha256": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3"
             },
             {
               "item": "InvocationResult",
@@ -268182,6 +269286,10 @@
             {
               "item": "InvocationLifecycleState.UNSPECIFIED",
               "sha256": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6"
+            },
+            {
+              "item": "InvocationLifecycleState.from_wire_name",
+              "sha256": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe"
             },
             {
               "item": "InvocationLifecycleState.is_terminal",
@@ -268436,7 +269544,7 @@
             },
             {
               "item": "InvocationLifecycleState",
-              "sha256": "0ffc4790c5d225bda2b6aba8a31ecbdb3bb77728c695f0d53fa003316713ea90"
+              "sha256": "3bb8fd7ae6e249f6e6da602caba2a55a5114e09e3ab8e88c519fd7e3a69691e3"
             },
             {
               "item": "InvocationResult",
@@ -268609,6 +269717,10 @@
             {
               "item": "InvocationLifecycleState.UNSPECIFIED",
               "sha256": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6"
+            },
+            {
+              "item": "InvocationLifecycleState.from_wire_name",
+              "sha256": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe"
             },
             {
               "item": "InvocationLifecycleState.is_terminal",

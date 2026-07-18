@@ -88,7 +88,7 @@ fi
 
 if [[ "$BUILD" == "1" || ! -x "$CLI_BIN" || ! -x "$DAEMON_BIN" || ! -x "$KEYRING_BIN" ]]; then
   echo "==> building CLI binaries only"
-  (cd "$REPO_ROOT" && cargo build --bin easynet --bin easynet-daemon --bin easynet-keyring)
+  "$REPO_ROOT/tools/scripts/build-daemon-process-set.sh" --bin easynet
 fi
 
 mkdir -p "$OUT_DIR"

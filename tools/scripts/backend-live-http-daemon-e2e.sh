@@ -24,8 +24,8 @@ if [[ "${1:-}" == "--self-test" ]]; then
 fi
 
 LIB_PATH="$REPO_ROOT/target/debug/libeasynet_cli.${LIB_EXT}"
-echo "[backend-live-http-daemon-e2e] rebuilding libeasynet_cli + easynet-daemon..."
-(cd "$REPO_ROOT" && cargo build --lib --bin easynet-daemon)
+echo "[backend-live-http-daemon-e2e] rebuilding libeasynet_cli + daemon process set..."
+"$REPO_ROOT/tools/scripts/build-daemon-process-set.sh" --lib
 
 echo "[backend-live-http-daemon-e2e] running browser HTTP → live daemon E2E..."
 (

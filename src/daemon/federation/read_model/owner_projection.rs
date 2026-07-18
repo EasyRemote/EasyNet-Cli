@@ -89,13 +89,11 @@ pub(crate) struct AbilityCallModeGeometry {
 /// REGISTRY/INDEX METADATA — intentionally outside the Axon wire contract
 /// (refactor SPEC §15.1 item 2; owner ruling 2026-06-29).
 ///
-/// The first ten fields mirror the Axon `AbilityProjectionSummary` proto
-/// (`EasyNet-Axon/core/proto/axon/v1/namespace.proto`). The eleventh field,
-/// `callable_summary` (`public_name` / `description` / `call_mode` /
-/// `receipt_semantics` / input fields / flags / `mode_geometry`), is daemon
-/// registry/index metadata deliberately NOT part of the Axon proto. The mode
-/// geometry binds the descriptor variants represented by one canonical
-/// Ability publication row; the remaining fields are presentation metadata.
+/// All fields are daemon product registry/index metadata. `callable_summary`
+/// (`public_name` / `description` / `call_mode` / `receipt_semantics` / input
+/// fields / flags / `mode_geometry`) binds the descriptor variants represented
+/// by one canonical Ability publication row; the remaining fields are
+/// presentation and route-discovery metadata carried as Invocation JSON.
 ///
 /// DECISION (do not relitigate): `callable_summary` is NOT promoted into the
 /// proto. The Axon wire contract carries only the canonical *execution*

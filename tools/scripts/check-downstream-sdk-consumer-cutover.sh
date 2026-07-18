@@ -397,6 +397,27 @@ def check_easyremote() -> None:
     ]:
         forbid_contains(receipts, forbidden, "easyremote:receipt")
 
+    runtime_provider = require_file(
+        easyremote,
+        "easyremote/runtime_provider.py",
+        "easyremote:runtime_provider",
+    )
+    for required in [
+        "easynet_sdk.RuntimeConnection",
+        "easynet_sdk.SdkEnvironment",
+        "self._environment_factory().runtime_connection()",
+    ]:
+        require_contains(runtime_provider, required, "easyremote:runtime_provider")
+    for forbidden in [
+        "DaemonLifecycleFacade",
+        "RuntimeLifecycle",
+        ".daemon_control()",
+        ".runtime_lifecycle()",
+        "start_daemon",
+        "start_runtime_host",
+    ]:
+        forbid_contains(runtime_provider, forbidden, "easyremote:runtime_provider")
+
     transport = require_file(
         easyremote,
         "easyremote/_sdk_transport/__init__.py",
@@ -406,7 +427,7 @@ def check_easyremote() -> None:
         "easynet_sdk.InvocationResultAdapter",
         "easynet_sdk.UnaryDispatchPool",
         "easynet_sdk.DaemonFrameStream",
-        "easynet_sdk.DaemonLifecycleFacade",
+        "easynet_sdk.DaemonBidiChannel",
     ]:
         require_contains(transport, required, "easyremote:transport")
     for forbidden in [
@@ -645,6 +666,16 @@ InvocationState = easynet_sdk.InvocationLifecycleState
 RuntimeReceipt = easynet_sdk.RuntimeReceipt.from_required_mapping
 ReceiptReference = easynet_sdk.ReceiptReference.from_runtime_receipt
 EOF
+  cat >"$good_remote/easyremote/runtime_provider.py" <<'EOF'
+import easynet_sdk
+
+class Provider:
+    def __init__(self, environment_factory: type[easynet_sdk.SdkEnvironment]):
+        self._environment_factory = environment_factory
+
+    def connect(self) -> easynet_sdk.RuntimeConnection:
+        return self._environment_factory().runtime_connection()
+EOF
   cat >"$good_remote/easyremote/_sdk_transport/__init__.py" <<'EOF'
 import easynet_sdk
 
@@ -652,7 +683,7 @@ _ = [
     easynet_sdk.InvocationResultAdapter,
     easynet_sdk.UnaryDispatchPool,
     easynet_sdk.DaemonFrameStream,
-    easynet_sdk.DaemonLifecycleFacade,
+    easynet_sdk.DaemonBidiChannel,
 ]
 EOF
   cat >"$good_remote/easyremote/client.py" <<'EOF'

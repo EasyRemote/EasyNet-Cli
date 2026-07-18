@@ -26,6 +26,7 @@ from axon_sdk.invocation import (
 from .errors import ErrorCode, RetryHint, SDKError
 from .bidi import BidiSession, BidiStreamDescriptor, BidiTransport
 from .invocation import InvocationBuilder, InvocationDraft
+from .invocation_state import InvocationLifecycleState
 from .stream import StreamHandle, StreamTransport
 from .signing import (
     PreparedInvocation,
@@ -525,9 +526,29 @@ class RuntimeReceipt:
             raise _invalid_runtime("runtime receipt summary is missing receipt_type")
         if not self.state:
             raise _invalid_runtime("runtime receipt summary is missing state")
+        self.lifecycle_state
         self.prev_receipt_hash()
         self.self_receipt_hash()
         self.validate_proof_facts()
+
+    @property
+    def lifecycle_state(self) -> InvocationLifecycleState:
+        """Return the fail-closed canonical lifecycle state."""
+
+        try:
+            state = InvocationLifecycleState.from_wire_name(self.state)
+        except ValueError as error:
+            raise _invalid_runtime(
+                str(error),
+                error,
+                details={"reason": "invalid_lifecycle_state"},
+            ) from error
+        if state is InvocationLifecycleState.UNSPECIFIED:
+            raise _invalid_runtime(
+                "runtime receipt lifecycle state must not be UNSPECIFIED",
+                details={"reason": "invalid_lifecycle_state"},
+            )
+        return state
 
     def has_causal_anchor(self) -> bool:
         """Return whether daemon/Axon supplied enough facts for causal linkage."""
@@ -738,8 +759,14 @@ _PRE_ADMISSION_FAILURE_STAGES = frozenset(
         "request_validation",
     }
 )
-_ADMISSION_RECEIPT_STATES = frozenset({"admitted"})
-_TERMINAL_RECEIPT_STATES = frozenset({"completed", "failed", "timedout", "cancelled"})
+_TERMINAL_RECEIPT_STATES = frozenset(
+    {
+        InvocationLifecycleState.COMPLETED,
+        InvocationLifecycleState.FAILED,
+        InvocationLifecycleState.TIMED_OUT,
+        InvocationLifecycleState.CANCELLED,
+    }
+)
 
 
 def _validated_result_receipt_projection(
@@ -772,11 +799,18 @@ def _validate_invocation_result_receipt_topology(
             "invocation result must carry both admission_receipt and "
             "terminal_receipt or neither"
         )
-    normalized_terminal_state = _normalized_receipt_state(terminal_state)
+    try:
+        result_terminal_state = InvocationLifecycleState.from_wire_name(terminal_state)
+    except ValueError as error:
+        raise _invalid_runtime(
+            str(error),
+            error,
+            details={"reason": "invalid_lifecycle_state"},
+        ) from error
     if admission is None:
         if (
             ok
-            or normalized_terminal_state != "failed"
+            or result_terminal_state is not InvocationLifecycleState.FAILED
             or failure is None
             or failure.stage not in _PRE_ADMISSION_FAILURE_STAGES
         ):
@@ -787,30 +821,31 @@ def _validate_invocation_result_receipt_topology(
         return
 
     assert terminal is not None
-    if _normalized_receipt_state(admission.state) not in _ADMISSION_RECEIPT_STATES:
+    admission_state = admission.lifecycle_state
+    if admission_state is not InvocationLifecycleState.ADMITTED:
         raise _invalid_runtime(
             "admission_receipt does not carry a canonical admission state"
         )
-    if _normalized_receipt_state(admission.receipt_type) != "admitted":
+    if admission.receipt_type != _canonical_receipt_type(admission_state):
         raise _invalid_runtime(
             "admission_receipt does not carry canonical receipt_type admitted"
         )
     if admission.cleanup_complete is not False:
         raise _invalid_runtime("admission_receipt cleanup_complete must be false")
-    terminal_receipt_state = _normalized_receipt_state(terminal.state)
+    terminal_receipt_state = terminal.lifecycle_state
     if terminal_receipt_state not in _TERMINAL_RECEIPT_STATES:
         raise _invalid_runtime(
             "terminal_receipt does not carry a canonical terminal state"
         )
-    if _normalized_receipt_state(terminal.receipt_type) != terminal_receipt_state:
+    if terminal.receipt_type != _canonical_receipt_type(terminal_receipt_state):
         raise _invalid_runtime(
             "terminal_receipt receipt_type does not match its terminal state"
         )
-    if terminal_receipt_state != normalized_terminal_state:
+    if terminal_receipt_state is not result_terminal_state:
         raise _invalid_runtime(
             "terminal_receipt state does not match invocation terminal_state"
         )
-    if ok != (terminal_receipt_state == "completed"):
+    if ok != (terminal_receipt_state is InvocationLifecycleState.COMPLETED):
         raise _invalid_runtime(
             "invocation result ok flag does not match terminal receipt state"
         )
@@ -1314,7 +1349,7 @@ def _decode_runtime_receipt_mapping(
             decoded.get("receipt_type"), "receipt_type"
         )
         or "",
-        state=_optional_runtime_summary_text(decoded.get("state"), "state") or "",
+        state=_optional_string(decoded.get("state"), "state") or "",
         index=_optional_non_negative_int(decoded.get("index"), "index"),
         timestamp_unix_ms=_optional_non_negative_int(
             decoded.get("timestamp_unix_ms"), "timestamp_unix_ms"
@@ -1447,8 +1482,18 @@ def _runtime_receipt_base64(
     return decoded
 
 
-def _normalized_receipt_state(value: str) -> str:
-    return value.strip().replace("_", "").lower()
+def _canonical_receipt_type(state: InvocationLifecycleState) -> str:
+    receipt_types = {
+        InvocationLifecycleState.ACCEPTED: "accepted",
+        InvocationLifecycleState.ADMITTED: "admitted",
+        InvocationLifecycleState.DISPATCHED: "dispatched",
+        InvocationLifecycleState.RUNNING: "running",
+        InvocationLifecycleState.COMPLETED: "completed",
+        InvocationLifecycleState.FAILED: "failed",
+        InvocationLifecycleState.TIMED_OUT: "timed_out",
+        InvocationLifecycleState.CANCELLED: "cancelled",
+    }
+    return receipt_types.get(state, "")
 
 
 def _validate_runtime_receipt_ref(
@@ -1516,8 +1561,7 @@ def _validate_runtime_receipt_signing_model(receipt: RuntimeReceipt) -> None:
     if signer_ura == callee_ura:
         if receipt.host_attestation_base64.strip():
             raise _invalid_runtime(
-                "self-signed runtime receipt must not carry "
-                "host_attestation_base64"
+                "self-signed runtime receipt must not carry host_attestation_base64"
             )
         return
     if not receipt.host_attestation_base64.strip():
@@ -1581,8 +1625,7 @@ def _validate_runtime_receipt_canonical_proof_facts(
     )
     if proof_binding != authority:
         raise _invalid_runtime(
-            "runtime receipt authority_proof binding does not match "
-            "authority_binding"
+            "runtime receipt authority_proof binding does not match authority_binding"
         )
 
     _required_receipt_agent_binding(proof.issuer, "authority_proof.issuer")
@@ -1835,7 +1878,9 @@ def _runtime_receipt_ura_profile(value: object, field_name: str) -> _AxonUraProf
     try:
         return _AxonUraProfile.parse(text)
     except _AxonError as error:
-        raise _invalid_runtime(f"{field_name} is not canonical: {error}", error) from error
+        raise _invalid_runtime(
+            f"{field_name} is not canonical: {error}", error
+        ) from error
 
 
 def _runtime_receipt_text_tuple(
@@ -2075,13 +2120,19 @@ def _invalid_runtime_client(message: str) -> SDKError:
     )
 
 
-def _invalid_runtime(message: str, cause: Optional[BaseException] = None) -> SDKError:
+def _invalid_runtime(
+    message: str,
+    cause: Optional[BaseException] = None,
+    *,
+    details: Optional[Mapping[str, object]] = None,
+) -> SDKError:
     return SDKError(
         code=ErrorCode.INVALID_ARGUMENT,
         stage="runtime",
         retry=RetryHint.NEVER,
         retryable=False,
         message=message,
+        details=details,
         cause=cause,
     )
 

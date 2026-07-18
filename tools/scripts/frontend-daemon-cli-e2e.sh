@@ -81,7 +81,7 @@ if [[ ! -x "$CLI_BIN" ]]; then
 fi
 if [[ "$START_RUNTIME" -eq 1 && ! -x "$DAEMON_BIN" ]]; then
   echo "[frontend-daemon-cli-e2e] building easynet-daemon..."
-  (cd "$REPO_ROOT" && cargo build --bin easynet-daemon)
+  "$REPO_ROOT/tools/scripts/build-daemon-process-set.sh"
 fi
 
 cleanup() {

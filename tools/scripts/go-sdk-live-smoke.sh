@@ -2,7 +2,7 @@
 # go-sdk-live-smoke.sh — live daemon smoke through the Go SDK facade
 # ==================================================================
 #
-# Builds `libeasynet_cli` and `easynet-daemon`, then runs the tagged Go SDK
+# Builds `libeasynet_cli` and the complete daemon process set, then runs the tagged Go SDK
 # live smoke against a hermetic daemon. The test exercises daemon lifecycle,
 # generic C ABI v5 Runtime Core health, unary, stream, and typed terminal
 # failure through public Go SDK objects.
@@ -35,8 +35,8 @@ if [[ "${1:-}" == "--self-test" ]]; then
   exit 0
 fi
 
-echo "[go-sdk-live-smoke] rebuilding libeasynet_cli + easynet-daemon..."
-(cd "$REPO_ROOT" && cargo build --lib --bin easynet-daemon)
+echo "[go-sdk-live-smoke] rebuilding libeasynet_cli + daemon process set..."
+"$REPO_ROOT/tools/scripts/build-daemon-process-set.sh" --lib
 
 SMOKE_HOME="$(mktemp -d "/tmp/easynet-go-sdk-smoke.XXXXXX")"
 cleanup() {

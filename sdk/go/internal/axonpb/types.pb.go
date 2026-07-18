@@ -661,7 +661,7 @@ const (
 	TrustLevel_TRUST_LEVEL_PROBATION   TrustLevel = 2 // new node, low-risk workloads only
 	TrustLevel_TRUST_LEVEL_STANDARD    TrustLevel = 3 // normal operations
 	TrustLevel_TRUST_LEVEL_ELEVATED    TrustLevel = 4 // sensitive operations allowed
-	TrustLevel_TRUST_LEVEL_PRIVILEGED  TrustLevel = 5 // ability installation allowed
+	TrustLevel_TRUST_LEVEL_PRIVILEGED  TrustLevel = 5 // sensitive runtime operations allowed
 )
 
 // Enum value maps for TrustLevel.
@@ -777,76 +777,6 @@ func (NodeRole) EnumDescriptor() ([]byte, []int) {
 	return file_axon_v1_types_proto_rawDescGZIP(), []int{11}
 }
 
-type CapabilityState int32
-
-const (
-	CapabilityState_CAPABILITY_STATE_UNSPECIFIED CapabilityState = 0
-	CapabilityState_CAPABILITY_STATE_RECEIVED    CapabilityState = 1 // payload received, not yet verified
-	CapabilityState_CAPABILITY_STATE_VERIFIED    CapabilityState = 2 // signature + requirements checked
-	CapabilityState_CAPABILITY_STATE_ADMITTED    CapabilityState = 3 // policy passed
-	CapabilityState_CAPABILITY_STATE_INSTALLING  CapabilityState = 4 // deploying to node
-	CapabilityState_CAPABILITY_STATE_INSTALLED   CapabilityState = 5 // code deployed, not yet live
-	CapabilityState_CAPABILITY_STATE_ACTIVATED   CapabilityState = 6 // live, accepting invocations
-	CapabilityState_CAPABILITY_STATE_DEACTIVATED CapabilityState = 7 // suspended/paused — can be re-activated
-	CapabilityState_CAPABILITY_STATE_ROLLED_BACK CapabilityState = 8 // reverted to previous version
-	CapabilityState_CAPABILITY_STATE_REVOKED     CapabilityState = 9 // permanently removed (terminal)
-)
-
-// Enum value maps for CapabilityState.
-var (
-	CapabilityState_name = map[int32]string{
-		0: "CAPABILITY_STATE_UNSPECIFIED",
-		1: "CAPABILITY_STATE_RECEIVED",
-		2: "CAPABILITY_STATE_VERIFIED",
-		3: "CAPABILITY_STATE_ADMITTED",
-		4: "CAPABILITY_STATE_INSTALLING",
-		5: "CAPABILITY_STATE_INSTALLED",
-		6: "CAPABILITY_STATE_ACTIVATED",
-		7: "CAPABILITY_STATE_DEACTIVATED",
-		8: "CAPABILITY_STATE_ROLLED_BACK",
-		9: "CAPABILITY_STATE_REVOKED",
-	}
-	CapabilityState_value = map[string]int32{
-		"CAPABILITY_STATE_UNSPECIFIED": 0,
-		"CAPABILITY_STATE_RECEIVED":    1,
-		"CAPABILITY_STATE_VERIFIED":    2,
-		"CAPABILITY_STATE_ADMITTED":    3,
-		"CAPABILITY_STATE_INSTALLING":  4,
-		"CAPABILITY_STATE_INSTALLED":   5,
-		"CAPABILITY_STATE_ACTIVATED":   6,
-		"CAPABILITY_STATE_DEACTIVATED": 7,
-		"CAPABILITY_STATE_ROLLED_BACK": 8,
-		"CAPABILITY_STATE_REVOKED":     9,
-	}
-)
-
-func (x CapabilityState) Enum() *CapabilityState {
-	p := new(CapabilityState)
-	*p = x
-	return p
-}
-
-func (x CapabilityState) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (CapabilityState) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[12].Descriptor()
-}
-
-func (CapabilityState) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[12]
-}
-
-func (x CapabilityState) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use CapabilityState.Descriptor instead.
-func (CapabilityState) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{12}
-}
-
 type InvocationState int32
 
 const (
@@ -898,11 +828,11 @@ func (x InvocationState) String() string {
 }
 
 func (InvocationState) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[13].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[12].Descriptor()
 }
 
 func (InvocationState) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[13]
+	return &file_axon_v1_types_proto_enumTypes[12]
 }
 
 func (x InvocationState) Number() protoreflect.EnumNumber {
@@ -911,7 +841,7 @@ func (x InvocationState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use InvocationState.Descriptor instead.
 func (InvocationState) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{13}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{12}
 }
 
 type RoutingStrategy int32
@@ -950,11 +880,11 @@ func (x RoutingStrategy) String() string {
 }
 
 func (RoutingStrategy) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[14].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[13].Descriptor()
 }
 
 func (RoutingStrategy) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[14]
+	return &file_axon_v1_types_proto_enumTypes[13]
 }
 
 func (x RoutingStrategy) Number() protoreflect.EnumNumber {
@@ -963,7 +893,7 @@ func (x RoutingStrategy) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RoutingStrategy.Descriptor instead.
 func (RoutingStrategy) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{14}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{13}
 }
 
 // Distinguishes the semantic kind of invocation target at the protocol level,
@@ -999,11 +929,11 @@ func (x InvocationTargetKind) String() string {
 }
 
 func (InvocationTargetKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[15].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[14].Descriptor()
 }
 
 func (InvocationTargetKind) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[15]
+	return &file_axon_v1_types_proto_enumTypes[14]
 }
 
 func (x InvocationTargetKind) Number() protoreflect.EnumNumber {
@@ -1012,7 +942,7 @@ func (x InvocationTargetKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use InvocationTargetKind.Descriptor instead.
 func (InvocationTargetKind) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{15}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{14}
 }
 
 type StreamFrameType int32
@@ -1069,11 +999,11 @@ func (x StreamFrameType) String() string {
 }
 
 func (StreamFrameType) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[16].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[15].Descriptor()
 }
 
 func (StreamFrameType) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[16]
+	return &file_axon_v1_types_proto_enumTypes[15]
 }
 
 func (x StreamFrameType) Number() protoreflect.EnumNumber {
@@ -1082,7 +1012,7 @@ func (x StreamFrameType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use StreamFrameType.Descriptor instead.
 func (StreamFrameType) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{16}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{15}
 }
 
 type KeyState int32
@@ -1121,11 +1051,11 @@ func (x KeyState) String() string {
 }
 
 func (KeyState) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[17].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[16].Descriptor()
 }
 
 func (KeyState) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[17]
+	return &file_axon_v1_types_proto_enumTypes[16]
 }
 
 func (x KeyState) Number() protoreflect.EnumNumber {
@@ -1134,7 +1064,7 @@ func (x KeyState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use KeyState.Descriptor instead.
 func (KeyState) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{17}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{16}
 }
 
 // Typed reference to any Axon-managed resource.
@@ -4622,92 +4552,6 @@ func (x *ResourceSnapshot) GetDiskAvailableBytes() int64 {
 	return 0
 }
 
-// Device hardware and OS metadata.
-// Populated on registration, updated on heartbeat if changed.
-type DeviceMeta struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Os            string                 `protobuf:"bytes,1,opt,name=os,proto3" json:"os,omitempty"`                                            // "linux" | "android" | "ios" | "macos" | "windows"
-	OsVersion     string                 `protobuf:"bytes,2,opt,name=os_version,json=osVersion,proto3" json:"os_version,omitempty"`             // "14.2", "24.04"
-	HardwareModel string                 `protobuf:"bytes,3,opt,name=hardware_model,json=hardwareModel,proto3" json:"hardware_model,omitempty"` // "Raspberry Pi 4B", "iPhone 15 Pro", "MacBook Pro M3"
-	Architecture  string                 `protobuf:"bytes,4,opt,name=architecture,proto3" json:"architecture,omitempty"`                        // "arm64" | "x86_64" | "riscv64"
-	NetworkType   string                 `protobuf:"bytes,5,opt,name=network_type,json=networkType,proto3" json:"network_type,omitempty"`       // "wifi" | "ethernet" | "lte" | "5g" | "offline"
-	Hostname      string                 `protobuf:"bytes,6,opt,name=hostname,proto3" json:"hostname,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeviceMeta) Reset() {
-	*x = DeviceMeta{}
-	mi := &file_axon_v1_types_proto_msgTypes[44]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeviceMeta) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeviceMeta) ProtoMessage() {}
-
-func (x *DeviceMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[44]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeviceMeta.ProtoReflect.Descriptor instead.
-func (*DeviceMeta) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{44}
-}
-
-func (x *DeviceMeta) GetOs() string {
-	if x != nil {
-		return x.Os
-	}
-	return ""
-}
-
-func (x *DeviceMeta) GetOsVersion() string {
-	if x != nil {
-		return x.OsVersion
-	}
-	return ""
-}
-
-func (x *DeviceMeta) GetHardwareModel() string {
-	if x != nil {
-		return x.HardwareModel
-	}
-	return ""
-}
-
-func (x *DeviceMeta) GetArchitecture() string {
-	if x != nil {
-		return x.Architecture
-	}
-	return ""
-}
-
-func (x *DeviceMeta) GetNetworkType() string {
-	if x != nil {
-		return x.NetworkType
-	}
-	return ""
-}
-
-func (x *DeviceMeta) GetHostname() string {
-	if x != nil {
-		return x.Hostname
-	}
-	return ""
-}
-
 type NodeDescriptor struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	NodeId      string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
@@ -4731,10 +4575,6 @@ type NodeDescriptor struct {
 	Resources           *ResourceSnapshot `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
 	RegisteredAtUnixMs  int64             `protobuf:"varint,10,opt,name=registered_at_unix_ms,json=registeredAtUnixMs,proto3" json:"registered_at_unix_ms,omitempty"`
 	LastHeartbeatUnixMs int64             `protobuf:"varint,11,opt,name=last_heartbeat_unix_ms,json=lastHeartbeatUnixMs,proto3" json:"last_heartbeat_unix_ms,omitempty"`
-	// ─── Device ownership & identity ──────────────────────
-	OwnerId     string      `protobuf:"bytes,12,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`             // principal_id of the owning user (structured, not labels)
-	DeviceGroup string      `protobuf:"bytes,13,opt,name=device_group,json=deviceGroup,proto3" json:"device_group,omitempty"` // "home" | "office" | "lab" | custom group name
-	Device      *DeviceMeta `protobuf:"bytes,14,opt,name=device,proto3" json:"device,omitempty"`                              // device hardware/OS metadata
 	// ─── Presence ─────────────────────────────────────────
 	// online=true means the node heartbeat is within timeout window.
 	Online bool `protobuf:"varint,16,opt,name=online,proto3" json:"online,omitempty"`
@@ -4748,7 +4588,7 @@ type NodeDescriptor struct {
 
 func (x *NodeDescriptor) Reset() {
 	*x = NodeDescriptor{}
-	mi := &file_axon_v1_types_proto_msgTypes[45]
+	mi := &file_axon_v1_types_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4760,7 +4600,7 @@ func (x *NodeDescriptor) String() string {
 func (*NodeDescriptor) ProtoMessage() {}
 
 func (x *NodeDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[45]
+	mi := &file_axon_v1_types_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4773,7 +4613,7 @@ func (x *NodeDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeDescriptor.ProtoReflect.Descriptor instead.
 func (*NodeDescriptor) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{45}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *NodeDescriptor) GetNodeId() string {
@@ -4853,27 +4693,6 @@ func (x *NodeDescriptor) GetLastHeartbeatUnixMs() int64 {
 	return 0
 }
 
-func (x *NodeDescriptor) GetOwnerId() string {
-	if x != nil {
-		return x.OwnerId
-	}
-	return ""
-}
-
-func (x *NodeDescriptor) GetDeviceGroup() string {
-	if x != nil {
-		return x.DeviceGroup
-	}
-	return ""
-}
-
-func (x *NodeDescriptor) GetDevice() *DeviceMeta {
-	if x != nil {
-		return x.Device
-	}
-	return nil
-}
-
 func (x *NodeDescriptor) GetOnline() bool {
 	if x != nil {
 		return x.Online
@@ -4895,166 +4714,6 @@ func (x *NodeDescriptor) GetRole() NodeRole {
 	return NodeRole_NODE_ROLE_UNSPECIFIED
 }
 
-type CapabilityPackageRef struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PackageId     string                 `protobuf:"bytes,1,opt,name=package_id,json=packageId,proto3" json:"package_id,omitempty"`
-	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"` // semver
-	Digest        string                 `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"`   // sha256 of payload
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CapabilityPackageRef) Reset() {
-	*x = CapabilityPackageRef{}
-	mi := &file_axon_v1_types_proto_msgTypes[46]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CapabilityPackageRef) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CapabilityPackageRef) ProtoMessage() {}
-
-func (x *CapabilityPackageRef) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[46]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CapabilityPackageRef.ProtoReflect.Descriptor instead.
-func (*CapabilityPackageRef) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{46}
-}
-
-func (x *CapabilityPackageRef) GetPackageId() string {
-	if x != nil {
-		return x.PackageId
-	}
-	return ""
-}
-
-func (x *CapabilityPackageRef) GetVersion() string {
-	if x != nil {
-		return x.Version
-	}
-	return ""
-}
-
-func (x *CapabilityPackageRef) GetDigest() string {
-	if x != nil {
-		return x.Digest
-	}
-	return ""
-}
-
-type CapabilityDescriptor struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	AbilityId         string                 `protobuf:"bytes,1,opt,name=ability_id,json=abilityId,proto3" json:"ability_id,omitempty"`
-	Name              string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Version           string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
-	Tags              []string               `protobuf:"bytes,4,rep,name=tags,proto3" json:"tags,omitempty"`                                                                                           // "vision", "audio", "sensor", etc.
-	Requirements      map[string]string      `protobuf:"bytes,5,rep,name=requirements,proto3" json:"requirements,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // "gpu": "required", "os": "linux"
-	Signature         []byte                 `protobuf:"bytes,6,opt,name=signature,proto3" json:"signature,omitempty"`                                                                                 // Ed25519 over payload hash
-	PublisherId       string                 `protobuf:"bytes,7,opt,name=publisher_id,json=publisherId,proto3" json:"publisher_id,omitempty"`
-	PublishedAtUnixMs int64                  `protobuf:"varint,8,opt,name=published_at_unix_ms,json=publishedAtUnixMs,proto3" json:"published_at_unix_ms,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
-}
-
-func (x *CapabilityDescriptor) Reset() {
-	*x = CapabilityDescriptor{}
-	mi := &file_axon_v1_types_proto_msgTypes[47]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CapabilityDescriptor) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CapabilityDescriptor) ProtoMessage() {}
-
-func (x *CapabilityDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[47]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CapabilityDescriptor.ProtoReflect.Descriptor instead.
-func (*CapabilityDescriptor) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{47}
-}
-
-func (x *CapabilityDescriptor) GetAbilityId() string {
-	if x != nil {
-		return x.AbilityId
-	}
-	return ""
-}
-
-func (x *CapabilityDescriptor) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *CapabilityDescriptor) GetVersion() string {
-	if x != nil {
-		return x.Version
-	}
-	return ""
-}
-
-func (x *CapabilityDescriptor) GetTags() []string {
-	if x != nil {
-		return x.Tags
-	}
-	return nil
-}
-
-func (x *CapabilityDescriptor) GetRequirements() map[string]string {
-	if x != nil {
-		return x.Requirements
-	}
-	return nil
-}
-
-func (x *CapabilityDescriptor) GetSignature() []byte {
-	if x != nil {
-		return x.Signature
-	}
-	return nil
-}
-
-func (x *CapabilityDescriptor) GetPublisherId() string {
-	if x != nil {
-		return x.PublisherId
-	}
-	return ""
-}
-
-func (x *CapabilityDescriptor) GetPublishedAtUnixMs() int64 {
-	if x != nil {
-		return x.PublishedAtUnixMs
-	}
-	return 0
-}
-
 type AbilityTarget struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	AbilityName   string                 `protobuf:"bytes,1,opt,name=ability_name,json=abilityName,proto3" json:"ability_name,omitempty"`
@@ -5065,7 +4724,7 @@ type AbilityTarget struct {
 
 func (x *AbilityTarget) Reset() {
 	*x = AbilityTarget{}
-	mi := &file_axon_v1_types_proto_msgTypes[48]
+	mi := &file_axon_v1_types_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5077,7 +4736,7 @@ func (x *AbilityTarget) String() string {
 func (*AbilityTarget) ProtoMessage() {}
 
 func (x *AbilityTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[48]
+	mi := &file_axon_v1_types_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5090,7 +4749,7 @@ func (x *AbilityTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AbilityTarget.ProtoReflect.Descriptor instead.
 func (*AbilityTarget) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{48}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *AbilityTarget) GetAbilityName() string {
@@ -5129,7 +4788,7 @@ type InvocationTarget struct {
 
 func (x *InvocationTarget) Reset() {
 	*x = InvocationTarget{}
-	mi := &file_axon_v1_types_proto_msgTypes[49]
+	mi := &file_axon_v1_types_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5141,7 +4800,7 @@ func (x *InvocationTarget) String() string {
 func (*InvocationTarget) ProtoMessage() {}
 
 func (x *InvocationTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[49]
+	mi := &file_axon_v1_types_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5154,7 +4813,7 @@ func (x *InvocationTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvocationTarget.ProtoReflect.Descriptor instead.
 func (*InvocationTarget) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{49}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *InvocationTarget) GetStrategy() RoutingStrategy {
@@ -5240,7 +4899,7 @@ type KeyInfo struct {
 
 func (x *KeyInfo) Reset() {
 	*x = KeyInfo{}
-	mi := &file_axon_v1_types_proto_msgTypes[50]
+	mi := &file_axon_v1_types_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5252,7 +4911,7 @@ func (x *KeyInfo) String() string {
 func (*KeyInfo) ProtoMessage() {}
 
 func (x *KeyInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[50]
+	mi := &file_axon_v1_types_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5265,7 +4924,7 @@ func (x *KeyInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyInfo.ProtoReflect.Descriptor instead.
 func (*KeyInfo) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{50}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *KeyInfo) GetKeyHash() string {
@@ -5333,7 +4992,7 @@ type AuditEntry struct {
 
 func (x *AuditEntry) Reset() {
 	*x = AuditEntry{}
-	mi := &file_axon_v1_types_proto_msgTypes[51]
+	mi := &file_axon_v1_types_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5345,7 +5004,7 @@ func (x *AuditEntry) String() string {
 func (*AuditEntry) ProtoMessage() {}
 
 func (x *AuditEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[51]
+	mi := &file_axon_v1_types_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5358,7 +5017,7 @@ func (x *AuditEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditEntry.ProtoReflect.Descriptor instead.
 func (*AuditEntry) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{51}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *AuditEntry) GetEntryId() string {
@@ -5434,7 +5093,7 @@ type ContentMeta struct {
 
 func (x *ContentMeta) Reset() {
 	*x = ContentMeta{}
-	mi := &file_axon_v1_types_proto_msgTypes[52]
+	mi := &file_axon_v1_types_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5446,7 +5105,7 @@ func (x *ContentMeta) String() string {
 func (*ContentMeta) ProtoMessage() {}
 
 func (x *ContentMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[52]
+	mi := &file_axon_v1_types_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5459,7 +5118,7 @@ func (x *ContentMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContentMeta.ProtoReflect.Descriptor instead.
 func (*ContentMeta) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{52}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *ContentMeta) GetWidth() uint32 {
@@ -5535,7 +5194,7 @@ type PayloadRef struct {
 
 func (x *PayloadRef) Reset() {
 	*x = PayloadRef{}
-	mi := &file_axon_v1_types_proto_msgTypes[53]
+	mi := &file_axon_v1_types_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5547,7 +5206,7 @@ func (x *PayloadRef) String() string {
 func (*PayloadRef) ProtoMessage() {}
 
 func (x *PayloadRef) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[53]
+	mi := &file_axon_v1_types_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5560,7 +5219,7 @@ func (x *PayloadRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PayloadRef.ProtoReflect.Descriptor instead.
 func (*PayloadRef) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{53}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *PayloadRef) GetUra() string {
@@ -5923,16 +5582,7 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"queueDepth\x12%\n" +
 	"\x0eactive_streams\x18\x05 \x01(\x05R\ractiveStreams\x12!\n" +
 	"\factive_calls\x18\x06 \x01(\x05R\vactiveCalls\x120\n" +
-	"\x14disk_available_bytes\x18\a \x01(\x03R\x12diskAvailableBytes\"\xc5\x01\n" +
-	"\n" +
-	"DeviceMeta\x12\x0e\n" +
-	"\x02os\x18\x01 \x01(\tR\x02os\x12\x1d\n" +
-	"\n" +
-	"os_version\x18\x02 \x01(\tR\tosVersion\x12%\n" +
-	"\x0ehardware_model\x18\x03 \x01(\tR\rhardwareModel\x12\"\n" +
-	"\farchitecture\x18\x04 \x01(\tR\farchitecture\x12!\n" +
-	"\fnetwork_type\x18\x05 \x01(\tR\vnetworkType\x12\x1a\n" +
-	"\bhostname\x18\x06 \x01(\tR\bhostname\"\x83\x06\n" +
+	"\x14disk_available_bytes\x18\a \x01(\x03R\x12diskAvailableBytes\"\xca\x05\n" +
 	"\x0eNodeDescriptor\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12!\n" +
@@ -5946,36 +5596,13 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\tresources\x18\t \x01(\v2\x19.axon.v1.ResourceSnapshotR\tresources\x121\n" +
 	"\x15registered_at_unix_ms\x18\n" +
 	" \x01(\x03R\x12registeredAtUnixMs\x123\n" +
-	"\x16last_heartbeat_unix_ms\x18\v \x01(\x03R\x13lastHeartbeatUnixMs\x12\x19\n" +
-	"\bowner_id\x18\f \x01(\tR\aownerId\x12!\n" +
-	"\fdevice_group\x18\r \x01(\tR\vdeviceGroup\x12+\n" +
-	"\x06device\x18\x0e \x01(\v2\x13.axon.v1.DeviceMetaR\x06device\x12\x16\n" +
+	"\x16last_heartbeat_unix_ms\x18\v \x01(\x03R\x13lastHeartbeatUnixMs\x12\x16\n" +
 	"\x06online\x18\x10 \x01(\bR\x06online\x12)\n" +
 	"\x11last_seen_unix_ms\x18\x11 \x01(\x03R\x0elastSeenUnixMs\x12%\n" +
 	"\x04role\x18\x12 \x01(\x0e2\x11.axon.v1.NodeRoleR\x04role\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x0f\x10\x10R\ba2a_card\"g\n" +
-	"\x14CapabilityPackageRef\x12\x1d\n" +
-	"\n" +
-	"package_id\x18\x01 \x01(\tR\tpackageId\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\tR\aversion\x12\x16\n" +
-	"\x06digest\x18\x03 \x01(\tR\x06digest\"\xa7\x03\n" +
-	"\x14CapabilityDescriptor\x12\x1d\n" +
-	"\n" +
-	"ability_id\x18\x01 \x01(\tR\tabilityId\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
-	"\aversion\x18\x03 \x01(\tR\aversion\x12\x12\n" +
-	"\x04tags\x18\x04 \x03(\tR\x04tags\x12S\n" +
-	"\frequirements\x18\x05 \x03(\v2/.axon.v1.CapabilityDescriptor.RequirementsEntryR\frequirements\x12\x1c\n" +
-	"\tsignature\x18\x06 \x01(\fR\tsignature\x12!\n" +
-	"\fpublisher_id\x18\a \x01(\tR\vpublisherId\x12/\n" +
-	"\x14published_at_unix_ms\x18\b \x01(\x03R\x11publishedAtUnixMs\x1a?\n" +
-	"\x11RequirementsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\t\x10\n" +
-	"J\x04\b\n" +
-	"\x10\vJ\x04\b\v\x10\fR\tmcp_toolsR\ta2a_skill\"W\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10R\bowner_idR\fdevice_groupR\x06deviceR\ba2a_card\"W\n" +
 	"\rAbilityTarget\x12!\n" +
 	"\fability_name\x18\x01 \x01(\tR\vabilityName\x12#\n" +
 	"\rfunction_name\x18\x02 \x01(\tR\ffunctionName\"\xf0\x02\n" +
@@ -6120,18 +5747,7 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\x15NODE_ROLE_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eNODE_ROLE_FULL\x10\x01\x12\x1a\n" +
 	"\x16NODE_ROLE_ORCHESTRATOR\x10\x02\x12\x14\n" +
-	"\x10NODE_ROLE_WORKER\x10\x03*\xd3\x02\n" +
-	"\x0fCapabilityState\x12 \n" +
-	"\x1cCAPABILITY_STATE_UNSPECIFIED\x10\x00\x12\x1d\n" +
-	"\x19CAPABILITY_STATE_RECEIVED\x10\x01\x12\x1d\n" +
-	"\x19CAPABILITY_STATE_VERIFIED\x10\x02\x12\x1d\n" +
-	"\x19CAPABILITY_STATE_ADMITTED\x10\x03\x12\x1f\n" +
-	"\x1bCAPABILITY_STATE_INSTALLING\x10\x04\x12\x1e\n" +
-	"\x1aCAPABILITY_STATE_INSTALLED\x10\x05\x12\x1e\n" +
-	"\x1aCAPABILITY_STATE_ACTIVATED\x10\x06\x12 \n" +
-	"\x1cCAPABILITY_STATE_DEACTIVATED\x10\a\x12 \n" +
-	"\x1cCAPABILITY_STATE_ROLLED_BACK\x10\b\x12\x1c\n" +
-	"\x18CAPABILITY_STATE_REVOKED\x10\t*\xad\x02\n" +
+	"\x10NODE_ROLE_WORKER\x10\x03*\xad\x02\n" +
 	"\x0fInvocationState\x12 \n" +
 	"\x1cINVOCATION_STATE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19INVOCATION_STATE_ACCEPTED\x10\x01\x12\x1d\n" +
@@ -6179,8 +5795,8 @@ func file_axon_v1_types_proto_rawDescGZIP() []byte {
 	return file_axon_v1_types_proto_rawDescData
 }
 
-var file_axon_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 18)
-var file_axon_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 59)
+var file_axon_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 17)
+var file_axon_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 55)
 var file_axon_v1_types_proto_goTypes = []any{
 	(ResourceType)(0),                         // 0: axon.v1.ResourceType
 	(ExecutionMode)(0),                        // 1: axon.v1.ExecutionMode
@@ -6194,139 +5810,132 @@ var file_axon_v1_types_proto_goTypes = []any{
 	(NodeState)(0),                            // 9: axon.v1.NodeState
 	(TrustLevel)(0),                           // 10: axon.v1.TrustLevel
 	(NodeRole)(0),                             // 11: axon.v1.NodeRole
-	(CapabilityState)(0),                      // 12: axon.v1.CapabilityState
-	(InvocationState)(0),                      // 13: axon.v1.InvocationState
-	(RoutingStrategy)(0),                      // 14: axon.v1.RoutingStrategy
-	(InvocationTargetKind)(0),                 // 15: axon.v1.InvocationTargetKind
-	(StreamFrameType)(0),                      // 16: axon.v1.StreamFrameType
-	(KeyState)(0),                             // 17: axon.v1.KeyState
-	(*ResourceRef)(nil),                       // 18: axon.v1.ResourceRef
-	(*BackpressureSignal)(nil),                // 19: axon.v1.BackpressureSignal
-	(*CircuitBreakerConfig)(nil),              // 20: axon.v1.CircuitBreakerConfig
-	(*CircuitBreakerStatus)(nil),              // 21: axon.v1.CircuitBreakerStatus
-	(*RateLimitInfo)(nil),                     // 22: axon.v1.RateLimitInfo
-	(*SchedulingScore)(nil),                   // 23: axon.v1.SchedulingScore
-	(*ContentEnvelope)(nil),                   // 24: axon.v1.ContentEnvelope
-	(*ChannelSecurity)(nil),                   // 25: axon.v1.ChannelSecurity
-	(*EncryptedPayload)(nil),                  // 26: axon.v1.EncryptedPayload
-	(*AgentIdentity)(nil),                     // 27: axon.v1.AgentIdentity
-	(*SubjectIdentity)(nil),                   // 28: axon.v1.SubjectIdentity
-	(*EntityRef)(nil),                         // 29: axon.v1.EntityRef
-	(*InvocationAuthorityProof)(nil),          // 30: axon.v1.InvocationAuthorityProof
-	(*CausalContext)(nil),                     // 31: axon.v1.CausalContext
-	(*Empty)(nil),                             // 32: axon.v1.Empty
-	(*ReceiptRef)(nil),                        // 33: axon.v1.ReceiptRef
-	(*ReceiptList)(nil),                       // 34: axon.v1.ReceiptList
-	(*MerkleRoot)(nil),                        // 35: axon.v1.MerkleRoot
-	(*CallerSignature)(nil),                   // 36: axon.v1.CallerSignature
-	(*CalleeSignature)(nil),                   // 37: axon.v1.CalleeSignature
-	(*AuthorityBinding)(nil),                  // 38: axon.v1.AuthorityBinding
-	(*SelfAuthority)(nil),                     // 39: axon.v1.SelfAuthority
-	(*DelegationProof)(nil),                   // 40: axon.v1.DelegationProof
-	(*CapabilityGrant)(nil),                   // 41: axon.v1.CapabilityGrant
-	(*PolicyGrant)(nil),                       // 42: axon.v1.PolicyGrant
-	(*SessionAuthority)(nil),                  // 43: axon.v1.SessionAuthority
-	(*BootstrapAuthority)(nil),                // 44: axon.v1.BootstrapAuthority
-	(*Envelope)(nil),                          // 45: axon.v1.Envelope
-	(*ResponseHeader)(nil),                    // 46: axon.v1.ResponseHeader
-	(*Error)(nil),                             // 47: axon.v1.Error
-	(*SealedLedgerEventPayload)(nil),          // 48: axon.v1.SealedLedgerEventPayload
-	(*LedgerEventPayload)(nil),                // 49: axon.v1.LedgerEventPayload
-	(*RecipientSealedLedgerEventPayload)(nil), // 50: axon.v1.RecipientSealedLedgerEventPayload
-	(*LedgerPayloadVisibility)(nil),           // 51: axon.v1.LedgerPayloadVisibility
-	(*LedgerVisibilitySummary)(nil),           // 52: axon.v1.LedgerVisibilitySummary
-	(*LedgerErrorRecord)(nil),                 // 53: axon.v1.LedgerErrorRecord
-	(*LedgerDiagnosticRecord)(nil),            // 54: axon.v1.LedgerDiagnosticRecord
-	(*InvocationReceiptAnchor)(nil),           // 55: axon.v1.InvocationReceiptAnchor
-	(*InvocationReceiptChainSummary)(nil),     // 56: axon.v1.InvocationReceiptChainSummary
-	(*InvocationCausalLink)(nil),              // 57: axon.v1.InvocationCausalLink
-	(*InvocationTraceEdge)(nil),               // 58: axon.v1.InvocationTraceEdge
-	(*InvocationTraceGraph)(nil),              // 59: axon.v1.InvocationTraceGraph
-	(*InvocationLedgerRecord)(nil),            // 60: axon.v1.InvocationLedgerRecord
-	(*ResourceSnapshot)(nil),                  // 61: axon.v1.ResourceSnapshot
-	(*DeviceMeta)(nil),                        // 62: axon.v1.DeviceMeta
-	(*NodeDescriptor)(nil),                    // 63: axon.v1.NodeDescriptor
-	(*CapabilityPackageRef)(nil),              // 64: axon.v1.CapabilityPackageRef
-	(*CapabilityDescriptor)(nil),              // 65: axon.v1.CapabilityDescriptor
-	(*AbilityTarget)(nil),                     // 66: axon.v1.AbilityTarget
-	(*InvocationTarget)(nil),                  // 67: axon.v1.InvocationTarget
-	(*KeyInfo)(nil),                           // 68: axon.v1.KeyInfo
-	(*AuditEntry)(nil),                        // 69: axon.v1.AuditEntry
-	(*ContentMeta)(nil),                       // 70: axon.v1.ContentMeta
-	(*PayloadRef)(nil),                        // 71: axon.v1.PayloadRef
-	nil,                                       // 72: axon.v1.Error.ContextEntry
-	nil,                                       // 73: axon.v1.LedgerErrorRecord.ContextEntry
-	nil,                                       // 74: axon.v1.NodeDescriptor.LabelsEntry
-	nil,                                       // 75: axon.v1.CapabilityDescriptor.RequirementsEntry
-	nil,                                       // 76: axon.v1.PayloadRef.LabelsEntry
+	(InvocationState)(0),                      // 12: axon.v1.InvocationState
+	(RoutingStrategy)(0),                      // 13: axon.v1.RoutingStrategy
+	(InvocationTargetKind)(0),                 // 14: axon.v1.InvocationTargetKind
+	(StreamFrameType)(0),                      // 15: axon.v1.StreamFrameType
+	(KeyState)(0),                             // 16: axon.v1.KeyState
+	(*ResourceRef)(nil),                       // 17: axon.v1.ResourceRef
+	(*BackpressureSignal)(nil),                // 18: axon.v1.BackpressureSignal
+	(*CircuitBreakerConfig)(nil),              // 19: axon.v1.CircuitBreakerConfig
+	(*CircuitBreakerStatus)(nil),              // 20: axon.v1.CircuitBreakerStatus
+	(*RateLimitInfo)(nil),                     // 21: axon.v1.RateLimitInfo
+	(*SchedulingScore)(nil),                   // 22: axon.v1.SchedulingScore
+	(*ContentEnvelope)(nil),                   // 23: axon.v1.ContentEnvelope
+	(*ChannelSecurity)(nil),                   // 24: axon.v1.ChannelSecurity
+	(*EncryptedPayload)(nil),                  // 25: axon.v1.EncryptedPayload
+	(*AgentIdentity)(nil),                     // 26: axon.v1.AgentIdentity
+	(*SubjectIdentity)(nil),                   // 27: axon.v1.SubjectIdentity
+	(*EntityRef)(nil),                         // 28: axon.v1.EntityRef
+	(*InvocationAuthorityProof)(nil),          // 29: axon.v1.InvocationAuthorityProof
+	(*CausalContext)(nil),                     // 30: axon.v1.CausalContext
+	(*Empty)(nil),                             // 31: axon.v1.Empty
+	(*ReceiptRef)(nil),                        // 32: axon.v1.ReceiptRef
+	(*ReceiptList)(nil),                       // 33: axon.v1.ReceiptList
+	(*MerkleRoot)(nil),                        // 34: axon.v1.MerkleRoot
+	(*CallerSignature)(nil),                   // 35: axon.v1.CallerSignature
+	(*CalleeSignature)(nil),                   // 36: axon.v1.CalleeSignature
+	(*AuthorityBinding)(nil),                  // 37: axon.v1.AuthorityBinding
+	(*SelfAuthority)(nil),                     // 38: axon.v1.SelfAuthority
+	(*DelegationProof)(nil),                   // 39: axon.v1.DelegationProof
+	(*CapabilityGrant)(nil),                   // 40: axon.v1.CapabilityGrant
+	(*PolicyGrant)(nil),                       // 41: axon.v1.PolicyGrant
+	(*SessionAuthority)(nil),                  // 42: axon.v1.SessionAuthority
+	(*BootstrapAuthority)(nil),                // 43: axon.v1.BootstrapAuthority
+	(*Envelope)(nil),                          // 44: axon.v1.Envelope
+	(*ResponseHeader)(nil),                    // 45: axon.v1.ResponseHeader
+	(*Error)(nil),                             // 46: axon.v1.Error
+	(*SealedLedgerEventPayload)(nil),          // 47: axon.v1.SealedLedgerEventPayload
+	(*LedgerEventPayload)(nil),                // 48: axon.v1.LedgerEventPayload
+	(*RecipientSealedLedgerEventPayload)(nil), // 49: axon.v1.RecipientSealedLedgerEventPayload
+	(*LedgerPayloadVisibility)(nil),           // 50: axon.v1.LedgerPayloadVisibility
+	(*LedgerVisibilitySummary)(nil),           // 51: axon.v1.LedgerVisibilitySummary
+	(*LedgerErrorRecord)(nil),                 // 52: axon.v1.LedgerErrorRecord
+	(*LedgerDiagnosticRecord)(nil),            // 53: axon.v1.LedgerDiagnosticRecord
+	(*InvocationReceiptAnchor)(nil),           // 54: axon.v1.InvocationReceiptAnchor
+	(*InvocationReceiptChainSummary)(nil),     // 55: axon.v1.InvocationReceiptChainSummary
+	(*InvocationCausalLink)(nil),              // 56: axon.v1.InvocationCausalLink
+	(*InvocationTraceEdge)(nil),               // 57: axon.v1.InvocationTraceEdge
+	(*InvocationTraceGraph)(nil),              // 58: axon.v1.InvocationTraceGraph
+	(*InvocationLedgerRecord)(nil),            // 59: axon.v1.InvocationLedgerRecord
+	(*ResourceSnapshot)(nil),                  // 60: axon.v1.ResourceSnapshot
+	(*NodeDescriptor)(nil),                    // 61: axon.v1.NodeDescriptor
+	(*AbilityTarget)(nil),                     // 62: axon.v1.AbilityTarget
+	(*InvocationTarget)(nil),                  // 63: axon.v1.InvocationTarget
+	(*KeyInfo)(nil),                           // 64: axon.v1.KeyInfo
+	(*AuditEntry)(nil),                        // 65: axon.v1.AuditEntry
+	(*ContentMeta)(nil),                       // 66: axon.v1.ContentMeta
+	(*PayloadRef)(nil),                        // 67: axon.v1.PayloadRef
+	nil,                                       // 68: axon.v1.Error.ContextEntry
+	nil,                                       // 69: axon.v1.LedgerErrorRecord.ContextEntry
+	nil,                                       // 70: axon.v1.NodeDescriptor.LabelsEntry
+	nil,                                       // 71: axon.v1.PayloadRef.LabelsEntry
 }
 var file_axon_v1_types_proto_depIdxs = []int32{
 	0,  // 0: axon.v1.ResourceRef.type:type_name -> axon.v1.ResourceType
 	3,  // 1: axon.v1.CircuitBreakerStatus.state:type_name -> axon.v1.CircuitState
-	70, // 2: axon.v1.ContentEnvelope.meta:type_name -> axon.v1.ContentMeta
+	66, // 2: axon.v1.ContentEnvelope.meta:type_name -> axon.v1.ContentMeta
 	4,  // 3: axon.v1.ContentEnvelope.encryption:type_name -> axon.v1.EncryptionAlgorithm
 	4,  // 4: axon.v1.EncryptedPayload.algorithm:type_name -> axon.v1.EncryptionAlgorithm
 	5,  // 5: axon.v1.EntityRef.kind:type_name -> axon.v1.EntityRefKind
-	38, // 6: axon.v1.InvocationAuthorityProof.binding:type_name -> axon.v1.AuthorityBinding
-	27, // 7: axon.v1.InvocationAuthorityProof.issuer:type_name -> axon.v1.AgentIdentity
-	37, // 8: axon.v1.InvocationAuthorityProof.signature:type_name -> axon.v1.CalleeSignature
-	32, // 9: axon.v1.CausalContext.none:type_name -> axon.v1.Empty
-	33, // 10: axon.v1.CausalContext.scalar:type_name -> axon.v1.ReceiptRef
-	34, // 11: axon.v1.CausalContext.list:type_name -> axon.v1.ReceiptList
-	35, // 12: axon.v1.CausalContext.merkle:type_name -> axon.v1.MerkleRoot
-	33, // 13: axon.v1.ReceiptList.prior:type_name -> axon.v1.ReceiptRef
-	39, // 14: axon.v1.AuthorityBinding.self_authority:type_name -> axon.v1.SelfAuthority
-	40, // 15: axon.v1.AuthorityBinding.delegated_authority:type_name -> axon.v1.DelegationProof
-	41, // 16: axon.v1.AuthorityBinding.capability_grant:type_name -> axon.v1.CapabilityGrant
-	42, // 17: axon.v1.AuthorityBinding.policy_grant:type_name -> axon.v1.PolicyGrant
-	43, // 18: axon.v1.AuthorityBinding.session_authority:type_name -> axon.v1.SessionAuthority
-	44, // 19: axon.v1.AuthorityBinding.bootstrap_authority:type_name -> axon.v1.BootstrapAuthority
+	37, // 6: axon.v1.InvocationAuthorityProof.binding:type_name -> axon.v1.AuthorityBinding
+	26, // 7: axon.v1.InvocationAuthorityProof.issuer:type_name -> axon.v1.AgentIdentity
+	36, // 8: axon.v1.InvocationAuthorityProof.signature:type_name -> axon.v1.CalleeSignature
+	31, // 9: axon.v1.CausalContext.none:type_name -> axon.v1.Empty
+	32, // 10: axon.v1.CausalContext.scalar:type_name -> axon.v1.ReceiptRef
+	33, // 11: axon.v1.CausalContext.list:type_name -> axon.v1.ReceiptList
+	34, // 12: axon.v1.CausalContext.merkle:type_name -> axon.v1.MerkleRoot
+	32, // 13: axon.v1.ReceiptList.prior:type_name -> axon.v1.ReceiptRef
+	38, // 14: axon.v1.AuthorityBinding.self_authority:type_name -> axon.v1.SelfAuthority
+	39, // 15: axon.v1.AuthorityBinding.delegated_authority:type_name -> axon.v1.DelegationProof
+	40, // 16: axon.v1.AuthorityBinding.capability_grant:type_name -> axon.v1.CapabilityGrant
+	41, // 17: axon.v1.AuthorityBinding.policy_grant:type_name -> axon.v1.PolicyGrant
+	42, // 18: axon.v1.AuthorityBinding.session_authority:type_name -> axon.v1.SessionAuthority
+	43, // 19: axon.v1.AuthorityBinding.bootstrap_authority:type_name -> axon.v1.BootstrapAuthority
 	2,  // 20: axon.v1.Envelope.priority:type_name -> axon.v1.Priority
-	27, // 21: axon.v1.Envelope.caller:type_name -> axon.v1.AgentIdentity
-	27, // 22: axon.v1.Envelope.callee:type_name -> axon.v1.AgentIdentity
-	28, // 23: axon.v1.Envelope.subject:type_name -> axon.v1.SubjectIdentity
-	31, // 24: axon.v1.Envelope.causal_context:type_name -> axon.v1.CausalContext
-	36, // 25: axon.v1.Envelope.caller_signature:type_name -> axon.v1.CallerSignature
-	72, // 26: axon.v1.Error.context:type_name -> axon.v1.Error.ContextEntry
+	26, // 21: axon.v1.Envelope.caller:type_name -> axon.v1.AgentIdentity
+	26, // 22: axon.v1.Envelope.callee:type_name -> axon.v1.AgentIdentity
+	27, // 23: axon.v1.Envelope.subject:type_name -> axon.v1.SubjectIdentity
+	30, // 24: axon.v1.Envelope.causal_context:type_name -> axon.v1.CausalContext
+	35, // 25: axon.v1.Envelope.caller_signature:type_name -> axon.v1.CallerSignature
+	68, // 26: axon.v1.Error.context:type_name -> axon.v1.Error.ContextEntry
 	6,  // 27: axon.v1.Error.stage:type_name -> axon.v1.ErrorStage
 	7,  // 28: axon.v1.Error.security_class:type_name -> axon.v1.SecurityClass
 	8,  // 29: axon.v1.LedgerEventPayload.kind:type_name -> axon.v1.LedgerEventPayloadKind
-	48, // 30: axon.v1.LedgerEventPayload.sealed:type_name -> axon.v1.SealedLedgerEventPayload
-	50, // 31: axon.v1.LedgerEventPayload.recipients:type_name -> axon.v1.RecipientSealedLedgerEventPayload
-	48, // 32: axon.v1.RecipientSealedLedgerEventPayload.payload:type_name -> axon.v1.SealedLedgerEventPayload
-	51, // 33: axon.v1.LedgerVisibilitySummary.args:type_name -> axon.v1.LedgerPayloadVisibility
-	51, // 34: axon.v1.LedgerVisibilitySummary.result:type_name -> axon.v1.LedgerPayloadVisibility
-	51, // 35: axon.v1.LedgerVisibilitySummary.diagnostics:type_name -> axon.v1.LedgerPayloadVisibility
-	73, // 36: axon.v1.LedgerErrorRecord.context:type_name -> axon.v1.LedgerErrorRecord.ContextEntry
-	49, // 37: axon.v1.LedgerDiagnosticRecord.payload:type_name -> axon.v1.LedgerEventPayload
-	55, // 38: axon.v1.InvocationReceiptChainSummary.anchors:type_name -> axon.v1.InvocationReceiptAnchor
-	60, // 39: axon.v1.InvocationTraceGraph.records:type_name -> axon.v1.InvocationLedgerRecord
-	58, // 40: axon.v1.InvocationTraceGraph.edges:type_name -> axon.v1.InvocationTraceEdge
-	49, // 41: axon.v1.InvocationLedgerRecord.args:type_name -> axon.v1.LedgerEventPayload
-	49, // 42: axon.v1.InvocationLedgerRecord.result:type_name -> axon.v1.LedgerEventPayload
-	53, // 43: axon.v1.InvocationLedgerRecord.error:type_name -> axon.v1.LedgerErrorRecord
-	54, // 44: axon.v1.InvocationLedgerRecord.diagnostics:type_name -> axon.v1.LedgerDiagnosticRecord
-	57, // 45: axon.v1.InvocationLedgerRecord.causal_links:type_name -> axon.v1.InvocationCausalLink
-	56, // 46: axon.v1.InvocationLedgerRecord.receipt_chain:type_name -> axon.v1.InvocationReceiptChainSummary
-	52, // 47: axon.v1.InvocationLedgerRecord.visibility:type_name -> axon.v1.LedgerVisibilitySummary
+	47, // 30: axon.v1.LedgerEventPayload.sealed:type_name -> axon.v1.SealedLedgerEventPayload
+	49, // 31: axon.v1.LedgerEventPayload.recipients:type_name -> axon.v1.RecipientSealedLedgerEventPayload
+	47, // 32: axon.v1.RecipientSealedLedgerEventPayload.payload:type_name -> axon.v1.SealedLedgerEventPayload
+	50, // 33: axon.v1.LedgerVisibilitySummary.args:type_name -> axon.v1.LedgerPayloadVisibility
+	50, // 34: axon.v1.LedgerVisibilitySummary.result:type_name -> axon.v1.LedgerPayloadVisibility
+	50, // 35: axon.v1.LedgerVisibilitySummary.diagnostics:type_name -> axon.v1.LedgerPayloadVisibility
+	69, // 36: axon.v1.LedgerErrorRecord.context:type_name -> axon.v1.LedgerErrorRecord.ContextEntry
+	48, // 37: axon.v1.LedgerDiagnosticRecord.payload:type_name -> axon.v1.LedgerEventPayload
+	54, // 38: axon.v1.InvocationReceiptChainSummary.anchors:type_name -> axon.v1.InvocationReceiptAnchor
+	59, // 39: axon.v1.InvocationTraceGraph.records:type_name -> axon.v1.InvocationLedgerRecord
+	57, // 40: axon.v1.InvocationTraceGraph.edges:type_name -> axon.v1.InvocationTraceEdge
+	48, // 41: axon.v1.InvocationLedgerRecord.args:type_name -> axon.v1.LedgerEventPayload
+	48, // 42: axon.v1.InvocationLedgerRecord.result:type_name -> axon.v1.LedgerEventPayload
+	52, // 43: axon.v1.InvocationLedgerRecord.error:type_name -> axon.v1.LedgerErrorRecord
+	53, // 44: axon.v1.InvocationLedgerRecord.diagnostics:type_name -> axon.v1.LedgerDiagnosticRecord
+	56, // 45: axon.v1.InvocationLedgerRecord.causal_links:type_name -> axon.v1.InvocationCausalLink
+	55, // 46: axon.v1.InvocationLedgerRecord.receipt_chain:type_name -> axon.v1.InvocationReceiptChainSummary
+	51, // 47: axon.v1.InvocationLedgerRecord.visibility:type_name -> axon.v1.LedgerVisibilitySummary
 	9,  // 48: axon.v1.NodeDescriptor.state:type_name -> axon.v1.NodeState
 	10, // 49: axon.v1.NodeDescriptor.trust_level:type_name -> axon.v1.TrustLevel
-	74, // 50: axon.v1.NodeDescriptor.labels:type_name -> axon.v1.NodeDescriptor.LabelsEntry
-	61, // 51: axon.v1.NodeDescriptor.resources:type_name -> axon.v1.ResourceSnapshot
-	62, // 52: axon.v1.NodeDescriptor.device:type_name -> axon.v1.DeviceMeta
-	11, // 53: axon.v1.NodeDescriptor.role:type_name -> axon.v1.NodeRole
-	75, // 54: axon.v1.CapabilityDescriptor.requirements:type_name -> axon.v1.CapabilityDescriptor.RequirementsEntry
-	14, // 55: axon.v1.InvocationTarget.strategy:type_name -> axon.v1.RoutingStrategy
-	10, // 56: axon.v1.InvocationTarget.min_trust_level:type_name -> axon.v1.TrustLevel
-	66, // 57: axon.v1.InvocationTarget.ability:type_name -> axon.v1.AbilityTarget
-	17, // 58: axon.v1.KeyInfo.state:type_name -> axon.v1.KeyState
-	24, // 59: axon.v1.PayloadRef.content:type_name -> axon.v1.ContentEnvelope
-	76, // 60: axon.v1.PayloadRef.labels:type_name -> axon.v1.PayloadRef.LabelsEntry
-	61, // [61:61] is the sub-list for method output_type
-	61, // [61:61] is the sub-list for method input_type
-	61, // [61:61] is the sub-list for extension type_name
-	61, // [61:61] is the sub-list for extension extendee
-	0,  // [0:61] is the sub-list for field type_name
+	70, // 50: axon.v1.NodeDescriptor.labels:type_name -> axon.v1.NodeDescriptor.LabelsEntry
+	60, // 51: axon.v1.NodeDescriptor.resources:type_name -> axon.v1.ResourceSnapshot
+	11, // 52: axon.v1.NodeDescriptor.role:type_name -> axon.v1.NodeRole
+	13, // 53: axon.v1.InvocationTarget.strategy:type_name -> axon.v1.RoutingStrategy
+	10, // 54: axon.v1.InvocationTarget.min_trust_level:type_name -> axon.v1.TrustLevel
+	62, // 55: axon.v1.InvocationTarget.ability:type_name -> axon.v1.AbilityTarget
+	16, // 56: axon.v1.KeyInfo.state:type_name -> axon.v1.KeyState
+	23, // 57: axon.v1.PayloadRef.content:type_name -> axon.v1.ContentEnvelope
+	71, // 58: axon.v1.PayloadRef.labels:type_name -> axon.v1.PayloadRef.LabelsEntry
+	59, // [59:59] is the sub-list for method output_type
+	59, // [59:59] is the sub-list for method input_type
+	59, // [59:59] is the sub-list for extension type_name
+	59, // [59:59] is the sub-list for extension extendee
+	0,  // [0:59] is the sub-list for field type_name
 }
 
 func init() { file_axon_v1_types_proto_init() }
@@ -6348,7 +5957,7 @@ func file_axon_v1_types_proto_init() {
 		(*AuthorityBinding_SessionAuthority)(nil),
 		(*AuthorityBinding_BootstrapAuthority)(nil),
 	}
-	file_axon_v1_types_proto_msgTypes[49].OneofWrappers = []any{
+	file_axon_v1_types_proto_msgTypes[46].OneofWrappers = []any{
 		(*InvocationTarget_Ability)(nil),
 	}
 	type x struct{}
@@ -6356,8 +5965,8 @@ func file_axon_v1_types_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_axon_v1_types_proto_rawDesc), len(file_axon_v1_types_proto_rawDesc)),
-			NumEnums:      18,
-			NumMessages:   59,
+			NumEnums:      17,
+			NumMessages:   55,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

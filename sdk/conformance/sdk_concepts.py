@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from collections import defaultdict
@@ -520,6 +521,7 @@ def validate_provider_implementations(
         "capability_ids",
         "axon_revision",
     }
+    provider_identities: dict[str, dict[str, str]] = defaultdict(dict)
     for implementation in implementations:
         if not isinstance(implementation, dict):
             fail("invalid_provider_implementation")
@@ -554,7 +556,22 @@ def validate_provider_implementations(
             or key in seen
         ):
             fail(f"invalid_provider_implementation:{language}:{identity}")
+        if re.search(r"\beasy(?:net|remote)\b", production_owner, flags=re.I):
+            fail(f"product_specific_provider_owner:{language}:{identity}")
+        if identity == "direct_runtime_provider" and {
+            "stream",
+            "bidi",
+        }.intersection(capabilities):
+            fail(f"direct_runtime_claims_unsupported_streaming:{language}")
+        if (
+            language in {"go", "python"}
+            and {"stream", "bidi"}.intersection(capabilities)
+            and identity != "cabi_runtime_provider"
+        ):
+            fail(f"noncanonical_streaming_provider:{language}:{identity}")
         seen.add(key)
+        for capability_id in capabilities:
+            provider_identities[capability_id][language] = identity
         source = ROOT / path
         interface_source = ROOT / interface_path
         if check_paths and (
@@ -567,6 +584,14 @@ def validate_provider_implementations(
             or interface not in interface_source.read_text(encoding="utf-8")
         ):
             fail(f"provider_implementation_mismatch:{language}:{identity}")
+    for capability_id, identities in provider_identities.items():
+        shared = {
+            identities[language]
+            for language in ("go", "python")
+            if language in identities
+        }
+        if len(shared) > 1:
+            fail(f"cross_language_provider_identity_divergence:{capability_id}")
 
 
 def validate_provider_proofs(
@@ -658,6 +683,20 @@ def validate_provider_proofs(
                 fail(
                     f"provider_implementation_capability_mismatch:{capability_id}:{language}"
                 )
+            if capability_id in {"stream", "bidi"} and language in {"go", "python"}:
+                expected_evidence = {
+                    "go": ["sdk/go/cabi_runtime_test.go"],
+                    "python": ["sdk/python/tests/test_cabi.py"],
+                }[language]
+                for case_id in capabilities[capability_id]["case_ids"]:
+                    if language not in contracts[case_id]["languages"]:
+                        continue
+                    binding = bindings.get((language, case_id))
+                    if binding is None or binding.get("evidence") != expected_evidence:
+                        fail(
+                            "streaming_provider_evidence_mismatch:"
+                            f"{capability_id}:{language}:{case_id}"
+                        )
             expected_steps = {
                 (case_id, action)
                 for case_id in capabilities[capability_id]["case_ids"]
@@ -975,6 +1014,46 @@ def self_test(tmp: Path) -> None:
     expect(
         duplicated_provider_state,
         "invalid_provider_implementation",
+        check_paths=True,
+    )
+
+    product_specific_provider_owner = copy.deepcopy(concepts)
+    product_specific_provider_owner["provider_implementations"][0][
+        "production_owner"
+    ] = "EasyNet daemon provider"
+    expect(
+        product_specific_provider_owner,
+        "product_specific_provider_owner",
+        check_paths=True,
+    )
+
+    direct_streaming_claim = copy.deepcopy(concepts)
+    direct_provider = next(
+        implementation
+        for implementation in direct_streaming_claim["provider_implementations"]
+        if implementation["language"] == "go"
+        and implementation["identity"] == "direct_runtime_provider"
+    )
+    direct_provider["capability_ids"].append("stream")
+    expect(
+        direct_streaming_claim,
+        "direct_runtime_claims_unsupported_streaming",
+        check_paths=True,
+    )
+
+    divergent_streaming_provider = copy.deepcopy(concepts)
+    python_streaming_provider = next(
+        implementation
+        for implementation in divergent_streaming_provider[
+            "provider_implementations"
+        ]
+        if implementation["language"] == "python"
+        and implementation["identity"] == "cabi_runtime_provider"
+    )
+    python_streaming_provider["identity"] = "python_streaming_provider"
+    expect(
+        divergent_streaming_provider,
+        "noncanonical_streaming_provider",
         check_paths=True,
     )
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::daemon::federation::resolver_contract::{ResolveAnswerKind, RouteReason};
 
 #[test]
 fn quota_meters_user_abilities_but_exempts_control_plane() {
@@ -193,6 +194,8 @@ async fn principal_mutation_commits_once_and_returns_one_finalized_receipt_chain
     let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
     let trust_dir = tempfile::tempdir().expect("principal mutation tempdir");
     let trust_path = trust_dir.path().join("realm-trust.toml");
+    let receipt_key_resolver =
+        crate::daemon::axon_bridge::runtime_factory::ephemeral_test_receipt_key_resolver();
     let principal_ura = "easynet:///r/test-realm/user/mutation-once";
     let arguments = serde_json::to_string(&serde_json::json!({
         "request": {
@@ -245,6 +248,29 @@ async fn principal_mutation_commits_once_and_returns_one_finalized_receipt_chain
     assert_eq!(
         terminal.state,
         axon_sdk::invocation::InvocationState::Completed.to_wire_i32()
+    );
+
+    let signed_receipts = [admission, terminal].map(|wire_receipt| {
+        let receipt = axon_sdk::invocation::wire::try_receipt_from_wire(wire_receipt)
+            .expect("canonical runtime returns a structurally valid signed receipt")
+            .verify(receipt_key_resolver.as_ref())
+            .expect("canonical runtime receipt signature verifies against the daemon authority");
+        receipt
+            .verify_proof_facts()
+            .expect("canonical runtime receipt carries descriptor-bound proof facts");
+        receipt
+    });
+    let verified_checkpoints =
+        axon_sdk::invocation::FinalizationCheckpointVerifier::new(receipt_key_resolver.as_ref())
+            .verify(&signed_receipts[0], &signed_receipts[1])
+            .expect("admission and terminal are signed checkpoints from one Axon invocation");
+    assert_eq!(
+        verified_checkpoints.admission().state(),
+        axon_sdk::invocation::InvocationState::Admitted
+    );
+    assert_eq!(
+        verified_checkpoints.terminal().state(),
+        axon_sdk::invocation::InvocationState::Completed
     );
 
     let store_path = crate::daemon::invocation::admission::principal_lifecycle::principal_lifecycle_store_path_for_trust_anchor(&trust_path);
@@ -604,7 +630,7 @@ async fn invoke_dispatches_namespace_resolve_to_typed_answer() {
 
     assert_eq!(
         body["answer_kind"],
-        axon_sdk::pb::axon::v1::ResolveAnswerKind::FinalRoute.as_str_name()
+        ResolveAnswerKind::FinalRoute.as_str_name()
     );
     assert_eq!(body["ability_ura"], ability_ura);
     assert_eq!(
@@ -643,7 +669,7 @@ async fn namespace_resolve_cross_realm_route_returns_peer_hub_delegation() {
 
     assert_eq!(
         body["answer_kind"],
-        axon_sdk::pb::axon::v1::ResolveAnswerKind::Delegation.as_str_name()
+        ResolveAnswerKind::Delegation.as_str_name()
     );
     assert_eq!(body["owner_ura"], remote_owner);
     assert_eq!(body["next_hop"]["peer_hub"]["realm"], "remote-realm");
@@ -661,7 +687,7 @@ async fn namespace_resolve_cross_realm_route_returns_peer_hub_delegation() {
     );
     assert_eq!(
         body["selected_route"]["reason"],
-        axon_sdk::pb::axon::v1::RouteReason::PeerDelegation.as_str_name()
+        RouteReason::PeerDelegation.as_str_name()
     );
 }
 

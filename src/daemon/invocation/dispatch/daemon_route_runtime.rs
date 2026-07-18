@@ -45,7 +45,9 @@ use tonic::{Response, Status, Streaming};
 use crate::daemon::ability::dispatch::stream_env_ability_with_options;
 use crate::daemon::ability::CallMode as DescriptorCallMode;
 use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
-use crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry;
+use crate::daemon::invocation::dispatch::cancellation::{
+    InvocationCancellationRegistry, RegisteredInvocationLifecycle,
+};
 use crate::daemon::invocation::dispatch::daemon_invocation_service::{
     DaemonBidiRoute, DaemonStreamRoute, DaemonUnaryRoute,
 };
@@ -417,7 +419,7 @@ impl DaemonRouteRuntimeAdapter {
         route: DaemonStreamRoute,
         request: &InvokeServerStreamRequest,
         local_system_ingress: bool,
-    ) -> Result<StreamingInvocationHandle, Status> {
+    ) -> Result<(StreamingInvocationHandle, RegisteredInvocationLifecycle), Status> {
         let envelope = request.envelope.clone().ok_or_else(|| {
             Status::invalid_argument(format!("{}: envelope is required", route.name()))
         })?;
@@ -481,6 +483,7 @@ impl DaemonRouteRuntimeAdapter {
             )
         }
         .map_err(|error| status_from_axon_invoke_error("InvokeStream", route.name(), *error))?;
+        let lifecycle_envelope = wire.envelope.clone();
         let product_admission =
             self.product_policy
                 .stage(&self.admission, &wire, route.name(), CallMode::Stream)?;
@@ -489,8 +492,28 @@ impl DaemonRouteRuntimeAdapter {
             crate::daemon::axon_bridge::dispatch_shim::open_stream_admitted(&self.runtime, wire)
                 .await
                 .map_err(|err| status_from_axon_invoke_error("InvokeStream", route.name(), err))?;
-        product_admission.commit()?;
-        Ok(handle)
+        let lifecycle = match RegisteredInvocationLifecycle::register(
+            self.cancellations.clone(),
+            &lifecycle_envelope,
+            handle.handle().clone(),
+        ) {
+            Ok(lifecycle) => lifecycle,
+            Err(error) => {
+                let _ = handle.cancel("stream lifecycle registration failed").await;
+                let _ = handle.finalized().await;
+                return Err(Status::failed_precondition(format!(
+                    "InvokeStream `{}` lifecycle registration failed: {error}",
+                    route.name()
+                )));
+            }
+        };
+        if let Err(error) = product_admission.commit() {
+            let _ = lifecycle
+                .cancel_and_finalize("stream product admission commit failed")
+                .await;
+            return Err(error);
+        }
+        Ok((handle, lifecycle))
     }
 
     /// Open one exact bidi route through the descriptor-bound LocalRuntime
@@ -569,6 +592,7 @@ impl DaemonRouteRuntimeAdapter {
             )
         }
         .map_err(|error| status_from_axon_invoke_error("InvokeBidi", route.name(), *error))?;
+        let lifecycle_envelope = wire.envelope.clone();
         let product_admission =
             self.product_policy
                 .stage(&self.admission, &wire, route.name(), CallMode::Bidi)?;
@@ -578,22 +602,54 @@ impl DaemonRouteRuntimeAdapter {
         )
         .await
         .map_err(|error| status_from_axon_invoke_error("InvokeBidi", route.name(), error))?;
-        product_admission.commit()?;
-        let admission_receipt = handle.admission_receipt().await.map_err(|error| {
-            Status::failed_precondition(format!(
-                "CANONICAL_ADMISSION_REQUIRED: InvokeBidi `{}`: {error}",
-                route.name()
-            ))
-        })?;
+        let lifecycle = match RegisteredInvocationLifecycle::register(
+            self.cancellations.clone(),
+            &lifecycle_envelope,
+            handle.handle().clone(),
+        ) {
+            Ok(lifecycle) => lifecycle,
+            Err(error) => {
+                let _ = handle
+                    .handle()
+                    .cancel("bidi lifecycle registration failed")
+                    .await;
+                let _ = handle.handle().finalized().await;
+                return Err(Status::failed_precondition(format!(
+                    "InvokeBidi `{}` lifecycle registration failed: {error}",
+                    route.name()
+                )));
+            }
+        };
+        if let Err(error) = product_admission.commit() {
+            let _ = lifecycle
+                .cancel_and_finalize("bidi product admission commit failed")
+                .await;
+            return Err(error);
+        }
+        let admission_receipt = match handle.admission_receipt().await {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let _ = lifecycle.finalized().await;
+                return Err(Status::failed_precondition(format!(
+                    "CANONICAL_ADMISSION_REQUIRED: InvokeBidi `{}`: {error}",
+                    route.name()
+                )));
+            }
+        };
+        let admission_wire = match axon_sdk::invocation::wire::receipt_to_wire(&admission_receipt) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let _ = lifecycle
+                    .cancel_and_finalize("canonical admission projection failed")
+                    .await;
+                return Err(Status::failed_precondition(format!(
+                    "CANONICAL_ADMISSION_PROJECTION_FAILED: {error}"
+                )));
+            }
+        };
         let admission_frame = InvokeBidiDown {
             payload: Some(axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::Receipt(
-                axon_sdk::invocation::wire::receipt_to_wire(&admission_receipt).map_err(
-                    |error| {
-                        Status::failed_precondition(format!(
-                            "CANONICAL_ADMISSION_PROJECTION_FAILED: {error}"
-                        ))
-                    },
-                )?,
+                admission_wire,
             )),
             ..InvokeBidiDown::default()
         };
@@ -634,18 +690,19 @@ impl DaemonRouteRuntimeAdapter {
 
         tokio::spawn(async move {
             let mut admission_pending = Some(admission_frame);
+            let mut terminal_authority_observed = false;
             while let Some(frame_result) = runtime_output.next_frame().await {
                 match frame_result {
                     Ok(frame) if frame.terminal => {
-                        if !send_pending_bidi_admission(&down_tx, &mut admission_pending).await {
-                            break;
-                        }
                         let projected =
-                            crate::daemon::invocation::bidi::bidi_dispatcher::project_finalized_bidi_receipt(
-                                &runtime_output,
+                            crate::daemon::invocation::bidi::bidi_dispatcher::project_registered_finalized_bidi_receipt(
+                                &lifecycle,
                             )
                             .await;
-                        let _ = down_tx.send(projected).await;
+                        terminal_authority_observed = true;
+                        if send_pending_bidi_admission(&down_tx, &mut admission_pending).await {
+                            let _ = down_tx.send(projected).await;
+                        }
                         break;
                     }
                     Ok(frame) => {
@@ -656,17 +713,16 @@ impl DaemonRouteRuntimeAdapter {
                                 "session provider emitted unsupported content type `{}`",
                                 frame.content_type
                             );
-                            let _ = runtime_output.cancel(reason.clone()).await;
-                            if !send_pending_bidi_admission(&down_tx, &mut admission_pending).await {
-                                break;
-                            }
-                            let projected =
-                                crate::daemon::invocation::bidi::bidi_dispatcher::project_finalized_bidi_receipt(
-                                    &runtime_output,
-                                )
+                            let projected = crate::daemon::invocation::bidi::bidi_dispatcher::cancel_registered_bidi(
+                                &lifecycle,
+                                reason.clone(),
+                            )
                                 .await
                                 .map_err(|status| Status::internal(format!("{reason}; {status}")));
-                            let _ = down_tx.send(projected).await;
+                            terminal_authority_observed = true;
+                            if send_pending_bidi_admission(&down_tx, &mut admission_pending).await {
+                                let _ = down_tx.send(projected).await;
+                            }
                             break;
                         }
                         let decoded = match InvokeBidiDown::decode(frame.payload.as_slice()) {
@@ -675,44 +731,46 @@ impl DaemonRouteRuntimeAdapter {
                                 let reason = format!(
                                     "session provider emitted malformed InvokeBidiDown: {error}"
                                 );
-                                let _ = runtime_output.cancel(reason.clone()).await;
-                                if !send_pending_bidi_admission(&down_tx, &mut admission_pending)
-                                    .await
-                                {
-                                    break;
-                                }
-                                let projected =
-                                    crate::daemon::invocation::bidi::bidi_dispatcher::project_finalized_bidi_receipt(
-                                        &runtime_output,
-                                    )
+                                let projected = crate::daemon::invocation::bidi::bidi_dispatcher::cancel_registered_bidi(
+                                    &lifecycle,
+                                    reason.clone(),
+                                )
                                     .await
                                     .map_err(|status| {
                                         Status::internal(format!("{reason}; {status}"))
                                     });
-                                let _ = down_tx.send(projected).await;
+                                terminal_authority_observed = true;
+                                if send_pending_bidi_admission(&down_tx, &mut admission_pending)
+                                    .await
+                                {
+                                    let _ = down_tx.send(projected).await;
+                                }
                                 break;
                             }
                         };
-                        if down_tx.send(Ok(decoded)).await.is_err() {
-                            let _ = runtime_output
-                                .cancel("InvokeBidi transport response dropped")
-                                .await;
+                        if !send_pending_bidi_admission(&down_tx, &mut admission_pending).await {
+                            let _ = crate::daemon::invocation::bidi::bidi_dispatcher::cancel_registered_bidi(
+                                &lifecycle,
+                                "InvokeBidi transport response dropped",
+                            )
+                            .await;
+                            terminal_authority_observed = true;
                             break;
                         }
-                        if !send_pending_bidi_admission(&down_tx, &mut admission_pending).await {
-                            let _ = runtime_output
-                                .cancel("InvokeBidi transport response dropped")
-                                .await;
+                        if down_tx.send(Ok(decoded)).await.is_err() {
+                            let _ = crate::daemon::invocation::bidi::bidi_dispatcher::cancel_registered_bidi(
+                                &lifecycle,
+                                "InvokeBidi transport response dropped",
+                            )
+                            .await;
+                            terminal_authority_observed = true;
                             break;
                         }
                     }
                     Err(error) => {
-                        if !send_pending_bidi_admission(&down_tx, &mut admission_pending).await {
-                            break;
-                        }
                         let projected =
-                            crate::daemon::invocation::bidi::bidi_dispatcher::project_finalized_bidi_receipt(
-                                &runtime_output,
+                            crate::daemon::invocation::bidi::bidi_dispatcher::project_registered_finalized_bidi_receipt(
+                                &lifecycle,
                             )
                             .await
                             .map_err(|status| {
@@ -720,9 +778,21 @@ impl DaemonRouteRuntimeAdapter {
                                     "InvokeBidi exact-route runtime frame failed: {error}; {status}"
                                 ))
                             });
-                        let _ = down_tx.send(projected).await;
+                        terminal_authority_observed = true;
+                        if send_pending_bidi_admission(&down_tx, &mut admission_pending).await {
+                            let _ = down_tx.send(projected).await;
+                        }
                         break;
                     }
+                }
+            }
+            if !terminal_authority_observed {
+                let projected = crate::daemon::invocation::bidi::bidi_dispatcher::project_registered_finalized_bidi_receipt(
+                    &lifecycle,
+                )
+                .await;
+                if send_pending_bidi_admission(&down_tx, &mut admission_pending).await {
+                    let _ = down_tx.send(projected).await;
                 }
             }
             input_bridge.abort();

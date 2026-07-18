@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 const MaxBidiBufferedFrames = 1024
@@ -89,9 +90,11 @@ func (f BidiTransportFunc) Cancel(ctx context.Context, reason string) ([]byte, e
 
 // BidiSession is the public bidirectional session lifecycle object.
 type BidiSession struct {
+	mu              sync.Mutex
 	sessionID       string
 	transport       BidiTransport
-	state           BidiState
+	runtimeState    BidiState
+	carrierState    carrierState
 	sentFrames      []BidiFrame
 	receivedFrames  []BidiFrame
 	lastSendSeq     uint64
@@ -100,6 +103,8 @@ type BidiSession struct {
 	maxBuffered     int
 	localHalfClose  bool
 	remoteHalfClose bool
+	sending         bool
+	receiving       bool
 }
 
 // BidiFrame is an SDK bidi frame projection.
@@ -168,7 +173,8 @@ func NewBidiSessionFromJSON(transport BidiTransport, raw []byte) (*BidiSession, 
 	return &BidiSession{
 		sessionID:      dto.SessionID,
 		transport:      transport,
-		state:          state,
+		runtimeState:   state,
+		carrierState:   carrierOpen,
 		sentFrames:     []BidiFrame{},
 		receivedFrames: []BidiFrame{},
 		maxBuffered:    maxBuffered,
@@ -186,13 +192,35 @@ func (s *BidiSession) State() BidiState {
 	if s == nil {
 		return BidiFailed
 	}
-	return s.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch s.carrierState {
+	case carrierClosed:
+		return BidiClosed
+	case carrierFailed:
+		return BidiFailed
+	default:
+		return s.runtimeState
+	}
+}
+
+// RuntimeState returns only provider-observed lifecycle state. Local Close
+// changes the carrier projection returned by State, not this runtime state.
+func (s *BidiSession) RuntimeState() BidiState {
+	if s == nil {
+		return BidiFailed
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runtimeState
 }
 
 func (s *BidiSession) SentFrames() []BidiFrame {
 	if s == nil {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return append([]BidiFrame(nil), s.sentFrames...)
 }
 
@@ -200,6 +228,8 @@ func (s *BidiSession) ReceivedFrames() []BidiFrame {
 	if s == nil {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return append([]BidiFrame(nil), s.receivedFrames...)
 }
 
@@ -207,6 +237,8 @@ func (s *BidiSession) MaxBufferedFrames() int {
 	if s == nil {
 		return 0
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.maxBuffered
 }
 
@@ -214,6 +246,8 @@ func (s *BidiSession) TerminalFrame() (BidiTerminalFrame, error) {
 	if s == nil {
 		return BidiTerminalFrame{}, invalidRuntimeClient("bidi session is not initialized")
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.terminalFrame == nil {
 		return BidiTerminalFrame{}, invalidRuntimePayload("bidi terminal frame has not been seen", nil)
 	}
@@ -221,13 +255,28 @@ func (s *BidiSession) TerminalFrame() (BidiTerminalFrame, error) {
 }
 
 func (s *BidiSession) Send(ctx context.Context, frame BidiFrame) (BidiFrame, error) {
-	if s == nil || s.transport == nil {
+	if s == nil {
 		return BidiFrame{}, invalidRuntimeClient("bidi session is not initialized")
 	}
 	if ctx == nil {
 		return BidiFrame{}, invalidRuntimeClient("context is required")
 	}
-	if s.state == BidiHalfClosedLocal {
+	rawFrame, err := json.Marshal(frame)
+	if err != nil {
+		return BidiFrame{}, invalidRuntimePayload(fmt.Sprintf("encode bidi frame: %v", err), err)
+	}
+
+	s.mu.Lock()
+	if s.transport == nil {
+		s.mu.Unlock()
+		return BidiFrame{}, invalidRuntimeClient("bidi session is not initialized")
+	}
+	if !s.carrierState.open() {
+		s.mu.Unlock()
+		return BidiFrame{}, invalidRuntimePayload("bidi carrier is closed", nil)
+	}
+	if s.runtimeState == BidiHalfClosedLocal {
+		s.mu.Unlock()
 		return BidiFrame{}, &SDKError{
 			Code:      ErrCancelled,
 			Stage:     "bidi",
@@ -236,20 +285,31 @@ func (s *BidiSession) Send(ctx context.Context, frame BidiFrame) (BidiFrame, err
 			Message:   "bidi send path is closed",
 		}
 	}
-	if s.state != BidiOpen && s.state != BidiHalfClosedRemote {
+	if s.runtimeState != BidiOpen && s.runtimeState != BidiHalfClosedRemote {
+		s.mu.Unlock()
 		return BidiFrame{}, invalidRuntimePayload("bidi send path is closed", nil)
 	}
 	if s.maxBuffered > 0 && len(s.sentFrames) >= s.maxBuffered {
-		s.state = BidiFailed
+		s.runtimeState = BidiFailed
+		s.mu.Unlock()
 		return BidiFrame{}, invalidRuntimePayload("bidi send buffer limit exceeded", nil)
 	}
-	rawFrame, err := json.Marshal(frame)
-	if err != nil {
-		return BidiFrame{}, invalidRuntimePayload(fmt.Sprintf("encode bidi frame: %v", err), err)
+	if s.sending {
+		s.mu.Unlock()
+		return BidiFrame{}, invalidRuntimePayload("bidi send is already in progress", nil)
 	}
-	rawAck, err := s.transport.Send(ctx, rawFrame)
+	s.sending = true
+	transport := s.transport
+	s.mu.Unlock()
+
+	rawAck, err := transport.Send(ctx, rawFrame)
 	if err != nil {
-		s.state = BidiFailed
+		s.mu.Lock()
+		s.sending = false
+		if s.carrierState.open() && !isLocalCarrierInterruption(err) {
+			s.runtimeState = BidiFailed
+		}
+		s.mu.Unlock()
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
 			return BidiFrame{}, sdkErr
@@ -257,29 +317,61 @@ func (s *BidiSession) Send(ctx context.Context, frame BidiFrame) (BidiFrame, err
 		return BidiFrame{}, transportRuntimeError("bidi send transport failed", err)
 	}
 	ack, err := NewBidiFrameFromJSON(rawAck)
+	s.mu.Lock()
+	s.sending = false
 	if err != nil {
-		s.state = BidiFailed
+		s.runtimeState = BidiFailed
+		s.mu.Unlock()
 		return BidiFrame{}, err
 	}
-	if err := s.recordSent(ack); err != nil {
+	if s.isRuntimeTerminalLocked() || s.runtimeState == BidiCancelRequested {
+		s.mu.Unlock()
+		return BidiFrame{}, invalidRuntimePayload("bidi send completed after the send path closed", nil)
+	}
+	if err := s.recordSentLocked(ack); err != nil {
+		s.mu.Unlock()
 		return BidiFrame{}, err
 	}
+	s.mu.Unlock()
 	return ack, nil
 }
 
 func (s *BidiSession) Receive(ctx context.Context) (BidiFrame, error) {
-	if s == nil || s.transport == nil {
+	if s == nil {
 		return BidiFrame{}, invalidRuntimeClient("bidi session is not initialized")
 	}
 	if ctx == nil {
 		return BidiFrame{}, invalidRuntimeClient("context is required")
 	}
-	if s.isTerminal() || s.state == BidiTerminal {
+	s.mu.Lock()
+	if s.transport == nil {
+		s.mu.Unlock()
+		return BidiFrame{}, invalidRuntimeClient("bidi session is not initialized")
+	}
+	if !s.carrierState.open() {
+		s.mu.Unlock()
+		return BidiFrame{}, invalidRuntimePayload("bidi carrier is closed", nil)
+	}
+	if s.isRuntimeTerminalLocked() {
+		s.mu.Unlock()
 		return BidiFrame{}, invalidRuntimePayload("bidi session is terminal", nil)
 	}
-	raw, err := s.transport.Recv(ctx)
+	if s.receiving {
+		s.mu.Unlock()
+		return BidiFrame{}, invalidRuntimePayload("bidi recv is already in progress", nil)
+	}
+	s.receiving = true
+	transport := s.transport
+	s.mu.Unlock()
+
+	raw, err := transport.Recv(ctx)
 	if err != nil {
-		s.state = BidiFailed
+		s.mu.Lock()
+		s.receiving = false
+		if s.carrierState.open() && !isLocalCarrierInterruption(err) {
+			s.runtimeState = BidiFailed
+		}
+		s.mu.Unlock()
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
 			return BidiFrame{}, sdkErr
@@ -287,32 +379,65 @@ func (s *BidiSession) Receive(ctx context.Context) (BidiFrame, error) {
 		return BidiFrame{}, transportRuntimeError("bidi recv transport failed", err)
 	}
 	frame, err := NewBidiFrameFromJSON(raw)
+	s.mu.Lock()
+	s.receiving = false
 	if err != nil {
-		s.state = BidiFailed
+		s.runtimeState = BidiFailed
+		s.mu.Unlock()
 		return BidiFrame{}, err
 	}
-	if err := s.recordReceived(frame); err != nil {
+	if s.isRuntimeTerminalLocked() {
+		s.mu.Unlock()
+		return BidiFrame{}, invalidRuntimePayload("bidi session became terminal while receive was in progress", nil)
+	}
+	if err := s.recordReceivedLocked(frame); err != nil {
+		s.mu.Unlock()
 		return BidiFrame{}, err
 	}
-	if err := s.applyReceivedState(frame); err != nil {
+	if err := s.applyReceivedStateLocked(frame); err != nil {
+		s.mu.Unlock()
 		return BidiFrame{}, err
 	}
+	s.mu.Unlock()
 	return frame, nil
 }
 
 func (s *BidiSession) CloseSend(ctx context.Context) (BidiOutcome, error) {
-	if s == nil || s.transport == nil {
+	if s == nil {
 		return BidiOutcome{}, invalidRuntimeClient("bidi session is not initialized")
 	}
 	if ctx == nil {
 		return BidiOutcome{}, invalidRuntimeClient("context is required")
 	}
-	if s.state != BidiOpen && s.state != BidiHalfClosedRemote {
+	s.mu.Lock()
+	if s.transport == nil {
+		s.mu.Unlock()
+		return BidiOutcome{}, invalidRuntimeClient("bidi session is not initialized")
+	}
+	if !s.carrierState.open() {
+		s.mu.Unlock()
+		return BidiOutcome{}, invalidRuntimePayload("bidi carrier is closed", nil)
+	}
+	if s.runtimeState != BidiOpen && s.runtimeState != BidiHalfClosedRemote {
+		s.mu.Unlock()
 		return BidiOutcome{}, invalidRuntimePayload("bidi send path is closed", nil)
 	}
-	raw, err := s.transport.CloseSend(ctx)
+	if s.sending {
+		s.mu.Unlock()
+		return BidiOutcome{}, invalidRuntimePayload("bidi send is already in progress", nil)
+	}
+	s.sending = true
+	transport := s.transport
+	s.mu.Unlock()
+
+	raw, err := transport.CloseSend(ctx)
 	if err != nil {
-		s.state = BidiFailed
+		s.mu.Lock()
+		s.sending = false
+		if s.carrierState.open() && !isLocalCarrierInterruption(err) {
+			s.runtimeState = BidiFailed
+		}
+		s.mu.Unlock()
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
 			return BidiOutcome{}, sdkErr
@@ -320,83 +445,141 @@ func (s *BidiSession) CloseSend(ctx context.Context) (BidiOutcome, error) {
 		return BidiOutcome{}, transportRuntimeError("bidi close-send transport failed", err)
 	}
 	outcome, err := NewBidiOutcomeFromJSON(raw)
+	s.mu.Lock()
+	s.sending = false
 	if err != nil {
-		s.state = BidiFailed
+		s.runtimeState = BidiFailed
+		s.mu.Unlock()
 		return BidiOutcome{}, err
 	}
-	if outcome.terminal {
-		s.state = BidiFailed
+	if outcome.state != BidiHalfClosedLocal || outcome.terminal {
+		s.runtimeState = BidiFailed
+		s.mu.Unlock()
 		return BidiOutcome{}, invalidRuntimePayload("bidi close-send transport must not claim canonical terminality", nil)
 	}
+	if s.isRuntimeTerminalLocked() || s.runtimeState == BidiCancelRequested {
+		s.mu.Unlock()
+		return outcome, nil
+	}
 	s.localHalfClose = true
-	s.state = BidiHalfClosedLocal
+	s.runtimeState = BidiHalfClosedLocal
+	s.mu.Unlock()
 	return outcome, nil
 }
 
 func (s *BidiSession) Cancel(ctx context.Context, reason string) (BidiOutcome, error) {
-	if s == nil || s.transport == nil {
+	if s == nil {
 		return BidiOutcome{}, invalidRuntimeClient("bidi session is not initialized")
 	}
 	if ctx == nil {
 		return BidiOutcome{}, invalidRuntimeClient("context is required")
 	}
-	if s.isTerminal() {
+	s.mu.Lock()
+	if s.transport == nil {
+		s.mu.Unlock()
+		return BidiOutcome{}, invalidRuntimeClient("bidi session is not initialized")
+	}
+	if !s.carrierState.open() {
+		s.mu.Unlock()
+		return BidiOutcome{}, invalidRuntimePayload("bidi carrier is closed", nil)
+	}
+	if s.isRuntimeTerminalLocked() {
+		s.mu.Unlock()
 		return BidiOutcome{}, invalidRuntimePayload("bidi session is terminal", nil)
 	}
-	raw, err := s.transport.Cancel(ctx, reason)
+	transport := s.transport
+	s.mu.Unlock()
+
+	raw, err := transport.Cancel(ctx, reason)
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
-			if sdkErr.Code != ErrNotImplemented {
-				s.state = BidiFailed
+			if sdkErr.Code != ErrNotImplemented && !isLocalCarrierInterruption(sdkErr) {
+				s.mu.Lock()
+				s.runtimeState = BidiFailed
+				s.mu.Unlock()
 			}
 			return BidiOutcome{}, sdkErr
 		}
-		s.state = BidiFailed
+		if !isLocalCarrierInterruption(err) {
+			s.mu.Lock()
+			s.runtimeState = BidiFailed
+			s.mu.Unlock()
+		}
 		return BidiOutcome{}, transportRuntimeError("bidi cancel transport failed", err)
 	}
 	outcome, err := NewBidiOutcomeFromJSON(raw)
 	if err != nil {
-		s.state = BidiFailed
+		s.mu.Lock()
+		s.runtimeState = BidiFailed
+		s.mu.Unlock()
 		return BidiOutcome{}, err
 	}
 	if outcome.state != BidiCancelRequested || outcome.terminal {
-		s.state = BidiFailed
+		s.mu.Lock()
+		s.runtimeState = BidiFailed
+		s.mu.Unlock()
 		return BidiOutcome{}, invalidRuntimePayload("bidi cancel transport must return CancelRequested with terminal=false", nil)
 	}
-	s.state = outcome.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runtimeState == BidiTerminal {
+		return outcome, nil
+	}
+	if s.runtimeState == BidiFailed {
+		return BidiOutcome{}, invalidRuntimePayload("bidi session failed while cancellation was in flight", nil)
+	}
+	s.runtimeState = outcome.state
 	return outcome, nil
 }
 
 func (s *BidiSession) Close(ctx context.Context) error {
-	if s == nil || s.transport == nil {
+	if s == nil {
 		return invalidRuntimeClient("bidi session is not initialized")
 	}
 	if ctx == nil {
 		return invalidRuntimeClient("context is required")
 	}
-	if s.state == BidiClosed {
+	s.mu.Lock()
+	if s.transport == nil {
+		s.mu.Unlock()
+		return invalidRuntimeClient("bidi session is not initialized")
+	}
+	if s.carrierState == carrierClosed {
+		s.mu.Unlock()
 		return nil
 	}
-	if err := s.transport.Close(ctx); err != nil {
-		s.state = BidiFailed
+	if s.carrierState == carrierClosing {
+		s.mu.Unlock()
+		return invalidRuntimePayload("bidi carrier close is already in progress", nil)
+	}
+	s.carrierState = carrierClosing
+	transport := s.transport
+	s.mu.Unlock()
+
+	if err := transport.Close(ctx); err != nil {
+		s.mu.Lock()
+		s.carrierState = carrierFailed
+		s.mu.Unlock()
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
 			return sdkErr
 		}
 		return transportRuntimeError("bidi close transport failed", err)
 	}
-	s.state = BidiClosed
+	s.mu.Lock()
+	s.carrierState = carrierClosed
+	s.mu.Unlock()
 	return nil
 }
 
-func (s *BidiSession) recordSent(frame BidiFrame) error {
+func (s *BidiSession) recordSentLocked(frame BidiFrame) error {
 	if frame.sequence == 0 {
-		s.state = BidiFailed
+		s.runtimeState = BidiFailed
 		return invalidRuntimePayload("bidi sent frame sequence is required", nil)
 	}
 	if frame.sequence <= s.lastSendSeq {
-		s.state = BidiFailed
+		s.runtimeState = BidiFailed
 		return invalidRuntimePayload("bidi sent frames must be strictly ordered", nil)
 	}
 	s.lastSendSeq = frame.sequence
@@ -404,17 +587,17 @@ func (s *BidiSession) recordSent(frame BidiFrame) error {
 	return nil
 }
 
-func (s *BidiSession) recordReceived(frame BidiFrame) error {
+func (s *BidiSession) recordReceivedLocked(frame BidiFrame) error {
 	if frame.sequence == 0 {
-		s.state = BidiFailed
+		s.runtimeState = BidiFailed
 		return invalidRuntimePayload("bidi received frame sequence is required", nil)
 	}
 	if frame.sequence <= s.lastRecvSeq {
-		s.state = BidiFailed
+		s.runtimeState = BidiFailed
 		return invalidRuntimePayload("bidi received frames must be strictly ordered", nil)
 	}
 	if s.maxBuffered > 0 && len(s.receivedFrames) >= s.maxBuffered {
-		s.state = BidiFailed
+		s.runtimeState = BidiFailed
 		return invalidRuntimePayload("bidi receive buffer limit exceeded", nil)
 	}
 	s.lastRecvSeq = frame.sequence
@@ -422,31 +605,39 @@ func (s *BidiSession) recordReceived(frame BidiFrame) error {
 	return nil
 }
 
-func (s *BidiSession) applyReceivedState(frame BidiFrame) error {
+func (s *BidiSession) applyReceivedStateLocked(frame BidiFrame) error {
 	switch {
+	case frame.transportTerminal:
+		if frame.terminal {
+			terminal, err := NewBidiTerminalFrame(s.sessionID, frame)
+			if err != nil {
+				s.carrierState = carrierFailed
+				return err
+			}
+			s.terminalFrame = &terminal
+		}
+		s.carrierState = carrierFailed
 	case frame.terminal:
 		terminal, err := NewBidiTerminalFrame(s.sessionID, frame)
 		if err != nil {
-			s.state = BidiFailed
+			s.runtimeState = BidiFailed
 			return err
 		}
 		s.terminalFrame = &terminal
-		s.state = BidiTerminal
-	case frame.transportTerminal:
-		s.state = BidiFailed
+		s.runtimeState = BidiTerminal
 	case frame.kind == "remote_close_send":
 		s.remoteHalfClose = true
 		if !s.localHalfClose {
-			s.state = BidiHalfClosedRemote
+			s.runtimeState = BidiHalfClosedRemote
 		}
-	case s.state == BidiOpening:
-		s.state = BidiOpen
+	case s.runtimeState == BidiOpening:
+		s.runtimeState = BidiOpen
 	}
 	return nil
 }
 
-func (s *BidiSession) isTerminal() bool {
-	return s.state == BidiTerminal || s.state == BidiClosed || s.state == BidiCancelled || s.state == BidiFailed
+func (s *BidiSession) isRuntimeTerminalLocked() bool {
+	return s.runtimeState == BidiTerminal || s.runtimeState == BidiCancelled || s.runtimeState == BidiFailed
 }
 
 // NewBidiFrame creates a caller-owned outbound SDK bidi frame.

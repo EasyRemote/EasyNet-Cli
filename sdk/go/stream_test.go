@@ -26,6 +26,10 @@ type unsupportedCancelStreamTransport struct {
 	memoryStreamTransport
 }
 
+type interruptedCancelStreamTransport struct {
+	memoryStreamTransport
+}
+
 func (*unsupportedCancelStreamTransport) Cancel(context.Context, string) ([]byte, error) {
 	return nil, &SDKError{
 		Code:      ErrNotImplemented,
@@ -34,6 +38,10 @@ func (*unsupportedCancelStreamTransport) Cancel(context.Context, string) ([]byte
 		Retryable: false,
 		Message:   "stream cancellation unsupported",
 	}
+}
+
+func (*interruptedCancelStreamTransport) Cancel(context.Context, string) ([]byte, error) {
+	return nil, context.DeadlineExceeded
 }
 
 func newConcurrentCancelStreamTransport() *concurrentCancelStreamTransport {
@@ -130,6 +138,9 @@ func TestStreamHandleOrdersEventsAndClosesAfterTerminal(t *testing.T) {
 	}
 	if !transport.closed || stream.State() != StreamClosed {
 		t.Fatalf("stream not closed: transport=%v state=%s", transport.closed, stream.State())
+	}
+	if stream.RuntimeState() != StreamTerminalFrameSeen {
+		t.Fatalf("runtime state = %s, want TerminalFrameSeen after local close", stream.RuntimeState())
 	}
 }
 
@@ -321,6 +332,37 @@ func TestStreamHandleUnsupportedCancelPreservesOpenState(t *testing.T) {
 	}
 	if stream.State() != StreamOpen {
 		t.Fatalf("state = %s, want %s", stream.State(), StreamOpen)
+	}
+	if err := stream.Close(context.Background()); err != nil {
+		t.Fatalf("Close after unsupported cancellation: %v", err)
+	}
+	if stream.State() != StreamClosed || stream.RuntimeState() != StreamOpen {
+		t.Fatalf(
+			"local close changed canonical state: state=%s runtime_state=%s",
+			stream.State(),
+			stream.RuntimeState(),
+		)
+	}
+}
+
+func TestStreamHandleInterruptedCancelPreservesOpenState(t *testing.T) {
+	stream, err := NewStreamHandleFromJSON(
+		&interruptedCancelStreamTransport{},
+		[]byte(`{"stream_id":"stream-1","state":"Open","max_buffered_events":4}`),
+	)
+	if err != nil {
+		t.Fatalf("NewStreamHandleFromJSON: %v", err)
+	}
+
+	if _, err := stream.Cancel(context.Background(), "client stop"); err == nil {
+		t.Fatal("Cancel accepted a locally interrupted request")
+	}
+	if stream.State() != StreamOpen || stream.RuntimeState() != StreamOpen {
+		t.Fatalf(
+			"local cancellation timeout changed runtime state: state=%s runtime_state=%s",
+			stream.State(),
+			stream.RuntimeState(),
+		)
 	}
 }
 

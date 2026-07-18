@@ -196,41 +196,41 @@
     {
       "language": "go",
       "case_id": "bidi/cancel_request",
-      "selector": "TestConformanceBidiCancelRequestIsNonTerminal",
+      "selector": "TestCABIRuntimeProviderRequestsBidiCancelBeforeCanonicalTerminal",
       "evidence": [
-        "sdk/go/conformance_test.go"
+        "sdk/go/cabi_runtime_test.go"
       ]
     },
     {
       "language": "go",
       "case_id": "bidi/close_send_not_cancel",
-      "selector": "TestBidiCloseSendDiffersFromCancel",
+      "selector": "TestCABIRuntimeProviderKeepsCloseSendDistinctFromCancel",
       "evidence": [
-        "sdk/go/bidi_test.go"
+        "sdk/go/cabi_runtime_test.go"
       ]
     },
     {
       "language": "go",
       "case_id": "bidi/deadline_owner",
-      "selector": "TestDirectRuntimeBidiDeadlineIsTypedTimeout",
+      "selector": "TestCABIRuntimeProviderOwnsBidiReceiveDeadline",
       "evidence": [
-        "sdk/go/direct_runtime_test.go"
+        "sdk/go/cabi_runtime_test.go"
       ]
     },
     {
       "language": "go",
       "case_id": "bidi/dispatch_provider",
-      "selector": "TestDirectRuntimeTransportBidiOverUnixSocket",
+      "selector": "TestCABIRuntimeProviderDispatchesBidiBeforeTerminal",
       "evidence": [
-        "sdk/go/direct_runtime_test.go"
+        "sdk/go/cabi_runtime_test.go"
       ]
     },
     {
       "language": "go",
       "case_id": "bidi/frame0_required",
-      "selector": "TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry",
+      "selector": "TestCABIRuntimeProviderRejectsMissingBidiFrameZero",
       "evidence": [
-        "sdk/go/direct_runtime_test.go"
+        "sdk/go/cabi_runtime_test.go"
       ]
     },
     {
@@ -516,41 +516,41 @@
     {
       "language": "go",
       "case_id": "stream/backpressure_bound",
-      "selector": "TestConformanceStreamAndBidiBackpressureBounds",
+      "selector": "TestCABIRuntimeProviderEnforcesCallbackBackpressure",
       "evidence": [
-        "sdk/go/conformance_test.go"
+        "sdk/go/cabi_runtime_test.go"
       ]
     },
     {
       "language": "go",
       "case_id": "stream/cancel_request",
-      "selector": "TestConformanceStreamCancelRequestIsNonTerminal",
+      "selector": "TestCABIRuntimeProviderRequestsStreamCancelBeforeCanonicalTerminal",
       "evidence": [
-        "sdk/go/conformance_test.go"
+        "sdk/go/cabi_runtime_test.go"
       ]
     },
     {
       "language": "go",
       "case_id": "stream/deadline_owner",
-      "selector": "TestDirectRuntimeStreamDeadlineIsTypedTimeout",
+      "selector": "TestCABIRuntimeProviderOwnsStreamReceiveDeadline",
       "evidence": [
-        "sdk/go/direct_runtime_test.go"
+        "sdk/go/cabi_runtime_test.go"
       ]
     },
     {
       "language": "go",
       "case_id": "stream/dispatch_provider",
-      "selector": "TestDirectRuntimeTransportStreamsOverUnixSocket",
+      "selector": "TestCABIRuntimeProviderDispatchesStreamBeforeTerminal",
       "evidence": [
-        "sdk/go/direct_runtime_test.go"
+        "sdk/go/cabi_runtime_test.go"
       ]
     },
     {
       "language": "go",
       "case_id": "stream/order_terminal",
-      "selector": "TestStreamHandleOrdersEventsAndClosesAfterTerminal",
+      "selector": "TestCABIRuntimeProviderPreservesStreamOrderAndSingleTerminal",
       "evidence": [
-        "sdk/go/stream_test.go"
+        "sdk/go/cabi_runtime_test.go"
       ]
     },
     {
@@ -868,41 +868,41 @@
     {
       "language": "python",
       "case_id": "bidi/cancel_request",
-      "selector": "test_bidi_cancel_request_is_non_terminal",
+      "selector": "test_cabi_provider_requests_bidi_cancel_before_canonical_terminal",
       "evidence": [
-        "sdk/python/tests/test_conformance_gates.py"
+        "sdk/python/tests/test_cabi.py"
       ]
     },
     {
       "language": "python",
       "case_id": "bidi/close_send_not_cancel",
-      "selector": "test_close_send_differs_from_cancel",
+      "selector": "test_cabi_provider_keeps_close_send_distinct_from_cancel",
       "evidence": [
-        "sdk/python/tests/test_bidi.py"
+        "sdk/python/tests/test_cabi.py"
       ]
     },
     {
       "language": "python",
       "case_id": "bidi/deadline_owner",
-      "selector": "test_direct_runtime_bidi_deadline_is_typed_timeout",
+      "selector": "test_cabi_provider_owns_bidi_receive_deadline",
       "evidence": [
-        "sdk/python/tests/test_direct_runtime.py"
+        "sdk/python/tests/test_cabi.py"
       ]
     },
     {
       "language": "python",
       "case_id": "bidi/dispatch_provider",
-      "selector": "test_direct_runtime_bidi_provider_json_uses_terminal_receipt",
+      "selector": "test_cabi_provider_dispatches_bidi_before_terminal",
       "evidence": [
-        "sdk/python/tests/test_direct_runtime.py"
+        "sdk/python/tests/test_cabi.py"
       ]
     },
     {
       "language": "python",
       "case_id": "bidi/frame0_required",
-      "selector": "test_direct_bidi_rejects_missing_frame0_before_session_entry",
+      "selector": "test_cabi_provider_rejects_missing_bidi_frame_zero",
       "evidence": [
-        "sdk/python/tests/test_direct_runtime.py"
+        "sdk/python/tests/test_cabi.py"
       ]
     },
     {
@@ -1188,41 +1188,41 @@
     {
       "language": "python",
       "case_id": "stream/backpressure_bound",
-      "selector": "test_stream_and_bidi_backpressure_bounds",
+      "selector": "test_cabi_provider_enforces_callback_backpressure",
       "evidence": [
-        "sdk/python/tests/test_conformance_gates.py"
+        "sdk/python/tests/test_cabi.py"
       ]
     },
     {
       "language": "python",
       "case_id": "stream/cancel_request",
-      "selector": "test_stream_cancel_request_is_non_terminal",
+      "selector": "test_cabi_provider_requests_stream_cancel_before_canonical_terminal",
       "evidence": [
-        "sdk/python/tests/test_conformance_gates.py"
+        "sdk/python/tests/test_cabi.py"
       ]
     },
     {
       "language": "python",
       "case_id": "stream/deadline_owner",
-      "selector": "test_direct_runtime_stream_deadline_is_typed_timeout",
+      "selector": "test_cabi_provider_owns_stream_receive_deadline",
       "evidence": [
-        "sdk/python/tests/test_direct_runtime.py"
+        "sdk/python/tests/test_cabi.py"
       ]
     },
     {
       "language": "python",
       "case_id": "stream/dispatch_provider",
-      "selector": "test_direct_runtime_stream_provider_json_uses_terminal_receipt",
+      "selector": "test_cabi_provider_dispatches_stream_before_terminal",
       "evidence": [
-        "sdk/python/tests/test_direct_runtime.py"
+        "sdk/python/tests/test_cabi.py"
       ]
     },
     {
       "language": "python",
       "case_id": "stream/order_terminal",
-      "selector": "test_stream_orders_events_and_closes_after_terminal",
+      "selector": "test_cabi_provider_preserves_stream_order_and_single_terminal",
       "evidence": [
-        "sdk/python/tests/test_stream.py"
+        "sdk/python/tests/test_cabi.py"
       ]
     },
     {

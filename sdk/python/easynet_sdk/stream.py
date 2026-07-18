@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Optional, Protocol, runtime_checkable
 
+from ._carrier import CarrierState, is_local_carrier_interruption
 from .errors import ErrorCode, RetryHint, SDKError
 
 
@@ -199,6 +201,24 @@ class StreamHandle:
     _last_sequence: int = 0
     _terminal_seen: bool = False
     _terminal_event: Optional[StreamTerminalEvent] = None
+    _runtime_state: StreamState = field(init=False, repr=False)
+    _carrier_state: CarrierState = field(
+        default=CarrierState.OPEN, init=False, repr=False
+    )
+    _lock: Any = field(
+        default_factory=threading.RLock, init=False, repr=False, compare=False
+    )
+    _receiving: bool = field(default=False, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._runtime_state = self.state
+
+    @property
+    def runtime_state(self) -> StreamState:
+        """Provider-observed lifecycle state, excluding local carrier close."""
+
+        with self._lock:
+            return self._runtime_state
 
     @classmethod
     def from_json(cls, transport: StreamTransport, raw: bytes | str) -> "StreamHandle":
@@ -229,96 +249,177 @@ class StreamHandle:
         )
 
     def next(self, timeout: float | None = None) -> StreamEvent:
-        if self._is_terminal():
-            raise _invalid_stream("stream is terminal")
-        if self.state in {StreamState.TERMINAL_FRAME_SEEN, StreamState.DRAINING}:
-            raise _invalid_stream("stream terminal event already seen")
+        with self._lock:
+            self._require_carrier_open_locked()
+            if self._is_runtime_terminal_locked():
+                raise _invalid_stream("stream is terminal")
+            if self._runtime_state in {
+                StreamState.TERMINAL_FRAME_SEEN,
+                StreamState.DRAINING,
+            }:
+                raise _invalid_stream("stream terminal event already seen")
+            if self._receiving:
+                raise _invalid_stream("stream recv is already in progress")
+            self._receiving = True
+            transport = self.transport
         try:
-            raw = self.transport.recv(timeout)
-        except SDKError:
-            self.state = StreamState.FAILED
+            raw = transport.recv(timeout)
+        except SDKError as exc:
+            with self._lock:
+                self._receiving = False
+                if self._carrier_state.is_open and not is_local_carrier_interruption(
+                    exc
+                ):
+                    self._set_runtime_state_locked(StreamState.FAILED)
             raise
         except TimeoutError:
+            with self._lock:
+                self._receiving = False
             raise
         except Exception as exc:
-            self.state = StreamState.FAILED
+            with self._lock:
+                self._receiving = False
+                if self._carrier_state.is_open:
+                    self._set_runtime_state_locked(StreamState.FAILED)
             raise _transport_error("stream recv transport failed", exc) from exc
-        event = StreamEvent.from_json(raw)
-        self._apply_event(event)
+        try:
+            event = StreamEvent.from_json(raw)
+        except SDKError:
+            with self._lock:
+                self._receiving = False
+                self._set_runtime_state_locked(StreamState.FAILED)
+            raise
+        with self._lock:
+            self._receiving = False
+            if self._is_runtime_terminal_locked():
+                raise _invalid_stream(
+                    "stream became terminal while receive was in progress"
+                )
+            self._apply_event_locked(event)
         return event
 
     def cancel(self, reason: str = "") -> StreamCancel:
-        if self._is_terminal():
-            raise _invalid_stream("stream is terminal")
+        with self._lock:
+            self._require_carrier_open_locked()
+            if self._is_runtime_terminal_locked() or self._runtime_state in {
+                StreamState.TERMINAL_FRAME_SEEN,
+                StreamState.DRAINING,
+            }:
+                raise _invalid_stream("stream is terminal")
+            transport = self.transport
         try:
-            raw = self.transport.cancel(reason)
+            raw = transport.cancel(reason)
         except SDKError as exc:
-            if exc.code != ErrorCode.NOT_IMPLEMENTED:
-                self.state = StreamState.FAILED
+            if (
+                exc.code != ErrorCode.NOT_IMPLEMENTED
+                and not is_local_carrier_interruption(exc)
+            ):
+                with self._lock:
+                    self._set_runtime_state_locked(StreamState.FAILED)
             raise
         except Exception as exc:
-            self.state = StreamState.FAILED
+            if not is_local_carrier_interruption(exc):
+                with self._lock:
+                    self._set_runtime_state_locked(StreamState.FAILED)
             raise _transport_error("stream cancel transport failed", exc) from exc
-        outcome = StreamCancel.from_json(raw)
+        try:
+            outcome = StreamCancel.from_json(raw)
+        except SDKError:
+            with self._lock:
+                self._set_runtime_state_locked(StreamState.FAILED)
+            raise
         if (
             outcome.state != StreamState.CANCEL_REQUESTED
             or outcome.terminal
             or outcome.cancelled
         ):
-            self.state = StreamState.FAILED
+            with self._lock:
+                self._set_runtime_state_locked(StreamState.FAILED)
             raise _invalid_stream(
                 "stream cancel transport must return CancelRequested with terminal=false"
             )
-        self.state = outcome.state
+        with self._lock:
+            if self._runtime_state in {
+                StreamState.TERMINAL_FRAME_SEEN,
+                StreamState.DRAINING,
+            }:
+                return outcome
+            if self._runtime_state == StreamState.FAILED:
+                raise _invalid_stream("stream failed while cancellation was in flight")
+            self._set_runtime_state_locked(outcome.state)
         return outcome
 
     def close(self) -> None:
-        if self.state == StreamState.CLOSED:
-            return
-        if self.state == StreamState.TERMINAL_FRAME_SEEN:
-            self.state = StreamState.DRAINING
+        with self._lock:
+            if self._carrier_state is CarrierState.CLOSED:
+                return
+            if self._carrier_state is CarrierState.CLOSING:
+                raise _invalid_stream("stream carrier close is already in progress")
+            self._carrier_state = CarrierState.CLOSING
+            transport = self.transport
         try:
-            self.transport.close()
+            transport.close()
         except SDKError:
-            self.state = StreamState.FAILED
+            with self._lock:
+                self._carrier_state = CarrierState.FAILED
+                self.state = StreamState.FAILED
             raise
         except Exception as exc:
-            self.state = StreamState.FAILED
+            with self._lock:
+                self._carrier_state = CarrierState.FAILED
+                self.state = StreamState.FAILED
             raise _transport_error("stream close transport failed", exc) from exc
-        self.state = StreamState.CLOSED
+        with self._lock:
+            self._carrier_state = CarrierState.CLOSED
+            self.state = StreamState.CLOSED
 
     def terminal_event(self) -> StreamTerminalEvent:
-        if self._terminal_event is None:
-            raise _invalid_stream("stream terminal event has not been seen")
-        return self._terminal_event
+        with self._lock:
+            if self._terminal_event is None:
+                raise _invalid_stream("stream terminal event has not been seen")
+            return self._terminal_event
 
-    def _apply_event(self, event: StreamEvent) -> None:
+    def _apply_event_locked(self, event: StreamEvent) -> None:
         if event.sequence <= self._last_sequence:
-            self.state = StreamState.FAILED
+            self._set_runtime_state_locked(StreamState.FAILED)
             raise _invalid_stream("stream events must be strictly ordered")
         if self._terminal_seen:
-            self.state = StreamState.FAILED
+            self._set_runtime_state_locked(StreamState.FAILED)
             raise _invalid_stream("stream terminal event already seen")
         if (
             self.max_buffered_events > 0
             and len(self.events) >= self.max_buffered_events
         ):
-            self.state = StreamState.FAILED
+            self._set_runtime_state_locked(StreamState.FAILED)
             raise _invalid_stream("stream event buffer limit exceeded")
-        if self.state == StreamState.OPENING:
-            self.state = StreamState.OPEN
+        if self._runtime_state == StreamState.OPENING:
+            self._set_runtime_state_locked(StreamState.OPEN)
         self._last_sequence = event.sequence
         self.events.append(event)
-        if event.terminal:
+        if event.transport_terminal:
+            if event.terminal:
+                self._terminal_seen = True
+                self._terminal_event = StreamTerminalEvent.from_event(
+                    self.stream_id, event
+                )
+            self._carrier_state = CarrierState.FAILED
+            self.state = StreamState.FAILED
+        elif event.terminal:
             self._terminal_seen = True
             self._terminal_event = StreamTerminalEvent.from_event(self.stream_id, event)
-            self.state = StreamState.TERMINAL_FRAME_SEEN
-        elif event.transport_terminal:
-            self.state = StreamState.FAILED
+            self._set_runtime_state_locked(StreamState.TERMINAL_FRAME_SEEN)
 
-    def _is_terminal(self) -> bool:
-        return self.state in {
-            StreamState.CLOSED,
+    def _set_runtime_state_locked(self, state: StreamState) -> None:
+        self._runtime_state = state
+        if self._carrier_state.is_open:
+            self.state = state
+
+    def _require_carrier_open_locked(self) -> None:
+        if not self._carrier_state.is_open:
+            raise _invalid_stream("stream carrier is closed")
+
+    def _is_runtime_terminal_locked(self) -> bool:
+        return self._runtime_state in {
             StreamState.CANCELLED,
             StreamState.FAILED,
         }

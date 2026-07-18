@@ -29,6 +29,7 @@ use crate::daemon::invocation::bidi::session_initiator::{
 };
 use crate::daemon::invocation::bidi::session_wire::{call_id_hex, SessionDispatch};
 use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
+use crate::daemon::invocation::dispatch::cancellation::RegisteredInvocationLifecycle;
 use axon_sdk::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
 use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use axon_sdk::pb::axon::v1::InvokeBidiDown;
@@ -375,17 +376,17 @@ impl LocalAxonSessionDispatcher {
                     return Ok(());
                 }
             };
-        Self::commit_product_admission(product_admission)?;
-        let lifecycle_handle = handle.handle().clone();
-        let lifecycle_key = match self
-            .lifecycle_cancellations
-            .register(&lifecycle_envelope, lifecycle_handle.clone())
-        {
-            Ok(key) => key,
+        let lifecycle = match RegisteredInvocationLifecycle::register(
+            self.lifecycle_cancellations.clone(),
+            &lifecycle_envelope,
+            handle.handle().clone(),
+        ) {
+            Ok(lifecycle) => lifecycle,
             Err(err) => {
                 let _ = handle
                     .cancel("lifecycle cancellation registration failed")
                     .await;
+                let _ = handle.finalized().await;
                 let reply = carrier_v1_control_failure(
                     call_id,
                     "CANONICAL_CANCELLATION_REGISTRATION_FAILED",
@@ -400,15 +401,19 @@ impl LocalAxonSessionDispatcher {
                 return Ok(());
             }
         };
+        if let Err(error) = Self::commit_product_admission(product_admission) {
+            let _ = lifecycle
+                .cancel_and_finalize("product admission commit failed")
+                .await;
+            return Err(error);
+        }
 
         Self::spawn_carrier_v1_stream_forwarder(
             call_id,
             handle,
             outbound.clone(),
             Arc::clone(&self.remote_stream_sessions),
-            self.lifecycle_cancellations.clone(),
-            lifecycle_key,
-            lifecycle_handle,
+            lifecycle,
         );
         Ok(())
     }
@@ -424,9 +429,7 @@ impl LocalAxonSessionDispatcher {
         mut handle: axon_sdk::invocation::StreamingInvocationHandle,
         outbound: SessionUpSender,
         sessions: Arc<Mutex<HashMap<u64, CancellationToken>>>,
-        lifecycle_cancellations: crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry,
-        lifecycle_key: String,
-        lifecycle_handle: axon_sdk::invocation::InvocationHandle,
+        lifecycle: RegisteredInvocationLifecycle,
     ) {
         use axon_sdk::pb::axon::v1::DispatchResult as PbDispatchResult;
 
@@ -444,10 +447,7 @@ impl LocalAxonSessionDispatcher {
             let admission = match handle.admission_receipt().await {
                 Ok(receipt) => receipt,
                 Err(error) => {
-                    if handle.finalized().await.is_ok() {
-                        lifecycle_cancellations
-                            .mark_terminal(&lifecycle_key, lifecycle_handle.clone());
-                    }
+                    let _ = lifecycle.finalized().await;
                     let _ = outbound
                         .send_payload(UpPayload::DispatchResult(carrier_v1_control_failure(
                             call_id,
@@ -461,11 +461,9 @@ impl LocalAxonSessionDispatcher {
             let admission_wire = match receipt_to_session_wire(&admission) {
                 Ok(receipt) => receipt,
                 Err(error) => {
-                    let _ = handle.cancel("canonical admission projection failed").await;
-                    if handle.finalized().await.is_ok() {
-                        lifecycle_cancellations
-                            .mark_terminal(&lifecycle_key, lifecycle_handle.clone());
-                    }
+                    let _ = lifecycle
+                        .cancel_and_finalize("canonical admission projection failed")
+                        .await;
                     let _ = outbound
                         .send_payload(UpPayload::DispatchResult(carrier_v1_control_failure(
                             call_id,
@@ -486,12 +484,9 @@ impl LocalAxonSessionDispatcher {
                 .await
                 .is_err()
             {
-                let _ = handle
-                    .cancel("session stream closed before admission")
+                let _ = lifecycle
+                    .cancel_and_finalize("session stream closed before admission")
                     .await;
-                if handle.finalized().await.is_ok() {
-                    lifecycle_cancellations.mark_terminal(&lifecycle_key, lifecycle_handle);
-                }
                 return;
             }
             loop {
@@ -519,7 +514,7 @@ impl LocalAxonSessionDispatcher {
                         );
                         sent_terminal = sent_terminal || terminal;
                         let finalized = if terminal {
-                            match handle.finalized().await {
+                            match lifecycle.finalized().await {
                                 Ok(finalized) => Some(finalized),
                                 Err(error) => {
                                     let _ = outbound
@@ -539,11 +534,7 @@ impl LocalAxonSessionDispatcher {
                         };
                         let terminal_receipt = match finalized.as_ref() {
                             Some(value) => match receipt_to_session_wire(&value.terminal_receipt) {
-                                Ok(receipt) => {
-                                    lifecycle_cancellations
-                                        .mark_terminal(&lifecycle_key, lifecycle_handle.clone());
-                                    Some(receipt)
-                                }
+                                Ok(receipt) => Some(receipt),
                                 Err(error) => {
                                     let _ = outbound
                                         .send_payload(UpPayload::DispatchResult(
@@ -576,7 +567,7 @@ impl LocalAxonSessionDispatcher {
                     }
                     Err(err) => {
                         sent_terminal = true;
-                        let finalized = match handle.finalized().await {
+                        let finalized = match lifecycle.finalized().await {
                             Ok(finalized) => finalized,
                             Err(error) => {
                                 let _ = outbound
@@ -595,11 +586,7 @@ impl LocalAxonSessionDispatcher {
                         };
                         let terminal_receipt =
                             match receipt_to_session_wire(&finalized.terminal_receipt) {
-                                Ok(receipt) => {
-                                    lifecycle_cancellations
-                                        .mark_terminal(&lifecycle_key, lifecycle_handle.clone());
-                                    receipt
-                                }
+                                Ok(receipt) => receipt,
                                 Err(error) => {
                                     let _ = outbound
                                         .send_payload(UpPayload::DispatchResult(
@@ -645,17 +632,16 @@ impl LocalAxonSessionDispatcher {
             // forwarder — dropping the handle alone leaves the ability's
             // emit loop alive holding its stream source. cancel() is
             // idempotent and a no-op on already-terminal invocations.
-            if let Err(err) = handle.cancel("session stream closed").await {
-                let err_msg = err.to_string();
-                crate::op_event!(
-                    component = local_session_dispatcher,
-                    kind = stream_runtime_cancel_failed,
-                    call_id = call_id,
-                    error = err_msg,
-                );
-            }
-            if cancelled && handle.finalized().await.is_ok() {
-                lifecycle_cancellations.mark_terminal(&lifecycle_key, lifecycle_handle);
+            if !sent_terminal {
+                if let Err(err) = lifecycle.cancel_and_finalize("session stream closed").await {
+                    let err_msg = err.to_string();
+                    crate::op_event!(
+                        component = local_session_dispatcher,
+                        kind = stream_runtime_cancel_failed,
+                        call_id = call_id,
+                        error = err_msg,
+                    );
+                }
             }
             let mut guard = match sessions.lock() {
                 Ok(g) => g,
@@ -1302,12 +1288,12 @@ impl LocalAxonSessionDispatcher {
         lifecycle_envelope: axon_sdk::invocation::DescriptorBoundEnvelope,
     ) -> Result<(), SessionDispatchError> {
         let (handler_in_tx, mut handler_out_rx) = handle.split();
-        let lifecycle_handle = handler_out_rx.handle().clone();
-        let lifecycle_key = match self
-            .lifecycle_cancellations
-            .register(&lifecycle_envelope, lifecycle_handle.clone())
-        {
-            Ok(key) => key,
+        let lifecycle = match RegisteredInvocationLifecycle::register(
+            self.lifecycle_cancellations.clone(),
+            &lifecycle_envelope,
+            handler_out_rx.handle().clone(),
+        ) {
+            Ok(lifecycle) => lifecycle,
             Err(error) => {
                 let reason = format!("lifecycle cancellation registration failed: {error}");
                 if let Err(cancel_error) = handler_out_rx.cancel(reason.clone()).await {
@@ -1337,9 +1323,7 @@ impl LocalAxonSessionDispatcher {
         let admission = match handler_out_rx.admission_receipt().await {
             Ok(receipt) => receipt,
             Err(error) => {
-                if let Ok(finalized) = handler_out_rx.finalized().await {
-                    self.lifecycle_cancellations
-                        .mark_terminal(&lifecycle_key, lifecycle_handle);
+                if let Ok(finalized) = lifecycle.finalized().await {
                     return Self::send_bidi_terminal(outbound, call_id, &finalized).await;
                 }
                 return Self::send_bidi_control_failure(
@@ -1352,13 +1336,9 @@ impl LocalAxonSessionDispatcher {
             }
         };
         if let Err(error) = Self::send_bidi_admission(outbound, call_id, &admission).await {
-            let _ = handler_out_rx
-                .cancel("session bidi closed before admission")
+            let _ = lifecycle
+                .cancel_and_finalize("session bidi closed before admission")
                 .await;
-            if handler_out_rx.finalized().await.is_ok() {
-                self.lifecycle_cancellations
-                    .mark_terminal(&lifecycle_key, lifecycle_handle);
-            }
             return Err(error);
         }
 
@@ -1380,14 +1360,13 @@ impl LocalAxonSessionDispatcher {
         let outbound = outbound.clone();
         let ability_owned = ability.to_string();
         let ability_wire = Arc::clone(&self.ability_wire);
-        let lifecycle_cancellations = self.lifecycle_cancellations.clone();
         tokio::spawn(async move {
             let mut canonical_terminal_observed = false;
             while let Some(frame_result) = handler_out_rx.next_frame().await {
                 let frame = match frame_result {
                     Ok(frame) => frame,
                     Err(err) => {
-                        let finalized = match handler_out_rx.finalized().await {
+                        let finalized = match lifecycle.finalized().await {
                             Ok(finalized) => finalized,
                             Err(error) => {
                                 let _ = LocalAxonSessionDispatcher::send_bidi_control_failure(
@@ -1400,8 +1379,6 @@ impl LocalAxonSessionDispatcher {
                                 break;
                             }
                         };
-                        lifecycle_cancellations
-                            .mark_terminal(&lifecycle_key, lifecycle_handle.clone());
                         canonical_terminal_observed = true;
                         let _ = LocalAxonSessionDispatcher::send_bidi_terminal(
                             &outbound, call_id, &finalized,
@@ -1411,7 +1388,7 @@ impl LocalAxonSessionDispatcher {
                     }
                 };
                 if frame.terminal {
-                    let finalized = match handler_out_rx.finalized().await {
+                    let finalized = match lifecycle.finalized().await {
                         Ok(finalized) => finalized,
                         Err(error) => {
                             let _ = LocalAxonSessionDispatcher::send_bidi_control_failure(
@@ -1424,7 +1401,6 @@ impl LocalAxonSessionDispatcher {
                             break;
                         }
                     };
-                    lifecycle_cancellations.mark_terminal(&lifecycle_key, lifecycle_handle.clone());
                     canonical_terminal_observed = true;
                     let _ = LocalAxonSessionDispatcher::send_bidi_terminal(
                         &outbound, call_id, &finalized,
@@ -1459,13 +1435,8 @@ impl LocalAxonSessionDispatcher {
                                     let reason = format!(
                                         "session.open: remote bidi output map failed: {err}"
                                     );
-                                    let _ = handler_out_rx.cancel(reason.clone()).await;
-                                    match handler_out_rx.finalized().await {
+                                    match lifecycle.cancel_and_finalize(reason.clone()).await {
                                         Ok(finalized) => {
-                                            lifecycle_cancellations.mark_terminal(
-                                                &lifecycle_key,
-                                                lifecycle_handle.clone(),
-                                            );
                                             canonical_terminal_observed = true;
                                             let _ = LocalAxonSessionDispatcher::send_bidi_terminal(
                                                 &outbound, call_id, &finalized,
@@ -1489,11 +1460,8 @@ impl LocalAxonSessionDispatcher {
                         Err(err) => {
                             let reason =
                                 format!("session.open: remote bidi output was not JSON: {err}");
-                            let _ = handler_out_rx.cancel(reason.clone()).await;
-                            match handler_out_rx.finalized().await {
+                            match lifecycle.cancel_and_finalize(reason.clone()).await {
                                 Ok(finalized) => {
-                                    lifecycle_cancellations
-                                        .mark_terminal(&lifecycle_key, lifecycle_handle.clone());
                                     canonical_terminal_observed = true;
                                     let _ = LocalAxonSessionDispatcher::send_bidi_terminal(
                                         &outbound, call_id, &finalized,
@@ -1527,11 +1495,10 @@ impl LocalAxonSessionDispatcher {
                 }
             }
             if !canonical_terminal_observed {
-                let _ = handler_out_rx
-                    .cancel("session bidi output forwarder closed")
-                    .await;
-                if let Ok(finalized) = handler_out_rx.finalized().await {
-                    lifecycle_cancellations.mark_terminal(&lifecycle_key, lifecycle_handle.clone());
+                if let Ok(finalized) = lifecycle
+                    .cancel_and_finalize("session bidi output forwarder closed")
+                    .await
+                {
                     let _ = LocalAxonSessionDispatcher::send_bidi_terminal(
                         &outbound, call_id, &finalized,
                     )

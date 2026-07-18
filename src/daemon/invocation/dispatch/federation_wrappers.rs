@@ -35,10 +35,9 @@
 // `InvokeResponse.result` with `result_content_type =
 // "application/json"`. The shapes here mirror what axon-runtime
 // emits today; PR-4's baseline captures pin the byte-level expected
-// output for SDK consumers across rust, go, python, java, node,
-// swift, react. Field names are drawn from the proto definitions in
-// `EasyNet-Axon/core/proto/axon/v1/federation.proto` so the JSON
-// encoding is the canonical proto-JSON mapping.
+// output for product consumers. Field names are owned by the daemon's
+// `federation::{wire_contract,resolver_contract}` modules; Axon transports
+// their JSON bytes without contributing product semantics.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -52,14 +51,16 @@ use crate::daemon::ability::conformance;
 use crate::daemon::federation::read_model::advertised_agents::{
     AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
 };
+#[cfg(test)]
+use crate::daemon::federation::resolver_contract::{
+    GateResult, NegativeReason, RecordType, ResolveAnswerKind, ResolverReleaseProfile,
+};
 pub use crate::daemon::federation::wire_contract::{
     DiscoverRequest, DiscoverResponse, ListUserDevicesRequest, ListUserDevicesResponse,
     ResolveAgentSummary, ResolveFilterRequest, ResolveKeyRequest, ResolveKeyResponse,
     ResolveRequest, ResolveResponse,
 };
 use crate::daemon::invocation::bidi::state::presence::PresenceRegistry;
-#[cfg(test)]
-use axon_sdk::pb::axon::v1 as axon_pb;
 
 /// `federation.join` — caller's claimed URA is authoritative; no
 /// hub-side `agent/a-X` minting (spec §5.1 URA scheme migration).
@@ -1991,13 +1992,13 @@ mod tests {
 
         assert_eq!(
             answer["answer_kind"],
-            axon_pb::ResolveAnswerKind::FinalRoute.as_str_name()
+            ResolveAnswerKind::FinalRoute.as_str_name()
         );
         assert_eq!(answer["owner_ura"], owner_ura);
         assert_eq!(answer["ability_ura"], ability_ura);
         assert_eq!(
             answer["release_profile"],
-            axon_pb::ResolverReleaseProfile::AuthoritativeLocal.as_str_name()
+            ResolverReleaseProfile::AuthoritativeLocal.as_str_name()
         );
         assert_eq!(
             answer["next_hop"]["local_device_ability"]["dispatch_name"],
@@ -2005,7 +2006,7 @@ mod tests {
         );
         assert_eq!(
             answer["selected_route"]["gates"]["ability"],
-            axon_pb::GateResult::Pass.as_str_name()
+            GateResult::Pass.as_str_name()
         );
         assert!(answer.get("negative").is_none());
     }
@@ -2032,11 +2033,11 @@ mod tests {
 
         assert_eq!(
             answer["answer_kind"],
-            axon_pb::ResolveAnswerKind::Negative.as_str_name()
+            ResolveAnswerKind::Negative.as_str_name()
         );
         assert_eq!(
             answer["negative"]["reason"],
-            axon_pb::NegativeReason::Nodata.as_str_name()
+            NegativeReason::Nodata.as_str_name()
         );
         assert_eq!(answer["next_hop"]["no_route"], serde_json::json!({}));
     }
@@ -2074,7 +2075,7 @@ mod tests {
             .expect("typed answer must carry records");
         assert!(
             records.iter().any(|record| {
-                record["record_type"] == axon_pb::RecordType::HostedBy.as_str_name()
+                record["record_type"] == RecordType::HostedBy.as_str_name()
                     && record["value"]["hosted_by"]["hosted_ura"] == agent_ura
                     && record["value"]["hosted_by"]["host_ura"] == host_ura
                     && record["value"]["hosted_by"]["host_node_id"] == "dev-1"

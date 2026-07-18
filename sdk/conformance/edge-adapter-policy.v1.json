@@ -117,13 +117,6 @@
         ],
         "allowed_sites": [
           {
-            "path": "sdk/go/cabi_runtime_test.go",
-            "kind": "old_facade_call",
-            "symbol": "NewDaemonControl",
-            "owner": "TestCABIRuntimeTransportDrivesStreamAndBidiCallbacks",
-            "occurrences": 1
-          },
-          {
             "path": "sdk/go/daemon_compat.go",
             "kind": "adapter_receiver_definition",
             "symbol": "runtimeLifecycleCompatibilityAdapter",

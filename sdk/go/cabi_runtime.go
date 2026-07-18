@@ -735,26 +735,29 @@ func (t *CABIRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte)
 		return nil, nil, err
 	}
 	inbox := newCABICallbackInbox(MaxStreamBufferedEvents)
-	token := registerCABICallbackInbox(inbox)
+	registration, err := registerCABICallbackInbox(inbox)
+	if err != nil {
+		return nil, nil, err
+	}
 	var out C.uint64_t
 	code := int32(cabiWithCString(draftJSON, func(cDraft *C.char) C.int32_t {
-		return C.easynet_runtime_call_stream_open(t.symbols.streamOpen, C.uint64_t(handle), cDraft, unsafe.Pointer(token), &out)
+		return C.easynet_runtime_call_stream_open(t.symbols.streamOpen, C.uint64_t(handle), cDraft, registration.userData, &out)
 	}))
 	if code != 0 {
-		releaseCABICallbackInbox(token)
+		releaseCABICallbackInbox(registration)
 		return nil, nil, t.lastErrorOrCode(code, "C ABI invocation stream open failed")
 	}
 	streamID := uint64(out)
 	if streamID == 0 {
-		releaseCABICallbackInbox(token)
+		releaseCABICallbackInbox(registration)
 		return nil, nil, invalidCABIHandle("C ABI stream open returned an invalid stream id")
 	}
 	stream := &cabiStreamTransport{
-		owner:       t,
-		streamID:    streamID,
-		token:       token,
-		inbox:       inbox,
-		nextRecvSeq: 1,
+		owner:        t,
+		streamID:     streamID,
+		registration: registration,
+		inbox:        inbox,
+		nextRecvSeq:  1,
 	}
 	t.mu.Lock()
 	t.streams[stream] = struct{}{}
@@ -772,26 +775,29 @@ func (t *CABIRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte, s
 		return nil, nil, err
 	}
 	inbox := newCABICallbackInbox(MaxBidiBufferedFrames)
-	token := registerCABICallbackInbox(inbox)
+	registration, err := registerCABICallbackInbox(inbox)
+	if err != nil {
+		return nil, nil, err
+	}
 	var out C.uint64_t
 	code := int32(cabiWithCString(invocationJSON, func(cDraft *C.char) C.int32_t {
-		return C.easynet_runtime_call_bidi_open(t.symbols.bidiOpen, C.uint64_t(handle), cDraft, unsafe.Pointer(token), &out)
+		return C.easynet_runtime_call_bidi_open(t.symbols.bidiOpen, C.uint64_t(handle), cDraft, registration.userData, &out)
 	}))
 	if code != 0 {
-		releaseCABICallbackInbox(token)
+		releaseCABICallbackInbox(registration)
 		return nil, nil, t.lastErrorOrCode(code, "C ABI invocation bidi open failed")
 	}
 	bidiID := uint64(out)
 	if bidiID == 0 {
-		releaseCABICallbackInbox(token)
+		releaseCABICallbackInbox(registration)
 		return nil, nil, invalidCABIHandle("C ABI bidi open returned an invalid session id")
 	}
 	bidi := &cabiBidiTransport{
-		owner:       t,
-		bidiID:      bidiID,
-		token:       token,
-		inbox:       inbox,
-		nextRecvSeq: 1,
+		owner:        t,
+		bidiID:       bidiID,
+		registration: registration,
+		inbox:        inbox,
+		nextRecvSeq:  1,
 	}
 	t.mu.Lock()
 	t.bidis[bidi] = struct{}{}
@@ -1051,14 +1057,15 @@ func (t *CABIRuntimeTransport) lastErrorOrCode(code int32, fallback string) erro
 }
 
 type cabiStreamTransport struct {
-	mu          sync.Mutex
-	owner       *CABIRuntimeTransport
-	streamID    uint64
-	token       uintptr
-	inbox       *cabiCallbackInbox
-	nextRecvSeq uint64
-	closed      bool
-	cancelSent  bool
+	mu           sync.Mutex
+	owner        *CABIRuntimeTransport
+	streamID     uint64
+	registration *cabiCallbackRegistration
+	inbox        *cabiCallbackInbox
+	nextRecvSeq  uint64
+	closed       bool
+	cancelSent   bool
+	cancelErr    error
 }
 
 func (s *cabiStreamTransport) Recv(ctx context.Context) ([]byte, error) {
@@ -1104,26 +1111,21 @@ func (s *cabiStreamTransport) cancelWithHandle(handle uint64) error {
 		return invalidRuntimeClient("C ABI stream transport is not initialized")
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
-		s.mu.Unlock()
 		return nil
 	}
 	if s.cancelSent {
-		s.mu.Unlock()
-		return nil
+		return s.cancelErr
 	}
 	streamID := s.streamID
-	s.mu.Unlock()
 
 	code := int32(C.easynet_runtime_call_stream_cancel(s.owner.symbols.streamCancel, C.uint64_t(handle), C.uint64_t(streamID)))
+	s.cancelSent = true
 	if code != 0 {
-		return s.owner.lastErrorOrCode(code, "C ABI invocation stream cancel failed")
+		s.cancelErr = s.owner.lastErrorOrCode(code, "C ABI invocation stream cancel failed")
+		return s.cancelErr
 	}
-	s.mu.Lock()
-	if !s.closed {
-		s.cancelSent = true
-	}
-	s.mu.Unlock()
 	return nil
 }
 
@@ -1138,11 +1140,11 @@ func (s *cabiStreamTransport) closeWithHandle(handle uint64) error {
 	}
 	s.closed = true
 	streamID := s.streamID
-	token := s.token
+	registration := s.registration
 	s.mu.Unlock()
 
 	code := int32(C.easynet_runtime_call_stream_close(s.owner.symbols.streamClose, C.uint64_t(handle), C.uint64_t(streamID)))
-	releaseCABICallbackInbox(token)
+	releaseCABICallbackInbox(registration)
 	s.owner.removeStream(s)
 	if code != 0 {
 		return s.owner.lastErrorOrCode(code, "C ABI invocation stream close failed")
@@ -1151,14 +1153,15 @@ func (s *cabiStreamTransport) closeWithHandle(handle uint64) error {
 }
 
 type cabiBidiTransport struct {
-	mu          sync.Mutex
-	owner       *CABIRuntimeTransport
-	bidiID      uint64
-	token       uintptr
-	inbox       *cabiCallbackInbox
-	nextRecvSeq uint64
-	closed      bool
-	cancelSent  bool
+	mu           sync.Mutex
+	owner        *CABIRuntimeTransport
+	bidiID       uint64
+	registration *cabiCallbackRegistration
+	inbox        *cabiCallbackInbox
+	nextRecvSeq  uint64
+	closed       bool
+	cancelSent   bool
+	cancelErr    error
 }
 
 func (b *cabiBidiTransport) Send(ctx context.Context, frameJSON []byte) ([]byte, error) {
@@ -1288,11 +1291,11 @@ func (b *cabiBidiTransport) closeWithHandle(handle uint64) error {
 	}
 	b.closed = true
 	bidiID := b.bidiID
-	token := b.token
+	registration := b.registration
 	b.mu.Unlock()
 
 	code := int32(C.easynet_runtime_call_bidi_close(b.owner.symbols.bidiClose, C.uint64_t(handle), C.uint64_t(bidiID)))
-	releaseCABICallbackInbox(token)
+	releaseCABICallbackInbox(registration)
 	b.owner.removeBidi(b)
 	if code != 0 {
 		return b.owner.lastErrorOrCode(code, "C ABI invocation bidi close failed")
@@ -1305,26 +1308,21 @@ func (b *cabiBidiTransport) cancelWithHandle(handle uint64) error {
 		return invalidRuntimeClient("C ABI bidi transport is not initialized")
 	}
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.closed {
-		b.mu.Unlock()
 		return nil
 	}
 	if b.cancelSent {
-		b.mu.Unlock()
-		return nil
+		return b.cancelErr
 	}
 	bidiID := b.bidiID
-	b.mu.Unlock()
 
 	code := int32(C.easynet_runtime_call_bidi_cancel(b.owner.symbols.bidiCancel, C.uint64_t(handle), C.uint64_t(bidiID)))
+	b.cancelSent = true
 	if code != 0 {
-		return b.owner.lastErrorOrCode(code, "C ABI invocation bidi cancel failed")
+		b.cancelErr = b.owner.lastErrorOrCode(code, "C ABI invocation bidi cancel failed")
+		return b.cancelErr
 	}
-	b.mu.Lock()
-	if !b.closed {
-		b.cancelSent = true
-	}
-	b.mu.Unlock()
 	return nil
 }
 
@@ -1823,6 +1821,14 @@ func mergeBidiStreamsForCABI(draftJSON []byte, streamsJSON []byte) ([]byte, erro
 	if err := json.Unmarshal(streamsJSON, &streams); err != nil {
 		return nil, invalidRuntimePayload(fmt.Sprintf("decode bidi stream descriptors: %v", err), err)
 	}
+	if len(streams) == 0 {
+		return nil, invalidRuntimePayload("bidi_streams must be a non-empty array", nil)
+	}
+	for _, stream := range streams {
+		if _, ok := stream.(map[string]any); !ok {
+			return nil, invalidRuntimePayload("bidi_streams entries must be objects", nil)
+		}
+	}
 	draft["bidi_streams"] = streams
 	return json.Marshal(draft)
 }
@@ -1835,10 +1841,11 @@ func preparedKeyFromMap(decoded map[string]any) (string, error) {
 }
 
 type cabiCallbackInbox struct {
-	mu      sync.Mutex
-	ch      chan []byte
-	closed  bool
-	failure error
+	mu               sync.Mutex
+	ch               chan []byte
+	closed           bool
+	failure          []byte
+	failureDelivered bool
 }
 
 func newCABICallbackInbox(maxItems int) *cabiCallbackInbox {
@@ -1851,20 +1858,14 @@ func newCABICallbackInbox(maxItems int) *cabiCallbackInbox {
 func (i *cabiCallbackInbox) push(raw []byte) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if i.closed || i.failure != nil {
+	if i.closed {
 		return
 	}
 	copied := append([]byte(nil), raw...)
 	select {
 	case i.ch <- copied:
 	default:
-		i.failure = &SDKError{
-			Code:      ErrProtocol,
-			Stage:     "cabi",
-			Retry:     RetryNever,
-			Retryable: false,
-			Message:   "C ABI callback queue limit exceeded",
-		}
+		i.failure = cabiCallbackBackpressureFailure()
 		i.closed = true
 		close(i.ch)
 	}
@@ -1872,32 +1873,26 @@ func (i *cabiCallbackInbox) push(raw []byte) {
 
 func (i *cabiCallbackInbox) recv(ctx context.Context) ([]byte, error) {
 	i.mu.Lock()
-	failure := i.failure
-	i.mu.Unlock()
-	if failure != nil {
-		return nil, failure
+	if i.failure != nil && !i.failureDelivered {
+		i.failureDelivered = true
+		failure := append([]byte(nil), i.failure...)
+		i.mu.Unlock()
+		return failure, nil
 	}
+	i.mu.Unlock()
 	select {
 	case raw, ok := <-i.ch:
 		if ok {
-			i.mu.Lock()
-			failure := i.failure
-			i.mu.Unlock()
-			if failure != nil {
-				return nil, failure
-			}
 			return raw, nil
-		}
-		i.mu.Lock()
-		failure := i.failure
-		i.mu.Unlock()
-		if failure != nil {
-			return nil, failure
 		}
 		return nil, invalidRuntimeClient("C ABI callback inbox is closed")
 	case <-ctx.Done():
 		return nil, cabiContextError(ctx)
 	}
+}
+
+func cabiCallbackBackpressureFailure() []byte {
+	return []byte(`{"kind":"error","state":"Failed","terminal":false,"transport_terminal":true,"error":{"code":"ADMISSION_DENIED","stage":"cabi_callback","message":"C ABI callback queue limit exceeded","retry":"after_backoff","details":{"wire_code":"RESOURCE_EXHAUSTED","reason":"callback_queue_overflow","bounded_queue":true}}}`)
 }
 
 func (i *cabiCallbackInbox) close() {
@@ -1916,20 +1911,44 @@ var cabiCallbackRegistry = struct {
 	inbox map[uintptr]*cabiCallbackInbox
 }{next: 1, inbox: map[uintptr]*cabiCallbackInbox{}}
 
-func registerCABICallbackInbox(inbox *cabiCallbackInbox) uintptr {
+type cabiCallbackRegistration struct {
+	token    uintptr
+	userData unsafe.Pointer
+}
+
+func registerCABICallbackInbox(inbox *cabiCallbackInbox) (*cabiCallbackRegistration, error) {
 	cabiCallbackRegistry.Lock()
-	defer cabiCallbackRegistry.Unlock()
 	token := cabiCallbackRegistry.next
 	cabiCallbackRegistry.next++
 	cabiCallbackRegistry.inbox[token] = inbox
-	return token
+	cabiCallbackRegistry.Unlock()
+
+	userData := C.malloc(C.size_t(unsafe.Sizeof(C.uintptr_t(0))))
+	if userData == nil {
+		cabiCallbackRegistry.Lock()
+		delete(cabiCallbackRegistry.inbox, token)
+		cabiCallbackRegistry.Unlock()
+		return nil, &SDKError{
+			Code:      ErrGeneric,
+			Stage:     "cabi",
+			Retry:     RetryAfterBackoff,
+			Retryable: true,
+			Message:   "allocate C ABI callback registration",
+		}
+	}
+	*(*C.uintptr_t)(userData) = C.uintptr_t(token)
+	return &cabiCallbackRegistration{token: token, userData: userData}, nil
 }
 
-func releaseCABICallbackInbox(token uintptr) {
+func releaseCABICallbackInbox(registration *cabiCallbackRegistration) {
+	if registration == nil {
+		return
+	}
 	cabiCallbackRegistry.Lock()
-	inbox := cabiCallbackRegistry.inbox[token]
-	delete(cabiCallbackRegistry.inbox, token)
+	inbox := cabiCallbackRegistry.inbox[registration.token]
+	delete(cabiCallbackRegistry.inbox, registration.token)
 	cabiCallbackRegistry.Unlock()
+	C.free(registration.userData)
 	if inbox != nil {
 		inbox.close()
 	}
@@ -1946,14 +1965,18 @@ func pushCABICallbackPayload(token uintptr, raw []byte) {
 
 func cabiContextError(ctx context.Context) error {
 	code := ErrCancelled
+	retry := RetryNever
+	retryable := false
 	if ctx.Err() == context.DeadlineExceeded {
 		code = ErrTimeout
+		retry = RetrySafe
+		retryable = true
 	}
 	return &SDKError{
 		Code:      code,
 		Stage:     "cabi",
-		Retry:     RetryNever,
-		Retryable: false,
+		Retry:     retry,
+		Retryable: retryable,
 		Message:   ctx.Err().Error(),
 		Cause:     ctx.Err(),
 	}

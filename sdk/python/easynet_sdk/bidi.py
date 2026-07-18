@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Optional, Protocol, runtime_checkable
 
+from ._carrier import CarrierState, is_local_carrier_interruption
 from .errors import ErrorCode, RetryHint, SDKError
 
 
@@ -245,6 +247,27 @@ class BidiSession:
     _last_send_sequence: int = 0
     _last_recv_sequence: int = 0
     _terminal_frame: Optional[BidiTerminalFrame] = None
+    _runtime_state: BidiState = field(init=False, repr=False)
+    _carrier_state: CarrierState = field(
+        default=CarrierState.OPEN, init=False, repr=False
+    )
+    _local_half_close: bool = False
+    _remote_half_close: bool = False
+    _lock: Any = field(
+        default_factory=threading.RLock, init=False, repr=False, compare=False
+    )
+    _sending: bool = field(default=False, init=False, repr=False)
+    _receiving: bool = field(default=False, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._runtime_state = self.state
+
+    @property
+    def runtime_state(self) -> BidiState:
+        """Provider-observed lifecycle state, excluding local carrier close."""
+
+        with self._lock:
+            return self._runtime_state
 
     @classmethod
     def from_json(cls, transport: BidiTransport, raw: bytes | str) -> "BidiSession":
@@ -275,153 +298,290 @@ class BidiSession:
         )
 
     def send(self, frame: BidiFrame) -> BidiFrame:
-        if self.state == BidiState.HALF_CLOSED_LOCAL:
-            raise SDKError(
-                code=ErrorCode.CANCELLED,
-                stage="bidi",
-                retry=RetryHint.NEVER,
-                retryable=False,
-                message="bidi send path is closed",
-            )
-        if self.state != BidiState.OPEN:
-            raise _invalid_bidi("bidi send path is closed")
-        if (
-            self.max_buffered_frames > 0
-            and len(self.sent_frames) >= self.max_buffered_frames
-        ):
-            self.state = BidiState.FAILED
-            raise _invalid_bidi("bidi send buffer limit exceeded")
+        frame_json = frame.to_json()
+        with self._lock:
+            self._require_carrier_open_locked()
+            if self._runtime_state == BidiState.HALF_CLOSED_LOCAL:
+                raise SDKError(
+                    code=ErrorCode.CANCELLED,
+                    stage="bidi",
+                    retry=RetryHint.NEVER,
+                    retryable=False,
+                    message="bidi send path is closed",
+                )
+            if self._runtime_state not in {
+                BidiState.OPEN,
+                BidiState.HALF_CLOSED_REMOTE,
+            }:
+                raise _invalid_bidi("bidi send path is closed")
+            if (
+                self.max_buffered_frames > 0
+                and len(self.sent_frames) >= self.max_buffered_frames
+            ):
+                self._set_runtime_state_locked(BidiState.FAILED)
+                raise _invalid_bidi("bidi send buffer limit exceeded")
+            if self._sending:
+                raise _invalid_bidi("bidi send is already in progress")
+            self._sending = True
+            transport = self.transport
         try:
-            raw = self.transport.send(frame.to_json())
-        except SDKError:
-            self.state = BidiState.FAILED
+            raw = transport.send(frame_json)
+        except SDKError as exc:
+            with self._lock:
+                self._sending = False
+                if self._carrier_state.is_open and not is_local_carrier_interruption(
+                    exc
+                ):
+                    self._set_runtime_state_locked(BidiState.FAILED)
             raise
         except Exception as exc:
-            self.state = BidiState.FAILED
+            with self._lock:
+                self._sending = False
+                if self._carrier_state.is_open and not is_local_carrier_interruption(
+                    exc
+                ):
+                    self._set_runtime_state_locked(BidiState.FAILED)
             raise _transport_error("bidi send transport failed", exc) from exc
-        ack = BidiFrame.from_json(raw)
-        self._record_sent(ack)
+        try:
+            ack = BidiFrame.from_json(raw)
+        except SDKError:
+            with self._lock:
+                self._sending = False
+                self._set_runtime_state_locked(BidiState.FAILED)
+            raise
+        with self._lock:
+            self._sending = False
+            if (
+                self._is_runtime_terminal_locked()
+                or self._runtime_state == BidiState.CANCEL_REQUESTED
+            ):
+                raise _invalid_bidi("bidi send completed after the send path closed")
+            self._record_sent_locked(ack)
         return ack
 
     def receive(self, timeout: float | None = None) -> BidiFrame:
-        if self._is_terminal() or self.state == BidiState.TERMINAL:
-            raise _invalid_bidi("bidi session is terminal")
+        with self._lock:
+            self._require_carrier_open_locked()
+            if self._is_runtime_terminal_locked():
+                raise _invalid_bidi("bidi session is terminal")
+            if self._receiving:
+                raise _invalid_bidi("bidi recv is already in progress")
+            self._receiving = True
+            transport = self.transport
         try:
-            raw = self.transport.recv(timeout)
-        except SDKError:
-            self.state = BidiState.FAILED
+            raw = transport.recv(timeout)
+        except SDKError as exc:
+            with self._lock:
+                self._receiving = False
+                if self._carrier_state.is_open and not is_local_carrier_interruption(
+                    exc
+                ):
+                    self._set_runtime_state_locked(BidiState.FAILED)
             raise
         except TimeoutError:
+            with self._lock:
+                self._receiving = False
             raise
         except Exception as exc:
-            self.state = BidiState.FAILED
+            with self._lock:
+                self._receiving = False
+                if self._carrier_state.is_open:
+                    self._set_runtime_state_locked(BidiState.FAILED)
             raise _transport_error("bidi recv transport failed", exc) from exc
-        frame = BidiFrame.from_json(raw)
-        self._record_received(frame)
-        self._apply_received_state(frame)
+        try:
+            frame = BidiFrame.from_json(raw)
+        except SDKError:
+            with self._lock:
+                self._receiving = False
+                self._set_runtime_state_locked(BidiState.FAILED)
+            raise
+        with self._lock:
+            self._receiving = False
+            if self._is_runtime_terminal_locked():
+                raise _invalid_bidi(
+                    "bidi session became terminal while receive was in progress"
+                )
+            self._record_received_locked(frame)
+            self._apply_received_state_locked(frame)
         return frame
 
     def close_send(self) -> BidiOutcome:
-        if self.state not in {BidiState.OPEN, BidiState.HALF_CLOSED_REMOTE}:
-            raise _invalid_bidi("bidi send path is closed")
+        with self._lock:
+            self._require_carrier_open_locked()
+            if self._runtime_state not in {
+                BidiState.OPEN,
+                BidiState.HALF_CLOSED_REMOTE,
+            }:
+                raise _invalid_bidi("bidi send path is closed")
+            if self._sending:
+                raise _invalid_bidi("bidi send is already in progress")
+            self._sending = True
+            transport = self.transport
         try:
-            raw = self.transport.close_send()
-        except SDKError:
-            self.state = BidiState.FAILED
+            raw = transport.close_send()
+        except SDKError as exc:
+            with self._lock:
+                self._sending = False
+                if self._carrier_state.is_open and not is_local_carrier_interruption(
+                    exc
+                ):
+                    self._set_runtime_state_locked(BidiState.FAILED)
             raise
         except Exception as exc:
-            self.state = BidiState.FAILED
+            with self._lock:
+                self._sending = False
+                if self._carrier_state.is_open and not is_local_carrier_interruption(
+                    exc
+                ):
+                    self._set_runtime_state_locked(BidiState.FAILED)
             raise _transport_error("bidi close-send transport failed", exc) from exc
-        outcome = BidiOutcome.from_json(raw)
-        if self.state == BidiState.HALF_CLOSED_REMOTE:
-            self.state = BidiState.TERMINAL
-            return BidiOutcome(
-                session_id=outcome.session_id,
-                state=BidiState.TERMINAL,
-                terminal=True,
-                reason=outcome.reason,
-            )
-        else:
-            self.state = outcome.state
+        try:
+            outcome = BidiOutcome.from_json(raw)
+        except SDKError:
+            with self._lock:
+                self._sending = False
+                self._set_runtime_state_locked(BidiState.FAILED)
+            raise
+        with self._lock:
+            self._sending = False
+            if outcome.state != BidiState.HALF_CLOSED_LOCAL or outcome.terminal:
+                self._set_runtime_state_locked(BidiState.FAILED)
+                raise _invalid_bidi(
+                    "bidi close-send transport must return "
+                    "HalfClosedLocal with terminal=false"
+                )
+            if (
+                self._is_runtime_terminal_locked()
+                or self._runtime_state == BidiState.CANCEL_REQUESTED
+            ):
+                return outcome
+            self._local_half_close = True
+            self._set_runtime_state_locked(BidiState.HALF_CLOSED_LOCAL)
         return outcome
 
     def cancel(self, reason: str = "") -> BidiOutcome:
-        if self._is_terminal():
-            raise _invalid_bidi("bidi session is terminal")
+        with self._lock:
+            self._require_carrier_open_locked()
+            if self._is_runtime_terminal_locked():
+                raise _invalid_bidi("bidi session is terminal")
+            transport = self.transport
         try:
-            raw = self.transport.cancel(reason)
+            raw = transport.cancel(reason)
         except SDKError as exc:
-            if exc.code != ErrorCode.NOT_IMPLEMENTED:
-                self.state = BidiState.FAILED
+            if (
+                exc.code != ErrorCode.NOT_IMPLEMENTED
+                and not is_local_carrier_interruption(exc)
+            ):
+                with self._lock:
+                    self._set_runtime_state_locked(BidiState.FAILED)
             raise
         except Exception as exc:
-            self.state = BidiState.FAILED
+            if not is_local_carrier_interruption(exc):
+                with self._lock:
+                    self._set_runtime_state_locked(BidiState.FAILED)
             raise _transport_error("bidi cancel transport failed", exc) from exc
-        outcome = BidiOutcome.from_json(raw)
+        try:
+            outcome = BidiOutcome.from_json(raw)
+        except SDKError:
+            with self._lock:
+                self._set_runtime_state_locked(BidiState.FAILED)
+            raise
         if outcome.state != BidiState.CANCEL_REQUESTED or outcome.terminal:
-            self.state = BidiState.FAILED
+            with self._lock:
+                self._set_runtime_state_locked(BidiState.FAILED)
             raise _invalid_bidi(
                 "bidi cancel transport must return CancelRequested with terminal=false"
             )
-        self.state = outcome.state
+        with self._lock:
+            if self._runtime_state == BidiState.TERMINAL:
+                return outcome
+            if self._runtime_state == BidiState.FAILED:
+                raise _invalid_bidi(
+                    "bidi session failed while cancellation was in flight"
+                )
+            self._set_runtime_state_locked(outcome.state)
         return outcome
 
     def close(self) -> None:
-        if self.state == BidiState.CLOSED:
-            return
+        with self._lock:
+            if self._carrier_state is CarrierState.CLOSED:
+                return
+            if self._carrier_state is CarrierState.CLOSING:
+                raise _invalid_bidi("bidi carrier close is already in progress")
+            self._carrier_state = CarrierState.CLOSING
+            transport = self.transport
         try:
-            self.transport.close()
+            transport.close()
         except SDKError:
-            self.state = BidiState.FAILED
+            with self._lock:
+                self._carrier_state = CarrierState.FAILED
+                self.state = BidiState.FAILED
             raise
         except Exception as exc:
-            self.state = BidiState.FAILED
+            with self._lock:
+                self._carrier_state = CarrierState.FAILED
+                self.state = BidiState.FAILED
             raise _transport_error("bidi close transport failed", exc) from exc
-        self.state = BidiState.CLOSED
+        with self._lock:
+            self._carrier_state = CarrierState.CLOSED
+            self.state = BidiState.CLOSED
 
     def terminal_frame(self) -> BidiTerminalFrame:
-        if self._terminal_frame is None:
-            raise _invalid_bidi("bidi terminal frame has not been seen")
-        return self._terminal_frame
+        with self._lock:
+            if self._terminal_frame is None:
+                raise _invalid_bidi("bidi terminal frame has not been seen")
+            return self._terminal_frame
 
-    def _record_sent(self, frame: BidiFrame) -> None:
+    def _record_sent_locked(self, frame: BidiFrame) -> None:
         if frame.sequence <= self._last_send_sequence:
-            self.state = BidiState.FAILED
+            self._set_runtime_state_locked(BidiState.FAILED)
             raise _invalid_bidi("bidi sent frames must be strictly ordered")
         self._last_send_sequence = frame.sequence
         self.sent_frames.append(frame)
 
-    def _record_received(self, frame: BidiFrame) -> None:
+    def _record_received_locked(self, frame: BidiFrame) -> None:
         if frame.sequence <= self._last_recv_sequence:
-            self.state = BidiState.FAILED
+            self._set_runtime_state_locked(BidiState.FAILED)
             raise _invalid_bidi("bidi received frames must be strictly ordered")
         if (
             self.max_buffered_frames > 0
             and len(self.received_frames) >= self.max_buffered_frames
         ):
-            self.state = BidiState.FAILED
+            self._set_runtime_state_locked(BidiState.FAILED)
             raise _invalid_bidi("bidi receive buffer limit exceeded")
         self._last_recv_sequence = frame.sequence
         self.received_frames.append(frame)
 
-    def _apply_received_state(self, frame: BidiFrame) -> None:
-        if frame.terminal:
-            self._terminal_frame = BidiTerminalFrame.from_frame(self.session_id, frame)
-            self.state = BidiState.TERMINAL
-        elif frame.transport_terminal:
+    def _apply_received_state_locked(self, frame: BidiFrame) -> None:
+        if frame.transport_terminal:
+            if frame.terminal:
+                self._terminal_frame = BidiTerminalFrame.from_frame(
+                    self.session_id, frame
+                )
+            self._carrier_state = CarrierState.FAILED
             self.state = BidiState.FAILED
+        elif frame.terminal:
+            self._terminal_frame = BidiTerminalFrame.from_frame(self.session_id, frame)
+            self._set_runtime_state_locked(BidiState.TERMINAL)
         elif frame.kind == "remote_close_send":
-            if self.state == BidiState.HALF_CLOSED_LOCAL:
-                self.state = BidiState.TERMINAL
-            else:
-                self.state = BidiState.HALF_CLOSED_REMOTE
-        elif self.state == BidiState.OPENING:
-            self.state = BidiState.OPEN
+            self._remote_half_close = True
+            if not self._local_half_close:
+                self._set_runtime_state_locked(BidiState.HALF_CLOSED_REMOTE)
+        elif self._runtime_state == BidiState.OPENING:
+            self._set_runtime_state_locked(BidiState.OPEN)
 
-    def _is_terminal(self) -> bool:
-        return self.state in {
+    def _set_runtime_state_locked(self, state: BidiState) -> None:
+        self._runtime_state = state
+        if self._carrier_state.is_open:
+            self.state = state
+
+    def _require_carrier_open_locked(self) -> None:
+        if not self._carrier_state.is_open:
+            raise _invalid_bidi("bidi carrier is closed")
+
+    def _is_runtime_terminal_locked(self) -> bool:
+        return self._runtime_state in {
             BidiState.TERMINAL,
-            BidiState.CLOSED,
             BidiState.CANCELLED,
             BidiState.FAILED,
         }

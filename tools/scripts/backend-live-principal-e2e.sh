@@ -120,8 +120,8 @@ backend_live_principal_main() {
   daemon_bin="$repo_root/target/debug/easynet-daemon"
   lib_path="$repo_root/target/debug/libeasynet_cli.${lib_ext}"
 
-  echo "[backend-live-principal-e2e] rebuilding libeasynet_cli + easynet-daemon..."
-  (cd "$repo_root" && cargo build --lib --bin easynet-daemon)
+  echo "[backend-live-principal-e2e] rebuilding libeasynet_cli + daemon process set..."
+  "$repo_root/tools/scripts/build-daemon-process-set.sh" --lib
 
   smoke_home="$(mktemp -d "/tmp/easynet-backend-live-principal.XXXXXX")"
   trap "backend_live_principal_cleanup \$? '$smoke_home'" EXIT

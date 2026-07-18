@@ -5,9 +5,10 @@
 // Description: Daemon-owned RFC-005 route resolver facade.
 //
 // Protocol Responsibility:
-// - Axon owns ResolveQuery / ResolveAnswer / NextHop / NegativeReason.
-// - The daemon owns the local runtime facts used to select an executable route:
-//   live device sessions, hosted-agent placement, and owner ability projection.
+// - The daemon owns EasyNet resolver vocabulary and the runtime facts used to
+//   select an executable route: live sessions, hosted-agent placement, and
+//   owner ability projection.
+// - Axon owns only the generic Invocation transport carrying resolver JSON.
 //
 // Implementation Approach:
 // - Resolve once into `SelectedInvokeRoute`.
@@ -35,6 +36,10 @@ use crate::daemon::federation::directory::SharedFederatedDirectoryView;
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore;
 use crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore;
+use crate::daemon::federation::resolver_contract::{
+    GateResult, NegativeReason, RecordType, ResolveAnswerKind, ResolveType, ResolverReleaseProfile,
+    RouteHealth, RouteReason, UraKind,
+};
 use crate::daemon::invocation::bidi::state::presence::PresenceRegistry;
 use crate::daemon::invocation::dispatch::federation_wrappers::{
     self, ResolveAgentSummary, ResolveRequest,
@@ -43,8 +48,6 @@ use crate::daemon::invocation::routing::hub_resolver::{HubResolution, HubResolve
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentHostedPlacementProjection,
 };
-
-use axon_sdk::pb::axon::v1 as axon_pb;
 
 const DEFAULT_DIRECTORY_LIMIT: usize = 50;
 const MAX_DIRECTORY_LIMIT: usize = 500;
@@ -66,8 +69,8 @@ pub(crate) struct LocalRuntimeAbility {
 /// Closed daemon-internal route-locality classification.
 ///
 /// This is the semantic value dispatchers should consume. Axon
-/// `RouteReason` remains the wire projection exposed through
-/// ResolveAnswer JSON, but the daemon must not infer route locality
+/// `RouteReason` is the product wire projection exposed through resolve JSON,
+/// but the daemon must not infer route locality
 /// from protobuf strings, owner URA shape, or ad hoc dispatcher branches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SelectedRouteKind {
@@ -79,11 +82,11 @@ pub(crate) enum SelectedRouteKind {
 
 impl SelectedRouteKind {
     #[must_use]
-    pub(crate) fn route_reason(self) -> axon_pb::RouteReason {
+    pub(crate) fn route_reason(self) -> RouteReason {
         match self {
-            Self::LocalDevice | Self::SameRealmDevice => axon_pb::RouteReason::LocalDevice,
-            Self::HubOwned => axon_pb::RouteReason::LocalHub,
-            Self::HostedAgent => axon_pb::RouteReason::HostedAgent,
+            Self::LocalDevice | Self::SameRealmDevice => RouteReason::LocalDevice,
+            Self::HubOwned => RouteReason::LocalHub,
+            Self::HostedAgent => RouteReason::HostedAgent,
         }
     }
 }
@@ -122,7 +125,7 @@ pub(crate) struct SelectedInvokeRoute {
     pub ability_ura: String,
     pub route_ura: String,
     pub dispatch_name: String,
-    pub release_profile: axon_pb::ResolverReleaseProfile,
+    pub release_profile: ResolverReleaseProfile,
     kind: SelectedRouteKind,
     ability_record: Value,
     route_record: Value,
@@ -145,7 +148,7 @@ impl SelectedInvokeRoute {
             ability_ura: ability_ura.clone(),
             route_ura: route_ura.clone(),
             dispatch_name: dispatch_name.to_string(),
-            release_profile: axon_pb::ResolverReleaseProfile::AuthoritativeLocal,
+            release_profile: ResolverReleaseProfile::AuthoritativeLocal,
             kind: SelectedRouteKind::LocalDevice,
             ability_record: device_local_ability_record(
                 &ability_ura,
@@ -169,8 +172,7 @@ impl SelectedInvokeRoute {
     pub(crate) fn is_authoritative_local_or_better(&self) -> bool {
         matches!(
             self.release_profile,
-            axon_pb::ResolverReleaseProfile::AuthoritativeLocal
-                | axon_pb::ResolverReleaseProfile::Production
+            ResolverReleaseProfile::AuthoritativeLocal | ResolverReleaseProfile::Production
         )
     }
 
@@ -186,7 +188,7 @@ impl SelectedInvokeRoute {
     }
 
     #[must_use]
-    pub(crate) fn route_reason(&self) -> axon_pb::RouteReason {
+    pub(crate) fn route_reason(&self) -> RouteReason {
         self.kind().route_reason()
     }
 
@@ -213,11 +215,11 @@ impl SelectedInvokeRoute {
     pub(crate) fn final_route_answer_json(&self) -> Value {
         let authority = authority_for_query(&self.query_name);
         let gates = json!({
-            "authority": axon_pb::GateResult::Pass.as_str_name(),
-            "identity": axon_pb::GateResult::Pass.as_str_name(),
-            "placement": axon_pb::GateResult::Pass.as_str_name(),
-            "ability": axon_pb::GateResult::Pass.as_str_name(),
-            "policy": axon_pb::GateResult::Pass.as_str_name(),
+            "authority": GateResult::Pass.as_str_name(),
+            "identity": GateResult::Pass.as_str_name(),
+            "placement": GateResult::Pass.as_str_name(),
+            "ability": GateResult::Pass.as_str_name(),
+            "policy": GateResult::Pass.as_str_name(),
         });
         let next_hop = self.next_hop_json();
         let selected_route = json!({
@@ -225,13 +227,13 @@ impl SelectedInvokeRoute {
             "priority": 0,
             "weight": 1,
             "reason": self.route_reason().as_str_name(),
-            "health": axon_pb::RouteHealth::Healthy.as_str_name(),
+            "health": RouteHealth::Healthy.as_str_name(),
             "authority": authority.clone(),
             "gates": gates,
         });
 
         json!({
-            "answer_kind": axon_pb::ResolveAnswerKind::FinalRoute.as_str_name(),
+            "answer_kind": ResolveAnswerKind::FinalRoute.as_str_name(),
             "canonical_name": self.query_name,
             "owner_ura": self.owner_ura,
             "ability_ura": self.ability_ura,
@@ -291,7 +293,7 @@ pub(crate) struct DelegatedInvokeRoute {
     pub realm: String,
     pub hub_ura: String,
     pub endpoints: Vec<DelegatedPeerEndpoint>,
-    pub release_profile: axon_pb::ResolverReleaseProfile,
+    pub release_profile: ResolverReleaseProfile,
 }
 
 /// Resolver-owned dispatch branch for one canonical Invocation.
@@ -372,20 +374,20 @@ impl DelegatedInvokeRoute {
             "next_hop": next_hop.clone(),
             "priority": 0,
             "weight": 1,
-            "reason": axon_pb::RouteReason::PeerDelegation.as_str_name(),
-            "health": axon_pb::RouteHealth::Healthy.as_str_name(),
+            "reason": RouteReason::PeerDelegation.as_str_name(),
+            "health": RouteHealth::Healthy.as_str_name(),
             "authority": authority.clone(),
             "gates": {
-                "authority": axon_pb::GateResult::Pass.as_str_name(),
-                "identity": axon_pb::GateResult::NotApplicable.as_str_name(),
-                "placement": axon_pb::GateResult::Pass.as_str_name(),
-                "ability": axon_pb::GateResult::NotApplicable.as_str_name(),
-                "policy": axon_pb::GateResult::Pass.as_str_name(),
+                "authority": GateResult::Pass.as_str_name(),
+                "identity": GateResult::NotApplicable.as_str_name(),
+                "placement": GateResult::Pass.as_str_name(),
+                "ability": GateResult::NotApplicable.as_str_name(),
+                "policy": GateResult::Pass.as_str_name(),
             },
         });
 
         json!({
-            "answer_kind": axon_pb::ResolveAnswerKind::Delegation.as_str_name(),
+            "answer_kind": ResolveAnswerKind::Delegation.as_str_name(),
             "canonical_name": self.query_name,
             "owner_ura": self.owner_ura,
             "next_hop": next_hop,
@@ -462,7 +464,7 @@ impl DelegatedPeerEndpoint {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolveRouteFailure {
     pub query_name: String,
-    pub reason: axon_pb::NegativeReason,
+    pub reason: NegativeReason,
     pub detail: String,
 }
 
@@ -699,14 +701,14 @@ impl<'a> DaemonRouteResolver<'a> {
                 || is_descriptor_ref(&query_name)
                 || is_ability_ura(&query_name)
             {
-                axon_pb::ResolveType::Route
+                ResolveType::Route
             } else {
-                axon_pb::ResolveType::DirectoryListing
+                ResolveType::DirectoryListing
             }
         });
 
         match qtype {
-            axon_pb::ResolveType::Route | axon_pb::ResolveType::Ability => {
+            ResolveType::Route | ResolveType::Ability => {
                 if let Some(answer) = self.delegation_answer_or_negative(&query_name, &ability_name)
                 {
                     answer
@@ -717,17 +719,17 @@ impl<'a> DaemonRouteResolver<'a> {
                     )
                 }
             }
-            axon_pb::ResolveType::DirectoryListing
-            | axon_pb::ResolveType::CanonicalIdentity
-            | axon_pb::ResolveType::Owner => self.directory_answer_json(query, &query_name),
-            axon_pb::ResolveType::Key | axon_pb::ResolveType::Service => negative_answer_json(
+            ResolveType::DirectoryListing | ResolveType::CanonicalIdentity | ResolveType::Owner => {
+                self.directory_answer_json(query, &query_name)
+            }
+            ResolveType::Key | ResolveType::Service => negative_answer_json(
                 &query_name,
-                axon_pb::NegativeReason::Nodata,
+                NegativeReason::Nodata,
                 Some("daemon namespace.resolve does not serve this qtype yet"),
             ),
-            axon_pb::ResolveType::Unspecified => negative_answer_json(
+            ResolveType::Unspecified => negative_answer_json(
                 &query_name,
-                axon_pb::NegativeReason::Refused,
+                NegativeReason::Refused,
                 Some("resolve qtype is unspecified"),
             ),
         }
@@ -741,7 +743,7 @@ impl<'a> DaemonRouteResolver<'a> {
         let selector = route_selector_from_query(query_name, ability_name).ok_or_else(|| {
             ResolveRouteFailure {
                 query_name: query_name.to_string(),
-                reason: axon_pb::NegativeReason::Refused,
+                reason: NegativeReason::Refused,
                 detail:
                     "route query must provide an owner URA plus ability_name or a full ability URA"
                         .to_string(),
@@ -828,7 +830,7 @@ impl<'a> DaemonRouteResolver<'a> {
         ) {
             return Err(ResolveRouteFailure {
                 query_name: selector.query_name.clone(),
-                reason: axon_pb::NegativeReason::Nodata,
+                reason: NegativeReason::Nodata,
                 detail:
                     "daemon-local ability is not routable through the public Invocation surface"
                         .to_string(),
@@ -838,7 +840,7 @@ impl<'a> DaemonRouteResolver<'a> {
             .resolve_owner_ability(&selector.owner_ura, &selector.public_name)
             .ok_or_else(|| ResolveRouteFailure {
                 query_name: selector.query_name.clone(),
-                reason: axon_pb::NegativeReason::Nodata,
+                reason: NegativeReason::Nodata,
                 detail: "local runtime does not register a dispatchable route for this ability"
                     .to_string(),
             })?;
@@ -869,7 +871,7 @@ impl<'a> DaemonRouteResolver<'a> {
             ability_ura: selector.ability_ura.clone(),
             route_ura,
             dispatch_name: ability.dispatch_name,
-            release_profile: axon_pb::ResolverReleaseProfile::AuthoritativeLocal,
+            release_profile: ResolverReleaseProfile::AuthoritativeLocal,
             kind,
             ability_record,
             route_record,
@@ -936,9 +938,9 @@ impl<'a> DaemonRouteResolver<'a> {
                     if advertised_agent_host_ura(self.advertised_agents, &selector.owner_ura)
                         .is_some()
                     {
-                        axon_pb::NegativeReason::Noroute
+                        NegativeReason::Noroute
                     } else {
-                        axon_pb::NegativeReason::Nxdomain
+                        NegativeReason::Nxdomain
                     };
                 ResolveRouteFailure {
                     query_name: selector.query_name.clone(),
@@ -960,7 +962,7 @@ impl<'a> DaemonRouteResolver<'a> {
             })
             .ok_or_else(|| ResolveRouteFailure {
                 query_name: selector.query_name.clone(),
-                reason: axon_pb::NegativeReason::Nodata,
+                reason: NegativeReason::Nodata,
                 detail: "owner is online but does not publish the requested ability".to_string(),
             })?;
 
@@ -978,7 +980,7 @@ impl<'a> DaemonRouteResolver<'a> {
             ability_record_from_summary(summary, self.now_unix_ms).ok_or_else(|| {
                 ResolveRouteFailure {
                     query_name: selector.query_name.clone(),
-                    reason: axon_pb::NegativeReason::Noroute,
+                    reason: NegativeReason::Noroute,
                     detail: "ability projection is missing canonical ability_ura".to_string(),
                 }
             })?;
@@ -1001,7 +1003,7 @@ impl<'a> DaemonRouteResolver<'a> {
             ability_ura: selected.ability_ura,
             route_ura: selected.route_ura,
             dispatch_name: selected.dispatch_name,
-            release_profile: axon_pb::ResolverReleaseProfile::AuthoritativeLocal,
+            release_profile: ResolverReleaseProfile::AuthoritativeLocal,
             kind: selected.kind,
             ability_record,
             route_record,
@@ -1017,7 +1019,7 @@ impl<'a> DaemonRouteResolver<'a> {
         let selector = route_selector_from_query(query_name, ability_name).ok_or_else(|| {
             ResolveRouteFailure {
                 query_name: query_name.to_string(),
-                reason: axon_pb::NegativeReason::Refused,
+                reason: NegativeReason::Refused,
                 detail:
                     "route query must provide an owner URA plus ability_name or a full ability URA"
                         .to_string(),
@@ -1029,7 +1031,7 @@ impl<'a> DaemonRouteResolver<'a> {
         let parsed_owner = crate::core::ura::parse_ura(&selector.owner_ura).map_err(|err| {
             ResolveRouteFailure {
                 query_name: selector.query_name.clone(),
-                reason: axon_pb::NegativeReason::Refused,
+                reason: NegativeReason::Refused,
                 detail: format!("owner URA is invalid: {err}"),
             }
         })?;
@@ -1058,7 +1060,7 @@ impl<'a> DaemonRouteResolver<'a> {
             HubResolution::Offline => {
                 return Err(ResolveRouteFailure {
                     query_name: selector.query_name,
-                    reason: axon_pb::NegativeReason::Noroute,
+                    reason: NegativeReason::Noroute,
                     detail: format!(
                         "remote realm `{}` has no configured peer hub route",
                         parsed_owner.realm
@@ -1073,7 +1075,7 @@ impl<'a> DaemonRouteResolver<'a> {
             realm: parsed_owner.realm.clone(),
             hub_ura: crate::core::ura::hub_ura(&parsed_owner.realm),
             endpoints: vec![endpoint],
-            release_profile: axon_pb::ResolverReleaseProfile::AuthoritativeLocal,
+            release_profile: ResolverReleaseProfile::AuthoritativeLocal,
         }))
     }
 
@@ -1087,7 +1089,7 @@ impl<'a> DaemonRouteResolver<'a> {
             .or_else(|| route_selector_from_query(target_ura, ability_ura))
             .ok_or_else(|| ResolveRouteFailure {
                 query_name: ability_ura.to_string(),
-                reason: axon_pb::NegativeReason::Refused,
+                reason: NegativeReason::Refused,
                 detail: "Invoke requires a full canonical ability URA, descriptor ref, or an owner-local ability name with an explicit callee"
                     .to_string(),
             })?;
@@ -1097,7 +1099,7 @@ impl<'a> DaemonRouteResolver<'a> {
         if selector.owner_ura != target_ura && !owner_is_agent {
             return Err(ResolveRouteFailure {
                 query_name: selector.query_name,
-                reason: axon_pb::NegativeReason::Refused,
+                reason: NegativeReason::Refused,
                 detail: format!(
                     "ability_ura `{ability_ura}` does not belong to target `{target_ura}`",
                 ),
@@ -1112,7 +1114,7 @@ impl<'a> DaemonRouteResolver<'a> {
                 if !target_matches {
                     return Err(ResolveRouteFailure {
                         query_name: selected_route.query_name.clone(),
-                        reason: axon_pb::NegativeReason::Refused,
+                        reason: NegativeReason::Refused,
                         detail: route_owner_mismatch_detail(
                             &selected_route.execution_host_ura,
                             &canonical_query,
@@ -1130,7 +1132,7 @@ impl<'a> DaemonRouteResolver<'a> {
                     crate::core::ura::parse_ura(&selector.owner_ura).map_err(|err| {
                         ResolveRouteFailure {
                             query_name: selector.query_name.clone(),
-                            reason: axon_pb::NegativeReason::Refused,
+                            reason: NegativeReason::Refused,
                             detail: format!("owner URA is invalid: {err}"),
                         }
                     })?;
@@ -1141,7 +1143,7 @@ impl<'a> DaemonRouteResolver<'a> {
                     .map(|route| CanonicalRouteSelection::peer(call_mode, route))
                     .ok_or(ResolveRouteFailure {
                         query_name: selector.query_name,
-                        reason: axon_pb::NegativeReason::Noroute,
+                        reason: NegativeReason::Noroute,
                         detail: "cross-realm Invoke had no peer delegation route".to_string(),
                     })
             }
@@ -1181,11 +1183,7 @@ impl<'a> DaemonRouteResolver<'a> {
             match directory_cursor_anchor(query.get("cursor").and_then(Value::as_str)) {
                 Ok(anchor) => anchor,
                 Err(detail) => {
-                    return negative_answer_json(
-                        query_name,
-                        axon_pb::NegativeReason::Refused,
-                        Some(&detail),
-                    )
+                    return negative_answer_json(query_name, NegativeReason::Refused, Some(&detail))
                 }
             };
         let mut records = Vec::new();
@@ -1222,19 +1220,15 @@ impl<'a> DaemonRouteResolver<'a> {
             }
         }
         if let Err(detail) = apply_directory_cursor(&mut records, cursor_anchor.as_deref()) {
-            return negative_answer_json(
-                query_name,
-                axon_pb::NegativeReason::Refused,
-                Some(&detail),
-            );
+            return negative_answer_json(query_name, NegativeReason::Refused, Some(&detail));
         }
         let next_cursor = next_directory_cursor(&mut records, requested_limit);
 
         let mut answer = json!({
-            "answer_kind": axon_pb::ResolveAnswerKind::NonDispatchable.as_str_name(),
+            "answer_kind": ResolveAnswerKind::NonDispatchable.as_str_name(),
             "canonical_name": (!query_name.is_empty()).then_some(query_name),
             "records": records,
-            "release_profile": axon_pb::ResolverReleaseProfile::AuthoritativeLocal.as_str_name(),
+            "release_profile": ResolverReleaseProfile::AuthoritativeLocal.as_str_name(),
             "authority": authority_for_query(query_name),
             "cache_policy": cache_policy_json(),
         });
@@ -1423,7 +1417,7 @@ fn selected_execution_for_owner(
             else {
                 return Err(ResolveRouteFailure {
                     query_name: query_name.to_string(),
-                    reason: axon_pb::NegativeReason::Noroute,
+                    reason: NegativeReason::Noroute,
                     detail: "hosted agent has no resolver-selected host device".to_string(),
                 });
             };
@@ -1444,7 +1438,7 @@ fn selected_execution_for_owner(
         )),
         _ => Err(ResolveRouteFailure {
             query_name: query_name.to_string(),
-            reason: axon_pb::NegativeReason::Refused,
+            reason: NegativeReason::Refused,
             detail: "route owner must be a canonical hub, device, or agent URA".to_string(),
         }),
     }
@@ -1483,7 +1477,7 @@ impl SelectedAbilityRoute {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| ResolveRouteFailure {
                 query_name: query_name.to_string(),
-                reason: axon_pb::NegativeReason::Noroute,
+                reason: NegativeReason::Noroute,
                 detail: "ability projection is missing canonical ability_ura".to_string(),
             })?
             .to_string();
@@ -1493,7 +1487,7 @@ impl SelectedAbilityRoute {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| ResolveRouteFailure {
                 query_name: query_name.to_string(),
-                reason: axon_pb::NegativeReason::Noroute,
+                reason: NegativeReason::Noroute,
                 detail: "ability projection is missing executable route_summary_ref".to_string(),
             })?
             .to_string();
@@ -1554,18 +1548,18 @@ fn json_bool(value: &Value, key: &str) -> Option<bool> {
     value.get(key).and_then(Value::as_bool)
 }
 
-fn json_resolve_type(value: &Value) -> Option<axon_pb::ResolveType> {
+fn json_resolve_type(value: &Value) -> Option<ResolveType> {
     let raw = value.get("qtype")?;
     if let Some(num) = raw.as_i64() {
-        return axon_pb::ResolveType::try_from(num as i32).ok();
+        return ResolveType::try_from(num as i32).ok();
     }
     let text = raw.as_str()?.trim();
     if text.is_empty() {
         return None;
     }
-    axon_pb::ResolveType::from_str_name(text).or_else(|| {
+    ResolveType::from_str_name(text).or_else(|| {
         let canonical = format!("RESOLVE_TYPE_{}", text.to_ascii_uppercase());
-        axon_pb::ResolveType::from_str_name(&canonical)
+        ResolveType::from_str_name(&canonical)
     })
 }
 
@@ -1601,7 +1595,7 @@ fn local_authority_route_kind(local_authority_ura: &str) -> SelectedRouteKind {
 fn id_record(name: &str, now_unix_ms: i64) -> Value {
     json!({
         "name": name,
-        "record_type": axon_pb::RecordType::Id.as_str_name(),
+        "record_type": RecordType::Id.as_str_name(),
         "authority": authority_for_query(name),
         "ttl_ms": 0,
         "expires_unix_ms": 0,
@@ -1641,7 +1635,7 @@ fn hosted_by_record(
 ) -> Value {
     json!({
         "name": hosted_ura,
-        "record_type": axon_pb::RecordType::HostedBy.as_str_name(),
+        "record_type": RecordType::HostedBy.as_str_name(),
         "authority": authority_for_query(hosted_ura),
         "ttl_ms": 0,
         "expires_unix_ms": 0,
@@ -1676,7 +1670,7 @@ fn ability_record_from_summary(summary: &Value, now_unix_ms: i64) -> Option<Valu
         .filter(|value| !value.is_empty())?;
     Some(json!({
         "name": ability_ura,
-        "record_type": axon_pb::RecordType::Ability.as_str_name(),
+        "record_type": RecordType::Ability.as_str_name(),
         "authority": authority_for_query(ability_ura),
         "ttl_ms": 0,
         "expires_unix_ms": 0,
@@ -1726,7 +1720,7 @@ fn device_local_ability_record(
         .map_or(("", public_name), |(ns, local)| (ns, local));
     json!({
         "name": ability_ura,
-        "record_type": axon_pb::RecordType::Ability.as_str_name(),
+        "record_type": RecordType::Ability.as_str_name(),
         "authority": authority_for_query(ability_ura),
         "ttl_ms": 0,
         "expires_unix_ms": 0,
@@ -1759,7 +1753,7 @@ fn route_record(
 ) -> Value {
     json!({
         "name": route_ura,
-        "record_type": axon_pb::RecordType::Route.as_str_name(),
+        "record_type": RecordType::Route.as_str_name(),
         "authority": authority_for_query(route_ura),
         "ttl_ms": 0,
         "expires_unix_ms": 0,
@@ -1779,18 +1773,14 @@ fn route_record(
     })
 }
 
-fn negative_answer_json(
-    query_name: &str,
-    reason: axon_pb::NegativeReason,
-    detail: Option<&str>,
-) -> Value {
+fn negative_answer_json(query_name: &str, reason: NegativeReason, detail: Option<&str>) -> Value {
     json!({
-        "answer_kind": axon_pb::ResolveAnswerKind::Negative.as_str_name(),
+        "answer_kind": ResolveAnswerKind::Negative.as_str_name(),
         "next_hop": {
             "no_route": {}
         },
         "records": [],
-        "release_profile": axon_pb::ResolverReleaseProfile::AuthoritativeLocal.as_str_name(),
+        "release_profile": ResolverReleaseProfile::AuthoritativeLocal.as_str_name(),
         "authority": authority_for_query(query_name),
         "cache_policy": cache_policy_json(),
         "negative": {
@@ -1826,13 +1816,13 @@ fn cache_policy_json() -> Value {
 
 fn ura_kind_name(ura: &str) -> &'static str {
     match crate::core::ura::parse_ura(ura).map(|parsed| parsed.kind) {
-        Ok(crate::core::ura::URAKind::Hub) => axon_pb::UraKind::Hub.as_str_name(),
-        Ok(crate::core::ura::URAKind::Device) => axon_pb::UraKind::Device.as_str_name(),
-        Ok(crate::core::ura::URAKind::User) => axon_pb::UraKind::User.as_str_name(),
-        Ok(crate::core::ura::URAKind::Agent) => axon_pb::UraKind::Agent.as_str_name(),
-        Ok(crate::core::ura::URAKind::Ability) => axon_pb::UraKind::Ability.as_str_name(),
-        Ok(crate::core::ura::URAKind::Resource) => axon_pb::UraKind::Resource.as_str_name(),
-        _ => axon_pb::UraKind::Unspecified.as_str_name(),
+        Ok(crate::core::ura::URAKind::Hub) => UraKind::Hub.as_str_name(),
+        Ok(crate::core::ura::URAKind::Device) => UraKind::Device.as_str_name(),
+        Ok(crate::core::ura::URAKind::User) => UraKind::User.as_str_name(),
+        Ok(crate::core::ura::URAKind::Agent) => UraKind::Agent.as_str_name(),
+        Ok(crate::core::ura::URAKind::Ability) => UraKind::Ability.as_str_name(),
+        Ok(crate::core::ura::URAKind::Resource) => UraKind::Resource.as_str_name(),
+        _ => UraKind::Unspecified.as_str_name(),
     }
 }
 
@@ -1983,7 +1973,7 @@ mod tests {
             .expect("device-owned ability online must resolve a final route");
 
         assert_eq!(route.kind(), SelectedRouteKind::LocalDevice);
-        assert_eq!(route.route_reason(), axon_pb::RouteReason::LocalDevice);
+        assert_eq!(route.route_reason(), RouteReason::LocalDevice);
         assert_eq!(
             route.dispatch_target(false),
             SelectedRouteDispatchTarget::LocalRuntime,
@@ -2099,7 +2089,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(failures.windows(2).all(|pair| pair[0] == pair[1]));
-        assert_eq!(failures[0].0, axon_pb::NegativeReason::Refused);
+        assert_eq!(failures[0].0, NegativeReason::Refused);
     }
 
     #[test]
@@ -2150,7 +2140,7 @@ mod tests {
                 .resolve_route(&owner_ura, ability)
                 .expect_err("daemon-local companion control must not resolve as remote route");
 
-            assert_eq!(err.reason, axon_pb::NegativeReason::Nodata);
+            assert_eq!(err.reason, NegativeReason::Nodata);
             assert!(
                 err.detail.contains("daemon-local"),
                 "route failure should name local-only policy: {}",
@@ -2230,7 +2220,7 @@ mod tests {
             let failure = resolver
                 .resolve_route(query_name, ability_name)
                 .expect_err("malformed descriptor refs must fail before public-name fallback");
-            assert_eq!(failure.reason, axon_pb::NegativeReason::Refused);
+            assert_eq!(failure.reason, NegativeReason::Refused);
             assert!(
                 failure.detail.contains("route query"),
                 "unexpected failure detail: {}",
@@ -2321,7 +2311,7 @@ mod tests {
             .resolve_route(&owner_ura, "agent.list")
             .expect_err("absent owner must resolve negative");
 
-        assert_eq!(failure.reason, axon_pb::NegativeReason::Nxdomain);
+        assert_eq!(failure.reason, NegativeReason::Nxdomain);
         assert_eq!(failure.query_name, format!("{owner_ura}#agent.list"));
     }
 
@@ -2348,7 +2338,7 @@ mod tests {
             .resolve_route(&agent_ura, "agent.list")
             .expect_err("advertised-but-offline owner must resolve negative");
 
-        assert_eq!(failure.reason, axon_pb::NegativeReason::Noroute);
+        assert_eq!(failure.reason, NegativeReason::Noroute);
         assert_eq!(failure.query_name, format!("{agent_ura}#agent.list"));
     }
 
@@ -2366,7 +2356,7 @@ mod tests {
             .resolve_route(&owner_ura, "fs.read")
             .expect_err("online owner missing the ability must resolve negative");
 
-        assert_eq!(failure.reason, axon_pb::NegativeReason::Nodata);
+        assert_eq!(failure.reason, NegativeReason::Nodata);
         assert_eq!(failure.query_name, format!("{owner_ura}#fs.read"));
     }
 
@@ -2421,7 +2411,7 @@ mod tests {
             .resolve_route(&owner_ura, "fs.read")
             .expect_err("unregistered device ability must resolve negative");
 
-        assert_eq!(failure.reason, axon_pb::NegativeReason::Nodata);
+        assert_eq!(failure.reason, NegativeReason::Nodata);
         assert_eq!(failure.query_name, format!("{owner_ura}#fs.read"));
     }
 
@@ -2470,7 +2460,7 @@ mod tests {
             .expect("hosted agent on this device must resolve a route");
 
         assert_eq!(route.kind(), SelectedRouteKind::HostedAgent);
-        assert_eq!(route.route_reason(), axon_pb::RouteReason::HostedAgent);
+        assert_eq!(route.route_reason(), RouteReason::HostedAgent);
         assert_eq!(
             route.dispatch_target(true),
             SelectedRouteDispatchTarget::LocalRuntime
@@ -2597,7 +2587,7 @@ mod tests {
             .expect("hub-owned runtime ability must resolve through local hub authority");
 
         assert_eq!(route.kind(), SelectedRouteKind::HubOwned);
-        assert_eq!(route.route_reason(), axon_pb::RouteReason::LocalHub);
+        assert_eq!(route.route_reason(), RouteReason::LocalHub);
         assert_eq!(
             route.dispatch_target(true),
             SelectedRouteDispatchTarget::LocalRuntime
@@ -2677,7 +2667,7 @@ mod tests {
             .expect("hub-owned ability must resolve through the hub route kind");
 
         assert_eq!(route.kind(), SelectedRouteKind::HubOwned);
-        assert_eq!(route.route_reason(), axon_pb::RouteReason::LocalHub);
+        assert_eq!(route.route_reason(), RouteReason::LocalHub);
         assert_eq!(
             route.dispatch_target(true),
             SelectedRouteDispatchTarget::LocalRuntime
@@ -2690,7 +2680,7 @@ mod tests {
         let answer = route.final_route_answer_json();
         assert_eq!(
             answer["selected_route"]["reason"],
-            axon_pb::RouteReason::LocalHub.as_str_name()
+            RouteReason::LocalHub.as_str_name()
         );
         assert!(answer["next_hop"]["local_hub_ability"].is_object());
         assert_eq!(
@@ -2722,7 +2712,7 @@ mod tests {
             .expect("projection route resolves");
 
         assert_eq!(route.kind(), SelectedRouteKind::SameRealmDevice);
-        assert_eq!(route.route_reason(), axon_pb::RouteReason::LocalDevice);
+        assert_eq!(route.route_reason(), RouteReason::LocalDevice);
         assert_eq!(
             route.dispatch_target(false),
             SelectedRouteDispatchTarget::PresenceSession
@@ -2748,27 +2738,27 @@ mod tests {
             .resolve_route(&owner_ura, "agent.list")
             .expect_err("ability without executable route must not be dispatchable");
 
-        assert_eq!(failure.reason, axon_pb::NegativeReason::Noroute);
+        assert_eq!(failure.reason, NegativeReason::Noroute);
         assert_eq!(failure.query_name, format!("{owner_ura}#agent.list"));
         assert!(failure.detail.contains("route_summary_ref"));
 
         let answer = DaemonRouteResolver::new(&registry, None, Some(&catalog))
             .at(TEST_NOW_MS)
             .resolve_query_json(&json!({
-                "qtype": axon_pb::ResolveType::DirectoryListing.as_str_name(),
+                "qtype": ResolveType::DirectoryListing.as_str_name(),
                 "query_name": owner_ura,
             }));
         let records = answer["records"].as_array().expect("records array");
         assert!(
             records.iter().any(|record| {
-                record["record_type"] == axon_pb::RecordType::Ability.as_str_name()
+                record["record_type"] == RecordType::Ability.as_str_name()
                     && record["value"]["ability"]["ability_ura"] == ability_ura.as_str()
             }),
             "directory listing should retain the non-dispatchable ability fact"
         );
         assert!(
             records.iter().all(|record| {
-                record["record_type"] != axon_pb::RecordType::Route.as_str_name()
+                record["record_type"] != RecordType::Route.as_str_name()
                     || record["value"]["route"]["ability_ura"] != ability_ura.as_str()
             }),
             "directory listing must not manufacture a ROUTE record without route_summary_ref"
@@ -2788,7 +2778,7 @@ mod tests {
             .resolve_route(&agent_ura, "chat.complete")
             .expect_err("hosted agent route must require selected host placement");
 
-        assert_eq!(failure.reason, axon_pb::NegativeReason::Noroute);
+        assert_eq!(failure.reason, NegativeReason::Noroute);
         assert_eq!(failure.query_name, format!("{agent_ura}#chat.complete"));
         assert!(failure.detail.contains("host device"));
     }
@@ -2804,7 +2794,7 @@ mod tests {
         let answer = DaemonRouteResolver::new(&registry, None, Some(&catalog))
             .at(TEST_NOW_MS)
             .resolve_query_json(&json!({
-                "qtype": axon_pb::ResolveType::Route.as_str_name(),
+                "qtype": ResolveType::Route.as_str_name(),
                 "queryName": owner_ura,
                 "abilityName": "agent.list",
                 "realmHint": "example",
@@ -2812,7 +2802,7 @@ mod tests {
 
         assert_eq!(
             answer["answer_kind"],
-            axon_pb::ResolveAnswerKind::Negative.as_str_name()
+            ResolveAnswerKind::Negative.as_str_name()
         );
         assert_eq!(answer["negative"]["query_name"], "");
         assert!(answer.get("ability_ura").is_none());
@@ -2829,7 +2819,7 @@ mod tests {
             .resolve_route("", "")
             .expect_err("empty selector must be refused");
 
-        assert_eq!(failure.reason, axon_pb::NegativeReason::Refused);
+        assert_eq!(failure.reason, NegativeReason::Refused);
     }
 
     #[test]
@@ -2851,14 +2841,14 @@ mod tests {
 
         assert_eq!(
             answer["answer_kind"],
-            axon_pb::ResolveAnswerKind::FinalRoute.as_str_name()
+            ResolveAnswerKind::FinalRoute.as_str_name()
         );
         assert_eq!(answer["ability_ura"], ability_ura);
         assert_eq!(answer["owner_ura"], owner_ura);
         assert_eq!(answer["route_ura"], format!("route-ref::{ability_ura}"));
         assert_eq!(
             answer["release_profile"],
-            axon_pb::ResolverReleaseProfile::AuthoritativeLocal.as_str_name()
+            ResolverReleaseProfile::AuthoritativeLocal.as_str_name()
         );
         // Required nested objects are present.
         assert!(answer.get("next_hop").is_some());
@@ -2900,11 +2890,11 @@ mod tests {
         let answer = delegation.delegation_answer_json();
         assert_eq!(
             answer["answer_kind"],
-            axon_pb::ResolveAnswerKind::Delegation.as_str_name()
+            ResolveAnswerKind::Delegation.as_str_name()
         );
         assert_eq!(
             answer["release_profile"],
-            axon_pb::ResolverReleaseProfile::AuthoritativeLocal.as_str_name()
+            ResolverReleaseProfile::AuthoritativeLocal.as_str_name()
         );
         assert_eq!(answer["next_hop"]["peer_hub"]["realm"], "remote-realm");
         assert_eq!(
@@ -2917,7 +2907,7 @@ mod tests {
         );
         assert_eq!(
             answer["selected_route"]["reason"],
-            axon_pb::RouteReason::PeerDelegation.as_str_name()
+            RouteReason::PeerDelegation.as_str_name()
         );
         assert_eq!(
             answer["route_evidence"]["selection_algorithm"],
@@ -2939,7 +2929,7 @@ mod tests {
 
         let resolver = DaemonRouteResolver::new(&registry, None, Some(&catalog)).at(TEST_NOW_MS);
         let answer = resolver.resolve_query_json(&json!({
-            "qtype": axon_pb::ResolveType::DirectoryListing.as_str_name(),
+            "qtype": ResolveType::DirectoryListing.as_str_name(),
             "query_name": owner_ura,
         }));
 
@@ -2947,7 +2937,7 @@ mod tests {
         let route = records
             .iter()
             .find(|record| {
-                record["record_type"] == axon_pb::RecordType::Route.as_str_name()
+                record["record_type"] == RecordType::Route.as_str_name()
                     && record["value"]["route"]["ability_ura"] == ability_ura.as_str()
             })
             .expect("directory listing must carry a ROUTE record for the published ability");
@@ -2987,7 +2977,7 @@ mod tests {
         let answer = DaemonRouteResolver::new(&registry, None, Some(&catalog))
             .at(TEST_NOW_MS)
             .resolve_query_json(&json!({
-                "qtype": axon_pb::ResolveType::DirectoryListing.as_str_name(),
+                "qtype": ResolveType::DirectoryListing.as_str_name(),
                 "query_name": "easynet:///r/test-realm/device/",
                 "include_abilities": false,
             }));
@@ -2999,10 +2989,7 @@ mod tests {
             .collect();
         assert_eq!(
             record_types,
-            vec![
-                axon_pb::RecordType::Id.as_str_name(),
-                axon_pb::RecordType::Id.as_str_name()
-            ],
+            vec![RecordType::Id.as_str_name(), RecordType::Id.as_str_name()],
             "presence-only listing must not let ability records page device IDs apart"
         );
         let names: Vec<&str> = records
@@ -3024,7 +3011,7 @@ mod tests {
 
         let resolver = DaemonRouteResolver::new(&registry, None, Some(&catalog)).at(TEST_NOW_MS);
         let first = resolver.resolve_query_json(&json!({
-            "qtype": axon_pb::ResolveType::DirectoryListing.as_str_name(),
+            "qtype": ResolveType::DirectoryListing.as_str_name(),
             "query_name": owner_ura,
             "limit": 1,
         }));
@@ -3033,7 +3020,7 @@ mod tests {
         let first_cursor = first["next_cursor"].as_str().expect("first cursor");
 
         let second = resolver.resolve_query_json(&json!({
-            "qtype": axon_pb::ResolveType::DirectoryListing.as_str_name(),
+            "qtype": ResolveType::DirectoryListing.as_str_name(),
             "query_name": owner_ura,
             "limit": 1,
             "cursor": first_cursor,
@@ -3056,20 +3043,20 @@ mod tests {
         publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
 
         let missing_cursor = directory_cursor_for(&json!({
-            "record_type": axon_pb::RecordType::Route.as_str_name(),
+            "record_type": RecordType::Route.as_str_name(),
             "name": "easynet:///r/test-realm/resource/missing-route",
         }))
         .expect("cursor");
         let answer = DaemonRouteResolver::new(&registry, None, Some(&catalog))
             .at(TEST_NOW_MS)
             .resolve_query_json(&json!({
-                "qtype": axon_pb::ResolveType::DirectoryListing.as_str_name(),
+                "qtype": ResolveType::DirectoryListing.as_str_name(),
                 "query_name": owner_ura,
                 "cursor": missing_cursor,
             }));
         assert_eq!(
             answer["answer_kind"],
-            axon_pb::ResolveAnswerKind::Negative.as_str_name()
+            ResolveAnswerKind::Negative.as_str_name()
         );
         assert!(
             answer["negative"]["detail"]

@@ -52,7 +52,7 @@ func canonicalRuntimeReceiptFixture(
 		"timestamp_unix_ms":       1_783_100_000_000 + index,
 		"prev_receipt_hash_hex":   strings.Repeat("00", 32),
 		"self_hash_hex":           fmt.Sprintf("%064x", index+1),
-		"cleanup_complete":        normalizeRuntimeReceiptState(state) != "admitted",
+		"cleanup_complete":        state != "admitted" && state != "Admitted" && state != "ADMITTED",
 		"caller_binding":          map[string]any{"ura": "easynet:///r/example/agent/alice.sdk", "profile": "easynet-strict-v2"},
 		"callee_binding":          map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "easynet-strict-v2"},
 		"subject_binding":         map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "easynet-strict-v2"},
@@ -102,16 +102,14 @@ func canonicalRuntimeReceiptFixture(
 }
 
 func canonicalRuntimeReceiptPairFixture(invocationID, terminalState string) (map[string]any, map[string]any) {
-	terminalTypes := map[string]string{
-		"completed": "completed",
-		"failed":    "failed",
-		"timedout":  "timed_out",
-		"cancelled": "cancelled",
+	state, err := ParseInvocationLifecycleState(terminalState)
+	if err != nil {
+		panic(err)
 	}
-	terminalType, ok := terminalTypes[normalizeRuntimeReceiptState(terminalState)]
-	if !ok {
+	if !state.IsTerminal() {
 		panic("unsupported terminal fixture state " + terminalState)
 	}
+	terminalType := canonicalReceiptType(state)
 	admission := canonicalRuntimeReceiptFixture(invocationID, "admitted", "Admitted", 0)
 	terminal := canonicalRuntimeReceiptFixture(invocationID, terminalType, terminalState, 1)
 	terminal["prev_receipt_hash_hex"] = admission["self_hash_hex"]
@@ -426,6 +424,29 @@ func TestRuntimeReceiptProofFactsRequired(t *testing.T) {
 	delete(incomplete, "authority_proof")
 	if _, err := NewRuntimeReceiptFromJSON(mustJSON(incomplete)); err == nil {
 		t.Fatal("NewRuntimeReceiptFromJSON accepted receipt without proof facts")
+	}
+}
+
+func TestRuntimeReceiptOwnsFailClosedLifecycleProjection(t *testing.T) {
+	complete := canonicalRuntimeReceiptFixture("inv-state", "completed", "completed", 1)
+	receipt, err := NewRuntimeReceiptFromJSON(mustJSON(complete))
+	if err != nil {
+		t.Fatalf("NewRuntimeReceiptFromJSON: %v", err)
+	}
+	state, err := receipt.LifecycleState()
+	if err != nil {
+		t.Fatalf("LifecycleState: %v", err)
+	}
+	if state != InvocationLifecycleCompleted || !state.IsTerminal() {
+		t.Fatalf("LifecycleState = %q, want terminal %q", state, InvocationLifecycleCompleted)
+	}
+
+	for _, invalid := range []any{"invented_state", " completed ", "5", 5, "UNSPECIFIED"} {
+		malformed := canonicalRuntimeReceiptFixture("inv-state", "completed", "completed", 1)
+		malformed["state"] = invalid
+		if _, err := NewRuntimeReceiptFromJSON(mustJSON(malformed)); !IsCode(err, ErrInvalidArgument) {
+			t.Fatalf("NewRuntimeReceiptFromJSON(state=%v) = %v, want %s", invalid, err, ErrInvalidArgument)
+		}
 	}
 }
 
@@ -871,6 +892,14 @@ func TestInvocationResultRejectsNonCanonicalReceiptTopology(t *testing.T) {
 			"terminal_receipt":null,
 			%s
 		}`, draftJSON, failure),
+		"normalized receipt free state": fmt.Sprintf(`{
+			"ok":false,
+			"tuple":%s,
+			"terminal_state":" Failed ",
+			"admission_receipt":null,
+			"terminal_receipt":null,
+			%s
+		}`, draftJSON, failure),
 		"admission only": fmt.Sprintf(`{
 			"ok":false,
 			"tuple":%s,
@@ -920,11 +949,17 @@ func TestInvocationResultRejectsConflictingCanonicalReceiptBindings(t *testing.T
 		"admission receipt type": func(admission, _ map[string]any) {
 			admission["receipt_type"] = "completed"
 		},
+		"admission receipt type case": func(admission, _ map[string]any) {
+			admission["receipt_type"] = "Admitted"
+		},
 		"terminal state": func(_, terminal map[string]any) {
 			terminal["state"] = "Failed"
 		},
 		"terminal receipt type": func(_, terminal map[string]any) {
 			terminal["receipt_type"] = "failed"
+		},
+		"terminal receipt type case": func(_, terminal map[string]any) {
+			terminal["receipt_type"] = "Completed"
 		},
 		"terminal index": func(_, terminal map[string]any) {
 			terminal["index"] = 0

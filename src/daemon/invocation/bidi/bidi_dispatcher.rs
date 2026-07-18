@@ -54,6 +54,7 @@ use crate::daemon::invocation::bidi::session_wire::{
     RequestOutcome, SessionContentEnvelope, SessionDispatch, SessionRequestError,
 };
 use crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION;
+use crate::daemon::invocation::dispatch::cancellation::RegisteredInvocationLifecycle;
 use crate::daemon::invocation::dispatch::daemon_invocation_service::{
     DaemonBidiRoute, DAEMON_INVOCATION_BIDI_ROUTES,
 };
@@ -851,6 +852,7 @@ impl BidiDispatcher {
             )
         }
         .map_err(|err| status_from_axon_invoke_error("InvokeBidi", &dispatch_ability, *err))?;
+        let lifecycle_envelope = wire.envelope.clone();
         let product_admission = self.runtime.stage_product_admission(
             &self.admission,
             &wire,
@@ -863,22 +865,51 @@ impl BidiDispatcher {
                 .map_err(|err| {
                     status_from_axon_invoke_error("InvokeBidi", &dispatch_ability, err)
                 })?;
-        product_admission.commit()?;
-        let admission_receipt = handle.admission_receipt().await.map_err(|err| {
-            Status::failed_precondition(format!(
-                "CANONICAL_ADMISSION_REQUIRED: InvokeBidi `{dispatch_ability}`: {err}"
-            ))
-        })?;
+        let lifecycle = match RegisteredInvocationLifecycle::register(
+            self.runtime.cancellations.clone(),
+            &lifecycle_envelope,
+            handle.handle().clone(),
+        ) {
+            Ok(lifecycle) => lifecycle,
+            Err(error) => {
+                let _ = handle
+                    .handle()
+                    .cancel("bidi lifecycle registration failed")
+                    .await;
+                let _ = handle.handle().finalized().await;
+                return Err(Status::failed_precondition(format!(
+                    "InvokeBidi `{dispatch_ability}` lifecycle registration failed: {error}"
+                )));
+            }
+        };
+        if let Err(error) = product_admission.commit() {
+            let _ = lifecycle
+                .cancel_and_finalize("bidi product admission commit failed")
+                .await;
+            return Err(error);
+        }
+        let admission_receipt = match handle.admission_receipt().await {
+            Ok(receipt) => receipt,
+            Err(err) => {
+                let _ = lifecycle.finalized().await;
+                return Err(Status::failed_precondition(format!(
+                    "CANONICAL_ADMISSION_REQUIRED: InvokeBidi `{dispatch_ability}`: {err}"
+                )));
+            }
+        };
+        let admission_wire = match axon_sdk::invocation::wire::receipt_to_wire(&admission_receipt) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let _ = lifecycle
+                    .cancel_and_finalize("canonical admission projection failed")
+                    .await;
+                return Err(Status::failed_precondition(format!(
+                    "CANONICAL_ADMISSION_PROJECTION_FAILED: {error}"
+                )));
+            }
+        };
         let admission_frame = InvokeBidiDown {
-            payload: Some(DownPayload::Receipt(
-                axon_sdk::invocation::wire::receipt_to_wire(&admission_receipt).map_err(
-                    |error| {
-                        Status::failed_precondition(format!(
-                            "CANONICAL_ADMISSION_PROJECTION_FAILED: {error}"
-                        ))
-                    },
-                )?,
-            )),
+            payload: Some(DownPayload::Receipt(admission_wire)),
             ..InvokeBidiDown::default()
         };
         let (handler_in_tx, mut handler_out_rx) = handle.split();
@@ -890,17 +921,19 @@ impl BidiDispatcher {
 
         let down_tx_for_handler = down_tx.clone();
         tokio::spawn(async move {
+            let mut terminal_authority_observed = false;
             while let Some(frame_result) = handler_out_rx.next_frame().await {
                 let frame = match frame_result {
                     Ok(frame) => frame,
                     Err(err) => {
-                        let projected = project_finalized_bidi_receipt(&handler_out_rx)
+                        let projected = project_registered_finalized_bidi_receipt(&lifecycle)
                             .await
                             .map_err(|status| {
                                 Status::internal(format!(
                                     "InvokeBidi local-runtime frame failed: {err}; {status}"
                                 ))
                             });
+                        terminal_authority_observed = true;
                         let _ = down_tx_for_handler.send(projected).await;
                         break;
                     }
@@ -910,6 +943,12 @@ impl BidiDispatcher {
                 match mapped {
                     LocalBidiHandlerFrame::Forward(frame) => {
                         if down_tx_for_handler.send(Ok(*frame)).await.is_err() {
+                            let _ = cancel_registered_bidi(
+                                &lifecycle,
+                                "InvokeBidi transport response dropped",
+                            )
+                            .await;
+                            terminal_authority_observed = true;
                             break;
                         }
                         if terminal {
@@ -917,16 +956,17 @@ impl BidiDispatcher {
                         }
                     }
                     LocalBidiHandlerFrame::Terminal => {
-                        let projected = project_finalized_bidi_receipt(&handler_out_rx).await;
+                        let projected = project_registered_finalized_bidi_receipt(&lifecycle).await;
+                        terminal_authority_observed = true;
                         let _ = down_tx_for_handler.send(projected).await;
                         break;
                     }
                     LocalBidiHandlerFrame::Ignore => {}
                     LocalBidiHandlerFrame::ProtocolFailure(reason) => {
-                        let _ = handler_out_rx.cancel(reason.clone()).await;
-                        let projected = project_finalized_bidi_receipt(&handler_out_rx)
+                        let projected = cancel_registered_bidi(&lifecycle, reason.clone())
                             .await
                             .map_err(|status| Status::internal(format!("{reason}; {status}")));
+                        terminal_authority_observed = true;
                         let _ = down_tx_for_handler.send(projected).await;
                         break;
                     }
@@ -934,6 +974,10 @@ impl BidiDispatcher {
                 if terminal {
                     break;
                 }
+            }
+            if !terminal_authority_observed {
+                let projected = project_registered_finalized_bidi_receipt(&lifecycle).await;
+                let _ = down_tx_for_handler.send(projected).await;
             }
         });
 
@@ -1277,12 +1321,9 @@ fn build_session_established_control(
     }
 }
 
-pub(crate) async fn project_finalized_bidi_receipt(
-    receiver: &axon_sdk::invocation::BidiOutputReceiver,
+fn project_bidi_receipt(
+    finalized: axon_sdk::invocation::FinalizedInvocation,
 ) -> Result<InvokeBidiDown, Status> {
-    let finalized = receiver.finalized().await.map_err(|err| {
-        Status::failed_precondition(format!("CANONICAL_FINALIZATION_REQUIRED: {err}"))
-    })?;
     Ok(InvokeBidiDown {
         payload: Some(DownPayload::Receipt(
             axon_sdk::invocation::wire::receipt_to_wire(&finalized.terminal_receipt).map_err(
@@ -1295,6 +1336,25 @@ pub(crate) async fn project_finalized_bidi_receipt(
         )),
         ..InvokeBidiDown::default()
     })
+}
+
+pub(crate) async fn project_registered_finalized_bidi_receipt(
+    lifecycle: &RegisteredInvocationLifecycle,
+) -> Result<InvokeBidiDown, Status> {
+    let finalized = lifecycle.finalized().await.map_err(|err| {
+        Status::failed_precondition(format!("CANONICAL_FINALIZATION_REQUIRED: {err}"))
+    })?;
+    project_bidi_receipt(finalized)
+}
+
+pub(crate) async fn cancel_registered_bidi(
+    lifecycle: &RegisteredInvocationLifecycle,
+    reason: impl Into<String>,
+) -> Result<InvokeBidiDown, Status> {
+    let finalized = lifecycle.cancel_and_finalize(reason).await.map_err(|err| {
+        Status::failed_precondition(format!("CANONICAL_CANCELLATION_FAILED: {err}"))
+    })?;
+    project_bidi_receipt(finalized)
 }
 
 const LOCAL_BIDI_DEFAULT_STREAM_ID: u32 = 1;

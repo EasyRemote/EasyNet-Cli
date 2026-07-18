@@ -1,4 +1,6 @@
+import threading
 import unittest
+from collections.abc import Callable
 
 from easynet_sdk import (
     ErrorCode,
@@ -44,6 +46,44 @@ class UnsupportedCancelStreamTransport(MemoryStreamTransport):
             retry=RetryHint.NEVER,
             message="stream cancellation unsupported",
         )
+
+
+class InterruptedCancelStreamTransport(MemoryStreamTransport):
+    def cancel(self, reason: str) -> bytes:
+        del reason
+        raise TimeoutError("cancel request deadline elapsed")
+
+
+class ConcurrentCancelStreamTransport(MemoryStreamTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.recv_started = threading.Event()
+        self.terminal_ready = threading.Event()
+
+    def recv(self, timeout: float | None = None) -> bytes:
+        self.recv_started.set()
+        if not self.terminal_ready.wait(timeout=timeout or 1.0):
+            raise TimeoutError("terminal frame was not released")
+        return (
+            b'{"sequence":1,"kind":"terminal","state":"Cancelled",'
+            b'"terminal":true,"terminal_receipt":{"receipt_id":"cancelled-1"}}'
+        )
+
+    def cancel(self, reason: str) -> bytes:
+        self.cancel_reason = reason
+        self.terminal_ready.set()
+        return self.cancel_reply
+
+
+def _capture_result(
+    operation: Callable[[], StreamEvent],
+    results: list[StreamEvent],
+    errors: list[BaseException],
+) -> None:
+    try:
+        results.append(operation())
+    except BaseException as exc:
+        errors.append(exc)
 
 
 class StreamTests(unittest.TestCase):
@@ -93,6 +133,7 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(terminal_projection.payload, {"ok": True})
         self.assertTrue(transport.closed)
         self.assertEqual(stream.state, StreamState.CLOSED)
+        self.assertEqual(stream.runtime_state, StreamState.TERMINAL_FRAME_SEEN)
 
     def test_stream_event_does_not_accept_legacy_content_type_alias(self) -> None:
         event = StreamEvent.from_json(
@@ -237,6 +278,75 @@ class StreamTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.NOT_IMPLEMENTED))
         self.assertEqual(stream.state, StreamState.OPEN)
+        stream.close()
+        self.assertEqual(stream.state, StreamState.CLOSED)
+        self.assertEqual(stream.runtime_state, StreamState.OPEN)
+
+    def test_stream_interrupted_cancel_preserves_open_state(self) -> None:
+        stream = StreamHandle.from_json(
+            InterruptedCancelStreamTransport(),
+            b'{"stream_id":"stream-1","state":"Open","max_buffered_events":4}',
+        )
+
+        with self.assertRaises(SDKError):
+            stream.cancel("client stop")
+
+        self.assertEqual(stream.state, StreamState.OPEN)
+        self.assertEqual(stream.runtime_state, StreamState.OPEN)
+
+    def test_cancel_while_receiving_preserves_canonical_terminal(self) -> None:
+        transport = ConcurrentCancelStreamTransport()
+        stream = StreamHandle.from_json(
+            transport,
+            b'{"stream_id":"stream-1","state":"Open","max_buffered_events":4}',
+        )
+        received: list[StreamEvent] = []
+        errors: list[BaseException] = []
+
+        receiver = threading.Thread(
+            target=lambda: _capture_result(stream.next, received, errors),
+            daemon=True,
+        )
+        receiver.start()
+        self.assertTrue(transport.recv_started.wait(timeout=1.0))
+
+        outcome = stream.cancel("client disconnected")
+        receiver.join(timeout=1.0)
+
+        self.assertFalse(receiver.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(outcome.state, StreamState.CANCEL_REQUESTED)
+        self.assertEqual(len(received), 1)
+        self.assertTrue(received[0].terminal)
+        self.assertEqual(stream.state, StreamState.TERMINAL_FRAME_SEEN)
+        self.assertEqual(
+            stream.terminal_event().terminal_receipt,
+            {"receipt_id": "cancelled-1"},
+        )
+
+    def test_second_concurrent_receiver_is_rejected(self) -> None:
+        transport = ConcurrentCancelStreamTransport()
+        stream = StreamHandle.from_json(
+            transport,
+            b'{"stream_id":"stream-1","state":"Open","max_buffered_events":4}',
+        )
+        received: list[StreamEvent] = []
+        errors: list[BaseException] = []
+        receiver = threading.Thread(
+            target=lambda: _capture_result(stream.next, received, errors),
+            daemon=True,
+        )
+        receiver.start()
+        self.assertTrue(transport.recv_started.wait(timeout=1.0))
+
+        with self.assertRaises(SDKError):
+            stream.next()
+
+        transport.terminal_ready.set()
+        receiver.join(timeout=1.0)
+        self.assertFalse(receiver.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(received), 1)
 
     def test_stream_enforces_buffer_bound(self) -> None:
         transport = MemoryStreamTransport(

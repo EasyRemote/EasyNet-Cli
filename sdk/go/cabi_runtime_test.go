@@ -10,7 +10,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
+	"time"
 )
 
 var _ DaemonTransport = (*CABIRuntimeLifecycleTransport)(nil)
@@ -424,30 +426,173 @@ func TestCABIRuntimeTransportClosedStateRejectsRuntimeCalls(t *testing.T) {
 	}
 }
 
-func TestCABIRuntimeTransportDrivesStreamAndBidiCallbacks(t *testing.T) {
-	libraryPath := buildFakeCABIStreamLibrary(t)
-	transport, err := OpenCABIRuntimeLifecycleTransport(libraryPath)
-	if err != nil {
-		t.Fatalf("OpenCABIRuntimeLifecycleTransport: %v", err)
+func TestCABIRuntimeProviderRequestsStreamCancelBeforeCanonicalTerminal(t *testing.T) {
+	observation := observeCABIStreamLifecycle(t)
+
+	if observation.cancel.State() != StreamCancelRequested ||
+		observation.cancel.Terminal() ||
+		observation.cancel.Cancelled() {
+		t.Fatalf("stream cancel must be a non-terminal request: %#v", observation.cancel)
 	}
-	defer func() {
-		if err := transport.Close(context.Background()); err != nil {
-			t.Fatalf("Close C ABI daemon transport: %v", err)
-		}
-	}()
-	control, err := NewDaemonControl(transport)
-	if err != nil {
-		t.Fatalf("NewDaemonControl: %v", err)
+	if !observation.terminal.Terminal() || len(observation.terminal.TerminalReceiptJSON()) == 0 {
+		t.Fatalf("stream cancel did not drain a canonical terminal: %#v", observation.terminal)
 	}
-	handle, err := control.Start(context.Background(), StartConfig{Mode: ModeDevice, DeviceID: "dev-a"})
+}
+
+func TestCABIRuntimeProviderMemoizesConcurrentStreamCancellation(t *testing.T) {
+	client := openFakeCABIRuntime(t)
+	stream, err := client.InvokeStream(context.Background(), completeDraftForRuntimeTest(t))
 	if err != nil {
-		t.Fatalf("Start: %v", err)
+		t.Fatalf("InvokeStream: %v", err)
 	}
-	client, err := handle.OpenRuntime(context.Background(), ConnectOptions{})
-	if err != nil {
-		t.Fatalf("OpenRuntime: %v", err)
+	if _, err := stream.Next(context.Background()); err != nil {
+		t.Fatalf("stream provider frame: %v", err)
 	}
 
+	var wait sync.WaitGroup
+	errors := make(chan error, 2)
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			_, err := stream.Cancel(context.Background(), "client stop")
+			errors <- err
+		}()
+	}
+	wait.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("concurrent stream cancel: %v", err)
+		}
+	}
+	if _, err := stream.Next(context.Background()); err != nil {
+		t.Fatalf("stream terminal event after concurrent cancel: %v", err)
+	}
+	if err := stream.Close(context.Background()); err != nil {
+		t.Fatalf("stream close: %v", err)
+	}
+}
+
+func TestCABIRuntimeProviderDispatchesStreamBeforeTerminal(t *testing.T) {
+	observation := observeCABIStreamLifecycle(t)
+
+	if observation.provider.Sequence() != 1 ||
+		observation.provider.Terminal() ||
+		string(observation.provider.PayloadJSON()) != `{"step":1}` {
+		t.Fatalf("stream provider dispatch was not observable: %#v", observation.provider)
+	}
+	if observation.terminal.Sequence() <= observation.provider.Sequence() ||
+		len(observation.terminal.TerminalReceiptJSON()) == 0 {
+		t.Fatalf("stream terminal did not follow provider dispatch: %#v", observation.terminal)
+	}
+}
+
+func TestCABIRuntimeProviderPreservesStreamOrderAndSingleTerminal(t *testing.T) {
+	observation := observeCABIStreamLifecycle(t)
+
+	if observation.provider.Sequence() != 1 ||
+		observation.terminal.Sequence() != 2 ||
+		observation.eventCount != 2 {
+		t.Fatalf("stream ordering observation = %#v", observation)
+	}
+	if observation.closedState != StreamClosed ||
+		observation.runtimeState != StreamTerminalFrameSeen {
+		t.Fatalf(
+			"stream close/runtime state = %s/%s",
+			observation.closedState,
+			observation.runtimeState,
+		)
+	}
+}
+
+func TestCABIRuntimeProviderRequestsBidiCancelBeforeCanonicalTerminal(t *testing.T) {
+	observation := observeCABIBidiLifecycle(t)
+
+	if observation.cancel.State() != BidiCancelRequested ||
+		observation.cancel.Terminal() {
+		t.Fatalf("bidi cancel must be a non-terminal request: %#v", observation.cancel)
+	}
+	if !observation.terminal.Terminal() || len(observation.terminal.TerminalReceiptJSON()) == 0 {
+		t.Fatalf("bidi cancel did not drain a canonical terminal: %#v", observation.terminal)
+	}
+}
+
+func TestCABIRuntimeProviderMemoizesConcurrentBidiCancellation(t *testing.T) {
+	client := openFakeCABIRuntime(t)
+	session, err := client.OpenBidi(
+		context.Background(),
+		completeDraftForRuntimeTest(t),
+		[]BidiStreamDescriptor{{
+			StreamID: 1, ContentType: "application/json", Ordering: "STRICT",
+		}},
+	)
+	if err != nil {
+		t.Fatalf("OpenBidi: %v", err)
+	}
+	if _, err := session.Receive(context.Background()); err != nil {
+		t.Fatalf("bidi provider frame: %v", err)
+	}
+
+	var wait sync.WaitGroup
+	errors := make(chan error, 2)
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			_, err := session.Cancel(context.Background(), "client stop")
+			errors <- err
+		}()
+	}
+	wait.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("concurrent bidi cancel: %v", err)
+		}
+	}
+	if _, err := session.Receive(context.Background()); err != nil {
+		t.Fatalf("bidi terminal frame after concurrent cancel: %v", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("bidi close: %v", err)
+	}
+}
+
+func TestCABIRuntimeProviderDispatchesBidiBeforeTerminal(t *testing.T) {
+	observation := observeCABIBidiLifecycle(t)
+
+	if observation.provider.Terminal() ||
+		observation.provider.Kind() != "data" ||
+		observation.ack.Sequence() != 1 ||
+		observation.ack.Kind() != "data" {
+		t.Fatalf("bidi provider dispatch observation = %#v", observation)
+	}
+	if len(observation.terminal.TerminalReceiptJSON()) == 0 {
+		t.Fatalf("bidi terminal did not carry provider receipt: %#v", observation.terminal)
+	}
+	if observation.closedState != BidiClosed ||
+		observation.runtimeState != BidiTerminal {
+		t.Fatalf(
+			"bidi close/runtime state = %s/%s",
+			observation.closedState,
+			observation.runtimeState,
+		)
+	}
+}
+
+type cabiStreamLifecycleObservation struct {
+	provider     StreamEvent
+	cancel       StreamCancel
+	terminal     StreamEvent
+	eventCount   int
+	closedState  StreamState
+	runtimeState StreamState
+}
+
+func observeCABIStreamLifecycle(t *testing.T) cabiStreamLifecycleObservation {
+	t.Helper()
+	client := openFakeCABIRuntime(t)
 	stream, err := client.InvokeStream(context.Background(), completeDraftForRuntimeTest(t))
 	if err != nil {
 		t.Fatalf("InvokeStream: %v", err)
@@ -456,35 +601,49 @@ func TestCABIRuntimeTransportDrivesStreamAndBidiCallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stream first event: %v", err)
 	}
-	if first.Sequence() != 1 || first.Terminal() || string(first.PayloadJSON()) != `{"step":1}` {
-		t.Fatalf("unexpected first stream event: %#v payload=%s", first, first.PayloadJSON())
-	}
 	cancel, err := stream.Cancel(context.Background(), "client stop")
 	if err != nil {
 		t.Fatalf("stream cancel: %v", err)
-	}
-	if cancel.State() != StreamCancelRequested || cancel.Terminal() || cancel.Cancelled() || stream.State() != StreamCancelRequested {
-		t.Fatalf("stream cancel must be non-terminal request: outcome=%#v state=%s", cancel, stream.State())
 	}
 	terminal, err := stream.Next(context.Background())
 	if err != nil {
 		t.Fatalf("stream terminal event after cancel request: %v", err)
 	}
-	if !terminal.Terminal() || stream.State() != StreamTerminalFrameSeen {
-		t.Fatalf("terminal stream event not observed: event=%#v state=%s", terminal, stream.State())
-	}
+	eventCount := len(stream.Events())
 	if err := stream.Close(context.Background()); err != nil {
 		t.Fatalf("stream close: %v", err)
 	}
-	if stream.State() != StreamClosed {
-		t.Fatalf("stream state = %s, want Closed", stream.State())
+	return cabiStreamLifecycleObservation{
+		provider:     first,
+		cancel:       cancel,
+		terminal:     terminal,
+		eventCount:   eventCount,
+		closedState:  stream.State(),
+		runtimeState: stream.RuntimeState(),
 	}
+}
 
+type cabiBidiLifecycleObservation struct {
+	provider     BidiFrame
+	ack          BidiFrame
+	cancel       BidiOutcome
+	terminal     BidiFrame
+	closedState  BidiState
+	runtimeState BidiState
+}
+
+func observeCABIBidiLifecycle(t *testing.T) cabiBidiLifecycleObservation {
+	t.Helper()
+	client := openFakeCABIRuntime(t)
 	session, err := client.OpenBidi(context.Background(), completeDraftForRuntimeTest(t), []BidiStreamDescriptor{
 		{StreamID: 1, ContentType: "application/json", Ordering: "STRICT"},
 	})
 	if err != nil {
 		t.Fatalf("OpenBidi: %v", err)
+	}
+	providerFrame, err := session.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("bidi provider frame: %v", err)
 	}
 	frame, err := NewBidiFrame(1, "data", 1)
 	if err != nil {
@@ -494,40 +653,267 @@ func TestCABIRuntimeTransportDrivesStreamAndBidiCallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bidi send: %v", err)
 	}
-	if ack.Sequence() != 1 || ack.Kind() != "data" {
-		t.Fatalf("unexpected bidi send ack: %#v", ack)
-	}
 	bidiCancel, err := session.Cancel(context.Background(), "client stop")
 	if err != nil {
 		t.Fatalf("bidi cancel: %v", err)
-	}
-	if bidiCancel.State() != BidiCancelRequested || bidiCancel.Terminal() || session.State() != BidiCancelRequested {
-		t.Fatalf("bidi cancel must be non-terminal request: outcome=%#v state=%s", bidiCancel, session.State())
 	}
 	received, err := session.Receive(context.Background())
 	if err != nil {
 		t.Fatalf("bidi receive after cancel request: %v", err)
 	}
-	if !received.Terminal() || session.State() != BidiTerminal {
-		t.Fatalf("bidi terminal frame not observed: frame=%#v state=%s", received, session.State())
-	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("bidi close: %v", err)
 	}
-	if session.State() != BidiClosed {
-		t.Fatalf("bidi state = %s, want Closed", session.State())
+	return cabiBidiLifecycleObservation{
+		provider:     providerFrame,
+		ack:          ack,
+		cancel:       bidiCancel,
+		terminal:     received,
+		closedState:  session.State(),
+		runtimeState: session.RuntimeState(),
 	}
 }
 
-func TestCABICallbackInboxOverflowIsBounded(t *testing.T) {
-	inbox := newCABICallbackInbox(1)
-	inbox.push([]byte(`{"sequence":1,"kind":"data","terminal":false}`))
-	inbox.push([]byte(`{"sequence":2,"kind":"data","terminal":false}`))
+func TestCABIRuntimeProviderEnforcesCallbackBackpressure(t *testing.T) {
+	client := openFakeCABIRuntime(t)
+	draft := cabiDraftWithMetadata(t, map[string]any{"conformance_backpressure": true})
 
-	_, err := inbox.recv(context.Background())
+	stream, err := client.InvokeStream(context.Background(), draft)
+	if err != nil {
+		t.Fatalf("InvokeStream: %v", err)
+	}
+	event, err := stream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("stream backpressure failure: %v", err)
+	}
+	assertCABIBackpressureError(t, event.ErrorJSON())
+	if event.Terminal() || !event.TransportTerminal() {
+		t.Fatalf("stream overflow event = %#v, want non-terminal transport failure", event)
+	}
+	if stream.State() != StreamFailed || stream.RuntimeState() != StreamOpen {
+		t.Fatalf("stream state=%s runtime=%s, want Failed/Open", stream.State(), stream.RuntimeState())
+	}
+	if err := stream.Close(context.Background()); err != nil {
+		t.Fatalf("close overflowed stream: %v", err)
+	}
 
-	if !IsCode(err, ErrProtocol) {
-		t.Fatalf("overflow error = %v, want %s", err, ErrProtocol)
+	session, err := client.OpenBidi(context.Background(), draft, []BidiStreamDescriptor{{
+		StreamID: 1, ContentType: "application/json", Ordering: "STRICT",
+	}})
+	if err != nil {
+		t.Fatalf("OpenBidi: %v", err)
+	}
+	frame, err := session.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("bidi backpressure failure: %v", err)
+	}
+	assertCABIBackpressureError(t, frame.ErrorJSON())
+	if frame.Terminal() || !frame.TransportTerminal() {
+		t.Fatalf("bidi overflow frame = %#v, want non-terminal transport failure", frame)
+	}
+	if session.State() != BidiFailed || session.RuntimeState() != BidiOpen {
+		t.Fatalf("bidi state=%s runtime=%s, want Failed/Open", session.State(), session.RuntimeState())
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("close overflowed bidi: %v", err)
+	}
+}
+
+func TestCABIRuntimeProviderOwnsStreamReceiveDeadline(t *testing.T) {
+	client := openFakeCABIRuntime(t)
+	draft := completeDraftForRuntimeTest(t)
+
+	stream, err := client.InvokeStream(context.Background(), draft)
+	if err != nil {
+		t.Fatalf("InvokeStream: %v", err)
+	}
+	if _, err := stream.Next(context.Background()); err != nil {
+		t.Fatalf("stream provider frame: %v", err)
+	}
+	streamDeadline, cancelStreamDeadline := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancelStreamDeadline()
+	if _, err := stream.Next(streamDeadline); !IsCode(err, ErrTimeout) {
+		t.Fatalf("stream deadline error = %v, want %s", err, ErrTimeout)
+	}
+	if stream.RuntimeState() != StreamOpen {
+		t.Fatalf("stream timeout changed runtime state to %s", stream.RuntimeState())
+	}
+	if err := stream.Close(context.Background()); err != nil {
+		t.Fatalf("close timed-out stream: %v", err)
+	}
+	retryStream, err := client.InvokeStream(context.Background(), draft)
+	if err != nil {
+		t.Fatalf("retry InvokeStream: %v", err)
+	}
+	if _, err := retryStream.Next(context.Background()); err != nil {
+		t.Fatalf("retry stream provider frame: %v", err)
+	}
+	if err := retryStream.Close(context.Background()); err != nil {
+		t.Fatalf("close retry stream: %v", err)
+	}
+}
+
+func TestCABIRuntimeProviderOwnsBidiReceiveDeadline(t *testing.T) {
+	client := openFakeCABIRuntime(t)
+	draft := completeDraftForRuntimeTest(t)
+	session, err := client.OpenBidi(context.Background(), draft, []BidiStreamDescriptor{{
+		StreamID: 1, ContentType: "application/json", Ordering: "STRICT",
+	}})
+	if err != nil {
+		t.Fatalf("OpenBidi: %v", err)
+	}
+	if _, err := session.Receive(context.Background()); err != nil {
+		t.Fatalf("bidi provider frame: %v", err)
+	}
+	bidiDeadline, cancelBidiDeadline := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancelBidiDeadline()
+	if _, err := session.Receive(bidiDeadline); !IsCode(err, ErrTimeout) {
+		t.Fatalf("bidi deadline error = %v, want %s", err, ErrTimeout)
+	}
+	if session.RuntimeState() != BidiOpen {
+		t.Fatalf("bidi timeout changed runtime state to %s", session.RuntimeState())
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("close timed-out bidi: %v", err)
+	}
+	retryBidi, err := client.OpenBidi(context.Background(), draft, []BidiStreamDescriptor{{
+		StreamID: 1, ContentType: "application/json", Ordering: "STRICT",
+	}})
+	if err != nil {
+		t.Fatalf("retry OpenBidi: %v", err)
+	}
+	if _, err := retryBidi.Receive(context.Background()); err != nil {
+		t.Fatalf("retry bidi provider frame: %v", err)
+	}
+	if err := retryBidi.Close(context.Background()); err != nil {
+		t.Fatalf("close retry bidi: %v", err)
+	}
+}
+
+func TestCABIRuntimeProviderKeepsCloseSendDistinctFromCancel(t *testing.T) {
+	client := openFakeCABIRuntime(t)
+	session, err := client.OpenBidi(
+		context.Background(),
+		completeDraftForRuntimeTest(t),
+		[]BidiStreamDescriptor{{StreamID: 1, ContentType: "application/json", Ordering: "STRICT"}},
+	)
+	if err != nil {
+		t.Fatalf("OpenBidi: %v", err)
+	}
+	outcome, err := session.CloseSend(context.Background())
+	if err != nil {
+		t.Fatalf("CloseSend: %v", err)
+	}
+	if outcome.Terminal() || outcome.State() != BidiHalfClosedLocal || session.RuntimeState() != BidiHalfClosedLocal {
+		t.Fatalf("close-send outcome=%#v runtime=%s", outcome, session.RuntimeState())
+	}
+	if _, err := session.Receive(context.Background()); err != nil {
+		t.Fatalf("receive after close-send: %v", err)
+	}
+	frame, err := NewBidiFrame(1, "data", 1)
+	if err != nil {
+		t.Fatalf("NewBidiFrame: %v", err)
+	}
+	if _, err := session.Send(context.Background(), frame); !IsCode(err, ErrCancelled) {
+		t.Fatalf("send after close-send error = %v, want %s", err, ErrCancelled)
+	}
+	receiveDeadline, cancelReceive := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancelReceive()
+	if _, err := session.Receive(receiveDeadline); !IsCode(err, ErrTimeout) {
+		t.Fatalf("close-send emitted cancellation terminal: %v", err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if session.RuntimeState() != BidiHalfClosedLocal {
+		t.Fatalf("local close changed runtime state to %s", session.RuntimeState())
+	}
+}
+
+func TestCABIRuntimeProviderRejectsMissingBidiFrameZero(t *testing.T) {
+	client := openFakeCABIRuntime(t)
+
+	_, err := client.OpenBidi(context.Background(), completeDraftForRuntimeTest(t), nil)
+
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("missing frame0 error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func openFakeCABIRuntime(t *testing.T) *RuntimeClient {
+	t.Helper()
+	transport, err := OpenCABIRuntimeLifecycleTransport(buildFakeCABIStreamLibrary(t))
+	if err != nil {
+		t.Fatalf("OpenCABIRuntimeLifecycleTransport: %v", err)
+	}
+	control, err := NewRuntimeHost(transport)
+	if err != nil {
+		_ = transport.Close(context.Background())
+		t.Fatalf("NewRuntimeHost: %v", err)
+	}
+	handle, err := control.Start(context.Background(), StartConfig{Mode: ModeDevice, DeviceID: "dev-a"})
+	if err != nil {
+		_ = transport.Close(context.Background())
+		t.Fatalf("Start: %v", err)
+	}
+	client, err := handle.OpenRuntime(context.Background(), ConnectOptions{})
+	if err != nil {
+		_ = transport.Close(context.Background())
+		t.Fatalf("OpenRuntime: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := client.Close(context.Background()); err != nil {
+			t.Errorf("Close runtime client: %v", err)
+		}
+		if err := transport.Close(context.Background()); err != nil {
+			t.Errorf("Close C ABI runtime transport: %v", err)
+		}
+	})
+	return client
+}
+
+func cabiDraftWithMetadata(t *testing.T, metadata map[string]any) InvocationDraft {
+	t.Helper()
+	raw, err := json.Marshal(completeDraftForRuntimeTest(t))
+	if err != nil {
+		t.Fatalf("marshal complete draft: %v", err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatalf("decode complete draft: %v", err)
+	}
+	value["metadata"] = metadata
+	raw, err = json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal draft metadata: %v", err)
+	}
+	draft, err := NewInvocationDraftFromJSON(raw)
+	if err != nil {
+		t.Fatalf("NewInvocationDraftFromJSON: %v", err)
+	}
+	return draft
+}
+
+func assertCABIBackpressureError(t *testing.T, raw json.RawMessage) {
+	t.Helper()
+	var failure struct {
+		Code    string `json:"code"`
+		Retry   string `json:"retry"`
+		Details struct {
+			WireCode string `json:"wire_code"`
+			Reason   string `json:"reason"`
+			Bounded  bool   `json:"bounded_queue"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(raw, &failure); err != nil {
+		t.Fatalf("decode backpressure error: %v", err)
+	}
+	if failure.Code != string(ErrAdmissionDenied) ||
+		failure.Retry != string(RetryAfterBackoff) ||
+		failure.Details.WireCode != "RESOURCE_EXHAUSTED" ||
+		failure.Details.Reason != "callback_queue_overflow" ||
+		!failure.Details.Bounded {
+		t.Fatalf("unexpected backpressure error: %#v", failure)
 	}
 }
 
@@ -564,6 +950,13 @@ const fakeCABIStreamSource = `
 typedef void (*stream_callback_t)(void *user_data, const char *chunk_json);
 typedef void (*bidi_callback_t)(void *user_data, const char *frame_json);
 
+static stream_callback_t active_stream_callback = 0;
+static void *active_stream_user_data = 0;
+static int active_stream_cancel_calls = 0;
+static bidi_callback_t active_bidi_callback = 0;
+static void *active_bidi_user_data = 0;
+static int active_bidi_cancel_calls = 0;
+
 static char *dup_json(const char *s) {
 	size_t n = strlen(s);
 	char *out = (char *)malloc(n + 1);
@@ -575,7 +968,7 @@ static char *dup_json(const char *s) {
 uint32_t easynet_abi_version(void) { return 5u; }
 void easynet_string_free(char *s) { free(s); }
 int32_t easynet_last_error_json(char **out_error_json) {
-	*out_error_json = dup_json("{\"code\":\"GENERIC\",\"stage\":\"fake\",\"message\":\"fake C ABI error\",\"retry\":\"never\",\"details\":{}}");
+	*out_error_json = dup_json("{\"code\":\"INVALID_ARGUMENT\",\"stage\":\"fake\",\"message\":\"invalid fake C ABI request\",\"retry\":\"never\",\"details\":{}}");
 	return 0;
 }
 
@@ -657,25 +1050,53 @@ int32_t easynet_prepared_invocation_free(uint64_t prepared_id) { (void)prepared_
 int32_t easynet_signed_invocation_free(uint64_t signed_id) { (void)signed_id; return 0; }
 
 int32_t easynet_invocation_stream_open(uint64_t handle, const char *invocation_json, stream_callback_t on_chunk, void *user_data, uint64_t *out_stream_id) {
-	(void)handle; (void)invocation_json;
+	(void)handle;
 	*out_stream_id = 404;
-	on_chunk(user_data, "{\"sequence\":1,\"kind\":\"data\",\"state\":\"Open\",\"terminal\":false,\"payload_json\":{\"step\":1}}");
-	on_chunk(user_data, "{\"sequence\":2,\"kind\":\"terminal\",\"state\":\"Completed\",\"terminal\":true}");
+	active_stream_callback = on_chunk;
+	active_stream_user_data = user_data;
+	active_stream_cancel_calls = 0;
+	if (strstr(invocation_json, "conformance_backpressure") != 0) {
+		char event[160];
+		for (int sequence = 1; sequence <= 1025; sequence++) {
+			snprintf(event, sizeof(event), "{\"sequence\":%d,\"kind\":\"data\",\"state\":\"Open\",\"terminal\":false}", sequence);
+			on_chunk(user_data, event);
+		}
+	} else {
+		on_chunk(user_data, "{\"sequence\":1,\"kind\":\"data\",\"state\":\"Open\",\"terminal\":false,\"payload_json\":{\"step\":1}}");
+	}
 	return 0;
 }
 int32_t easynet_invocation_stream_cancel(uint64_t handle, uint64_t stream_id) {
 	(void)handle;
+	active_stream_cancel_calls += 1;
+	if (active_stream_cancel_calls > 1) return 1;
+	if (stream_id == 404 && active_stream_callback != 0) {
+		active_stream_callback(active_stream_user_data, "{\"sequence\":2,\"kind\":\"terminal\",\"state\":\"Cancelled\",\"terminal\":true,\"terminal_receipt\":{\"state\":\"Cancelled\",\"cleanup_complete\":true}}");
+	}
 	return stream_id == 404 ? 0 : 4;
 }
 int32_t easynet_invocation_stream_close(uint64_t handle, uint64_t stream_id) {
 	(void)handle;
+	active_stream_callback = 0;
+	active_stream_user_data = 0;
 	return stream_id == 404 ? 0 : 4;
 }
 int32_t easynet_invocation_bidi_open(uint64_t handle, const char *invocation_json, bidi_callback_t on_frame, void *user_data, uint64_t *out_bidi_id) {
 	(void)handle;
-	if (strstr(invocation_json, "bidi_streams") == 0) return 11;
+	if (strstr(invocation_json, "\"bidi_streams\":[]") != 0) return 1;
 	*out_bidi_id = 505;
-	on_frame(user_data, "{\"sequence\":1,\"kind\":\"terminal\",\"stream_id\":1,\"terminal\":true}");
+	active_bidi_callback = on_frame;
+	active_bidi_user_data = user_data;
+	active_bidi_cancel_calls = 0;
+	if (strstr(invocation_json, "conformance_backpressure") != 0) {
+		char frame[160];
+		for (int sequence = 1; sequence <= 1025; sequence++) {
+			snprintf(frame, sizeof(frame), "{\"sequence\":%d,\"kind\":\"data\",\"stream_id\":1,\"terminal\":false}", sequence);
+			on_frame(user_data, frame);
+		}
+	} else {
+		on_frame(user_data, "{\"sequence\":1,\"kind\":\"data\",\"stream_id\":1,\"terminal\":false,\"payload_json\":{\"provider\":\"cabi\"}}");
+	}
 	return 0;
 }
 int32_t easynet_invocation_bidi_send(uint64_t handle, uint64_t bidi_id, const char *frame_json) {
@@ -688,10 +1109,17 @@ int32_t easynet_invocation_bidi_close_send(uint64_t handle, uint64_t bidi_id) {
 }
 int32_t easynet_invocation_bidi_close(uint64_t handle, uint64_t bidi_id) {
 	(void)handle;
+	active_bidi_callback = 0;
+	active_bidi_user_data = 0;
 	return bidi_id == 505 ? 0 : 4;
 }
 int32_t easynet_invocation_bidi_cancel(uint64_t handle, uint64_t bidi_id) {
 	(void)handle;
+	active_bidi_cancel_calls += 1;
+	if (active_bidi_cancel_calls > 1) return 1;
+	if (bidi_id == 505 && active_bidi_callback != 0) {
+		active_bidi_callback(active_bidi_user_data, "{\"sequence\":2,\"kind\":\"terminal\",\"stream_id\":1,\"terminal\":true,\"terminal_receipt\":{\"state\":\"Cancelled\",\"cleanup_complete\":true}}");
+	}
 	return bidi_id == 505 ? 0 : 4;
 }
 `

@@ -45,6 +45,7 @@ use crate::daemon::invocation::bidi::state::pending_dispatch::{
     DispatchResult, DispatchStreamEvent,
 };
 use crate::daemon::invocation::bidi::state::presence::PresenceRegistry;
+use crate::daemon::invocation::dispatch::cancellation::RegisteredInvocationLifecycle;
 use crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonStreamRoute;
 use crate::daemon::invocation::dispatch::deps::{DirectoryPlane, RuntimePlane, SessionPlane};
 use crate::daemon::invocation::dispatch::descriptor_binding::RuntimeBoundAbility;
@@ -113,7 +114,7 @@ impl StreamDispatcher {
         let local_system_ingress = self
             .admission
             .accepts_local_system_envelope(request.envelope.as_ref());
-        let handle =
+        let (handle, lifecycle) =
             crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
                 runtime,
                 self.runtime.cancellations.clone(),
@@ -129,6 +130,7 @@ impl StreamDispatcher {
             route.name().to_string(),
             "local-runtime",
             initial_sequence,
+            lifecycle,
         )
         .await
     }
@@ -249,6 +251,7 @@ impl StreamDispatcher {
             ))),
         }
         .map_err(|err| status_from_axon_invoke_error("InvokeStream", ability, *err))?;
+        let lifecycle_envelope = wire.envelope.clone();
         let product_admission = self.runtime.stage_product_admission(
             &self.admission,
             &wire,
@@ -259,13 +262,33 @@ impl StreamDispatcher {
             crate::daemon::axon_bridge::dispatch_shim::open_stream_admitted(&runtime, wire)
                 .await
                 .map_err(|err| status_from_axon_invoke_error("InvokeStream", ability, err))?;
-        product_admission.commit()?;
+        let lifecycle = match RegisteredInvocationLifecycle::register(
+            self.runtime.cancellations.clone(),
+            &lifecycle_envelope,
+            handle.handle().clone(),
+        ) {
+            Ok(lifecycle) => lifecycle,
+            Err(error) => {
+                let _ = handle.cancel("stream lifecycle registration failed").await;
+                let _ = handle.finalized().await;
+                return Err(Status::failed_precondition(format!(
+                    "InvokeStream `{ability}` lifecycle registration failed: {error}"
+                )));
+            }
+        };
+        if let Err(error) = product_admission.commit() {
+            let _ = lifecycle
+                .cancel_and_finalize("stream product admission commit failed")
+                .await;
+            return Err(error);
+        }
         project_local_runtime_stream(
             handle,
             ability,
             selected_route.route_ura.clone(),
             "local-runtime",
             0,
+            lifecycle,
         )
         .await
     }
@@ -482,16 +505,28 @@ async fn project_local_runtime_stream(
     selected_node_id: String,
     scheduling_reason: &'static str,
     initial_sequence: u64,
+    lifecycle: RegisteredInvocationLifecycle,
 ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
-    let admission_receipt = handle.admission_receipt().await.map_err(|err| {
-        Status::failed_precondition(format!(
-            "InvokeStream `{ability}` canonical admission unavailable: {err}"
-        ))
-    })?;
-    let admission_wire =
-        axon_sdk::invocation::wire::receipt_to_wire(&admission_receipt).map_err(|error| {
-            Status::failed_precondition(format!("CANONICAL_ADMISSION_PROJECTION_FAILED: {error}"))
-        })?;
+    let admission_receipt = match handle.admission_receipt().await {
+        Ok(receipt) => receipt,
+        Err(err) => {
+            let _ = lifecycle.finalized().await;
+            return Err(Status::failed_precondition(format!(
+                "InvokeStream `{ability}` canonical admission unavailable: {err}"
+            )));
+        }
+    };
+    let admission_wire = match axon_sdk::invocation::wire::receipt_to_wire(&admission_receipt) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            let _ = lifecycle
+                .cancel_and_finalize("canonical admission projection failed")
+                .await;
+            return Err(Status::failed_precondition(format!(
+                "CANONICAL_ADMISSION_PROJECTION_FAILED: {error}"
+            )));
+        }
+    };
 
     let (tx, rx) = mpsc::channel::<Result<InvokeStreamChunk, Status>>(16);
     let (consumer_closed_tx, mut consumer_closed_rx) = watch::channel(false);
@@ -505,7 +540,7 @@ async fn project_local_runtime_stream(
                 changed = consumer_closed_rx.changed() => {
                     if changed.is_ok() && *consumer_closed_rx.borrow() {
                         cancel_abandoned_local_stream(
-                            &handle,
+                            &lifecycle,
                             ability_name.as_str(),
                             invocation_id.as_str(),
                             "stream consumer disconnected",
@@ -525,7 +560,7 @@ async fn project_local_runtime_stream(
                 Ok(frame) => {
                     let terminal = frame.terminal;
                     let finalized = if terminal {
-                        match handle.finalized().await {
+                        match lifecycle.finalized().await {
                             Ok(finalized) => Some(finalized),
                             Err(err) => {
                                 let _ = tx
@@ -621,7 +656,7 @@ async fn project_local_runtime_stream(
                     if tx.send(Ok(chunk)).await.is_err() {
                         if !terminal {
                             cancel_abandoned_local_stream(
-                                &handle,
+                                &lifecycle,
                                 ability_name.as_str(),
                                 invocation_id.as_str(),
                                 "stream consumer disconnected",
@@ -635,7 +670,7 @@ async fn project_local_runtime_stream(
                     }
                 }
                 Err(err) => {
-                    let finalized = match handle.finalized().await {
+                    let finalized = match lifecycle.finalized().await {
                         Ok(finalized) => finalized,
                         Err(finalization_error) => {
                             let _ = tx
@@ -724,29 +759,18 @@ impl<T> Drop for DropNotifyingReceiverStream<T> {
 }
 
 async fn cancel_abandoned_local_stream(
-    handle: &StreamingInvocationHandle,
+    lifecycle: &RegisteredInvocationLifecycle,
     ability: &str,
     invocation_id: &str,
     reason: &'static str,
 ) {
-    match handle.cancel(reason).await {
-        Ok(()) => {
-            if let Err(err) = handle.finalized().await {
-                let err_msg = err.to_string();
-                crate::op_event!(
-                    component = daemon_invocation,
-                    kind = invoke_stream_local_cancel_finalization_failed,
-                    ability = ability,
-                    invocation_id = invocation_id,
-                    error = err_msg,
-                );
-            }
-        }
+    match lifecycle.cancel_and_finalize(reason).await {
+        Ok(_) => {}
         Err(err) => {
             let err_msg = err.to_string();
             crate::op_event!(
                 component = daemon_invocation,
-                kind = invoke_stream_local_cancel_failed,
+                kind = invoke_stream_local_cancel_finalization_failed,
                 ability = ability,
                 invocation_id = invocation_id,
                 error = err_msg,
