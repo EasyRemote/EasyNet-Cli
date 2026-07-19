@@ -347,13 +347,15 @@ fn resolve_package(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::persistence::resources::{
-        ResourceBinding, ResourceEntry, ResourceType, ResourcesFile,
-    };
+    use crate::daemon::persistence::resources::ResourcesFile;
+    #[cfg(feature = "remote-desktop")]
+    use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::surface::PluginKindView;
+    #[cfg(feature = "remote-desktop")]
+    use crate::daemon::plugins::PluginRealtimePermissionStatus;
     use crate::daemon::plugins::{
         activation_plans_for_manifest, PluginPackageManifest, PluginPackageSurfaceRecord,
-        PluginRealtimeOutcomeStatus, PluginRealtimePermissionStatus, PluginSurfaceReport,
+        PluginRealtimeOutcomeStatus, PluginSurfaceReport,
     };
     use std::collections::BTreeSet;
 
@@ -460,6 +462,7 @@ mod tests {
         assert_eq!(outcome.resources.missing, Vec::<String>::new());
     }
 
+    #[cfg(feature = "remote-desktop")]
     fn resource(kind: ResourceType, hardware_id: &str) -> ResourceEntry {
         ResourceEntry {
             resource_ura: crate::daemon::persistence::resources::build_resource_ura(

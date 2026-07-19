@@ -33,6 +33,7 @@ pub mod invocation;
 pub mod mcp;
 pub mod mission;
 pub mod plugin;
+mod plugin_template;
 pub mod principal;
 mod principal_routes_gen;
 pub mod runtime;

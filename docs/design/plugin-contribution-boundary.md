@@ -24,6 +24,25 @@ my-plugin/
 metadata. `abilities/*.ability.toml` declares descriptor-facing schema and
 description. The executable or builtin Rust binding supplies handlers.
 
+`easynet plugin init <path>` creates the default developer version of this
+shape: a declarative exec Hello World package with one governed echo ability.
+The generated package is intentionally installable as-is so a contributor can
+run the full product loop before adding product-specific logic:
+
+```bash
+easynet plugin init hello-plugin
+cd hello-plugin
+easynet plugin install .
+```
+
+The scaffold separates the two load-bearing versions:
+
+- `plugin.toml` `version` is the package lifecycle version used by
+  install/update/remove.
+- `abilities/*.ability.toml` `descriptor_version` is the governed interface
+  version that enters descriptor refs, authority bindings, implementation
+  bindings, and receipts.
+
 ## Runtime Boundary
 
 The runtime path is:
@@ -54,6 +73,24 @@ The contribution deliberately does not contain:
 - receipt semantics
 
 Those remain daemon/Axon responsibilities.
+
+## Collision Rule
+
+Plugin templates reduce accidental naming collisions, but they are not the
+authority. Collision prevention is enforced in the daemon path:
+
+1. Installer/index rejects duplicate package identity: `package_id@version`.
+2. Active package state keeps one active version per package id for update
+   semantics.
+3. Runtime bind rejects duplicate ability ownership under the same daemon owner.
+4. Descriptor binding rejects conflicting descriptor facts for the same
+   ability/version/call-mode identity.
+5. Resource and permission brokers report blocked/partial readiness instead of
+   granting authority or silently publishing an unsafe ability.
+
+A plugin package never becomes an authority root. The daemon binds
+`PluginAbilityImpl` under the device/agent authority it owns; callers only see
+the resulting governed `AbilityDescriptor`.
 
 ## Authority Rule
 

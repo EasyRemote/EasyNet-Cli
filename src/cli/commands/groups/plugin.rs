@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 
+use super::plugin_template::{init_hello_plugin, PluginTemplateInit};
 use crate::daemon::plugins::index::default_plugin_root;
 use crate::daemon::plugins::{
     DesktopCompanionManager, PluginInstaller, PluginKind, PluginKindView, PluginLoadPlanner,
@@ -31,6 +32,8 @@ pub struct PluginArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum PluginAction {
+    /// Create a Hello World plugin project.
+    Init(InitArgs),
     /// List indexed plugin abilities and their descriptor/runtime/invocation surfaces.
     List(ListArgs),
     /// Install an unpacked plugin package directory transactionally.
@@ -47,6 +50,24 @@ pub enum PluginAction {
     Status(PluginStatusArgs),
     /// Check whether a package's realtime capability can be activated now.
     ActivateRealtime(ActivateRealtimeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// Target directory for the generated plugin project.
+    pub path: PathBuf,
+    /// Plugin package id. Defaults to local.<directory_slug>.
+    #[arg(long)]
+    pub id: Option<String>,
+    /// Public plugin ability name. Defaults to <directory_slug>.echo.
+    #[arg(long)]
+    pub ability: Option<String>,
+    /// Plugin package version.
+    #[arg(long, default_value = "0.1.0")]
+    pub package_version: String,
+    /// Governed AbilityDescriptor version.
+    #[arg(long, default_value = "1.0.0")]
+    pub descriptor_version: String,
 }
 
 #[derive(Debug, Args)]
@@ -105,6 +126,7 @@ pub struct ActivateRealtimeArgs {
 
 pub fn run(args: PluginArgs) -> anyhow::Result<()> {
     match args.action {
+        PluginAction::Init(args) => run_init(args),
         PluginAction::List(args) => run_list(args),
         PluginAction::Install(args) => run_install(args),
         PluginAction::Update(args) => run_update(args),
@@ -114,6 +136,27 @@ pub fn run(args: PluginArgs) -> anyhow::Result<()> {
         PluginAction::Status(args) => run_status(args),
         PluginAction::ActivateRealtime(args) => run_activate_realtime(args),
     }
+}
+
+fn run_init(args: InitArgs) -> anyhow::Result<()> {
+    let project = init_hello_plugin(PluginTemplateInit {
+        path: args.path,
+        package_id: args.id,
+        ability_name: args.ability,
+        package_version: args.package_version,
+        descriptor_version: args.descriptor_version,
+    })?;
+    output::success(&format!(
+        "created Hello World plugin {}@{}",
+        project.package_id, project.package_version
+    ));
+    output::detail("path", &project.path.display().to_string());
+    output::detail("ability", &project.ability_name);
+    output::detail(
+        "next",
+        &format!("easynet plugin install '{}'", project.path.display()),
+    );
+    Ok(())
 }
 
 fn run_list(args: ListArgs) -> anyhow::Result<()> {

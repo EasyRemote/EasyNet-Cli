@@ -863,6 +863,7 @@ This stage should run before deleting the rest of `~/.easynet`.
 Extend:
 
 ```text
+easynet plugin init <path> [--id ID] [--ability NAME]
 easynet plugin list
 easynet plugin install <path>
 easynet plugin update <path>
@@ -883,6 +884,41 @@ easynet companion restart <id>
 
 The `companion` group may be added later. Minimum first implementation can keep
 everything under `plugin`.
+
+### 13.1 Hello World scaffold
+
+`easynet plugin init <path>` creates an installable declarative exec package:
+
+```text
+<path>/
+  plugin.toml
+  abilities/
+    <ability>.ability.toml
+  bin/
+    exec-plugin
+  README.md
+```
+
+Default naming is deterministic:
+
+- directory `hello-plugin`
+- package id `local.hello_plugin`
+- ability `hello_plugin.echo`
+- package version `0.1.0`
+- descriptor version `1.0.0`
+
+The generated plugin is a working echo implementation. It reads one JSON frame
+from stdin and returns a `result` frame containing the invocation tuple facts
+the daemon supplied: caller, callee, subject, ability, and nonce length.
+
+The scaffold is a product onboarding tool, not a conflict-avoidance mechanism.
+Conflict authority remains in install/index/binder/admission:
+
+- duplicate `id@version` fails install
+- duplicate active package ownership fails index/load planning
+- duplicate ability owner binding fails daemon runtime registration
+- descriptor fact conflicts fail before publication
+- resource/permission conflicts block activation instead of granting authority
 
 Table columns:
 
