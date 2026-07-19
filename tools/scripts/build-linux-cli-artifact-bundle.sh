@@ -34,6 +34,8 @@ Environment:
                                 common rustup installation paths.
   ZIG                           Zig executable used by cargo-zigbuild. Defaults
                                 to PATH lookup, then common Homebrew paths.
+  EASYNET_CLI_MIN_FD_LIMIT      Minimum soft file descriptor limit requested
+                                before cargo-zigbuild. Defaults to 4096.
 USAGE
 }
 
@@ -103,6 +105,28 @@ resolve_zig() {
   die "missing zig executable: install zig or set ZIG=/path/to/zig"
 }
 
+raise_fd_limit() {
+  local desired="${EASYNET_CLI_MIN_FD_LIMIT:-4096}"
+  [[ "$desired" =~ ^[0-9]+$ ]] || die "EASYNET_CLI_MIN_FD_LIMIT must be numeric: $desired"
+
+  local current hard target
+  current="$(ulimit -n 2>/dev/null || echo 0)"
+  hard="$(ulimit -H -n 2>/dev/null || echo "$current")"
+  [[ "$current" =~ ^[0-9]+$ ]] || return 0
+  (( current >= desired )) && return 0
+
+  target="$desired"
+  if [[ "$hard" =~ ^[0-9]+$ ]] && (( hard < target )); then
+    target="$hard"
+  fi
+  if [[ "$target" =~ ^[0-9]+$ ]] && (( target > current )); then
+    if ! ulimit -n "$target" 2>/dev/null; then
+      echo "[WARN] unable to raise file descriptor limit from $current to $target" >&2
+      return 0
+    fi
+  fi
+}
+
 host_default_target() {
   case "$(uname -m)" in
     arm64|aarch64) echo "aarch64-unknown-linux-gnu" ;;
@@ -125,6 +149,7 @@ if [[ "$SELF_TEST" == "1" ]]; then
   bash -n "$0"
   grep -q "resolve_cargo" "$0"
   grep -q "resolve_zig" "$0"
+  grep -q "raise_fd_limit" "$0"
   grep -q "cargo zigbuild" "$0"
   grep -q "libeasynet_cli.so" "$0"
   grep -q "libaxon_dendrite_bridge.so" "$0"
@@ -140,6 +165,7 @@ export ZIG
 export PATH="$(dirname "$CARGO_BIN"):$(dirname "$ZIG"):$PATH"
 command -v "$CARGO_BIN" >/dev/null 2>&1 || die "missing cargo executable: $CARGO_BIN"
 "$CARGO_BIN" zigbuild --help >/dev/null 2>&1 || die "cargo zigbuild is required"
+raise_fd_limit
 
 mkdir -p "$OUT_DIR"
 
