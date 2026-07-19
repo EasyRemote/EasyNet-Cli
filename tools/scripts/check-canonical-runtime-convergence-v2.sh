@@ -208,6 +208,153 @@ check_daemon_runtime_assembly_contract() {
   fi
 }
 
+check_plugin_sidecar_helper_matrix_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local template="$cli_root/src/cli/commands/groups/plugin_template.rs"
+  if [[ ! -f "$template" ]]; then
+    fail "plugin sidecar helper matrix source is missing: $template"
+  fi
+
+  "$PYTHON_BIN" - "$template" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+
+required_states = {
+    "Unsupported",
+    "Seam",
+    "ProviderBacked",
+    "CutoverReady",
+}
+state_enum = re.search(
+    r"pub enum ProviderSidecarHelperState\s*\{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if not state_enum:
+    raise SystemExit("plugin_sidecar_helper_state_enum_missing")
+state_variants = set(re.findall(r"\b([A-Z][A-Za-z0-9_]*)\s*,", state_enum.group("body")))
+if not required_states.issubset(state_variants):
+    raise SystemExit(
+        "plugin_sidecar_helper_state_enum_incomplete:"
+        + ",".join(sorted(required_states - state_variants))
+    )
+
+language_enum = re.search(
+    r"pub enum PluginTemplateLanguage\s*\{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if not language_enum:
+    raise SystemExit("plugin_template_language_enum_missing")
+template_variants = set(
+    re.findall(r"^\s+([A-Z][A-Za-z0-9_]*)\s*,", language_enum.group("body"), re.M)
+)
+if template_variants != {"Python", "Go"}:
+    raise SystemExit(
+        "plugin_template_language_surface_not_helper_backed:"
+        + ",".join(sorted(template_variants))
+    )
+
+matrix = re.search(
+    r"PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX:\s*&\[ProviderSidecarHelperCapability\]\s*=\s*&\[(?P<body>.*?)\n\];",
+    text,
+    re.S,
+)
+if not matrix:
+    raise SystemExit("plugin_sidecar_helper_matrix_missing")
+
+rows = {}
+for match in re.finditer(
+    r"ProviderSidecarHelperCapability\s*\{(?P<body>.*?)\n\s*\},",
+    matrix.group("body"),
+    re.S,
+):
+    body = match.group("body")
+    language = re.search(r'language:\s*"([^"]+)"', body)
+    state = re.search(r"state:\s*ProviderSidecarHelperState::([A-Za-z0-9_]+)", body)
+    template_available = re.search(r"template_available:\s*(true|false)", body)
+    helper = re.search(r'helper_package:\s*(Some\("([^"]+)"\)|None)', body)
+    if not (language and state and template_available and helper):
+        raise SystemExit("plugin_sidecar_helper_matrix_row_malformed")
+    if language.group(1) in rows:
+        raise SystemExit("plugin_sidecar_helper_matrix_duplicate:" + language.group(1))
+    rows[language.group(1)] = {
+        "state": state.group(1),
+        "template_available": template_available.group(1) == "true",
+        "helper_package": helper.group(2),
+    }
+
+required_languages = {"python", "go", "rust", "node", "java", "c/c++"}
+if not required_languages.issubset(rows):
+    raise SystemExit(
+        "plugin_sidecar_helper_matrix_incomplete:"
+        + ",".join(sorted(required_languages - set(rows)))
+    )
+
+expected_helpers = {
+    "python": "easynet_sdk.providers.easynet.plugin_exec",
+    "go": "easynet.run/cli/sdk/go/provider/easynet/pluginexec",
+}
+for language, helper in expected_helpers.items():
+    row = rows[language]
+    if row["state"] not in {"ProviderBacked", "CutoverReady"}:
+        raise SystemExit(f"plugin_template_helper_not_provider_backed:{language}")
+    if not row["template_available"]:
+        raise SystemExit(f"plugin_template_helper_not_exposed:{language}")
+    if row["helper_package"] != helper:
+        raise SystemExit(f"plugin_template_helper_package_mismatch:{language}")
+
+for language in sorted(required_languages - set(expected_helpers)):
+    row = rows[language]
+    if row["state"] not in {"Unsupported", "Seam"}:
+        raise SystemExit(f"plugin_unbacked_language_state_open:{language}:{row['state']}")
+    if row["template_available"]:
+        raise SystemExit(f"plugin_unbacked_language_template_open:{language}")
+    if row["helper_package"] is not None:
+        raise SystemExit(f"plugin_unbacked_language_helper_claim:{language}")
+
+variant_labels = {
+    "Python": "python",
+    "Go": "go",
+}
+if {variant_labels[variant] for variant in template_variants} != {
+    language for language, row in rows.items() if row["template_available"]
+}:
+    raise SystemExit("plugin_template_enum_and_matrix_drift")
+
+for const_name in ("PYTHON_EXEC_PLUGIN", "GO_EXEC_PLUGIN"):
+    template = re.search(
+        rf'const {const_name}: &str = r#"(.*?)"#;',
+        text,
+        re.S,
+    )
+    if not template:
+        raise SystemExit(f"plugin_template_constant_missing:{const_name}")
+    body = template.group(1)
+    forbidden = [
+        "json.loads",
+        "JSON.parse",
+        "json.NewDecoder",
+        "NewDecoder(",
+        "encoding/json",
+    ]
+    leaked = [pattern for pattern in forbidden if pattern in body]
+    if leaked:
+        raise SystemExit(
+            f"plugin_template_naked_sidecar_frame:{const_name}:{','.join(leaked)}"
+        )
+
+if "serve_exec_plugin(handle)" not in text:
+    raise SystemExit("plugin_python_template_missing_provider_helper")
+if "pluginexec.MustServe" not in text:
+    raise SystemExit("plugin_go_template_missing_provider_helper")
+PY
+}
+
 check_key_custody_boundary_contract() {
   bash "$ROOT/tools/scripts/check-daemon-key-service-boundary.sh" >/dev/null
   bash "$ROOT/tools/scripts/check-product-key-custody-boundary.sh" >/dev/null
@@ -1771,6 +1918,14 @@ EOF
   if ( CLI_ROOT="$tmp/cli-bare-runtime"; check_daemon_runtime_assembly_contract ) >/dev/null 2>&1; then
     fail "self-test expected bare daemon LocalRuntime construction gate to fail"
   fi
+  mkdir -p "$tmp/cli-sidecar-template/src/cli/commands/groups"
+  cp "$ROOT/src/cli/commands/groups/plugin_template.rs" \
+    "$tmp/cli-sidecar-template/src/cli/commands/groups/plugin_template.rs"
+  perl -0pi -e 's/serve_exec_plugin\(handle\)/json.loads(sys.stdin.readline())/' \
+    "$tmp/cli-sidecar-template/src/cli/commands/groups/plugin_template.rs"
+  if ( CLI_ROOT="$tmp/cli-sidecar-template"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
+    fail "self-test expected naked sidecar frame template gate to fail"
+  fi
   run_ura_vocabulary_self_test "$tmp/ura-vocabulary"
   cp -R "$tmp/axon" "$tmp/axon-uri-vector"
   mkdir -p "$tmp/axon-uri-vector/packaging/protocol-pack/conformance-vectors"
@@ -1848,6 +2003,7 @@ EOF
   check_daemon_tuple_route_contract
   check_daemon_runtime_route_inventory_contract
   check_daemon_runtime_assembly_contract
+  check_plugin_sidecar_helper_matrix_contract
   check_key_custody_boundary_contract
   check_daemon_mission_eal_boundary_contract
   check_ura_vocabulary_contract
@@ -1878,6 +2034,7 @@ check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
 check_daemon_runtime_route_inventory_contract
 check_daemon_runtime_assembly_contract
+check_plugin_sidecar_helper_matrix_contract
 check_key_custody_boundary_contract
 check_daemon_mission_eal_boundary_contract
 check_ura_vocabulary_contract

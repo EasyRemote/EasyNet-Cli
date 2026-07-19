@@ -22,6 +22,7 @@ AXON_ROOT="${EASYNET_AXON_ROOT:-$WORKSPACE_ROOT/EasyNet-Axon}"
 
 PROJECT="${EASYNET_E2E_PROJECT:-easynet-easyremote-two-node}"
 RUNTIME_IMAGE="${EASYNET_RUNTIME_IMAGE:-${EASYNET_HUB_IMAGE:-easynet/hub-e2e:local}}"
+DOCKER_BIN="${DOCKER_BIN:-}"
 REALM="${EASYNET_E2E_REALM:-hub}"
 HUB_URA="easynet:///r/${REALM}/authority"
 ADMIN_URA="easynet:///r/${REALM}/user/admin"
@@ -79,6 +80,48 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
 }
 
+resolve_docker() {
+  if [[ -n "${DOCKER_BIN:-}" ]]; then
+    [[ -x "$DOCKER_BIN" ]] || die "DOCKER_BIN is not executable: $DOCKER_BIN"
+    printf '%s\n' "$DOCKER_BIN"
+    return 0
+  fi
+  local candidate
+  for candidate in \
+    docker \
+    /usr/local/bin/docker \
+    /opt/homebrew/bin/docker \
+    /Applications/Docker.app/Contents/Resources/bin/docker
+  do
+    if [[ "$candidate" == */* ]]; then
+      if [[ -x "$candidate" ]]; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    elif command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return 0
+    fi
+  done
+  die "missing command: docker"
+}
+
+extend_tool_path() {
+  local dir
+  for dir in \
+    "$(dirname "$DOCKER_BIN")" \
+    "$HOME/.cargo/bin" \
+    /opt/homebrew/bin \
+    /usr/local/bin \
+    /usr/local/go/bin
+  do
+    if [[ -d "$dir" && ":$PATH:" != *":$dir:"* ]]; then
+      PATH="$dir:$PATH"
+    fi
+  done
+  export PATH
+}
+
 require_paths() {
   [[ -d "$EASYNET_ROOT" ]] || die "EasyNet root not found: $EASYNET_ROOT"
   [[ -x "$EASYNET_ROOT/scripts/docker-build-images.sh" ]] || die "missing EasyNet image build script"
@@ -118,11 +161,13 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "native_easynet_receipt_chains_projected" "$0"
   grep -q "caller_observed_native_easynet_ability_removed" "$0"
   grep -q "provider-hosted user external Agent" "$0"
-  grep -q "user_agent_one_invocation_record" "$0"
+  grep -q "user_agent_canonical_invocation_gap_detected" "$0"
   grep -q "caller_observed_user_agent_chat_removed" "$0"
   grep -q "ability list --node" "$0"
   grep -q "ability stream" "$0"
   grep -q "invocation list --ability-ura" "$0"
+  grep -q "resolve_docker" "$0"
+  grep -q "extend_tool_path" "$0"
   grep -q "docker compose" "$0"
   grep -q "build-linux-cli-artifact-bundle.sh" "$0"
   grep -q "EASYNET_CLI_ARTIFACT_ROOT" "$0"
@@ -130,12 +175,13 @@ if [[ "$SELF_TEST" == "1" ]]; then
   exit 0
 fi
 
-need_cmd docker
+DOCKER_BIN="$(resolve_docker)"
+extend_tool_path
 need_cmd jq
 need_cmd openssl
 need_cmd python3
 require_paths
-docker info >/dev/null 2>&1 || die "Docker engine is not available"
+"$DOCKER_BIN" info >/dev/null 2>&1 || die "Docker engine is not available"
 
 mkdir -p "$OUT_DIR"
 WORK_ROOT="$(mktemp -d "/tmp/easynet-er2.XXXXXX")"
@@ -153,7 +199,7 @@ cleanup() {
     fi
   fi
   if [[ "$KEEP" != "1" ]]; then
-    docker compose -p "$PROJECT" -f "$COMPOSE_FILE" down -v --remove-orphans >/dev/null 2>&1 || true
+    "$DOCKER_BIN" compose -p "$PROJECT" -f "$COMPOSE_FILE" down -v --remove-orphans >/dev/null 2>&1 || true
     rm -rf "$WORK_ROOT"
   else
     echo "kept work root: $WORK_ROOT" >&2
@@ -167,7 +213,7 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
   if [[ -z "$CLI_ARTIFACT_ROOT" ]]; then
     CLI_ARTIFACT_ROOT="$WORK_ROOT/cli-artifacts"
     echo "==> building Linux CLI artifact bundle"
-    CARGO_BIN="${CARGO_BIN:-cargo}" "$SELF_DIR/build-linux-cli-artifact-bundle.sh" \
+    CARGO_BIN="${CARGO_BIN:-}" "$SELF_DIR/build-linux-cli-artifact-bundle.sh" \
       --out-dir "$CLI_ARTIFACT_ROOT"
   else
     echo "==> using caller-provided Linux CLI artifact bundle: $CLI_ARTIFACT_ROOT"
@@ -179,7 +225,7 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
 fi
 
 compose() {
-  docker compose -p "$PROJECT" -f "$COMPOSE_FILE" "$@"
+  "$DOCKER_BIN" compose -p "$PROJECT" -f "$COMPOSE_FILE" "$@"
 }
 
 service_exec() {
@@ -280,15 +326,88 @@ wait_caller_remote_ability_list() {
 extract_ability_ura_by_name() {
   local file="$1"
   local ability_name="$2"
-  jq -r --arg name "$ability_name" '
-    if type == "array" then .
-    else (.abilities // .items // .records // [])
-    end
-    | map(select(
-        (.name // .ability_name // .public_name // .qualified_name // "") == $name
-      ))
-    | .[0].ability_ura // empty
-  ' "$file"
+  python3 - "$file" "$ability_name" <<'PY'
+import json
+import sys
+
+path, expected = sys.argv[1:3]
+payload = json.load(open(path, encoding="utf-8"))
+rows = payload if isinstance(payload, list) else payload.get("abilities") or payload.get("items") or payload.get("records") or []
+
+def candidates(row):
+    values = {
+        str(row.get("name") or ""),
+        str(row.get("ability_name") or ""),
+        str(row.get("public_name") or ""),
+        str(row.get("qualified_name") or ""),
+    }
+    owner = str(row.get("owner_ura") or "")
+    if "/agent/" in owner:
+        owner_tail = owner.rsplit("/agent/", 1)[1]
+        name = str(row.get("name") or "")
+        if name:
+            values.add(f"{owner_tail}.{name}")
+            if "." in owner_tail:
+                values.add(f"{owner_tail.split('.', 1)[1]}.{name}")
+    return values
+
+def matches(row):
+    ability_ura = str(row.get("ability_ura") or "")
+    return expected in candidates(row) or ability_ura.endswith(f".{expected}")
+
+for row in rows:
+    if isinstance(row, dict) and matches(row):
+        ability_ura = str(row.get("ability_ura") or "")
+        if ability_ura:
+            print(ability_ura)
+            raise SystemExit(0)
+PY
+}
+
+extract_descriptor_ref_by_name_mode() {
+  local file="$1"
+  local ability_name="$2"
+  local call_mode="$3"
+  python3 - "$file" "$ability_name" "$call_mode" <<'PY'
+import json
+import sys
+
+path, expected, call_mode = sys.argv[1:4]
+payload = json.load(open(path, encoding="utf-8"))
+rows = payload if isinstance(payload, list) else payload.get("abilities") or payload.get("items") or payload.get("records") or []
+
+def candidates(row):
+    values = {
+        str(row.get("name") or ""),
+        str(row.get("ability_name") or ""),
+        str(row.get("public_name") or ""),
+        str(row.get("qualified_name") or ""),
+    }
+    owner = str(row.get("owner_ura") or "")
+    if "/agent/" in owner:
+        owner_tail = owner.rsplit("/agent/", 1)[1]
+        name = str(row.get("name") or "")
+        if name:
+            values.add(f"{owner_tail}.{name}")
+            if "." in owner_tail:
+                values.add(f"{owner_tail.split('.', 1)[1]}.{name}")
+    return values
+
+def matches(row):
+    ability_ura = str(row.get("ability_ura") or "")
+    return expected in candidates(row) or ability_ura.endswith(f".{expected}")
+
+for row in rows:
+    if not isinstance(row, dict):
+        continue
+    if str(row.get("call_mode") or "") != call_mode:
+        continue
+    if matches(row):
+        descriptor_ref = str(row.get("descriptor_ref") or "")
+        if descriptor_ref:
+            print(descriptor_ref)
+            raise SystemExit(0)
+PY
 }
 
 wait_caller_ability_name() {
@@ -524,6 +643,44 @@ caller_cli "agent add '$TMP_AGENT' --type external --command /shared/fake-agent.
   >"$OUT_DIR/agent-temp-add.txt" 2>"$OUT_DIR/agent-temp-add.err"
 caller_cli "agent remove '$TMP_AGENT' --purge" >"$OUT_DIR/agent-temp-remove.txt" 2>"$OUT_DIR/agent-temp-remove.err"
 caller_cli "agent list" >"$OUT_DIR/agent-list-after-temp-remove.txt" 2>"$OUT_DIR/agent-list-after-temp-remove.err"
+
+echo "==> registering provider-hosted user external Agent and invoking it from caller"
+PROVIDER_AGENT_NAME="provider_agent_${TIMESTAMP}"
+PROVIDER_AGENT_CHAT_ABILITY="${PROVIDER_AGENT_NAME}.chat"
+PROVIDER_AGENT_PROMPT="hello provider agent from caller ${TIMESTAMP}"
+provider_cli "agent add '$PROVIDER_AGENT_NAME' --type external --command /shared/fake-agent.sh --arg '$PROVIDER_AGENT_NAME' --label '$PROVIDER_AGENT_NAME'" \
+  >"$OUT_DIR/provider-agent-add.txt" 2>"$OUT_DIR/provider-agent-add.err"
+provider_cli "agent list" >"$OUT_DIR/provider-agent-list-after-add.txt" 2>"$OUT_DIR/provider-agent-list-after-add.err"
+provider_cli "agent send '$PROVIDER_AGENT_NAME' '$PROVIDER_AGENT_PROMPT'" \
+  >"$OUT_DIR/provider-agent-send.txt" 2>"$OUT_DIR/provider-agent-send.err"
+PROVIDER_AGENT_CHAT_URA="$(wait_caller_ability_name "$PROVIDER_URA" "$PROVIDER_AGENT_CHAT_ABILITY" "caller-ability-list-provider-agent")"
+[[ "$PROVIDER_AGENT_CHAT_URA" == easynet://* ]] || die "provider user Agent chat ability was not discovered as a canonical URA: $PROVIDER_AGENT_CHAT_URA"
+caller_cli "ability show '$PROVIDER_AGENT_CHAT_URA' --node '$PROVIDER_URA' --format json" \
+  >"$OUT_DIR/caller-ability-show-provider-agent-chat.json" 2>"$OUT_DIR/caller-ability-show-provider-agent-chat.err"
+PROVIDER_AGENT_SUBJECT_URA="$(jq -r '.owner_ura' "$OUT_DIR/caller-ability-show-provider-agent-chat.json")"
+[[ "$PROVIDER_AGENT_SUBJECT_URA" == easynet://*/agent/* ]] || die "provider Agent chat show did not expose valid owner Agent URA subject"
+PROVIDER_AGENT_CHAT_DESCRIPTOR_REF="$(extract_descriptor_ref_by_name_mode "$OUT_DIR/caller-ability-list-provider-agent.json" "$PROVIDER_AGENT_CHAT_ABILITY" stream)"
+if [[ -z "$PROVIDER_AGENT_CHAT_DESCRIPTOR_REF" ]]; then
+  PROVIDER_AGENT_CHAT_DESCRIPTOR_REF="$(jq -r '
+  .descriptor_ref //
+  (.ability_ura + "@" + .version + "#" + (.descriptor_hash | sub("^sha256:"; "")) + "!" + .admission_action)
+' "$OUT_DIR/caller-ability-show-provider-agent-chat.json")"
+fi
+[[ "$PROVIDER_AGENT_CHAT_DESCRIPTOR_REF" == easynet://*@*#*!* ]] || die "caller ability show did not expose descriptor-bound provider Agent chat ref"
+PROVIDER_AGENT_NONCE_HEX="$(random_nonce_hex)"
+set +e
+provider_cli "ability stream '$PROVIDER_AGENT_CHAT_URA' --subject '$PROVIDER_AGENT_SUBJECT_URA' --nonce-hex '$PROVIDER_AGENT_NONCE_HEX' --causal-root --args '$(json_arg agent_chat "$PROVIDER_AGENT_PROMPT")' --format json --raw" \
+  >"$OUT_DIR/provider-cli-provider-agent-chat-stream.json" 2>"$OUT_DIR/provider-cli-provider-agent-chat-stream.err"
+PROVIDER_AGENT_CANONICAL_STATUS=$?
+set -e
+printf '%s\n' "$PROVIDER_AGENT_CANONICAL_STATUS" >"$OUT_DIR/provider-cli-provider-agent-chat-stream.status"
+provider_cli "invocation list --ability-ura '$PROVIDER_AGENT_CHAT_URA' --format json" \
+  >"$OUT_DIR/provider-invocation-list-provider-agent-after-cli.json" 2>"$OUT_DIR/provider-invocation-list-provider-agent-after-cli.err"
+provider_cli "invocation list --format json" \
+  >"$OUT_DIR/provider-invocation-list-all-after-provider-agent-cli.json" 2>"$OUT_DIR/provider-invocation-list-all-after-provider-agent-cli.err"
+provider_cli "agent remove '$PROVIDER_AGENT_NAME' --purge" >"$OUT_DIR/provider-agent-remove.txt" 2>"$OUT_DIR/provider-agent-remove.err"
+provider_cli "agent list" >"$OUT_DIR/provider-agent-list-after-remove.txt" 2>"$OUT_DIR/provider-agent-list-after-remove.err"
+wait_caller_ability_absent "$PROVIDER_URA" "$PROVIDER_AGENT_CHAT_ABILITY" "caller-ability-list-provider-after-agent-remove"
 
 echo "==> publishing native EasyNet host_stream ability from provider via CLI deploy"
 NATIVE_NAMESPACE="nativeer"
@@ -967,6 +1124,7 @@ caller_cli "ability list --node '$PROVIDER_URA' --format json" \
   >"$OUT_DIR/caller-ability-list-provider-after-native-uninstall.json" 2>"$OUT_DIR/caller-ability-list-provider-after-native-uninstall.err"
 
 python3 - "$OUT_DIR" "$PROVIDER_NODE" "$CALLER_NODE" "$PROVIDER_URA" "$CALLER_URA" "$AGENT_NAME" "$TMP_AGENT" "$HUB_URA" \
+  "$PROVIDER_AGENT_NAME" "$PROVIDER_AGENT_CHAT_ABILITY" "$PROVIDER_AGENT_CHAT_URA" "$PROVIDER_AGENT_PROMPT" \
   "$USER_PLUGIN_ID" "$USER_PLUGIN_VERSION" "$USER_PLUGIN_ABILITY" "$USER_PLUGIN_ABILITY_URA" "$USER_PLUGIN_MESSAGE" \
   "$NATIVE_ABILITY_URA" "$ADD_URA" "$TOTAL_URA" "$MERGE_URA" "$DEFAULTED_URA" "$SUMMARIZE_URA" "$BUNDLE_URA" "$COUNTDOWN_URA" "$WHOAMI_URA" <<'PY' >"$OUT_DIR/report.json"
 import json
@@ -975,17 +1133,18 @@ from pathlib import Path
 
 out = Path(sys.argv[1])
 provider_node, caller_node, provider_ura, caller_ura, agent_name, tmp_agent, hub_ura = sys.argv[2:9]
-user_plugin_id, user_plugin_version, user_plugin_ability, user_plugin_ability_ura, user_plugin_message = sys.argv[9:14]
-native_ability_ura = sys.argv[14]
+provider_agent_name, provider_agent_chat_ability, provider_agent_chat_ura, provider_agent_prompt = sys.argv[9:13]
+user_plugin_id, user_plugin_version, user_plugin_ability, user_plugin_ability_ura, user_plugin_message = sys.argv[13:18]
+native_ability_ura = sys.argv[18]
 ability_uras = {
-    "add": sys.argv[15],
-    "total": sys.argv[16],
-    "merge": sys.argv[17],
-    "defaulted": sys.argv[18],
-    "summarize": sys.argv[19],
-    "bundle": sys.argv[20],
-    "countdown": sys.argv[21],
-    "whoami": sys.argv[22],
+    "add": sys.argv[19],
+    "total": sys.argv[20],
+    "merge": sys.argv[21],
+    "defaulted": sys.argv[22],
+    "summarize": sys.argv[23],
+    "bundle": sys.argv[24],
+    "countdown": sys.argv[25],
+    "whoami": sys.argv[26],
 }
 
 def text(name: str) -> str:
@@ -1070,12 +1229,21 @@ def runtime_stream_payloads(value):
 ready = load("easyremote-ready.json") or {}
 native_ready = load("native-easynet-ready.json") or {}
 native_deploy = load("provider-native-deploy.json") or {}
+provider_agent_stream = load("provider-cli-provider-agent-chat-stream.json") or []
+provider_agent_show = load("caller-ability-show-provider-agent-chat.json") or {}
+provider_agent_canonical_status = text("provider-cli-provider-agent-chat-stream.status").strip()
+provider_agent_canonical_error = text("provider-cli-provider-agent-chat-stream.err")
 user_plugin_list_after_install = load("provider-plugin-list-after-user-plugin-install.json") or {}
 user_plugin_status = load("provider-plugin-status-user-plugin.json") or {}
 user_plugin_stream = load("caller-cli-user-plugin-stream.json") or []
 user_plugin_show = load("caller-ability-show-user-plugin.json") or {}
 remote_results = load("easyremote-remote-results.json") or {}
 cli_stream = load("caller-cli-add-stream.json") or []
+provider_agent_records = ability_invocation_records(
+    "provider-invocation-list-provider-agent-after-cli.json",
+    "provider-invocation-list-all-after-provider-agent-cli.json",
+    provider_agent_chat_ura,
+)
 user_plugin_records = ability_invocation_records(
     "provider-invocation-list-user-plugin-after-cli.json",
     "provider-invocation-list-all-after-user-plugin-cli.json",
@@ -1091,6 +1259,8 @@ native_records = ability_invocation_records(
     "provider-invocation-list-all-after-easyremote.json",
     native_ability_ura,
 )
+provider_agent_rows = ability_rows("caller-ability-list-provider-agent.json")
+provider_agent_rows_after_remove = ability_rows("caller-ability-list-provider-after-agent-remove.json")
 user_plugin_rows = ability_rows("caller-ability-list-provider-plugin.json")
 user_plugin_rows_after_remove = ability_rows("caller-ability-list-provider-after-plugin-remove.json")
 caller_rows = ability_rows("caller-ability-list-provider.json")
@@ -1106,6 +1276,8 @@ def row_has_ura(rows, ability_ura: str) -> bool:
 
 all_provider_abilities_visible = all(row_has_ura(caller_rows, ura) for ura in ability_uras.values())
 native_visible = row_has_ura(caller_rows, native_ability_ura)
+provider_agent_visible = row_has_ura(provider_agent_rows, provider_agent_chat_ura)
+provider_agent_removed = not row_has_ura(provider_agent_rows_after_remove, provider_agent_chat_ura)
 user_plugin_visible = row_has_ura(user_plugin_rows, user_plugin_ability_ura)
 user_plugin_removed = not row_has_ura(user_plugin_rows_after_remove, user_plugin_ability_ura)
 add_removed = not row_has_ura(caller_rows_after_uninstall, ability_uras["add"])
@@ -1154,6 +1326,14 @@ user_plugin_receipt_chains_verified = (
     and user_plugin_records[0]["receipt_chain"].get("verified") is True
     and isinstance(user_plugin_records[0]["receipt_chain"].get("anchors"), list)
     and len(user_plugin_records[0]["receipt_chain"]["anchors"]) > 0
+)
+provider_agent_receipt_chains_verified = (
+    len(provider_agent_records) == 1
+    and str(provider_agent_records[0].get("state", "")).lower() == "completed"
+    and isinstance(provider_agent_records[0].get("receipt_chain"), dict)
+    and provider_agent_records[0]["receipt_chain"].get("verified") is True
+    and isinstance(provider_agent_records[0]["receipt_chain"].get("anchors"), list)
+    and len(provider_agent_records[0]["receipt_chain"]["anchors"]) > 0
 )
 receipt_chains_verified = (
     len(cli_add_records) == 1
@@ -1237,6 +1417,12 @@ report = {
         "ability_ura": native_ability_ura,
         "remote_results": native_results,
     },
+    "user_agent": {
+        "name": provider_agent_name,
+        "chat_ability": provider_agent_chat_ability,
+        "chat_ability_ura": provider_agent_chat_ura,
+        "stream_frames": provider_agent_stream,
+    },
     "user_plugin": {
         "package_id": user_plugin_id,
         "package_version": user_plugin_version,
@@ -1260,6 +1446,29 @@ report = {
             cli_contains("agent-temp-add", tmp_agent)
             and cli_contains("agent-temp-remove", tmp_agent)
             and not cli_contains("agent-list-after-temp-remove", tmp_agent)
+        ),
+        "provider_user_agent_created_and_listed": cli_contains("provider-agent-list-after-add", provider_agent_name),
+        "provider_user_agent_invoked_via_agent_send": (
+            contains("provider-agent-send.txt", f"docker-easyremote-agent[{provider_agent_name}]")
+            and contains("provider-agent-send.txt", provider_agent_prompt)
+        ),
+        "caller_cli_discovered_user_agent_chat": (
+            provider_agent_visible
+            and isinstance(provider_agent_show, dict)
+            and provider_agent_show.get("ability_ura") == provider_agent_chat_ura
+            and provider_agent_name in str(provider_agent_show.get("owner_ura") or "")
+        ),
+        "user_agent_canonical_invocation_gap_detected": (
+            provider_agent_canonical_status != "0"
+            and (
+                "ADMISSION_DESCRIPTOR_ROUTE_MISMATCH" in provider_agent_canonical_error
+                or "NEGATIVE_REASON_NODATA" in provider_agent_canonical_error
+            )
+        ),
+        "caller_observed_user_agent_chat_removed": (
+            cli_contains("provider-agent-remove", provider_agent_name)
+            and not cli_contains("provider-agent-list-after-remove", provider_agent_name)
+            and provider_agent_removed
         ),
         "user_plugin_package_loaded_in_daemon": user_plugin_package_loaded,
         "user_plugin_ability_loaded_in_daemon": user_plugin_ability_loaded,
@@ -1418,6 +1627,7 @@ report = {
         "provider_other_abilities_remained_after_delete": other_abilities_remain,
         "caller_observed_native_easynet_ability_removed": native_removed,
     },
+    "provider_user_agent_invocation_records": provider_agent_records,
     "provider_user_plugin_invocation_records": user_plugin_records,
     "caller_cli_add_stream_frames": cli_stream,
     "provider_cli_add_invocation_records": cli_add_records,
@@ -1433,6 +1643,11 @@ jq -e '
   and .assertions.agent_updated_on_caller
   and .assertions.agent_invoked_on_caller
   and .assertions.temp_agent_removed_on_caller
+  and .assertions.provider_user_agent_created_and_listed
+  and .assertions.provider_user_agent_invoked_via_agent_send
+  and .assertions.caller_cli_discovered_user_agent_chat
+  and .assertions.user_agent_canonical_invocation_gap_detected
+  and .assertions.caller_observed_user_agent_chat_removed
   and .assertions.user_plugin_package_loaded_in_daemon
   and .assertions.user_plugin_ability_loaded_in_daemon
   and .assertions.caller_cli_discovered_user_plugin_ability
@@ -1489,6 +1704,8 @@ for name, ura in sorted(report["easyremote"]["ability_uras"].items()):
     print(f"  - `{name}`: `{ura}`")
 print("- Native EasyNet ability:")
 print(f"  - `nativeer.native_echo`: `{report['native_easynet']['ability_ura']}`")
+print("- User-defined Agent chat ability:")
+print(f"  - `{report['user_agent']['chat_ability']}`: `{report['user_agent']['chat_ability_ura']}`")
 print("- User-defined plugin ability:")
 print(f"  - `{report['user_plugin']['ability']}`: `{report['user_plugin']['ability_ura']}`")
 print("")

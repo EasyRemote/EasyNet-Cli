@@ -49,8 +49,8 @@ use axon_sdk::invocation::{
     SubjectIdentity, UraProfile, WireEnvelopeMetadata,
 };
 use axon_sdk::pb::axon::v1::{
-    invocation_target, AbilityTarget, EntityRef, EntityRefKind, Envelope, InvocationTarget,
-    InvokeRequest, InvokeServerStreamRequest,
+    invocation_target, AbilityTarget, ContentEnvelope, EntityRef, EntityRefKind, Envelope,
+    EnvelopeOpen, InvocationTarget, InvokeRequest, InvokeServerStreamRequest, StreamDescriptor,
 };
 
 pub const DEFAULT_URA_PROFILE: &str = "axon-strict-v2";
@@ -432,6 +432,64 @@ impl ProtoEnvelope {
             arguments,
             content_type: "application/json".to_string(),
             ..InvokeServerStreamRequest::default()
+        })
+    }
+
+    /// Build a descriptor-bound bidirectional session open frame with the same
+    /// canonical signing and metadata rules as unary and server-stream
+    /// invocation.
+    pub async fn signed_descriptor_ref_bidi_open_with_signer(
+        mut self,
+        function_name: impl Into<String>,
+        descriptor_ability_ref: impl Into<String>,
+        arguments: Vec<u8>,
+        signer: &dyn crate::daemon::identity::self_identity::CanonicalSigner,
+    ) -> anyhow::Result<EnvelopeOpen> {
+        let function_name = function_name.into();
+        if function_name.trim().is_empty() {
+            anyhow::bail!("function_name must not be empty");
+        }
+        let descriptor_ability_ref = descriptor_ability_ref.into();
+        if descriptor_ability_ref.trim().is_empty() {
+            anyhow::bail!("descriptor_ability_ref must not be empty");
+        }
+        let descriptor = self.descriptor_bound_envelope(&descriptor_ability_ref, &arguments)?;
+        let caller_ura = descriptor.envelope().caller.ura.clone();
+        if signer.owner_ura() != caller_ura {
+            anyhow::bail!(
+                "caller signer owner mismatch: envelope caller is `{caller_ura}`, signer is `{}`",
+                signer.owner_ura()
+            );
+        }
+        let caller_signature =
+            crate::daemon::invocation::caller_signature::sign_canonical_caller_signature(
+                signer,
+                &descriptor_bound_canonical_bytes(&descriptor),
+            )
+            .await
+            .with_context(|| format!("sign descriptor-bound invocation as {caller_ura}"))?;
+        self.wire_metadata.caller_signature = Some(caller_signature.into());
+        let envelope = self.wire_envelope_for(&descriptor_ability_ref, &arguments)?;
+        Ok(EnvelopeOpen {
+            envelope: Some(envelope),
+            target: Some(wire_invocation_target(
+                &descriptor_ability_ref,
+                &function_name,
+            )?),
+            initial_args: arguments,
+            args_content_type: "application/json".to_string(),
+            streams: vec![StreamDescriptor {
+                stream_id: 1,
+                content_type: "application/json".to_string(),
+                ordering: "STRICT".to_string(),
+                ..StreamDescriptor::default()
+            }],
+            content_envelope: Some(ContentEnvelope {
+                content_type: "application/json".to_string(),
+                encoding: "identity".to_string(),
+                ..ContentEnvelope::default()
+            }),
+            ..EnvelopeOpen::default()
         })
     }
 

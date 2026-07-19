@@ -22,12 +22,74 @@ pub enum PluginTemplateLanguage {
     Go,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderSidecarHelperState {
+    Unsupported,
+    Seam,
+    ProviderBacked,
+    CutoverReady,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderSidecarHelperCapability {
+    pub language: &'static str,
+    pub state: ProviderSidecarHelperState,
+    pub template_available: bool,
+    pub helper_package: Option<&'static str>,
+}
+
+pub const PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX: &[ProviderSidecarHelperCapability] = &[
+    ProviderSidecarHelperCapability {
+        language: "python",
+        state: ProviderSidecarHelperState::CutoverReady,
+        template_available: true,
+        helper_package: Some("easynet_sdk.providers.easynet.plugin_exec"),
+    },
+    ProviderSidecarHelperCapability {
+        language: "go",
+        state: ProviderSidecarHelperState::CutoverReady,
+        template_available: true,
+        helper_package: Some("easynet.run/cli/sdk/go/provider/easynet/pluginexec"),
+    },
+    ProviderSidecarHelperCapability {
+        language: "rust",
+        state: ProviderSidecarHelperState::Seam,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "node",
+        state: ProviderSidecarHelperState::Seam,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "java",
+        state: ProviderSidecarHelperState::Seam,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "c/c++",
+        state: ProviderSidecarHelperState::Unsupported,
+        template_available: false,
+        helper_package: None,
+    },
+];
+
 impl PluginTemplateLanguage {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Python => "python",
             Self::Go => "go",
         }
+    }
+
+    pub fn sidecar_helper_capability(self) -> &'static ProviderSidecarHelperCapability {
+        PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX
+            .iter()
+            .find(|capability| capability.language == self.label())
+            .expect("plugin template language must have a provider helper matrix row")
     }
 }
 
@@ -72,6 +134,19 @@ impl HelloPluginTemplate {
         let slug = slug_from_path(&target);
         let package_id = init.package_id.unwrap_or_else(|| format!("local.{slug}"));
         let ability_name = init.ability_name.unwrap_or_else(|| format!("{slug}.echo"));
+        let capability = init.language.sidecar_helper_capability();
+        if !capability.template_available
+            || !matches!(
+                capability.state,
+                ProviderSidecarHelperState::ProviderBacked
+                    | ProviderSidecarHelperState::CutoverReady
+            )
+        {
+            anyhow::bail!(
+                "{} plugin templates require a provider-backed sidecar helper",
+                init.language.label()
+            );
+        }
         validate_dotted_identifier(&package_id, "plugin package id")?;
         validate_dotted_identifier(&ability_name, "plugin ability name")?;
         validate_numeric_version(&init.package_version, "plugin package version")?;
@@ -514,6 +589,43 @@ mod tests {
             package.manifest().abilities()[0].name(),
             "hello_plugin.echo"
         );
+    }
+
+    #[test]
+    fn sidecar_helper_matrix_keeps_templates_provider_backed() {
+        let rows: std::collections::BTreeMap<_, _> = PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX
+            .iter()
+            .map(|row| (row.language, row))
+            .collect();
+
+        assert_eq!(rows.len(), PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX.len());
+        for language in [PluginTemplateLanguage::Python, PluginTemplateLanguage::Go] {
+            let capability = language.sidecar_helper_capability();
+            assert!(capability.template_available);
+            assert!(matches!(
+                capability.state,
+                ProviderSidecarHelperState::ProviderBacked
+                    | ProviderSidecarHelperState::CutoverReady
+            ));
+            assert!(
+                capability.helper_package.is_some(),
+                "{} template must point at a provider helper",
+                language.label()
+            );
+        }
+        for language in ["rust", "node", "java", "c/c++"] {
+            let capability = rows
+                .get(language)
+                .unwrap_or_else(|| panic!("missing sidecar helper matrix row for {language}"));
+            assert!(
+                !capability.template_available,
+                "{language} template must stay closed until its provider helper is backed"
+            );
+            assert!(matches!(
+                capability.state,
+                ProviderSidecarHelperState::Unsupported | ProviderSidecarHelperState::Seam
+            ));
+        }
     }
 
     #[test]

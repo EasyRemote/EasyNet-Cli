@@ -80,6 +80,21 @@ pub struct EscalationRequest {
     pub reply: EscalationReplySink,
 }
 
+pub enum EscalationCommand {
+    Request(EscalationRequest),
+    BidiInput(EscalationBidiInput),
+}
+
+pub struct EscalationBidiInput {
+    pub call_id: [u8; 16],
+    pub input: EscalatedBidiInput,
+}
+
+pub enum EscalatedBidiInput {
+    Binary(axon_sdk::pb::axon::v1::BinaryChunk),
+    Control(axon_sdk::pb::axon::v1::BidiControl),
+}
+
 /// Payload carried by a reverse session request.
 ///
 /// Product invocations use `Canonical` exclusively. `DaemonControl` is a
@@ -88,6 +103,7 @@ pub struct EscalationRequest {
 pub enum EscalationInvocation {
     Canonical(Box<axon_sdk::pb::axon::v1::InvokeRequest>),
     CanonicalStream(Box<axon_sdk::pb::axon::v1::InvokeServerStreamRequest>),
+    CanonicalBidi(Box<axon_sdk::pb::axon::v1::InvokeRequest>),
     DaemonControl { ability_ura: String, args: Vec<u8> },
 }
 
@@ -140,12 +156,109 @@ impl Drop for EscalatedStreamHandle {
     }
 }
 
+/// Bidi handle returned to a device-mode dispatcher after the reverse-bidi
+/// open frame is queued on the live session. Output is correlated by the same
+/// 16-byte reverse call nonce as unary/stream escalation; input frames are
+/// serialized through the escalation consumer so open/input ordering is
+/// preserved on reconnect-bound session outboxes.
+pub struct EscalatedBidiHandle {
+    call_id: [u8; 16],
+    submit: mpsc::Sender<EscalationCommand>,
+    correlation: Arc<EscalationCorrelation>,
+    rx: mpsc::Receiver<DispatchStreamEvent>,
+}
+
+impl EscalatedBidiHandle {
+    #[must_use]
+    pub fn call_id(&self) -> [u8; 16] {
+        self.call_id
+    }
+
+    pub async fn recv(&mut self) -> Option<DispatchStreamEvent> {
+        self.rx.recv().await
+    }
+
+    #[must_use]
+    pub fn input_sender(&self) -> EscalatedBidiInputSender {
+        EscalatedBidiInputSender {
+            call_id: self.call_id,
+            submit: self.submit.clone(),
+        }
+    }
+
+    pub async fn send_binary(
+        &self,
+        chunk: axon_sdk::pb::axon::v1::BinaryChunk,
+    ) -> Result<(), SessionRequestError> {
+        self.send_input(EscalatedBidiInput::Binary(chunk)).await
+    }
+
+    pub async fn send_control(
+        &self,
+        control: axon_sdk::pb::axon::v1::BidiControl,
+    ) -> Result<(), SessionRequestError> {
+        self.send_input(EscalatedBidiInput::Control(control)).await
+    }
+
+    async fn send_input(&self, input: EscalatedBidiInput) -> Result<(), SessionRequestError> {
+        self.submit
+            .send(EscalationCommand::BidiInput(EscalationBidiInput {
+                call_id: self.call_id,
+                input,
+            }))
+            .await
+            .map_err(|_| SessionRequestError::UpstreamFailure {
+                reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
+            })
+    }
+}
+
+impl Drop for EscalatedBidiHandle {
+    fn drop(&mut self) {
+        self.correlation.cancel(self.call_id);
+    }
+}
+
+#[derive(Clone)]
+pub struct EscalatedBidiInputSender {
+    call_id: [u8; 16],
+    submit: mpsc::Sender<EscalationCommand>,
+}
+
+impl EscalatedBidiInputSender {
+    pub async fn send_binary(
+        &self,
+        chunk: axon_sdk::pb::axon::v1::BinaryChunk,
+    ) -> Result<(), SessionRequestError> {
+        self.send_input(EscalatedBidiInput::Binary(chunk)).await
+    }
+
+    pub async fn send_control(
+        &self,
+        control: axon_sdk::pb::axon::v1::BidiControl,
+    ) -> Result<(), SessionRequestError> {
+        self.send_input(EscalatedBidiInput::Control(control)).await
+    }
+
+    async fn send_input(&self, input: EscalatedBidiInput) -> Result<(), SessionRequestError> {
+        self.submit
+            .send(EscalationCommand::BidiInput(EscalationBidiInput {
+                call_id: self.call_id,
+                input,
+            }))
+            .await
+            .map_err(|_| SessionRequestError::UpstreamFailure {
+                reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
+            })
+    }
+}
+
 /// Stable handle the dispatch handler clones to submit Requests.
 /// Lives in `Arc` so every dispatch can call `escalate` without
 /// taking ownership.
 #[derive(Clone, Debug)]
 pub struct SessionEscalationHandle {
-    submit: mpsc::Sender<EscalationRequest>,
+    submit: mpsc::Sender<EscalationCommand>,
     correlation: Arc<EscalationCorrelation>,
     session_realm: String,
 }
@@ -200,7 +313,12 @@ impl SessionEscalationHandle {
                 accepted: accepted_tx,
             },
         };
-        if self.submit.send(request).await.is_err() {
+        if self
+            .submit
+            .send(EscalationCommand::Request(request))
+            .await
+            .is_err()
+        {
             return Err(SessionRequestError::UpstreamFailure {
                 reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
             });
@@ -214,6 +332,63 @@ impl SessionEscalationHandle {
             Ok(Ok(Err(error))) => Err(error),
             Ok(Err(_)) => Err(SessionRequestError::UpstreamFailure {
                 reason: "session stream escalation acknowledgement channel dropped".to_string(),
+            }),
+            Err(_) => {
+                self.correlation.cancel(call_id);
+                Err(SessionRequestError::UpstreamTimeout)
+            }
+        }
+    }
+
+    /// Relay one already-signed canonical bidi invocation through the
+    /// device-owned session. This is the reverse-channel equivalent of
+    /// `InvokeBidi`: open is a `ReverseDispatchCall(open_bidi=true)`, input is
+    /// `ReverseBidiInput`, and output returns as `ReverseDispatchResult`.
+    pub async fn escalate_bidi(
+        &self,
+        request: axon_sdk::pb::axon::v1::InvokeRequest,
+    ) -> Result<EscalatedBidiHandle, SessionRequestError> {
+        use rand::RngCore as _;
+        let mut call_id = [0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut call_id);
+        let id_hex = call_id_hex(&call_id);
+
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = canonical_invoke_bidi_escalated_up_session_bidi,
+            call_id = id_hex,
+        );
+
+        let (events_tx, events_rx) = mpsc::channel(32);
+        let (accepted_tx, accepted_rx) = oneshot::channel();
+        let request = EscalationRequest {
+            call_id,
+            invocation: EscalationInvocation::CanonicalBidi(Box::new(request)),
+            reply: EscalationReplySink::Stream {
+                events: events_tx,
+                accepted: accepted_tx,
+            },
+        };
+        if self
+            .submit
+            .send(EscalationCommand::Request(request))
+            .await
+            .is_err()
+        {
+            return Err(SessionRequestError::UpstreamFailure {
+                reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
+            });
+        }
+        match tokio::time::timeout(DEFAULT_ESCALATION_TIMEOUT, accepted_rx).await {
+            Ok(Ok(Ok(()))) => Ok(EscalatedBidiHandle {
+                call_id,
+                submit: self.submit.clone(),
+                correlation: Arc::clone(&self.correlation),
+                rx: events_rx,
+            }),
+            Ok(Ok(Err(error))) => Err(error),
+            Ok(Err(_)) => Err(SessionRequestError::UpstreamFailure {
+                reason: "session bidi escalation acknowledgement channel dropped".to_string(),
             }),
             Err(_) => {
                 self.correlation.cancel(call_id);
@@ -295,7 +470,12 @@ impl SessionEscalationHandle {
             reply: EscalationReplySink::Unary(reply_tx),
         };
 
-        if self.submit.send(request).await.is_err() {
+        if self
+            .submit
+            .send(EscalationCommand::Request(request))
+            .await
+            .is_err()
+        {
             // The consumer task dropped its receiver — most likely
             // the daemon is shutting down. Surface a typed
             // upstream-failure outcome so the dispatch handler
@@ -752,7 +932,7 @@ pub fn spawn_escalation_consumer_with_outbox(
     outbox: SharedSessionOutbox,
     session_realm: impl Into<String>,
 ) -> SessionEscalationHandle {
-    let (submit_tx, mut submit_rx) = mpsc::channel::<EscalationRequest>(ESCALATION_QUEUE_CAPACITY);
+    let (submit_tx, mut submit_rx) = mpsc::channel::<EscalationCommand>(ESCALATION_QUEUE_CAPACITY);
     let handle = SessionEscalationHandle {
         submit: submit_tx,
         correlation: Arc::clone(&correlation),
@@ -760,7 +940,17 @@ pub fn spawn_escalation_consumer_with_outbox(
     };
 
     tokio::spawn(async move {
-        while let Some(request) = submit_rx.recv().await {
+        while let Some(command) = submit_rx.recv().await {
+            let request = match command {
+                EscalationCommand::Request(request) => request,
+                EscalationCommand::BidiInput(input) => {
+                    let Some(up_tx) = outbox.snapshot() else {
+                        continue;
+                    };
+                    let _ = send_escalation_bidi_input(&up_tx, input).await;
+                    continue;
+                }
+            };
             let EscalationRequest {
                 call_id,
                 invocation,
@@ -820,7 +1010,7 @@ pub fn spawn_escalation_consumer(
     up_tx: SessionUpSender,
     session_realm: impl Into<String>,
 ) -> SessionEscalationHandle {
-    let (submit_tx, mut submit_rx) = mpsc::channel::<EscalationRequest>(ESCALATION_QUEUE_CAPACITY);
+    let (submit_tx, mut submit_rx) = mpsc::channel::<EscalationCommand>(ESCALATION_QUEUE_CAPACITY);
     let handle = SessionEscalationHandle {
         submit: submit_tx,
         correlation: Arc::clone(&correlation),
@@ -828,7 +1018,14 @@ pub fn spawn_escalation_consumer(
     };
 
     tokio::spawn(async move {
-        while let Some(request) = submit_rx.recv().await {
+        while let Some(command) = submit_rx.recv().await {
+            let request = match command {
+                EscalationCommand::Request(request) => request,
+                EscalationCommand::BidiInput(input) => {
+                    let _ = send_escalation_bidi_input(&up_tx, input).await;
+                    continue;
+                }
+            };
             let EscalationRequest {
                 call_id,
                 invocation,
@@ -874,6 +1071,7 @@ async fn send_escalation_request(
                 .send_payload(UpPayload::ReverseDispatchCall(ReverseDispatchCall {
                     call_id: call_id.to_vec(),
                     request: Some(*request),
+                    open_bidi: false,
                 }))
                 .await
                 .map_err(|err| err.to_string())
@@ -895,6 +1093,19 @@ async fn send_escalation_request(
                 .send_payload(UpPayload::ReverseDispatchCall(ReverseDispatchCall {
                     call_id: call_id.to_vec(),
                     request: Some(request),
+                    open_bidi: false,
+                }))
+                .await
+                .map_err(|err| err.to_string())
+        }
+        EscalationInvocation::CanonicalBidi(request) => {
+            use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+            use axon_sdk::pb::axon::v1::ReverseDispatchCall;
+            up_tx
+                .send_payload(UpPayload::ReverseDispatchCall(ReverseDispatchCall {
+                    call_id: call_id.to_vec(),
+                    request: Some(*request),
+                    open_bidi: true,
                 }))
                 .await
                 .map_err(|err| err.to_string())
@@ -907,6 +1118,28 @@ async fn send_escalation_request(
                 .map_err(|err| err.to_string())
         }
     }
+}
+
+async fn send_escalation_bidi_input(
+    up_tx: &SessionUpSender,
+    input: EscalationBidiInput,
+) -> Result<(), String> {
+    use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+    use axon_sdk::pb::axon::v1::reverse_bidi_input::Input;
+    use axon_sdk::pb::axon::v1::ReverseBidiInput;
+
+    let call_id = input.call_id;
+    let input = match input.input {
+        EscalatedBidiInput::Binary(chunk) => Some(Input::BinaryChunk(chunk)),
+        EscalatedBidiInput::Control(control) => Some(Input::Control(control)),
+    };
+    up_tx
+        .send_payload(UpPayload::ReverseBidiInput(ReverseBidiInput {
+            call_id: call_id.to_vec(),
+            input,
+        }))
+        .await
+        .map_err(|err| err.to_string())
 }
 
 fn register_reply(
@@ -1228,6 +1461,63 @@ mod tests {
                 assert_eq!(result_bytes, b"hub-via-outbox");
             }
             other => panic!("expected Ok via outbox, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn bidi_escalation_sends_open_then_input_on_same_reverse_call_id() {
+        let correlation = EscalationCorrelation::new();
+        let (up_tx, mut up_rx) = mpsc::channel::<InvokeBidiUp>(8);
+        let handle = spawn_escalation_consumer(
+            Arc::clone(&correlation),
+            SessionUpSender::new(up_tx),
+            "test-realm",
+        );
+
+        let bidi = handle
+            .escalate_bidi(axon_sdk::pb::axon::v1::InvokeRequest::default())
+            .await
+            .expect("bidi escalation opens");
+        let input = bidi.input_sender();
+
+        let open = tokio::time::timeout(Duration::from_secs(2), up_rx.recv())
+            .await
+            .expect("open frame arrives")
+            .expect("open frame present");
+        let call_id = match open.payload {
+            Some(axon_sdk::pb::axon::v1::invoke_bidi_up::Payload::ReverseDispatchCall(call)) => {
+                assert!(call.open_bidi, "reverse bidi open must set open_bidi");
+                assert_eq!(call.call_id.len(), 16);
+                call.call_id
+            }
+            other => panic!("expected ReverseDispatchCall open, got {other:?}"),
+        };
+
+        input
+            .send_binary(axon_sdk::pb::axon::v1::BinaryChunk {
+                stream_id: 1,
+                data: b"frame".to_vec(),
+                ..Default::default()
+            })
+            .await
+            .expect("input queues");
+
+        let input_frame = tokio::time::timeout(Duration::from_secs(2), up_rx.recv())
+            .await
+            .expect("input frame arrives")
+            .expect("input frame present");
+        match input_frame.payload {
+            Some(axon_sdk::pb::axon::v1::invoke_bidi_up::Payload::ReverseBidiInput(input)) => {
+                assert_eq!(input.call_id, call_id);
+                match input.input {
+                    Some(axon_sdk::pb::axon::v1::reverse_bidi_input::Input::BinaryChunk(chunk)) => {
+                        assert_eq!(chunk.stream_id, 1);
+                        assert_eq!(chunk.data, b"frame");
+                    }
+                    other => panic!("expected reverse bidi binary input, got {other:?}"),
+                }
+            }
+            other => panic!("expected ReverseBidiInput, got {other:?}"),
         }
     }
 

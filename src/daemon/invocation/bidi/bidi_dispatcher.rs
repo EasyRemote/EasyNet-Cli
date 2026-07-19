@@ -22,9 +22,9 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -39,7 +39,7 @@ use tonic::{Response, Status, Streaming};
 use axon_sdk::pb::axon::v1::{
     bidi_control, invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload,
     BidiControl, BidiSessionEstablished, BinaryChunk, EnvelopeOpen, InvokeBidiDown, InvokeBidiUp,
-    StreamDescriptor,
+    InvokeRequest, StreamDescriptor,
 };
 
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
@@ -91,6 +91,8 @@ use crate::daemon::invocation::bidi::state::presence::{
 };
 use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
 use crate::daemon::trust::anchor::RealmTrustAnchor;
+
+type BoxedUpStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
 /// Named runtime-admin abilities the `InvokeBidi` dispatcher routes by
 /// exact name (as opposed to the generic `is_bidi_wire_ability` remote
@@ -474,7 +476,17 @@ impl BidiDispatcher {
                 route.name()
             )));
         }
-        let selection = self.resolve_bidi_route(envelope_open).await?;
+        let selection = match self.resolve_bidi_route(envelope_open).await {
+            Ok(selection) => selection,
+            Err(status) => {
+                if let Some(handle) = self.sessions.escalation.as_ref() {
+                    return self
+                        .dispatch_escalated_bidi(handle, envelope_open, up, status)
+                        .await;
+                }
+                return Err(status);
+            }
+        };
         let call_mode = selection.call_mode();
         let selected_route = match selection.into_dispatch() {
             CanonicalRouteDispatch::Local(route) => route,
@@ -486,24 +498,6 @@ impl BidiDispatcher {
                 )));
             }
         };
-        let wire_kind = self
-            .runtime
-            .ability_wire
-            .bidi_wire_kind_for(&selected_route.dispatch_name)
-            .ok_or_else(|| {
-                crate::op_event!(
-                    component = daemon_invocation,
-                    kind = invoke_bidi_unwired_ability,
-                    ability = ability_name,
-                    dispatch_ability = selected_route.dispatch_name.as_str(),
-                    route_ura = selected_route.route_ura.as_str(),
-                );
-                Status::unimplemented(format!(
-                    "InvokeBidi selected route `{}` for ability `{ability_name}`, but dispatch \
-                     ability `{}` has no daemon bidi wire adapter",
-                    selected_route.route_ura, selected_route.dispatch_name,
-                ))
-            })?;
         let execution_host_is_self = self
             .gate
             .matches_self_target_ura(&selected_route.execution_host_ura)
@@ -512,16 +506,34 @@ impl BidiDispatcher {
             .dispatch_target(execution_host_is_self)
             .is_local_runtime()
         {
+            let wire_kind = self
+                .runtime
+                .ability_wire
+                .bidi_wire_kind_for(&selected_route.dispatch_name)
+                .ok_or_else(|| {
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = invoke_bidi_unwired_ability,
+                        ability = ability_name,
+                        dispatch_ability = selected_route.dispatch_name.as_str(),
+                        route_ura = selected_route.route_ura.as_str(),
+                    );
+                    Status::unimplemented(format!(
+                        "InvokeBidi selected local route `{}` for ability `{ability_name}`, but \
+                         dispatch ability `{}` has no daemon bidi wire adapter",
+                        selected_route.route_ura, selected_route.dispatch_name,
+                    ))
+                })?;
             self.dispatch_local_bidi_selected_route(
                 envelope_open,
-                up,
+                Box::pin(up),
                 selected_route,
                 call_mode,
                 wire_kind,
             )
             .await
         } else {
-            self.dispatch_remote_bidi(&selected_route, envelope_open, up, call_mode)
+            self.dispatch_remote_bidi(&selected_route, envelope_open, Box::pin(up), call_mode)
                 .await
         }
     }
@@ -613,11 +625,166 @@ pub(crate) fn failed_dispatch_result(
 }
 
 impl BidiDispatcher {
+    async fn dispatch_escalated_bidi(
+        &self,
+        escalation: &crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle,
+        envelope_open: &EnvelopeOpen,
+        mut up: Streaming<InvokeBidiUp>,
+        route_status: Status,
+    ) -> Result<Response<BoxedDownStream<InvokeBidiDown>>, Status> {
+        let request = bidi_open_to_invoke_request(envelope_open)?;
+        let forwarded_binding = ForwardedInvocationBinding::from_request(&request)?;
+        let receipt_resolver = self.admission.receipt_key_resolver();
+        let stdout_stream_id = local_bidi_stdout_stream_id(envelope_open);
+        let mut handle = escalation
+            .escalate_bidi(request)
+            .await
+            .map_err(session_request_status)?;
+        let input_sender = handle.input_sender();
+        let call_id = handle.call_id();
+        let call_id_hex = call_id_hex(&call_id);
+
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = invoke_bidi_escalated_after_route_negative,
+            call_id = call_id_hex,
+            route_status = route_status.message(),
+        );
+
+        let (down_tx, down_rx) = tokio::sync::mpsc::channel::<Result<InvokeBidiDown, Status>>(16);
+        let down_tx_for_results = down_tx.clone();
+        tokio::spawn(async move {
+            let mut finalization =
+                ForwardedFinalizationVerifier::new(forwarded_binding, receipt_resolver);
+            while let Some(event) = handle.recv().await {
+                match event {
+                    DispatchStreamEvent::Admission(receipt) => {
+                        let receipt = *receipt;
+                        if let Err(status) = finalization.admit(receipt.clone()) {
+                            let _ = down_tx_for_results.send(Err(status)).await;
+                            break;
+                        }
+                        let frame = InvokeBidiDown {
+                            payload: Some(DownPayload::Receipt(receipt)),
+                            ..InvokeBidiDown::default()
+                        };
+                        if down_tx_for_results.send(Ok(frame)).await.is_err() {
+                            break;
+                        }
+                    }
+                    DispatchStreamEvent::Chunk(bytes) => {
+                        if let Err(status) = finalization.observe_data() {
+                            let _ = down_tx_for_results.send(Err(status)).await;
+                            break;
+                        }
+                        let frame = InvokeBidiDown {
+                            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                                stream_id: stdout_stream_id,
+                                data: bytes,
+                                ..BinaryChunk::default()
+                            })),
+                            ..InvokeBidiDown::default()
+                        };
+                        if down_tx_for_results.send(Ok(frame)).await.is_err() {
+                            break;
+                        }
+                    }
+                    DispatchStreamEvent::Terminal(result) => {
+                        let DispatchResult {
+                            error,
+                            failure,
+                            admission_receipt,
+                            terminal_receipt,
+                            ..
+                        } = *result;
+                        let frame = match terminal_receipt {
+                            Some(terminal_receipt) => finalization
+                                .finalize(admission_receipt, terminal_receipt)
+                                .map(|finalized| InvokeBidiDown {
+                                    payload: Some(DownPayload::Receipt(finalized.terminal_receipt)),
+                                    ..InvokeBidiDown::default()
+                                }),
+                            None => {
+                                let detail = failure
+                                    .as_ref()
+                                    .map(|failure| failure.message.as_str())
+                                    .or(error.as_deref())
+                                    .unwrap_or(
+                                        "reverse remote bidi omitted its canonical terminal receipt",
+                                    );
+                                Err(Status::failed_precondition(format!(
+                                    "reverse remote bidi failed before canonical terminal: {detail}"
+                                )))
+                            }
+                        };
+                        let _ = down_tx_for_results.send(frame).await;
+                        break;
+                    }
+                }
+            }
+        });
+
+        tokio::spawn(async move {
+            let mut expected_up_sequence = 1_u64;
+            let mut eof_sent = false;
+            while let Some(maybe_frame) = up.next().await {
+                let frame = match maybe_frame {
+                    Ok(frame) => frame,
+                    Err(_) => break,
+                };
+                if frame.sequence != expected_up_sequence {
+                    break;
+                }
+                expected_up_sequence = expected_up_sequence.saturating_add(1);
+                let Some(payload) = frame.payload else {
+                    continue;
+                };
+                match payload {
+                    UpPayload::BinaryChunk(chunk) => {
+                        if input_sender.send_binary(chunk).await.is_err() {
+                            break;
+                        }
+                    }
+                    UpPayload::Control(control) => {
+                        if matches!(
+                            control.control,
+                            Some(axon_sdk::pb::axon::v1::bidi_control::Control::Eof(true))
+                        ) {
+                            eof_sent = true;
+                        }
+                        if input_sender.send_control(control).await.is_err() {
+                            break;
+                        }
+                        if eof_sent {
+                            break;
+                        }
+                    }
+                    UpPayload::EnvelopeOpen(_)
+                    | UpPayload::DispatchResult(_)
+                    | UpPayload::ReverseDispatchCall(_)
+                    | UpPayload::ReverseBidiInput(_) => {}
+                }
+            }
+            if !eof_sent {
+                let _ = input_sender
+                    .send_control(BidiControl {
+                        control: Some(axon_sdk::pb::axon::v1::bidi_control::Control::Eof(true)),
+                    })
+                    .await;
+            }
+        });
+
+        let stream = LocalBidiDownStream::new(down_rx);
+        Ok(Response::new(
+            Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
+        ))
+    }
+
     pub(crate) async fn dispatch_remote_bidi(
         &self,
         selected_route: &SelectedInvokeRoute,
         envelope_open: &EnvelopeOpen,
-        mut up: Streaming<InvokeBidiUp>,
+        mut up: BoxedUpStream<InvokeBidiUp>,
         call_mode: CallMode,
     ) -> Result<Response<BoxedDownStream<InvokeBidiDown>>, Status> {
         let pending = self.sessions.pending_stream.as_ref().ok_or_else(|| {
@@ -846,7 +1013,9 @@ impl BidiDispatcher {
                     // device→hub on the device's own session, never on
                     // the caller's up stream — a carrier-v1 frame here
                     // is a peer bug, not a negotiation gap.
-                    UpPayload::DispatchResult(_) | UpPayload::ReverseDispatchCall(_) => continue,
+                    UpPayload::DispatchResult(_)
+                    | UpPayload::ReverseDispatchCall(_)
+                    | UpPayload::ReverseBidiInput(_) => continue,
                 };
                 let bridge_frame = match bridge_frame_result {
                     Ok(frame) => frame,
@@ -966,7 +1135,7 @@ impl BidiDispatcher {
     pub(crate) async fn dispatch_local_bidi_selected_route(
         &self,
         envelope_open: &EnvelopeOpen,
-        mut up: Streaming<InvokeBidiUp>,
+        mut up: BoxedUpStream<InvokeBidiUp>,
         selected_route: SelectedInvokeRoute,
         call_mode: CallMode,
         wire_kind: LocalBidiWireKind,
@@ -1627,9 +1796,9 @@ pub(crate) fn map_local_bidi_up_payload(
         },
         (LocalBidiWireKind::Pty, UpPayload::Control(_)) => LocalBidiUpFrame::Ignore,
         // Carrier-v1 frames (DEC-F004): not local-bidi wire traffic.
-        (_, UpPayload::DispatchResult(_)) | (_, UpPayload::ReverseDispatchCall(_)) => {
-            LocalBidiUpFrame::Ignore
-        }
+        (_, UpPayload::DispatchResult(_))
+        | (_, UpPayload::ReverseDispatchCall(_))
+        | (_, UpPayload::ReverseBidiInput(_)) => LocalBidiUpFrame::Ignore,
         (LocalBidiWireKind::FileTransfer, UpPayload::BinaryChunk(chunk)) => {
             let b64 = B64.encode(&chunk.data);
             LocalBidiUpFrame::Forward(json!({"type": "chunk", "data": b64}))
@@ -2004,6 +2173,62 @@ impl BidiDispatcher {
         self.stream_dispatcher()
             .dispatch_selected_route(&stream_request)
             .await
+    }
+
+    async fn dispatch_canonical_session_bidi(
+        &self,
+        request: InvokeRequest,
+        up: BoxedUpStream<InvokeBidiUp>,
+    ) -> Result<Response<BoxedDownStream<InvokeBidiDown>>, Status> {
+        let envelope_open = invoke_request_to_bidi_open(request)?;
+        let ability =
+            crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                "carrier-v1 reverse bidi call",
+                envelope_open.target.as_ref(),
+            )?;
+        let selection = self.resolve_bidi_route(&envelope_open).await?;
+        let call_mode = selection.call_mode();
+        let selected_route = match selection.into_dispatch() {
+            CanonicalRouteDispatch::Local(route) => route,
+            CanonicalRouteDispatch::Peer(route) => {
+                return Err(Status::unimplemented(format!(
+                    "reverse InvokeBidi selected canonical peer route to hub `{}` for `{}`, but \
+                     the generic cross-realm bidi carrier is unsupported",
+                    route.hub_ura, route.query_name,
+                )));
+            }
+        };
+        let execution_host_is_self = self
+            .gate
+            .matches_self_target_ura(&selected_route.execution_host_ura)
+            .await;
+        if selected_route
+            .dispatch_target(execution_host_is_self)
+            .is_local_runtime()
+        {
+            let wire_kind = self
+                .runtime
+                .ability_wire
+                .bidi_wire_kind_for(&selected_route.dispatch_name)
+                .ok_or_else(|| {
+                    Status::unimplemented(format!(
+                        "reverse InvokeBidi selected local route `{}` for ability `{ability}`, but \
+                         dispatch ability `{}` has no daemon bidi wire adapter",
+                        selected_route.route_ura, selected_route.dispatch_name,
+                    ))
+                })?;
+            self.dispatch_local_bidi_selected_route(
+                &envelope_open,
+                up,
+                selected_route,
+                call_mode,
+                wire_kind,
+            )
+            .await
+        } else {
+            self.dispatch_remote_bidi(&selected_route, &envelope_open, up, call_mode)
+                .await
+        }
     }
 
     fn stream_dispatcher(&self) -> StreamDispatcher {
@@ -2442,6 +2667,77 @@ async fn forward_reverse_dispatch_stream_results(
     push_session_request_result(presence, caller_ura, id_hex, frame);
 }
 
+async fn forward_reverse_dispatch_bidi_results(
+    mut stream: BoxedDownStream<InvokeBidiDown>,
+    presence: &Arc<PresenceRegistry>,
+    caller_ura: &str,
+    id_hex: &str,
+    call_id: [u8; 16],
+) {
+    while let Some(next) = stream.next().await {
+        let frame = match next {
+            Ok(frame) => match build_reverse_dispatch_bidi_result_frame(call_id, frame) {
+                Some(frame) => frame,
+                None => continue,
+            },
+            Err(status) => build_reverse_dispatch_stream_failure_frame(
+                call_id,
+                session_request_error_from_status(status),
+            ),
+        };
+        let terminal = reverse_dispatch_frame_is_terminal(&frame);
+        push_session_request_result(presence, caller_ura, id_hex, frame);
+        if terminal {
+            return;
+        }
+    }
+    let frame = build_reverse_dispatch_stream_failure_frame(
+        call_id,
+        SessionRequestError::UpstreamFailure {
+            reason: "hub reverse bidi ended without terminal checkpoint".to_string(),
+        },
+    );
+    push_session_request_result(presence, caller_ura, id_hex, frame);
+}
+
+fn build_reverse_dispatch_bidi_result_frame(
+    call_id: [u8; 16],
+    frame: InvokeBidiDown,
+) -> Option<DispatchFrame> {
+    use axon_sdk::pb::axon::v1::ReverseDispatchResult;
+    let payload = frame.payload?;
+    let result = match payload {
+        DownPayload::Receipt(receipt) => {
+            if receipt.state == axon_sdk::invocation::InvocationState::Admitted.to_wire_i32() {
+                ReverseDispatchResult {
+                    call_id: call_id.to_vec(),
+                    admission_receipt: Some(receipt),
+                    ..ReverseDispatchResult::default()
+                }
+            } else {
+                ReverseDispatchResult {
+                    call_id: call_id.to_vec(),
+                    terminal: true,
+                    terminal_receipt: Some(receipt),
+                    ..ReverseDispatchResult::default()
+                }
+            }
+        }
+        DownPayload::BinaryChunk(chunk) => ReverseDispatchResult {
+            call_id: call_id.to_vec(),
+            payload: chunk.data,
+            ..ReverseDispatchResult::default()
+        },
+        DownPayload::Control(_)
+        | DownPayload::DispatchCall(_)
+        | DownPayload::ReverseDispatchResult(_) => return None,
+    };
+    Some(DispatchFrame::control(InvokeBidiDown {
+        payload: Some(DownPayload::ReverseDispatchResult(result)),
+        ..InvokeBidiDown::default()
+    }))
+}
+
 fn build_reverse_dispatch_stream_chunk_frame(
     call_id: [u8; 16],
     chunk: axon_sdk::pb::axon::v1::InvokeStreamChunk,
@@ -2591,6 +2887,27 @@ fn report_chunk_delivery(
     }
 }
 
+struct ReverseBidiIngress {
+    sender: mpsc::Sender<Result<InvokeBidiUp, Status>>,
+    next_sequence: u64,
+}
+
+fn reverse_bidi_input_to_up_frame(
+    input: axon_sdk::pb::axon::v1::ReverseBidiInput,
+    sequence: u64,
+) -> Option<InvokeBidiUp> {
+    use axon_sdk::pb::axon::v1::reverse_bidi_input::Input;
+    let payload = match input.input? {
+        Input::BinaryChunk(chunk) => UpPayload::BinaryChunk(chunk),
+        Input::Control(control) => UpPayload::Control(control),
+    };
+    Some(InvokeBidiUp {
+        sequence,
+        payload: Some(payload),
+        ..InvokeBidiUp::default()
+    })
+}
+
 /// Drain a device's runtime-owned `session.open` inbox. Each frame may carry
 /// typed `DispatchResult` / `ReverseDispatchCall` frames or the
 /// remaining JSON streaming/control frames. Matching pending entries are
@@ -2610,6 +2927,8 @@ async fn drain_session_runtime_up_stream(
 
     let mut close_reason = OfflineReason::StreamClosed;
     let mut expected_up_sequence = 1_u64;
+    let reverse_bidi_inputs: Arc<Mutex<HashMap<[u8; 16], ReverseBidiIngress>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     while let Some(message) = context.recv_message(None).await {
         if message.content_type == SESSION_RUNTIME_TRANSPORT_ERROR_CONTENT_TYPE {
@@ -2744,6 +3063,53 @@ async fn drain_session_runtime_up_stream(
                 }
                 continue;
             }
+            Some(UpPayload::ReverseBidiInput(input)) => {
+                let Ok(call_id) = <[u8; 16]>::try_from(input.call_id.as_slice()) else {
+                    crate::op_event!(
+                        component = session_accept,
+                        kind = carrier_v1_reverse_bidi_input_bad_id,
+                        caller = caller_ura,
+                        id_len = input.call_id.len(),
+                    );
+                    continue;
+                };
+                let (sender, sequence) = {
+                    let mut guard = match reverse_bidi_inputs.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    let Some(ingress) = guard.get_mut(&call_id) else {
+                        crate::op_event!(
+                            component = session_accept,
+                            kind = carrier_v1_reverse_bidi_input_no_open,
+                            caller = caller_ura,
+                            call_id = call_id_hex(&call_id),
+                        );
+                        continue;
+                    };
+                    let sequence = ingress.next_sequence;
+                    ingress.next_sequence = ingress.next_sequence.saturating_add(1);
+                    (ingress.sender.clone(), sequence)
+                };
+                let Some(frame) = reverse_bidi_input_to_up_frame(input, sequence) else {
+                    continue;
+                };
+                crate::op_event!(
+                    component = session_accept,
+                    kind = carrier_v1_reverse_bidi_input,
+                    caller = caller_ura,
+                    call_id = call_id_hex(&call_id),
+                    sequence = sequence,
+                );
+                if sender.send(Ok(frame)).await.is_err() {
+                    let mut guard = match reverse_bidi_inputs.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    guard.remove(&call_id);
+                }
+                continue;
+            }
             Some(UpPayload::ReverseDispatchCall(call)) => {
                 let Ok(call_id) = <[u8; 16]>::try_from(call.call_id.as_slice()) else {
                     crate::op_event!(
@@ -2790,6 +3156,69 @@ async fn drain_session_runtime_up_stream(
                 let dispatcher_for_request = dispatcher.clone();
                 let presence_for_reply = Arc::clone(&presence);
                 let caller_ura_for_reply = caller_ura.clone();
+                if call.open_bidi {
+                    crate::op_event!(
+                        component = session_accept,
+                        kind = carrier_v1_reverse_bidi_opened,
+                        caller = caller_ura,
+                        call_id = id_hex,
+                        ability = ability,
+                    );
+                    let (reverse_up_tx, reverse_up_rx) =
+                        mpsc::channel::<Result<InvokeBidiUp, Status>>(16);
+                    {
+                        let mut guard = match reverse_bidi_inputs.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        guard.insert(
+                            call_id,
+                            ReverseBidiIngress {
+                                sender: reverse_up_tx,
+                                next_sequence: 1,
+                            },
+                        );
+                    }
+                    let reverse_bidi_inputs_for_task = Arc::clone(&reverse_bidi_inputs);
+                    tokio::spawn(async move {
+                        let up_stream =
+                            Box::pin(tokio_stream::wrappers::ReceiverStream::new(reverse_up_rx))
+                                as BoxedUpStream<InvokeBidiUp>;
+                        match dispatcher_for_request
+                            .dispatch_canonical_session_bidi(request, up_stream)
+                            .await
+                        {
+                            Ok(response) => {
+                                forward_reverse_dispatch_bidi_results(
+                                    response.into_inner(),
+                                    &presence_for_reply,
+                                    &caller_ura_for_reply,
+                                    &id_hex,
+                                    call_id,
+                                )
+                                .await;
+                            }
+                            Err(status) => {
+                                let frame = build_reverse_dispatch_stream_failure_frame(
+                                    call_id,
+                                    session_request_error_from_status(status),
+                                );
+                                push_session_request_result(
+                                    &presence_for_reply,
+                                    &caller_ura_for_reply,
+                                    &id_hex,
+                                    frame,
+                                );
+                            }
+                        }
+                        let mut guard = match reverse_bidi_inputs_for_task.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        guard.remove(&call_id);
+                    });
+                    continue;
+                }
                 tokio::spawn(async move {
                     if reverse_dispatch_request_is_stream(&request) {
                         match dispatcher_for_request
@@ -3107,6 +3536,55 @@ fn remote_bidi_forwarded_request(
         metadata: envelope_open.metadata.clone(),
         ..Default::default()
     })
+}
+
+fn bidi_open_to_invoke_request(envelope_open: &EnvelopeOpen) -> Result<InvokeRequest, Status> {
+    let envelope = envelope_open
+        .envelope
+        .clone()
+        .ok_or_else(|| Status::invalid_argument("InvokeBidi request missing envelope"))?;
+    Ok(InvokeRequest {
+        envelope: Some(envelope),
+        target: envelope_open.target.clone(),
+        arguments: envelope_open.initial_args.clone(),
+        content_type: envelope_open.args_content_type.clone(),
+        metadata: envelope_open.metadata.clone(),
+        content_envelope: envelope_open.content_envelope.clone(),
+        ..InvokeRequest::default()
+    })
+}
+
+fn invoke_request_to_bidi_open(request: InvokeRequest) -> Result<EnvelopeOpen, Status> {
+    let envelope = request
+        .envelope
+        .ok_or_else(|| Status::invalid_argument("reverse InvokeBidi request missing envelope"))?;
+    let target = request
+        .target
+        .ok_or_else(|| Status::invalid_argument("reverse InvokeBidi request missing target"))?;
+    Ok(EnvelopeOpen {
+        envelope: Some(envelope),
+        target: Some(target),
+        initial_args: request.arguments,
+        args_content_type: request.content_type,
+        streams: vec![StreamDescriptor {
+            stream_id: 1,
+            content_type: "application/json".to_string(),
+            ordering: "strict".to_string(),
+            ..StreamDescriptor::default()
+        }],
+        metadata: request.metadata,
+        content_envelope: request.content_envelope,
+        ..EnvelopeOpen::default()
+    })
+}
+
+fn session_request_status(error: SessionRequestError) -> Status {
+    match error {
+        SessionRequestError::TargetOffline => Status::failed_precondition("target offline"),
+        SessionRequestError::PermissionDenied { reason } => Status::permission_denied(reason),
+        SessionRequestError::UpstreamFailure { reason } => Status::unavailable(reason),
+        SessionRequestError::UpstreamTimeout => Status::deadline_exceeded("upstream timeout"),
+    }
 }
 
 fn build_remote_bidi_input_dispatch_frame(
