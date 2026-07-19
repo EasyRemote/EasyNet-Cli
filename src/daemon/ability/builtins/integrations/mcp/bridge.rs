@@ -22,7 +22,6 @@
 // ---------------------------
 //   * mcp.bridge.call_tool — dispatches an in-process Invoke
 //                            against the advertised MCP tool name
-//                            (or legacy dotted ability name) and
 //                            wraps the response in MCP `tools/call`
 //                            shape. The §A5 visibility filter is
 //                            checked client-side BEFORE we hit the

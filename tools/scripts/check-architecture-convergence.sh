@@ -380,6 +380,40 @@ for path in daemon_invocation_files:
             "daemon owns writable ledger state or a manual unary terminal writer",
         )
 
+# LedgerSink adapters must preserve descriptor/binding ownership. A sink
+# resolver may fail fast when Axon's canonical URA helpers cannot derive a
+# record or route; it must not silently remap an unowned invocation into a
+# synthetic `_system` receipt owner.
+runtime_factory = cli_root / "src/daemon/axon_bridge/runtime_factory.rs"
+if runtime_factory.exists():
+    text = source(runtime_factory)
+    if "LedgerSink cannot derive invocation record URA from binding" not in text:
+        add(
+            "R65_LEDGER_SINK_SYSTEM_FALLBACK",
+            runtime_factory,
+            1,
+            "LedgerSink invocation resolver must reject unowned bindings instead of writing a system fallback",
+        )
+    if "LedgerSink cannot derive ability URA from binding" not in text:
+        add(
+            "R65_LEDGER_SINK_SYSTEM_FALLBACK",
+            runtime_factory,
+            1,
+            "LedgerSink route resolver must reject unowned bindings instead of writing a system fallback",
+        )
+    for pattern in (
+        r"\binvocation_history_resource_ura\s*\(",
+        r"\bhub_ability_ura\s*\(\s*\"_system\"",
+        r"format!\s*\(\s*\"system\.\{ability_name\}\"",
+    ):
+        for match in re.finditer(pattern, text):
+            add(
+                "R65_LEDGER_SINK_SYSTEM_FALLBACK",
+                runtime_factory,
+                line_number(text, match.start()),
+                "LedgerSink resolver must not synthesize a `_system` receipt owner fallback",
+            )
+
 # Rule 12: mission run lifecycle owns one aggregate writer. `meta.json` is a
 # projection of MissionRunAggregate, not a mutable DTO that every caller may
 # rewrite directly.

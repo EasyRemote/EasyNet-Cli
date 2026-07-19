@@ -198,6 +198,15 @@ async fn send_bidi_terminal(
     });
 }
 EOF
+  cat >"$CLI/src/daemon/axon_bridge/runtime_factory.rs" <<'EOF'
+fn ledger_invocation_ura() {
+    panic!("LedgerSink cannot derive invocation record URA from binding subject=`x` callee=`y` caller=`z` invocation_id=`i`")
+}
+
+fn ledger_route_ura() {
+    panic!("LedgerSink cannot derive ability URA from binding callee=`y` caller=`z` ability=`a`")
+}
+EOF
   cat >"$CLI/src/daemon/resources/context/clipboard_tracker.rs" <<'EOF'
 use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 
@@ -4782,6 +4791,38 @@ EOF
 expect_fail \
   "receiptless session terminal fork" \
   "R64_SESSION_CANONICAL_CARRIER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/axon_bridge/runtime_factory.rs" <<'EOF'
+fn ledger_invocation_ura() -> String {
+    crate::core::ura::invocation_history_resource_ura(
+        "_system",
+        "authority.invocations",
+        "inv_123",
+    )
+}
+
+fn ledger_route_ura() {
+    panic!("LedgerSink cannot derive ability URA from binding callee=`y` caller=`z` ability=`a`")
+}
+EOF
+expect_fail \
+  "LedgerSink invocation system fallback" \
+  "R65_LEDGER_SINK_SYSTEM_FALLBACK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/axon_bridge/runtime_factory.rs" <<'EOF'
+fn ledger_invocation_ura() {
+    panic!("LedgerSink cannot derive invocation record URA from binding subject=`x` callee=`y` caller=`z` invocation_id=`i`")
+}
+
+fn ledger_route_ura(ability_name: &str) -> String {
+    crate::core::ura::hub_ability_ura("_system", &format!("system.{ability_name}"))
+}
+EOF
+expect_fail \
+  "LedgerSink route system fallback" \
+  "R65_LEDGER_SINK_SYSTEM_FALLBACK"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

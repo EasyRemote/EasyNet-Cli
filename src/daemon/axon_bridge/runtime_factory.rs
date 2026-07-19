@@ -494,10 +494,9 @@ fn ledger_invocation_ura(invocation_id: &str, binding: &AxiomBinding) -> String 
         invocation_id,
     )
     .unwrap_or_else(|| {
-        crate::core::ura::invocation_history_resource_ura(
-            "_system",
-            "authority.invocations",
-            invocation_id,
+        panic!(
+            "LedgerSink cannot derive invocation record URA from binding subject=`{}` callee=`{}` caller=`{}` invocation_id=`{}`",
+            binding.subject.ura, binding.callee.ura, binding.caller.ura, invocation_id
         )
     })
 }
@@ -521,7 +520,10 @@ fn ledger_route_ura(ability_name: &str, binding: &AxiomBinding) -> String {
     crate::core::ura::published_route_ura(&binding.callee.ura, &callee_public_name)
         .or_else(|| crate::core::ura::published_route_ura(&binding.caller.ura, &caller_public_name))
         .unwrap_or_else(|| {
-            crate::core::ura::hub_ability_ura("_system", &format!("system.{ability_name}"))
+            panic!(
+                "LedgerSink cannot derive ability URA from binding callee=`{}` caller=`{}` ability=`{}`",
+                binding.callee.ura, binding.caller.ura, ability_name
+            )
         })
 }
 
@@ -636,17 +638,86 @@ mod tests {
             callee_signature: None,
             signer_binding: None,
             host_attestation: Vec::new(),
-            ability_binding: "chat".to_string(),
+            ability_binding: "system.chat".to_string(),
             authority_binding: AuthorityBinding::Self_ {
                 principal_ura: fallback_caller.ura.clone(),
             },
         };
-        // RFC-005 removed the device ability *resource* route; the
-        // last-resort fallback (neither binding URA publishes the route)
-        // now names a hub-owned system ability URA.
         assert_eq!(
-            ledger_route_ura("chat", &fallback_binding),
-            "easynet:///r/_system/ability/authority.system.chat"
+            ledger_route_ura("system.chat", &fallback_binding),
+            "easynet:///r/localhost/ability/authority.system.chat"
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "LedgerSink cannot derive ability URA from binding")]
+    fn ledger_route_resolver_rejects_authority_bare_ability_instead_of_system_fallback() {
+        let caller = AgentIdentity::new("easynet:///r/localhost/user/dev", UraProfile::StrictV2);
+        let binding = AxiomBinding {
+            caller: caller.clone(),
+            callee: AgentIdentity::new(
+                crate::core::ura::hub_ura("localhost"),
+                UraProfile::StrictV2,
+            ),
+            subject: SubjectIdentity::new("easynet:///r/localhost/user/dev", UraProfile::StrictV2),
+            invocation_nonce: [0u8; 16],
+            causal: CausalContext::None,
+            payload_digest: [0u8; 32],
+            callee_signature: None,
+            signer_binding: None,
+            host_attestation: Vec::new(),
+            ability_binding: "chat".to_string(),
+            authority_binding: AuthorityBinding::Self_ {
+                principal_ura: caller.ura.clone(),
+            },
+        };
+
+        let _ = ledger_route_ura("chat", &binding);
+    }
+
+    #[test]
+    #[should_panic(expected = "LedgerSink cannot derive ability URA from binding")]
+    fn ledger_route_resolver_rejects_unowned_route_instead_of_system_fallback() {
+        let caller = AgentIdentity::new("not-a-canonical-caller", UraProfile::StrictV2);
+        let binding = AxiomBinding {
+            caller: caller.clone(),
+            callee: AgentIdentity::new("not-a-canonical-callee", UraProfile::StrictV2),
+            subject: SubjectIdentity::new("not-a-canonical-subject", UraProfile::StrictV2),
+            invocation_nonce: [0u8; 16],
+            causal: CausalContext::None,
+            payload_digest: [0u8; 32],
+            callee_signature: None,
+            signer_binding: None,
+            host_attestation: Vec::new(),
+            ability_binding: "chat".to_string(),
+            authority_binding: AuthorityBinding::Self_ {
+                principal_ura: caller.ura.clone(),
+            },
+        };
+
+        let _ = ledger_route_ura("chat", &binding);
+    }
+
+    #[test]
+    #[should_panic(expected = "LedgerSink cannot derive invocation record URA from binding")]
+    fn ledger_invocation_resolver_rejects_unowned_record_instead_of_system_fallback() {
+        let caller = AgentIdentity::new("not-a-canonical-caller", UraProfile::StrictV2);
+        let binding = AxiomBinding {
+            caller: caller.clone(),
+            callee: AgentIdentity::new("not-a-canonical-callee", UraProfile::StrictV2),
+            subject: SubjectIdentity::new("not-a-canonical-subject", UraProfile::StrictV2),
+            invocation_nonce: [0u8; 16],
+            causal: CausalContext::None,
+            payload_digest: [0u8; 32],
+            callee_signature: None,
+            signer_binding: None,
+            host_attestation: Vec::new(),
+            ability_binding: "chat".to_string(),
+            authority_binding: AuthorityBinding::Self_ {
+                principal_ura: caller.ura.clone(),
+            },
+        };
+
+        let _ = ledger_invocation_ura("inv_123", &binding);
     }
 }
