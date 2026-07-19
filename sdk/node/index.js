@@ -883,9 +883,10 @@ export class RuntimeClient {
     if (typeof transport.openBidi !== "function") {
       throw invalidSDK("runtime open-bidi transport function is required");
     }
+    const normalizedStreams = assertBidiOpenStreams(streams);
     const result = await transport.openBidi(
       Buffer.from(assertDraft(draft).toJSONString()),
-      Buffer.from(JSON.stringify(streams)),
+      Buffer.from(JSON.stringify(normalizedStreams)),
     );
     return new BidiSession(result.transport, parseJSON(result.open, "bidi open"));
   }
@@ -1635,6 +1636,16 @@ function assertDraft(value) {
     throw invalidInvocation("invocation draft is required");
   }
   return value;
+}
+
+function assertBidiOpenStreams(value) {
+  if (!Array.isArray(value)) {
+    throw invalidRuntime("bidi_streams must be an array");
+  }
+  if (value.length === 0) {
+    throw invalidRuntime("bidi_streams must not be empty");
+  }
+  return value.map((stream, index) => objectValue(stream, `bidi_streams[${index}]`));
 }
 
 function assertHandle(value) {

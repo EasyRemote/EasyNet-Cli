@@ -23,6 +23,8 @@ Completed in this slice:
 - `bash tools/scripts/docker-media-bidi-e2e.sh --project easynet-media-bidi-codex-full-173456 --out-dir target/e2e/docker-media-bidi/codex-full-20260719-173456`
 - `PATH="$HOME/.cargo/bin:$PATH" cargo test invocation_bidi_open_rejects_missing_frame_zero_before_session_entry --lib`
 - `SDK_CONFORMANCE_RUN_NONCE=0879d40513b38bb77f7d9cc2259d573f8903a1e26f38c51d869233b31866e424 PATH="$HOME/.cargo/bin:$PATH" cargo run -p sdk-conformance-runner -- --language c_abi --adapter-report sdk/conformance/runner/c-abi-action-adapter-report.json --format json`
+- `PATH="$HOME/.nvm/versions/node/v22.16.0/bin:$PATH" npm test --prefix sdk/node`
+- `SDK_CONFORMANCE_RUN_NONCE=<issued> PATH="$HOME/.cargo/bin:$HOME/.nvm/versions/node/v22.16.0/bin:$PATH" cargo run -p sdk-conformance-runner -- --language node --adapter-report sdk/conformance/runner/node-action-adapter-report.json --format json`
 
 Evidence reports:
 
@@ -51,5 +53,9 @@ Observed closure:
   frames.
 - C ABI now has direct executable `bidi/frame0_required` evidence at the C ABI
   boundary. It rejects missing frame-0 construction material before active bidi
-  session allocation; Rust, Node, Java, and Swift remain listed as unproven for
-  that requirement.
+  session allocation; Rust, Java, and Swift remain listed as unproven for that
+  requirement.
+- Node now has direct executable `bidi/frame0_required` evidence in the SDK
+  runtime facade. `RuntimeClient.openBidi` rejects omitted or empty stream
+  descriptors before the transport is called; Rust, Java, and Swift remain
+  listed as unproven for that requirement.
