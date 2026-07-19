@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 
-use super::plugin_template::{init_hello_plugin, PluginTemplateInit};
+use super::plugin_template::{init_hello_plugin, PluginTemplateInit, PluginTemplateLanguage};
 use crate::daemon::plugins::index::default_plugin_root;
 use crate::daemon::plugins::{
     DesktopCompanionManager, PluginInstaller, PluginKind, PluginKindView, PluginLoadPlanner,
@@ -68,6 +68,9 @@ pub struct InitArgs {
     /// Governed AbilityDescriptor version.
     #[arg(long, default_value = "1.0.0")]
     pub descriptor_version: String,
+    /// Template language. Python is zero-build; Go generates compiled source.
+    #[arg(long, value_enum, default_value_t = PluginTemplateLanguage::Python)]
+    pub language: PluginTemplateLanguage,
 }
 
 #[derive(Debug, Args)]
@@ -145,17 +148,28 @@ fn run_init(args: InitArgs) -> anyhow::Result<()> {
         ability_name: args.ability,
         package_version: args.package_version,
         descriptor_version: args.descriptor_version,
+        language: args.language,
     })?;
     output::success(&format!(
-        "created Hello World plugin {}@{}",
-        project.package_id, project.package_version
+        "created {} Hello World plugin {}@{}",
+        project.language.label(),
+        project.package_id,
+        project.package_version
     ));
     output::detail("path", &project.path.display().to_string());
     output::detail("ability", &project.ability_name);
-    output::detail(
-        "next",
-        &format!("easynet plugin install '{}'", project.path.display()),
-    );
+    let next = match project.language {
+        PluginTemplateLanguage::Python => {
+            format!("easynet plugin install '{}'", project.path.display())
+        }
+        PluginTemplateLanguage::Go => {
+            format!(
+                "cd '{}' && make build && easynet plugin install .",
+                project.path.display()
+            )
+        }
+    };
+    output::detail("next", &next);
     Ok(())
 }
 

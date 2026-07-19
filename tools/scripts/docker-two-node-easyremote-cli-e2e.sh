@@ -101,15 +101,25 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q -- "--format json" "$0"
   grep -q "provider.ability" "$0"
   grep -q "nativeer.native_echo" "$0"
-  grep -q "Client.functions(scope=\"user\")" "$0"
+  grep -q "client.functions(scope=\"user\")" "$0"
   grep -q "canonical_ura_call" "$0"
   grep -q "canonical_ura_stream" "$0"
   grep -q "easyremote_sdk_consumer_boundary" "$0"
   grep -q "forbidden_easyremote_authority" "$0"
+  grep -q "user-defined declarative exec plugin" "$0"
+  grep -q "user_plugin.echo" "$0"
+  grep -q "plugin init" "$0"
+  grep -q "PYTHONPATH: /work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python" "$0"
+  grep -q "plugin install" "$0"
+  grep -q "plugin remove" "$0"
+  grep -q "user_plugin_one_invocation_record" "$0"
   grep -q "provider_catalog" "$0"
   grep -q "provider-invocation-list-native-after-easyremote" "$0"
   grep -q "native_easynet_receipt_chains_projected" "$0"
   grep -q "caller_observed_native_easynet_ability_removed" "$0"
+  grep -q "provider-hosted user external Agent" "$0"
+  grep -q "user_agent_one_invocation_record" "$0"
+  grep -q "caller_observed_user_agent_chat_removed" "$0"
   grep -q "ability list --node" "$0"
   grep -q "ability stream" "$0"
   grep -q "invocation list --ability-ura" "$0"
@@ -267,6 +277,63 @@ wait_caller_remote_ability_list() {
   return 1
 }
 
+extract_ability_ura_by_name() {
+  local file="$1"
+  local ability_name="$2"
+  jq -r --arg name "$ability_name" '
+    if type == "array" then .
+    else (.abilities // .items // .records // [])
+    end
+    | map(select(
+        (.name // .ability_name // .public_name // .qualified_name // "") == $name
+      ))
+    | .[0].ability_ura // empty
+  ' "$file"
+}
+
+wait_caller_ability_name() {
+  local provider_node="$1"
+  local ability_name="$2"
+  local stem="$3"
+  local out="$OUT_DIR/${stem}.json"
+  local err="$OUT_DIR/${stem}.err"
+  local ability_ura=""
+  for _ in $(seq 1 120); do
+    if caller_cli "ability list --node '$provider_node' --format json" >"$out" 2>"$err"; then
+      ability_ura="$(extract_ability_ura_by_name "$out" "$ability_name")"
+      if [[ -n "$ability_ura" ]]; then
+        printf '%s\n' "$ability_ura"
+        return 0
+      fi
+    fi
+    sleep 0.5
+  done
+  cat "$out" >&2 2>/dev/null || true
+  cat "$err" >&2 2>/dev/null || true
+  return 1
+}
+
+wait_caller_ability_absent() {
+  local provider_node="$1"
+  local ability_name="$2"
+  local stem="$3"
+  local out="$OUT_DIR/${stem}.json"
+  local err="$OUT_DIR/${stem}.err"
+  local ability_ura=""
+  for _ in $(seq 1 120); do
+    if caller_cli "ability list --node '$provider_node' --format json" >"$out" 2>"$err"; then
+      ability_ura="$(extract_ability_ura_by_name "$out" "$ability_name")"
+      if [[ -z "$ability_ura" ]]; then
+        return 0
+      fi
+    fi
+    sleep 0.5
+  done
+  cat "$out" >&2 2>/dev/null || true
+  cat "$err" >&2 2>/dev/null || true
+  return 1
+}
+
 wait_file() {
   local path="$1"
   for _ in $(seq 1 120); do
@@ -284,9 +351,17 @@ import json, sys
 kind = sys.argv[1]
 if kind == "add":
     print(json.dumps({"a": int(sys.argv[2]), "b": int(sys.argv[3])}, separators=(",", ":")))
+elif kind == "plugin_echo":
+    print(json.dumps({"message": sys.argv[2]}, separators=(",", ":")))
+elif kind == "agent_chat":
+    print(json.dumps({"prompt": sys.argv[2], "skills": {"mode": "none"}}, separators=(",", ":")))
 else:
     raise SystemExit(f"unknown json kind: {kind}")
 PY
+}
+
+random_nonce_hex() {
+  openssl rand -hex 16
 }
 
 issue_device_enrollment() {
@@ -554,6 +629,38 @@ provider_cli "ability deploy '$NATIVE_BUNDLE' --node local --format json" \
   >"$OUT_DIR/provider-native-deploy.json" 2>"$OUT_DIR/provider-native-deploy.err"
 NATIVE_ABILITY_URA="$(jq -r '.ability_ura' "$OUT_DIR/provider-native-deploy.json")"
 [[ "$NATIVE_ABILITY_URA" == easynet://* ]] || die "native EasyNet deploy returned invalid ability URA: $NATIVE_ABILITY_URA"
+
+echo "==> installing and invoking user-defined declarative exec plugin"
+USER_PLUGIN_ID="user.plugin.echo"
+USER_PLUGIN_VERSION="0.1.0"
+USER_PLUGIN_ABILITY="user_plugin.echo"
+USER_PLUGIN_MESSAGE="hello-from-user-plugin-${TIMESTAMP}"
+USER_PLUGIN_ROOT="/shared/user-plugin-echo"
+provider_cli "plugin init '$USER_PLUGIN_ROOT' --id '$USER_PLUGIN_ID' --ability '$USER_PLUGIN_ABILITY'" \
+  >"$OUT_DIR/provider-plugin-init-user-plugin.txt" 2>"$OUT_DIR/provider-plugin-init-user-plugin.err"
+provider_cli "plugin install '$USER_PLUGIN_ROOT'" >"$OUT_DIR/provider-plugin-install-user-plugin.txt" 2>"$OUT_DIR/provider-plugin-install-user-plugin.err"
+provider_cli "plugin list --format json" >"$OUT_DIR/provider-plugin-list-after-user-plugin-install.json" 2>"$OUT_DIR/provider-plugin-list-after-user-plugin-install.err"
+provider_cli "plugin status '$USER_PLUGIN_ID' --version '$USER_PLUGIN_VERSION' --json" \
+  >"$OUT_DIR/provider-plugin-status-user-plugin.json" 2>"$OUT_DIR/provider-plugin-status-user-plugin.err"
+USER_PLUGIN_ABILITY_URA="$(wait_caller_ability_name "$PROVIDER_URA" "$USER_PLUGIN_ABILITY" "caller-ability-list-provider-plugin")"
+[[ "$USER_PLUGIN_ABILITY_URA" == easynet://* ]] || die "user plugin ability was not discovered as a canonical URA: $USER_PLUGIN_ABILITY_URA"
+caller_cli "ability show '$USER_PLUGIN_ABILITY_URA' --node '$PROVIDER_URA' --format json" \
+  >"$OUT_DIR/caller-ability-show-user-plugin.json" 2>"$OUT_DIR/caller-ability-show-user-plugin.err"
+USER_PLUGIN_DESCRIPTOR_REF="$(jq -r '
+  .descriptor_ref //
+  (.ability_ura + "@" + .version + "#" + (.descriptor_hash | sub("^sha256:"; "")) + "!" + .admission_action)
+' "$OUT_DIR/caller-ability-show-user-plugin.json")"
+[[ "$USER_PLUGIN_DESCRIPTOR_REF" == easynet://*@*#*!* ]] || die "caller ability show did not expose descriptor-bound user plugin ref"
+USER_PLUGIN_NONCE_HEX="$(random_nonce_hex)"
+caller_cli "ability stream '$USER_PLUGIN_DESCRIPTOR_REF' --node '$PROVIDER_URA' --subject 'easynet:///r/${REALM}/resource/e2e/user-plugin/echo' --nonce-hex '$USER_PLUGIN_NONCE_HEX' --causal-root --args '$(json_arg plugin_echo "$USER_PLUGIN_MESSAGE")' --format json --raw" \
+  >"$OUT_DIR/caller-cli-user-plugin-stream.json" 2>"$OUT_DIR/caller-cli-user-plugin-stream.err"
+provider_cli "invocation list --ability-ura '$USER_PLUGIN_ABILITY_URA' --format json" \
+  >"$OUT_DIR/provider-invocation-list-user-plugin-after-cli.json" 2>"$OUT_DIR/provider-invocation-list-user-plugin-after-cli.err"
+provider_cli "invocation list --format json" \
+  >"$OUT_DIR/provider-invocation-list-all-after-user-plugin-cli.json" 2>"$OUT_DIR/provider-invocation-list-all-after-user-plugin-cli.err"
+provider_cli "plugin remove '$USER_PLUGIN_ID' '$USER_PLUGIN_VERSION'" >"$OUT_DIR/provider-plugin-remove-user-plugin.txt" 2>"$OUT_DIR/provider-plugin-remove-user-plugin.err"
+provider_cli "plugin list --format json" >"$OUT_DIR/provider-plugin-list-after-user-plugin-remove.json" 2>"$OUT_DIR/provider-plugin-list-after-user-plugin-remove.err"
+wait_caller_ability_absent "$PROVIDER_URA" "$USER_PLUGIN_ABILITY" "caller-ability-list-provider-after-plugin-remove"
 
 echo "==> starting EasyRemote ComputeNode provider with @node.register matrix"
 cat >"$SHARED_DIR/easyremote_provider.py" <<'PY'
@@ -860,6 +967,7 @@ caller_cli "ability list --node '$PROVIDER_URA' --format json" \
   >"$OUT_DIR/caller-ability-list-provider-after-native-uninstall.json" 2>"$OUT_DIR/caller-ability-list-provider-after-native-uninstall.err"
 
 python3 - "$OUT_DIR" "$PROVIDER_NODE" "$CALLER_NODE" "$PROVIDER_URA" "$CALLER_URA" "$AGENT_NAME" "$TMP_AGENT" "$HUB_URA" \
+  "$USER_PLUGIN_ID" "$USER_PLUGIN_VERSION" "$USER_PLUGIN_ABILITY" "$USER_PLUGIN_ABILITY_URA" "$USER_PLUGIN_MESSAGE" \
   "$NATIVE_ABILITY_URA" "$ADD_URA" "$TOTAL_URA" "$MERGE_URA" "$DEFAULTED_URA" "$SUMMARIZE_URA" "$BUNDLE_URA" "$COUNTDOWN_URA" "$WHOAMI_URA" <<'PY' >"$OUT_DIR/report.json"
 import json
 import sys
@@ -867,16 +975,17 @@ from pathlib import Path
 
 out = Path(sys.argv[1])
 provider_node, caller_node, provider_ura, caller_ura, agent_name, tmp_agent, hub_ura = sys.argv[2:9]
-native_ability_ura = sys.argv[9]
+user_plugin_id, user_plugin_version, user_plugin_ability, user_plugin_ability_ura, user_plugin_message = sys.argv[9:14]
+native_ability_ura = sys.argv[14]
 ability_uras = {
-    "add": sys.argv[10],
-    "total": sys.argv[11],
-    "merge": sys.argv[12],
-    "defaulted": sys.argv[13],
-    "summarize": sys.argv[14],
-    "bundle": sys.argv[15],
-    "countdown": sys.argv[16],
-    "whoami": sys.argv[17],
+    "add": sys.argv[15],
+    "total": sys.argv[16],
+    "merge": sys.argv[17],
+    "defaulted": sys.argv[18],
+    "summarize": sys.argv[19],
+    "bundle": sys.argv[20],
+    "countdown": sys.argv[21],
+    "whoami": sys.argv[22],
 }
 
 def text(name: str) -> str:
@@ -934,6 +1043,15 @@ def ability_invocation_records(exact_name: str, fallback_name: str, ability_ura:
 def payload_contains(value, needle: str) -> bool:
     return needle in json.dumps(value, separators=(",", ":"), sort_keys=True)
 
+def payload_has_field(value, key: str, expected) -> bool:
+    if isinstance(value, dict):
+        if value.get(key) == expected:
+            return True
+        return any(payload_has_field(item, key, expected) for item in value.values())
+    if isinstance(value, list):
+        return any(payload_has_field(item, key, expected) for item in value)
+    return False
+
 def runtime_unary_payload(value):
     if isinstance(value, list):
         payloads = [item for item in value if item is not None]
@@ -952,8 +1070,17 @@ def runtime_stream_payloads(value):
 ready = load("easyremote-ready.json") or {}
 native_ready = load("native-easynet-ready.json") or {}
 native_deploy = load("provider-native-deploy.json") or {}
+user_plugin_list_after_install = load("provider-plugin-list-after-user-plugin-install.json") or {}
+user_plugin_status = load("provider-plugin-status-user-plugin.json") or {}
+user_plugin_stream = load("caller-cli-user-plugin-stream.json") or []
+user_plugin_show = load("caller-ability-show-user-plugin.json") or {}
 remote_results = load("easyremote-remote-results.json") or {}
 cli_stream = load("caller-cli-add-stream.json") or []
+user_plugin_records = ability_invocation_records(
+    "provider-invocation-list-user-plugin-after-cli.json",
+    "provider-invocation-list-all-after-user-plugin-cli.json",
+    user_plugin_ability_ura,
+)
 cli_add_records = ability_invocation_records(
     "provider-invocation-list-add-after-cli.json",
     "provider-invocation-list-all-after-cli.json",
@@ -964,6 +1091,8 @@ native_records = ability_invocation_records(
     "provider-invocation-list-all-after-easyremote.json",
     native_ability_ura,
 )
+user_plugin_rows = ability_rows("caller-ability-list-provider-plugin.json")
+user_plugin_rows_after_remove = ability_rows("caller-ability-list-provider-after-plugin-remove.json")
 caller_rows = ability_rows("caller-ability-list-provider.json")
 caller_rows_after_uninstall = ability_rows("caller-ability-list-provider-after-uninstall.json")
 caller_rows_after_native_uninstall = ability_rows("caller-ability-list-provider-after-native-uninstall.json")
@@ -977,12 +1106,55 @@ def row_has_ura(rows, ability_ura: str) -> bool:
 
 all_provider_abilities_visible = all(row_has_ura(caller_rows, ura) for ura in ability_uras.values())
 native_visible = row_has_ura(caller_rows, native_ability_ura)
+user_plugin_visible = row_has_ura(user_plugin_rows, user_plugin_ability_ura)
+user_plugin_removed = not row_has_ura(user_plugin_rows_after_remove, user_plugin_ability_ura)
 add_removed = not row_has_ura(caller_rows_after_uninstall, ability_uras["add"])
 other_abilities_remain = all(
     row_has_ura(caller_rows_after_uninstall, ability_uras[name])
     for name in ("total", "merge", "defaulted", "summarize", "bundle", "countdown", "whoami")
 )
 native_removed = not row_has_ura(caller_rows_after_native_uninstall, native_ability_ura)
+def plugin_package_rows(report):
+    if isinstance(report, dict):
+        value = report.get("packages")
+        return value if isinstance(value, list) else []
+    return []
+
+def plugin_ability_rows(report):
+    if isinstance(report, dict):
+        value = report.get("abilities")
+        return value if isinstance(value, list) else []
+    return []
+
+user_plugin_package_loaded = any(
+    isinstance(row, dict)
+    and row.get("package_id") == user_plugin_id
+    and row.get("package_version") == user_plugin_version
+    and row.get("kind") == "declarative"
+    and row.get("daemon_runtime_status") == "loaded"
+    and row.get("runtime_published") is True
+    and row.get("invokable") is True
+    for row in plugin_package_rows(user_plugin_list_after_install)
+)
+user_plugin_ability_loaded = any(
+    isinstance(row, dict)
+    and row.get("package_id") == user_plugin_id
+    and row.get("package_version") == user_plugin_version
+    and row.get("ability") == user_plugin_ability
+    and row.get("call_mode") == "rpc"
+    and row.get("daemon_runtime_status") == "loaded"
+    and row.get("runtime_published") is True
+    and row.get("invokable") is True
+    for row in plugin_ability_rows(user_plugin_list_after_install)
+)
+user_plugin_receipt_chains_verified = (
+    len(user_plugin_records) == 1
+    and str(user_plugin_records[0].get("state", "")).lower() == "completed"
+    and isinstance(user_plugin_records[0].get("receipt_chain"), dict)
+    and user_plugin_records[0]["receipt_chain"].get("verified") is True
+    and isinstance(user_plugin_records[0]["receipt_chain"].get("anchors"), list)
+    and len(user_plugin_records[0]["receipt_chain"]["anchors"]) > 0
+)
 receipt_chains_verified = (
     len(cli_add_records) == 1
     and str(cli_add_records[0].get("state", "")).lower() == "completed"
@@ -1065,6 +1237,14 @@ report = {
         "ability_ura": native_ability_ura,
         "remote_results": native_results,
     },
+    "user_plugin": {
+        "package_id": user_plugin_id,
+        "package_version": user_plugin_version,
+        "ability": user_plugin_ability,
+        "ability_ura": user_plugin_ability_ura,
+        "status": user_plugin_status,
+        "stream_frames": user_plugin_stream,
+    },
     "easyremote": {
         "provider_ready": ready,
         "ability_uras": ability_uras,
@@ -1081,6 +1261,25 @@ report = {
             and cli_contains("agent-temp-remove", tmp_agent)
             and not cli_contains("agent-list-after-temp-remove", tmp_agent)
         ),
+        "user_plugin_package_loaded_in_daemon": user_plugin_package_loaded,
+        "user_plugin_ability_loaded_in_daemon": user_plugin_ability_loaded,
+        "caller_cli_discovered_user_plugin_ability": (
+            user_plugin_visible
+            and isinstance(user_plugin_show, dict)
+            and user_plugin_show.get("ability_ura") == user_plugin_ability_ura
+            and user_plugin_show.get("owner_ura") == provider_ura
+        ),
+        "caller_cli_stream_called_user_plugin": (
+            payload_contains(user_plugin_stream, "hello-plugin")
+            and payload_contains(user_plugin_stream, user_plugin_message)
+            and payload_has_field(user_plugin_stream, "invocation_nonce_len", 16)
+        ),
+        "user_plugin_one_invocation_record": (
+            len(user_plugin_records) == 1
+            and user_plugin_ability_ura in json.dumps(user_plugin_records[0])
+        ),
+        "user_plugin_receipt_chain_projected": user_plugin_receipt_chains_verified,
+        "caller_observed_user_plugin_ability_removed": user_plugin_removed,
         "provider_registered_register_decorator_matrix": (
             ready.get("decorator") == "@node.register"
             and set(ready.get("function_shapes") or []) == {
@@ -1219,6 +1418,7 @@ report = {
         "provider_other_abilities_remained_after_delete": other_abilities_remain,
         "caller_observed_native_easynet_ability_removed": native_removed,
     },
+    "provider_user_plugin_invocation_records": user_plugin_records,
     "caller_cli_add_stream_frames": cli_stream,
     "provider_cli_add_invocation_records": cli_add_records,
     "provider_native_easynet_invocation_records": native_records,
@@ -1233,6 +1433,13 @@ jq -e '
   and .assertions.agent_updated_on_caller
   and .assertions.agent_invoked_on_caller
   and .assertions.temp_agent_removed_on_caller
+  and .assertions.user_plugin_package_loaded_in_daemon
+  and .assertions.user_plugin_ability_loaded_in_daemon
+  and .assertions.caller_cli_discovered_user_plugin_ability
+  and .assertions.caller_cli_stream_called_user_plugin
+  and .assertions.user_plugin_one_invocation_record
+  and .assertions.user_plugin_receipt_chain_projected
+  and .assertions.caller_observed_user_plugin_ability_removed
   and .assertions.provider_registered_register_decorator_matrix
   and .assertions.caller_cli_queried_all_provider_abilities
   and .assertions.caller_cli_queried_native_easynet_ability
@@ -1282,6 +1489,8 @@ for name, ura in sorted(report["easyremote"]["ability_uras"].items()):
     print(f"  - `{name}`: `{ura}`")
 print("- Native EasyNet ability:")
 print(f"  - `nativeer.native_echo`: `{report['native_easynet']['ability_ura']}`")
+print("- User-defined plugin ability:")
+print(f"  - `{report['user_plugin']['ability']}`: `{report['user_plugin']['ability_ura']}`")
 print("")
 print("## Assertions")
 for key, value in report["assertions"].items():

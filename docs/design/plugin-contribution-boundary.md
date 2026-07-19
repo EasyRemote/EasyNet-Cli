@@ -24,16 +24,37 @@ my-plugin/
 metadata. `abilities/*.ability.toml` declares descriptor-facing schema and
 description. The executable or builtin Rust binding supplies handlers.
 
-`easynet plugin init <path>` creates the default developer version of this
-shape: a declarative exec Hello World package with one governed echo ability.
-The generated package is intentionally installable as-is so a contributor can
-run the full product loop before adding product-specific logic:
+`easynet plugin init <path>` creates the default Python developer version of
+this shape: a declarative exec Hello World package with one governed echo
+ability. The generated Python package is intentionally installable as-is so a
+contributor can run the full product loop before adding product-specific logic:
 
 ```bash
 easynet plugin init hello-plugin
 cd hello-plugin
 easynet plugin install .
 ```
+
+`easynet plugin init --language go <path>` creates a compiled Go source
+project. It must be built before install:
+
+```bash
+easynet plugin init --language go hello-go-plugin
+cd hello-go-plugin
+make build
+easynet plugin install .
+```
+
+The plugin runtime is not Python-only. Declarative exec plugins are executable
+sidecar processes; Python, Go, Rust, Node, Java, C++, or another runtime can be
+used if the package supplies the executable declared by `[declarative].argv`.
+
+Generated executables do not hand-write sidecar JSON frames. Python templates
+import `easynet_sdk.providers.easynet.plugin_exec`; Go templates import
+`easynet.run/cli/sdk/go/provider/easynet/pluginexec`. Each template implements
+only a `SidecarInvocation -> result` handler. The daemon/provider frame grammar
+remains owned by CLI SDK provider helpers; plugin code should not construct
+`call_id`, `result`, `error`, stream, or bidi protocol frames directly.
 
 The scaffold separates the two load-bearing versions:
 

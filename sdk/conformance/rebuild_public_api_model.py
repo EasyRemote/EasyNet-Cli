@@ -312,6 +312,7 @@ def package_manifest() -> dict[str, list[dict[str, str]]]:
         "sdk/go/internal/runtimeevents": "provider_neutral_core",
         "sdk/go/provider/easynet": "easynet_provider",
         "sdk/go/provider/easynet/contract": "easynet_provider",
+        "sdk/go/provider/easynet/pluginexec": "easynet_provider",
         "sdk/go/runtimeevents": "provider_neutral_core",
     }
     go_paths = sorted(str(Path(path).resolve().relative_to(ROOT)) for path in go_output)
