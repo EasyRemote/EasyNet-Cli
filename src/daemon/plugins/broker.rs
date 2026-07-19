@@ -277,7 +277,6 @@ fn outcome_status(
                 && matches!(
                     transport_status,
                     PluginRealtimeTransportReadinessStatus::Ready
-                        | PluginRealtimeTransportReadinessStatus::FallbackReady
                 ) =>
         {
             PluginRealtimeOutcomeStatus::Ready

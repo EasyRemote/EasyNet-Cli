@@ -651,7 +651,6 @@ fn transport_readiness_status_label(
     match status {
         PluginRealtimeTransportReadinessStatus::Unknown => "unknown",
         PluginRealtimeTransportReadinessStatus::Ready => "ready",
-        PluginRealtimeTransportReadinessStatus::FallbackReady => "fallback_ready",
         PluginRealtimeTransportReadinessStatus::Blocked => "blocked",
     }
 }

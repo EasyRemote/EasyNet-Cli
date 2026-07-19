@@ -25,7 +25,6 @@ max_frame_queue = 1
 kind = "screen"
 modes = ["subscribe", "record"]
 transport = "webrtc"
-fallback_transport = "invoke_bidi"
 activation_abilities = [
   "remote_desktop.create_session",
   "remote_desktop.set_description",

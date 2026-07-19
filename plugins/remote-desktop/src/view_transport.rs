@@ -38,7 +38,7 @@ impl RemoteDesktopTransportView {
         }
     }
 
-    /// Build the legacy `transport` object.
+    /// Build the canonical transport object.
     pub(in crate::daemon::plugins::remote_desktop) fn summary(
         &self,
         session: &RemoteDesktopSession,
@@ -48,7 +48,6 @@ impl RemoteDesktopTransportView {
             "primary_transport": TRANSPORT_WEBRTC,
             "primary_ready": session.media_transport_ready(),
             "preferred": session.transport_preferences(),
-            "fallback_transports": [TRANSPORT_INVOKE_BIDI, TRANSPORT_PREVIEW_STREAM],
             "endpoint_ura": self.endpoint_ura.clone(),
             "preview_ability": "screen.subscribe",
             "message": self.message,

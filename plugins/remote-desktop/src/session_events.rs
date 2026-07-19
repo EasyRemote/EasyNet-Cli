@@ -84,7 +84,6 @@ pub(in crate::daemon::plugins::remote_desktop) fn preview_transport_connected(
             "transport_kind": TRANSPORT_INVOKE_BIDI,
             "encoding": "metadata_json_plus_binary",
             "media_transport_ready": false,
-            "fallback_transport_ready": true,
             "diagnostic_only": true,
         }),
     )
@@ -100,7 +99,6 @@ pub(in crate::daemon::plugins::remote_desktop) fn preview_transport_detached(
             "transport_kind": TRANSPORT_INVOKE_BIDI,
             "reason": reason,
             "media_transport_ready": false,
-            "fallback_transport_ready": false,
             "diagnostic_only": true,
         }),
     )
@@ -118,7 +116,6 @@ pub(in crate::daemon::plugins::remote_desktop) fn preview_transport_failed(
             "reason": reason,
             "message": message,
             "media_transport_ready": false,
-            "fallback_transport_ready": false,
             "diagnostic_only": true,
         }),
     )

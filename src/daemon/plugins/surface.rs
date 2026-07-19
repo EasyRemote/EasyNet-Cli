@@ -589,7 +589,6 @@ bidi_wire_kind = "json_frames"
 kind = "camera"
 modes = ["snapshot", "subscribe", "record"]
 transport = "invoke_bidi"
-fallback_transport = "invoke_stream"
 activation_abilities = ["test.camera"]
 permissions = ["camera"]
 resources = ["camera"]

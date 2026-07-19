@@ -134,7 +134,7 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "media.synthetic_stream" "$0"
   grep -q "media.synthetic_bidi" "$0"
   grep -q "transport = \"webrtc\"" "$0"
-  grep -q "fallback_transport = \"invoke_bidi\"" "$0"
+  ! grep -q "fallback_""transport" "$0"
   grep -q "ability stream" "$0"
   grep -q "ability bidi" "$0"
   grep -q "caller_remote_media_stream_succeeded" "$0"
@@ -683,7 +683,6 @@ quick_add = true
 kind = "screen"
 modes = ["subscribe"]
 transport = "webrtc"
-fallback_transport = "invoke_bidi"
 activation_abilities = ["media.synthetic_bidi"]
 permissions = ["screen"]
 resources = ["display"]
@@ -1086,7 +1085,7 @@ assertions = {
     "provider_media_plugin_loaded": "e2e.synthetic_media_bidi" in status_blob,
     "provider_media_stream_invokable": "media.synthetic_stream" in status_blob and "invokable" in status_blob,
     "provider_media_bidi_invoked": bool(bidi_frames) and "session_established" in payload_kinds(bidi_payloads),
-    "plugin_declares_webrtc_with_invoke_bidi_fallback": "webrtc" in status_blob and "invoke_bidi" in status_blob,
+    "plugin_declares_single_webrtc_transport": "webrtc" in status_blob and ("fallback_" + "transport") not in status_blob,
     "provider_media_stream_audio_video_screen_frames": {"audio", "video", "screen"}.issubset(payload_kinds(stream_payloads)),
     "provider_media_stream_preserved_invocation_tuple": any(
         isinstance(p, dict)

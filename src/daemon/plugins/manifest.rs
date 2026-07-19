@@ -64,8 +64,6 @@ pub struct PluginRealtimeCapability {
     modes: Vec<PluginRealtimeMode>,
     transport: PluginRealtimeTransport,
     #[serde(default)]
-    fallback_transport: Option<PluginRealtimeTransport>,
-    #[serde(default)]
     activation_abilities: Vec<String>,
     #[serde(default)]
     permissions: Vec<String>,
@@ -86,10 +84,6 @@ impl PluginRealtimeCapability {
 
     pub const fn transport(&self) -> PluginRealtimeTransport {
         self.transport
-    }
-
-    pub const fn fallback_transport(&self) -> Option<PluginRealtimeTransport> {
-        self.fallback_transport
     }
 
     pub fn activation_abilities(&self) -> &[String] {
@@ -848,12 +842,6 @@ fn validate_realtime_capabilities(
                 });
             }
         }
-        if capability.fallback_transport == Some(capability.transport) {
-            return Err(PluginHostError::InvalidRealtimeCapability {
-                id: id.to_string(),
-                reason: "fallback_transport must differ from transport".to_string(),
-            });
-        }
         if capability.quick_add && capability.resources.is_empty() {
             return Err(PluginHostError::InvalidRealtimeCapability {
                 id: id.to_string(),
@@ -1052,7 +1040,6 @@ bidi_wire_kind = "json_frames"
 kind = "camera"
 modes = ["snapshot", "subscribe", "record"]
 transport = "invoke_bidi"
-fallback_transport = "invoke_stream"
 activation_abilities = ["test.camera"]
 permissions = ["camera"]
 resources = ["camera"]
