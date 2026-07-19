@@ -1847,7 +1847,7 @@ impl CanonicalHubAuthority {
         if parsed.kind != crate::core::ura::URAKind::Authority {
             return Err(AbilityControlPlaneError::InvalidHubAuthorityRoot {
                 authority_root: ura,
-                reason: format!("expected /hub URA, got {:?}", parsed.kind),
+                reason: format!("expected authority URA, got {:?}", parsed.kind),
             });
         }
         Ok(Self { ura })

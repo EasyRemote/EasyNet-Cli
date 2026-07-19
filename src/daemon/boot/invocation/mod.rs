@@ -406,9 +406,9 @@ pub fn start_daemon_invocation_transport(
             config.realm(),
             signer,
             &trust_anchor_path,
-            load_trust_anchor_from(&trust_anchor_path),
+            load_trust_anchor_from(&trust_anchor_path)?,
         ),
-        None => load_trust_anchor_from(&trust_anchor_path),
+        None => load_trust_anchor_from(&trust_anchor_path)?,
     };
     // PR-7 commit 5/N: wrap the boot-time anchor in a reload-friendly
     // cell. The same cell is handed to the admission facade *and* to

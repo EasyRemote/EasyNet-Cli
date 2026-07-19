@@ -9,7 +9,7 @@ use crate::daemon::persistence::daemon_config::DaemonConfig;
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 use crate::daemon::trust::cell::SharedTrustAnchor;
 
-pub(super) fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
+pub(super) fn load_trust_anchor_from(path: &Path) -> anyhow::Result<RealmTrustAnchor> {
     match RealmTrustAnchor::load_or_empty(path) {
         Ok(anchor) => {
             let path_display = format!("{}", path.display());
@@ -29,7 +29,7 @@ pub(super) fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
                     entries = entry_count,
                 );
             }
-            anchor
+            Ok(anchor)
         }
         Err(err) => {
             let path_display = format!("{}", path.display());
@@ -39,9 +39,12 @@ pub(super) fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
                 kind = realm_trust_anchor_load_failed,
                 path = path_display,
                 error = err_msg,
-                message = "proceeding with empty trust set",
+                message = "refusing to boot with a malformed trust anchor",
             );
-            RealmTrustAnchor::default()
+            Err(anyhow::anyhow!(
+                "load realm trust anchor from {}: {err}",
+                path.display()
+            ))
         }
     }
 }
@@ -159,4 +162,44 @@ pub(super) fn reload_daemon_config_cells_from(
         federated_peers_len: len,
         quota_configured,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn load_trust_anchor_allows_missing_file_as_empty_first_run_state() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("missing-realm-trust.toml");
+
+        let anchor = load_trust_anchor_from(&path).expect("missing anchor is first-run empty");
+
+        assert!(anchor.is_empty());
+    }
+
+    #[test]
+    fn load_trust_anchor_rejects_malformed_existing_file() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("realm-trust.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[trusted_agent]]
+agent_ura = "easynet:///r/local/hub"
+public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+role = "hub"
+added_at_unix_ms = 1
+"#,
+        )
+        .expect("write malformed trust anchor");
+
+        let err = load_trust_anchor_from(&path).expect_err("malformed anchor must fail boot");
+
+        assert!(
+            err.to_string().contains("load realm trust anchor"),
+            "unexpected error: {err}",
+        );
+    }
 }
