@@ -7066,6 +7066,13 @@ mod tests {
         )
     }
 
+    fn active_bidi_len_for_owner(owner: ClientSessionBinding) -> usize {
+        lock_bidi_entries(bidi_registry())
+            .values()
+            .filter(|session| session.owner == owner)
+            .count()
+    }
+
     fn assert_bidi_eof_frame(frame: axon_sdk::pb::axon::v1::InvokeBidiUp, sequence: u64) {
         use axon_sdk::pb::axon::v1::{bidi_control, invoke_bidi_up};
         assert_eq!(frame.sequence, sequence);
@@ -8747,6 +8754,55 @@ mod tests {
             ERR_NULL_POINTER,
             "on_frame callback is null",
         );
+    }
+
+    #[test]
+    fn invocation_bidi_open_rejects_missing_frame_zero_before_session_entry() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let raw = CString::new(
+            serde_json::json!({
+                "caller_ura": "easynet:///r/acme/device/dev-a",
+                "callee_ura": "easynet:///r/acme/device/dev-a",
+                "descriptor_ref": descriptor_ref(
+                    "easynet:///r/acme/device/dev-a",
+                    "device.pty.attach",
+                    "2.4.0"
+                ),
+                "subject_ura": "easynet:///r/acme/device/dev-a",
+                "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                "causal_context": {"form": "none"},
+                "args": {"session_id": "pty-1"},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let before = active_bidi_len_for_owner(owner);
+        let mut bidi_id: InvocationBidiId = 42;
+
+        let code = unsafe {
+            easynet_invocation_bidi_open(
+                handle,
+                raw.as_ptr(),
+                Some(ignore_bidi_frame),
+                std::ptr::null_mut(),
+                &mut bidi_id,
+            )
+        };
+
+        assert_eq!(code, ERR_INVALID_ARG);
+        assert_eq!(bidi_id, 0);
+        assert_eq!(
+            active_bidi_len_for_owner(owner),
+            before,
+            "missing C ABI bidi frame-0 material must be rejected before runtime session entry"
+        );
+        assert_typed_last_error(
+            "INVALID_ARGUMENT",
+            ERR_INVALID_ARG,
+            "bidi_streams must not be empty",
+        );
+        crate::ffi::client::handle::release(handle);
     }
 
     #[test]

@@ -11,6 +11,14 @@
     },
     {
       "language": "c_abi",
+      "case_id": "bidi/frame0_required",
+      "selector": "invocation_bidi_open_rejects_missing_frame_zero_before_session_entry",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
       "case_id": "daemon/permission_denied",
       "selector": "daemon_status_error_records_typed_last_error",
       "evidence": [

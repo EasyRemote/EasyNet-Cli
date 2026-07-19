@@ -267,7 +267,7 @@ evidence-record update; this paragraph update is documentation-only and does
 not alter runtime, SDK, daemon, or downstream product behavior.
 
 - EasyNet-Cli runtime/source revision:
-  `6cf0f7dacb5172fbee3690a59349cf6530bfb158`.
+  `13672adab3536b16fa92aa7c6f1d5626a4755613`.
 - EasyNet-Axon revision: `ad060b8736f715440cbb68680790380ad29fd5f4`.
 - EasyRemote consumer revision:
   `ad6181fe4d2d9fba209ac79ecdfd654581fca72f`.
@@ -292,14 +292,14 @@ not alter runtime, SDK, daemon, or downstream product behavior.
   `target/e2e/docker-two-node-easyremote-cli/20260719-170651/report.md`.
 - Media bidi product evidence:
   `bash tools/scripts/docker-media-bidi-e2e.sh`. Report:
-  `target/e2e/docker-media-bidi/20260719-170938/report.md`.
+  `target/e2e/docker-media-bidi/codex-full-20260719-173456/report.md`.
 
 | ID | Status | Evidence and limit |
 | --- | --- | --- |
 | RF-1 | Gate-conformant | `check_axon_product_protocol_boundary_contract`, `check_sdk_product_neutrality_contract`, the public API manifest, and `check_plugin_sidecar_helper_matrix_contract` reject product protocol, package, provider, lifecycle, runtime-configuration leakage, and naked sidecar-frame templates in canonical SDK roots. Python, Go, and Node declarative exec invoke templates are provider-helper-backed; stream/bidi helper cells and unbacked languages remain closed seams. This is boundary evidence, not an independent release audit of every downstream product package. |
 | RF-2 | Gate-conformant | `check_daemon_mission_eal_boundary_contract` and the Axon product/protocol boundary reject Mission schema, Mission runtime state, MissionControl service, and public Mission SDK facade in canonical Axon surfaces. This proves source-boundary conformance; downstream Mission/EAL product behavior still needs its own release evidence. |
 | RF-3 | Gate-conformant | `check_axon_plain_proof_public_boundary_contract`, `check_cli_signed_submission_boundary_contract`, and the manifest contract reject plain admission/proof helpers, legacy helper names, unsigned daemon submissions, and raw canonical proof ownership outside descriptor-bound request/draft builders. |
-| RF-4 | Gate-conformant | `check_lifecycle_evidence_freshness_contract` requires the Axon lifecycle contract, capability matrix, and transition vectors to be fresh and `CutoverReady` for all required lifecycle actions before the convergence gate passes. This is only as strong as the revision-pinned lifecycle runner evidence. |
+| RF-4 | Gate-conformant | `check_lifecycle_evidence_freshness_contract` requires the Axon lifecycle contract, capability matrix, and transition vectors to be fresh and `CutoverReady` for all required lifecycle actions before the convergence gate passes. C ABI now has direct executable `bidi/frame0_required` evidence at the C ABI boundary; Rust, Node, Java, and Swift remain explicit unproven cells for that frame-0 requirement. This is only as strong as the revision-pinned lifecycle runner evidence. |
 | RF-5 | Gate-conformant | `check_axon_process_local_signer_fallback_contract`, `check_axon_rust_local_fast_signer_boundary_contract`, `check_cli_rust_local_fast_signer_boundary_contract`, and the manifest fallback-signer checks reject process-local signer fallback exports and consumers outside explicit test fixtures. |
 | RF-6 | Gate-conformant | `check_receipt_proof_fact_contract` rejects empty authority/proof constructors and receipt construction paths that synthesize missing authority binding, proof facts, or terminal receipt facts across the SDK languages. |
 | RF-7 | Gate-conformant | `check_daemon_tuple_route_contract`, `check_daemon_runtime_route_inventory_contract`, and `check_daemon_runtime_assembly_contract` require unary, stream, bidi, sidecar, exact route, and loopback paths to enter descriptor-bound `LocalRuntime` through typed route inventories and registered route adapters. Live production daemon evidence remains outside this document unless separately recorded. |

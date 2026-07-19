@@ -54368,11 +54368,10 @@
       "profile": "runtime_core",
       "status": "seam",
       "evidence_case_ids": [
-        "bidi/close_send_not_cancel"
+        "bidi/close_send_not_cancel",
+        "bidi/frame0_required"
       ],
-      "unproven_requirement_ids": [
-        "bidi/frame0_required_other_languages"
-      ],
+      "unproven_requirement_ids": [],
       "shape_evidence": [],
       "step_shape_evidence": [],
       "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/bidi",
