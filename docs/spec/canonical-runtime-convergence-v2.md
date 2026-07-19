@@ -267,8 +267,8 @@ evidence-record update; this paragraph update is documentation-only and does
 not alter runtime, SDK, daemon, or downstream product behavior.
 
 - EasyNet-Cli runtime/source revision:
-  `ae0430fc5483ed789497a6d2bec05541a5a9c5c2`.
-- EasyNet-Axon revision: `e5110473da2d9ef02a0876bcfe1c5ba4c0afbb10`.
+  `0b1f785586379997fcce5b7c46d1aa76f22b7da1`.
+- EasyNet-Axon revision: `ad060b8736f715440cbb68680790380ad29fd5f4`.
 - EasyRemote consumer revision:
   `ad6181fe4d2d9fba209ac79ecdfd654581fca72f`.
 - EasyNet backend/Docker artifact-pipeline revision:
@@ -289,7 +289,7 @@ not alter runtime, SDK, daemon, or downstream product behavior.
   `bash tools/scripts/docker-two-node-easyremote-cli-e2e.sh --skip-build`
   after rebuilding Docker images from the host-cross-compiled Linux CLI
   artifact bundle. Report:
-  `target/e2e/docker-two-node-easyremote-cli/20260719-111034/report.md`.
+  `target/e2e/docker-two-node-easyremote-cli/20260719-164635/report.md`.
 
 | ID | Status | Evidence and limit |
 | --- | --- | --- |

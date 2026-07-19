@@ -1287,13 +1287,6 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
         hub_published_abilities,
         user_trust_sync,
     } = config;
-    // Directory publication is an immutable view of the same committed
-    // control-plane rows used by local route admission and dispatch.
-    let ability_descriptors =
-        crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(
-            local_ability_catalog.as_ref(),
-        )
-        .all_descriptors();
     let signing_state = "daemon-custodied canonical signer";
     let ca_state = match hub_ca_pem_path.as_deref() {
         Some(path) => format!("pinned CA `{}`", path.display()),
@@ -1363,7 +1356,10 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
             hub_ca_pem_path,
             dispatcher,
             escalation_outbox: outbox,
-            ability_descriptors,
+            ability_inventory:
+                crate::daemon::invocation::bidi::session_initiator::SessionAbilityDescriptorInventory::live_catalog(
+                    local_ability_catalog,
+                ),
             hub_published_abilities,
             initial_admission: Some(initial_admission),
             user_trust_sync: Some(user_trust_sync),
