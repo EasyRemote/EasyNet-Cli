@@ -3,6 +3,7 @@ profile: runtime_core
 required_for:
   - c_abi
   - go
+  - node
   - python
 description: Runtime Core bidi open rejects a missing or non-EnvelopeOpen frame0 before entering a runtime session.
 steps:

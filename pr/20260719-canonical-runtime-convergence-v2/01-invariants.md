@@ -21,3 +21,7 @@
 8. Bidi frame-0 terminality evidence is language-specific. A C ABI proof must
    exercise the C ABI boundary itself, reject before allocating an active bidi
    session, and must not rely on Go/Python wrapper evidence.
+9. Node bidi open must reject missing frame-0 material in the SDK runtime facade
+   before calling the transport. A mock transport that receives an empty stream
+   vector is not valid proof, because it has already crossed the runtime-session
+   entry boundary.

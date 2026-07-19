@@ -715,6 +715,14 @@
     },
     {
       "language": "node",
+      "case_id": "bidi/frame0_required",
+      "selector": "conformance bidi frame0 is required before runtime session entry",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
       "case_id": "error/profile_source_refs",
       "selector": "conformance profile source reference is explicit",
       "evidence": [

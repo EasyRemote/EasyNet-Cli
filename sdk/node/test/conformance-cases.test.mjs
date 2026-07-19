@@ -161,3 +161,23 @@ test("conformance bidi close send does not cancel receive", async () => {
   assert.equal(closed, true);
   assert.equal((await bidi.receive()).terminal, false);
 });
+
+test("conformance bidi frame0 is required before runtime session entry", async () => {
+  let opened = 0;
+  const client = runtime({
+    openBidi: () => {
+      opened += 1;
+      throw new Error("runtime session entry must not be reached");
+    },
+  });
+  for (const streams of [undefined, []]) {
+    await assert.rejects(
+      () => client.openBidi(builder().build(), streams),
+      (error) =>
+        error instanceof sdk.SDKError &&
+        error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+        error.message.includes("bidi_streams must not be empty"),
+    );
+  }
+  assert.equal(opened, 0);
+});
