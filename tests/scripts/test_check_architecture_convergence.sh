@@ -3400,6 +3400,24 @@ expect_fail \
   "R23B_MISSION_RECURSION_IGNORED_EVIDENCE"
 
 make_good_fixture
+cat >"$CLI/src/daemon/execution/mission/dispatch.rs" <<'EOF'
+fn resolve_model_with_overrides(
+    override_model: Option<String>,
+    spec_model: Option<String>,
+    entry_model: Option<String>,
+) -> Option<String> {
+    override_model.or(spec_model).or(entry_model)
+}
+
+fn send(entry: AgentEntry, spec_model: Option<String>) -> Option<String> {
+    resolve_model_with_overrides(None, spec_model, entry.model.clone())
+}
+EOF
+expect_fail \
+  "mission model entry fallback" \
+  "R66_MISSION_MODEL_ENTRY_FALLBACK"
+
+make_good_fixture
 cat >"$CLI/src/daemon/invocation/dispatch/cancellation.rs" <<'EOF'
 struct RegistryState {
     terminal_order: VecDeque<String>,

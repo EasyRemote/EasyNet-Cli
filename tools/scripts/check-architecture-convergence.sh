@@ -5581,6 +5581,7 @@ for path, requirements in mcp_stdio_requirements:
 mission_dispatch = cli_root / "src/daemon/execution/mission/dispatch.rs"
 if mission_dispatch.exists():
     text = source(mission_dispatch)
+    production_text = text.split("#[cfg(test)]", 1)[0]
     ignored_recursion = re.search(
         r"#\s*\[\s*ignore[^\]]*\]\s*(?:\n\s*(?://.*)?)*\n\s*fn\s+agent_send_desugar_e2e\b",
         text,
@@ -5592,6 +5593,21 @@ if mission_dispatch.exists():
             line_number(text, ignored_recursion.start()),
             "mission recursion/agent-send architecture evidence must not be a permanently ignored external-CLI test",
         )
+    model_entry_fallback_patterns = (
+        r"resolve_model_with_overrides[\s\S]{0,220}\bentry_model\b",
+        r"resolve_model\s*\([^)]*\bentry_model\b",
+        r"\.or\s*\(\s*entry_model\s*\)",
+        r"resolve_model_with_overrides\s*\([\s\S]{0,220}entry\.model\.clone\s*\(",
+    )
+    for pattern in model_entry_fallback_patterns:
+        match = re.search(pattern, production_text)
+        if match:
+            add(
+                "R66_MISSION_MODEL_ENTRY_FALLBACK",
+                mission_dispatch,
+                line_number(production_text, match.start()),
+                "mission dispatch model must come from per-call override or agent.toml, not registry entry.model fallback",
+            )
 
 # Rule 24: cancellation terminal retention is an idempotent lifecycle index.
 # Repeated observation of the same terminal invocation must not enqueue

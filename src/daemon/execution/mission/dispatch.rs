@@ -54,8 +54,8 @@ pub struct AgentUsage {
 /// dispatch surface.
 #[derive(Debug, Clone, Default)]
 pub struct DriverOverrides {
-    /// Override the agent's default model (`agent.toml::model` or
-    /// `entry.model`). Wins over both when `Some`.
+    /// Override the agent's default model (`agent.toml::model`).
+    /// Wins over the persistent spec when `Some`.
     pub model: Option<String>,
     /// Honored by future drivers; current claude-code / codex CLIs
     /// ignore this field. A one-shot warning prints on first ignored
@@ -167,19 +167,20 @@ pub(crate) fn resolve_timeout(spec_timeout_secs: Option<u64>, entry_timeout_secs
     Duration::from_secs(spec_timeout_secs.unwrap_or(entry_timeout_secs))
 }
 
-/// Resolve the dispatch model from spec + entry precedence.
+/// Resolve the dispatch model from invocation override + spec precedence.
 ///
 /// `spec_model = Some(_)` — operator named a model in
 /// `agent.toml`; it wins. `spec_model = None` — operator did
-/// not name one; fall through to the v1/legacy `entry.model`
-/// so pre-migration rows keep dispatching to the model their
-/// registry row names. If both are `None`, the result is
-/// `None` (the runtime driver picks its own default).
+/// not name one, so the result is `None` unless the invocation
+/// carries a per-call override. The runtime driver then picks its own
+/// default. Registry-row `entry.model` is deliberately not consulted:
+/// `agent.toml` is the single persistent Agent runtime configuration
+/// authority.
 ///
 /// Extracted so production and tests call the same code.
 ///
-/// Three-tier model resolution:
-/// per-call override > agent.toml spec > legacy entry.
+/// Two-tier model resolution:
+/// per-call override > agent.toml spec.
 ///
 /// Extracted as its own helper (rather than inlined at the call site)
 /// so production and tests bind to the same code path — the chat-ability
@@ -188,17 +189,13 @@ pub(crate) fn resolve_timeout(spec_timeout_secs: Option<u64>, entry_timeout_secs
 pub(crate) fn resolve_model_with_overrides(
     override_model: Option<String>,
     spec_model: Option<String>,
-    entry_model: Option<String>,
 ) -> Option<String> {
-    override_model.or(spec_model).or(entry_model)
+    override_model.or(spec_model)
 }
 
 #[cfg(test)]
-pub(crate) fn resolve_model(
-    spec_model: Option<String>,
-    entry_model: Option<String>,
-) -> Option<String> {
-    spec_model.or(entry_model)
+pub(crate) fn resolve_model(spec_model: Option<String>) -> Option<String> {
+    spec_model
 }
 
 /// Send a prompt to a registered agent on behalf of an *external* caller —
@@ -420,7 +417,7 @@ pub fn send_to_agent_with_depth_and_progress(
     }
     let cwd = workspace::ensure_from_directory(&directory)?;
     let spec_source = directory.spec().clone();
-    // ── Resolve dispatch knobs from spec (falling back to entry) ──
+    // ── Resolve dispatch knobs from canonical runtime config ──
     //
     // Precedence per field:
     //
@@ -441,10 +438,10 @@ pub fn send_to_agent_with_depth_and_progress(
     //     clears `entry.env` on v2 rows). A v2 row has
     //     `entry.env` empty; a v1 row still carries it and
     //     migration will move it on the next load.
-    //   * `model`: `spec.model` wins when set; else
-    //     `entry.model`. A post-`agent add` edit to
-    //     `agent.toml` setting a new model takes effect on the
-    //     next dispatch without re-running the CLI.
+    //   * `model`: per-call override wins when set; else
+    //     `spec.model`. `entry.model` is not a dispatch input because
+    //     the registry row is placement/state, while `agent.toml` is
+    //     the Agent runtime configuration authority.
     //
     // The two `resolve_*` helpers below are the single
     // implementation of the timeout and model precedence rules.
@@ -459,14 +456,13 @@ pub fn send_to_agent_with_depth_and_progress(
     // calling that function breaks.
     let timeout = resolve_timeout(spec_source.timeout_secs, entry.timeout_secs);
     let max_output = entry.max_output_bytes;
-    // Per-call overrides win over spec / entry defaults. The chat
+    // Per-call overrides win over spec defaults. The chat
     // ability handler threads its `driver.model` arg through here so
     // a single chat call can pin a different model than what
     // agent.toml carries, without touching the manifest.
     let effective_model = resolve_model_with_overrides(
         overrides.and_then(|o| o.model.clone()),
         spec_source.model.clone(),
-        entry.model.clone(),
     );
 
     // The other DriverOverrides fields (temperature, max_tokens)
@@ -1372,7 +1368,7 @@ mod tests {
         assert_eq!(d.runtime_id(), "external");
     }
 
-    // ── spec-over-entry precedence (PR-3b.5 / 3b.5.1) ───────────────────
+    // ── runtime config authority (PR-3b.5 / 3b.5.1) ─────────────────────
     //
     // These tests exercise the real `send_to_agent_with_depth`
     // code path rather than restate its equation in the test
@@ -1380,13 +1376,13 @@ mod tests {
     //
     //   1. Materialize an AgentDirectory with a distinct
     //      spec.model / spec.timeout_secs.
-    //   2. Build an AgentEntry carrying conflicting
+    //   2. Build an AgentEntry carrying stale/conflicting
     //      entry.model / entry.timeout_secs values.
     //   3. Call `send_to_agent_with_depth` with
     //      `depth_override = Some(1)` so the real dispatch
     //      flows: `AgentDirectory::open` validates the registered
-    //      root, `effective_model` / `effective_timeout` resolve
-    //      from spec, and the adapter invoke fails fast
+    //      root, `effective_model` resolves from spec/override only,
+    //      `effective_timeout` resolves from spec/entry, and the adapter invoke fails fast
     //      (dummy_entry's bogus `command` → ENOENT in ms).
     //   4. Inspect `<run-dir>/meta.json` — the authoritative
     //      audit record the dispatcher wrote BEFORE returning
@@ -1484,24 +1480,23 @@ mod tests {
     }
 
     #[test]
-    fn entry_model_is_used_when_spec_model_is_none() {
-        // Legacy path: spec carries no model, entry does.
-        // dispatcher must fall back to entry.model in meta.json
-        // so pre-v2 registry rows continue to dispatch to the
-        // model their row names — operators whose agents have
-        // not been touched since upgrade must see no regression.
+    fn entry_model_is_ignored_when_spec_model_is_none() {
+        // The registry row may still carry stale model data, but
+        // dispatch must not treat it as runtime configuration.
+        // `agent.toml` is the persistent authority; when the spec
+        // carries no model, meta.json records no model and the
+        // driver chooses its own default.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut entry = seed_agent_with_spec("alice", None, None);
-        entry.model = Some("legacy-entry-model".into());
+        entry.model = Some("stale-registry-model".into());
         let root = entry.root_path.clone().unwrap();
 
         let _ = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json must exist");
-        assert_eq!(
-            meta.model.as_deref(),
-            Some("legacy-entry-model"),
-            "spec.model = None must fall back to entry.model; got {:?}",
+        assert!(
+            meta.model.is_none(),
+            "spec.model = None must ignore entry.model; got {:?}",
             meta.model
         );
     }
@@ -1529,12 +1524,14 @@ mod tests {
         );
     }
 
-    // ── resolve_timeout / resolve_model (spec-over-entry rule) ──
+    // ── resolve_timeout / resolve_model (runtime config authority) ──
     //
     // These two helpers are the single implementation of the
-    // spec-vs-entry precedence rule for timeouts and model
-    // selection. Production `send_to_agent_with_depth` calls
-    // them; these tests call the same functions.
+    // timeout still bridges from spec to entry because no spec-level default
+    // exists yet; model selection is intentionally narrower:
+    // invocation override > agent.toml spec, never entry.model.
+    // Production `send_to_agent_with_depth` calls these helpers; tests call
+    // the same functions.
     //
     // This is the honest form of the rule we pin: the tests
     // are not "recompute the equation and assert the result"
@@ -1578,48 +1575,39 @@ mod tests {
 
     #[test]
     fn resolve_model_prefers_spec_when_set() {
-        let m = resolve_model(Some("spec-model".into()), Some("entry-model".into()));
+        let m = resolve_model(Some("spec-model".into()));
         assert_eq!(m.as_deref(), Some("spec-model"));
     }
 
     #[test]
-    fn resolve_model_falls_back_to_entry_when_spec_none() {
-        let m = resolve_model(None, Some("entry-model".into()));
-        assert_eq!(m.as_deref(), Some("entry-model"));
-    }
-
-    #[test]
-    fn resolve_model_both_none_yields_none() {
-        let m = resolve_model(None, None);
+    fn resolve_model_returns_none_when_spec_none() {
+        let m = resolve_model(None);
         assert_eq!(m, None);
     }
 
     #[test]
-    fn resolve_model_spec_some_overrides_entry_none() {
-        // The asymmetric case: a spec that explicitly names a
-        // model must not be shadowed by a None on the entry
-        // row. This one tripped the original "or_else vs or"
-        // choice — `Option::or_else` evaluates the entry
-        // closure only when spec is None, which is the shape
-        // we want.
-        let m = resolve_model(Some("spec-model".into()), None);
+    fn resolve_model_both_none_yields_none() {
+        let m = resolve_model(None);
+        assert_eq!(m, None);
+    }
+
+    #[test]
+    fn resolve_model_has_no_entry_model_fallback() {
+        let m = resolve_model(Some("spec-model".into()));
         assert_eq!(m.as_deref(), Some("spec-model"));
     }
 
     // ── resolve_model_with_overrides (chat ability driver.model) ────────────
 
     #[test]
-    fn resolve_model_with_overrides_per_call_wins_over_spec_and_entry() {
+    fn resolve_model_with_overrides_per_call_wins_over_spec() {
         // The whole point of the chat `driver.model` field: a
-        // per-invocation override beats both the agent.toml spec
-        // and the legacy entry default. Pin that explicitly so a
+        // per-invocation override beats the agent.toml spec.
+        // Pin that explicitly so a
         // refactor of `or` chains here can't silently invert
         // precedence.
-        let m = resolve_model_with_overrides(
-            Some("override-model".into()),
-            Some("spec-model".into()),
-            Some("entry-model".into()),
-        );
+        let m =
+            resolve_model_with_overrides(Some("override-model".into()), Some("spec-model".into()));
         assert_eq!(m.as_deref(), Some("override-model"));
     }
 
@@ -1627,37 +1615,28 @@ mod tests {
     fn resolve_model_with_overrides_falls_through_to_spec_when_override_none() {
         // No per-call override → spec wins (matches resolve_model's
         // pre-overrides contract).
-        let m = resolve_model_with_overrides(
-            None,
-            Some("spec-model".into()),
-            Some("entry-model".into()),
-        );
+        let m = resolve_model_with_overrides(None, Some("spec-model".into()));
         assert_eq!(m.as_deref(), Some("spec-model"));
     }
 
     #[test]
-    fn resolve_model_with_overrides_falls_through_to_entry_when_override_and_spec_none() {
-        let m = resolve_model_with_overrides(None, None, Some("entry-model".into()));
-        assert_eq!(m.as_deref(), Some("entry-model"));
+    fn resolve_model_with_overrides_returns_none_when_override_and_spec_none() {
+        let m = resolve_model_with_overrides(None, None);
+        assert_eq!(m, None);
     }
 
     #[test]
     fn resolve_model_with_overrides_all_none_yields_none() {
-        let m = resolve_model_with_overrides(None, None, None);
+        let m = resolve_model_with_overrides(None, None);
         assert_eq!(m, None);
     }
 
     #[test]
     fn resolve_model_with_overrides_override_none_does_not_shadow_spec() {
-        // An explicit `Some("...")` on a lower tier must not be
-        // shadowed by `None` from a higher tier. `Option::or` has
-        // the right semantics here; pin it because a `unwrap_or`
-        // chain or a `match` statement could easily invert the
-        // shape.
-        let m = resolve_model_with_overrides(None, Some("spec".into()), None);
+        // A lower-tier spec value must not be shadowed by `None`
+        // from the per-call override tier.
+        let m = resolve_model_with_overrides(None, Some("spec".into()));
         assert_eq!(m.as_deref(), Some("spec"));
-        let m = resolve_model_with_overrides(None, None, Some("entry".into()));
-        assert_eq!(m.as_deref(), Some("entry"));
     }
 
     // ── PR-7 Session + Timeline dispatch integration ────────────────────────
