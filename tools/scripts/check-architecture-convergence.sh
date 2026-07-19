@@ -5455,18 +5455,115 @@ if python_runtime_ability.exists():
             "Python stream lowering must resolve a stream-mode descriptor",
         )
 
-# Rule 60: the generic Go and Python RuntimeClient facades must emit the same
-# descriptor-selection state. An omitted call mode is canonically RPC before
-# crossing the provider seam; transports may not infer an empty selector.
+# Rule 60: generic descriptor resolver ingress must not default tuple
+# selector state. Higher-level convenience APIs may choose RPC explicitly, but
+# RuntimeClient / C ABI descriptor resolvers must require `call_mode` before
+# crossing the provider seam so there is no second implicit selector authority.
 python_runtime = cli_root / "sdk/python/easynet_sdk/runtime.py"
+python_cabi = cli_root / "sdk/python/easynet_sdk/_cabi.py"
+go_runtime = cli_root / "sdk/go/runtime.go"
+go_cabi_runtime = cli_root / "sdk/go/cabi_runtime.go"
+rust_ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
 if python_runtime.exists():
     text = source(python_runtime)
-    if 'call_mode = call_mode.strip() or "rpc"' not in text:
+    for token, detail in (
+        (
+            'call_mode: str = "rpc"',
+            "Python RuntimeClient.resolve_descriptor_ref must require explicit call_mode",
+        ),
+        (
+            'call_mode = call_mode.strip() or "rpc"',
+            "Python RuntimeClient must not normalize blank descriptor call_mode to rpc",
+        ),
+    ):
+        if token in text:
+            add("R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK", python_runtime, 1, detail)
+    if 'raise _invalid_runtime_client("descriptor_ref call_mode is required")' not in text:
         add(
             "R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK",
             python_runtime,
             1,
-            "Python RuntimeClient must normalize blank descriptor call mode to rpc before provider resolution",
+            "Python RuntimeClient must reject missing descriptor call_mode before provider resolution",
+        )
+if python_cabi.exists():
+    text = source(python_cabi)
+    for token, detail in (
+        (
+            'request.get("call_mode") or "rpc"',
+            "Python C ABI diagnostics resolver must not default request call_mode to rpc",
+        ),
+        (
+            'entry.get("call_mode") or "rpc"',
+            "Python C ABI diagnostics resolver must not default catalog entry call_mode to rpc",
+        ),
+    ):
+        if token in text:
+            add("R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK", python_cabi, 1, detail)
+    if '_required_string(request, "call_mode")' not in text:
+        add(
+            "R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK",
+            python_cabi,
+            1,
+            "Python C ABI diagnostics resolver must require request call_mode",
+        )
+if go_runtime.exists():
+    text = source(go_runtime)
+    for token, detail in (
+        (
+            'CallMode   string `json:"call_mode,omitempty"`',
+            "Go RuntimeDescriptorRefRequest must not omit call_mode at the generic resolver seam",
+        ),
+        (
+            'req.CallMode = "rpc"',
+            "Go RuntimeClient must not default blank descriptor call_mode to rpc",
+        ),
+    ):
+        if token in text:
+            add("R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK", go_runtime, 1, detail)
+    if 'invalidRuntimeClient("descriptor_ref call_mode is required")' not in text:
+        add(
+            "R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK",
+            go_runtime,
+            1,
+            "Go RuntimeClient must reject missing descriptor call_mode before provider resolution",
+        )
+if go_cabi_runtime.exists():
+    text = source(go_cabi_runtime)
+    for token, detail in (
+        (
+            'callMode = "rpc"',
+            "Go C ABI diagnostics resolver must not default request call_mode to rpc",
+        ),
+        (
+            'entryCallMode = "rpc"',
+            "Go C ABI diagnostics resolver must not default catalog entry call_mode to rpc",
+        ),
+    ):
+        if token in text:
+            add("R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK", go_cabi_runtime, 1, detail)
+    if 'invalidRuntimePayload("call_mode is required for descriptor_ref resolution", nil)' not in text:
+        add(
+            "R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK",
+            go_cabi_runtime,
+            1,
+            "Go C ABI diagnostics resolver must require request call_mode",
+        )
+if rust_ffi_invocation.exists():
+    text = source(rust_ffi_invocation)
+    for token, detail in (
+        (
+            'descriptor_ref request missing call_mode',
+            "Rust FFI descriptor resolver must require request call_mode",
+        ),
+    ):
+        if token not in text:
+            add("R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK", rust_ffi_invocation, 1, detail)
+    if '.unwrap_or("rpc")' in text:
+        add(
+            "R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK",
+            rust_ffi_invocation,
+            1,
+            "Rust FFI descriptor resolver/catalog path must not default missing call_mode to rpc",
         )
 
 # Rule 61: direct gRPC transports own only unary/stream/bidi wire dispatch.

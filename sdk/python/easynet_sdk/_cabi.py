@@ -1746,7 +1746,7 @@ def _resolve_descriptor_ref_from_diagnostics(
     request = _json_object(request_json or b"{}", "descriptor_ref resolution request")
     callee_ura = _required_string(request, "callee_ura")
     ability = _required_string(request, "ability")
-    call_mode = str(request.get("call_mode") or "rpc").strip() or "rpc"
+    call_mode = _required_string(request, "call_mode").strip()
     ability_is_ura = ability.startswith("easynet:///r/")
     catalog = diagnostics.get("descriptor_catalog")
     if not isinstance(catalog, dict):
@@ -1768,7 +1768,7 @@ def _resolve_descriptor_ref_from_diagnostics(
         if not isinstance(entry, dict):
             continue
         entry_owner_ura = str(entry.get("owner_ura") or "").strip()
-        if str(entry.get("call_mode") or "rpc").strip() != call_mode:
+        if str(entry.get("call_mode") or "").strip() != call_mode:
             continue
         entry_name = str(entry.get("name") or "").strip()
         entry_ability_ura = str(entry.get("ability_ura") or "").strip()

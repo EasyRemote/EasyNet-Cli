@@ -22,10 +22,37 @@ from easynet_sdk._cabi import (
     _CABIStreamTransport,
     _platform_library_candidates,
     _project_cabi_ordered_event,
+    _resolve_descriptor_ref_from_diagnostics,
 )
 from easynet_sdk.providers.easynet.lifecycle import DaemonMode, StartConfig
 
 from test_runtime import canonical_runtime_receipt_pair, complete_draft
+
+
+class CABIDescriptorDiagnosticsTests(unittest.TestCase):
+    def test_descriptor_diagnostics_requires_call_mode(self) -> None:
+        diagnostics = {
+            "descriptor_catalog": {
+                "entries": [
+                    {
+                        "name": "page.fetch",
+                        "owner_ura": "easynet:///r/test/device/dev-a",
+                        "ability_ura": "easynet:///r/test/ability/device.dev-a.page.fetch",
+                        "descriptor_ref": "easynet:///r/test/ability/device.dev-a.page.fetch@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+                        "call_mode": "rpc",
+                    }
+                ]
+            }
+        }
+
+        with self.assertRaises(SDKError) as raised:
+            _resolve_descriptor_ref_from_diagnostics(
+                b'{"callee_ura":"easynet:///r/test/device/dev-a","ability":"page.fetch"}',
+                diagnostics,
+            )
+
+        self.assertEqual(raised.exception.code, ErrorCode.INVALID_ARGUMENT)
+        self.assertIn("call_mode is required", raised.exception.message)
 
 
 class FakeSymbol:

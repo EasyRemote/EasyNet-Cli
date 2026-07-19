@@ -3,9 +3,31 @@ package easynet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
+
+func TestRuntimeClientResolveDescriptorRefRequiresCallMode(t *testing.T) {
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(context.Context, []byte) ([]byte, error) {
+			t.Fatal("descriptor resolver transport must not be called for missing call_mode")
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+
+	_, err = runtime.ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
+		CalleeURA: "easynet:///r/example/device/dev-a",
+		Ability:   "observe.health",
+	})
+	var sdkErr *SDKError
+	if !errors.As(err, &sdkErr) || sdkErr.Code != ErrInvalidArgument {
+		t.Fatalf("ResolveDescriptorRef error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
 
 func TestRuntimeAbilityClientBuildsCompleteCanonicalDraft(t *testing.T) {
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{

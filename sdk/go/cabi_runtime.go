@@ -1467,11 +1467,11 @@ func resolveDescriptorRefFromDiagnostics(requestJSON []byte, diagnosticsJSON []b
 	calleeURA := strings.TrimSpace(cabiStringOrEmpty(request["callee_ura"]))
 	ability := strings.TrimSpace(cabiStringOrEmpty(request["ability"]))
 	callMode := strings.TrimSpace(cabiStringOrEmpty(request["call_mode"]))
-	if callMode == "" {
-		callMode = "rpc"
-	}
 	if calleeURA == "" || ability == "" {
 		return nil, invalidRuntimePayload("callee_ura and ability are required for descriptor_ref resolution", nil)
+	}
+	if callMode == "" {
+		return nil, invalidRuntimePayload("call_mode is required for descriptor_ref resolution", nil)
 	}
 	abilityIsURA := strings.HasPrefix(ability, URAScheme)
 
@@ -1494,9 +1494,6 @@ func resolveDescriptorRefFromDiagnostics(requestJSON []byte, diagnosticsJSON []b
 		}
 		entryOwnerURA := strings.TrimSpace(cabiStringOrEmpty(entry["owner_ura"]))
 		entryCallMode := strings.TrimSpace(cabiStringOrEmpty(entry["call_mode"]))
-		if entryCallMode == "" {
-			entryCallMode = "rpc"
-		}
 		if entryCallMode != callMode {
 			continue
 		}

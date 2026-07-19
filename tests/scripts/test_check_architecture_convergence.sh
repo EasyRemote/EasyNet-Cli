@@ -2227,8 +2227,10 @@ def decode_invocation_result(decoded):
     _reject_retired_top_level_receipt_alias(decoded, "invocation result")
 
 class RuntimeClient:
-    def resolve_descriptor_ref(self, call_mode="rpc"):
-        call_mode = call_mode.strip() or "rpc"
+    def resolve_descriptor_ref(self, call_mode: str):
+        call_mode = call_mode.strip()
+        if not call_mode:
+            raise _invalid_runtime_client("descriptor_ref call_mode is required")
         return self._transport.resolve_descriptor_ref({"call_mode": call_mode})
 
 # Product words in comments and private symbols do not create public models.
@@ -2257,8 +2259,20 @@ func (s *cabiStreamTransport) Cancel(ctx context.Context, reason string) ([]byte
 func (b *cabiBidiTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
     return []byte(fmt.Sprintf(`{"session_id":%q,"state":"CancelRequested","terminal":false,"reason":"cancelled"}`, bidiID)), nil
 }
+
+func resolveDescriptorRefFromDiagnostics(request map[string]string) error {
+    if request["call_mode"] == "" {
+        return invalidRuntimePayload("call_mode is required for descriptor_ref resolution", nil)
+    }
+    return nil
+}
 EOF
   cat >"$CLI/sdk/python/easynet_sdk/_cabi.py" <<'EOF'
+def _resolve_descriptor_ref_from_diagnostics(request):
+    call_mode = _required_string(request, "call_mode")
+    return call_mode
+
+
 class _CABIStreamTransport:
     def cancel(self, reason: str) -> bytes:
         return _json_bytes(

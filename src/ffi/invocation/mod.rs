@@ -1916,7 +1916,7 @@ fn runtime_resolve_descriptor_ref_json(
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("rpc");
+        .ok_or_else(|| anyhow::anyhow!("descriptor_ref request missing call_mode"))?;
     let ability_ura = match crate::core::ura::AbilitySelector::parse(ability) {
         Ok(selector) => selector.ability_ura().to_string(),
         Err(_) => crate::core::ura::owner_ability_ura(callee_ura, ability)
@@ -2141,8 +2141,7 @@ fn descriptor_catalog_entry_from_value(value: &serde_json::Value) -> Option<serd
     let version = value.get("version")?.as_str()?.trim();
     let call_mode = value
         .get("call_mode")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("rpc")
+        .and_then(serde_json::Value::as_str)?
         .trim();
     let admission_action = value.get("admission_action")?.as_str()?.trim();
     let descriptor_hash = value.get("descriptor_hash")?.as_str()?.trim();
@@ -2150,6 +2149,7 @@ fn descriptor_catalog_entry_from_value(value: &serde_json::Value) -> Option<serd
         || owner_ura.is_empty()
         || name.is_empty()
         || version.is_empty()
+        || call_mode.is_empty()
         || admission_action.is_empty()
         || descriptor_hash.is_empty()
     {
@@ -2193,7 +2193,8 @@ fn descriptor_catalog_resolution_from_entries(
         let entry_call_mode = entry
             .get("call_mode")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or("rpc");
+            .unwrap_or_default()
+            .trim();
         if entry_ability != ability_ura || entry_call_mode != call_mode {
             return None;
         }
@@ -8873,6 +8874,59 @@ mod tests {
                 |descriptor_ref| descriptor_ref.starts_with(&format!("{ability_ura}@"))
                     && descriptor_ref.ends_with("!read")
             ));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_descriptor_resolver_requires_explicit_call_mode() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path = dir.path().join("control.json");
+        let node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
+        let device_ura = crate::core::ura::device_ura("localhost", node_id);
+        crate::daemon::control::discovery::write(
+            &control_path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(dir.path().join("control.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: Some(node_id.to_string()),
+                }),
+                pid: 1,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write control discovery");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            control_path.display().to_string(),
+            Some(dir.path().join("offline-daemon.sock").display().to_string()),
+        );
+
+        let error = runtime_resolve_descriptor_ref_json(
+            &session,
+            &serde_json::json!({
+                "callee_ura": device_ura,
+                "caller_ura": device_ura,
+                "subject_ura": device_ura,
+                "ability": crate::daemon::ability::names::resources::META_LIST_RESOURCES,
+            })
+            .to_string(),
+        )
+        .expect_err("descriptor resolver must reject missing call_mode");
+
+        assert!(
+            error
+                .to_string()
+                .contains("descriptor_ref request missing call_mode"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[cfg(feature = "axon-pb")]

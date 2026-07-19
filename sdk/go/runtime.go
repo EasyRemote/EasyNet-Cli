@@ -93,7 +93,7 @@ type DescriptorResolverTransport interface {
 type RuntimeDescriptorRefRequest struct {
 	CalleeURA  string `json:"callee_ura"`
 	Ability    string `json:"ability"`
-	CallMode   string `json:"call_mode,omitempty"`
+	CallMode   string `json:"call_mode"`
 	CallerURA  string `json:"caller_ura,omitempty"`
 	SubjectURA string `json:"subject_ura,omitempty"`
 }
@@ -273,7 +273,7 @@ func (c *RuntimeClient) ResolveDescriptorRef(ctx context.Context, req RuntimeDes
 		return "", invalidRuntimeClient("runtime transport does not expose descriptor resolution")
 	}
 	if strings.TrimSpace(req.CallMode) == "" {
-		req.CallMode = "rpc"
+		return "", invalidRuntimeClient("descriptor_ref call_mode is required")
 	}
 	requestJSON, err := json.Marshal(req)
 	if err != nil {

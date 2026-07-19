@@ -1000,7 +1000,7 @@ class RuntimeClient:
         *,
         callee_ura: str,
         ability: str,
-        call_mode: str = "rpc",
+        call_mode: str,
         caller_ura: str = "",
         subject_ura: str = "",
     ) -> str:
@@ -1011,7 +1011,9 @@ class RuntimeClient:
             raise _invalid_runtime_client(
                 "runtime transport does not expose descriptor resolution"
             )
-        call_mode = call_mode.strip() or "rpc"
+        call_mode = call_mode.strip()
+        if not call_mode:
+            raise _invalid_runtime_client("descriptor_ref call_mode is required")
         request = {
             "callee_ura": callee_ura,
             "ability": ability,

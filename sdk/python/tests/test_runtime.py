@@ -318,28 +318,20 @@ def signed_fixture():
 
 
 class RuntimeTests(unittest.TestCase):
-    def test_descriptor_resolution_normalizes_blank_call_mode_to_rpc(self) -> None:
+    def test_descriptor_resolution_rejects_blank_call_mode(self) -> None:
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)
 
-        descriptor_ref = client.resolve_descriptor_ref(
-            callee_ura="easynet:///r/example/device/dev-a",
-            ability="observe.health",
-            call_mode="  ",
-        )
+        with self.assertRaises(SDKError) as raised:
+            client.resolve_descriptor_ref(
+                callee_ura="easynet:///r/example/device/dev-a",
+                ability="observe.health",
+                call_mode="  ",
+            )
 
-        self.assertEqual(
-            descriptor_ref,
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
-        )
-        self.assertEqual(
-            transport.seen_descriptor_request,
-            {
-                "callee_ura": "easynet:///r/example/device/dev-a",
-                "ability": "observe.health",
-                "call_mode": "rpc",
-            },
-        )
+        self.assertEqual(raised.exception.code, ErrorCode.INVALID_ARGUMENT)
+        self.assertIn("call_mode is required", raised.exception.message)
+        self.assertIsNone(transport.seen_descriptor_request)
 
     def test_invoke_returns_typed_result(self) -> None:
         transport = MemoryRuntimeTransport()

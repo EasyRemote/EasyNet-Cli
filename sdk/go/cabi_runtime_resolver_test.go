@@ -69,3 +69,30 @@ func TestResolveDescriptorRefFromDiagnosticsAbilityURASelectorAllowsHostedOwner(
 		t.Fatalf("owner_ura = %#v", decoded["owner_ura"])
 	}
 }
+
+func TestResolveDescriptorRefFromDiagnosticsRequiresCallMode(t *testing.T) {
+	diagnostics := []byte(`{
+		"descriptor_catalog": {
+			"source": "test",
+			"entries": [
+				{
+					"name": "page.fetch",
+					"owner_ura": "easynet:///r/test/device/dev-a",
+					"ability_ura": "easynet:///r/test/ability/device.dev-a.page.fetch",
+					"descriptor_ref": "easynet:///r/test/ability/device.dev-a.page.fetch@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+					"call_mode": "rpc"
+				}
+			]
+		}
+	}`)
+	_, err := resolveDescriptorRefFromDiagnostics(
+		[]byte(`{"callee_ura":"easynet:///r/test/device/dev-a","ability":"page.fetch"}`),
+		diagnostics,
+	)
+	if err == nil {
+		t.Fatal("descriptor_ref diagnostics resolver accepted missing call_mode")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
