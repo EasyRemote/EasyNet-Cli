@@ -37,7 +37,7 @@ use clap::Args;
 use serde::{Deserialize, Serialize};
 
 use crate::core::ura;
-use crate::daemon::identity::self_identity::KeyringClient;
+use crate::daemon::identity::self_identity::{KeyringClient, USER_SIGNING_CLI_PURPOSE};
 use crate::daemon::keyring::{ManagedSigningKeyProjection, ManagedSigningStatus};
 use crate::daemon::persistence::config::{
     self, atomic_write_with_permissions, state_dir, WritePermissions,
@@ -1097,13 +1097,13 @@ trait UserSigningKeyStore {
 impl UserSigningKeyStore for KeyringClient {
     fn list(&self) -> anyhow::Result<Vec<ManagedSigningKeyProjection>> {
         Ok(self.inventory_list(
-            Some("user_signing.cli".into()),
+            Some(USER_SIGNING_CLI_PURPOSE.into()),
             Some(ManagedSigningStatus::Active),
         )?)
     }
 
     fn create(&self, user_ura: &str) -> anyhow::Result<ManagedSigningKeyProjection> {
-        Ok(self.inventory_create("user_signing.cli", Some(user_ura.to_string()))?)
+        Ok(self.inventory_create(USER_SIGNING_CLI_PURPOSE, Some(user_ura.to_string()))?)
     }
 }
 

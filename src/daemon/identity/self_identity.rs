@@ -50,6 +50,8 @@ use crate::daemon::keyring::{
     MAX_KEY_SERVICE_FRAME_BYTES, MAX_MANAGED_SIGNING_PAGE_SIZE,
 };
 
+pub const USER_SIGNING_CLI_PURPOSE: &str = "user_signing.cli";
+
 /// Errors surfaced by `SelfIdentity` callers. Most are 1:1 with
 /// the keyring daemon's typed responses; transport-level failures
 /// (socket missing, broken pipe) get their own variant so callers
@@ -215,6 +217,108 @@ impl CanonicalSigner for RuntimeSigningIdentity {
         .map_err(|error| {
             SelfIdentityError::Transport(format!(
                 "key-service signing worker terminated unexpectedly: {error}"
+            ))
+        })?
+    }
+
+    fn signing_public_key(&self) -> Result<VerifyingKey, SelfIdentityError> {
+        Ok(self.public_key)
+    }
+}
+
+/// Caller signer resolver used by runtime invocation facades.
+///
+/// Device and authority callers are runtime owners and keep the canonical
+/// `self_ura -> keypair` lookup. User callers are different: the CLI
+/// provisions them as managed, subject-bound signing keys so multiple user
+/// devices can coexist without pretending the user is a daemon runtime owner.
+pub fn load_runtime_caller_signer(
+    owner_ura: impl Into<String>,
+) -> Result<Arc<dyn CanonicalSigner>, SelfIdentityError> {
+    let owner_ura = owner_ura.into();
+    let provider = Arc::new(KeyringClient::default_path());
+    let self_identity_provider: Arc<dyn SelfIdentity> = provider.clone();
+    match RuntimeSigningIdentity::load(owner_ura.clone(), self_identity_provider) {
+        Ok(signer) => Ok(Arc::new(signer)),
+        Err(primary_error) => {
+            if !is_user_owner_ura(&owner_ura) {
+                return Err(primary_error);
+            }
+            ManagedRuntimeSigningIdentity::load_user(owner_ura.clone(), provider)
+                .map(|signer| Arc::new(signer) as Arc<dyn CanonicalSigner>)
+                .map_err(|managed_error| SelfIdentityError::Rejected {
+                    kind: "not_found".into(),
+                    message: format!(
+                        "runtime self-identity unavailable ({primary_error}); no active managed user signer bound to `{owner_ura}` under purpose `{USER_SIGNING_CLI_PURPOSE}` ({managed_error})"
+                    ),
+                })
+        }
+    }
+}
+
+fn is_user_owner_ura(owner_ura: &str) -> bool {
+    crate::core::ura::parse_ura(owner_ura)
+        .map(|parsed| parsed.kind == crate::core::ura::URAKind::User)
+        .unwrap_or(false)
+}
+
+#[derive(Clone)]
+struct ManagedRuntimeSigningIdentity {
+    owner_ura: Arc<str>,
+    projection: ManagedSigningKeyProjection,
+    public_key: VerifyingKey,
+    provider: Arc<KeyringClient>,
+}
+
+impl ManagedRuntimeSigningIdentity {
+    fn load_user(
+        owner_ura: impl Into<String>,
+        provider: Arc<KeyringClient>,
+    ) -> Result<Self, SelfIdentityError> {
+        let owner_ura = owner_ura.into();
+        let owner_ura = owner_ura.trim();
+        if owner_ura.is_empty() {
+            return Err(SelfIdentityError::InvalidOwner);
+        }
+        let projection = provider
+            .inventory_list(
+                Some(USER_SIGNING_CLI_PURPOSE.to_string()),
+                Some(ManagedSigningStatus::Active),
+            )?
+            .into_iter()
+            .find(|entry| entry.bound_subject.as_deref() == Some(owner_ura))
+            .ok_or_else(|| SelfIdentityError::Rejected {
+                kind: "not_found".into(),
+                message: format!("managed user signing key not found for `{owner_ura}`"),
+            })?;
+        let public_key = decode_public_key(projection.public_key_b64.clone())?;
+        Ok(Self {
+            owner_ura: Arc::from(owner_ura.to_string()),
+            projection,
+            public_key,
+            provider,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl CanonicalSigner for ManagedRuntimeSigningIdentity {
+    fn owner_ura(&self) -> &str {
+        &self.owner_ura
+    }
+
+    async fn sign_canonical(&self, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError> {
+        validate_canonical_signing_bytes(canonical_bytes)?;
+        let provider = Arc::clone(&self.provider);
+        let projection = self.projection.clone();
+        let canonical_bytes = canonical_bytes.to_vec();
+        tokio::task::spawn_blocking(move || {
+            provider.inventory_sign_bound(&projection, &canonical_bytes)
+        })
+        .await
+        .map_err(|error| {
+            SelfIdentityError::Transport(format!(
+                "managed key-service signing worker terminated unexpectedly: {error}"
             ))
         })?
     }
@@ -966,6 +1070,7 @@ impl SelfIdentity for InMemoryVault {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
     use crate::daemon::keyring::{MasterKeySource, Vault};
     use ed25519_dalek::Verifier;
     use rand::rngs::OsRng;
@@ -1084,6 +1189,53 @@ mod tests {
             SelfIdentityError::DaemonOffline { .. } => (),
             other => panic!("wrong variant: {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn managed_user_runtime_signer_signs_with_subject_bound_inventory_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("key-service.sock");
+        let vault_path = temp.path().join("key-service.enc");
+        let user_ura = "easynet:///r/acme/user/alice";
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let socket_for_server = socket.clone();
+        let server = std::thread::spawn(move || {
+            crate::daemon::keyring::service::run_test_unix_key_service_with_purpose(
+                socket_for_server,
+                vault_path,
+                "test-passphrase".to_string(),
+                user_ura.to_string(),
+                USER_SIGNING_CLI_PURPOSE.to_string(),
+                2,
+                ready_tx,
+            );
+        });
+        let projection = ready_rx
+            .recv()
+            .expect("test key service reports readiness")
+            .expect("test key service starts");
+        let provider = Arc::new(KeyringClient::new(socket));
+        let signer = ManagedRuntimeSigningIdentity::load_user(user_ura, provider)
+            .expect("managed user signer loads");
+
+        assert_eq!(signer.owner_ura(), user_ura);
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.encode(
+                signer.signing_public_key().unwrap().to_bytes()
+            ),
+            projection.public_key_b64
+        );
+        let signature = signer
+            .sign_canonical(b"canonical user call")
+            .await
+            .expect("managed signer signs");
+        signer
+            .signing_public_key()
+            .unwrap()
+            .verify(b"canonical user call", &signature)
+            .expect("managed signature verifies");
+        server.join().unwrap();
     }
 
     #[cfg(unix)]

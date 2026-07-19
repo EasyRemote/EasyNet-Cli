@@ -598,13 +598,34 @@ pub(crate) fn run_test_unix_key_service(
     expected_connections: usize,
     ready: std::sync::mpsc::Sender<Result<ManagedSigningKeyProjection, String>>,
 ) {
+    run_test_unix_key_service_with_purpose(
+        socket_path,
+        vault_path,
+        passphrase,
+        caller,
+        "agent_signing".to_string(),
+        expected_connections,
+        ready,
+    );
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn run_test_unix_key_service_with_purpose(
+    socket_path: std::path::PathBuf,
+    vault_path: std::path::PathBuf,
+    passphrase: String,
+    caller: String,
+    purpose: String,
+    expected_connections: usize,
+    ready: std::sync::mpsc::Sender<Result<ManagedSigningKeyProjection, String>>,
+) {
     let result = (|| -> Result<_, String> {
         let runtime = KeyServiceRuntime::open(vault_path, passphrase)
             .map_err(|error| format!("open test key service: {error}"))?;
         let runtime_driver = tokio::runtime::Runtime::new()
             .map_err(|error| format!("create test key-service runtime: {error}"))?;
         let entry = runtime_driver.block_on(runtime.dispatch(KeyringRequest::InventoryCreate {
-            purpose: "agent_signing".to_string(),
+            purpose,
             bound_subject: Some(caller),
         }));
         let entry = match entry {

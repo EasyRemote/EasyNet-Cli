@@ -534,7 +534,7 @@ pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyh
         .context("build tokio runtime for canonical remote invoke")?;
 
     runtime.block_on(async move {
-        let signer = crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(
+        let signer = crate::daemon::identity::self_identity::load_runtime_caller_signer(
             caller_ura.clone(),
         )
         .map_err(|err| {
@@ -556,7 +556,7 @@ pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyh
             target.route_function_name(),
             target.descriptor_ref(),
             arguments,
-            &signer,
+            signer.as_ref(),
         )
         .await?;
         request.content_type = "application/json".to_string();
@@ -629,7 +629,7 @@ pub(crate) fn invoke_remote_target_stream(
         .context("build tokio runtime for remote InvokeStream")?;
 
     runtime.block_on(async move {
-        let signer = crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(
+        let signer = crate::daemon::identity::self_identity::load_runtime_caller_signer(
             caller_ura.clone(),
         )
         .map_err(|err| {
@@ -651,7 +651,7 @@ pub(crate) fn invoke_remote_target_stream(
             target.route_function_name(),
             target.descriptor_ref(),
             arguments,
-            &signer,
+            signer.as_ref(),
         )
         .await?;
         stream_request.content_type = "application/json".to_string();
@@ -759,7 +759,7 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
         .context("build tokio runtime for remote InvokeBidi")?;
 
     runtime.block_on(async move {
-        let signer = crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(
+        let signer = crate::daemon::identity::self_identity::load_runtime_caller_signer(
             caller_ura.clone(),
         )
         .map_err(|err| {
@@ -781,7 +781,7 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
             target.route_function_name(),
             target.descriptor_ref(),
             arguments,
-            &signer,
+            signer.as_ref(),
         )
         .await?;
         let mac = envelope_open
