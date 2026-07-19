@@ -277,10 +277,19 @@ not alter runtime, SDK, daemon, or downstream product behavior.
   `00473e644fd92a1c7688ec42bc56aa2497f5a3a6fbb767c54123f4ae2071e5e1`.
 - Lifecycle vector digest:
   `63d9344234bdd760165d42b72748204f3864e9a71b308d74162408109fbe5748`.
+- Fixed-baseline benchmark evidence:
+  `../EasyNet-Axon/sdk/rust/benches/baseline-v2.json`, digest
+  `9e29b154f67fa00f39d879fea0c92d0e79044801e70c8fdbf967825976320930`.
+  The checked `canonical-local-runtime-v2` suite covers unary, stream, bidi,
+  cooperative cancellation cleanup, allocation counts, allocated bytes,
+  active-invocation cleanup, and bounded concurrency
+  (`requests=64`, `limit=16`) with median/min/max samples.
 - Aggregate conformance gate:
   `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`.
 - Negative gate self-test:
   `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`.
+- Benchmark baseline gate:
+  `python3 ../EasyNet-Axon/scripts/checks/check_benchmark_baselines.py --baseline ../EasyNet-Axon/sdk/rust/benches/baseline-v2.json`.
 - Cutover readiness gate:
   `bash tools/scripts/check-sdk-cutover-readiness.sh`.
 - Downstream consumer gate:
@@ -296,7 +305,7 @@ not alter runtime, SDK, daemon, or downstream product behavior.
 
 | ID | Status | Evidence and limit |
 | --- | --- | --- |
-| RF-1 | Gate-conformant | `check_axon_product_protocol_boundary_contract`, `check_sdk_product_neutrality_contract`, the public API manifest, and `check_plugin_sidecar_helper_matrix_contract` reject product protocol, package, provider, lifecycle, runtime-configuration leakage, and naked sidecar-frame templates in canonical SDK roots. Python, Go, and Node declarative exec invoke templates are provider-helper-backed; stream/bidi helper cells and unbacked languages remain closed seams. This is boundary evidence, not an independent release audit of every downstream product package. |
+| RF-1 | Gate-conformant | `check_axon_product_protocol_boundary_contract`, `check_sdk_product_neutrality_contract`, the public API manifest, and `check_plugin_sidecar_helper_matrix_contract` reject product protocol, package, provider, lifecycle, runtime-configuration leakage, and naked sidecar-frame templates in canonical SDK roots. Python, Go, Rust, and Node declarative exec invoke templates are provider-helper-backed; stream/bidi helper cells and unbacked languages remain closed seams. This is boundary evidence, not an independent release audit of every downstream product package. |
 | RF-2 | Gate-conformant | `check_daemon_mission_eal_boundary_contract` and the Axon product/protocol boundary reject Mission schema, Mission runtime state, MissionControl service, and public Mission SDK facade in canonical Axon surfaces. This proves source-boundary conformance; downstream Mission/EAL product behavior still needs its own release evidence. |
 | RF-3 | Gate-conformant | `check_axon_plain_proof_public_boundary_contract`, `check_cli_signed_submission_boundary_contract`, and the manifest contract reject plain admission/proof helpers, legacy helper names, unsigned daemon submissions, and raw canonical proof ownership outside descriptor-bound request/draft builders. |
 | RF-4 | Gate-conformant | `check_lifecycle_evidence_freshness_contract` requires the Axon lifecycle contract, capability matrix, and transition vectors to be fresh and `CutoverReady` for all required lifecycle actions before the convergence gate passes. Rust, C ABI, Node, Java, and Swift now have direct executable `bidi/frame0_required` evidence at their own runtime boundaries, and Go/Python provider-backed evidence remains in the shared capability matrix. This is only as strong as the revision-pinned lifecycle runner evidence. |

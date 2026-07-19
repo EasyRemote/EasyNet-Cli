@@ -20,6 +20,7 @@ use clap::ValueEnum;
 pub enum PluginTemplateLanguage {
     Python,
     Go,
+    Rust,
     Node,
 }
 
@@ -65,9 +66,9 @@ pub const PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX: &[ProviderSidecarHelperCapa
     ProviderSidecarHelperCapability {
         language: "rust",
         call_mode: ProviderSidecarCallMode::ExecInvoke,
-        state: ProviderSidecarHelperState::Seam,
-        template_available: false,
-        helper_package: None,
+        state: ProviderSidecarHelperState::CutoverReady,
+        template_available: true,
+        helper_package: Some("easynet-provider-pluginexec"),
     },
     ProviderSidecarHelperCapability {
         language: "node",
@@ -181,6 +182,7 @@ impl PluginTemplateLanguage {
         match self {
             Self::Python => "python",
             Self::Go => "go",
+            Self::Rust => "rust",
             Self::Node => "node",
         }
     }
@@ -307,6 +309,15 @@ impl HelloPluginTemplate {
                 write_new_file(&cmd_dir.join("main.go"), GO_EXEC_PLUGIN)?;
                 write_new_file(&bin_dir.join(".gitkeep"), "")?;
             }
+            PluginTemplateLanguage::Rust => {
+                let src_dir = self.target.join("src");
+                fs::create_dir_all(&src_dir)
+                    .with_context(|| format!("create {}", src_dir.display()))?;
+                write_new_file(&self.target.join("Cargo.toml"), &self.rust_cargo_toml())?;
+                write_new_file(&self.target.join("Makefile"), RUST_MAKEFILE)?;
+                write_new_file(&src_dir.join("main.rs"), RUST_EXEC_PLUGIN)?;
+                write_new_file(&bin_dir.join(".gitkeep"), "")?;
+            }
             PluginTemplateLanguage::Node => {
                 write_new_file(&self.target.join("package.json"), &self.node_package_json())?;
                 let exec_path = bin_dir.join("exec-plugin");
@@ -409,6 +420,23 @@ easynet plugin install .
 ```
 
 The daemon runs `bin/exec-plugin`; it does not run `go run` at invocation time.
+"#
+            }
+            PluginTemplateLanguage::Rust => {
+                r#"This template uses the Rust CLI SDK provider helper:
+
+```rust
+use easynet_provider_pluginexec::{serve_exec_plugin, SidecarInvocation};
+```
+
+Build the executable before install:
+
+```bash
+make build
+easynet plugin install .
+```
+
+The daemon runs `bin/exec-plugin`; it does not run `cargo run` at invocation time.
 "#
             }
             PluginTemplateLanguage::Node => {
@@ -527,6 +555,28 @@ replace easynet.run/cli/sdk/go => {sdk_path}
             sdk_path = default_node_sdk_file_path().display(),
         )
     }
+
+    fn rust_cargo_toml(&self) -> String {
+        format!(
+            r#"[package]
+name = "{package_name}"
+version = "{package_version}"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "exec-plugin"
+path = "src/main.rs"
+
+[dependencies]
+easynet-provider-pluginexec = {{ path = "{sdk_path}" }}
+serde_json = "1"
+"#,
+            package_name = self.package_id.replace('.', "-"),
+            package_version = self.package_version,
+            sdk_path = default_rust_pluginexec_path().display(),
+        )
+    }
 }
 
 const PYTHON_EXEC_PLUGIN: &str = r#"#!/usr/bin/env python3
@@ -580,6 +630,32 @@ build:
 	go build -o bin/exec-plugin ./cmd/exec-plugin
 "#;
 
+const RUST_EXEC_PLUGIN: &str = r#"use easynet_provider_pluginexec::{serve_exec_plugin, SidecarInvocation};
+use serde_json::{json, Value};
+
+fn main() -> std::io::Result<()> {
+    serve_exec_plugin(|invocation: SidecarInvocation| {
+        Ok::<Value, std::convert::Infallible>(json!({
+            "ok": true,
+            "source": "hello-plugin",
+            "message": invocation.args.get("message").cloned().unwrap_or(Value::Null),
+            "caller": invocation.caller,
+            "callee": invocation.callee,
+            "subject": invocation.subject,
+            "ability": invocation.ability,
+            "invocation_nonce_len": invocation.invocation_nonce.len(),
+        }))
+    })
+}
+"#;
+
+const RUST_MAKEFILE: &str = r#".PHONY: build
+
+build:
+	cargo build --release
+	cp target/release/exec-plugin bin/exec-plugin
+"#;
+
 const NODE_EXEC_WRAPPER: &str = r#"#!/usr/bin/env sh
 set -eu
 exec node "$(dirname "$0")/exec-plugin.mjs"
@@ -605,6 +681,10 @@ fn default_go_sdk_replace_path() -> PathBuf {
 
 fn default_node_sdk_file_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sdk/node")
+}
+
+fn default_rust_pluginexec_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sdk/rust/provider/easynet/pluginexec")
 }
 
 fn ensure_empty_or_missing_dir(path: &Path) -> anyhow::Result<()> {
@@ -782,6 +862,7 @@ mod tests {
         for language in [
             PluginTemplateLanguage::Python,
             PluginTemplateLanguage::Go,
+            PluginTemplateLanguage::Rust,
             PluginTemplateLanguage::Node,
         ] {
             let capability = language.sidecar_helper_capability();
@@ -797,7 +878,7 @@ mod tests {
                 language.label()
             );
         }
-        for language in ["rust", "java", "c/c++"] {
+        for language in ["java", "c/c++"] {
             let capability = rows
                 .get(&(language, ProviderSidecarCallMode::ExecInvoke))
                 .unwrap_or_else(|| panic!("missing sidecar helper matrix row for {language}"));
@@ -866,6 +947,44 @@ mod tests {
         let readme = fs::read_to_string(target.join("README.md")).expect("readme");
         assert!(readme.contains("Build the executable before install"));
         assert!(readme.contains("make build"));
+    }
+
+    #[test]
+    fn init_hello_plugin_generates_rust_compiled_project() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let target = root.path().join("hello-rust-plugin");
+
+        let project = init_hello_plugin(PluginTemplateInit {
+            path: target.clone(),
+            package_id: Some("local.hello_rust_plugin".to_string()),
+            ability_name: Some("hello_rust_plugin.echo".to_string()),
+            package_version: "0.1.0".to_string(),
+            descriptor_version: "1.0.0".to_string(),
+            language: PluginTemplateLanguage::Rust,
+        })
+        .expect("generate rust plugin");
+
+        assert_eq!(project.language, PluginTemplateLanguage::Rust);
+        assert!(target.join("plugin.toml").is_file());
+        assert!(target.join("Cargo.toml").is_file());
+        assert!(target.join("Makefile").is_file());
+        assert!(target.join("src/main.rs").is_file());
+        assert!(target.join("bin/.gitkeep").is_file());
+        assert!(
+            !target.join("bin/exec-plugin").exists(),
+            "compiled template must not fake a binary before build"
+        );
+        let main_body = fs::read_to_string(target.join("src/main.rs")).expect("main");
+        assert!(main_body.contains("serve_exec_plugin"));
+        assert!(main_body.contains("SidecarInvocation"));
+        assert!(!main_body.contains("serde_json::from_str"));
+        let cargo_toml = fs::read_to_string(target.join("Cargo.toml")).expect("cargo toml");
+        assert!(cargo_toml.contains("easynet-provider-pluginexec = { path = \""));
+        assert!(cargo_toml.contains("/sdk/rust/provider/easynet/pluginexec"));
+        let readme = fs::read_to_string(target.join("README.md")).expect("readme");
+        assert!(readme.contains("Build the executable before install"));
+        assert!(readme.contains("make build"));
+        assert!(readme.contains("easynet_provider_pluginexec"));
     }
 
     #[test]
