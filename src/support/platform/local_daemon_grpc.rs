@@ -1255,28 +1255,32 @@ impl axon_sdk::invocation::KeyResolver for CanonicalRuntimeReceiptResolver {
         &self,
         signer_ura: &str,
     ) -> Result<ed25519_dalek::VerifyingKey, axon_sdk::invocation::AxonError> {
-        let realm_error = match self.realm_trust.as_ref() {
+        let local_error =
+            match axon_sdk::invocation::KeyResolver::resolve(&self.local_self_identity, signer_ura)
+            {
+                Ok(key) => return Ok(key),
+                Err(error) => error.to_string(),
+            };
+        match self.realm_trust.as_ref() {
             Some(resolver) => {
                 match axon_sdk::invocation::KeyResolver::resolve(resolver, signer_ura) {
                     Ok(key) => return Ok(key),
-                    Err(error) => Some(error.to_string()),
+                    Err(realm_error) => Err(axon_sdk::invocation::AxonError::permission_denied(
+                        "runtime_receipt_signer_key_untrusted",
+                    )
+                    .with_message(format!(
+                        "canonical runtime trust cannot resolve receipt signer {signer_ura:?}: \
+                         local_self_identity={local_error}; realm_trust={realm_error}"
+                    ))),
                 }
             }
-            None => Some("realm trust anchor is empty or unavailable".to_string()),
-        };
-        match axon_sdk::invocation::KeyResolver::resolve(&self.local_self_identity, signer_ura) {
-            Ok(key) => Ok(key),
-            Err(local_error) => {
-                let realm_error =
-                    realm_error.unwrap_or_else(|| "realm trust resolver unavailable".to_string());
-                Err(axon_sdk::invocation::AxonError::permission_denied(
-                    "runtime_receipt_signer_key_untrusted",
-                )
-                .with_message(format!(
-                    "canonical runtime trust cannot resolve receipt signer {signer_ura:?}: \
-                     realm_trust={realm_error}; local_self_identity={local_error}"
-                )))
-            }
+            None => Err(axon_sdk::invocation::AxonError::permission_denied(
+                "runtime_receipt_signer_key_untrusted",
+            )
+            .with_message(format!(
+                "canonical runtime trust cannot resolve receipt signer {signer_ura:?}: \
+                 local_self_identity={local_error}; realm_trust=realm trust anchor is empty or unavailable"
+            ))),
         }
     }
 }

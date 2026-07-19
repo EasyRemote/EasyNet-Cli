@@ -192,7 +192,7 @@ PY
 )"
 export_symbols="$(LC_ALL=C sort -u "$ROOT/include/easynet_cli.exports.v5")"
 [[ "$header_symbols" == "$export_symbols" ]] || fail "C header and v5 export allowlist differ"
-[[ "$(printf '%s\n' "$export_symbols" | grep -c '^easynet_')" -eq 54 ]] || fail "generic C ABI v5 must contain exactly 54 symbols"
+[[ "$(printf '%s\n' "$export_symbols" | grep -c '^easynet_')" -eq 55 ]] || fail "generic C ABI v5 must contain exactly 55 symbols"
 if printf '%s\n' "$export_symbols" | rg -q '_(admin|directory|identity|mission|publication|receipt|surface|compatibility|host_binding|events|wrapper|companion)_'; then
   fail "product-domain symbol leaked into C ABI v5"
 fi

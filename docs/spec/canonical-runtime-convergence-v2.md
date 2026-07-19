@@ -261,10 +261,18 @@ release ownership, live production rollout, or future repository revisions have
 already been audited. The 2026-07-18 closure report was withdrawn after its
 claims were found not to describe the accepted checkout.
 
-Current gate-conformant evidence, manually rechecked on 2026-07-19:
+Current gate-conformant evidence, manually rechecked on 2026-07-19.
+The runtime/source implementation revision below was verified before this
+evidence-record update; this paragraph update is documentation-only and does
+not alter runtime, SDK, daemon, or downstream product behavior.
 
-- EasyNet-Cli revision: `9125109cc54290f02a41b6f950bac3babf2bd64b`.
+- EasyNet-Cli runtime/source revision:
+  `ae0430fc5483ed789497a6d2bec05541a5a9c5c2`.
 - EasyNet-Axon revision: `e5110473da2d9ef02a0876bcfe1c5ba4c0afbb10`.
+- EasyRemote consumer revision:
+  `ad6181fe4d2d9fba209ac79ecdfd654581fca72f`.
+- EasyNet backend/Docker artifact-pipeline revision:
+  `b8773427d44dc524868cd15b3e26efccab78d442`.
 - Lifecycle matrix digest:
   `00473e644fd92a1c7688ec42bc56aa2497f5a3a6fbb767c54123f4ae2071e5e1`.
 - Lifecycle vector digest:
@@ -273,6 +281,15 @@ Current gate-conformant evidence, manually rechecked on 2026-07-19:
   `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`.
 - Negative gate self-test:
   `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`.
+- Cutover readiness gate:
+  `bash tools/scripts/check-sdk-cutover-readiness.sh`.
+- Downstream consumer gate:
+  `bash tools/scripts/check-downstream-sdk-consumer-cutover.sh`.
+- Final live cross-repository evidence:
+  `bash tools/scripts/docker-two-node-easyremote-cli-e2e.sh --skip-build`
+  after rebuilding Docker images from the host-cross-compiled Linux CLI
+  artifact bundle. Report:
+  `target/e2e/docker-two-node-easyremote-cli/20260719-111034/report.md`.
 
 | ID | Status | Evidence and limit |
 | --- | --- | --- |

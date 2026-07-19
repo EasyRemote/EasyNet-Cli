@@ -9,7 +9,7 @@ cd "$ROOT"
 HEADER="include/easynet_cli.h"
 ALLOWLIST="include/easynet_cli.exports.v5"
 SPEC="docs/spec/ffi-abi-v5.md"
-EXPECTED_COUNT=54
+EXPECTED_COUNT=55
 violations=0
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -153,7 +153,7 @@ done
 if require_file "$SPEC"; then
     require_literal "$SPEC" "include/easynet_cli.h"
     require_literal "$SPEC" "include/easynet_cli.exports.v5"
-    require_literal "$SPEC" 'exactly `54`'
+    require_literal "$SPEC" 'exactly `55`'
     require_literal "$SPEC" 'ABI version: `5`'
 fi
 

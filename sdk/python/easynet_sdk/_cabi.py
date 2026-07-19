@@ -880,8 +880,9 @@ class CABIRuntimeTransport:
         return self.lib.runtime_diagnostics(self._require_open())
 
     def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+        handle = self._require_open()
         diagnostics = _json_object(
-            self.lib.runtime_diagnostics(self._require_open()),
+            self.lib.runtime_diagnostics(handle),
             "runtime diagnostics",
         )
         try:
@@ -898,7 +899,7 @@ class CABIRuntimeTransport:
                     raise
             try:
                 return self.lib.runtime_resolve_descriptor_ref(
-                    self._require_open(), request_json
+                    handle, request_json
                 )
             except SDKError:
                 raise exc

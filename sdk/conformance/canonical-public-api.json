@@ -6132,6 +6132,7 @@
         "easynet_prepared_invocation_free",
         "easynet_runtime_diagnostics",
         "easynet_runtime_health",
+        "easynet_runtime_resolve_descriptor_ref",
         "easynet_shutdown",
         "easynet_signed_invocation_free",
         "easynet_string_free"
@@ -6851,6 +6852,14 @@
         "easynet_runtime_health": {
           "canonical_replacement": [
             "capability_inventory.runtime_health"
+          ],
+          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
+          "removal_phase": "quarantined",
+          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
+        },
+        "easynet_runtime_resolve_descriptor_ref": {
+          "canonical_replacement": [
+            "capability_inventory.ability_descriptor_projection"
           ],
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
@@ -16379,7 +16388,7 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/_cabi.py",
-          "sha256": "33445903404a3117766f26cab93bb0cb7c34c7dc9dc07a532f8859a88a9b8caa",
+          "sha256": "759c63f0ddcd955c7d9b729286168efd9d78d4bebde4a1bb78790dcd3fde88aa",
           "interface": "CABIRuntimeTransport",
           "revision": "8574f5644f8f048f0ea834ae4cbe19ffb9612001"
         },
@@ -16756,7 +16765,7 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/_cabi.py",
-          "sha256": "33445903404a3117766f26cab93bb0cb7c34c7dc9dc07a532f8859a88a9b8caa",
+          "sha256": "759c63f0ddcd955c7d9b729286168efd9d78d4bebde4a1bb78790dcd3fde88aa",
           "interface": "CABIRuntimeTransport",
           "revision": "8574f5644f8f048f0ea834ae4cbe19ffb9612001"
         },
@@ -17805,6 +17814,7 @@
       "easynet_prepared_invocation_free": "b9a3bd12538bfcb62af0731cc9f05abf2a4c5d42de803649407ca789df87fe4c",
       "easynet_runtime_diagnostics": "8034faeaae6c3c7fc61cf4816f5c638f13d1c59c1891740df99b42b3bd060370",
       "easynet_runtime_health": "8428a99a34175fcb71e5ba231331f07adf5233c101668fafcb422bab8364452c",
+      "easynet_runtime_resolve_descriptor_ref": "a97368b0be1401cfe8e0f9d6f9e0897398e11adb1349e1254ae2a8b7add0327b",
       "easynet_shutdown": "b267334430dc79fef26944247d2a760f4ffe0d8615ae79d1ecfdd8aec726cb59",
       "easynet_signed_invocation_free": "33739c10646a95b7cf39761c892f35369dadb0a5438fe357e49f9326e901872f",
       "easynet_string_free": "04fc5eb79513f4ebea1bef700938d84722ba20a39ec2e123baeb7f0cb401d5c5"
@@ -24101,10 +24111,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/_cabi.py",
-      "sha256": "33445903404a3117766f26cab93bb0cb7c34c7dc9dc07a532f8859a88a9b8caa",
+      "sha256": "759c63f0ddcd955c7d9b729286168efd9d78d4bebde4a1bb78790dcd3fde88aa",
       "interface": "CABIRuntimeTransport",
       "interface_path": "sdk/python/easynet_sdk/_cabi.py",
-      "interface_sha256": "33445903404a3117766f26cab93bb0cb7c34c7dc9dc07a532f8859a88a9b8caa",
+      "interface_sha256": "759c63f0ddcd955c7d9b729286168efd9d78d4bebde4a1bb78790dcd3fde88aa",
       "capability_ids": [
         "stream",
         "bidi"

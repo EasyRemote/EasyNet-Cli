@@ -525,22 +525,33 @@ fn ledger_route_ura(ability_name: &str, binding: &AxiomBinding) -> String {
         })
 }
 
+fn descriptor_ref_ability_ura_for_binding(
+    descriptor_ref: &str,
+    binding: &AxiomBinding,
+) -> Option<String> {
+    crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        &binding.callee.ura,
+        descriptor_ref,
+    )
+    .ok()
+    .or_else(|| {
+        crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+            &binding.caller.ura,
+            descriptor_ref,
+        )
+        .ok()
+    })
+}
+
 fn canonical_ledger_ability_ura(ability_name: &str, binding: &AxiomBinding) -> Option<String> {
     let ability_name = ability_name.trim();
     if ability_name.is_empty() {
         return None;
     }
-    if axon_sdk::invocation::canonical_ability_descriptor_ref(ability_name).is_ok() {
-        if let Ok(ability_ura) = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
-            &binding.callee.ura,
-            ability_name,
-        ) {
-            return Some(ability_ura);
-        }
-        if let Ok(ability_ura) = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
-            &binding.caller.ura,
-            ability_name,
-        ) {
+    if let Ok(descriptor_ref) = axon_sdk::invocation::canonical_ability_descriptor_ref(ability_name)
+    {
+        if let Some(ability_ura) = descriptor_ref_ability_ura_for_binding(&descriptor_ref, binding)
+        {
             return Some(ability_ura);
         }
     }
