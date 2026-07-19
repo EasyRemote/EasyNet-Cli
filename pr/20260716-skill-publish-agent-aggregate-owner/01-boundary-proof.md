@@ -14,4 +14,3 @@
 - Missing-owner errors still include the registered agent list.
 - The skill ability still validates that the resolved workspace path exists before writing or reading packages.
 - Agent type remains the selector for Claude Code versus generic skill directory layout.
-

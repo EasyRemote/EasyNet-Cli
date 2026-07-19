@@ -7,4 +7,3 @@ The immediate defect class is duplicate public DTO members. Python accepts the
 last declaration, while the inventory's set-based member graph can hide the
 source duplication. The public API inventory must reject that state before the
 canonical manifest hashes are trusted.
-

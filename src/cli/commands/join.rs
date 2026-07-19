@@ -48,6 +48,7 @@ use crate::daemon::persistence::config;
 use crate::support::platform::{output, sysinfo};
 
 use super::pairing_contract::PairingCredentialEnvelope;
+use super::{auth, login, profile};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -89,9 +90,18 @@ struct ValidatePairingPayload {
 
 #[derive(Debug, Args)]
 pub struct JoinArgs {
-    /// One-time pairing token or hub URA (easynet:///r/<realm>/authority).
-    pub token: String,
-    /// Hub API base URL for self-hosted Hubs.
+    /// Pairing token, hub URA, or '<login-hint>@<realm>'. Omit to use current profile.
+    pub target: Option<String>,
+    /// Profile to use when target is omitted.
+    #[arg(long)]
+    pub profile: Option<String>,
+    /// Explicit login hint for one-step login+join.
+    #[arg(long)]
+    pub user: Option<String>,
+    /// Explicit Realm for one-step login+join.
+    #[arg(long)]
+    pub realm: Option<String>,
+    /// Hub/Auth endpoint override for profile joins; Hub API base for token joins.
     // No `(default: ...)` in the doc-comment — clap already renders
     // the `[default: …]` suffix from `default_value_t` in `--help`.
     // Listing it twice (once in prose, once via clap) is the kind
@@ -106,6 +116,15 @@ pub struct JoinArgs {
     /// Override Hub REST API base URL (local-dev only).
     #[arg(long)]
     pub hub_api: Option<String>,
+    /// Password for one-step login+join. If omitted, prompt when login is needed.
+    #[arg(long)]
+    pub password: Option<String>,
+    /// Register the user if one-step login fails and the backend supports registration.
+    #[arg(long)]
+    pub register_if_missing: bool,
+    /// Nickname to use when --register-if-missing creates a user.
+    #[arg(long)]
+    pub nickname: Option<String>,
     // The doc-comment below is a single paragraph on purpose. clap
     // switches `--help` into multi-paragraph "long help" mode the
     // moment ANY arg's doc-comment has a blank line in it — every
@@ -154,7 +173,129 @@ pub enum JoinBoot {
     No,
 }
 
+enum ResolvedJoinTarget {
+    Direct(String),
+    Profile {
+        profile: profile::ProfileEntry,
+        token: Option<String>,
+        login_recovery: bool,
+    },
+}
+
+impl ResolvedJoinTarget {
+    fn login_recovery_profile(&self) -> Option<String> {
+        match self {
+            Self::Profile {
+                profile,
+                login_recovery: true,
+                ..
+            } => Some(profile.profile_name.clone()),
+            _ => None,
+        }
+    }
+}
+
+fn resolve_join_target(args: &JoinArgs) -> anyhow::Result<ResolvedJoinTarget> {
+    let target = args
+        .target
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let login_requested =
+        args.user.is_some() || args.realm.is_some() || target.is_some_and(looks_like_login_target);
+
+    if login_requested {
+        let hub_override = explicit_join_login_hub_override(args);
+        let outcome = login::login_and_select_profile(login::LoginArgs {
+            target: args.target.clone(),
+            user: args.user.clone(),
+            realm: args.realm.clone(),
+            hub: hub_override,
+            password: args.password.clone(),
+            register_if_missing: args.register_if_missing,
+            nickname: args.nickname.clone(),
+        })?;
+        login::render_login_outcome(&outcome);
+        return Ok(ResolvedJoinTarget::Profile {
+            profile: outcome.profile,
+            token: None,
+            login_recovery: true,
+        });
+    }
+
+    if let Some(target) = target {
+        return Ok(ResolvedJoinTarget::Direct(target.to_string()));
+    }
+
+    let profile = profile::selected_profile(args.profile.as_deref())?;
+    Ok(ResolvedJoinTarget::Profile {
+        profile,
+        token: None,
+        login_recovery: false,
+    })
+}
+
+fn explicit_join_login_hub_override(args: &JoinArgs) -> Option<String> {
+    let default_hub = format!("https://{}", config::DEFAULT_HUB_HOST);
+    (args.hub.trim_end_matches('/') != default_hub)
+        .then(|| args.hub.trim_end_matches('/').to_string())
+}
+
+fn looks_like_login_target(target: &str) -> bool {
+    target.contains('@') && !target.starts_with(crate::core::ura::URA_SCHEME)
+}
+
+fn mint_profile_pairing_token(profile: &profile::ProfileEntry) -> anyhow::Result<String> {
+    if profile.account_session != profile::ProfileAccountSessionState::Authenticated {
+        anyhow::bail!(
+            "profile '{}' is logged out — run 'easynet login {}' first",
+            profile.profile_name,
+            profile.profile_name
+        );
+    }
+    let session = auth::load_session()?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "not logged in — run 'easynet login {}' first",
+            profile.profile_name
+        )
+    })?;
+    profile::ensure_auth_session_owns_profile(profile, &session)?;
+    let token = auth::mint_pairing_token()?.pairing_token;
+    Ok(token)
+}
+
 pub fn run(args: JoinArgs) -> anyhow::Result<()> {
+    let target = resolve_join_target(&args)?;
+    let login_recovery_profile = target.login_recovery_profile();
+    run_resolved(args, target).map_err(|err| {
+        if let Some(profile_name) = login_recovery_profile {
+            err.context(format!(
+                "login succeeded and profile '{profile_name}' was saved, but device join failed; retry with `easynet join --profile {profile_name}`"
+            ))
+        } else {
+            err
+        }
+    })
+}
+
+fn run_resolved(args: JoinArgs, target: ResolvedJoinTarget) -> anyhow::Result<()> {
+    if let ResolvedJoinTarget::Profile {
+        profile,
+        token: None,
+        ..
+    } = &target
+    {
+        if let Ok(existing) = config::load_credentials() {
+            if existing_credentials_match_profile(&existing, profile) {
+                output::info(&format!(
+                    "This device is already joined to Realm {}.",
+                    profile.realm_alias
+                ));
+                return finish_join(args.boot, &existing, args.peer_hub.as_deref());
+            }
+        }
+    }
+
     // Warn if already paired — prevent accidental overwrite.
     if let Ok(existing) = config::load_credentials() {
         output::warn(&format!(
@@ -190,7 +331,31 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         }
     }
 
-    let target = args.token.trim().to_string();
+    let target = match target {
+        ResolvedJoinTarget::Direct(target) => target,
+        ResolvedJoinTarget::Profile {
+            profile,
+            token: Some(token),
+            ..
+        } => {
+            output::info(&format!(
+                "Using profile {} for Realm {}.",
+                profile.profile_name, profile.realm_alias
+            ));
+            token
+        }
+        ResolvedJoinTarget::Profile {
+            profile,
+            token: None,
+            ..
+        } => {
+            output::info(&format!(
+                "Requesting device enrollment for profile {}.",
+                profile.profile_name
+            ));
+            mint_profile_pairing_token(&profile)?
+        }
+    };
     let peer_hub = args.peer_hub.as_deref();
     let creds = if target.starts_with(crate::core::ura::URA_SCHEME) {
         let principal_enrollment = join_principal_enrollment_from_args(
@@ -246,7 +411,46 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         )?
     };
 
+    if let Ok(profile) = profile::selected_profile(args.profile.as_deref()) {
+        if profile.realm_alias == creds.realm_str() {
+            let _ = profile::mark_device_membership(&profile.profile_name, "enrolled");
+        }
+    }
+
     finish_join(args.boot, &creds, peer_hub)
+}
+
+fn existing_credentials_match_profile(
+    existing: &config::Credentials,
+    profile: &profile::ProfileEntry,
+) -> bool {
+    if existing.realm_str() != profile.realm_alias {
+        return false;
+    }
+    if let Some(subject) = profile
+        .subject
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        return existing
+            .user_id()
+            .ok()
+            .is_some_and(|user_id| user_id == subject);
+    }
+    if let Some(login_hint) = profile
+        .login_hint
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        return existing
+            .username
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|username| username == login_hint);
+    }
+    true
 }
 
 fn finish_join(
@@ -1456,6 +1660,48 @@ mod tests {
         assert!(validate_token_format(&"a".repeat(257)).is_err());
         assert!(validate_token_format("bad token").is_err());
         assert!(validate_token_format("bad/token").is_err());
+    }
+
+    #[test]
+    fn existing_join_idempotency_requires_profile_account_owner() {
+        let existing = config::Credentials {
+            node_id: "dev-one".to_string(),
+            credential_token: "credential-token".to_string(),
+            hub_endpoint: "https://hub.acme.internal".to_string(),
+            realm: "acme".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("silan".to_string()),
+            user_id: Some("usr_silan".to_string()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+        let silan_profile = profile::ProfileEntry {
+            profile_name: "silan@acme".to_string(),
+            realm_alias: "acme".to_string(),
+            issuer: "https://hub.acme.internal".to_string(),
+            login_hint: Some("silan".to_string()),
+            subject: Some("usr_silan".to_string()),
+            account_session: profile::ProfileAccountSessionState::Authenticated,
+            device_membership: "enrolled".to_string(),
+            ..Default::default()
+        };
+        let admin_profile = profile::ProfileEntry {
+            profile_name: "admin@acme".to_string(),
+            login_hint: Some("admin".to_string()),
+            subject: Some("usr_admin".to_string()),
+            ..silan_profile.clone()
+        };
+
+        assert!(existing_credentials_match_profile(
+            &existing,
+            &silan_profile
+        ));
+        assert!(!existing_credentials_match_profile(
+            &existing,
+            &admin_profile
+        ));
     }
 
     #[test]
