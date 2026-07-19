@@ -130199,6 +130199,10 @@
           "sha256": "e4bbb8ed76b6ae456e37cd1ce00bba458edb141de2e8c877451096a06715d01c"
         },
         {
+          "item": "RuntimeSigningTransport.ResolveDescriptorRef",
+          "sha256": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86"
+        },
+        {
           "item": "RuntimeSigningTransport.SubmitSigned",
           "sha256": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86"
         },
@@ -130506,6 +130510,10 @@
               "sha256": "e4bbb8ed76b6ae456e37cd1ce00bba458edb141de2e8c877451096a06715d01c"
             },
             {
+              "item": "RuntimeSigningTransport.ResolveDescriptorRef",
+              "sha256": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86"
+            },
+            {
               "item": "RuntimeSigningTransport.SubmitSigned",
               "sha256": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86"
             },
@@ -130811,6 +130819,10 @@
             {
               "item": "RuntimeSigningTransport.Prepare",
               "sha256": "e4bbb8ed76b6ae456e37cd1ce00bba458edb141de2e8c877451096a06715d01c"
+            },
+            {
+              "item": "RuntimeSigningTransport.ResolveDescriptorRef",
+              "sha256": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86"
             },
             {
               "item": "RuntimeSigningTransport.SubmitSigned",
@@ -131120,6 +131132,10 @@
               "sha256": "e4bbb8ed76b6ae456e37cd1ce00bba458edb141de2e8c877451096a06715d01c"
             },
             {
+              "item": "RuntimeSigningTransport.ResolveDescriptorRef",
+              "sha256": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86"
+            },
+            {
               "item": "RuntimeSigningTransport.SubmitSigned",
               "sha256": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86"
             },
@@ -131425,6 +131441,10 @@
             {
               "item": "RuntimeSigningTransport.Prepare",
               "sha256": "e4bbb8ed76b6ae456e37cd1ce00bba458edb141de2e8c877451096a06715d01c"
+            },
+            {
+              "item": "RuntimeSigningTransport.ResolveDescriptorRef",
+              "sha256": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86"
             },
             {
               "item": "RuntimeSigningTransport.SubmitSigned",
@@ -131734,6 +131754,10 @@
               "sha256": "e4bbb8ed76b6ae456e37cd1ce00bba458edb141de2e8c877451096a06715d01c"
             },
             {
+              "item": "RuntimeSigningTransport.ResolveDescriptorRef",
+              "sha256": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86"
+            },
+            {
               "item": "RuntimeSigningTransport.SubmitSigned",
               "sha256": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86"
             },
@@ -132039,6 +132063,10 @@
             {
               "item": "RuntimeSigningTransport.Prepare",
               "sha256": "e4bbb8ed76b6ae456e37cd1ce00bba458edb141de2e8c877451096a06715d01c"
+            },
+            {
+              "item": "RuntimeSigningTransport.ResolveDescriptorRef",
+              "sha256": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86"
             },
             {
               "item": "RuntimeSigningTransport.SubmitSigned",
@@ -132348,6 +132376,10 @@
               "sha256": "e4bbb8ed76b6ae456e37cd1ce00bba458edb141de2e8c877451096a06715d01c"
             },
             {
+              "item": "RuntimeSigningTransport.ResolveDescriptorRef",
+              "sha256": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86"
+            },
+            {
               "item": "RuntimeSigningTransport.SubmitSigned",
               "sha256": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86"
             },
@@ -132653,6 +132685,10 @@
             {
               "item": "RuntimeSigningTransport.Prepare",
               "sha256": "e4bbb8ed76b6ae456e37cd1ce00bba458edb141de2e8c877451096a06715d01c"
+            },
+            {
+              "item": "RuntimeSigningTransport.ResolveDescriptorRef",
+              "sha256": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86"
             },
             {
               "item": "RuntimeSigningTransport.SubmitSigned",

@@ -872,6 +872,24 @@ func openFakeCABIRuntime(t *testing.T) *RuntimeClient {
 	return client
 }
 
+func TestCABIRuntimeProviderResolvesDescriptorRefThroughNativeProvider(t *testing.T) {
+	client := openFakeCABIRuntime(t)
+
+	descriptorRef, err := client.ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
+		CalleeURA: "easynet:///r/example/device/dev-a",
+		Ability:   "meta.list_resources",
+		CallMode:  "rpc",
+	})
+
+	if err != nil {
+		t.Fatalf("ResolveDescriptorRef: %v", err)
+	}
+	const want = "easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+	if descriptorRef != want {
+		t.Fatalf("descriptor_ref = %q, want %q", descriptorRef, want)
+	}
+}
+
 func cabiDraftWithMetadata(t *testing.T, metadata map[string]any) InvocationDraft {
 	t.Helper()
 	raw, err := json.Marshal(completeDraftForRuntimeTest(t))
@@ -1008,6 +1026,11 @@ int32_t easynet_runtime_health(uint64_t handle, char **out_health_json) {
 int32_t easynet_runtime_diagnostics(uint64_t handle, char **out_diagnostics_json) {
 	(void)handle;
 	*out_diagnostics_json = dup_json("{\"profile\":\"health\",\"kind\":\"diagnostics_report\",\"state\":\"Running\",\"ready\":true,\"version\":\"0.91.30\",\"abi_version\":5,\"control_endpoint\":\"/tmp/easynet/control.json\",\"invocation_endpoint\":\"/tmp/easynet/daemon.sock\",\"checks\":[{\"name\":\"api\",\"ready\":true,\"message\":null},{\"name\":\"daemon\",\"ready\":true,\"message\":null},{\"name\":\"invocation\",\"ready\":true,\"message\":null},{\"name\":\"directory\",\"ready\":true,\"message\":null},{\"name\":\"trust\",\"ready\":true,\"message\":null},{\"name\":\"runtime\",\"ready\":true,\"message\":null}],\"diagnostics\":[]}");
+	return 0;
+}
+int32_t easynet_runtime_resolve_descriptor_ref(uint64_t handle, const char *request_json, char **out_descriptor_json) {
+	(void)handle; (void)request_json;
+	*out_descriptor_json = dup_json("{\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read\",\"ability_ura\":\"easynet:///r/example/ability/device.dev-a.meta.list_resources\",\"owner_ura\":\"easynet:///r/example/device/dev-a\",\"name\":\"meta.list_resources\",\"call_mode\":\"rpc\",\"source\":\"fake_native_provider\"}");
 	return 0;
 }
 int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, char **out_result_json) {

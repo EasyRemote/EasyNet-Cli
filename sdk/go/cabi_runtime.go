@@ -21,6 +21,7 @@ typedef int32_t (*easynet_daemon_open_client_fn)(uint64_t daemon_handle, uint64_
 typedef int32_t (*easynet_shutdown_fn)(uint64_t handle);
 typedef int32_t (*easynet_runtime_health_fn)(uint64_t handle, char **out_health_json);
 typedef int32_t (*easynet_runtime_diagnostics_fn)(uint64_t handle, char **out_diagnostics_json);
+typedef int32_t (*easynet_runtime_resolve_descriptor_ref_fn)(uint64_t handle, const char *request_json, char **out_descriptor_json);
 typedef int32_t (*easynet_invocation_invoke_fn)(uint64_t handle, const char *invocation_json, char **out_result_json);
 typedef int32_t (*easynet_invocation_prepare_fn)(uint64_t handle, const char *invocation_json, const char *options_json, uint64_t *out_prepared_id, char **out_prepared_json);
 typedef int32_t (*easynet_invocation_sign_prepared_fn)(uint64_t prepared_id, const char *signature_json, uint64_t *out_signed_id, char **out_signed_json);
@@ -96,6 +97,10 @@ static int32_t easynet_runtime_call_health(void *fn, uint64_t handle, char **out
 
 static int32_t easynet_runtime_call_diagnostics(void *fn, uint64_t handle, char **out_diagnostics_json) {
 	return ((easynet_runtime_diagnostics_fn)fn)(handle, out_diagnostics_json);
+}
+
+static int32_t easynet_runtime_call_resolve_descriptor_ref(void *fn, uint64_t handle, const char *request_json, char **out_descriptor_json) {
+	return ((easynet_runtime_resolve_descriptor_ref_fn)fn)(handle, request_json, out_descriptor_json);
 }
 
 static int32_t easynet_runtime_call_invoke(void *fn, uint64_t handle, const char *invocation_json, char **out_result_json) {
@@ -202,6 +207,7 @@ type cabiRuntimeSymbols struct {
 	shutdown           unsafe.Pointer
 	runtimeHealth      unsafe.Pointer
 	runtimeDiagnostics unsafe.Pointer
+	resolveDescriptor  unsafe.Pointer
 	invocationInvoke   unsafe.Pointer
 	invocationPrepare  unsafe.Pointer
 	signPrepared       unsafe.Pointer
@@ -707,11 +713,23 @@ func (t *CABIRuntimeTransport) RuntimeDiagnostics(ctx context.Context) ([]byte, 
 }
 
 func (t *CABIRuntimeTransport) ResolveDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
-	diagnostics, err := t.RuntimeDiagnostics(ctx)
+	handle, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return resolveDescriptorRefFromDiagnostics(requestJSON, diagnostics)
+	var out *C.char
+	code := int32(cabiWithCString(requestJSON, func(cRequest *C.char) C.int32_t {
+		return C.easynet_runtime_call_resolve_descriptor_ref(
+			t.symbols.resolveDescriptor,
+			C.uint64_t(handle),
+			cRequest,
+			&out,
+		)
+	}))
+	if code != 0 {
+		return nil, t.lastErrorOrCode(code, "C ABI runtime descriptor_ref resolver failed")
+	}
+	return cabiTakeCString(t.symbols.stringFree, out), nil
 }
 
 func (t *CABIRuntimeTransport) Invoke(ctx context.Context, draftJSON []byte) ([]byte, error) {
@@ -1562,6 +1580,7 @@ func bindCABIRuntimeSymbols(library unsafe.Pointer) (cabiRuntimeSymbols, error) 
 		{"easynet_shutdown", &symbols.shutdown},
 		{"easynet_runtime_health", &symbols.runtimeHealth},
 		{"easynet_runtime_diagnostics", &symbols.runtimeDiagnostics},
+		{"easynet_runtime_resolve_descriptor_ref", &symbols.resolveDescriptor},
 		{"easynet_invocation_invoke", &symbols.invocationInvoke},
 		{"easynet_invocation_prepare", &symbols.invocationPrepare},
 		{"easynet_invocation_sign_prepared", &symbols.signPrepared},
