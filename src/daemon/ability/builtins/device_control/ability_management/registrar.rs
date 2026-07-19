@@ -939,11 +939,80 @@ impl DeviceAbilityRegistrar {
                 };
             }
         };
+        if rows.is_empty() {
+            return ReplayReport {
+                recovered_installing,
+                ..ReplayReport::default()
+            };
+        }
+        let catalog = match self.control_plane_catalog("device ability replay") {
+            Ok(catalog) => catalog,
+            Err(err) => {
+                let mut report = ReplayReport {
+                    recovered_installing,
+                    ..ReplayReport::default()
+                };
+                for row in rows {
+                    report.push_errored(&row, format!("control-plane catalog unavailable: {err}"));
+                }
+                return report;
+            }
+        };
+        let hosted_device_authority_root = match catalog.hosted_device_authority_root() {
+            Some(root) => root.to_string(),
+            None => {
+                let mut report = ReplayReport {
+                    recovered_installing,
+                    ..ReplayReport::default()
+                };
+                for row in rows {
+                    report.push_errored(
+                        &row,
+                        "control-plane catalog has no hosted device authority root",
+                    );
+                }
+                return report;
+            }
+        };
+        let quarantined = match self
+            .store
+            .quarantine_unhosted_device_authority(&hosted_device_authority_root)
+        {
+            Ok(rows) => rows,
+            Err(_) => {
+                return ReplayReport {
+                    recovered_installing,
+                    store_unreadable: true,
+                    ..ReplayReport::default()
+                };
+            }
+        };
+        let rows = match self.store.load() {
+            Ok(r) => r,
+            Err(_) => {
+                return ReplayReport {
+                    recovered_installing,
+                    store_unreadable: true,
+                    ..ReplayReport::default()
+                };
+            }
+        };
 
         let mut report = ReplayReport {
             recovered_installing,
             ..ReplayReport::default()
         };
+        for row in quarantined {
+            let owner = crate::core::ura::AbilitySelector::parse(row.ability_ura())
+                .map(|selector| selector.owner_ura().to_string())
+                .unwrap_or_else(|_| "<invalid ability ura>".to_string());
+            report.push_quarantined(
+                &row,
+                format!(
+                    "device ability owner {owner} is not hosted by current daemon authority {hosted_device_authority_root}; row hidden from boot replay"
+                ),
+            );
+        }
         for row in rows {
             // Re-read embedded manifest material and verify hash. A corrupt
             // snapshot must NOT be registered under the recorded binding.
@@ -988,13 +1057,6 @@ impl DeviceAbilityRegistrar {
                         continue;
                     }
                 };
-            let catalog = match self.control_plane_catalog("device ability replay") {
-                Ok(catalog) => catalog,
-                Err(err) => {
-                    report.push_errored(&row, format!("control-plane catalog unavailable: {err}"));
-                    continue;
-                }
-            };
             let mut control_plane_txn =
                 Self::begin_control_plane_transaction(&catalog, &control_plane_key);
             let control_plane_record = match Self::rebind_control_plane_record(
@@ -1103,6 +1165,8 @@ pub struct ReplayReport {
     pub registered: usize,
     /// Manifest gone or hash drifted — row not registered.
     pub stale: usize,
+    /// Valid rows owned by a previous device authority — hidden from replay.
+    pub quarantined: usize,
     /// Manifest unparseable or binding build/register failed.
     pub errored: usize,
     pub runtime_not_ready: bool,
@@ -1124,6 +1188,15 @@ impl ReplayReport {
         self.stale += 1;
         self.outcomes
             .push(ReplayOutcome::new(row, ReplayOutcomeStatus::Stale, detail));
+    }
+
+    fn push_quarantined(&mut self, row: &DeviceAbilityRecord, detail: impl Into<String>) {
+        self.quarantined += 1;
+        self.outcomes.push(ReplayOutcome::new(
+            row,
+            ReplayOutcomeStatus::Quarantined,
+            detail,
+        ));
     }
 
     fn push_errored(&mut self, row: &DeviceAbilityRecord, detail: impl Into<String>) {
@@ -1172,6 +1245,7 @@ impl ReplayOutcome {
 pub enum ReplayOutcomeStatus {
     Registered,
     Stale,
+    Quarantined,
     Errored,
 }
 
@@ -1450,12 +1524,22 @@ mod tests {
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,
         );
-        let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt)));
+        let catalog = registrar_test_catalog(Arc::clone(&rt));
         registrar.set_runtime(Arc::clone(&rt)).unwrap();
         registrar
             .set_control_plane_catalog(Arc::downgrade(&catalog))
             .unwrap();
         (registrar, rt, catalog)
+    }
+
+    fn registrar_test_catalog(runtime: Arc<LocalRuntime>) -> Arc<AxonAbilityCatalog> {
+        Arc::new(AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            runtime,
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+                "easynet:///r/localhost/device/d1",
+            )
+            .expect("registrar test authority context"),
+        ))
     }
 
     fn stream_control_plane_record(catalog: &AxonAbilityCatalog) -> AbilityControlPlaneRecord {
@@ -1483,7 +1567,7 @@ mod tests {
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,
         );
-        let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt)));
+        let catalog = registrar_test_catalog(Arc::clone(&rt));
         registrar.set_runtime(Arc::clone(&rt)).unwrap();
         registrar
             .set_control_plane_catalog(Arc::downgrade(&catalog))
@@ -1522,7 +1606,7 @@ mod tests {
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,
         );
-        let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt)));
+        let catalog = registrar_test_catalog(Arc::clone(&rt));
         registrar.set_runtime(Arc::clone(&rt)).unwrap();
         registrar
             .set_control_plane_catalog(Arc::downgrade(&catalog))
@@ -1959,7 +2043,7 @@ mod tests {
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,
         );
-        let catalog2 = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt2)));
+        let catalog2 = registrar_test_catalog(Arc::clone(&rt2));
         registrar2.set_runtime(Arc::clone(&rt2)).unwrap();
         registrar2
             .set_control_plane_catalog(Arc::downgrade(&catalog2))
@@ -1993,7 +2077,7 @@ mod tests {
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,
         );
-        let catalog2 = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt2)));
+        let catalog2 = registrar_test_catalog(Arc::clone(&rt2));
         registrar2.set_runtime(Arc::clone(&rt2)).unwrap();
         registrar2
             .set_control_plane_catalog(Arc::downgrade(&catalog2))
@@ -2005,6 +2089,72 @@ mod tests {
         assert_eq!(report.outcomes.len(), 1);
         assert_eq!(report.outcomes[0].status, ReplayOutcomeStatus::Registered);
         assert!(rt2.has_ability(er_generate_runtime_key()).await);
+    }
+
+    #[tokio::test]
+    async fn boot_replay_quarantines_previous_device_authority_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_path = dir.path().join("device-abilities.json");
+        {
+            let (registrar, _rt, _catalog) =
+                wired_registrar(DeviceAbilityStore::open_at(store_path.clone()));
+            registrar
+                .install(host_stream_install(dir.path(), "/tmp/current-host.sock"))
+                .await
+                .unwrap();
+        }
+
+        let previous_manifest = host_stream_manifest("/tmp/old-host.sock", "er.generate");
+        let previous_manifest_bytes = serde_json::to_vec(&previous_manifest).unwrap();
+        let previous_row = DeviceAbilityRecord::new_with_manifest_bytes(
+            "er.previous",
+            "er",
+            "easynet:///r/localhost/ability/device.old.er.previous",
+            dir.path()
+                .join("previous-ability.json")
+                .to_string_lossy()
+                .into_owned(),
+            &previous_manifest_bytes,
+            2,
+        );
+        DeviceAbilityStore::open_at(store_path.clone())
+            .upsert(previous_row.clone())
+            .unwrap();
+
+        let registrar2 = DeviceAbilityRegistrar::new_pending_with_store(
+            DeviceAbilityStore::open_at(store_path.clone()),
+        );
+        let rt2 = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
+        let catalog2 = registrar_test_catalog(Arc::clone(&rt2));
+        registrar2.set_runtime(Arc::clone(&rt2)).unwrap();
+        registrar2
+            .set_control_plane_catalog(Arc::downgrade(&catalog2))
+            .unwrap();
+        let report = registrar2.replay_from_store().await;
+
+        assert_eq!(report.registered, 1);
+        assert_eq!(report.quarantined, 1);
+        assert_eq!(report.errored, 0);
+        assert!(report.outcomes.iter().any(|outcome| {
+            outcome.install_id == previous_row.install_id()
+                && outcome.status == ReplayOutcomeStatus::Quarantined
+        }));
+        assert!(rt2.has_ability(er_generate_runtime_key()).await);
+        assert!(
+            !rt2.has_ability("easynet:///r/localhost/ability/device.old.er.previous")
+                .await,
+            "foreign device ability must never be registered"
+        );
+        let replayable_rows = DeviceAbilityStore::open_at(store_path).load().unwrap();
+        assert!(
+            replayable_rows
+                .iter()
+                .all(|row| row.install_id() != previous_row.install_id()),
+            "quarantined rows must be hidden from boot replay"
+        );
     }
 
     #[test]

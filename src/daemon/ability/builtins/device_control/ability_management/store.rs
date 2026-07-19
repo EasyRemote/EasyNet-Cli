@@ -86,6 +86,11 @@ pub struct DeviceAbilityRecord {
 /// `Removing` is a tombstone: boot replay must not re-register it, but the row
 /// remains available for rollback until the uninstall state machine commits the
 /// final physical delete.
+///
+/// `Quarantined` is a boot-recovery terminal for rows whose device authority is
+/// no longer hosted by the current daemon, typically after `device join`
+/// overwrote credentials with a new Hub-issued node id. Quarantined rows are
+/// kept for audit but hidden from replay.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceAbilityRecordState {
@@ -93,6 +98,7 @@ pub enum DeviceAbilityRecordState {
     #[default]
     Installed,
     Removing,
+    Quarantined,
 }
 
 impl DeviceAbilityRecord {
@@ -208,6 +214,10 @@ impl DeviceAbilityRecord {
 
     fn mark_removing(&mut self) {
         self.state = DeviceAbilityRecordState::Removing;
+    }
+
+    fn mark_quarantined(&mut self) {
+        self.state = DeviceAbilityRecordState::Quarantined;
     }
 
     fn mark_installing(&mut self) {
@@ -464,6 +474,48 @@ impl DeviceAbilityStore {
         Ok(recovered)
     }
 
+    /// Hide installed rows owned by a previous device authority before boot
+    /// replay binds live runtime state.
+    ///
+    /// This is the rejoin recovery boundary: a new `credentials.json` means the
+    /// daemon no longer hosts the old device URA, so replay must not try to
+    /// register those abilities. The rows stay on disk as `Quarantined` for
+    /// audit instead of being silently deleted.
+    pub fn quarantine_unhosted_device_authority(
+        &self,
+        hosted_device_authority_root: &str,
+    ) -> anyhow::Result<Vec<DeviceAbilityRecord>> {
+        let hosted_device_authority_root = hosted_device_authority_root.trim();
+        if hosted_device_authority_root.is_empty() {
+            anyhow::bail!("hosted device authority root must not be empty");
+        }
+        let _guard = self.lock_for_write()?;
+        let mut rows = self.load_all_unlocked()?;
+        let mut quarantined = Vec::new();
+        let mut changed = false;
+        for row in &mut rows {
+            if row.state != DeviceAbilityRecordState::Installed {
+                continue;
+            }
+            let Ok(selector) = crate::core::ura::AbilitySelector::parse(row.ability_ura()) else {
+                continue;
+            };
+            if selector.owner_kind() != "device" {
+                continue;
+            }
+            if selector.owner_ura() == hosted_device_authority_root {
+                continue;
+            }
+            quarantined.push(row.clone());
+            row.mark_quarantined();
+            changed = true;
+        }
+        if changed {
+            self.write_all(&rows)?;
+        }
+        Ok(quarantined)
+    }
+
     /// Restore rows previously removed by a higher-level transaction.
     /// Existing rows with the same install id are left untouched so retrying
     /// a rollback is idempotent.
@@ -505,6 +557,7 @@ impl DeviceAbilityStore {
                     changed = true;
                 }
                 DeviceAbilityRecordState::Installing => {}
+                DeviceAbilityRecordState::Quarantined => {}
                 DeviceAbilityRecordState::Removing => {
                     records.push(record.clone());
                     resumed = true;
@@ -635,7 +688,16 @@ mod tests {
         manifest_marker: &str,
         installed_at_unix_ms: u64,
     ) -> DeviceAbilityRecord {
-        let owner_ura = crate::core::ura::device_ura("localhost", "x");
+        record_with_owner(name, "x", manifest_marker, installed_at_unix_ms)
+    }
+
+    fn record_with_owner(
+        name: &str,
+        device_id: &str,
+        manifest_marker: &str,
+        installed_at_unix_ms: u64,
+    ) -> DeviceAbilityRecord {
+        let owner_ura = crate::core::ura::device_ura("localhost", device_id);
         let manifest_bytes = format!(r#"{{"name":"{name}","marker":"{manifest_marker}"}}"#);
         DeviceAbilityRecord::new_with_manifest_bytes(
             name.to_string(),
@@ -767,6 +829,33 @@ mod tests {
                 .any(|row| row.install_id() == changed_id),
             "uncommitted replacement intent must be physically removed"
         );
+    }
+
+    #[test]
+    fn quarantine_unhosted_device_authority_hides_old_device_rows_from_replay() {
+        let (store, _d) = tmp_store();
+        let current = record_with_owner("current", "current-device", "sha256:a", 0);
+        let previous = record_with_owner("previous", "old-device", "sha256:b", 0);
+        let previous_id = previous.install_id().to_string();
+        store.upsert(current.clone()).unwrap();
+        store.upsert(previous).unwrap();
+
+        let quarantined = store
+            .quarantine_unhosted_device_authority(&crate::core::ura::device_ura(
+                "localhost",
+                "current-device",
+            ))
+            .unwrap();
+
+        assert_eq!(quarantined.len(), 1);
+        assert_eq!(quarantined[0].install_id(), previous_id);
+        let replayable = store.load().unwrap();
+        assert_eq!(replayable.len(), 1);
+        assert_eq!(replayable[0].install_id(), current.install_id());
+        let all_rows = store.load_all_unlocked().unwrap();
+        assert!(all_rows.iter().any(|row| {
+            row.install_id() == previous_id && row.state() == DeviceAbilityRecordState::Quarantined
+        }));
     }
 
     #[test]

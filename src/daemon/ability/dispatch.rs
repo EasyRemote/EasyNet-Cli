@@ -1915,6 +1915,10 @@ impl AbilityAuthoritySet {
         }
     }
 
+    fn device_authority_root(&self) -> Option<&str> {
+        self.device().map(|(device, _)| device.ura.as_str())
+    }
+
     fn hub(&self) -> Option<&CanonicalHubAuthority> {
         match self {
             Self::Hub { hub } | Self::Both { hub, .. } => Some(hub),
@@ -3737,6 +3741,10 @@ impl AxonAbilityCatalog {
         self.authority_context
             .hot_agent_authority_inventory()?
             .authority_root(agent)
+    }
+
+    pub(crate) fn hosted_device_authority_root(&self) -> Option<&str> {
+        self.authority_context.authorities.device_authority_root()
     }
 
     pub(crate) fn static_authority_exclusion_snapshot(&self) -> BTreeMap<String, usize> {

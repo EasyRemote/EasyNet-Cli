@@ -64,8 +64,13 @@ fn device_ability_replay_fatal_message(
     {
         return Some(format!(
             "device ability replay failed before daemon start: runtime_not_ready={}, \
-             store_unreadable={}, stale={}, errored={}",
-            report.runtime_not_ready, report.store_unreadable, report.stale, report.errored
+             store_unreadable={}, stale={}, quarantined={}, errored={}, outcomes={}",
+            report.runtime_not_ready,
+            report.store_unreadable,
+            report.stale,
+            report.quarantined,
+            report.errored,
+            report.outcomes_json()
         ));
     }
     None
@@ -78,10 +83,11 @@ fn report_device_ability_replay(
         anyhow::bail!(message);
     }
     eprintln!(
-        "[device-ability] replay: {} registered, {} stale, {} errored, \
+        "[device-ability] replay: {} registered, {} stale, {} quarantined, {} errored, \
          runtime_not_ready={}, store_unreadable={}, outcomes={}",
         report.registered,
         report.stale,
+        report.quarantined,
         report.errored,
         report.runtime_not_ready,
         report.store_unreadable,
@@ -915,7 +921,9 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::ReplayReport;
+    use easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::{
+        ReplayOutcome, ReplayOutcomeStatus, ReplayReport,
+    };
 
     #[test]
     fn device_replay_boot_policy_rejects_stale_rows() {
@@ -940,5 +948,28 @@ mod tests {
         assert!(device_ability_replay_fatal_message(&report)
             .unwrap()
             .contains("runtime_not_ready=true"));
+    }
+
+    #[test]
+    fn device_replay_boot_policy_reports_outcome_details() {
+        let report = ReplayReport {
+            errored: 1,
+            outcomes: vec![ReplayOutcome {
+                public_name: "er.generate".to_string(),
+                ability_ura: "easynet:///r/localhost/ability/device.old.er.generate".to_string(),
+                install_id: "dev-old".to_string(),
+                status: ReplayOutcomeStatus::Errored,
+                detail: "explicit authority scope rejected".to_string(),
+            }],
+            ..ReplayReport::default()
+        };
+
+        let message = device_ability_replay_fatal_message(&report).unwrap();
+        assert!(message.contains("errored=1"), "{message}");
+        assert!(message.contains("er.generate"), "{message}");
+        assert!(
+            message.contains("explicit authority scope rejected"),
+            "{message}"
+        );
     }
 }
