@@ -171,10 +171,12 @@ fn is_default_max_output(n: &usize) -> bool {
     *n == default_max_output()
 }
 
-/// Value a fresh v2 row should carry in `timeout_secs`. Exposed
-/// so `cli::agent::run_add` can set it explicitly rather
-/// than rely on `AgentEntry::new`'s current behaviour — see the
-/// rationale block in `run_add` for why that symmetry matters.
+/// Canonical default wall-clock budget for one agent runtime dispatch.
+///
+/// Fresh v2 rows carry this in `timeout_secs` for shape stability, and
+/// `agent.toml` entries that omit `timeout_secs` resolve to this value at
+/// dispatch time. Keeping both call sites on one named function prevents the
+/// registry row from becoming a second timeout authority.
 pub(crate) fn default_timeout_for_new_rows() -> u64 {
     default_timeout()
 }

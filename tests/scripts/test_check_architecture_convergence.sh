@@ -3415,7 +3415,21 @@ fn send(entry: AgentEntry, spec_model: Option<String>) -> Option<String> {
 EOF
 expect_fail \
   "mission model entry fallback" \
-  "R66_MISSION_MODEL_ENTRY_FALLBACK"
+  "R66_MISSION_RUNTIME_CONFIG_ENTRY_FALLBACK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/execution/mission/dispatch.rs" <<'EOF'
+fn resolve_timeout(spec_timeout_secs: Option<u64>, entry_timeout_secs: u64) -> Duration {
+    Duration::from_secs(spec_timeout_secs.unwrap_or(entry_timeout_secs))
+}
+
+fn send(entry: AgentEntry, spec_timeout_secs: Option<u64>) -> Duration {
+    resolve_timeout(spec_timeout_secs, entry.timeout_secs)
+}
+EOF
+expect_fail \
+  "mission timeout entry fallback" \
+  "R66_MISSION_RUNTIME_CONFIG_ENTRY_FALLBACK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/invocation/dispatch/cancellation.rs" <<'EOF'

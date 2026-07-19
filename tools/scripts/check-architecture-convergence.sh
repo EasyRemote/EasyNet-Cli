@@ -5593,20 +5593,23 @@ if mission_dispatch.exists():
             line_number(text, ignored_recursion.start()),
             "mission recursion/agent-send architecture evidence must not be a permanently ignored external-CLI test",
         )
-    model_entry_fallback_patterns = (
+    runtime_config_entry_fallback_patterns = (
         r"resolve_model_with_overrides[\s\S]{0,220}\bentry_model\b",
         r"resolve_model\s*\([^)]*\bentry_model\b",
         r"\.or\s*\(\s*entry_model\s*\)",
         r"resolve_model_with_overrides\s*\([\s\S]{0,220}entry\.model\.clone\s*\(",
+        r"resolve_timeout\s*\([^)]*\bentry_timeout_secs\b",
+        r"resolve_timeout\s*\([\s\S]{0,160}entry\.timeout_secs",
+        r"unwrap_or\s*\(\s*entry_timeout_secs\s*\)",
     )
-    for pattern in model_entry_fallback_patterns:
+    for pattern in runtime_config_entry_fallback_patterns:
         match = re.search(pattern, production_text)
         if match:
             add(
-                "R66_MISSION_MODEL_ENTRY_FALLBACK",
+                "R66_MISSION_RUNTIME_CONFIG_ENTRY_FALLBACK",
                 mission_dispatch,
                 line_number(production_text, match.start()),
-                "mission dispatch model must come from per-call override or agent.toml, not registry entry.model fallback",
+                "mission dispatch runtime config must come from per-call override, agent.toml, or canonical defaults, not registry entry fallback",
             )
 
 # Rule 24: cancellation terminal retention is an idempotent lifecycle index.

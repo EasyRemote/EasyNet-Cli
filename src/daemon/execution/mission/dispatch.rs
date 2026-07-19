@@ -153,18 +153,23 @@ pub struct AgentDispatchRequest<'a> {
     pub progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
 }
 
-/// Resolve the dispatch timeout from spec + entry precedence.
+/// Resolve the dispatch timeout from AgentDirectory runtime configuration.
 ///
 /// `spec_timeout_secs = Some(n)` — operator set a timeout in
 /// `agent.toml`; use it verbatim. `None` — no operator choice
-/// in the spec; fall through to the v1/legacy
-/// `entry.timeout_secs` so pre-migration rows keep working.
+/// in the spec; use the canonical agent runtime default. Registry-row
+/// `entry.timeout_secs` is deliberately not consulted because v1 migration
+/// writes customized timeouts into `agent.toml`.
 ///
 /// Extracted so production and tests call the same code: see
 /// the doc block at the call site in `send_to_agent_with_depth`
 /// for why.
-pub(crate) fn resolve_timeout(spec_timeout_secs: Option<u64>, entry_timeout_secs: u64) -> Duration {
-    Duration::from_secs(spec_timeout_secs.unwrap_or(entry_timeout_secs))
+pub(crate) fn resolve_timeout(spec_timeout_secs: Option<u64>) -> Duration {
+    Duration::from_secs(
+        spec_timeout_secs.unwrap_or_else(
+            crate::daemon::persistence::agent_registry::default_timeout_for_new_rows,
+        ),
+    )
 }
 
 /// Resolve the dispatch model from invocation override + spec precedence.
@@ -422,10 +427,8 @@ pub fn send_to_agent_with_depth_and_progress(
     // Precedence per field:
     //
     //   * `timeout`: `spec.timeout_secs` (Some = explicit user
-    //     choice) wins; else `entry.timeout_secs` (v1 / legacy).
-    //     Matches `AgentSpec::validate`'s timeout-0 rejection —
-    //     if the spec says 60, the dispatch uses 60 even if a
-    //     stale registry row still carries 300.
+    //     choice) wins; else the canonical agent runtime default.
+    //     Matches `AgentSpec::validate`'s timeout-0 rejection.
     //   * `max_output_bytes`: no spec field yet — stays on
     //     entry. Future `agent.toml` addition will plug in the
     //     same way.
@@ -454,7 +457,7 @@ pub fn send_to_agent_with_depth_and_progress(
     // and tests bound to the same code path: a refactor that
     // inverts the order must touch the function, and the test
     // calling that function breaks.
-    let timeout = resolve_timeout(spec_source.timeout_secs, entry.timeout_secs);
+    let timeout = resolve_timeout(spec_source.timeout_secs);
     let max_output = entry.max_output_bytes;
     // Per-call overrides win over spec defaults. The chat
     // ability handler threads its `driver.model` arg through here so
@@ -1382,7 +1385,7 @@ mod tests {
     //      `depth_override = Some(1)` so the real dispatch
     //      flows: `AgentDirectory::open` validates the registered
     //      root, `effective_model` resolves from spec/override only,
-    //      `effective_timeout` resolves from spec/entry, and the adapter invoke fails fast
+    //      `effective_timeout` resolves from spec/default only, and the adapter invoke fails fast
     //      (dummy_entry's bogus `command` → ENOENT in ms).
     //   4. Inspect `<run-dir>/meta.json` — the authoritative
     //      audit record the dispatcher wrote BEFORE returning
@@ -1526,10 +1529,11 @@ mod tests {
 
     // ── resolve_timeout / resolve_model (runtime config authority) ──
     //
-    // These two helpers are the single implementation of the
-    // timeout still bridges from spec to entry because no spec-level default
-    // exists yet; model selection is intentionally narrower:
-    // invocation override > agent.toml spec, never entry.model.
+    // These helpers are the single implementation of the runtime config
+    // precedence rule: timeout comes from agent.toml or the canonical
+    // agent runtime default; model comes from invocation override or
+    // agent.toml. Registry-row `entry.model` / `entry.timeout_secs` are not
+    // dispatch-time runtime config authorities.
     // Production `send_to_agent_with_depth` calls these helpers; tests call
     // the same functions.
     //
@@ -1537,10 +1541,8 @@ mod tests {
     // are not "recompute the equation and assert the result"
     // (the test-theatre shape the earlier iteration took);
     // they are "drive the one function production uses and
-    // observe its output". A refactor that inverts the
-    // precedence order in `resolve_timeout` (say, swaps to
-    // `entry_timeout_secs.unwrap_or(spec_timeout_secs)` or
-    // somesuch) flips these test outputs and the tests break.
+    // observe its output". A refactor that reintroduces registry-row
+    // fallback flips these test outputs and the tests break.
     //
     // The sibling `*_is_written_to_meta_json_when_set` tests
     // above complete the picture by proving that the resolved
@@ -1552,24 +1554,24 @@ mod tests {
 
     #[test]
     fn resolve_timeout_prefers_spec_when_set() {
-        let t = resolve_timeout(Some(42), 300);
+        let t = resolve_timeout(Some(42));
         assert_eq!(t, Duration::from_secs(42));
     }
 
     #[test]
-    fn resolve_timeout_falls_back_to_entry_when_spec_none() {
-        let t = resolve_timeout(None, 300);
-        assert_eq!(t, Duration::from_secs(300));
+    fn resolve_timeout_uses_canonical_default_when_spec_none() {
+        let t = resolve_timeout(None);
+        assert_eq!(
+            t,
+            Duration::from_secs(
+                crate::daemon::persistence::agent_registry::default_timeout_for_new_rows()
+            )
+        );
     }
 
     #[test]
-    fn resolve_timeout_spec_trumps_entry_even_when_entry_is_smaller() {
-        // Guard against "pick the smaller of the two" drift
-        // — some tempting but wrong rules would satisfy the
-        // simple "spec wins when larger" case. If a refactor
-        // ever changes to `.min(entry_timeout_secs)` this
-        // test catches it.
-        let t = resolve_timeout(Some(600), 30);
+    fn resolve_timeout_has_no_entry_timeout_fallback() {
+        let t = resolve_timeout(Some(600));
         assert_eq!(t, Duration::from_secs(600));
     }
 
