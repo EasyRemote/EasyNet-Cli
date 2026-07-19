@@ -5,7 +5,7 @@
 <h1 align="center">easynet</h1>
 
 <p align="center">
-  CLI + MCP server for <strong>EasyNet Axon</strong> — manage distributed devices, orchestrate abilities across edge nodes, and give Claude Code direct access to your fleet.
+  Open-world capability runtime for AI-era execution: publish, invoke, audit, and orchestrate abilities across owners, devices, models, tools, and services.
 </p>
 
 <p align="center">
@@ -22,36 +22,96 @@
 
 ## Why EasyNet exists
 
-The web gave every page a **URL**, so strangers could find and read each other's pages without owning the server. AI capabilities have no such address — today a capability is trapped inside one agent, behind one NAT, and to share it you must ship the code or the model itself.
+The next software runtime is no longer made only of deterministic APIs,
+database operators, and scheduled jobs. Production workflows now call LLMs,
+agents, MCP tools, external SaaS services, private models, local devices, and
+human-in-the-loop systems. These capabilities are powerful, but they are
+scattered across owners, machines, networks, and trust boundaries.
 
-EasyNet gives every capability a **URA** (Universal Resource Address): one network address that works **across owners and across NAT**, while the capability **never leaves its owner's machine**.
+Today, a capability usually lives behind one framework, one API key, one
+server, or one agent session. It has no stable network identity, no portable
+execution contract, no verifiable receipt, and no durable execution history
+that can be optimized over time.
 
-> Alice's research agent needs protein-folding inference but has no GPU. A stranger, Bob, publishes a fold capability on his own GPU box. Alice's Claude discovers `bob.fold.predict` in the federation and calls it — Bob's model never leaves his machine, Alice gets the *result* and not the weights, and every call emits a **receipt** Bob can bill and audit against.
+EasyNet gives every capability a network address and an execution contract.
 
-**In the open world, AI capability today is:**
+A capability can stay where it belongs: on the owner's machine, inside the
+owner's model runtime, behind the owner's SaaS account, or attached to the
+owner's device. Other software can discover and invoke it through a signed,
+auditable protocol call. The caller receives a result and a receipt, not the
+underlying model, code, credential, or data source.
+
+> A research workflow needs protein-folding inference but has no local GPU. A
+> remote owner publishes a fold capability from their own GPU box. The workflow
+> discovers the capability, invokes it through EasyNet, receives the result, and
+> keeps a receipt for audit and settlement. The model weights never leave the
+> owner's machine.
+
+**In open-world execution, the missing layer is capability management:**
 
 | Problem | EasyNet's answer |
 |---|---|
-| **Hard to distribute** — a capability is locked in one runtime, with no address | **Addressable** — every capability gets a URA, discoverable across owners and behind NAT |
-| **Not private** — to share a capability you must hand over the code or model | **Non-portable** — the capability stays on its owner's machine; callers get results, not the artifact |
-| **Hard to compose** — capabilities from different owners don't interoperate | **Composable** — one invocation primitive + uniform addressing lets any capability call any other |
-| **Not auditable** — calls leave no verifiable, accountable trail | **Accountable** — every call emits a receipt, so strangers can settle: bill and assign liability |
+| Capabilities are trapped inside one runtime, API, account, or framework | **Ability** gives each capability a stable network contract |
+| Callers cannot safely invoke capabilities owned by others | **Invocation** carries caller, callee, ability, subject, nonce, causal context, and args as a signed object |
+| Execution is hard to audit, replay, or settle | **Receipt** records the verifiable terminal fact of the call |
+| Similar workflows repeatedly re-plan from scratch | Execution traces become reusable optimization material |
+| Private models and devices sit behind NAT or local trust boundaries | The capability stays with its owner; EasyNet routes the call |
 
-**One line:** EasyNet gives every capability a network address (URA), so agents that have never met — and belong to different owners — can **discover, invoke, and settle** with each other in the open, *without the capability ever leaving its owner.*
+**One line:** EasyNet is the open-world capability network: a protocol and
+runtime stack for publishing, invoking, auditing, and eventually optimizing
+AI-era capabilities across ownership and network boundaries.
 
 ## What is this?
 
-`easynet` is a single binary that turns a fleet of edge devices into a programmable network. It speaks to an **Axon Hub** — the coordination layer that routes ability invocations across devices behind NAT, without any of them needing a public IP.
+`easynet` is the device runtime and operator CLI for EasyNet. It starts
+`easynet-daemon`, joins an Axon Hub, publishes local capabilities as governed
+Abilities, dispatches complete signed Invocations, and records execution facts
+as receipts.
 
-**Three things in one binary:**
+**Four things in one binary:**
 
-1. **CLI** — `easynet devices`, `easynet exec gpu-rig -- nvidia-smi`, `easynet deploy ./skill --to edge-cam`. Ten subcommands for real-time device and ability management.
+1. **Daemon runtime**: `easynet runtime start` launches `easynet-daemon`, the
+   product runtime that owns device lifecycle, local policy, plugins, ability
+   registration, dispatch, and receipt projection.
 
-2. **EAL compiler** — EAL (EasyNet Ability Language) is a DSL for distributed ability orchestration. Write a `.eal` file, the compiler infers a dependency DAG from variable references, partitions it into parallel phases, and compiles it to **Mission IR v2** — a serializable, backend-agnostic execution plan.
+2. **CLI**: `easynet devices`, `easynet exec gpu-rig -- nvidia-smi`,
+   `easynet deploy ./skill --to edge-cam`, and `easynet invoke ...` provide
+   direct control over devices and abilities.
 
-3. **MCP server** — `easynet mcp-server` exposes 11 Hub-level tools over stdio, so Claude Code or Codex can discover devices, deploy abilities, run commands, and orchestrate missions without leaving the IDE.
+3. **EAL compiler**: EAL (EasyNet Ability Language) is a DSL for distributed
+   ability orchestration. Write a `.eal` file, and the compiler infers a
+   dependency DAG from variable references, partitions it into parallel phases,
+   and compiles it to **Mission IR v2**, a serializable execution plan.
 
-**Why this matters:** Most distributed execution tools force you to choose between a CLI (manual, one-shot) and a programmable API (code-heavy, no visibility). EAL sits in between — it's a language with compiler-level guarantees (type-safe variable references, cycle detection, phase-optimal parallelism) that produces an inspectable IR and a structured audit trail.
+4. **MCP server**: `easynet mcp-server` exposes Hub-level tools over stdio, so
+   local AI development environments can discover devices, deploy abilities,
+   run commands, and orchestrate missions without leaving the IDE.
+
+**Why this matters:** EasyNet does not treat a capability as a local tool
+hidden inside one agent session. It treats the capability as a network object:
+addressable by URA, invoked through Axon, governed by daemon policy, and
+closed by a receipt.
+
+## System layers
+
+| Layer | Repository | Responsibility |
+|---|---|---|
+| Protocol | [EasyNet-Axon](https://github.com/EasyRemote/EasyNet-Axon) | URA, Ability, Invocation, Receipt, stream/bidi, runtime semantics, SDK conformance |
+| Runtime | [EasyNet-Cli](https://github.com/EasyRemote/EasyNet-Cli) | `easynet-daemon`, device lifecycle, plugins, local execution, EAL/Mission, CLI, MCP |
+| Product | [EasyNet](https://github.com/EasyRemote/EasyNet) | Web platform, federation backend, operator console, dashboards, product workflows |
+| Optimization | IntentDB (research direction) | Learn reusable hybrid execution plans from receipt-backed traces |
+
+## Research direction: IntentDB
+
+EasyNet's receipt-backed execution history makes a higher-level system
+possible: **IntentDB**, a database-style optimizer for open-world capability
+execution.
+
+IntentDB treats user intent as a managed object, learns recurring execution
+patterns from historical traces, promotes stable patterns into deterministic
+operators, and keeps uncertain reasoning only where it is still necessary. This
+layer is a research direction, not a completed runtime feature in this
+repository.
 
 ## Install
 
