@@ -553,7 +553,7 @@ fn reject_empty_unknown_trace(trace_id: &str, nodes: &[Record]) -> anyhow::Resul
     if nodes.is_empty() && !mission_run_exists(trace_id) {
         anyhow::bail!(
             "trace {trace_id:?} has no invocation records in the ledger; \
-             check the trace id or start with `easynet invocation history list`"
+             check the trace id or start with `easynet invocation list`"
         );
     }
     Ok(())
