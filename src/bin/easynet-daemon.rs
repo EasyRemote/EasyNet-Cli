@@ -213,8 +213,6 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(2);
     }
 
-    easynet_cli::daemon::persistence::config::migrate_legacy_agents_directory()?;
-
     // The key service is a detached custody process so that it cannot be
     // inherited accidentally by arbitrary child commands. Its lifecycle is
     // nevertheless owned by this daemon: every normal shutdown and every

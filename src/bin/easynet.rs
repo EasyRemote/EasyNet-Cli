@@ -65,7 +65,6 @@ fn main() -> anyhow::Result<()> {
     let cmd = apply_help_layout(App::command());
     let matches = cmd.get_matches();
     let app = App::from_arg_matches(&matches)?;
-    easynet_cli::daemon::persistence::config::migrate_legacy_agents_directory()?;
     run(app.command)
 }
 

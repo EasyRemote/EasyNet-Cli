@@ -1225,13 +1225,8 @@ for path in (
 
 
 # Rule 12: per-agent state has one canonical directory. The old
-# `workspaces/` name is permitted only inside the explicit, one-time migration
-# owner and registry-prefix rewrite; no runtime reader may select it as a
-# fallback authority.
-legacy_agent_root_allowed = {
-    cli_root / "src/daemon/persistence/config.rs",
-    cli_root / "src/daemon/persistence/agent_registry.rs",
-}
+# `workspaces/` name is retired; runtime readers, writers, and boot paths must
+# not keep a directory migration or registry-prefix rewrite.
 legacy_agent_root_pattern = re.compile(
     r'(?:state_dir\s*\(\s*\)|\.easynet)[^\n]{0,80}["\']workspaces["\']|'
     r'\.easynet/workspaces(?:/|\b)|'
@@ -1247,13 +1242,11 @@ legacy_agent_root_operational_files += production_files(
 for path in sorted(set(legacy_agent_root_operational_files)):
     text = source(path)
     for match in legacy_agent_root_pattern.finditer(text):
-        if path in legacy_agent_root_allowed:
-            continue
         add(
             "R12_AGENT_ROOT_FORK",
             path,
             line_number(text, match.start()),
-            "runtime agent state must use agents_root; workspaces is migration-only",
+            "runtime agent state must use agents_root; workspaces migration is retired",
         )
 
 

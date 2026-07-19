@@ -382,8 +382,6 @@ fn store_agents_cache(
 }
 
 pub fn load_agents() -> anyhow::Result<AgentRegistry> {
-    config::migrate_legacy_agents_directory()
-        .context("migrate canonical agent directory layout before registry read")?;
     let path = agents_path();
     let initial_signature = agents_file_signature(&path);
     if let Some(registry) = cached_agents(&path, &initial_signature) {
@@ -419,8 +417,6 @@ pub fn load_agents() -> anyhow::Result<AgentRegistry> {
     let mut registry: AgentRegistry =
         serde_json::from_str(&data).with_context(|| format!("parse {}", path.display()))?;
 
-    let layout_migrated = migrate_registry_root_paths(&mut registry);
-
     // Load-time v1 → v2 migration.
     //
     // Pre-v2 rows have `schema_version == 0` (the absent-field
@@ -447,7 +443,7 @@ pub fn load_agents() -> anyhow::Result<AgentRegistry> {
     if schema_migration_required {
         migrate_registry_to_v2(&mut registry)?;
     }
-    if schema_migration_required || layout_migrated {
+    if schema_migration_required {
         // Write the migrated shape back so subsequent loads never
         // re-run the migration. `save_agents` is atomic; a crash
         // between the migration and the save leaves the on-disk
@@ -465,35 +461,11 @@ pub fn load_agents() -> anyhow::Result<AgentRegistry> {
     Ok(registry)
 }
 
-/// Rewrite registry roots after the atomic parent-directory migration.
-///
-/// This is intentionally idempotent. If a process crashes after renaming the
-/// directory but before the atomic registry write, the next load observes the
-/// stale prefix and completes the second commit without consulting the old
-/// directory as a runtime fallback.
-fn migrate_registry_root_paths(registry: &mut AgentRegistry) -> bool {
-    let legacy = config::legacy_agents_root();
-    let canonical = config::agents_root();
-    let mut changed = false;
-    for entry in registry.agents.values_mut() {
-        let Some(root) = entry.root_path.as_ref() else {
-            continue;
-        };
-        let Ok(relative) = root.strip_prefix(&legacy) else {
-            continue;
-        };
-        entry.root_path = Some(canonical.join(relative));
-        changed = true;
-    }
-    changed
-}
-
 /// v1 → v2 registry migration.
 ///
 /// For each v1 row (`schema_version == 0`) we:
 /// 1. Resolve the agent's on-disk root under the canonical
-///    `~/.easynet/agents/<name>/` directory. The parent layout migration has
-///    already committed before registry parsing begins.
+///    `~/.easynet/agents/<name>/` directory.
 /// 2. If the root does not already hold an `agent.toml`, build a
 ///    minimal `AgentSpec` from the v1 fields (runtime, model,
 ///    timeout_secs) and materialise the directory via
@@ -723,8 +695,6 @@ pub fn validate_agent_name(name: &str) -> anyhow::Result<()> {
 }
 
 pub fn save_agents(registry: &AgentRegistry) -> anyhow::Result<()> {
-    config::migrate_legacy_agents_directory()
-        .context("migrate canonical agent directory layout before registry write")?;
     // Validate every key once at the persistence boundary, so every code
     // path that builds a registry (CLI add, programmatic insert, manual
     // edit followed by re-save) gets the same guarantees.
@@ -758,39 +728,6 @@ pub fn save_agents(registry: &AgentRegistry) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn load_migrates_directory_and_registry_root_as_one_recoverable_transition() {
-        let _guard = crate::cli::commands::test_support::HomeGuard::new();
-        let legacy_root = config::legacy_agents_root();
-        let legacy_agent = legacy_root.join("alice");
-        fs::create_dir_all(&legacy_agent).expect("legacy agent root");
-
-        let mut registry = AgentRegistry::default();
-        let mut entry = AgentEntry::new(AgentType::Codex, None);
-        entry.root_path = Some(legacy_agent);
-        registry.agents.insert("alice".to_string(), entry);
-        fs::create_dir_all(config::state_dir()).expect("state root");
-        fs::write(
-            agents_path(),
-            serde_json::to_vec_pretty(&registry).expect("registry JSON"),
-        )
-        .expect("legacy registry");
-
-        let migrated = load_agents().expect("layout migration");
-        let expected = config::agents_root().join("alice");
-        assert_eq!(migrated.agents["alice"].root_path.as_ref(), Some(&expected));
-        assert!(expected.exists());
-        assert!(!legacy_root.exists());
-
-        let persisted: AgentRegistry =
-            serde_json::from_slice(&fs::read(agents_path()).expect("persisted migrated registry"))
-                .expect("parse migrated registry");
-        assert_eq!(
-            persisted.agents["alice"].root_path.as_ref(),
-            Some(&expected)
-        );
-    }
 
     #[test]
     fn external_agent_type_round_trips_and_has_no_default_command() {
