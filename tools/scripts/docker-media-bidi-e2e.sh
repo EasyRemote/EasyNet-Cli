@@ -140,6 +140,10 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "caller_remote_media_stream_succeeded" "$0"
   grep -q "caller_remote_media_bidi_succeeded" "$0"
   grep -q "caller_media_bidi_descriptor_ref" "$0"
+  grep -q "media_stream_unique_invocation_records" "$0"
+  grep -q "media_bidi_unique_invocation_records" "$0"
+  grep -q "media_product_operations_have_verified_single_terminal_receipt_chains" "$0"
+  grep -q "completed_chain_facts" "$0"
   grep -q "resolve_docker" "$0"
   grep -q "extend_tool_path" "$0"
   grep -q "random_nonce_hex" "$0"
@@ -920,6 +924,70 @@ def completed_receipt_records(path):
             completed.append(row)
     return completed
 
+def receipt_anchors(record):
+    chain = record.get("receipt_chain")
+    if not isinstance(chain, dict):
+        return []
+    anchors = chain.get("anchors")
+    return anchors if isinstance(anchors, list) else []
+
+def unique_non_empty(values):
+    compact = [value for value in values if value]
+    return bool(compact) and len(compact) == len(set(compact))
+
+def completed_chain_facts(records, expected_ability_ura, expected_callee_ura):
+    facts = {
+        "record_count": len(records),
+        "request_ids": [str(record.get("request_id") or "") for record in records],
+        "invocation_uras": [str(record.get("invocation_ura") or "") for record in records],
+        "head_receipt_hashes": [],
+        "terminal_receipt_counts": [],
+        "all_completed": False,
+        "all_expected_ability": False,
+        "all_expected_callee": False,
+        "unique_request_ids": False,
+        "unique_invocation_uras": False,
+        "all_verified_receipt_chains": False,
+        "all_single_completed_terminal_receipt": False,
+        "all_terminal_head_receipts": False,
+    }
+    if not records:
+        return facts
+    terminal_counts = []
+    terminal_heads = []
+    for record in records:
+        chain = record.get("receipt_chain") if isinstance(record, dict) else None
+        chain = chain if isinstance(chain, dict) else {}
+        head_hash = str(chain.get("head_receipt_hash") or "")
+        facts["head_receipt_hashes"].append(head_hash)
+        completed_anchors = [
+            anchor
+            for anchor in receipt_anchors(record)
+            if isinstance(anchor, dict)
+            and anchor.get("state") == "completed"
+            and anchor.get("receipt_type") == "completed"
+        ]
+        terminal_counts.append(len(completed_anchors))
+        terminal_heads.append(
+            len(completed_anchors) == 1
+            and head_hash
+            and str(completed_anchors[0].get("receipt_hash") or "") == head_hash
+        )
+    facts["terminal_receipt_counts"] = terminal_counts
+    facts["all_completed"] = all(record.get("state") == "completed" for record in records)
+    facts["all_expected_ability"] = all(record.get("ability_ura") == expected_ability_ura for record in records)
+    facts["all_expected_callee"] = all(record.get("callee_ura") == expected_callee_ura for record in records)
+    facts["unique_request_ids"] = unique_non_empty(facts["request_ids"])
+    facts["unique_invocation_uras"] = unique_non_empty(facts["invocation_uras"])
+    facts["all_verified_receipt_chains"] = all(
+        isinstance(record.get("receipt_chain"), dict)
+        and record["receipt_chain"].get("verified") is True
+        for record in records
+    )
+    facts["all_single_completed_terminal_receipt"] = all(count == 1 for count in terminal_counts)
+    facts["all_terminal_head_receipts"] = all(terminal_heads)
+    return facts
+
 plugin_status = load_json(out / "provider-plugin-status-media.json")
 stream_frames = load_json_array_from_cli(out / "provider-media-stream.json")
 caller_remote_stream_frames = load_json_array_from_cli(out / "caller-remote-media-stream.json")
@@ -934,6 +1002,8 @@ bidi_payloads = [frame.get("payload") for frame in bidi_frames if isinstance(fra
 caller_remote_bidi_payloads = [frame.get("payload") for frame in caller_remote_bidi_frames if isinstance(frame, dict)]
 stream_records = completed_receipt_records(out / "provider-invocation-list-media-stream.json")
 bidi_records = completed_receipt_records(out / "provider-invocation-list-media-bidi.json")
+stream_chain_facts = completed_chain_facts(stream_records, stream_ura, provider_ura)
+bidi_chain_facts = completed_chain_facts(bidi_records, bidi_ura, provider_ura)
 
 def payload_kinds(payloads):
     return {p.get("kind") for p in payloads if isinstance(p, dict)}
@@ -1006,7 +1076,33 @@ assertions = {
     "hub_observed_reverse_bidi_input": "carrier_v1_reverse_bidi_input" in hub_daemon_log,
     "media_stream_two_operations_two_receipt_chains": len(stream_records) == 2,
     "media_bidi_two_operations_two_receipt_chains": len(bidi_records) == 2,
+    "media_stream_unique_invocation_records": stream_chain_facts["record_count"] == 2
+        and stream_chain_facts["unique_request_ids"]
+        and stream_chain_facts["unique_invocation_uras"],
+    "media_bidi_unique_invocation_records": bidi_chain_facts["record_count"] == 2
+        and bidi_chain_facts["unique_request_ids"]
+        and bidi_chain_facts["unique_invocation_uras"],
+    "media_stream_preserved_provider_tuple": stream_chain_facts["all_expected_ability"]
+        and stream_chain_facts["all_expected_callee"],
+    "media_bidi_preserved_provider_tuple": bidi_chain_facts["all_expected_ability"]
+        and bidi_chain_facts["all_expected_callee"],
+    "media_stream_verified_single_terminal_receipt_chains": stream_chain_facts["all_completed"]
+        and stream_chain_facts["all_verified_receipt_chains"]
+        and stream_chain_facts["all_single_completed_terminal_receipt"]
+        and stream_chain_facts["all_terminal_head_receipts"],
+    "media_bidi_verified_single_terminal_receipt_chains": bidi_chain_facts["all_completed"]
+        and bidi_chain_facts["all_verified_receipt_chains"]
+        and bidi_chain_facts["all_single_completed_terminal_receipt"]
+        and bidi_chain_facts["all_terminal_head_receipts"],
 }
+assertions["media_product_operations_have_verified_single_terminal_receipt_chains"] = (
+    assertions["media_stream_unique_invocation_records"]
+    and assertions["media_bidi_unique_invocation_records"]
+    and assertions["media_stream_preserved_provider_tuple"]
+    and assertions["media_bidi_preserved_provider_tuple"]
+    and assertions["media_stream_verified_single_terminal_receipt_chains"]
+    and assertions["media_bidi_verified_single_terminal_receipt_chains"]
+)
 
 report = {
     "topology": {
@@ -1027,6 +1123,10 @@ report = {
     "caller_remote_bidi_frames": caller_remote_bidi_frames,
     "provider_media_stream_invocation_records": stream_records,
     "provider_media_bidi_invocation_records": bidi_records,
+    "mutation_facts": {
+        "stream": stream_chain_facts,
+        "bidi": bidi_chain_facts,
+    },
     "assertions": assertions,
 }
 print(json.dumps(report, indent=2, sort_keys=True))
@@ -1052,6 +1152,21 @@ print("## Assertions")
 print()
 for key, value in report["assertions"].items():
     print(f"- `{key}`: `{str(value).lower()}`")
+print()
+print("## Mutation facts")
+print()
+for kind in ("stream", "bidi"):
+    facts = report["mutation_facts"][kind]
+    print(f"### {kind}")
+    print()
+    print(f"- record_count: `{facts['record_count']}`")
+    print(f"- request_ids: `{', '.join(facts['request_ids'])}`")
+    print(f"- invocation_uras: `{', '.join(facts['invocation_uras'])}`")
+    print(f"- terminal_receipt_counts: `{', '.join(str(v) for v in facts['terminal_receipt_counts'])}`")
+    print(f"- head_receipt_hashes: `{', '.join(facts['head_receipt_hashes'])}`")
+    print(f"- all_verified_receipt_chains: `{str(facts['all_verified_receipt_chains']).lower()}`")
+    print(f"- all_terminal_head_receipts: `{str(facts['all_terminal_head_receipts']).lower()}`")
+    print()
 PY
 
 python3 - "$OUT_DIR/report.json" <<'PY'
