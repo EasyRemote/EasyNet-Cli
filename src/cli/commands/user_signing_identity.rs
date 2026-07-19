@@ -8,7 +8,9 @@
 
 use anyhow::{anyhow, Context};
 
-use crate::daemon::identity::self_identity::{KeyringClient, USER_SIGNING_CLI_PURPOSE};
+use crate::daemon::identity::self_identity::{
+    ensure_user_runtime_signing_identity, KeyringClient, USER_SIGNING_CLI_PURPOSE,
+};
 use crate::daemon::keyring::{ManagedSigningKeyProjection, ManagedSigningStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,8 +28,7 @@ pub(crate) struct UserSigningIdentityOutcome {
 }
 
 trait UserSigningKeyInventory {
-    fn active(&self) -> anyhow::Result<Vec<ManagedSigningKeyProjection>>;
-    fn create(&self, user_ura: &str) -> anyhow::Result<ManagedSigningKeyProjection>;
+    fn ensure(&self, user_ura: &str) -> anyhow::Result<(ManagedSigningKeyProjection, bool)>;
 }
 
 trait UserPublicKeyRegistry {
@@ -48,17 +49,9 @@ impl Default for KeyringUserSigningKeyInventory {
 }
 
 impl UserSigningKeyInventory for KeyringUserSigningKeyInventory {
-    fn active(&self) -> anyhow::Result<Vec<ManagedSigningKeyProjection>> {
-        Ok(self.client.inventory_list(
-            Some(USER_SIGNING_CLI_PURPOSE.into()),
-            Some(ManagedSigningStatus::Active),
-        )?)
-    }
-
-    fn create(&self, user_ura: &str) -> anyhow::Result<ManagedSigningKeyProjection> {
-        Ok(self
-            .client
-            .inventory_create(USER_SIGNING_CLI_PURPOSE, Some(user_ura.to_string()))?)
+    fn ensure(&self, user_ura: &str) -> anyhow::Result<(ManagedSigningKeyProjection, bool)> {
+        let ensured = ensure_user_runtime_signing_identity(&self.client, user_ura)?;
+        Ok((ensured.projection, ensured.created))
     }
 }
 
@@ -127,17 +120,7 @@ where
             ));
         }
 
-        let mut matching = self
-            .inventory
-            .active()?
-            .into_iter()
-            .filter(|entry| entry.bound_subject.as_deref() == Some(user_ura))
-            .collect::<Vec<_>>();
-        matching.sort_by(|left, right| left.key_id.cmp(&right.key_id));
-        let (key, created) = match matching.into_iter().next() {
-            Some(existing) => (existing, false),
-            None => (self.inventory.create(user_ura)?, true),
-        };
+        let (key, created) = self.inventory.ensure(user_ura)?;
         validate_managed_user_key(&key, user_ura)?;
 
         if self.registry.contains(user_ura, &key.public_key_b64)? {
@@ -204,19 +187,15 @@ mod tests {
     use super::*;
 
     struct FakeInventory {
-        entries: Vec<ManagedSigningKeyProjection>,
-        created: ManagedSigningKeyProjection,
-        create_calls: Cell<usize>,
+        ensured: ManagedSigningKeyProjection,
+        created: bool,
+        ensure_calls: Cell<usize>,
     }
 
     impl UserSigningKeyInventory for FakeInventory {
-        fn active(&self) -> anyhow::Result<Vec<ManagedSigningKeyProjection>> {
-            Ok(self.entries.clone())
-        }
-
-        fn create(&self, _user_ura: &str) -> anyhow::Result<ManagedSigningKeyProjection> {
-            self.create_calls.set(self.create_calls.get() + 1);
-            Ok(self.created.clone())
+        fn ensure(&self, _user_ura: &str) -> anyhow::Result<(ManagedSigningKeyProjection, bool)> {
+            self.ensure_calls.set(self.ensure_calls.get() + 1);
+            Ok((self.ensured.clone(), self.created))
         }
     }
 
@@ -275,9 +254,9 @@ mod tests {
         let user = "easynet:///r/local/user/alice";
         let existing = managed_key("existing", user, 0x11);
         let inventory = FakeInventory {
-            entries: vec![existing.clone()],
-            created: managed_key("unused", user, 0x22),
-            create_calls: Cell::new(0),
+            ensured: existing.clone(),
+            created: false,
+            ensure_calls: Cell::new(0),
         };
         let registry = fake_registry(true);
 
@@ -287,7 +266,7 @@ mod tests {
 
         assert_eq!(outcome.state, UserSigningIdentityState::ExistingTrusted);
         assert_eq!(outcome.key_id, existing.key_id);
-        assert_eq!(inventory.create_calls.get(), 0);
+        assert_eq!(inventory.ensure_calls.get(), 1);
         assert_eq!(registry.register_calls.get(), 0);
     }
 
@@ -296,9 +275,9 @@ mod tests {
         let user = "easynet:///r/local/user/alice";
         let created = managed_key("created", user, 0x22);
         let inventory = FakeInventory {
-            entries: Vec::new(),
-            created: created.clone(),
-            create_calls: Cell::new(0),
+            ensured: created.clone(),
+            created: true,
+            ensure_calls: Cell::new(0),
         };
         let registry = fake_registry(false);
 
@@ -308,18 +287,18 @@ mod tests {
 
         assert_eq!(outcome.state, UserSigningIdentityState::CreatedRegistered);
         assert_eq!(outcome.public_key_b64, created.public_key_b64);
-        assert_eq!(inventory.create_calls.get(), 1);
+        assert_eq!(inventory.ensure_calls.get(), 1);
         assert_eq!(registry.register_calls.get(), 1);
     }
 
     #[test]
-    fn ignores_keys_bound_to_another_subject() {
+    fn reports_existing_registration_when_inventory_reused_key() {
         let user = "easynet:///r/local/user/alice";
-        let created = managed_key("created", user, 0x44);
+        let existing = managed_key("existing", user, 0x44);
         let inventory = FakeInventory {
-            entries: vec![managed_key("bob", "easynet:///r/local/user/bob", 0x33)],
-            created: created.clone(),
-            create_calls: Cell::new(0),
+            ensured: existing.clone(),
+            created: false,
+            ensure_calls: Cell::new(0),
         };
         let registry = fake_registry(false);
 
@@ -327,8 +306,9 @@ mod tests {
             .reconcile(user)
             .unwrap();
 
-        assert_eq!(outcome.key_id, created.key_id);
-        assert_eq!(inventory.create_calls.get(), 1);
+        assert_eq!(outcome.state, UserSigningIdentityState::ExistingRegistered);
+        assert_eq!(outcome.key_id, existing.key_id);
+        assert_eq!(inventory.ensure_calls.get(), 1);
     }
 
     #[test]
@@ -349,9 +329,9 @@ mod tests {
 
         let user = "easynet:///r/local/user/alice";
         let inventory = FakeInventory {
-            entries: vec![managed_key("existing", user, 0x11)],
-            created: managed_key("unused", user, 0x22),
-            create_calls: Cell::new(0),
+            ensured: managed_key("existing", user, 0x11),
+            created: false,
+            ensure_calls: Cell::new(0),
         };
         let registry = ConcurrentRegistry {
             trusted: Cell::new(false),

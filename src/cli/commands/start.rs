@@ -349,16 +349,6 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // here, so this branch is defence-in-depth only).
     let pages_listener_port = super::start_boot_watcher::final_pages_port(boot.pages_port)
         .ok_or_else(|| anyhow::anyhow!("daemon reported Ready without binding a pages port"))?;
-    let user_ura = creds.user_ura()?;
-    if let Err(error) =
-        super::user_signing_identity::reconcile_local_user_signing_identity(&user_ura)
-    {
-        if !attached_existing_daemon {
-            let _ = daemon_handle.stop();
-        }
-        return Err(error).context("reconcile managed user signer after daemon Ready");
-    }
-    output::success("user-signer");
     let pid = daemon_handle.pid();
     let endpoint = daemon_handle.invocation_endpoint().display().to_string();
 
@@ -403,6 +393,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // Welcome line — surface the human-readable paired account while the
     // canonical user URA below stays anchored on credentials.user_id.
     let username = creds.username_slug()?;
+    let user_ura = creds.user_ura()?;
     eprintln!();
     eprintln!(
         "{} {}",

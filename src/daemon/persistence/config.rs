@@ -351,6 +351,8 @@ impl RuntimeState {
 
 // ─── Device Credentials ────────────────────────────────────────────────────
 
+const ALL_ZERO_PRINCIPAL_ID: &str = "00000000-0000-0000-0000-000000000000";
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Credentials {
@@ -436,7 +438,8 @@ impl Credentials {
 
     /// Return the immutable product user id carried by device credentials.
     pub fn user_id(&self) -> anyhow::Result<&str> {
-        self.user_id
+        let user_id = self
+            .user_id
             .as_deref()
             .map(str::trim)
             .filter(|v| !v.is_empty())
@@ -444,7 +447,13 @@ impl Credentials {
                 anyhow::anyhow!(
                     "credentials file is missing user_id — run `easynet join <token>` to re-pair"
                 )
-            })
+            })?;
+        if user_id.eq_ignore_ascii_case(ALL_ZERO_PRINCIPAL_ID) {
+            anyhow::bail!(
+                "credentials file carries all-zero user_id — run `easynet join <token>` to re-pair"
+            );
+        }
+        Ok(user_id)
     }
 
     /// Return the canonical runtime user-subject URA for this credential.
@@ -1012,6 +1021,32 @@ mod tests {
         assert!(
             err.to_string().contains("missing user_id"),
             "error should name the missing user_id contract: {err}"
+        );
+    }
+
+    #[test]
+    fn load_credentials_rejects_all_zero_user_id() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(
+            credentials_path(),
+            r#"{
+  "node_id": "node",
+  "credential_token": "token",
+  "hub_endpoint": "axon://hub.example:7700",
+  "realm": "tenant",
+  "deploy_signature": "",
+  "username": "alice",
+  "user_id": "00000000-0000-0000-0000-000000000000"
+}
+"#,
+        )
+        .expect("write placeholder credentials");
+
+        let err = load_credentials().expect_err("all-zero user_id must fail on load");
+        assert!(
+            err.to_string().contains("all-zero user_id"),
+            "error should name the all-zero user_id contract: {err}"
         );
     }
 

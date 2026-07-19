@@ -88,6 +88,7 @@ use crate::daemon::invocation::admission::federated_key_resolver::{
 use crate::daemon::invocation::admission::principal_lifecycle::{
     principal_lifecycle_store_path_for_trust_anchor, PrincipalLifecycleReader,
 };
+use crate::daemon::invocation::admission::runtime_trust::RuntimeTrustContext;
 use crate::daemon::invocation::admission::usage_quota::SharedUsageQuotaGate;
 use crate::daemon::invocation::bidi::session_initiator::{
     initial_session_admission_probe, run_session_supervisor,
@@ -424,6 +425,8 @@ pub fn start_daemon_invocation_transport(
     // restart.
     runtime_trust_anchor.replace(Arc::new(trust_anchor));
     let trust_anchor_cell = runtime_trust_anchor;
+    register_paired_user_runtime_signer(&config, &trust_anchor_path, &trust_anchor_cell)
+        .context("register paired User runtime signing identity")?;
     let presence = Arc::new(PresenceRegistry::new());
     let advertised_agents = Arc::new(
         crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore::new(),
@@ -1040,6 +1043,57 @@ async fn publish_dynamic_owner_projection(
             );
         }
     }
+}
+
+fn register_paired_user_runtime_signer(
+    config: &DaemonConfig,
+    trust_anchor_path: &PathBuf,
+    trust_anchor_cell: &SharedTrustAnchor,
+) -> anyhow::Result<()> {
+    if config.mode() == DaemonMode::Hub {
+        return Ok(());
+    }
+    let credentials = crate::daemon::persistence::config::load_credentials()
+        .context("load paired device credentials for user runtime signer")?;
+    if credentials.realm_str() != config.realm() {
+        anyhow::bail!(
+            "daemon credentials realm `{}` does not match configured realm `{}`",
+            credentials.realm_str(),
+            config.realm()
+        );
+    }
+    let user_ura = match credentials.user_ura() {
+        Ok(user_ura) => user_ura,
+        Err(_) => return Ok(()),
+    };
+    let client = crate::daemon::identity::self_identity::KeyringClient::default_path();
+    let ensured = crate::daemon::identity::self_identity::ensure_user_runtime_signing_identity(
+        &client, &user_ura,
+    )
+    .map_err(|error| {
+        anyhow::anyhow!("ensure managed signing key for paired User `{user_ura}`: {error}")
+    })?;
+    let projection = ensured.projection;
+    RuntimeTrustContext {
+        daemon_realm: config.realm().to_string(),
+        trust_anchor_path: trust_anchor_path.clone(),
+        cell: trust_anchor_cell.clone(),
+    }
+    .register_user_pubkey(user_ura.clone(), projection.public_key_b64.clone())
+    .map_err(|status| {
+        anyhow::anyhow!(
+            "register paired User `{user_ura}` runtime signing key: code={:?}, message={}",
+            status.code(),
+            status.message()
+        )
+    })?;
+    crate::op_event!(
+        component = daemon_invocation,
+        kind = paired_user_runtime_signer_registered,
+        user_ura = user_ura.as_str(),
+        key_id = projection.key_id.as_str(),
+    );
+    Ok(())
 }
 
 fn transport_daemon_ura(

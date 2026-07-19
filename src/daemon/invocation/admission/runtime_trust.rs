@@ -60,9 +60,17 @@ pub(crate) struct RuntimeTrustContext {
 }
 
 impl RuntimeTrustContext {
-    #[cfg(test)]
-    pub(crate) fn writer(&self) -> RuntimeTrust<'_> {
+    fn writer(&self) -> RuntimeTrust<'_> {
         RuntimeTrust::new(&self.daemon_realm, &self.trust_anchor_path, &self.cell)
+    }
+
+    pub(crate) fn register_user_pubkey(
+        &self,
+        user_ura: String,
+        public_key_b64: String,
+    ) -> Result<(), Status> {
+        self.writer()
+            .register_pubkey(user_ura, public_key_b64, TrustedAgentRole::User)
     }
 
     pub(crate) fn reader(&self) -> RuntimeTrustReader<'_> {
