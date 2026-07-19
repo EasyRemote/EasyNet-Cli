@@ -21,6 +21,7 @@ pub enum PluginTemplateLanguage {
     Python,
     Go,
     Rust,
+    Java,
     Node,
 }
 
@@ -80,9 +81,9 @@ pub const PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX: &[ProviderSidecarHelperCapa
     ProviderSidecarHelperCapability {
         language: "java",
         call_mode: ProviderSidecarCallMode::ExecInvoke,
-        state: ProviderSidecarHelperState::Seam,
-        template_available: false,
-        helper_package: None,
+        state: ProviderSidecarHelperState::CutoverReady,
+        template_available: true,
+        helper_package: Some("run.easynet.daemon.provider.easynet.pluginexec"),
     },
     ProviderSidecarHelperCapability {
         language: "c/c++",
@@ -183,6 +184,7 @@ impl PluginTemplateLanguage {
             Self::Python => "python",
             Self::Go => "go",
             Self::Rust => "rust",
+            Self::Java => "java",
             Self::Node => "node",
         }
     }
@@ -318,6 +320,17 @@ impl HelloPluginTemplate {
                 write_new_file(&src_dir.join("main.rs"), RUST_EXEC_PLUGIN)?;
                 write_new_file(&bin_dir.join(".gitkeep"), "")?;
             }
+            PluginTemplateLanguage::Java => {
+                let src_dir = self.target.join("src/main/java");
+                fs::create_dir_all(&src_dir)
+                    .with_context(|| format!("create {}", src_dir.display()))?;
+                write_new_file(&self.target.join("pom.xml"), &self.java_pom_xml())?;
+                write_new_file(&self.target.join("Makefile"), &self.java_makefile())?;
+                let exec_path = bin_dir.join("exec-plugin");
+                write_new_file(&exec_path, &self.java_exec_wrapper())?;
+                make_executable(&exec_path)?;
+                write_new_file(&src_dir.join("ExecPlugin.java"), JAVA_EXEC_PLUGIN)?;
+            }
             PluginTemplateLanguage::Node => {
                 write_new_file(&self.target.join("package.json"), &self.node_package_json())?;
                 let exec_path = bin_dir.join("exec-plugin");
@@ -437,6 +450,24 @@ easynet plugin install .
 ```
 
 The daemon runs `bin/exec-plugin`; it does not run `cargo run` at invocation time.
+"#
+            }
+            PluginTemplateLanguage::Java => {
+                r#"This template uses the Java CLI SDK provider helper:
+
+```java
+import run.easynet.daemon.provider.easynet.pluginexec.SidecarRuntime;
+import run.easynet.daemon.provider.easynet.pluginexec.SidecarInvocation;
+```
+
+Build the executable wrapper target before install:
+
+```bash
+make build
+easynet plugin install .
+```
+
+The daemon runs `bin/exec-plugin`; it does not run Maven at invocation time.
 "#
             }
             PluginTemplateLanguage::Node => {
@@ -577,6 +608,66 @@ serde_json = "1"
             sdk_path = default_rust_pluginexec_path().display(),
         )
     }
+
+    fn java_pom_xml(&self) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>example.easynet.plugin</groupId>
+  <artifactId>{artifact_id}</artifactId>
+  <version>{package_version}</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <easynet.sdk.jar>{sdk_jar}</easynet.sdk.jar>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>run.easynet</groupId>
+      <artifactId>easynet-daemon-sdk</artifactId>
+      <version>0.0.0-seam</version>
+      <scope>system</scope>
+      <systemPath>${{easynet.sdk.jar}}</systemPath>
+    </dependency>
+  </dependencies>
+</project>
+"#,
+            artifact_id = self.package_id.replace('.', "-"),
+            package_version = self.package_version,
+            sdk_jar = default_java_sdk_jar_path().display(),
+        )
+    }
+
+    fn java_makefile(&self) -> String {
+        format!(
+            r#".PHONY: build
+
+build:
+	mvn -q -f {sdk_pom} package
+	mvn -q package
+	cp target/{artifact_id}-{package_version}.jar bin/exec-plugin.jar
+"#,
+            sdk_pom = default_java_sdk_pom_path().display(),
+            artifact_id = self.package_id.replace('.', "-"),
+            package_version = self.package_version,
+        )
+    }
+
+    fn java_exec_wrapper(&self) -> String {
+        format!(
+            r#"#!/usr/bin/env sh
+set -eu
+exec java -cp "$(dirname "$0")/exec-plugin.jar:{sdk_jar}" ExecPlugin
+"#,
+            sdk_jar = default_java_sdk_jar_path().display(),
+        )
+    }
 }
 
 const PYTHON_EXEC_PLUGIN: &str = r#"#!/usr/bin/env python3
@@ -656,6 +747,32 @@ build:
 	cp target/release/exec-plugin bin/exec-plugin
 "#;
 
+const JAVA_EXEC_PLUGIN: &str = r#"import java.util.Map;
+import run.easynet.daemon.provider.easynet.pluginexec.SidecarRuntime;
+import run.easynet.daemon.provider.easynet.pluginexec.SidecarInvocation;
+
+public final class ExecPlugin {
+    private ExecPlugin() {}
+
+    public static void main(String[] args) throws Exception {
+        SidecarRuntime.serve(ExecPlugin::handle);
+    }
+
+    private static Object handle(SidecarInvocation invocation) {
+        return Map.of(
+            "ok", true,
+            "source", "hello-plugin",
+            "message", invocation.args().get("message"),
+            "caller", invocation.caller(),
+            "callee", invocation.callee(),
+            "subject", invocation.subject(),
+            "ability", invocation.ability(),
+            "invocation_nonce_len", invocation.invocationNonce().size()
+        );
+    }
+}
+"#;
+
 const NODE_EXEC_WRAPPER: &str = r#"#!/usr/bin/env sh
 set -eu
 exec node "$(dirname "$0")/exec-plugin.mjs"
@@ -685,6 +802,15 @@ fn default_node_sdk_file_path() -> PathBuf {
 
 fn default_rust_pluginexec_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sdk/rust/provider/easynet/pluginexec")
+}
+
+fn default_java_sdk_pom_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sdk/java/pom.xml")
+}
+
+fn default_java_sdk_jar_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("sdk/java/target/easynet-daemon-sdk-0.0.0-seam.jar")
 }
 
 fn ensure_empty_or_missing_dir(path: &Path) -> anyhow::Result<()> {
@@ -863,6 +989,7 @@ mod tests {
             PluginTemplateLanguage::Python,
             PluginTemplateLanguage::Go,
             PluginTemplateLanguage::Rust,
+            PluginTemplateLanguage::Java,
             PluginTemplateLanguage::Node,
         ] {
             let capability = language.sidecar_helper_capability();
@@ -878,7 +1005,7 @@ mod tests {
                 language.label()
             );
         }
-        for language in ["java", "c/c++"] {
+        for language in ["c/c++"] {
             let capability = rows
                 .get(&(language, ProviderSidecarCallMode::ExecInvoke))
                 .unwrap_or_else(|| panic!("missing sidecar helper matrix row for {language}"));
@@ -985,6 +1112,44 @@ mod tests {
         assert!(readme.contains("Build the executable before install"));
         assert!(readme.contains("make build"));
         assert!(readme.contains("easynet_provider_pluginexec"));
+    }
+
+    #[test]
+    fn init_hello_plugin_generates_java_compiled_project() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let target = root.path().join("hello-java-plugin");
+
+        let project = init_hello_plugin(PluginTemplateInit {
+            path: target.clone(),
+            package_id: Some("local.hello_java_plugin".to_string()),
+            ability_name: Some("hello_java_plugin.echo".to_string()),
+            package_version: "0.1.0".to_string(),
+            descriptor_version: "1.0.0".to_string(),
+            language: PluginTemplateLanguage::Java,
+        })
+        .expect("generate java plugin");
+
+        assert_eq!(project.language, PluginTemplateLanguage::Java);
+        assert!(target.join("plugin.toml").is_file());
+        assert!(target.join("pom.xml").is_file());
+        assert!(target.join("Makefile").is_file());
+        assert!(target.join("src/main/java/ExecPlugin.java").is_file());
+        assert!(target.join("bin/exec-plugin").is_file());
+        assert!(
+            !target.join("bin/exec-plugin.jar").exists(),
+            "compiled template must not fake a jar before build"
+        );
+        let main_body =
+            fs::read_to_string(target.join("src/main/java/ExecPlugin.java")).expect("main");
+        assert!(main_body.contains("SidecarRuntime.serve"));
+        assert!(main_body.contains("SidecarInvocation"));
+        assert!(!main_body.contains("JsonFrameCodec"));
+        let pom = fs::read_to_string(target.join("pom.xml")).expect("pom");
+        assert!(pom.contains("<artifactId>easynet-daemon-sdk</artifactId>"));
+        assert!(pom.contains("/sdk/java/target/easynet-daemon-sdk-0.0.0-seam.jar"));
+        let readme = fs::read_to_string(target.join("README.md")).expect("readme");
+        assert!(readme.contains("Build the executable wrapper target before install"));
+        assert!(readme.contains("run.easynet.daemon.provider.easynet.pluginexec.SidecarRuntime"));
     }
 
     #[test]

@@ -275,7 +275,7 @@ if not language_enum:
 template_variants = set(
     re.findall(r"^\s+([A-Z][A-Za-z0-9_]*)\s*,", language_enum.group("body"), re.M)
 )
-if template_variants != {"Python", "Go", "Rust", "Node"}:
+if template_variants != {"Python", "Go", "Rust", "Java", "Node"}:
     raise SystemExit(
         "plugin_template_language_surface_not_helper_backed:"
         + ",".join(sorted(template_variants))
@@ -328,6 +328,7 @@ expected_helpers = {
     "python": "easynet_sdk.providers.easynet.plugin_exec",
     "go": "easynet.run/cli/sdk/go/provider/easynet/pluginexec",
     "rust": "easynet-provider-pluginexec",
+    "java": "run.easynet.daemon.provider.easynet.pluginexec",
     "node": "@easynet/daemon-sdk/provider/easynet/pluginexec",
 }
 expected_helper_files = {
@@ -343,6 +344,11 @@ expected_helper_files = {
         "sdk/rust/provider/easynet/pluginexec/Cargo.toml",
         "sdk/rust/provider/easynet/pluginexec/src/lib.rs",
         "sdk/rust/provider/easynet/pluginexec/tests/pluginexec.rs",
+    ],
+    "java": [
+        "sdk/java/src/main/java/run/easynet/daemon/provider/easynet/pluginexec/SidecarRuntime.java",
+        "sdk/java/src/main/java/run/easynet/daemon/provider/easynet/pluginexec/SidecarInvocation.java",
+        "sdk/java/src/test/java/run/easynet/daemon/provider/easynet/pluginexec/SidecarRuntimeTest.java",
     ],
     "node": [
         "sdk/node/provider/easynet/pluginexec.js",
@@ -387,6 +393,7 @@ variant_labels = {
     "Python": "python",
     "Go": "go",
     "Rust": "rust",
+    "Java": "java",
     "Node": "node",
 }
 if {variant_labels[variant] for variant in template_variants} != {
@@ -395,7 +402,7 @@ if {variant_labels[variant] for variant in template_variants} != {
 }:
     raise SystemExit("plugin_template_enum_and_matrix_drift")
 
-for const_name in ("PYTHON_EXEC_PLUGIN", "GO_EXEC_PLUGIN", "RUST_EXEC_PLUGIN", "NODE_EXEC_PLUGIN"):
+for const_name in ("PYTHON_EXEC_PLUGIN", "GO_EXEC_PLUGIN", "RUST_EXEC_PLUGIN", "JAVA_EXEC_PLUGIN", "NODE_EXEC_PLUGIN"):
     template = re.search(
         rf'const {const_name}: &str = r#"(.*?)"#;',
         text,
@@ -412,6 +419,9 @@ for const_name in ("PYTHON_EXEC_PLUGIN", "GO_EXEC_PLUGIN", "RUST_EXEC_PLUGIN", "
         "encoding/json",
         "serde_json::from_str",
         "serde_json::Deserializer",
+        "JsonFrameCodec",
+        "ObjectMapper",
+        "Gson",
     ]
     leaked = [pattern for pattern in forbidden if pattern in body]
     if leaked:
@@ -425,6 +435,8 @@ if "pluginexec.MustServe" not in text:
     raise SystemExit("plugin_go_template_missing_provider_helper")
 if "serve_exec_plugin" not in text or "easynet_provider_pluginexec" not in text:
     raise SystemExit("plugin_rust_template_missing_provider_helper")
+if "SidecarRuntime.serve" not in text or "run.easynet.daemon.provider.easynet.pluginexec" not in text:
+    raise SystemExit("plugin_java_template_missing_provider_helper")
 if "serveExecPlugin" not in text:
     raise SystemExit("plugin_node_template_missing_provider_helper")
 PY
