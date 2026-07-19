@@ -517,6 +517,8 @@ pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyh
         args,
         timeout,
     } = request;
+    let arguments = serde_json::to_vec(&args).context("serialise remote invocation arguments")?;
+    let timeout_seconds = i32::try_from(timeout.as_secs().max(1)).unwrap_or(i32::MAX);
     let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
     if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
@@ -525,9 +527,6 @@ pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyh
             socket_path.display()
         );
     }
-
-    let arguments = serde_json::to_vec(&args).context("serialise remote invocation arguments")?;
-    let timeout_seconds = i32::try_from(timeout.as_secs().max(1)).unwrap_or(i32::MAX);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -710,6 +709,213 @@ pub(crate) fn invoke_remote_target_stream(
                 terminal,
                 payload,
             });
+            if terminal {
+                break;
+            }
+            if max_frames.is_some_and(|limit| frames.len() >= limit) {
+                break;
+            }
+        }
+        Ok::<_, anyhow::Error>(frames)
+    })
+}
+
+pub(crate) fn invoke_remote_target_bidi_json_frames(
+    request: RemoteInvocationRequest<'_>,
+    input_frames: Vec<Value>,
+    max_frames: Option<usize>,
+) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
+    use axon_sdk::pb::axon::v1::{
+        invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload,
+        BinaryChunk, InvokeBidiUp,
+    };
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+
+    let RemoteInvocationRequest {
+        target,
+        caller_ura,
+        subject_ura,
+        invocation_nonce,
+        causal_context,
+        args,
+        timeout,
+    } = request;
+    if max_frames == Some(0) {
+        bail!("--max-frames must be greater than 0 when provided");
+    }
+    let arguments = serde_json::to_vec(&args).context("serialise remote bidi arguments")?;
+    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+    if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
+        bail!(
+            "daemon not running (local gRPC listener unreachable at {}). \
+             Start it with `easynet runtime start`.",
+            socket_path.display()
+        );
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime for remote InvokeBidi")?;
+
+    runtime.block_on(async move {
+        let signer = crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(
+            caller_ura.clone(),
+        )
+        .map_err(|err| {
+            anyhow!(
+                "remote bidi invocation requires a caller signer for `{caller_ura}`; \
+                 load or provision that identity in the local key service: {err}"
+            )
+        })?;
+        let envelope_open = ProtoEnvelope::from_target(
+            caller_ura.clone(),
+            target.callee_ura.clone(),
+            subject_ura,
+            InvocationDerivationPolicy::Explicit {
+                invocation_nonce,
+                causal_context,
+            },
+        )?
+        .signed_descriptor_ref_bidi_open_with_signer(
+            target.route_function_name(),
+            target.descriptor_ref(),
+            arguments,
+            &signer,
+        )
+        .await?;
+        let mac = envelope_open
+            .envelope
+            .as_ref()
+            .ok_or_else(|| anyhow!("remote bidi builder omitted envelope"))?
+            .caller_signature
+            .as_ref()
+            .map(|signature| signature.signature.clone())
+            .unwrap_or_default();
+
+        let channel = crate::support::platform::local_daemon_grpc::connect_channel(
+            socket_path.clone(),
+            timeout,
+            Duration::from_secs(10),
+        )
+        .await
+        .context("connect to local daemon gRPC endpoint")?;
+        let mut client = InvocationClient::new(channel)
+            .max_decoding_message_size(
+                crate::daemon::boot::invocation::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+            )
+            .max_encoding_message_size(
+                crate::daemon::boot::invocation::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
+            );
+
+        let mut up_frames = vec![InvokeBidiUp {
+            sequence: 0,
+            mac,
+            payload: Some(UpPayload::EnvelopeOpen(envelope_open)),
+        }];
+
+        let mut next_sequence = 1_u64;
+        for input in input_frames {
+            let data = serde_json::to_vec(&input)
+                .with_context(|| format!("encode {} bidi input JSON frame", target.as_str()))?;
+            up_frames.push(InvokeBidiUp {
+                sequence: next_sequence,
+                mac: Vec::new(),
+                payload: Some(UpPayload::BinaryChunk(BinaryChunk {
+                    stream_id: 1,
+                    data,
+                    ..BinaryChunk::default()
+                })),
+            });
+            next_sequence = next_sequence.saturating_add(1);
+        }
+
+        let mut down = client
+            .invoke_bidi(tonic::Request::new(tokio_stream::iter(up_frames)))
+            .await
+            .map_err(|status| {
+                anyhow!(
+                    "daemon rejected canonical remote bidi invocation `{}` for target `{}` \
+                     (code={:?}): {}",
+                    target.as_str(),
+                    target.execution_target_ura(),
+                    status.code(),
+                    status.message(),
+                )
+            })?
+            .into_inner();
+
+        let mut frames = Vec::new();
+        while let Some(frame) = down.message().await.map_err(|status| {
+            anyhow!(
+                "remote bidi invocation `{}` for target `{}` failed while reading \
+                 daemon stream (code={:?}): {}",
+                target.as_str(),
+                target.execution_target_ura(),
+                status.code(),
+                status.message(),
+            )
+        })? {
+            let sequence = frame.sequence;
+            let Some(payload) = frame.payload else {
+                continue;
+            };
+            let projected = match payload {
+                DownPayload::BinaryChunk(chunk) => {
+                    let payload = serde_json::from_slice(&chunk.data).unwrap_or_else(|_| {
+                        json!({
+                            "type": "binary",
+                            "stream_id": chunk.stream_id,
+                            "data_b64": B64.encode(&chunk.data),
+                        })
+                    });
+                    crate::support::platform::local_invoke::LocalBidiFrame {
+                        sequence,
+                        content_type: "application/json".to_string(),
+                        terminal: false,
+                        payload,
+                    }
+                }
+                DownPayload::Receipt(receipt) => {
+                    let terminal = receipt.state
+                        != axon_sdk::invocation::InvocationState::Admitted.to_wire_i32();
+                    let receipt_payload = if receipt.payload.is_empty() {
+                        Value::Null
+                    } else {
+                        serde_json::from_slice(&receipt.payload).unwrap_or_else(|_| {
+                            json!({
+                                "data_b64": B64.encode(&receipt.payload),
+                            })
+                        })
+                    };
+                    crate::support::platform::local_invoke::LocalBidiFrame {
+                        sequence,
+                        content_type: receipt.payload_content_type.clone(),
+                        terminal,
+                        payload: json!({
+                            "type": "receipt",
+                            "state": receipt.state,
+                            "reason": receipt.reason,
+                            "cleanup_complete": receipt.cleanup_complete,
+                            "failure": receipt.failure.map(|failure| json!({
+                                "code": failure.code,
+                                "message": failure.message,
+                                "retryable": failure.retryable,
+                            })),
+                            "payload": receipt_payload,
+                        }),
+                    }
+                }
+                DownPayload::Control(_) => crate::support::platform::local_invoke::LocalBidiFrame {
+                    sequence,
+                    content_type: "application/json".to_string(),
+                    terminal: false,
+                    payload: json!({"type": "control"}),
+                },
+                DownPayload::DispatchCall(_) | DownPayload::ReverseDispatchResult(_) => continue,
+            };
+            let terminal = projected.terminal;
+            frames.push(projected);
             if terminal {
                 break;
             }

@@ -470,6 +470,7 @@ class InvokeBidiUp(google.protobuf.message.Message):
     CONTROL_FIELD_NUMBER: builtins.int
     DISPATCH_RESULT_FIELD_NUMBER: builtins.int
     REVERSE_DISPATCH_CALL_FIELD_NUMBER: builtins.int
+    REVERSE_BIDI_INPUT_FIELD_NUMBER: builtins.int
     sequence: builtins.int
     """Monotonic 0-based sequence per up-direction."""
     mac: builtins.bytes
@@ -496,6 +497,10 @@ class InvokeBidiUp(google.protobuf.message.Message):
     def reverse_dispatch_call(self) -> global___ReverseDispatchCall:
         """device → authority"""
 
+    @property
+    def reverse_bidi_input(self) -> global___ReverseBidiInput:
+        """device → authority"""
+
     def __init__(
         self,
         *,
@@ -506,10 +511,11 @@ class InvokeBidiUp(google.protobuf.message.Message):
         control: global___BidiControl | None = ...,
         dispatch_result: global___DispatchResult | None = ...,
         reverse_dispatch_call: global___ReverseDispatchCall | None = ...,
+        reverse_bidi_input: global___ReverseBidiInput | None = ...,
     ) -> None: ...
-    def HasField(self, field_name: typing.Literal["binary_chunk", b"binary_chunk", "control", b"control", "dispatch_result", b"dispatch_result", "envelope_open", b"envelope_open", "payload", b"payload", "reverse_dispatch_call", b"reverse_dispatch_call"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["binary_chunk", b"binary_chunk", "control", b"control", "dispatch_result", b"dispatch_result", "envelope_open", b"envelope_open", "mac", b"mac", "payload", b"payload", "reverse_dispatch_call", b"reverse_dispatch_call", "sequence", b"sequence"]) -> None: ...
-    def WhichOneof(self, oneof_group: typing.Literal["payload", b"payload"]) -> typing.Literal["envelope_open", "binary_chunk", "control", "dispatch_result", "reverse_dispatch_call"] | None: ...
+    def HasField(self, field_name: typing.Literal["binary_chunk", b"binary_chunk", "control", b"control", "dispatch_result", b"dispatch_result", "envelope_open", b"envelope_open", "payload", b"payload", "reverse_bidi_input", b"reverse_bidi_input", "reverse_dispatch_call", b"reverse_dispatch_call"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["binary_chunk", b"binary_chunk", "control", b"control", "dispatch_result", b"dispatch_result", "envelope_open", b"envelope_open", "mac", b"mac", "payload", b"payload", "reverse_bidi_input", b"reverse_bidi_input", "reverse_dispatch_call", b"reverse_dispatch_call", "sequence", b"sequence"]) -> None: ...
+    def WhichOneof(self, oneof_group: typing.Literal["payload", b"payload"]) -> typing.Literal["envelope_open", "binary_chunk", "control", "dispatch_result", "reverse_dispatch_call", "reverse_bidi_input"] | None: ...
 
 global___InvokeBidiUp = InvokeBidiUp
 
@@ -974,7 +980,10 @@ class ReverseDispatchCall(google.protobuf.message.Message):
 
     CALL_ID_FIELD_NUMBER: builtins.int
     REQUEST_FIELD_NUMBER: builtins.int
+    OPEN_BIDI_FIELD_NUMBER: builtins.int
     call_id: builtins.bytes
+    open_bidi: builtins.bool
+    """true = the reverse request opens long-lived bidi semantics."""
     @property
     def request(self) -> global___InvokeRequest:
         """Complete canonical invocation, same rationale as DispatchCall."""
@@ -984,11 +993,42 @@ class ReverseDispatchCall(google.protobuf.message.Message):
         *,
         call_id: builtins.bytes = ...,
         request: global___InvokeRequest | None = ...,
+        open_bidi: builtins.bool = ...,
     ) -> None: ...
     def HasField(self, field_name: typing.Literal["request", b"request"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["call_id", b"call_id", "request", b"request"]) -> None: ...
+    def ClearField(self, field_name: typing.Literal["call_id", b"call_id", "open_bidi", b"open_bidi", "request", b"request"]) -> None: ...
 
 global___ReverseDispatchCall = ReverseDispatchCall
+
+@typing.final
+class ReverseBidiInput(google.protobuf.message.Message):
+    """Device → authority input for a reverse bidi request opened by
+    ReverseDispatchCall.open_bidi. The 16-byte call_id is the reverse
+    request nonce, not the authority→callee session-local call id.
+    """
+
+    DESCRIPTOR: google.protobuf.descriptor.Descriptor
+
+    CALL_ID_FIELD_NUMBER: builtins.int
+    BINARY_CHUNK_FIELD_NUMBER: builtins.int
+    CONTROL_FIELD_NUMBER: builtins.int
+    call_id: builtins.bytes
+    @property
+    def binary_chunk(self) -> global___BinaryChunk: ...
+    @property
+    def control(self) -> global___BidiControl: ...
+    def __init__(
+        self,
+        *,
+        call_id: builtins.bytes = ...,
+        binary_chunk: global___BinaryChunk | None = ...,
+        control: global___BidiControl | None = ...,
+    ) -> None: ...
+    def HasField(self, field_name: typing.Literal["binary_chunk", b"binary_chunk", "control", b"control", "input", b"input"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["binary_chunk", b"binary_chunk", "call_id", b"call_id", "control", b"control", "input", b"input"]) -> None: ...
+    def WhichOneof(self, oneof_group: typing.Literal["input", b"input"]) -> typing.Literal["binary_chunk", "control"] | None: ...
+
+global___ReverseBidiInput = ReverseBidiInput
 
 @typing.final
 class ReverseDispatchResult(google.protobuf.message.Message):

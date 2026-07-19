@@ -11,7 +11,7 @@ use clap::{Args, ValueEnum};
 use serde_json::{json, Value};
 
 use crate::cli::commands::invocation_tuple::{
-    require_causal_root, required_nonce_hex, required_subject,
+    require_causal_root, required_nonce_hex, required_subject, AbilityInvocationRef,
 };
 use crate::support::platform::local_invoke::{
     invoke_local_ability_target_bidi_json_frames_explicit_root, LocalAbilityTarget, LocalBidiFrame,
@@ -32,6 +32,10 @@ pub enum BidiOutputFormat {
 pub struct BidiArgs {
     /// Canonical Ability URA returned by `easynet ability list`.
     pub ability_ura: String,
+    /// Pin the bidi session to a remote Device or Hub URA through the
+    /// local daemon's canonical InvokeBidi RPC.
+    #[arg(long, short = 'n', value_name = "URA")]
+    pub node: Option<String>,
     /// JSON object passed as the bidi session's initial arguments.
     #[arg(long, value_name = "JSON")]
     pub args: Option<String>,
@@ -68,8 +72,30 @@ pub fn run(args: BidiArgs) -> anyhow::Result<()> {
     if args.max_frames == Some(0) {
         anyhow::bail!("--max-frames must be greater than 0 when provided");
     }
-    let ability_selector = crate::core::ura::AbilitySelector::parse(&args.ability_ura)
-        .context("parse <ability-ura>")?;
+    let ability_ref = AbilityInvocationRef::parse(&args.ability_ura)?;
+    let ability_selector = ability_ref.selector();
+    let node_ura: Option<String> = match args.node.as_deref().map(str::trim) {
+        None => None,
+        Some("") => anyhow::bail!(
+            "--node was given but empty; omit the flag to open bidi locally, \
+             or pass a real `easynet:///r/<tenant>/device/<node>` URA"
+        ),
+        Some(node) => {
+            #[cfg(feature = "axon-pb")]
+            {
+                Some(crate::daemon::invocation::routing::remote_invoke::parse_node_ura(node)?)
+            }
+            #[cfg(not(feature = "axon-pb"))]
+            {
+                let _ = node;
+                anyhow::bail!(
+                    "remote bidi pinning via --node requires the `axon-pb` feature, \
+                     which is not enabled in this build. Re-build with \
+                     `--features axon-pb` and try again."
+                )
+            }
+        }
+    };
     let arguments: Value = match args.args.as_deref() {
         Some(s) => serde_json::from_str(s).context("parse --args JSON")?,
         None => Value::Object(Default::default()),
@@ -83,22 +109,67 @@ pub fn run(args: BidiArgs) -> anyhow::Result<()> {
         .map_err(anyhow::Error::msg)?
         .unwrap_or(timeouts::INVOKE_DEFAULT_SECS * 1000);
     let target = LocalAbilityTarget::from_selector(&ability_selector);
-    let surface = "local ability bidi";
-    let subject = required_subject(args.subject.as_deref(), surface)?;
-    let invocation_nonce = required_nonce_hex(args.nonce_hex.as_deref(), surface)?;
-    require_causal_root(args.causal_root, surface)?;
-    let frames = invoke_local_ability_target_bidi_json_frames_explicit_root(
-        &target,
-        arguments,
-        subject,
-        invocation_nonce,
-        Duration::from_millis(timeout_ms),
-        input_frames,
-        drain_limit(args.max_frames, args.until_terminal),
-    )?;
+    let frames = match node_ura.as_deref() {
+        #[cfg(feature = "axon-pb")]
+        Some(remote_node) => {
+            let credentials = crate::daemon::persistence::config::load_credentials()
+                .context("remote ability bidi requires paired device credentials")?;
+            let caller_ura =
+                crate::support::platform::remote_device::caller_device_ura(&credentials)?;
+            let remote_target = ability_ref
+                .remote_target_for_mode(remote_node, crate::daemon::ability::CallMode::Bidi)?;
+            let surface = "remote ability bidi with --node";
+            let subject = required_subject(args.subject.as_deref(), surface)?.to_string();
+            let invocation_nonce = required_nonce_hex(args.nonce_hex.as_deref(), surface)?;
+            require_causal_root(args.causal_root, surface)?;
+            let request =
+                crate::daemon::invocation::routing::remote_invoke::RemoteInvocationTuplePlan::public_explicit(
+                    &remote_target,
+                    caller_ura,
+                    subject,
+                    invocation_nonce,
+                    crate::daemon::invocation::routing::remote_invoke::declared_root_causal_context(),
+                    arguments,
+                    Duration::from_millis(timeout_ms),
+                )?
+                .into_request()?;
+            crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_bidi_json_frames(
+                request,
+                input_frames,
+                drain_limit(args.max_frames, args.until_terminal),
+            )?
+        }
+        #[cfg(not(feature = "axon-pb"))]
+        Some(_) => unreachable!("--node bail handled above when axon-pb is off"),
+        None => {
+            if ability_ref.is_descriptor_ref() {
+                anyhow::bail!(
+                    "local ability bidi does not accept descriptor refs; omit `@version` \
+                     for local dispatch or pass `--node` for remote descriptor-bound origin proof"
+                );
+            }
+            let surface = "local ability bidi";
+            let subject = required_subject(args.subject.as_deref(), surface)?;
+            let invocation_nonce = required_nonce_hex(args.nonce_hex.as_deref(), surface)?;
+            require_causal_root(args.causal_root, surface)?;
+            invoke_local_ability_target_bidi_json_frames_explicit_root(
+                &target,
+                arguments,
+                subject,
+                invocation_nonce,
+                Duration::from_millis(timeout_ms),
+                input_frames,
+                drain_limit(args.max_frames, args.until_terminal),
+            )?
+        }
+    };
     print_frames(&frames, args.raw, args.format)?;
+    let fulfilled_by = node_ura
+        .as_deref()
+        .map(|node| format!("canonical InvokeBidi target={node}"))
+        .unwrap_or_else(|| "local daemon".to_string());
     output::success(&format!(
-        "{} -> bidi drained {} frame(s) (local daemon)",
+        "{} -> bidi drained {} frame(s) ({fulfilled_by})",
         ability_selector.ability_ura(),
         frames.len()
     ));
@@ -173,6 +244,7 @@ mod tests {
     fn zero_max_frames_is_rejected_before_ipc() {
         let err = run(BidiArgs {
             ability_ura: "easynet:///r/acme/ability/device.dev.remote_desktop.attach".to_string(),
+            node: None,
             args: None,
             input_frames: Vec::new(),
             timeout: 60,
