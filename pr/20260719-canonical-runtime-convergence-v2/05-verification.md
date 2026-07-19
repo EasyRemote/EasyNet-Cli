@@ -3,6 +3,7 @@
 Completed in this slice:
 
 - `python3 scripts/checks/check_benchmark_baselines.py`
+- `python3 ../EasyNet-Axon/scripts/checks/check_benchmark_baselines.py --baseline ../EasyNet-Axon/sdk/rust/benches/baseline-v2.json`
 - `PATH="$HOME/.cargo/bin:$PATH" cargo bench --manifest-path sdk/rust/Cargo.toml --bench local_runtime_allocations -- --output sdk/rust/benches/baseline-v2.json`
 - `PATH="$HOME/.cargo/bin:$HOME/go/bin:$PATH" tools/scripts/check-canonical-runtime-convergence-v2.sh`
 - `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
@@ -15,6 +16,7 @@ Completed in this slice:
 - `tools/scripts/docker-two-node-easyremote-cli-e2e.sh --skip-build --project easynet-easyremote-two-node-codex`
 - `PATH="$HOME/.nvm/versions/node/v22.16.0/bin:$PATH" npm test --prefix sdk/node`
 - `PATH="$HOME/.nvm/versions/node/v22.16.0/bin:$PATH" node --check sdk/node/provider/easynet/pluginexec.js`
+- `PATH="$HOME/.cargo/bin:$PATH" cargo test --manifest-path sdk/rust/provider/easynet/pluginexec/Cargo.toml`
 - `PATH="$HOME/.cargo/bin:$PATH" cargo test plugin_template --lib`
 - `PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check`
 - `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
@@ -54,9 +56,13 @@ Observed closure:
   tests; `plugin init --language node` generates a helper-backed template
   instead of naked sidecar frame parsing.
 - Provider sidecar helper capability evidence is language/call-mode scoped:
-  Python, Go, and Node are template-backed for declarative exec invoke; stream
-  and bidi helper cells remain closed seams until their helpers own streaming
-  frames.
+  Python, Go, Rust, and Node are template-backed for declarative exec invoke;
+  stream and bidi helper cells remain closed seams until their helpers own
+  streaming frames.
+- Rust plugin templates now use the provider-scoped
+  `easynet-provider-pluginexec` helper crate and generate compiled source that
+  produces `bin/exec-plugin` through `make build`; the template does not
+  hand-write sidecar request parsing.
 - C ABI now has direct executable `bidi/frame0_required` evidence at the C ABI
   boundary. It rejects missing frame-0 construction material before active bidi
   session allocation; Rust, Java, and Swift remain listed as unproven for that
@@ -79,3 +85,8 @@ Observed closure:
   construction material before active bidi session allocation. The
   `bidi/frame0_required_other_languages` unproven requirement is now removed
   from the canonical public API model.
+- The Section 11.9 fixed-baseline benchmark acceptance item is now explicitly
+  represented in Section 12 with the Axon `canonical-local-runtime-v2` baseline
+  digest and the standalone benchmark-baseline validator. The baseline covers
+  unary, stream, bidi, cooperative cancellation cleanup, allocation counts,
+  allocated bytes, active-invocation cleanup, and bounded concurrency.
