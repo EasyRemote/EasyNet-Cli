@@ -614,88 +614,37 @@ class CABITransportTests(unittest.TestCase):
 
         self.assertEqual(raw.shutdown_handles, [42])
 
-    def test_descriptor_resolution_uses_local_realm_catalog_for_remote_ability(
+    def test_descriptor_resolution_uses_native_runtime_provider(
         self,
     ) -> None:
         caller_ura = "easynet:///r/acme/device/caller"
         callee_ura = "easynet:///r/acme/device/provider"
         target_ability = "easynet:///r/acme/ability/device.provider.er.add"
         target_ref = f"{target_ability}@1.0.0#{'b' * 64}!stream"
-        meta_ability = "easynet:///r/acme/ability/device.caller.meta.list_abilities"
-        meta_ref = f"{meta_ability}@1.0.0#{'a' * 64}!read"
 
-        class RealmCatalogRaw(FakeRawCABI):
-            def _runtime_diagnostics(self, handle, out_ptr) -> int:
-                self.runtime_requests.append(("diagnostics", int(handle.value)))
+        class NativeDescriptorRaw(FakeRawCABI):
+            def _runtime_resolve_descriptor_ref(
+                self, handle, request_json, out_ptr
+            ) -> int:
+                request = json.loads(request_json.value.decode("utf-8"))
+                self.runtime_requests.append(("resolve_descriptor_ref", request))
                 return self._write(
                     out_ptr,
                     json.dumps(
                         {
-                            "profile": "health",
-                            "kind": "diagnostics_report",
-                            "state": "Running",
-                            "ready": True,
-                            "abi_version": 5,
-                            "checks": [],
-                            "diagnostics": [],
-                            "descriptor_catalog": {
-                                "owner_ura": caller_ura,
-                                "source": "runtime_descriptor_catalog",
-                                "entries": [
-                                    {
-                                        "name": "meta.list_abilities",
-                                        "owner_ura": caller_ura,
-                                        "ability_ura": meta_ability,
-                                        "descriptor_ref": meta_ref,
-                                        "version": "1.0.0",
-                                        "descriptor_hash": f"sha256:{'a' * 64}",
-                                        "call_mode": "rpc",
-                                        "admission_action": "read",
-                                    }
-                                ],
-                                "diagnostics": [],
-                            },
+                            "descriptor_ref": target_ref,
+                            "ability_ura": target_ability,
+                            "owner_ura": callee_ura,
+                            "name": "er.add",
+                            "call_mode": "stream",
+                            "source": "fake_native_provider",
                         },
                         separators=(",", ":"),
                         sort_keys=True,
                     ).encode("utf-8"),
                 )
 
-            def _invocation_invoke(self, handle, raw, out_ptr) -> int:
-                draft = json.loads(raw.value.decode("utf-8"))
-                self.runtime_requests.append(("invoke", draft))
-                admission, terminal = canonical_runtime_receipt_pair("inv-cabi")
-                return self._write(
-                    out_ptr,
-                    json.dumps(
-                        {
-                            "ok": True,
-                            "tuple": draft,
-                            "invocation_id": "inv-cabi",
-                            "terminal_state": "Completed",
-                            "output_json": {
-                                "abilities": [
-                                    {
-                                        "name": "er.add",
-                                        "owner_ura": callee_ura,
-                                        "ability_ura": target_ability,
-                                        "descriptor_ref": target_ref,
-                                        "version": "1.0.0",
-                                        "descriptor_hash": f"sha256:{'b' * 64}",
-                                        "call_mode": "stream",
-                                        "admission_action": "stream",
-                                    }
-                                ]
-                            },
-                            "admission_receipt": admission,
-                            "terminal_receipt": terminal,
-                        },
-                        separators=(",", ":"),
-                        sort_keys=True,
-                    ).encode("utf-8"),
-                )
-
-        raw = RealmCatalogRaw()
+        raw = NativeDescriptorRaw()
         transport = CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
 
         resolved = json.loads(
@@ -714,19 +663,16 @@ class CABITransportTests(unittest.TestCase):
         )
 
         self.assertEqual(resolved["descriptor_ref"], target_ref)
-        invocations = [
+        resolutions = [
             request
             for kind, request in raw.runtime_requests
-            if kind == "invoke"
+            if kind == "resolve_descriptor_ref"
         ]
-        self.assertEqual(len(invocations), 1)
-        lookup = invocations[0]
-        self.assertEqual(lookup["callee_ura"], caller_ura)
-        self.assertEqual(lookup["subject_ura"], caller_ura)
-        self.assertEqual(lookup["descriptor_ref"], meta_ref)
-        self.assertEqual(
-            lookup["args"],
-            {"scope": "realm", "subject_ura": target_ability},
+        self.assertEqual(len(resolutions), 1)
+        self.assertEqual(resolutions[0]["callee_ura"], callee_ura)
+        self.assertEqual(resolutions[0]["ability"], target_ability)
+        self.assertFalse(
+            any(kind == "diagnostics" or kind == "invoke" for kind, _ in raw.runtime_requests)
         )
 
     def test_prepare_uses_opaque_c_handle_when_request_id_repeats(self) -> None:

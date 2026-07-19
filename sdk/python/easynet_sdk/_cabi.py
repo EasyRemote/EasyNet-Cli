@@ -9,9 +9,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
-import base64
 import json
-import os
 import queue as queue_module
 import sys
 import threading
@@ -881,28 +879,7 @@ class CABIRuntimeTransport:
 
     def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
         handle = self._require_open()
-        diagnostics = _json_object(
-            self.lib.runtime_diagnostics(handle),
-            "runtime diagnostics",
-        )
-        try:
-            return _resolve_descriptor_ref_from_diagnostics(request_json, diagnostics)
-        except SDKError as exc:
-            if exc.code is not ErrorCode.NOT_FOUND:
-                raise
-            try:
-                return _resolve_descriptor_ref_from_runtime_catalog(
-                    self, request_json, exc
-                )
-            except SDKError as catalog_exc:
-                if catalog_exc.code is not ErrorCode.NOT_FOUND:
-                    raise
-            try:
-                return self.lib.runtime_resolve_descriptor_ref(
-                    handle, request_json
-                )
-            except SDKError:
-                raise exc
+        return self.lib.runtime_resolve_descriptor_ref(handle, request_json)
 
     def invoke(self, draft_json: bytes) -> bytes:
         return self.lib.invocation_invoke(self._require_open(), draft_json)
@@ -1821,82 +1798,6 @@ def _resolve_descriptor_ref_from_diagnostics(
             f"ability={ability!r} call_mode={call_mode!r}"
         ),
     )
-
-
-def _resolve_descriptor_ref_from_runtime_catalog(
-    transport: CABIRuntimeTransport,
-    request_json: bytes,
-    original: SDKError,
-) -> bytes:
-    request = _json_object(request_json or b"{}", "descriptor_ref resolution request")
-    callee_ura = _required_string(request, "callee_ura")
-    ability = _required_string(request, "ability")
-    call_mode = str(request.get("call_mode") or "rpc").strip() or "rpc"
-    if not ability.startswith("easynet:///r/"):
-        raise original
-    caller_ura = str(request.get("caller_ura") or "").strip()
-    if not caller_ura:
-        raise original
-
-    try:
-        from .axon_addressing import AddressingClient, AxonAddressingTransport
-        from .runtime import RuntimeClient
-        from .runtime_ability import RuntimeAbilityClient, RuntimeCallContext
-
-        addressing = AddressingClient(AxonAddressingTransport())
-        try:
-            output = RuntimeAbilityClient(
-                RuntimeClient(transport), addressing
-            ).invoke(
-                RuntimeCallContext(
-                    caller_ura=caller_ura,
-                    callee_ura=caller_ura,
-                    subject_ura=caller_ura,
-                    nonce_base64=base64.b64encode(os.urandom(16)).decode("ascii"),
-                    causal_context={"form": "none"},
-                ),
-                "meta.list_abilities",
-                {"scope": "realm", "subject_ura": ability},
-            )
-        finally:
-            addressing.close()
-    except SDKError as exc:
-        if exc.code is ErrorCode.NOT_FOUND:
-            raise original
-        raise
-    except Exception as exc:
-        raise SDKError(
-            code=ErrorCode.NOT_FOUND,
-            stage="cabi",
-            retry=RetryHint.NEVER,
-            message=f"runtime catalog descriptor_ref lookup failed: {exc}",
-            cause=exc,
-        ) from exc
-
-    abilities = output.get("abilities")
-    if not isinstance(abilities, list):
-        raise original
-    for entry in abilities:
-        if not isinstance(entry, dict):
-            continue
-        entry_ability_ura = str(entry.get("ability_ura") or "").strip()
-        entry_call_mode = str(entry.get("call_mode") or "rpc").strip() or "rpc"
-        if entry_ability_ura != ability or entry_call_mode != call_mode:
-            continue
-        descriptor_ref = str(entry.get("descriptor_ref") or "").strip()
-        if not descriptor_ref:
-            continue
-        return _json_bytes(
-            {
-                "descriptor_ref": descriptor_ref,
-                "ability_ura": entry_ability_ura,
-                "owner_ura": str(entry.get("owner_ura") or callee_ura).strip(),
-                "name": str(entry.get("name") or "").strip(),
-                "call_mode": call_mode,
-                "source": "runtime_realm_catalog",
-            }
-        )
-    raise original
 
 
 def _prepared_key(decoded: dict[str, object]) -> str:

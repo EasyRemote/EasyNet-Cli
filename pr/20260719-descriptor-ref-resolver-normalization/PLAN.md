@@ -35,3 +35,18 @@ descriptor-bound local ability, but `ResolveDescriptorRef` reports
 - `cargo fmt --check`.
 - `cargo check --bin easynet --bin easynet-daemon`.
 - `tools/scripts/check-canonical-runtime-convergence-v2.sh`.
+
+## Delta — Python C ABI resolver
+
+- Removed the production Python C ABI diagnostics-first resolver path.
+- Removed the recursive runtime-catalog fallback that invoked
+  `meta.list_abilities` through `RuntimeAbilityClient` while still inside
+  descriptor resolution.
+- Python C ABI now matches Go C ABI: `ResolveDescriptorRef` delegates directly
+  to the native runtime provider symbol `easynet_runtime_resolve_descriptor_ref`.
+- Added a regression test where diagnostics intentionally lacks a descriptor
+  catalog, proving the production resolver does not depend on diagnostics or a
+  secondary `meta.list_abilities` invocation.
+- Live-verified the exact failing tuple for
+  `easynet:///r/localhost/ability/device.386b1258-3c89-494a-90a2-2321c29bf992.meta.list_resources`
+  through the public Python `RuntimeAbilityClient.invoke` facade.
