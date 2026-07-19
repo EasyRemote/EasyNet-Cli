@@ -534,15 +534,14 @@ pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyh
         .context("build tokio runtime for canonical remote invoke")?;
 
     runtime.block_on(async move {
-        let signer = crate::daemon::identity::self_identity::load_runtime_caller_signer(
-            caller_ura.clone(),
-        )
-        .map_err(|err| {
-            anyhow!(
-                "remote invocation requires a caller signer for `{caller_ura}`; \
+        let signer =
+            crate::daemon::identity::self_identity::load_runtime_caller_signer(caller_ura.clone())
+                .map_err(|err| {
+                    anyhow!(
+                        "remote invocation requires a caller signer for `{caller_ura}`; \
                  load or provision that identity in the local key service: {err}"
-            )
-        })?;
+                    )
+                })?;
         let mut request = ProtoEnvelope::from_target(
             caller_ura.clone(),
             target.callee_ura.clone(),
@@ -629,15 +628,14 @@ pub(crate) fn invoke_remote_target_stream(
         .context("build tokio runtime for remote InvokeStream")?;
 
     runtime.block_on(async move {
-        let signer = crate::daemon::identity::self_identity::load_runtime_caller_signer(
-            caller_ura.clone(),
-        )
-        .map_err(|err| {
-            anyhow!(
-                "remote stream invocation requires a caller signer for `{caller_ura}`; \
+        let signer =
+            crate::daemon::identity::self_identity::load_runtime_caller_signer(caller_ura.clone())
+                .map_err(|err| {
+                    anyhow!(
+                        "remote stream invocation requires a caller signer for `{caller_ura}`; \
                  load or provision that identity in the local key service: {err}"
-            )
-        })?;
+                    )
+                })?;
         let mut stream_request = ProtoEnvelope::from_target(
             caller_ura.clone(),
             target.callee_ura.clone(),
@@ -759,15 +757,14 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
         .context("build tokio runtime for remote InvokeBidi")?;
 
     runtime.block_on(async move {
-        let signer = crate::daemon::identity::self_identity::load_runtime_caller_signer(
-            caller_ura.clone(),
-        )
-        .map_err(|err| {
-            anyhow!(
-                "remote bidi invocation requires a caller signer for `{caller_ura}`; \
+        let signer =
+            crate::daemon::identity::self_identity::load_runtime_caller_signer(caller_ura.clone())
+                .map_err(|err| {
+                    anyhow!(
+                        "remote bidi invocation requires a caller signer for `{caller_ura}`; \
                  load or provision that identity in the local key service: {err}"
-            )
-        })?;
+                    )
+                })?;
         let envelope_open = ProtoEnvelope::from_target(
             caller_ura.clone(),
             target.callee_ura.clone(),

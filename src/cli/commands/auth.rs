@@ -37,8 +37,6 @@ use clap::Args;
 use serde::{Deserialize, Serialize};
 
 use crate::core::ura;
-use crate::daemon::identity::self_identity::{KeyringClient, USER_SIGNING_CLI_PURPOSE};
-use crate::daemon::keyring::{ManagedSigningKeyProjection, ManagedSigningStatus};
 use crate::daemon::persistence::config::{
     self, atomic_write_with_permissions, state_dir, WritePermissions,
 };
@@ -1042,160 +1040,18 @@ pub fn run_signing_key_register(args: SigningKeyRegisterArgs) -> anyhow::Result<
         .context("load device credentials (run `easynet device join <token>` first)")?;
     let user_ura = creds.user_ura()?;
 
-    let keyring = KeyringClient::default_path();
-    let key = ensure_user_signing_key(&keyring, &user_ura)?;
-    let public_key_b64 = key.public_key_b64;
-
-    // Register the PUBLIC key with the daemon trust anchor
-    // (loopback-admitted). The public key must be derived from the
-    // keyring's persisted seed, never from a fresh seed that failed to
-    // persist because the user already had a local signing key.
-    if !registered_user_pubkey(&user_ura, &public_key_b64)? {
-        let register_subject = crate::core::ura::owner_ability_ura(
-            &crate::daemon::identity::local_invocation::local_device_ura(),
-            "identity.register_pubkey",
-        )
-        .ok_or_else(|| anyhow::anyhow!("derive identity.register_pubkey descriptor subject"))?;
-        let register_result =
-            crate::support::platform::local_invoke::invoke_local_ability_with_subject(
-                "identity.register_pubkey",
-                serde_json::json!({
-                    "agent_ura": user_ura.as_str(),
-                    "public_key_b64": public_key_b64.as_str(),
-                    "role": "user",
-                }),
-                Some(register_subject),
-            );
-        if let Err(err) = register_result {
-            if registered_user_pubkey(&user_ura, &public_key_b64).unwrap_or(false) {
-                output::detail(
-                    "identity",
-                    "user signing key was already registered by a concurrent caller",
-                );
-            } else {
-                return Err(err).context("invoke identity.register_pubkey");
-            }
-        }
-    }
+    let outcome = super::user_signing_identity::reconcile_local_user_signing_identity(&user_ura)?;
 
     output::success(&format!("Registered user signing key for {user_ura}"));
     if args.show_pubkey {
-        println!("{public_key_b64}");
+        println!("{}", outcome.public_key_b64);
     }
     Ok(())
-}
-
-struct UserSigningKey {
-    public_key_b64: String,
-}
-
-trait UserSigningKeyStore {
-    fn list(&self) -> anyhow::Result<Vec<ManagedSigningKeyProjection>>;
-    fn create(&self, user_ura: &str) -> anyhow::Result<ManagedSigningKeyProjection>;
-}
-
-impl UserSigningKeyStore for KeyringClient {
-    fn list(&self) -> anyhow::Result<Vec<ManagedSigningKeyProjection>> {
-        Ok(self.inventory_list(
-            Some(USER_SIGNING_CLI_PURPOSE.into()),
-            Some(ManagedSigningStatus::Active),
-        )?)
-    }
-
-    fn create(&self, user_ura: &str) -> anyhow::Result<ManagedSigningKeyProjection> {
-        Ok(self.inventory_create(USER_SIGNING_CLI_PURPOSE, Some(user_ura.to_string()))?)
-    }
-}
-
-fn ensure_user_signing_key(
-    store: &impl UserSigningKeyStore,
-    user_ura: &str,
-) -> anyhow::Result<UserSigningKey> {
-    let mut matching = store
-        .list()?
-        .into_iter()
-        .filter(|entry| entry.bound_subject.as_deref() == Some(user_ura));
-    if let Some(existing) = matching.next() {
-        return Ok(UserSigningKey {
-            public_key_b64: existing.public_key_b64,
-        });
-    }
-    let created = store.create(user_ura)?;
-    Ok(UserSigningKey {
-        public_key_b64: created.public_key_b64,
-    })
-}
-
-fn registered_user_pubkey(user_ura: &str, public_key_b64: &str) -> anyhow::Result<bool> {
-    let response = crate::support::platform::local_invoke::invoke_local_ability(
-        "identity.list_user_pubkeys",
-        serde_json::json!({ "agent_ura": user_ura }),
-    )
-    .context("invoke identity.list_user_pubkeys")?;
-    let keys = response
-        .get("keys")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow!("identity.list_user_pubkeys returned no keys array"))?;
-    Ok(keys.iter().any(|key| {
-        key.get("public_key_b64")
-            .and_then(serde_json::Value::as_str)
-            == Some(public_key_b64)
-    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::{Cell, RefCell};
-
-    struct FakeUserSigningKeyStore {
-        entries: Vec<ManagedSigningKeyProjection>,
-        created: ManagedSigningKeyProjection,
-        create_calls: Cell<usize>,
-        create_subjects: RefCell<Vec<String>>,
-    }
-
-    impl FakeUserSigningKeyStore {
-        fn new(
-            entries: Vec<ManagedSigningKeyProjection>,
-            created: ManagedSigningKeyProjection,
-        ) -> Self {
-            Self {
-                entries,
-                created,
-                create_calls: Cell::new(0),
-                create_subjects: RefCell::new(Vec::new()),
-            }
-        }
-    }
-
-    impl UserSigningKeyStore for FakeUserSigningKeyStore {
-        fn list(&self) -> anyhow::Result<Vec<ManagedSigningKeyProjection>> {
-            Ok(self.entries.clone())
-        }
-
-        fn create(&self, user_ura: &str) -> anyhow::Result<ManagedSigningKeyProjection> {
-            self.create_calls.set(self.create_calls.get() + 1);
-            self.create_subjects.borrow_mut().push(user_ura.to_string());
-            Ok(self.created.clone())
-        }
-    }
-
-    fn managed_key(key_id: &str, subject: &str, byte: u8) -> ManagedSigningKeyProjection {
-        ManagedSigningKeyProjection {
-            key_id: key_id.into(),
-            purpose: "user_signing.cli".into(),
-            public_key_b64: B64.encode([byte; 32]),
-            status: ManagedSigningStatus::Active,
-            rotation_epoch: 0,
-            bound_subject: Some(subject.into()),
-            signer_policy_ref: None,
-            rotated_from: None,
-            created_unix_ms: 1,
-            expires_unix_ms: None,
-            revoked_unix_ms: None,
-        }
-    }
 
     #[test]
     fn auth_exec_tool_name_accepts_canonical_device_tool() {
@@ -1232,46 +1088,5 @@ mod tests {
                 .contains("canonical advertised ability name"),
             "error should explain the canonical tool-name contract: {err}"
         );
-    }
-
-    #[test]
-    fn ensure_user_signing_key_reuses_keyring_key_without_generation() {
-        let user = "easynet:///r/local/user/alice";
-        let existing = managed_key("existing", user, 0x11);
-        let store =
-            FakeUserSigningKeyStore::new(vec![existing.clone()], managed_key("unused", user, 0x22));
-
-        let key = ensure_user_signing_key(&store, user).unwrap();
-
-        assert_eq!(key.public_key_b64, existing.public_key_b64);
-        assert_eq!(store.create_calls.get(), 0);
-    }
-
-    #[test]
-    fn ensure_user_signing_key_creates_missing_key_inside_provider() {
-        let user = "easynet:///r/local/user/alice";
-        let created = managed_key("created", user, 0x22);
-        let store = FakeUserSigningKeyStore::new(Vec::new(), created.clone());
-
-        let key = ensure_user_signing_key(&store, user).unwrap();
-
-        assert_eq!(key.public_key_b64, created.public_key_b64);
-        assert_eq!(store.create_calls.get(), 1);
-        assert_eq!(store.create_subjects.borrow().as_slice(), &[user]);
-    }
-
-    #[test]
-    fn ensure_user_signing_key_does_not_reuse_another_subjects_key() {
-        let user = "easynet:///r/local/user/alice";
-        let created = managed_key("created", user, 0x44);
-        let store = FakeUserSigningKeyStore::new(
-            vec![managed_key("bob", "easynet:///r/local/user/bob", 0x33)],
-            created.clone(),
-        );
-
-        let key = ensure_user_signing_key(&store, user).unwrap();
-
-        assert_eq!(key.public_key_b64, created.public_key_b64);
-        assert_eq!(store.create_calls.get(), 1);
     }
 }

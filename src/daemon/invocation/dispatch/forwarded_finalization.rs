@@ -66,14 +66,18 @@ pub(crate) struct ForwardedFinalizedInvocation {
 }
 
 impl ForwardedFinalizedInvocation {
-    pub(crate) fn verify(
+    pub(crate) fn verify_with_carrier_result(
         binding: &ForwardedInvocationBinding,
         admission: WireInvocationReceipt,
         terminal: WireInvocationReceipt,
+        carrier_payload: Vec<u8>,
+        carrier_result_content_type: String,
         resolver: &dyn KeyResolver,
     ) -> Result<Self, Status> {
         let verified = verify_finalization_proofs(admission, terminal, resolver)?;
-        Self::from_verified(binding, verified)
+        let mut finalized = Self::from_verified(binding, verified)?;
+        finalized.bind_carrier_result(carrier_payload, carrier_result_content_type)?;
+        Ok(finalized)
     }
 
     fn from_verified(
@@ -87,10 +91,10 @@ impl ForwardedFinalizedInvocation {
         Self::verify_structure(binding, admission, terminal)
     }
 
-    /// Verify and canonicalize one forwarded unary response. Every response
-    /// field is reconstructed from the signed terminal checkpoint; untrusted
-    /// transport duplicates such as `state`, `result`, and `error` are never
-    /// consumed after verification.
+    /// Verify and canonicalize one forwarded unary response. Receipt fields
+    /// prove lifecycle closure; the carrier payload/result content type is
+    /// accepted only after the payload is byte-bound to the signed terminal
+    /// checkpoint.
     pub(crate) fn verify_response(
         binding: &ForwardedInvocationBinding,
         response: InvokeResponse,
@@ -102,7 +106,14 @@ impl ForwardedFinalizedInvocation {
         let terminal = response
             .terminal_receipt
             .ok_or_else(|| invalid("forwarded unary response omitted its terminal checkpoint"))?;
-        Self::verify(binding, admission, terminal, resolver)
+        Self::verify_with_carrier_result(
+            binding,
+            admission,
+            terminal,
+            response.result,
+            response.result_content_type,
+            resolver,
+        )
     }
 
     pub(crate) fn into_response(self) -> InvokeResponse {
@@ -163,6 +174,30 @@ impl ForwardedFinalizedInvocation {
             output,
             failure,
         })
+    }
+
+    fn bind_carrier_result(
+        &mut self,
+        carrier_payload: Vec<u8>,
+        carrier_result_content_type: String,
+    ) -> Result<(), Status> {
+        if self.terminal_state != InvocationState::Completed {
+            return Ok(());
+        }
+        let content_type = carrier_result_content_type.trim();
+        if content_type.is_empty() {
+            return Err(invalid(
+                "completed forwarded invocation omitted carrier result_content_type",
+            ));
+        }
+        if carrier_payload != self.output {
+            return Err(invalid(
+                "carrier result payload does not match signed terminal checkpoint payload",
+            ));
+        }
+        self.output = carrier_payload;
+        self.output_content_type = content_type.to_string();
+        Ok(())
     }
 }
 
@@ -681,16 +716,52 @@ mod tests {
     }
 
     #[test]
-    fn public_verifier_rejects_receipts_without_valid_cryptographic_proof() {
+    fn carrier_bound_verifier_rejects_receipts_without_valid_cryptographic_proof() {
         let binding = ForwardedInvocationBinding::from_request(&request()).unwrap();
         let admission = checkpoint(InvocationState::Admitted, 1, b"");
         let terminal = checkpoint(InvocationState::Completed, 4, b"done");
 
-        let error =
-            ForwardedFinalizedInvocation::verify(&binding, admission, terminal, &RejectingResolver)
-                .expect_err("shape-correct forged receipts must fail closed");
+        let error = ForwardedFinalizedInvocation::verify_with_carrier_result(
+            &binding,
+            admission,
+            terminal,
+            b"done".to_vec(),
+            "application/json".to_string(),
+            &RejectingResolver,
+        )
+        .expect_err("shape-correct forged receipts must fail closed");
 
         assert!(error.message().contains("proof"));
+    }
+
+    #[test]
+    fn completed_forwarded_result_requires_carrier_content_type() {
+        let binding = ForwardedInvocationBinding::from_request(&request()).unwrap();
+        let admission = checkpoint(InvocationState::Admitted, 1, b"");
+        let terminal = checkpoint(InvocationState::Completed, 4, b"done");
+        let mut finalized =
+            ForwardedFinalizedInvocation::verify_structure(&binding, admission, terminal).unwrap();
+
+        let error = finalized
+            .bind_carrier_result(b"done".to_vec(), "  ".to_string())
+            .expect_err("completed carrier result must name its content type");
+
+        assert!(error.message().contains("result_content_type"));
+    }
+
+    #[test]
+    fn completed_forwarded_result_payload_must_match_terminal_checkpoint() {
+        let binding = ForwardedInvocationBinding::from_request(&request()).unwrap();
+        let admission = checkpoint(InvocationState::Admitted, 1, b"");
+        let terminal = checkpoint(InvocationState::Completed, 4, b"done");
+        let mut finalized =
+            ForwardedFinalizedInvocation::verify_structure(&binding, admission, terminal).unwrap();
+
+        let error = finalized
+            .bind_carrier_result(b"tampered".to_vec(), "application/json".to_string())
+            .expect_err("carrier payload cannot diverge from terminal checkpoint payload");
+
+        assert!(error.message().contains("payload"));
     }
 
     #[test]

@@ -40,6 +40,19 @@ class ErrorCode(StrEnum):
     ABILITY_FAILED = "ABILITY_FAILED"
     NOT_IMPLEMENTED = "NOT_IMPLEMENTED"
     GENERIC = "GENERIC"
+    CALLER_IDENTITY_UNAVAILABLE = "CALLER_IDENTITY_UNAVAILABLE"
+    CALLER_SIGNER_UNAVAILABLE = "CALLER_SIGNER_UNAVAILABLE"
+    AUTHORITY_SUBJECT_MISMATCH = "AUTHORITY_SUBJECT_MISMATCH"
+    DESCRIPTOR_NOT_FOUND = "DESCRIPTOR_NOT_FOUND"
+    DESCRIPTOR_OWNER_OFFLINE = "DESCRIPTOR_OWNER_OFFLINE"
+    DESCRIPTOR_MODE_UNSUPPORTED = "DESCRIPTOR_MODE_UNSUPPORTED"
+    DESCRIPTOR_STALE = "DESCRIPTOR_STALE"
+    RUNTIME_ROUTE_UNAVAILABLE = "RUNTIME_ROUTE_UNAVAILABLE"
+    INVOCATION_CANCELLED = "INVOCATION_CANCELLED"
+    INVOCATION_TIMEOUT = "INVOCATION_TIMEOUT"
+    TERMINAL_RECEIPT_UNAVAILABLE = "TERMINAL_RECEIPT_UNAVAILABLE"
+    RECEIPT_PROOF_FACTS_MISSING = "RECEIPT_PROOF_FACTS_MISSING"
+    PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"
 
 
 class ErrorClass(StrEnum):
@@ -206,22 +219,39 @@ def error_class_for_code(code: ErrorCode | str) -> ErrorClass:
             return ErrorClass.LIFECYCLE
         case ErrorCode.DAEMON_OFFLINE | ErrorCode.TRANSPORT:
             return ErrorClass.AVAILABILITY
-        case ErrorCode.PERMISSION_DENIED | ErrorCode.HTTP_AUTH_DENIED:
+        case (
+            ErrorCode.PERMISSION_DENIED
+            | ErrorCode.HTTP_AUTH_DENIED
+            | ErrorCode.CALLER_IDENTITY_UNAVAILABLE
+        ):
             return ErrorClass.PERMISSION
         case (
             ErrorCode.ADMISSION_DENIED
             | ErrorCode.SIGNATURE_DENIED
             | ErrorCode.POLICY_DENIED
             | ErrorCode.AUTHORITY_DENIED
+            | ErrorCode.AUTHORITY_SUBJECT_MISMATCH
             | ErrorCode.EXECUTION_FAILED
             | ErrorCode.ABILITY_FAILED
+            | ErrorCode.CALLER_SIGNER_UNAVAILABLE
+            | ErrorCode.RECEIPT_PROOF_FACTS_MISSING
         ):
             return ErrorClass.ADMISSION
-        case ErrorCode.ABILITY_NOT_FOUND | ErrorCode.ROUTE_UNAVAILABLE | ErrorCode.NOT_FOUND:
+        case (
+            ErrorCode.ABILITY_NOT_FOUND
+            | ErrorCode.ROUTE_UNAVAILABLE
+            | ErrorCode.NOT_FOUND
+            | ErrorCode.DESCRIPTOR_NOT_FOUND
+            | ErrorCode.DESCRIPTOR_OWNER_OFFLINE
+            | ErrorCode.DESCRIPTOR_MODE_UNSUPPORTED
+            | ErrorCode.DESCRIPTOR_STALE
+            | ErrorCode.RUNTIME_ROUTE_UNAVAILABLE
+            | ErrorCode.PROVIDER_UNAVAILABLE
+        ):
             return ErrorClass.ROUTING
-        case ErrorCode.TIMEOUT:
+        case ErrorCode.TIMEOUT | ErrorCode.INVOCATION_TIMEOUT:
             return ErrorClass.TIMEOUT
-        case ErrorCode.CANCELLED:
+        case ErrorCode.CANCELLED | ErrorCode.INVOCATION_CANCELLED:
             return ErrorClass.CANCELLATION
         case ErrorCode.PROTOCOL_MISMATCH | ErrorCode.PROTOCOL:
             return ErrorClass.PROTOCOL

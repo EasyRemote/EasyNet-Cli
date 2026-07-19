@@ -65,7 +65,6 @@ use crate::daemon::invocation::bidi::session_wire::{
     build_carrier_v1_dispatch_frame, require_canonical_dispatch_session, SessionRequestError,
 };
 use crate::daemon::invocation::bidi::state::pending_dispatch::DispatchResult;
-use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
 use crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonUnaryRoute;
 use crate::daemon::invocation::dispatch::daemon_route_runtime::product_status_to_axon_error;
 use crate::daemon::invocation::dispatch::deps::{
@@ -84,6 +83,9 @@ use crate::daemon::invocation::dispatch::invocation_wire::{
     descriptor_ref_from_invocation_target, encode_json_payload,
     function_name_from_invocation_target, parse_json_args, status_from_axon_invoke_error,
     target_ura_from_envelope, FEDERATION_RESULT_CONTENT_TYPE,
+};
+use crate::daemon::invocation::dispatch::remote_failure::{
+    is_admission_denial_message, status_from_remote_failure,
 };
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, DelegatedInvokeRoute, SelectedInvokeRoute,
@@ -1801,7 +1803,8 @@ impl UnaryDispatcher {
         let DispatchResult {
             admission_receipt,
             terminal_receipt,
-            payload: _,
+            payload,
+            result_content_type,
             error,
             failure,
             request_id: _,
@@ -1809,14 +1812,14 @@ impl UnaryDispatcher {
         if let Some(err) =
             error.filter(|_| admission_receipt.is_none() || terminal_receipt.is_none())
         {
-            let detail = failure
-                .as_ref()
-                .map(SessionFailure::status_detail)
-                .unwrap_or(err);
-            return Err(Status::failed_precondition(format!(
-                "Invoke: remote route `{}` ability `{}` failed: {detail}",
-                selected_route.route_ura, selected_route.dispatch_name,
-            )));
+            return Err(status_from_remote_failure(
+                &format!(
+                    "Invoke: remote route `{}` ability `{}` failed",
+                    selected_route.route_ura, selected_route.dispatch_name,
+                ),
+                &err,
+                failure.as_ref(),
+            ));
         }
         let admission_receipt = admission_receipt.ok_or_else(|| {
             Status::failed_precondition(
@@ -1828,10 +1831,12 @@ impl UnaryDispatcher {
                 "CANONICAL_TERMINAL_RECEIPT_REQUIRED: remote unary omitted terminal checkpoint",
             )
         })?;
-        let finalized = ForwardedFinalizedInvocation::verify(
+        let finalized = ForwardedFinalizedInvocation::verify_with_carrier_result(
             &forwarded_binding,
             admission_receipt,
             terminal_receipt,
+            payload,
+            result_content_type,
             receipt_resolver.as_ref(),
         )?;
         Ok(Response::new(finalized.into_response()))
@@ -1925,15 +1930,6 @@ fn target_admission_denial_status(error: &FederationClientError) -> Option<Statu
     } else {
         Some(Status::permission_denied(status.clone()))
     }
-}
-
-fn is_admission_denial_message(message: &str) -> bool {
-    message.contains("POLICY_DENIED")
-        || message.contains("AUTHORITY_DENIED")
-        || message.contains("SIGNATURE_DENIED")
-        || message.contains("AXON_CALLER_SIGNATURE_INVALID")
-        || message.contains("SIGNED_DESCRIPTOR_REF_")
-        || message.contains("SIGNED_ENVELOPE_ROUTE_MUTATION")
 }
 
 fn sorted_non_empty_urls(urls: Vec<String>) -> Vec<String> {

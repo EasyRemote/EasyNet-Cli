@@ -1672,8 +1672,11 @@ mod tests {
             Some(descriptor_ref.to_string()),
             descriptor.descriptor_ref()
         );
-        assert!(descriptor_ref
-            .starts_with("easynet:///r/acme/ability/device.dev-1.meta.list_abilities@1.0.0#"));
+        let expected_ref_prefix = format!(
+            "{}@1.0.0#",
+            crate::core::ura::device_ability_ura("acme", "dev-1", "meta.list_abilities")
+        );
+        assert!(descriptor_ref.starts_with(&expected_ref_prefix));
         assert!(descriptor_ref.ends_with("!invoke"));
     }
 

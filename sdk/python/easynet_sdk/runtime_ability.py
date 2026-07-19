@@ -5,9 +5,16 @@ from __future__ import annotations
 import base64
 import binascii
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Mapping, TypeAlias
 
-from .axon_addressing import AddressingClient
+from .axon_addressing import AddressingClient, AddressingProjection
+from .authority import (
+    DELEGATION_METADATA_KEY,
+    SESSION_AUTHORITY_METADATA_KEY,
+    DelegationProof,
+    SessionAuthority,
+    validate_authority_metadata,
+)
 from .bidi import BidiSession, BidiStreamDescriptor
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationBuilder, InvocationDraft
@@ -22,7 +29,14 @@ from .runtime import (
 from .signing import SignedInvocation
 from .stream import StreamHandle
 
-__all__ = ["RuntimeAbilityClient", "RuntimeCallContext"]
+__all__ = [
+    "RuntimeAbilityClient",
+    "RuntimeCallContext",
+    "RuntimeInvocationAuthority",
+]
+
+
+RuntimeInvocationAuthority: TypeAlias = DelegationProof | SessionAuthority
 
 
 @dataclass(frozen=True)
@@ -36,6 +50,7 @@ class RuntimeCallContext:
     causal_context: Mapping[str, object]
     descriptor_version: str = ""
     metadata: Mapping[str, object] = field(default_factory=dict)
+    authority: RuntimeInvocationAuthority | None = None
 
 
 class RuntimeAbilityClient:
@@ -64,13 +79,6 @@ class RuntimeAbilityClient:
     ) -> InvocationDraft:
         _validate_call(call)
         ability_name = _required_text(ability_name, "ability name")
-        descriptor_ref = self._runtime.resolve_descriptor_ref(
-            callee_ura=call.callee_ura.strip(),
-            ability=ability_name,
-            call_mode=call_mode,
-            caller_ura=call.caller_ura.strip(),
-            subject_ura=call.subject_ura.strip(),
-        )
         subject = self._addressing.parse_ura(call.subject_ura.strip())
         if subject.kind in {"user", "hub"}:
             subject_ura = self._addressing.descriptor_bound_resource_subject_ura(
@@ -80,6 +88,19 @@ class RuntimeAbilityClient:
             subject_ura = subject.ura
         else:
             raise _invalid(f"subject kind {subject.kind!r} is not descriptor-bound")
+        metadata = _canonical_runtime_call_metadata(
+            call,
+            subject_ura,
+            self._addressing.parse_ura(subject_ura),
+            ability_name,
+        )
+        descriptor_ref = self._runtime.resolve_descriptor_ref(
+            callee_ura=call.callee_ura.strip(),
+            ability=ability_name,
+            call_mode=call_mode,
+            caller_ura=call.caller_ura.strip(),
+            subject_ura=call.subject_ura.strip(),
+        )
         return (
             InvocationBuilder()
             .with_caller_ura(call.caller_ura.strip())
@@ -90,7 +111,7 @@ class RuntimeAbilityClient:
             .with_causal_context(dict(call.causal_context))
             .with_json_args(arguments)
             .with_content_type("application/json")
-            .with_metadata(dict(call.metadata))
+            .with_metadata(metadata)
             .build()
         )
 
@@ -156,6 +177,110 @@ def _validate_call(call: RuntimeCallContext) -> None:
         raise _invalid("nonce_base64 must be canonical base64", error) from error
     if not isinstance(call.causal_context, Mapping):
         raise _invalid("causal_context is required")
+
+
+def _canonical_runtime_call_metadata(
+    call: RuntimeCallContext,
+    envelope_subject_ura: str,
+    envelope_subject: AddressingProjection,
+    ability_name: str,
+) -> dict[str, object]:
+    metadata = dict(call.metadata)
+    validate_authority_metadata(metadata)
+    raw_authority_present = bool(
+        metadata.get(DELEGATION_METADATA_KEY)
+        or metadata.get(SESSION_AUTHORITY_METADATA_KEY)
+    )
+    authority = call.authority
+    if authority is not None:
+        if raw_authority_present:
+            raise _invalid(
+                "runtime call authority must be supplied once as a typed authority or metadata, not both"
+            )
+        metadata = authority.metadata().merge_into(metadata)
+    else:
+        authority = _runtime_authority_from_metadata(metadata)
+    if authority is not None:
+        _validate_runtime_authority_binding(
+            authority,
+            call,
+            envelope_subject_ura,
+            envelope_subject,
+            ability_name,
+        )
+    return metadata
+
+
+def _runtime_authority_from_metadata(
+    metadata: Mapping[str, object],
+) -> RuntimeInvocationAuthority | None:
+    delegation = metadata.get(DELEGATION_METADATA_KEY)
+    if isinstance(delegation, str) and delegation.strip():
+        return DelegationProof.from_metadata(delegation)
+    session = metadata.get(SESSION_AUTHORITY_METADATA_KEY)
+    if isinstance(session, str) and session.strip():
+        return SessionAuthority.from_metadata(session)
+    return None
+
+
+def _validate_runtime_authority_binding(
+    authority: RuntimeInvocationAuthority,
+    call: RuntimeCallContext,
+    envelope_subject_ura: str,
+    envelope_subject: AddressingProjection,
+    ability_name: str,
+) -> None:
+    caller_ura = call.caller_ura.strip()
+    callee_ura = call.callee_ura.strip()
+    if isinstance(authority, DelegationProof):
+        if authority.caller_ura.strip() != caller_ura:
+            raise _invalid("runtime delegation caller does not match caller_ura")
+        if authority.subject_ura.strip() != envelope_subject_ura:
+            raise _invalid(
+                "runtime delegation subject does not match descriptor-bound subject_ura"
+            )
+        if not authority.matches_audience(callee_ura):
+            raise _invalid("runtime delegation audience does not admit callee_ura")
+        if not authority.matches_scope(ability_name):
+            raise _invalid("runtime delegation scopes do not admit ability")
+        return
+    if authority.issuer_ura.strip() != caller_ura:
+        raise _invalid("runtime session authority issuer does not match caller_ura")
+    if authority.callee_ura.strip() != callee_ura:
+        raise _invalid("runtime session authority callee does not match callee_ura")
+    if not authority.matches_audience(callee_ura):
+        raise _invalid("runtime session authority audience does not admit callee_ura")
+    if not _session_authority_admits_subject(
+        authority,
+        envelope_subject_ura,
+        envelope_subject,
+    ):
+        raise _invalid(
+            "runtime session authority does not admit descriptor-bound subject_ura"
+        )
+    if not authority.matches_scope(ability_name):
+        raise _invalid("runtime session authority scopes do not admit ability")
+
+
+def _session_authority_admits_subject(
+    authority: SessionAuthority,
+    subject_ura: str,
+    subject: AddressingProjection,
+) -> bool:
+    if authority.subject_ura.strip() == subject_ura.strip():
+        return True
+    if subject.kind != "resource":
+        return False
+    owner_id = subject.components.get("owner_id")
+    if not isinstance(owner_id, str):
+        return False
+    owner_user_id = authority.session_owner_user_id.strip()
+    if owner_id == f"user.{owner_user_id}":
+        return True
+    if not owner_id.startswith("agent."):
+        return False
+    agent_owner = owner_id.removeprefix("agent.").split(".", 1)
+    return len(agent_owner) == 2 and agent_owner[0] == owner_user_id
 
 
 def _required_text(value: object, field_name: str) -> str:

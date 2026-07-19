@@ -612,6 +612,7 @@ pub(crate) fn failed_dispatch_result(
     let reason = reason.into();
     DispatchResult {
         payload: Vec::new(),
+        result_content_type: String::new(),
         failure: Some(SessionFailure::from_reason(
             &reason,
             fallback_code,
@@ -2431,6 +2432,7 @@ pub(crate) fn pending_result_from_carrier_v1(
 ) -> DispatchResult {
     DispatchResult {
         payload: result.payload.clone(),
+        result_content_type: result.result_content_type.clone(),
         error: result
             .failure
             .as_ref()
@@ -2557,11 +2559,13 @@ pub(crate) fn build_reverse_dispatch_result_frame(
     outcome: Result<axon_sdk::pb::axon::v1::InvokeResponse, SessionRequestError>,
 ) -> DispatchFrame {
     use axon_sdk::pb::axon::v1::ReverseDispatchResult;
-    let (payload, failure, admission_receipt, terminal_receipt) = match outcome {
+    let (payload, result_content_type, failure, admission_receipt, terminal_receipt) = match outcome
+    {
         Ok(response) => {
             if response.admission_receipt.is_none() || response.terminal_receipt.is_none() {
                 (
                     Vec::new(),
+                    String::new(),
                     Some(axon_sdk::pb::axon::v1::Error {
                         code: "CANONICAL_FINALIZATION_REQUIRED".to_string(),
                         message: "hub canonical reverse dispatch completed without both signed finalization checkpoints".to_string(),
@@ -2574,6 +2578,7 @@ pub(crate) fn build_reverse_dispatch_result_frame(
             } else {
                 (
                     response.result,
+                    response.result_content_type,
                     None,
                     response.admission_receipt,
                     response.terminal_receipt,
@@ -2595,6 +2600,7 @@ pub(crate) fn build_reverse_dispatch_result_frame(
             };
             (
                 Vec::new(),
+                String::new(),
                 Some(axon_sdk::pb::axon::v1::Error {
                     code: code.to_string(),
                     message,
@@ -2610,6 +2616,7 @@ pub(crate) fn build_reverse_dispatch_result_frame(
         payload: Some(DownPayload::ReverseDispatchResult(ReverseDispatchResult {
             call_id: call_id.to_vec(),
             payload,
+            result_content_type,
             terminal: true,
             failure,
             admission_receipt,
@@ -2747,6 +2754,7 @@ fn build_reverse_dispatch_stream_chunk_frame(
         payload: Some(DownPayload::ReverseDispatchResult(ReverseDispatchResult {
             call_id: call_id.to_vec(),
             payload: chunk.payload,
+            result_content_type: chunk.content_type,
             terminal: chunk.terminal,
             failure: chunk.error,
             admission_receipt: chunk.admission_receipt,

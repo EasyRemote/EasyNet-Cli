@@ -29,12 +29,16 @@ class AuthoritySigningMaterial:
     payload: Mapping[str, object]
 
     @classmethod
-    def from_json(cls, raw: bytes | str, *, kind: str, metadata_key: str) -> "AuthoritySigningMaterial":
+    def from_json(
+        cls, raw: bytes | str, *, kind: str, metadata_key: str
+    ) -> "AuthoritySigningMaterial":
         text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
         try:
             decoded = json.loads(text)
         except Exception as exc:
-            raise _invalid_authority(f"decode authority signing material: {exc}", exc) from exc
+            raise _invalid_authority(
+                f"decode authority signing material: {exc}", exc
+            ) from exc
         if not isinstance(decoded, dict):
             raise _invalid_authority("authority signing material must be an object")
         material = cls(
@@ -45,13 +49,19 @@ class AuthoritySigningMaterial:
             canonical_bytes_base64=_required_string(
                 decoded.get("canonical_bytes_base64"), "canonical_bytes_base64"
             ),
-            canonical_hash_hex=_required_string(decoded.get("canonical_hash_hex"), "canonical_hash_hex"),
+            canonical_hash_hex=_required_string(
+                decoded.get("canonical_hash_hex"), "canonical_hash_hex"
+            ),
             signed_fields=_required_string_tuple(
                 decoded.get("signed_fields"), "signed_fields", "authority"
             ),
             payload=_required_mapping(decoded.get("payload"), "payload"),
         )
-        if material.profile != "authority" or material.kind != kind or material.metadata_key != metadata_key:
+        if (
+            material.profile != "authority"
+            or material.kind != kind
+            or material.metadata_key != metadata_key
+        ):
             raise _invalid_authority("authority signing material identity mismatch")
         _decode_base64(material.canonical_bytes_base64, "canonical_bytes_base64")
         return material
@@ -64,7 +74,10 @@ class AuthoritySignature:
     signature_base64: str
 
     def to_json(self) -> bytes:
-        if not isinstance(self.signature_base64, str) or not self.signature_base64.strip():
+        if (
+            not isinstance(self.signature_base64, str)
+            or not self.signature_base64.strip()
+        ):
             raise _invalid_authority("authority signature_base64 is required")
         _decode_base64(self.signature_base64, "signature_base64")
         return json.dumps(
@@ -76,8 +89,9 @@ class AuthoritySignature:
 class AuthoritySignatureProvider(Protocol):
     """Signs canonical authority material outside the C ABI."""
 
-    def sign_authority(self, material: AuthoritySigningMaterial) -> AuthoritySignature:
-        ...
+    def sign_authority(
+        self, material: AuthoritySigningMaterial
+    ) -> AuthoritySignature: ...
 
 
 @dataclass(frozen=True)
@@ -124,7 +138,9 @@ class DelegationProof:
             subject_ura=_required_payload_string(payload, "subject_ura", "delegation"),
             caller_ura=_required_payload_string(payload, "caller_ura", "delegation"),
             audience=_required_payload_string(payload, "audience", "delegation"),
-            scopes=_required_string_tuple(payload.get("scopes"), "scopes", "delegation"),
+            scopes=_required_string_tuple(
+                payload.get("scopes"), "scopes", "delegation"
+            ),
             issued_at_ms=_required_payload_int(payload, "issued_at_ms", "delegation"),
             expires_at_ms=_required_payload_int(payload, "expires_at_ms", "delegation"),
             signature=signature,
@@ -142,6 +158,16 @@ class DelegationProof:
             key=DELEGATION_METADATA_KEY,
             value=self.metadata_value,
         )
+
+    def matches_scope(self, ability: str) -> bool:
+        """Return whether this proof admits the canonical ability selector."""
+
+        return any(_match_scope_pattern(scope, ability) for scope in self.scopes)
+
+    def matches_audience(self, callee_ura: str) -> bool:
+        """Return whether this proof admits the canonical callee."""
+
+        return _audience_admits(self.audience, callee_ura)
 
 
 @dataclass(frozen=True)
@@ -169,18 +195,28 @@ class SessionAuthority:
     def from_metadata(cls, value: str) -> "SessionAuthority":
         payload, signature = _decode_authority_metadata(value, "session authority")
         authority = cls(
-            issuer_ura=_required_payload_string(payload, "issuer_ura", "session authority"),
-            session_id=_required_payload_string(payload, "session_id", "session authority"),
+            issuer_ura=_required_payload_string(
+                payload, "issuer_ura", "session authority"
+            ),
+            session_id=_required_payload_string(
+                payload, "session_id", "session authority"
+            ),
             session_owner_user_id=_required_payload_string(
                 payload, "session_owner_user_id", "session authority"
             ),
             creator_principal_id=_required_payload_string(
                 payload, "creator_principal_id", "session authority"
             ),
-            callee_ura=_required_payload_string(payload, "callee_ura", "session authority"),
-            subject_ura=_required_payload_string(payload, "subject_ura", "session authority"),
+            callee_ura=_required_payload_string(
+                payload, "callee_ura", "session authority"
+            ),
+            subject_ura=_required_payload_string(
+                payload, "subject_ura", "session authority"
+            ),
             audience=_required_payload_string(payload, "audience", "session authority"),
-            scopes=_required_string_tuple(payload.get("scopes"), "scopes", "session authority"),
+            scopes=_required_string_tuple(
+                payload.get("scopes"), "scopes", "session authority"
+            ),
             allowed_actions=_required_string_tuple(
                 payload.get("allowed_actions"), "allowed_actions", "session authority"
             ),
@@ -189,8 +225,12 @@ class SessionAuthority:
                 "allowed_followup_abilities",
                 "session authority",
             ),
-            issued_at_ms=_required_payload_int(payload, "issued_at_ms", "session authority"),
-            expires_at_ms=_required_payload_int(payload, "expires_at_ms", "session authority"),
+            issued_at_ms=_required_payload_int(
+                payload, "issued_at_ms", "session authority"
+            ),
+            expires_at_ms=_required_payload_int(
+                payload, "expires_at_ms", "session authority"
+            ),
             signature=signature,
             session_owner_ura=_session_owner_ura_from_payload(payload),
             creator_principal_ura=_canonical_ura_or_empty(
@@ -212,6 +252,16 @@ class SessionAuthority:
             key=SESSION_AUTHORITY_METADATA_KEY,
             value=self.metadata_value,
         )
+
+    def matches_scope(self, ability: str) -> bool:
+        """Return whether this authority admits the canonical ability selector."""
+
+        return any(_match_scope_pattern(scope, ability) for scope in self.scopes)
+
+    def matches_audience(self, callee_ura: str) -> bool:
+        """Return whether this authority admits the canonical callee."""
+
+        return _audience_admits(self.audience, callee_ura)
 
 
 @dataclass(frozen=True)
@@ -275,18 +325,15 @@ class SessionAuthorityRequest:
 class AuthorityTransport(Protocol):
     """Provider boundary for authority metadata minting."""
 
-    def mint_delegation_proof(self, request_json: bytes) -> bytes:
-        ...
+    def mint_delegation_proof(self, request_json: bytes) -> bytes: ...
 
-    def mint_session_authority(self, request_json: bytes) -> bytes:
-        ...
+    def mint_session_authority(self, request_json: bytes) -> bytes: ...
 
 
 class CanonicalSigner(Protocol):
     """Opaque signer for SDK-owned canonical authority payloads."""
 
-    def sign_canonical(self, canonical_bytes: bytes) -> bytes:
-        ...
+    def sign_canonical(self, canonical_bytes: bytes) -> bytes: ...
 
 
 class CanonicalAuthorityTransport:
@@ -363,7 +410,9 @@ class AuthorityClient:
         if not isinstance(request, DelegationRequest):
             raise _invalid_authority("delegation request is required")
         raw = self._transport.mint_delegation_proof(request.to_json())
-        value = _authority_metadata_projection(raw, DELEGATION_METADATA_KEY, "delegation")
+        value = _authority_metadata_projection(
+            raw, DELEGATION_METADATA_KEY, "delegation"
+        )
         return DelegationProof.from_metadata(value)
 
     def mint_session_authority(
@@ -407,17 +456,37 @@ def _authority_metadata_value(metadata: Mapping[str, object], key: str) -> str:
     return raw.strip()
 
 
-def _decode_authority_metadata(value: str, label: str) -> tuple[Mapping[str, object], bytes]:
+def _match_scope_pattern(pattern: str, ability: str) -> bool:
+    if pattern == "*":
+        return True
+    if len(pattern) >= 2 and pattern.endswith("*"):
+        return ability.startswith(pattern[:-1])
+    return pattern == ability
+
+
+def _audience_admits(audience: str, callee_ura: str) -> bool:
+    if audience == "*" or audience == callee_ura:
+        return True
+    return bool(audience) and audience.endswith("/") and callee_ura.startswith(audience)
+
+
+def _decode_authority_metadata(
+    value: str, label: str
+) -> tuple[Mapping[str, object], bytes]:
     if not isinstance(value, str) or not value.strip():
         raise _invalid_authority(f"{label} metadata value is required")
     try:
         wire_bytes = _decode_base64(value.strip(), f"{label} metadata")
     except binascii.Error as exc:
-        raise _invalid_authority(f"{label} metadata base64 decode failed: {exc}", exc) from exc
+        raise _invalid_authority(
+            f"{label} metadata base64 decode failed: {exc}", exc
+        ) from exc
     try:
         wire = json.loads(wire_bytes.decode("utf-8"))
     except Exception as exc:
-        raise _invalid_authority(f"{label} metadata JSON parse failed: {exc}", exc) from exc
+        raise _invalid_authority(
+            f"{label} metadata JSON parse failed: {exc}", exc
+        ) from exc
     if not isinstance(wire, dict):
         raise _invalid_authority(f"{label} metadata JSON must be an object")
     payload = wire.get("payload")
@@ -437,7 +506,9 @@ def _decode_authority_metadata(value: str, label: str) -> tuple[Mapping[str, obj
     return payload, signature
 
 
-def _authority_metadata_projection(raw: bytes | str, metadata_key: str, label: str) -> str:
+def _authority_metadata_projection(
+    raw: bytes | str, metadata_key: str, label: str
+) -> str:
     text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
     if not isinstance(text, str) or not text.strip():
         raise _invalid_authority(f"{label} metadata projection is required")
@@ -504,7 +575,9 @@ def _decode_session_authority_request(raw: bytes) -> SessionAuthorityRequest:
             audience=cast(str, decoded["audience"]),
             scopes=tuple(cast(tuple[str, ...], decoded["scopes"])),
             allowed_actions=tuple(cast(tuple[str, ...], decoded["allowed_actions"])),
-            allowed_followup_abilities=tuple(cast(tuple[str, ...], decoded["allowed_followup_abilities"])),
+            allowed_followup_abilities=tuple(
+                cast(tuple[str, ...], decoded["allowed_followup_abilities"])
+            ),
             issued_at_ms=cast(int, decoded["issued_at_ms"]),
             expires_at_ms=cast(int, decoded["expires_at_ms"]),
             session_owner_ura=str(decoded.get("session_owner_ura", "")),
@@ -578,7 +651,9 @@ def _authority_projection_bytes(key: str, payload: bytes, signature: bytes) -> b
     return _canonical_json({"metadata": {key: value}})
 
 
-def _required_payload_string(payload: Mapping[str, object], field_name: str, label: str) -> str:
+def _required_payload_string(
+    payload: Mapping[str, object], field_name: str, label: str
+) -> str:
     value = payload.get(field_name)
     return _required_string(value, f"{label} authority {field_name}")
 
@@ -589,14 +664,18 @@ def _required_string(value: object, label: str) -> str:
     return value
 
 
-def _required_payload_int(payload: Mapping[str, object], field_name: str, label: str) -> int:
+def _required_payload_int(
+    payload: Mapping[str, object], field_name: str, label: str
+) -> int:
     value = payload.get(field_name)
     if isinstance(value, bool) or not isinstance(value, int):
         raise _invalid_authority(f"{label} authority {field_name} is required")
     return value
 
 
-def _required_string_tuple(value: object, field_name: str, label: str) -> tuple[str, ...]:
+def _required_string_tuple(
+    value: object, field_name: str, label: str
+) -> tuple[str, ...]:
     if not isinstance(value, list) or len(value) == 0:
         raise _invalid_authority(f"{label} authority {field_name} are required")
     result: list[str] = []
@@ -743,7 +822,10 @@ def _session_owner_ura_from_subject(subject_ura: str, owner_user_id: str) -> str
         projection = parse_ura(subject_ura.strip())
     except SDKError:
         return ""
-    if projection.kind == "user" and projection.components.get("user_id") == owner_user_id:
+    if (
+        projection.kind == "user"
+        and projection.components.get("user_id") == owner_user_id
+    ):
         return projection.ura
     if (
         projection.kind == "resource"
@@ -798,11 +880,15 @@ def _validate_delegation(proof: DelegationProof) -> None:
         and proof.caller_ura.strip()
         and proof.audience.strip()
     ):
-        raise _invalid_authority("delegation authority must bind issuer, subject, caller, and audience")
+        raise _invalid_authority(
+            "delegation authority must bind issuer, subject, caller, and audience"
+        )
     if not proof.scopes:
         raise _invalid_authority("delegation authority scopes are required")
     if proof.expires_at_ms <= proof.issued_at_ms:
-        raise _invalid_authority("delegation authority expires_at_ms must be greater than issued_at_ms")
+        raise _invalid_authority(
+            "delegation authority expires_at_ms must be greater than issued_at_ms"
+        )
     if not proof.signature:
         raise _invalid_authority("delegation authority signature is required")
 
@@ -830,7 +916,9 @@ def _validate_session_authority(authority: SessionAuthority) -> None:
     if not authority.allowed_followup_abilities or any(
         not ability.strip() for ability in authority.allowed_followup_abilities
     ):
-        raise _invalid_authority("session authority allowed follow-up abilities are required")
+        raise _invalid_authority(
+            "session authority allowed follow-up abilities are required"
+        )
     if authority.expires_at_ms <= authority.issued_at_ms:
         raise _invalid_authority(
             "session authority expires_at_ms must be greater than issued_at_ms"

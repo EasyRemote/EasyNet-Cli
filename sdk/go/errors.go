@@ -40,6 +40,20 @@ const (
 	ErrNotImplemented      ErrorCode = "NOT_IMPLEMENTED"
 	ErrGeneric             ErrorCode = "GENERIC"
 	ErrVersionIncompatible ErrorCode = "VERSION_INCOMPATIBLE"
+
+	ErrCallerIdentityUnavailable  ErrorCode = "CALLER_IDENTITY_UNAVAILABLE"
+	ErrCallerSignerUnavailable    ErrorCode = "CALLER_SIGNER_UNAVAILABLE"
+	ErrAuthoritySubjectMismatch   ErrorCode = "AUTHORITY_SUBJECT_MISMATCH"
+	ErrDescriptorNotFound         ErrorCode = "DESCRIPTOR_NOT_FOUND"
+	ErrDescriptorOwnerOffline     ErrorCode = "DESCRIPTOR_OWNER_OFFLINE"
+	ErrDescriptorModeUnsupported  ErrorCode = "DESCRIPTOR_MODE_UNSUPPORTED"
+	ErrDescriptorStale            ErrorCode = "DESCRIPTOR_STALE"
+	ErrRuntimeRouteUnavailable    ErrorCode = "RUNTIME_ROUTE_UNAVAILABLE"
+	ErrInvocationCancelled        ErrorCode = "INVOCATION_CANCELLED"
+	ErrInvocationTimeout          ErrorCode = "INVOCATION_TIMEOUT"
+	ErrTerminalReceiptUnavailable ErrorCode = "TERMINAL_RECEIPT_UNAVAILABLE"
+	ErrReceiptProofFactsMissing   ErrorCode = "RECEIPT_PROOF_FACTS_MISSING"
+	ErrProviderUnavailable        ErrorCode = "PROVIDER_UNAVAILABLE"
 )
 
 // ErrorClass is a language-side grouping derived from canonical ErrorCode.
@@ -152,16 +166,19 @@ func ErrorClassForCode(code ErrorCode) ErrorClass {
 		return ErrorClassLifecycle
 	case ErrDaemonOffline, ErrTransport:
 		return ErrorClassAvailability
-	case ErrPermissionDenied, ErrHTTPAuthDenied:
+	case ErrPermissionDenied, ErrHTTPAuthDenied, ErrCallerIdentityUnavailable:
 		return ErrorClassPermission
 	case ErrAdmissionDenied, ErrSignatureDenied, ErrPolicyDenied, ErrAuthorityDenied,
-		ErrExecutionFailed, ErrAbilityFailed:
+		ErrAuthoritySubjectMismatch, ErrExecutionFailed, ErrAbilityFailed,
+		ErrCallerSignerUnavailable, ErrReceiptProofFactsMissing:
 		return ErrorClassAdmission
-	case ErrAbilityNotFound, ErrRouteUnavailable, ErrNotFound:
+	case ErrAbilityNotFound, ErrRouteUnavailable, ErrNotFound, ErrDescriptorNotFound,
+		ErrDescriptorOwnerOffline, ErrDescriptorModeUnsupported, ErrDescriptorStale,
+		ErrRuntimeRouteUnavailable, ErrProviderUnavailable:
 		return ErrorClassRouting
-	case ErrTimeout:
+	case ErrTimeout, ErrInvocationTimeout:
 		return ErrorClassTimeout
-	case ErrCancelled:
+	case ErrCancelled, ErrInvocationCancelled:
 		return ErrorClassCancellation
 	case ErrProtocolMismatch, ErrProtocol:
 		return ErrorClassProtocol
@@ -298,6 +315,32 @@ func ParseErrorCode(code string) (ErrorCode, error) {
 		return ErrNotImplemented, nil
 	case "GENERIC":
 		return ErrGeneric, nil
+	case "CALLER_IDENTITY_UNAVAILABLE":
+		return ErrCallerIdentityUnavailable, nil
+	case "CALLER_SIGNER_UNAVAILABLE":
+		return ErrCallerSignerUnavailable, nil
+	case "AUTHORITY_SUBJECT_MISMATCH":
+		return ErrAuthoritySubjectMismatch, nil
+	case "DESCRIPTOR_NOT_FOUND":
+		return ErrDescriptorNotFound, nil
+	case "DESCRIPTOR_OWNER_OFFLINE":
+		return ErrDescriptorOwnerOffline, nil
+	case "DESCRIPTOR_MODE_UNSUPPORTED":
+		return ErrDescriptorModeUnsupported, nil
+	case "DESCRIPTOR_STALE":
+		return ErrDescriptorStale, nil
+	case "RUNTIME_ROUTE_UNAVAILABLE":
+		return ErrRuntimeRouteUnavailable, nil
+	case "INVOCATION_CANCELLED":
+		return ErrInvocationCancelled, nil
+	case "INVOCATION_TIMEOUT":
+		return ErrInvocationTimeout, nil
+	case "TERMINAL_RECEIPT_UNAVAILABLE":
+		return ErrTerminalReceiptUnavailable, nil
+	case "RECEIPT_PROOF_FACTS_MISSING":
+		return ErrReceiptProofFactsMissing, nil
+	case "PROVIDER_UNAVAILABLE":
+		return ErrProviderUnavailable, nil
 	default:
 		return "", invalidDaemonError(fmt.Sprintf("unknown daemon error code: %s", code))
 	}

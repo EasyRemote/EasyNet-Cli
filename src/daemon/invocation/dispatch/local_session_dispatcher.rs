@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::descriptor_binding::RuntimeBoundAbility;
-use super::invocation_wire::target_ura_from_envelope;
+use super::invocation_wire::{target_ura_from_envelope, FEDERATION_RESULT_CONTENT_TYPE};
 #[cfg(test)]
 use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
@@ -335,6 +335,7 @@ impl LocalAxonSessionDispatcher {
         let reply = PbDispatchResult {
             call_id,
             payload: outcome.payload_bytes,
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
             terminal: true,
             admission_receipt,
             terminal_receipt,
@@ -564,6 +565,10 @@ impl LocalAxonSessionDispatcher {
                                 .as_ref()
                                 .map(|value| value.output().to_vec())
                                 .unwrap_or(frame.payload),
+                            result_content_type: finalized
+                                .as_ref()
+                                .map(|value| value.output_content_type().to_string())
+                                .unwrap_or_else(|| frame.content_type.clone()),
                             terminal,
                             terminal_receipt,
                             failure: finalized
@@ -1245,6 +1250,7 @@ impl LocalAxonSessionDispatcher {
             axon_sdk::pb::axon::v1::DispatchResult {
                 call_id,
                 payload: finalized.output().to_vec(),
+                result_content_type: finalized.output_content_type().to_string(),
                 terminal: true,
                 terminal_receipt: Some(receipt_to_session_wire(&finalized.terminal_receipt)?),
                 failure: finalized

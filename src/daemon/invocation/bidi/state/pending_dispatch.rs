@@ -76,6 +76,9 @@ pub enum DispatchReceipt {}
 pub struct DispatchResult {
     /// Reply payload from the target ability (opaque bytes).
     pub payload: Vec<u8>,
+    /// MIME type for `payload`. The session carrier owns this result fact; it
+    /// is intentionally not recovered from the signed receipt checkpoint.
+    pub result_content_type: String,
     /// Exact callee-signed admission checkpoint. Unary carries this together
     /// with terminal; stream/bidi deliver it through the ordered admission
     /// event before data.
@@ -238,6 +241,7 @@ impl PendingDispatchMap {
             if let Some((_, entry)) = self.inner.entries.remove(&call_id) {
                 let _ = entry.sender.send(DispatchResult {
                     payload: Vec::new(),
+                    result_content_type: String::new(),
                     error: Some(error_reason.to_string()),
                     failure: Some(SessionFailure::from_reason(
                         error_reason,
@@ -571,6 +575,7 @@ impl PendingStreamDispatchMap {
                     .sender
                     .try_send(DispatchStreamEvent::Terminal(Box::new(DispatchResult {
                         payload: Vec::new(),
+                        result_content_type: String::new(),
                         error: Some(error_reason.to_string()),
                         failure: Some(SessionFailure::from_reason(
                             error_reason,
@@ -615,6 +620,7 @@ mod tests {
                 id,
                 DispatchResult {
                     payload: b"reply".to_vec(),
+                    result_content_type: "application/json".to_string(),
                     error: None,
                     failure: None,
                     request_id: None,
@@ -654,6 +660,7 @@ mod tests {
                 admission_receipt: None,
                 terminal_receipt: None,
                 payload: b"too late".to_vec(),
+                result_content_type: "application/json".to_string(),
                 error: None,
                 failure: None,
                 request_id: None,
@@ -676,6 +683,7 @@ mod tests {
                 id,
                 DispatchResult {
                     payload: Vec::new(),
+                    result_content_type: String::new(),
                     error: Some("target ability raised".into()),
                     failure: Some(failure),
                     request_id: None,
@@ -732,6 +740,7 @@ mod tests {
                 id2,
                 DispatchResult {
                     payload: b"two".to_vec(),
+                    result_content_type: "application/json".to_string(),
                     error: None,
                     failure: None,
                     request_id: None,
@@ -783,6 +792,7 @@ mod tests {
                             admission_receipt: None,
                             terminal_receipt: None,
                             payload: br#"{"sha256":"abc"}"#.to_vec(),
+                            result_content_type: "application/json".to_string(),
                             error: None,
                             failure: None,
                             request_id: None,
@@ -803,6 +813,7 @@ mod tests {
                 admission_receipt: None,
                 terminal_receipt: None,
                 payload: br#"{"sha256":"abc"}"#.to_vec(),
+                result_content_type: "application/json".to_string(),
                 error: None,
                 failure: None,
                 request_id: None,
@@ -898,6 +909,7 @@ mod tests {
                     id,
                     DispatchResult {
                         payload: br#"{"sha256":"abc"}"#.to_vec(),
+                        result_content_type: "application/json".to_string(),
                         error: None,
                         failure: None,
                         request_id: None,
@@ -923,6 +935,7 @@ mod tests {
             handle.recv().await,
             Some(DispatchStreamEvent::Terminal(Box::new(DispatchResult {
                 payload: br#"{"sha256":"abc"}"#.to_vec(),
+                result_content_type: "application/json".to_string(),
                 error: None,
                 failure: None,
                 request_id: None,
@@ -946,6 +959,7 @@ mod tests {
                 id,
                 DispatchResult {
                     payload: Vec::new(),
+                    result_content_type: String::new(),
                     error: None,
                     failure: None,
                     request_id: None,

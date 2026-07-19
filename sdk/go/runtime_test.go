@@ -789,6 +789,30 @@ func TestRuntimeClientInvokeReturnsTypedResult(t *testing.T) {
 	}
 }
 
+func TestInvocationResultDerivesJSONOutputFromCanonicalPayload(t *testing.T) {
+	admission, terminal := canonicalRuntimeReceiptPairFixture("inv-derived-output", "Completed")
+	raw := mustJSON(map[string]any{
+		"ok":                  true,
+		"tuple":               completeDraftForRuntimeTest(t),
+		"invocation_id":       "inv-derived-output",
+		"terminal_state":      "Completed",
+		"output_content_type": "application/json; charset=utf-8",
+		"output_base64":       "eyJyZWFkeSI6dHJ1ZX0=",
+		"output_json":         nil,
+		"elapsed_ms":          1,
+		"admission_receipt":   admission,
+		"terminal_receipt":    terminal,
+		"error":               nil,
+	})
+	result, err := NewInvocationResultFromJSON(raw)
+	if err != nil {
+		t.Fatalf("NewInvocationResultFromJSON: %v", err)
+	}
+	if got := string(result.OutputJSON()); got != `{"ready":true}` {
+		t.Fatalf("derived output JSON = %s", got)
+	}
+}
+
 func TestInvocationResultSeparatesAdmissionAndTerminalReceipts(t *testing.T) {
 	admission, terminal := canonicalRuntimeReceiptPairFixture("inv-1", "Completed")
 	raw := mustJSON(map[string]any{

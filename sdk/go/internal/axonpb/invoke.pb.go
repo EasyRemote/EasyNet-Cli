@@ -1747,8 +1747,12 @@ type DispatchResult struct {
 	// MUST be greater than admission_receipt.index; adjacency is not required and
 	// MUST NOT be inferred from two checkpoints alone.
 	TerminalReceipt *InvocationReceipt `protobuf:"bytes,7,opt,name=terminal_receipt,json=terminalReceipt,proto3" json:"terminal_receipt,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// MIME type for payload. This belongs to the dispatch carrier result, not to
+	// the signed receipt checkpoint; mutating receipt.payload_content_type after
+	// finalization would break receipt self-hash verification.
+	ResultContentType string `protobuf:"bytes,8,opt,name=result_content_type,json=resultContentType,proto3" json:"result_content_type,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *DispatchResult) Reset() {
@@ -1821,6 +1825,13 @@ func (x *DispatchResult) GetTerminalReceipt() *InvocationReceipt {
 		return x.TerminalReceipt
 	}
 	return nil
+}
+
+func (x *DispatchResult) GetResultContentType() string {
+	if x != nil {
+		return x.ResultContentType
+	}
+	return ""
 }
 
 // Device → authority reverse request (the former Request/RequestResult):
@@ -1992,8 +2003,12 @@ type ReverseDispatchResult struct {
 	// the original InvokeRequest binding.
 	AdmissionReceipt *InvocationReceipt `protobuf:"bytes,6,opt,name=admission_receipt,json=admissionReceipt,proto3" json:"admission_receipt,omitempty"`
 	TerminalReceipt  *InvocationReceipt `protobuf:"bytes,7,opt,name=terminal_receipt,json=terminalReceipt,proto3" json:"terminal_receipt,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// MIME type for payload. This belongs to the reverse carrier result, not to
+	// the signed receipt checkpoint; mutating receipt.payload_content_type after
+	// finalization would break receipt self-hash verification.
+	ResultContentType string `protobuf:"bytes,8,opt,name=result_content_type,json=resultContentType,proto3" json:"result_content_type,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ReverseDispatchResult) Reset() {
@@ -2066,6 +2081,13 @@ func (x *ReverseDispatchResult) GetTerminalReceipt() *InvocationReceipt {
 		return x.TerminalReceipt
 	}
 	return nil
+}
+
+func (x *ReverseDispatchResult) GetResultContentType() string {
+	if x != nil {
+		return x.ResultContentType
+	}
+	return ""
 }
 
 // Frame-0 up extension (rides EnvelopeOpen.session_ext).
@@ -2838,14 +2860,15 @@ const file_axon_v1_invoke_proto_rawDesc = "" +
 	"\fDispatchCall\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\x04R\x06callId\x120\n" +
 	"\arequest\x18\x02 \x01(\v2\x16.axon.v1.InvokeRequestR\arequest\x12\x1b\n" +
-	"\topen_bidi\x18\x03 \x01(\bR\bopenBidi\"\xa8\x02\n" +
+	"\topen_bidi\x18\x03 \x01(\bR\bopenBidi\"\xd8\x02\n" +
 	"\x0eDispatchResult\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\x04R\x06callId\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayload\x12\x1a\n" +
 	"\bterminal\x18\x03 \x01(\bR\bterminal\x12(\n" +
 	"\afailure\x18\x05 \x01(\v2\x0e.axon.v1.ErrorR\afailure\x12G\n" +
 	"\x11admission_receipt\x18\x06 \x01(\v2\x1a.axon.v1.InvocationReceiptR\x10admissionReceipt\x12E\n" +
-	"\x10terminal_receipt\x18\a \x01(\v2\x1a.axon.v1.InvocationReceiptR\x0fterminalReceiptJ\x04\b\x04\x10\x05R\areceipt\"}\n" +
+	"\x10terminal_receipt\x18\a \x01(\v2\x1a.axon.v1.InvocationReceiptR\x0fterminalReceipt\x12.\n" +
+	"\x13result_content_type\x18\b \x01(\tR\x11resultContentTypeJ\x04\b\x04\x10\x05R\areceipt\"}\n" +
 	"\x13ReverseDispatchCall\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\fR\x06callId\x120\n" +
 	"\arequest\x18\x02 \x01(\v2\x16.axon.v1.InvokeRequestR\arequest\x12\x1b\n" +
@@ -2854,14 +2877,15 @@ const file_axon_v1_invoke_proto_rawDesc = "" +
 	"\acall_id\x18\x01 \x01(\fR\x06callId\x129\n" +
 	"\fbinary_chunk\x18\x02 \x01(\v2\x14.axon.v1.BinaryChunkH\x00R\vbinaryChunk\x120\n" +
 	"\acontrol\x18\x03 \x01(\v2\x14.axon.v1.BidiControlH\x00R\acontrolB\a\n" +
-	"\x05input\"\xaf\x02\n" +
+	"\x05input\"\xdf\x02\n" +
 	"\x15ReverseDispatchResult\x12\x17\n" +
 	"\acall_id\x18\x01 \x01(\fR\x06callId\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\fR\apayload\x12\x1a\n" +
 	"\bterminal\x18\x03 \x01(\bR\bterminal\x12(\n" +
 	"\afailure\x18\x05 \x01(\v2\x0e.axon.v1.ErrorR\afailure\x12G\n" +
 	"\x11admission_receipt\x18\x06 \x01(\v2\x1a.axon.v1.InvocationReceiptR\x10admissionReceipt\x12E\n" +
-	"\x10terminal_receipt\x18\a \x01(\v2\x1a.axon.v1.InvocationReceiptR\x0fterminalReceiptJ\x04\b\x04\x10\x05R\areceipt\"k\n" +
+	"\x10terminal_receipt\x18\a \x01(\v2\x1a.axon.v1.InvocationReceiptR\x0fterminalReceipt\x12.\n" +
+	"\x13result_content_type\x18\b \x01(\tR\x11resultContentTypeJ\x04\b\x04\x10\x05R\areceipt\"k\n" +
 	"\x0eSessionOpenExt\x12)\n" +
 	"\x10contract_version\x18\x01 \x01(\rR\x0fcontractVersion\x12.\n" +
 	"\x13claimant_boot_nonce\x18\x02 \x01(\fR\x11claimantBootNonce\"\x87\f\n" +

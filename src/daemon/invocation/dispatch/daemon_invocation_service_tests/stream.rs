@@ -998,6 +998,7 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
             call_id,
             DispatchResult {
                 payload: br#"{"done":true}"#.to_vec(),
+                result_content_type: "application/json".to_string(),
                 admission_receipt: None,
                 terminal_receipt: Some(terminal_receipt.clone()),
                 error: None,

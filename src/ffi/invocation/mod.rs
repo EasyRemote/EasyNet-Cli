@@ -1843,12 +1843,10 @@ fn runtime_resolve_descriptor_ref_json(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("rpc");
-    let ability_ura = if ability.starts_with("easynet:///r/") {
-        let selector = crate::core::ura::AbilitySelector::parse(ability)?;
-        selector.ability_ura().to_string()
-    } else {
-        crate::core::ura::owner_ability_ura(callee_ura, ability)
-            .ok_or_else(|| anyhow::anyhow!("derive ability URA for `{callee_ura}` `{ability}`"))?
+    let ability_ura = match crate::core::ura::AbilitySelector::parse(ability) {
+        Ok(selector) => selector.ability_ura().to_string(),
+        Err(_) => crate::core::ura::owner_ability_ura(callee_ura, ability)
+            .ok_or_else(|| anyhow::anyhow!("derive ability URA for `{callee_ura}` `{ability}`"))?,
     };
     let runtime_owner_ura = runtime_owner_ura_from_session(session).ok();
     if runtime_owner_ura.as_deref() == Some(callee_ura) {
@@ -6042,7 +6040,7 @@ fn invocation_outcome_json_with_tuple(
     use base64::Engine;
     let (result, stages) = outcome.into_parts();
     debug_assert_eq!(result.receipt, stages.terminal);
-    let output_json = if result.output_content_type == "application/json" {
+    let output_json = if result_content_type_is_json(&result.output_content_type) {
         serde_json::from_slice::<serde_json::Value>(&result.output).ok()
     } else {
         None
@@ -6060,6 +6058,11 @@ fn invocation_outcome_json_with_tuple(
         "terminal_receipt": terminal_receipt.map(receipt_summary_dto_json),
         "error": result.error.map(runtime_error_json),
     })
+}
+
+#[cfg(feature = "axon-pb")]
+fn result_content_type_is_json(content_type: &str) -> bool {
+    content_type.to_ascii_lowercase().contains("json")
 }
 
 #[cfg(feature = "axon-pb")]
@@ -6993,6 +6996,7 @@ mod tests {
                 let response = axon_sdk::pb::axon::v1::InvokeResponse {
                     state: finalized.terminal_state.to_wire_i32(),
                     result: finalized.output().to_vec(),
+                    result_content_type: "application/json".to_string(),
                     error: finalized
                         .failure
                         .as_ref()
@@ -7048,7 +7052,9 @@ mod tests {
 
         let json = invocation_outcome_json_with_tuple(outcome, serde_json::json!({}));
         assert_eq!(json["output_json"], serde_json::json!({"ok": true}));
-        assert!(json["output_base64"].as_str().is_some_and(|value| !value.is_empty()));
+        assert!(json["output_base64"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
         assert_eq!(json["admission_receipt"]["index"], admission_index);
         assert_eq!(json["terminal_receipt"]["index"], terminal_index);
         assert!(

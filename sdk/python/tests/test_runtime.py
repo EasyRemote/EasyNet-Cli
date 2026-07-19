@@ -360,6 +360,30 @@ class RuntimeTests(unittest.TestCase):
             "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
         )
 
+    def test_invocation_result_derives_json_output_from_canonical_payload(self) -> None:
+        admission, terminal = canonical_runtime_receipt_pair("inv-derived-output")
+        result = InvocationResult.from_json(
+            json.dumps(
+                {
+                    "ok": True,
+                    "tuple": complete_draft().to_json_dict(),
+                    "invocation_id": "inv-derived-output",
+                    "terminal_state": "Completed",
+                    "output_content_type": "application/json; charset=utf-8",
+                    "output_base64": "eyJyZWFkeSI6dHJ1ZX0=",
+                    "output_json": None,
+                    "elapsed_ms": 1,
+                    "admission_receipt": admission,
+                    "terminal_receipt": terminal,
+                    "error": None,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+
+        self.assertEqual(result.output_json, {"ready": True})
+
     def test_invocation_result_projects_runtime_receipt_summary(self) -> None:
         admission, terminal = canonical_runtime_receipt_pair("inv-1")
         terminal.update(

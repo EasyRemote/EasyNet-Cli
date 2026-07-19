@@ -930,9 +930,15 @@ class DispatchResult(google.protobuf.message.Message):
     FAILURE_FIELD_NUMBER: builtins.int
     ADMISSION_RECEIPT_FIELD_NUMBER: builtins.int
     TERMINAL_RECEIPT_FIELD_NUMBER: builtins.int
+    RESULT_CONTENT_TYPE_FIELD_NUMBER: builtins.int
     call_id: builtins.int
     payload: builtins.bytes
     terminal: builtins.bool
+    result_content_type: builtins.str
+    """MIME type for payload. This belongs to the dispatch carrier result, not to
+    the signed receipt checkpoint; mutating receipt.payload_content_type after
+    finalization would break receipt self-hash verification.
+    """
     @property
     def failure(self) -> types_pb2.Error:
         """Typed single-track failure (replaces the JSON-era
@@ -963,9 +969,10 @@ class DispatchResult(google.protobuf.message.Message):
         failure: types_pb2.Error | None = ...,
         admission_receipt: global___InvocationReceipt | None = ...,
         terminal_receipt: global___InvocationReceipt | None = ...,
+        result_content_type: builtins.str = ...,
     ) -> None: ...
     def HasField(self, field_name: typing.Literal["admission_receipt", b"admission_receipt", "failure", b"failure", "terminal_receipt", b"terminal_receipt"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["admission_receipt", b"admission_receipt", "call_id", b"call_id", "failure", b"failure", "payload", b"payload", "terminal", b"terminal", "terminal_receipt", b"terminal_receipt"]) -> None: ...
+    def ClearField(self, field_name: typing.Literal["admission_receipt", b"admission_receipt", "call_id", b"call_id", "failure", b"failure", "payload", b"payload", "result_content_type", b"result_content_type", "terminal", b"terminal", "terminal_receipt", b"terminal_receipt"]) -> None: ...
 
 global___DispatchResult = DispatchResult
 
@@ -1040,9 +1047,15 @@ class ReverseDispatchResult(google.protobuf.message.Message):
     FAILURE_FIELD_NUMBER: builtins.int
     ADMISSION_RECEIPT_FIELD_NUMBER: builtins.int
     TERMINAL_RECEIPT_FIELD_NUMBER: builtins.int
+    RESULT_CONTENT_TYPE_FIELD_NUMBER: builtins.int
     call_id: builtins.bytes
     payload: builtins.bytes
     terminal: builtins.bool
+    result_content_type: builtins.str
+    """MIME type for payload. This belongs to the reverse carrier result, not to
+    the signed receipt checkpoint; mutating receipt.payload_content_type after
+    finalization would break receipt self-hash verification.
+    """
     @property
     def failure(self) -> types_pb2.Error: ...
     @property
@@ -1063,9 +1076,10 @@ class ReverseDispatchResult(google.protobuf.message.Message):
         failure: types_pb2.Error | None = ...,
         admission_receipt: global___InvocationReceipt | None = ...,
         terminal_receipt: global___InvocationReceipt | None = ...,
+        result_content_type: builtins.str = ...,
     ) -> None: ...
     def HasField(self, field_name: typing.Literal["admission_receipt", b"admission_receipt", "failure", b"failure", "terminal_receipt", b"terminal_receipt"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["admission_receipt", b"admission_receipt", "call_id", b"call_id", "failure", b"failure", "payload", b"payload", "terminal", b"terminal", "terminal_receipt", b"terminal_receipt"]) -> None: ...
+    def ClearField(self, field_name: typing.Literal["admission_receipt", b"admission_receipt", "call_id", b"call_id", "failure", b"failure", "payload", b"payload", "result_content_type", b"result_content_type", "terminal", b"terminal", "terminal_receipt", b"terminal_receipt"]) -> None: ...
 
 global___ReverseDispatchResult = ReverseDispatchResult
 

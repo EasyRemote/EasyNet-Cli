@@ -237,23 +237,13 @@ pub fn load_runtime_caller_signer(
 ) -> Result<Arc<dyn CanonicalSigner>, SelfIdentityError> {
     let owner_ura = owner_ura.into();
     let provider = Arc::new(KeyringClient::default_path());
-    let self_identity_provider: Arc<dyn SelfIdentity> = provider.clone();
-    match RuntimeSigningIdentity::load(owner_ura.clone(), self_identity_provider) {
-        Ok(signer) => Ok(Arc::new(signer)),
-        Err(primary_error) => {
-            if !is_user_owner_ura(&owner_ura) {
-                return Err(primary_error);
-            }
-            ManagedRuntimeSigningIdentity::load_user(owner_ura.clone(), provider)
-                .map(|signer| Arc::new(signer) as Arc<dyn CanonicalSigner>)
-                .map_err(|managed_error| SelfIdentityError::Rejected {
-                    kind: "not_found".into(),
-                    message: format!(
-                        "runtime self-identity unavailable ({primary_error}); no active managed user signer bound to `{owner_ura}` under purpose `{USER_SIGNING_CLI_PURPOSE}` ({managed_error})"
-                    ),
-                })
-        }
+    if is_user_owner_ura(&owner_ura) {
+        return ManagedRuntimeSigningIdentity::load_user(owner_ura, provider)
+            .map(|signer| Arc::new(signer) as Arc<dyn CanonicalSigner>);
     }
+    let self_identity_provider: Arc<dyn SelfIdentity> = provider.clone();
+    RuntimeSigningIdentity::load(owner_ura, self_identity_provider)
+        .map(|signer| Arc::new(signer) as Arc<dyn CanonicalSigner>)
 }
 
 fn is_user_owner_ura(owner_ura: &str) -> bool {
@@ -1070,8 +1060,8 @@ impl SelfIdentity for InMemoryVault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine as _;
     use crate::daemon::keyring::{MasterKeySource, Vault};
+    use base64::Engine as _;
     use ed25519_dalek::Verifier;
     use rand::rngs::OsRng;
     use rand::RngCore;
@@ -1221,9 +1211,8 @@ mod tests {
 
         assert_eq!(signer.owner_ura(), user_ura);
         assert_eq!(
-            base64::engine::general_purpose::STANDARD.encode(
-                signer.signing_public_key().unwrap().to_bytes()
-            ),
+            base64::engine::general_purpose::STANDARD
+                .encode(signer.signing_public_key().unwrap().to_bytes()),
             projection.public_key_b64
         );
         let signature = signer

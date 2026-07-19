@@ -661,12 +661,22 @@ enum PendingEscalationKind {
 
 fn reverse_unary_reply(result: axon_sdk::pb::axon::v1::ReverseDispatchResult) -> EscalationReply {
     match result.failure {
-        None => EscalationReply::Canonical(Box::new(axon_sdk::pb::axon::v1::InvokeResponse {
-            result: result.payload,
-            admission_receipt: result.admission_receipt,
-            terminal_receipt: result.terminal_receipt,
-            ..axon_sdk::pb::axon::v1::InvokeResponse::default()
-        })),
+        None => {
+            let result_content_type = result.result_content_type.trim().to_string();
+            let state = result
+                .terminal_receipt
+                .as_ref()
+                .map(|receipt| receipt.state)
+                .unwrap_or(axon_sdk::pb::axon::v1::InvocationState::Completed as i32);
+            EscalationReply::Canonical(Box::new(axon_sdk::pb::axon::v1::InvokeResponse {
+                state,
+                result: result.payload,
+                result_content_type,
+                admission_receipt: result.admission_receipt,
+                terminal_receipt: result.terminal_receipt,
+                ..axon_sdk::pb::axon::v1::InvokeResponse::default()
+            }))
+        }
         Some(failure) => EscalationReply::Error(session_request_error_from_wire_failure(failure)),
     }
 }
@@ -688,6 +698,7 @@ fn reverse_stream_event(
             return (
                 DispatchStreamEvent::Terminal(Box::new(DispatchResult {
                     payload: Vec::new(),
+                    result_content_type: String::new(),
                     error: Some("malformed stream admission reverse dispatch result".to_string()),
                     failure: Some(SessionFailure::from_reason(
                         "malformed stream admission reverse dispatch result",
@@ -717,6 +728,7 @@ fn dispatch_result_from_reverse_result(
 ) -> DispatchResult {
     DispatchResult {
         payload: result.payload,
+        result_content_type: result.result_content_type,
         error: result
             .failure
             .as_ref()
@@ -732,6 +744,7 @@ fn dispatch_result_from_escalation_reply(reply: EscalationReply) -> DispatchResu
     match reply {
         EscalationReply::Canonical(response) => DispatchResult {
             payload: response.result,
+            result_content_type: response.result_content_type,
             error: None,
             failure: None,
             request_id: None,
@@ -740,6 +753,7 @@ fn dispatch_result_from_escalation_reply(reply: EscalationReply) -> DispatchResu
         },
         EscalationReply::Control(RequestOutcome::Ok { result_bytes }) => DispatchResult {
             payload: result_bytes,
+            result_content_type: String::new(),
             error: None,
             failure: None,
             request_id: None,
@@ -750,6 +764,7 @@ fn dispatch_result_from_escalation_reply(reply: EscalationReply) -> DispatchResu
             let message = session_request_error_message(&error);
             DispatchResult {
                 payload: Vec::new(),
+                result_content_type: String::new(),
                 error: Some(message.clone()),
                 failure: Some(SessionFailure::from_reason(
                     &message,
@@ -1178,6 +1193,7 @@ fn fail_pending(pending: PendingEscalation, error: SessionRequestError) {
             let message = session_request_error_message(&error);
             let _ = sender.try_send(DispatchStreamEvent::Terminal(Box::new(DispatchResult {
                 payload: Vec::new(),
+                result_content_type: String::new(),
                 error: Some(message.clone()),
                 failure: Some(SessionFailure::from_reason(
                     &message,
@@ -1226,7 +1242,34 @@ fn build_session_request_up_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axon_sdk::pb::axon::v1::InvokeBidiUp;
+    use axon_sdk::pb::axon::v1::{InvocationReceipt, InvocationState, InvokeBidiUp};
+
+    #[test]
+    fn reverse_unary_reply_preserves_terminal_state_and_json_content_type() {
+        let reply = reverse_unary_reply(axon_sdk::pb::axon::v1::ReverseDispatchResult {
+            payload: br#"{"abilities":[]}"#.to_vec(),
+            result_content_type: "application/json".to_string(),
+            terminal: true,
+            admission_receipt: Some(InvocationReceipt {
+                state: InvocationState::Running as i32,
+                ..InvocationReceipt::default()
+            }),
+            terminal_receipt: Some(InvocationReceipt {
+                state: InvocationState::Completed as i32,
+                ..InvocationReceipt::default()
+            }),
+            ..axon_sdk::pb::axon::v1::ReverseDispatchResult::default()
+        });
+
+        match reply {
+            EscalationReply::Canonical(response) => {
+                assert_eq!(response.state, InvocationState::Completed as i32);
+                assert_eq!(response.result_content_type, "application/json");
+                assert_eq!(response.result, br#"{"abilities":[]}"#);
+            }
+            other => panic!("expected canonical reverse unary reply, got {other:?}"),
+        }
+    }
 
     #[tokio::test]
     async fn escalate_resolves_when_correlation_completes() {

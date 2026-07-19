@@ -313,6 +313,136 @@ func TestRuntimeAbilityClientFailsClosedOnIncompleteContext(t *testing.T) {
 	}
 }
 
+func TestRuntimeAbilityClientMaterializesTypedAuthorityIntoCanonicalDraft(t *testing.T) {
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: testResolveDescriptorRef(t),
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	call := runtimeAbilityTestContext()
+	authority := runtimeAbilitySessionAuthority(t, call, "alice")
+	call.Authority = &authority
+
+	draft, err := client.Build(context.Background(), call, "namespace.resolve", map[string]any{})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	metadata := draft.Metadata()
+	if metadata[SessionAuthorityMetadataKey] == "" {
+		t.Fatalf("typed authority was not materialized: %#v", metadata)
+	}
+	if _, present := call.Metadata[SessionAuthorityMetadataKey]; present {
+		t.Fatalf("typed authority mutated caller metadata: %#v", call.Metadata)
+	}
+}
+
+func TestRuntimeAbilityClientRejectsAuthoritySubjectMismatchBeforeResolution(t *testing.T) {
+	resolverCalls := 0
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+			resolverCalls++
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	call := runtimeAbilityTestContext()
+	call.SubjectURA = "easynet:///r/example/device/device-a"
+	authority := runtimeAbilitySessionAuthority(t, call, "00000000-0000-0000-0000-000000000000")
+	call.Authority = &authority
+
+	_, err = client.Build(context.Background(), call, "namespace.resolve", map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "does not admit descriptor-bound subject_ura") {
+		t.Fatalf("subject mismatch error = %v", err)
+	}
+	if resolverCalls != 0 {
+		t.Fatalf("descriptor resolver called %d times after authority mismatch", resolverCalls)
+	}
+}
+
+func TestRuntimeAbilityClientValidatesRawAuthorityMetadata(t *testing.T) {
+	resolverCalls := 0
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+			resolverCalls++
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	call := runtimeAbilityTestContext()
+	call.SubjectURA = "easynet:///r/example/device/device-a"
+	authority := runtimeAbilitySessionAuthority(t, call, "00000000-0000-0000-0000-000000000000")
+	projection, err := authority.Metadata()
+	if err != nil {
+		t.Fatalf("authority metadata: %v", err)
+	}
+	call.Metadata = projection.Metadata()
+
+	_, err = client.Build(context.Background(), call, "namespace.resolve", map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "does not admit descriptor-bound subject_ura") {
+		t.Fatalf("raw authority mismatch error = %v", err)
+	}
+	if resolverCalls != 0 {
+		t.Fatalf("descriptor resolver called %d times after raw authority mismatch", resolverCalls)
+	}
+}
+
+func TestRuntimeAbilityClientRejectsDuplicateAuthorityRepresentations(t *testing.T) {
+	runtime, _ := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: testResolveDescriptorRef(t),
+	})
+	client, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	call := runtimeAbilityTestContext()
+	authority := runtimeAbilitySessionAuthority(t, call, "alice")
+	projection, err := authority.Metadata()
+	if err != nil {
+		t.Fatalf("authority metadata: %v", err)
+	}
+	call.Authority = &authority
+	call.Metadata = projection.Metadata()
+
+	_, err = client.Build(context.Background(), call, "namespace.resolve", map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "must be supplied once") {
+		t.Fatalf("duplicate authority error = %v", err)
+	}
+}
+
+func runtimeAbilitySessionAuthority(t *testing.T, call RuntimeCallContext, ownerUserID string) SessionAuthority {
+	t.Helper()
+	payload := sessionAuthorityPayloadFixture()
+	payload["issuer_ura"] = call.CallerURA
+	payload["session_owner_user_id"] = ownerUserID
+	payload["creator_principal_id"] = call.CallerURA
+	payload["callee_ura"] = call.CalleeURA
+	payload["subject_ura"] = "easynet:///r/example/resource/user." + ownerUserID + "/session/session-1"
+	payload["audience"] = call.CalleeURA
+	payload["scopes"] = []string{"namespace.resolve"}
+	payload["allowed_actions"] = []string{"read"}
+	payload["allowed_followup_abilities"] = []string{"namespace.resolve"}
+	value := authorityMetadataFixture(t, payload, []byte("session-signature"))
+	authority, err := NewSessionAuthorityFromMetadata(value)
+	if err != nil {
+		t.Fatalf("NewSessionAuthorityFromMetadata: %v", err)
+	}
+	return authority
+}
+
 func runtimeAbilityTestContext() RuntimeCallContext {
 	return RuntimeCallContext{
 		CallerURA:     "easynet:///r/example/agent/alice.client",

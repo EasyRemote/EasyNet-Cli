@@ -58,6 +58,7 @@ use crate::daemon::invocation::dispatch::invocation_wire::{
     function_name_from_invocation_target, status_from_axon_invoke_error, target_ura_from_envelope,
     BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
 };
+use crate::daemon::invocation::dispatch::remote_failure::status_from_remote_failure;
 use crate::daemon::invocation::dispatch::unary_dispatcher::require_complete_signed_remote_request;
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
@@ -545,14 +546,17 @@ async fn project_forwarded_remote_stream(
                         admission_receipt,
                         terminal_receipt,
                         error,
-                        failure: _,
+                        failure,
                         request_id: _,
+                        result_content_type: _,
                     } = *result;
                     if let Some(error) = error.filter(|_| terminal_receipt.is_none()) {
                         let _ = tx
-                            .send(Err(Status::unavailable(format!(
-                                "remote stream transport failed: {error}"
-                            ))))
+                            .send(Err(status_from_remote_failure(
+                                "remote stream transport failed",
+                                &error,
+                                failure.as_ref(),
+                            )))
                             .await;
                         break;
                     }

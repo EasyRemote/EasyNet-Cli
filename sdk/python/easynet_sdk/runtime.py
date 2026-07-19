@@ -726,6 +726,13 @@ class InvocationResult:
         invocation_id = (
             _optional_string(decoded.get("invocation_id"), "invocation_id") or ""
         )
+        output_content_type = (
+            _optional_string(decoded.get("output_content_type"), "output_content_type")
+            or ""
+        )
+        output_base64 = (
+            _optional_string(decoded.get("output_base64"), "output_base64") or ""
+        )
         if (
             invocation_id
             and terminal_receipt_summary is not None
@@ -738,15 +745,13 @@ class InvocationResult:
             ok=ok,
             tuple=draft,
             terminal_state=terminal_state,
-            output_content_type=_optional_string(
-                decoded.get("output_content_type"), "output_content_type"
-            )
-            or "",
-            output_base64=_optional_string(
-                decoded.get("output_base64"), "output_base64"
-            )
-            or "",
-            output_json=decoded.get("output_json"),
+            output_content_type=output_content_type,
+            output_base64=output_base64,
+            output_json=_normalized_invocation_output_json(
+                decoded.get("output_json"),
+                output_base64,
+                output_content_type,
+            ),
             elapsed_ms=elapsed_ms,
             error=failure,
             admission_receipt=admission_receipt,
@@ -754,6 +759,31 @@ class InvocationResult:
             terminal_receipt=terminal_receipt,
             terminal_receipt_summary=terminal_receipt_summary,
         )
+
+
+def _normalized_invocation_output_json(
+    raw: object,
+    output_base64: str,
+    output_content_type: str,
+) -> object:
+    if raw is not None:
+        return raw
+    if "json" not in output_content_type.lower() or not output_base64.strip():
+        return raw
+    try:
+        payload = base64.b64decode(output_base64.strip(), validate=True)
+    except Exception as exc:
+        raise _invalid_runtime(
+            "output_base64 must be valid base64 for JSON invocation output",
+            exc,
+        ) from exc
+    try:
+        return json.loads(payload.decode("utf-8"))
+    except Exception as exc:
+        raise _invalid_runtime(
+            "output_base64 must decode to valid JSON for JSON invocation output",
+            exc,
+        ) from exc
 
 
 _PRE_ADMISSION_FAILURE_STAGES = frozenset(

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import base64
 import json
+from dataclasses import replace
 
 import pytest
 
 import easynet_sdk.runtime_ability as runtime_ability_module
 from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
+from easynet_sdk.authority import SESSION_AUTHORITY_METADATA_KEY, SessionAuthority
 from easynet_sdk.errors import SDKError
 from easynet_sdk.bidi import BidiStreamDescriptor
 from easynet_sdk.runtime import RuntimeClient, RuntimeRecoveryRequest
@@ -305,11 +308,119 @@ def test_runtime_ability_rejects_incomplete_context() -> None:
         )
 
 
+def test_runtime_ability_materializes_typed_authority() -> None:
+    client, _ = _client()
+    call = _call()
+    authority = _runtime_session_authority(call, "alice")
+
+    draft = client.build(
+        replace(call, authority=authority),
+        "namespace.resolve",
+        {},
+    )
+
+    assert draft.metadata[SESSION_AUTHORITY_METADATA_KEY] == authority.metadata_value
+    assert SESSION_AUTHORITY_METADATA_KEY not in call.metadata
+
+
+def test_runtime_ability_rejects_authority_subject_mismatch_before_resolution() -> None:
+    client, transport = _client()
+    call = replace(
+        _call(),
+        subject_ura="easynet:///r/example/device/device-a",
+    )
+    authority = _runtime_session_authority(
+        call,
+        "00000000-0000-0000-0000-000000000000",
+    )
+
+    with pytest.raises(SDKError, match="does not admit descriptor-bound subject_ura"):
+        client.build(
+            replace(call, authority=authority),
+            "namespace.resolve",
+            {},
+        )
+
+    assert transport.descriptor_requests == []
+
+
+def test_runtime_ability_validates_raw_authority_metadata() -> None:
+    client, transport = _client()
+    call = replace(
+        _call(),
+        subject_ura="easynet:///r/example/device/device-a",
+    )
+    authority = _runtime_session_authority(
+        call,
+        "00000000-0000-0000-0000-000000000000",
+    )
+
+    with pytest.raises(SDKError, match="does not admit descriptor-bound subject_ura"):
+        client.build(
+            replace(
+                call,
+                metadata={SESSION_AUTHORITY_METADATA_KEY: authority.metadata_value},
+            ),
+            "namespace.resolve",
+            {},
+        )
+
+    assert transport.descriptor_requests == []
+
+
+def test_runtime_ability_rejects_duplicate_authority_representations() -> None:
+    client, _ = _client()
+    call = _call()
+    authority = _runtime_session_authority(call, "alice")
+
+    with pytest.raises(SDKError, match="must be supplied once"):
+        client.build(
+            replace(
+                call,
+                authority=authority,
+                metadata={SESSION_AUTHORITY_METADATA_KEY: authority.metadata_value},
+            ),
+            "namespace.resolve",
+            {},
+        )
+
+
 def test_runtime_ability_exports_only_canonical_contract() -> None:
     assert runtime_ability_module.__all__ == [
         "RuntimeAbilityClient",
         "RuntimeCallContext",
+        "RuntimeInvocationAuthority",
     ]
+
+
+def _runtime_session_authority(
+    call: RuntimeCallContext,
+    owner_user_id: str,
+) -> SessionAuthority:
+    payload = {
+        "issuer_ura": call.caller_ura,
+        "session_id": "session-1",
+        "session_owner_user_id": owner_user_id,
+        "creator_principal_id": call.caller_ura,
+        "callee_ura": call.callee_ura,
+        "subject_ura": (
+            f"easynet:///r/example/resource/user.{owner_user_id}/session/session-1"
+        ),
+        "audience": call.callee_ura,
+        "scopes": ["namespace.resolve"],
+        "allowed_actions": ["read"],
+        "allowed_followup_abilities": ["namespace.resolve"],
+        "issued_at_ms": 1000,
+        "expires_at_ms": 2000,
+    }
+    wire = json.dumps(
+        {
+            "payload": payload,
+            "signature": base64.b64encode(b"session-signature").decode("ascii"),
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return SessionAuthority.from_metadata(base64.b64encode(wire).decode("ascii"))
 
 
 def _complete_draft_json() -> dict[str, object]:

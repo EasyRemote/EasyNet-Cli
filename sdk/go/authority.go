@@ -72,6 +72,8 @@ type DelegationProof struct {
 	metadataValue string
 }
 
+func (DelegationProof) runtimeInvocationAuthority() {}
+
 // SessionAuthority is a typed projection of daemon/Axon session-authority
 // metadata. It does not own canonical signing or verification.
 type SessionAuthority struct {
@@ -93,6 +95,8 @@ type SessionAuthority struct {
 
 	metadataValue string
 }
+
+func (SessionAuthority) runtimeInvocationAuthority() {}
 
 // DelegationRequest asks the authority transport to mint delegated-authority
 // metadata. The SDK validates shape only; canonical payload creation stays

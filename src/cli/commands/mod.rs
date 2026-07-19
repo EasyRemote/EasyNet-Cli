@@ -53,3 +53,4 @@ pub mod teach;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub(crate) mod think;
+pub(crate) mod user_signing_identity;

@@ -1848,6 +1848,14 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 	); err != nil {
 		return InvocationResult{}, err
 	}
+	outputJSON, err := normalizedInvocationOutputJSON(
+		dto.OutputJSON,
+		dto.OutputBase64,
+		dto.OutputContentType,
+	)
+	if err != nil {
+		return InvocationResult{}, err
+	}
 	return InvocationResult{
 		ok:                      *dto.OK,
 		tuple:                   tuple,
@@ -1855,7 +1863,7 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 		terminalState:           dto.TerminalState,
 		outputContentType:       dto.OutputContentType,
 		outputBase64:            dto.OutputBase64,
-		outputJSON:              append(json.RawMessage(nil), dto.OutputJSON...),
+		outputJSON:              outputJSON,
 		elapsedMS:               dto.ElapsedMS,
 		admissionReceipt:        admissionReceipt,
 		terminalReceipt:         terminalReceipt,
@@ -1863,6 +1871,31 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 		terminalReceiptSummary:  terminalReceiptSummary,
 		failure:                 failure,
 	}, nil
+}
+
+func normalizedInvocationOutputJSON(
+	raw json.RawMessage,
+	outputBase64 string,
+	outputContentType string,
+) (json.RawMessage, error) {
+	if len(raw) != 0 && string(raw) != "null" {
+		return append(json.RawMessage(nil), raw...), nil
+	}
+	if !runtimeResultContentTypeIsJSON(outputContentType) || strings.TrimSpace(outputBase64) == "" {
+		return append(json.RawMessage(nil), raw...), nil
+	}
+	payload, err := base64.StdEncoding.DecodeString(strings.TrimSpace(outputBase64))
+	if err != nil {
+		return nil, invalidRuntimePayload("output_base64 must be valid base64 for JSON invocation output", err)
+	}
+	if !json.Valid(payload) {
+		return nil, invalidRuntimePayload("output_base64 must decode to valid JSON for JSON invocation output", nil)
+	}
+	return append(json.RawMessage(nil), payload...), nil
+}
+
+func runtimeResultContentTypeIsJSON(contentType string) bool {
+	return strings.Contains(strings.ToLower(contentType), "json")
 }
 
 func validateInvocationResultReceiptPresence(

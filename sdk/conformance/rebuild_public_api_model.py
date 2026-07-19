@@ -64,6 +64,10 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
         "ability_descriptor_projection",
     ),
     (
+        r"(descriptorprovider|descriptorresolution|descriptor(resolved|notfound|owneroffline|modeunsupported|stale|unavailable))",
+        "ability_descriptor_projection",
+    ),
+    (
         r"(accesscontrol|admission|grantactive|grantrevoked|noncereplay)",
         "access_control",
     ),
@@ -71,6 +75,7 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
         r"(delegation|sessionauthority|authority|proofbinding|hostedattestation|hostattestation|subjectauth|privateagentauth|privatehubauth)",
         "authority_metadata",
     ),
+    (r"(authorityartifact|authorizationprovider)", "authority_metadata"),
     (
         r"(canonicaladdress|abilityaddress|addressing|abilityura|agentura|entityura|receiptura|\bura\b|urabuilder|easynetaxonura|axonsdkura)",
         "canonical_addressing",
@@ -97,7 +102,15 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
         "prepare_sign_submit",
     ),
     (
+        r"(authorizedruntime|authorizedinvocation|signedinvocationstate|submittedinvocation|runtimesessionstate|runtimeclientsessionruntimeprovider|session.*operations)",
+        "prepare_sign_submit",
+    ),
+    (
         r"(invocationdraft|invocationtuple|invocationbuilder|canonicalenvelope|wireenvelope|derivationpolicy|causal|agentref|agentidentity|subjectref|subjectidentity|entityref|invocationenvelope|invocationjson|canonicaljson|descriptorbound|freshnonce|privateagentsubject|privatehubsubject|validateenvelope|tojcs)",
+        "complete_invocation_draft",
+    ),
+    (
+        r"(abilityref|actingprincipalref|calleridentityref|clockidempotencysource|invocationintent|principalref|runtimetargetref)",
         "complete_invocation_draft",
     ),
     (r"(managedsign|keyservice)", "managed_signing"),
@@ -122,6 +135,7 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
         r"(runtimeidentity|runtimecredential|selfidentity|identityjson)",
         "runtime_identity",
     ),
+    (r"(identityprovider)", "runtime_identity"),
     (r"(sdkenvironment|processroot|environment)", "runtime_environment"),
     (r"(runtimehealth|healthclient|healthtransport|diagnostic)", "runtime_health"),
     (r"(runtimeadmin|administration)", "runtime_administration"),
