@@ -11,8 +11,6 @@ import (
 	"strconv"
 	"testing"
 	"time"
-
-	easynetprovider "easynet.run/cli/sdk/go/provider/easynet"
 )
 
 // TestGoSDKLiveDaemonSmoke proves the generic C ABI v5 boundary through the
@@ -54,17 +52,19 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 		t.Fatalf("NewRuntimeHost: %v", err)
 	}
 	logPath := filepath.Join(home, ".easynet", "go-sdk-smoke-daemon.log")
-	handle, err := control.StartRuntime(ctx, easynetprovider.StartConfig{
-		Mode:       easynetprovider.ModeDevice,
-		Realm:      realm,
-		DeviceID:   deviceID,
-		DaemonBin:  daemonBin,
-		WorkingDir: repoRoot,
-		LogPath:    logPath,
-		Env: map[string]string{
-			"HOME":                     home,
-			"EASYNET_REALM_TRUST_PATH": trustPath,
-			"EASYNET_PAGES_PORT":       os.Getenv("EASYNET_PAGES_PORT"),
+	handle, err := control.StartRuntime(ctx, testRuntimeHostStartRequest{
+		payload: map[string]any{
+			"mode":        "device",
+			"realm":       realm,
+			"device_id":   deviceID,
+			"daemon_bin":  daemonBin,
+			"working_dir": repoRoot,
+			"log_path":    logPath,
+			"env": map[string]string{
+				"HOME":                     home,
+				"EASYNET_REALM_TRUST_PATH": trustPath,
+				"EASYNET_PAGES_PORT":       os.Getenv("EASYNET_PAGES_PORT"),
+			},
 		},
 	})
 	if err != nil {

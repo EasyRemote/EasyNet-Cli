@@ -1,6 +1,5 @@
 // Package contract owns the EasyNet provider's daemon lifecycle wire contract.
 //
-// The canonical SDK root aliases these types only for source compatibility.
 // Runtime lifecycle state and handle ownership remain in the canonical SDK.
 package contract
 

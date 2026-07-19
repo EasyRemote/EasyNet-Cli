@@ -13,8 +13,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	easynetprovider "easynet.run/cli/sdk/go/provider/easynet"
 )
 
 var _ RuntimeLifecycleTransport = (*CABIRuntimeLifecycleTransport)(nil)
@@ -853,9 +851,11 @@ func openFakeCABIRuntime(t *testing.T) *RuntimeClient {
 		_ = transport.Close(context.Background())
 		t.Fatalf("NewRuntimeHost: %v", err)
 	}
-	handle, err := control.StartRuntime(context.Background(), easynetprovider.StartConfig{
-		Mode:     easynetprovider.ModeDevice,
-		DeviceID: "dev-a",
+	handle, err := control.StartRuntime(context.Background(), testRuntimeHostStartRequest{
+		payload: map[string]any{
+			"mode":      "device",
+			"device_id": "dev-a",
+		},
 	})
 	if err != nil {
 		_ = transport.Close(context.Background())
