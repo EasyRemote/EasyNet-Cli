@@ -144,6 +144,9 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "media_bidi_unique_invocation_records" "$0"
   grep -q "media_product_operations_have_verified_single_terminal_receipt_chains" "$0"
   grep -q "completed_chain_facts" "$0"
+  grep -q "caller_cli_must_fail" "$0"
+  grep -q "provider_media_plugin_removed" "$0"
+  grep -q "provider_removed_media_routes_reject_invocation" "$0"
   grep -q "resolve_docker" "$0"
   grep -q "extend_tool_path" "$0"
   grep -q "random_nonce_hex" "$0"
@@ -227,6 +230,24 @@ provider_cli() {
 caller_cli() {
   [[ $# -gt 0 ]] || die "caller_cli requires a command"
   service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so easynet ${*:-}"
+}
+
+caller_cli_must_fail() {
+  [[ $# -eq 3 ]] || die "caller_cli_must_fail requires <command> <stdout> <stderr>"
+  local command="$1"
+  local stdout="$2"
+  local stderr="$3"
+  set +e
+  service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so timeout 20s easynet ${command}" \
+    >"$stdout" 2>"$stderr"
+  local status=$?
+  set -e
+  printf '%s\n' "$status" >"${stderr}.exit_code"
+  if [[ "$status" -eq 0 ]]; then
+    cat "$stdout" >&2 2>/dev/null || true
+    cat "$stderr" >&2 2>/dev/null || true
+    die "expected caller CLI command to fail after plugin removal: easynet ${command}"
+  fi
 }
 
 dump_logs() {
@@ -823,12 +844,16 @@ provider_cli "plugin list --format json" >"$OUT_DIR/provider-plugin-list-after-m
 
 MEDIA_STREAM_URA="$(wait_ability_name provider_cli "" "$MEDIA_STREAM_ABILITY" "provider-ability-list-media-stream")"
 MEDIA_BIDI_URA="$(wait_ability_name provider_cli "" "$MEDIA_BIDI_ABILITY" "provider-ability-list-media-bidi")"
+MEDIA_STREAM_DESCRIPTOR_REF="$(wait_ability_descriptor_ref provider_cli "" "$MEDIA_STREAM_ABILITY" "provider-ability-list-media-stream-descriptor" "stream")"
+MEDIA_BIDI_DESCRIPTOR_REF="$(wait_ability_descriptor_ref provider_cli "" "$MEDIA_BIDI_ABILITY" "provider-ability-list-media-bidi-descriptor" "stream")"
 CALLER_MEDIA_STREAM_URA="$(wait_ability_name caller_cli "$PROVIDER_URA" "$MEDIA_STREAM_ABILITY" "caller-ability-list-media-stream")"
 CALLER_MEDIA_BIDI_URA="$(wait_ability_name caller_cli "$PROVIDER_URA" "$MEDIA_BIDI_ABILITY" "caller-ability-list-media-bidi")"
 CALLER_MEDIA_STREAM_DESCRIPTOR_REF="$(wait_ability_descriptor_ref caller_cli "$PROVIDER_URA" "$MEDIA_STREAM_ABILITY" "caller-ability-list-media-stream-descriptor" "stream")"
 CALLER_MEDIA_BIDI_DESCRIPTOR_REF="$(wait_ability_descriptor_ref caller_cli "$PROVIDER_URA" "$MEDIA_BIDI_ABILITY" "caller-ability-list-media-bidi-descriptor" "stream")"
 [[ "$MEDIA_STREAM_URA" == easynet://* ]] || die "provider media stream ability did not resolve to URA"
 [[ "$MEDIA_BIDI_URA" == easynet://* ]] || die "provider media bidi ability did not resolve to URA"
+[[ "$MEDIA_STREAM_DESCRIPTOR_REF" == easynet://*@*#*'!stream' ]] || die "provider media stream list did not expose stream descriptor-bound ref"
+[[ "$MEDIA_BIDI_DESCRIPTOR_REF" == easynet://*@*#*'!stream' ]] || die "provider media bidi list did not expose stream-admission descriptor-bound ref"
 [[ "$CALLER_MEDIA_STREAM_URA" == easynet://* ]] || die "caller did not discover provider media stream ability"
 [[ "$CALLER_MEDIA_BIDI_URA" == easynet://* ]] || die "caller did not discover provider media bidi ability"
 [[ "$CALLER_MEDIA_STREAM_DESCRIPTOR_REF" == easynet://*@*#*'!stream' ]] || die "caller media stream list did not expose stream descriptor-bound ref"
@@ -869,14 +894,24 @@ service_exec caller "cat /home/caller/.easynet/logs/easynet-daemon.log" \
   >"$OUT_DIR/caller-daemon.log" 2>"$OUT_DIR/caller-daemon-log.err" || true
 
 provider_cli "plugin remove '$MEDIA_PLUGIN_ID' '$MEDIA_PLUGIN_VERSION'" >"$OUT_DIR/provider-plugin-remove-media.txt" 2>"$OUT_DIR/provider-plugin-remove-media.err"
+provider_cli "plugin list --format json" >"$OUT_DIR/provider-plugin-list-after-media-remove.json" 2>"$OUT_DIR/provider-plugin-list-after-media-remove.err"
+provider_cli "ability list --format json" >"$OUT_DIR/provider-ability-list-after-media-remove.json" 2>"$OUT_DIR/provider-ability-list-after-media-remove.err"
+caller_cli_must_fail \
+  "ability stream '$CALLER_MEDIA_STREAM_DESCRIPTOR_REF' --node '$PROVIDER_URA' --subject '$MEDIA_SUBJECT' --nonce-hex '$(random_nonce_hex)' --causal-root --timeout 5 --args '$(json_args stream "removed-stream-$TIMESTAMP")' --format json --raw" \
+  "$OUT_DIR/caller-removed-media-stream.stdout" \
+  "$OUT_DIR/caller-removed-media-stream.stderr"
+caller_cli_must_fail \
+  "ability bidi '$CALLER_MEDIA_BIDI_DESCRIPTOR_REF' --node '$PROVIDER_URA' --subject '$MEDIA_SUBJECT' --nonce-hex '$(random_nonce_hex)' --causal-root --timeout 5 --args '$(json_args bidi "removed-bidi-$TIMESTAMP")' --input '$(json_frame control 1 close)' --until-terminal --format json --raw" \
+  "$OUT_DIR/caller-removed-media-bidi.stdout" \
+  "$OUT_DIR/caller-removed-media-bidi.stderr"
 
-python3 - "$OUT_DIR" "$PROVIDER_URA" "$CALLER_URA" "$MEDIA_STREAM_URA" "$MEDIA_BIDI_URA" "$CALLER_MEDIA_STREAM_URA" "$CALLER_MEDIA_BIDI_URA" "$CALLER_MEDIA_STREAM_DESCRIPTOR_REF" "$CALLER_MEDIA_BIDI_DESCRIPTOR_REF" <<'PY' >"$OUT_DIR/report.json"
+python3 - "$OUT_DIR" "$PROVIDER_URA" "$CALLER_URA" "$MEDIA_STREAM_URA" "$MEDIA_BIDI_URA" "$MEDIA_STREAM_DESCRIPTOR_REF" "$MEDIA_BIDI_DESCRIPTOR_REF" "$CALLER_MEDIA_STREAM_URA" "$CALLER_MEDIA_BIDI_URA" "$CALLER_MEDIA_STREAM_DESCRIPTOR_REF" "$CALLER_MEDIA_BIDI_DESCRIPTOR_REF" <<'PY' >"$OUT_DIR/report.json"
 import json
 import pathlib
 import sys
 
 out = pathlib.Path(sys.argv[1])
-provider_ura, caller_ura, stream_ura, bidi_ura, caller_stream_ura, caller_bidi_ura, caller_stream_descriptor_ref, caller_bidi_descriptor_ref = sys.argv[2:10]
+provider_ura, caller_ura, stream_ura, bidi_ura, stream_descriptor_ref, bidi_descriptor_ref, caller_stream_ura, caller_bidi_ura, caller_stream_descriptor_ref, caller_bidi_descriptor_ref = sys.argv[2:12]
 
 def load_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
@@ -894,6 +929,15 @@ def load_text(path):
         return path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return ""
+
+def load_int(path):
+    text = load_text(path).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
 
 def rows(path):
     payload = load_json(path)
@@ -1011,6 +1055,32 @@ def payload_kinds(payloads):
 def terminal_count(frames):
     return sum(1 for frame in frames if isinstance(frame, dict) and frame.get("terminal") is True)
 
+def catalog_exposes_ability(path, ability_ura, ability_name):
+    for row in rows(path):
+        if not isinstance(row, dict):
+            continue
+        values = {
+            str(row.get("ability_ura") or ""),
+            str(row.get("name") or ""),
+            str(row.get("ability_name") or ""),
+            str(row.get("public_name") or ""),
+            str(row.get("qualified_name") or ""),
+        }
+        if ability_ura in values or ability_name in values:
+            return True
+    return False
+
+plugin_list_after_remove = load_json(out / "provider-plugin-list-after-media-remove.json")
+ability_list_after_remove = out / "provider-ability-list-after-media-remove.json"
+removed_stream_exit = load_int(out / "caller-removed-media-stream.stderr.exit_code")
+removed_bidi_exit = load_int(out / "caller-removed-media-bidi.stderr.exit_code")
+removed_stream_error = load_text(out / "caller-removed-media-stream.stderr") + load_text(out / "caller-removed-media-stream.stdout")
+removed_bidi_error = load_text(out / "caller-removed-media-bidi.stderr") + load_text(out / "caller-removed-media-bidi.stdout")
+plugin_after_remove_blob = json.dumps(plugin_list_after_remove, sort_keys=True)
+
+def rejected_without_harness_timeout(exit_code, text):
+    return exit_code not in (None, 0, 124) and bool(text.strip()) and "success" not in text.lower()
+
 status_blob = json.dumps(plugin_status, sort_keys=True)
 assertions = {
     "provider_media_plugin_loaded": "e2e.synthetic_media_bidi" in status_blob,
@@ -1094,6 +1164,22 @@ assertions = {
         and bidi_chain_facts["all_verified_receipt_chains"]
         and bidi_chain_facts["all_single_completed_terminal_receipt"]
         and bidi_chain_facts["all_terminal_head_receipts"],
+    "provider_media_plugin_removed": "e2e.synthetic_media_bidi" not in plugin_after_remove_blob,
+    "provider_removed_media_abilities_unpublished": not catalog_exposes_ability(
+        ability_list_after_remove,
+        stream_ura,
+        "media.synthetic_stream",
+    )
+        and not catalog_exposes_ability(
+            ability_list_after_remove,
+            bidi_ura,
+            "media.synthetic_bidi",
+        ),
+    "provider_removed_media_routes_reject_invocation": rejected_without_harness_timeout(
+        removed_stream_exit,
+        removed_stream_error,
+    )
+        and rejected_without_harness_timeout(removed_bidi_exit, removed_bidi_error),
 }
 assertions["media_product_operations_have_verified_single_terminal_receipt_chains"] = (
     assertions["media_stream_unique_invocation_records"]
@@ -1112,6 +1198,8 @@ report = {
     "abilities": {
         "stream_ura": stream_ura,
         "bidi_ura": bidi_ura,
+        "stream_descriptor_ref": stream_descriptor_ref,
+        "bidi_descriptor_ref": bidi_descriptor_ref,
         "caller_stream_ura": caller_stream_ura,
         "caller_bidi_ura": caller_bidi_ura,
         "caller_stream_descriptor_ref": caller_stream_descriptor_ref,
@@ -1126,6 +1214,22 @@ report = {
     "mutation_facts": {
         "stream": stream_chain_facts,
         "bidi": bidi_chain_facts,
+    },
+    "plugin_removal_facts": {
+        "stream_route_exit_code": removed_stream_exit,
+        "bidi_route_exit_code": removed_bidi_exit,
+        "stream_error_excerpt": removed_stream_error.strip()[:800],
+        "bidi_error_excerpt": removed_bidi_error.strip()[:800],
+        "provider_catalog_exposes_stream_after_remove": catalog_exposes_ability(
+            ability_list_after_remove,
+            stream_ura,
+            "media.synthetic_stream",
+        ),
+        "provider_catalog_exposes_bidi_after_remove": catalog_exposes_ability(
+            ability_list_after_remove,
+            bidi_ura,
+            "media.synthetic_bidi",
+        ),
     },
     "assertions": assertions,
 }
@@ -1143,6 +1247,8 @@ print(f"- Provider device: `{report['topology']['provider_ura']}`")
 print(f"- Caller device: `{report['topology']['caller_ura']}`")
 print(f"- Stream ability: `{report['abilities']['stream_ura']}`")
 print(f"- Bidi ability: `{report['abilities']['bidi_ura']}`")
+print(f"- Provider stream descriptor ref: `{report['abilities']['stream_descriptor_ref']}`")
+print(f"- Provider bidi descriptor ref: `{report['abilities']['bidi_descriptor_ref']}`")
 print(f"- Caller remote stream ability: `{report['abilities']['caller_stream_ura']}`")
 print(f"- Caller remote bidi ability: `{report['abilities']['caller_bidi_ura']}`")
 print(f"- Caller stream descriptor ref: `{report['abilities']['caller_stream_descriptor_ref']}`")
@@ -1167,6 +1273,13 @@ for kind in ("stream", "bidi"):
     print(f"- all_verified_receipt_chains: `{str(facts['all_verified_receipt_chains']).lower()}`")
     print(f"- all_terminal_head_receipts: `{str(facts['all_terminal_head_receipts']).lower()}`")
     print()
+print("## Plugin removal facts")
+print()
+removal = report["plugin_removal_facts"]
+print(f"- stream_route_exit_code: `{removal['stream_route_exit_code']}`")
+print(f"- bidi_route_exit_code: `{removal['bidi_route_exit_code']}`")
+print(f"- provider_catalog_exposes_stream_after_remove: `{str(removal['provider_catalog_exposes_stream_after_remove']).lower()}`")
+print(f"- provider_catalog_exposes_bidi_after_remove: `{str(removal['provider_catalog_exposes_bidi_after_remove']).lower()}`")
 PY
 
 python3 - "$OUT_DIR/report.json" <<'PY'

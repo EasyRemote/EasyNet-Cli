@@ -1865,6 +1865,27 @@ fn runtime_resolve_descriptor_ref_json(
             "descriptor_ref not found in local runtime catalog for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
         );
     }
+    if let Ok(entries) = runtime_system_descriptor_catalog_entries(callee_ura) {
+        if let Some(resolution) = descriptor_catalog_resolution_from_entries(
+            &entries,
+            &ability_ura,
+            call_mode,
+            "runtime_system_descriptor_catalog",
+        ) {
+            return Ok(resolution);
+        }
+    }
+    if let Some(owner_ura) = runtime_owner_ura.as_deref() {
+        let catalog = runtime_descriptor_catalog_entries(session, owner_ura);
+        if let Some(resolution) = descriptor_catalog_resolution_from_entries(
+            &catalog.entries,
+            &ability_ura,
+            call_mode,
+            "runtime_realm_descriptor_catalog",
+        ) {
+            return Ok(resolution);
+        }
+    }
 
     let caller_ura = object
         .get("caller_ura")
@@ -7026,6 +7047,8 @@ mod tests {
         assert!(admission_index < terminal_index);
 
         let json = invocation_outcome_json_with_tuple(outcome, serde_json::json!({}));
+        assert_eq!(json["output_json"], serde_json::json!({"ok": true}));
+        assert!(json["output_base64"].as_str().is_some_and(|value| !value.is_empty()));
         assert_eq!(json["admission_receipt"]["index"], admission_index);
         assert_eq!(json["terminal_receipt"]["index"], terminal_index);
         assert!(
@@ -8824,6 +8847,74 @@ mod tests {
         assert!(message.contains("descriptor_ref not found in local runtime catalog"));
         assert!(!message.contains("offline-daemon.sock"));
         assert!(!message.contains("ROUTE_NEGATIVE"));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_descriptor_resolver_synthesizes_remote_system_ability_without_presence_probe() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path = dir.path().join("control.json");
+        let local_node_id = "local-runtime-node";
+        let remote_node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
+        let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
+        let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        let ability_ura = format!(
+            "easynet:///r/localhost/ability/device.{remote_node_id}.{}",
+            crate::daemon::ability::builtins::governance::invocation_history::ABILITY_HISTORY_LIST
+        );
+        crate::daemon::control::discovery::write(
+            &control_path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(dir.path().join("control.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: Some(local_node_id.to_string()),
+                }),
+                pid: 1,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write control discovery");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            control_path.display().to_string(),
+            Some(dir.path().join("offline-daemon.sock").display().to_string()),
+        );
+
+        let resolved = runtime_resolve_descriptor_ref_json(
+            &session,
+            &serde_json::json!({
+                "callee_ura": remote_device_ura,
+                "caller_ura": local_device_ura,
+                "subject_ura": remote_device_ura,
+                "ability": crate::daemon::ability::builtins::governance::invocation_history::ABILITY_HISTORY_LIST,
+                "call_mode": "rpc",
+            })
+            .to_string(),
+        )
+        .expect("remote runtime system descriptor resolves without owner presence");
+
+        assert_eq!(resolved["ability_ura"], ability_ura);
+        assert_eq!(resolved["owner_ura"], remote_device_ura);
+        assert_eq!(
+            resolved["name"],
+            crate::daemon::ability::builtins::governance::invocation_history::ABILITY_HISTORY_LIST
+        );
+        assert_eq!(resolved["call_mode"], "rpc");
+        assert_eq!(resolved["source"], "runtime_system_descriptor_catalog");
+        assert!(resolved["descriptor_ref"]
+            .as_str()
+            .is_some_and(
+                |descriptor_ref| descriptor_ref.starts_with(&format!("{ability_ura}@"))
+                    && descriptor_ref.ends_with("!read")
+            ));
     }
 
     #[cfg(feature = "axon-pb")]

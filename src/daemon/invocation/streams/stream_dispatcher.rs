@@ -22,6 +22,7 @@
 use std::pin::Pin;
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use axon_sdk::invocation::{CallMode, KeyResolver, StreamingInvocationHandle};
 use futures::Stream;
@@ -195,6 +196,7 @@ impl StreamDispatcher {
                 RemoteStreamEventSource::Session(stream),
                 forwarded_binding,
                 receipt_resolver,
+                request_timeout(request),
             )
             .await,
             Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::TargetOffline) => {
@@ -430,6 +432,7 @@ impl StreamDispatcher {
             RemoteStreamEventSource::Presence(handle),
             forwarded_binding,
             receipt_resolver,
+            request_timeout(request),
         )
         .await
     }
@@ -453,6 +456,7 @@ async fn project_forwarded_remote_stream(
     mut source: RemoteStreamEventSource,
     forwarded_binding: ForwardedInvocationBinding,
     receipt_resolver: Arc<dyn KeyResolver>,
+    timeout: Option<Duration>,
 ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
     let (tx, rx) = mpsc::channel::<Result<InvokeStreamChunk, Status>>(16);
     tokio::spawn(async move {
@@ -460,7 +464,30 @@ async fn project_forwarded_remote_stream(
         let mut canonical_invocation_id = None::<String>;
         let mut finalization =
             ForwardedFinalizationVerifier::new(forwarded_binding, receipt_resolver);
-        while let Some(event) = source.recv().await {
+        let deadline = timeout.map(|duration| tokio::time::Instant::now() + duration);
+        loop {
+            let event = match deadline {
+                Some(deadline) => match tokio::time::timeout_at(deadline, source.recv()).await {
+                    Ok(event) => event,
+                    Err(_) => {
+                        let _ = tx
+                            .send(Err(Status::deadline_exceeded(
+                                "REMOTE_STREAM_TERMINAL_TIMEOUT: remote stream did not produce a terminal event before the invocation deadline",
+                            )))
+                            .await;
+                        break;
+                    }
+                },
+                None => source.recv().await,
+            };
+            let Some(event) = event else {
+                let _ = tx
+                    .send(Err(Status::failed_precondition(
+                        "CANONICAL_TERMINAL_REQUIRED: remote stream source closed without a terminal event",
+                    )))
+                    .await;
+                break;
+            };
             match event {
                 DispatchStreamEvent::Admission(receipt) => {
                     let receipt = *receipt;
@@ -1128,6 +1155,13 @@ fn stream_request_as_invoke_request(
     }
 }
 
+fn request_timeout(request: &InvokeServerStreamRequest) -> Option<Duration> {
+    u64::try_from(request.timeout_seconds)
+        .ok()
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::from_secs)
+}
+
 struct RemoteStreamChunkParts {
     invocation_id: String,
     state: axon_sdk::invocation::InvocationState,
@@ -1194,5 +1228,95 @@ impl From<crate::daemon::invocation::bidi::state::presence::PresenceEvent> for P
                 },
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::invocation::bidi::state::pending_dispatch::PendingStreamDispatchMap;
+    use axon_sdk::pb::axon::v1::{
+        causal_context, AgentIdentity, CausalContext, Empty, Envelope, InvokeRequest,
+        SubjectIdentity,
+    };
+    use ed25519_dalek::VerifyingKey;
+    use futures::StreamExt as _;
+
+    struct RejectingKeyResolver;
+
+    impl KeyResolver for RejectingKeyResolver {
+        fn resolve(
+            &self,
+            _agent_ura: &str,
+        ) -> Result<VerifyingKey, axon_sdk::invocation::AxonError> {
+            Err(axon_sdk::invocation::AxonError::permission_denied(
+                "test resolver should not be reached before remote stream timeout",
+            ))
+        }
+    }
+
+    fn forwarded_request_for_timeout_test() -> InvokeRequest {
+        let descriptor_ref = "easynet:///r/test/ability/device.target.media.synthetic_stream@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+        InvokeRequest {
+            envelope: Some(Envelope {
+                caller: Some(AgentIdentity {
+                    ura: "easynet:///r/test/device/caller".to_string(),
+                    profile: "axon-strict-v2".to_string(),
+                }),
+                callee: Some(AgentIdentity {
+                    ura: "easynet:///r/test/device/target".to_string(),
+                    profile: "axon-strict-v2".to_string(),
+                }),
+                subject: Some(SubjectIdentity {
+                    ura: "easynet:///r/test/resource/media/session".to_string(),
+                    profile: "axon-strict-v2".to_string(),
+                }),
+                invocation_nonce: vec![1; 16],
+                causal_context: Some(CausalContext {
+                    form: Some(causal_context::Form::None(Empty {})),
+                }),
+                ..Envelope::default()
+            }),
+            target: Some(
+                crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+                    descriptor_ref,
+                    "media.synthetic_stream",
+                )
+                .expect("descriptor target"),
+            ),
+            arguments: b"{}".to_vec(),
+            ..InvokeRequest::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn forwarded_remote_stream_times_out_without_terminal_event() {
+        let pending = PendingStreamDispatchMap::new();
+        let handle = pending.register_pending_for("easynet:///r/test/device/target");
+        let binding =
+            ForwardedInvocationBinding::from_request(&forwarded_request_for_timeout_test())
+                .expect("forwarded binding");
+
+        let response = project_forwarded_remote_stream(
+            RemoteStreamEventSource::Presence(handle),
+            binding,
+            Arc::new(RejectingKeyResolver),
+            Some(Duration::from_millis(10)),
+        )
+        .await
+        .expect("stream response");
+
+        let mut stream = response.into_inner();
+        let error = stream
+            .next()
+            .await
+            .expect("deadline emits one item")
+            .expect_err("deadline item is an error");
+        assert_eq!(error.code(), tonic::Code::DeadlineExceeded);
+        assert!(
+            error.message().contains("REMOTE_STREAM_TERMINAL_TIMEOUT"),
+            "unexpected timeout error: {}",
+            error.message()
+        );
     }
 }
