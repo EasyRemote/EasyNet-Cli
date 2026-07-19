@@ -103,11 +103,6 @@ func (e *SdkEnvironment) RuntimeHost(ctx context.Context) (*RuntimeHost, error) 
 	return host, nil
 }
 
-// DaemonControl returns the explicit daemon lifecycle facade.
-func (e *SdkEnvironment) DaemonControl(ctx context.Context) (*DaemonControl, error) {
-	return e.RuntimeHost(ctx)
-}
-
 // DiscoverRuntime discovers runtime endpoints using environment defaults plus
 // per-call overrides.
 func (e *SdkEnvironment) DiscoverRuntime(ctx context.Context, opts RuntimeHostDiscoverOptions) (RuntimeHostEndpoints, error) {
@@ -116,22 +111,6 @@ func (e *SdkEnvironment) DiscoverRuntime(ctx context.Context, opts RuntimeHostDi
 		return RuntimeHostEndpoints{}, err
 	}
 	return host.DiscoverRuntime(ctx, mergeDiscoverOptions(e.options.Discover, opts))
-}
-
-// DiscoverDaemon discovers daemon endpoints using environment defaults plus
-// per-call overrides.
-func (e *SdkEnvironment) DiscoverDaemon(ctx context.Context, opts DiscoverOptions) (Endpoints, error) {
-	_, host, err := e.requireOpen(ctx)
-	if err != nil {
-		return Endpoints{}, err
-	}
-	if opts.ControlEndpoint == "" {
-		opts.ControlEndpoint = e.options.Discover.ControlEndpoint
-	}
-	if opts.ControlPath == "" {
-		opts.ControlPath = e.options.Discover.ControlPath
-	}
-	return host.Discover(ctx, opts)
 }
 
 // ConnectLocal opens a RuntimeClient through the explicit runtime lifecycle
@@ -191,9 +170,6 @@ func mergeDiscoverOptions(base RuntimeHostDiscoverOptions, override RuntimeHostD
 	}
 	if override.ControlPath != "" {
 		base.ControlPath = override.ControlPath
-	}
-	if override.HomeDir != "" {
-		base.HomeDir = override.HomeDir
 	}
 	return base
 }

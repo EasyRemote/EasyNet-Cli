@@ -160,17 +160,25 @@ func TestLifecycleRejectsEasyNetPolicyBeforeTransport(t *testing.T) {
 	}
 }
 
-func TestEasyNetLifecycleDTOsAreNotImplementedInCanonicalRoot(t *testing.T) {
+func TestEasyNetLifecycleDTOsAreOwnedByProviderContract(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve current test file")
 	}
 	rootFile := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "daemon_compat.go"))
-	parsed, err := parser.ParseFile(token.NewFileSet(), rootFile, nil, 0)
-	if err != nil {
-		t.Fatalf("parse canonical daemon compatibility module: %v", err)
+	if _, err := os.Stat(rootFile); err == nil {
+		t.Fatalf("canonical root must not restore daemon compatibility module: %s", rootFile)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat canonical daemon compatibility module: %v", err)
 	}
 
+	contractFile := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "contract", "lifecycle.go"))
+	parsed, err := parser.ParseFile(token.NewFileSet(), contractFile, nil, 0)
+	if err != nil {
+		t.Fatalf("parse provider lifecycle contract: %v", err)
+	}
+
+	implemented := map[string]bool{}
 	for _, declaration := range parsed.Decls {
 		general, ok := declaration.(*ast.GenDecl)
 		if !ok || general.Tok != token.TYPE {
@@ -183,10 +191,13 @@ func TestEasyNetLifecycleDTOsAreNotImplementedInCanonicalRoot(t *testing.T) {
 			}
 			switch typeSpec.Name.Name {
 			case "StartConfig", "AttachOptions", "DiscoverOptions", "StopOptions":
-				if _, isAlias := typeSpec.Type.(*ast.SelectorExpr); !isAlias || !typeSpec.Assign.IsValid() {
-					t.Fatalf("%s must remain an exact provider type alias", typeSpec.Name.Name)
-				}
+				implemented[typeSpec.Name.Name] = true
 			}
+		}
+	}
+	for _, name := range []string{"StartConfig", "AttachOptions", "DiscoverOptions", "StopOptions"} {
+		if !implemented[name] {
+			t.Fatalf("provider contract does not own %s", name)
 		}
 	}
 }

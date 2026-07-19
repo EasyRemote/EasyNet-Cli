@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
+
+	easynetprovider "easynet.run/cli/sdk/go/provider/easynet"
 )
 
 func TestOpenNativeRuntimeUsesNativeProviderBuild(t *testing.T) {
@@ -42,8 +44,8 @@ func TestConnectNativeRuntimeStartsWhenConfigured(t *testing.T) {
 	transport := &nativeRuntimeTestDaemonTransport{}
 
 	runtime, health, closeFn, err := connectNativeRuntime(context.Background(), transport, NativeRuntimeOptions{
-		StartConfig: &StartConfig{
-			Mode:  ModeHub,
+		StartRequest: easynetprovider.StartConfig{
+			Mode:  easynetprovider.ModeHub,
 			Realm: "example.com",
 		},
 	})
@@ -65,7 +67,7 @@ func TestConnectNativeRuntimeStopOnCloseKeepsStartedHandle(t *testing.T) {
 	transport := &nativeRuntimeTestDaemonTransport{}
 
 	runtime, _, closeFn, err := connectNativeRuntime(context.Background(), transport, NativeRuntimeOptions{
-		StartConfig:       &StartConfig{Mode: ModeHub},
+		StartRequest:      easynetprovider.StartConfig{Mode: easynetprovider.ModeHub},
 		StopDaemonOnClose: true,
 	})
 	if err != nil {

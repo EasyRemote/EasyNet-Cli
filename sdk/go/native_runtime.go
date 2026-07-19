@@ -20,13 +20,13 @@ type NativeRuntimeOptions struct {
 	// SubmitSigned remain unchanged because their signatures are user/browser
 	// supplied by design.
 	Signer *Signer
-	// StartConfig requests an explicit runtime lifecycle start/adopt operation
-	// before opening the runtime. When nil, OpenNativeRuntime only discovers
-	// and attaches to an existing daemon.
-	StartConfig *StartConfig
-	// StopDaemonOnClose stops the lifecycle handle opened from StartConfig when
-	// the native runtime handle is closed. When false, the runtime host is detached
-	// after the runtime transport opens and keeps running.
+	// StartRequest requests an explicit runtime lifecycle start/adopt operation
+	// before opening the runtime. The request is provider-owned; when nil,
+	// OpenNativeRuntime only discovers and attaches to an existing runtime host.
+	StartRequest RuntimeHostStartRequest
+	// StopDaemonOnClose stops the lifecycle handle opened from StartRequest
+	// when the native runtime handle is closed. When false, the runtime host
+	// is detached after the runtime transport opens and keeps running.
 	StopDaemonOnClose bool
 }
 

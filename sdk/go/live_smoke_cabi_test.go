@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	easynetprovider "easynet.run/cli/sdk/go/provider/easynet"
 )
 
 // TestGoSDKLiveDaemonSmoke proves the generic C ABI v5 boundary through the
@@ -37,9 +39,9 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	t.Setenv("EASYNET_REALM_TRUST_PATH", trustPath)
 	t.Setenv("EASYNET_PAGES_PORT", strconv.Itoa(19000+os.Getpid()%1000))
 
-	transport, err := OpenCABIDaemonTransport(libPath)
+	transport, err := OpenCABIRuntimeLifecycleTransport(libPath)
 	if err != nil {
-		t.Fatalf("OpenCABIDaemonTransport: %v", err)
+		t.Fatalf("OpenCABIRuntimeLifecycleTransport: %v", err)
 	}
 	defer func() {
 		if err := transport.Close(context.Background()); err != nil {
@@ -47,13 +49,13 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 		}
 	}()
 
-	control, err := NewDaemonControl(transport)
+	control, err := NewRuntimeHost(transport)
 	if err != nil {
-		t.Fatalf("NewDaemonControl: %v", err)
+		t.Fatalf("NewRuntimeHost: %v", err)
 	}
 	logPath := filepath.Join(home, ".easynet", "go-sdk-smoke-daemon.log")
-	handle, err := control.Start(ctx, StartConfig{
-		Mode:       ModeDevice,
+	handle, err := control.StartRuntime(ctx, easynetprovider.StartConfig{
+		Mode:       easynetprovider.ModeDevice,
 		Realm:      realm,
 		DeviceID:   deviceID,
 		DaemonBin:  daemonBin,
@@ -72,7 +74,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	defer func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer stopCancel()
-		if err := handle.Stop(stopCtx, StopOptions{}); err != nil {
+		if err := handle.StopRuntime(stopCtx, RuntimeHostStopOptions{}); err != nil {
 			t.Fatalf("daemon stop: %v", err)
 		}
 	}()

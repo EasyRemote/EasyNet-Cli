@@ -43,6 +43,7 @@ sdk/go/profiles.go
 sdk/go/admin.go
 sdk/go/companion.go
 sdk/go/compatibility.go
+sdk/go/daemon_compat.go
 sdk/go/events.go
 sdk/go/host_binding.go
 sdk/go/identity.go
@@ -248,7 +249,6 @@ if rg -n 'easynet.run/cli/sdk/go/provider/easynet' sdk/go \
   --glob '*.go' \
   --glob '!**/provider/**' \
   --glob '!**/*_test.go' \
-  --glob '!**/daemon_compat.go' \
   --glob '!**/runtime_events_compat.go'; then
   fail "canonical Go implementation imports the EasyNet provider facade"
 fi

@@ -7,6 +7,19 @@ import (
 	"testing"
 )
 
+type testRuntimeHostStartRequest struct {
+	payload map[string]any
+	err     error
+}
+
+func (r testRuntimeHostStartRequest) Validate() error {
+	return r.err
+}
+
+func (r testRuntimeHostStartRequest) RuntimeHostStartPayload() ([]byte, error) {
+	return json.Marshal(r.payload)
+}
+
 type memoryDaemonTransport struct {
 	discoverJSON   string
 	startJSON      string
@@ -115,20 +128,20 @@ func companionStatusJSON(packageID string, packageVersion string) string {
 	return `{"profile":"desktop_companion","kind":"desktop_companion_status","package_id":"` + packageID + `","package_version":"` + packageVersion + `","display_name":"EasyNet Menu Bar","platform":"macos","desired_state":"enabled","supervisor_state":"installed_enabled","observed_state":"running","projected_state":"running","boot_policy":"ensure_running_after_daemon_ready","stop_policy":"keep_running","health":"status_file","pid":123,"version":"0.1.0","last_seen_unix_ms":1783411200000,"launch_method":"launch_agent","error":null,"metadata":{}}`
 }
 
-func TestDaemonStartReturnsRuntimeReadyHandle(t *testing.T) {
+func TestRuntimeHostStartReturnsRuntimeReadyHandle(t *testing.T) {
 	transport := &memoryDaemonTransport{startJSON: readyDaemonStatus()}
 
-	handle, err := Start(context.Background(), transport, StartConfig{
-		Mode:        ModeHub,
-		ListenTCP:   "127.0.0.1:9443",
-		TLSCertPath: "/tmp/cert.pem",
-		TLSKeyPath:  "/tmp/key.pem",
+	handle, err := StartRuntimeHost(context.Background(), transport, testRuntimeHostStartRequest{
+		payload: map[string]any{
+			"mode":       "test-runtime",
+			"listen_tcp": "127.0.0.1:9443",
+		},
 	})
 	if err != nil {
-		t.Fatalf("Start: %v", err)
+		t.Fatalf("StartRuntimeHost: %v", err)
 	}
 
-	if handle.HandleID() != "daemon-1" || handle.State() != DaemonRunning {
+	if handle.HandleID() != "daemon-1" || handle.State() != RuntimeRunning {
 		t.Fatalf("unexpected handle: id=%q state=%s", handle.HandleID(), handle.State())
 	}
 	if transport.seenStart["listen_tcp"] != "127.0.0.1:9443" {
@@ -139,45 +152,38 @@ func TestDaemonStartReturnsRuntimeReadyHandle(t *testing.T) {
 	}
 }
 
-func TestRuntimeHostStartReturnsRuntimeHandleWithDaemonAliases(t *testing.T) {
+func TestRuntimeHostStartUsesCanonicalLifecycleTypes(t *testing.T) {
 	transport := &memoryDaemonTransport{startJSON: readyDaemonStatus()}
 	host, err := NewRuntimeHost(transport)
 	if err != nil {
 		t.Fatalf("NewRuntimeHost: %v", err)
 	}
 
-	handle, err := host.Start(context.Background(), RuntimeHostStartConfig{Mode: RuntimeModeHub})
+	handle, err := host.StartRuntime(context.Background(), testRuntimeHostStartRequest{
+		payload: map[string]any{"mode": "test-runtime"},
+	})
 	if err != nil {
-		t.Fatalf("RuntimeHost.Start: %v", err)
+		t.Fatalf("RuntimeHost.StartRuntime: %v", err)
 	}
 
-	var daemonHandle *DaemonHandle = handle
-	var daemonState DaemonLifecycleState = handle.State()
-	if daemonHandle.HandleID() != "daemon-1" || daemonState != DaemonRunning {
-		t.Fatalf("alias compatibility lost: id=%q state=%s", daemonHandle.HandleID(), daemonState)
-	}
-	if _, err := NewDaemonControl(transport); err != nil {
-		t.Fatalf("NewDaemonControl compatibility wrapper: %v", err)
+	if handle.HandleID() != "daemon-1" || handle.State() != RuntimeRunning {
+		t.Fatalf("canonical lifecycle handle mismatch: id=%q state=%s", handle.HandleID(), handle.State())
 	}
 }
 
-func TestDaemonStartRejectsUnsafeModePolicyBeforeTransport(t *testing.T) {
+func TestRuntimeHostStartRejectsInvalidRequestBeforeTransport(t *testing.T) {
 	transport := &memoryDaemonTransport{startJSON: readyDaemonStatus()}
+	requestErr := errors.New("invalid provider request")
 
-	_, err := Start(context.Background(), transport, StartConfig{Mode: ModeDevice, ListenTCP: "0.0.0.0:9443"})
+	_, err := StartRuntimeHost(context.Background(), transport, testRuntimeHostStartRequest{err: requestErr})
 	if err == nil {
-		t.Fatalf("Start succeeded with device public listener")
+		t.Fatalf("StartRuntimeHost succeeded with invalid request")
+	}
+	if !errors.Is(err, requestErr) {
+		t.Fatalf("StartRuntimeHost error = %v, want %v", err, requestErr)
 	}
 	if transport.startCalls != 0 {
-		t.Fatalf("transport called despite invalid policy")
-	}
-
-	_, err = Start(context.Background(), transport, StartConfig{Mode: ModeHub, ListenTCP: "0.0.0.0:9443"})
-	if err == nil {
-		t.Fatalf("Start succeeded without TLS material")
-	}
-	if transport.startCalls != 0 {
-		t.Fatalf("transport called despite missing TLS")
+		t.Fatalf("transport called despite invalid request")
 	}
 }
 
@@ -186,7 +192,7 @@ func TestDaemonAttachRejectsControlOnlyReadiness(t *testing.T) {
 		attachJSON: `{"handle_id":"daemon-1","state":"ControlOnly","endpoints":{"control_endpoint":"unix:///tmp/control.sock"}}`,
 	}
 
-	_, err := Attach(context.Background(), transport, AttachOptions{ControlEndpoint: "unix:///tmp/control.sock"})
+	_, err := AttachRuntimeHost(context.Background(), transport, RuntimeHostAttachOptions{ControlEndpoint: "unix:///tmp/control.sock"})
 	if err == nil {
 		t.Fatalf("Attach succeeded with control-only readiness")
 	}
@@ -195,14 +201,14 @@ func TestDaemonAttachRejectsControlOnlyReadiness(t *testing.T) {
 	}
 }
 
-func TestDaemonDiscoverPreservesAdvertisedInvocationEndpoint(t *testing.T) {
+func TestRuntimeHostDiscoverPreservesAdvertisedInvocationEndpoint(t *testing.T) {
 	transport := &memoryDaemonTransport{
 		discoverJSON: `{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/custom-daemon.sock"}`,
 	}
 
-	endpoints, err := Discover(context.Background(), transport, DiscoverOptions{HomeDir: "/tmp/easynet-home"})
+	endpoints, err := DiscoverRuntimeHost(context.Background(), transport, RuntimeHostDiscoverOptions{ControlPath: "/tmp/control.sock"})
 	if err != nil {
-		t.Fatalf("Discover: %v", err)
+		t.Fatalf("DiscoverRuntimeHost: %v", err)
 	}
 	if endpoints.InvocationEndpoint != "unix:///tmp/custom-daemon.sock" {
 		t.Fatalf("did not preserve advertised invocation endpoint: %#v", endpoints)
@@ -211,9 +217,11 @@ func TestDaemonDiscoverPreservesAdvertisedInvocationEndpoint(t *testing.T) {
 
 func TestDaemonHandleOpenRuntimeRequiresReadyState(t *testing.T) {
 	transport := &memoryDaemonTransport{startJSON: readyDaemonStatus()}
-	handle, err := Start(context.Background(), transport, StartConfig{Mode: ModeHub})
+	handle, err := StartRuntimeHost(context.Background(), transport, testRuntimeHostStartRequest{
+		payload: map[string]any{"mode": "test-runtime"},
+	})
 	if err != nil {
-		t.Fatalf("Start: %v", err)
+		t.Fatalf("StartRuntimeHost: %v", err)
 	}
 
 	client, err := handle.OpenRuntime(context.Background(), ConnectOptions{MaxMessageBytes: 4096})
@@ -224,7 +232,7 @@ func TestDaemonHandleOpenRuntimeRequiresReadyState(t *testing.T) {
 		t.Fatalf("runtime not opened correctly: client=%#v calls=%d options=%#v", client, transport.openCalls, transport.seenOptions)
 	}
 
-	handle.status.State = DaemonControlReady
+	handle.status.State = RuntimeControlReady
 	if _, err := handle.OpenRuntime(context.Background(), ConnectOptions{}); err == nil {
 		t.Fatalf("OpenRuntime succeeded from ControlReady")
 	}
@@ -236,7 +244,7 @@ func TestConnectLocalDiscoversAttachesOpensAndDetaches(t *testing.T) {
 		attachJSON:   readyDaemonStatus(),
 	}
 
-	client, err := ConnectLocal(context.Background(), transport, ConnectOptions{ControlPath: "/tmp/control.sock", MaxMessageBytes: 4096})
+	client, err := ConnectLocalRuntimeHost(context.Background(), transport, ConnectOptions{ControlPath: "/tmp/control.sock", MaxMessageBytes: 4096})
 	if err != nil {
 		t.Fatalf("ConnectLocal: %v", err)
 	}
@@ -260,7 +268,7 @@ func TestConnectLocalRejectsControlOnlyAttach(t *testing.T) {
 		attachJSON:   `{"handle_id":"daemon-1","state":"ControlOnly","endpoints":{"control_endpoint":"unix:///tmp/control.sock"}}`,
 	}
 
-	_, err := ConnectLocal(context.Background(), transport, ConnectOptions{})
+	_, err := ConnectLocalRuntimeHost(context.Background(), transport, ConnectOptions{})
 	if err == nil {
 		t.Fatal("expected control-only rejection")
 	}
@@ -280,7 +288,7 @@ func TestConnectLocalDetachesAfterOpenRuntimeFailure(t *testing.T) {
 		openErr:      openErr,
 	}
 
-	_, err := ConnectLocal(context.Background(), transport, ConnectOptions{})
+	_, err := ConnectLocalRuntimeHost(context.Background(), transport, ConnectOptions{})
 	if err == nil {
 		t.Fatal("expected open runtime failure")
 	}
@@ -298,7 +306,7 @@ func TestConnectLocalAllowsExplicitEndpointOverride(t *testing.T) {
 		attachJSON:   readyDaemonStatus(),
 	}
 
-	_, err := ConnectLocal(context.Background(), transport, ConnectOptions{Endpoint: "unix:///tmp/explicit-daemon.sock"})
+	_, err := ConnectLocalRuntimeHost(context.Background(), transport, ConnectOptions{Endpoint: "unix:///tmp/explicit-daemon.sock"})
 	if err != nil {
 		t.Fatalf("ConnectLocal: %v", err)
 	}
@@ -312,15 +320,17 @@ func TestDaemonStopIsIdempotentAndDetachDoesNotStop(t *testing.T) {
 		startJSON: readyDaemonStatus(),
 		stopJSON:  `{"handle_id":"daemon-1","state":"Stopped","mode":"hub"}`,
 	}
-	handle, err := Start(context.Background(), transport, StartConfig{Mode: ModeHub})
+	handle, err := StartRuntimeHost(context.Background(), transport, testRuntimeHostStartRequest{
+		payload: map[string]any{"mode": "test-runtime"},
+	})
 	if err != nil {
-		t.Fatalf("Start: %v", err)
+		t.Fatalf("StartRuntimeHost: %v", err)
 	}
 
-	if err := handle.Stop(context.Background(), StopOptions{}); err != nil {
+	if err := handle.StopRuntime(context.Background(), RuntimeHostStopOptions{}); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
-	if err := handle.Stop(context.Background(), StopOptions{}); err != nil {
+	if err := handle.StopRuntime(context.Background(), RuntimeHostStopOptions{}); err != nil {
 		t.Fatalf("Stop second: %v", err)
 	}
 	if transport.stopCalls != 1 {

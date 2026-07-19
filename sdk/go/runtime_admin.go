@@ -137,13 +137,6 @@ type RuntimeAdminClient struct {
 	health    *HealthClient
 }
 
-func NewRuntimeAdminClient(lifecycle RuntimeLifecycle, health *HealthClient) (*RuntimeAdminClient, error) {
-	if lifecycle == nil {
-		return nil, invalidRuntimeClient("runtime lifecycle is required")
-	}
-	return NewRuntimeHostAdminClient(runtimeLifecycleCompatibilityAdapter{lifecycle}, health)
-}
-
 // NewRuntimeHostAdminClient creates a provider-neutral runtime administration
 // facade over the canonical runtime-host lifecycle.
 func NewRuntimeHostAdminClient(lifecycle RuntimeHostLifecycle, health *HealthClient) (*RuntimeAdminClient, error) {
@@ -161,12 +154,12 @@ func (c *RuntimeAdminClient) Discover(ctx context.Context, opts RuntimeHostDisco
 	return control.DiscoverRuntime(ctx, opts)
 }
 
-func (c *RuntimeAdminClient) Start(ctx context.Context, cfg RuntimeHostStartConfig) (*RuntimeHandle, error) {
+func (c *RuntimeAdminClient) Start(ctx context.Context, request RuntimeHostStartRequest) (*RuntimeHandle, error) {
 	control, err := c.requireControl(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return control.StartRuntime(ctx, cfg)
+	return control.StartRuntime(ctx, request)
 }
 
 func (c *RuntimeAdminClient) Attach(ctx context.Context, opts RuntimeHostAttachOptions) (*RuntimeHandle, error) {

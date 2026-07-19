@@ -39,9 +39,9 @@ func TestRuntimeAdminReadinessComposesLifecycleAndHealth(t *testing.T) {
 		startJSON:  readyDaemonStatus(),
 		statusJSON: `{"handle_id":"daemon-1","state":"Running","mode":"hub","endpoints":{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/daemon.sock"},"diagnostics":["status-ok"]}`,
 	}
-	control, err := NewDaemonControl(daemon)
+	control, err := NewRuntimeHost(daemon)
 	if err != nil {
-		t.Fatalf("NewDaemonControl: %v", err)
+		t.Fatalf("NewRuntimeHost: %v", err)
 	}
 	health, err := NewHealthClient(staticHealthTransport{
 		health:      []byte(`{"api_ready":true,"invocation_ready":true,"directory_ready":true,"trust_ready":true,"runtime_ready":true,"diagnostics":["health-ok"]}`),
@@ -50,11 +50,13 @@ func TestRuntimeAdminReadinessComposesLifecycleAndHealth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewHealthClient: %v", err)
 	}
-	admin, err := NewRuntimeAdminClient(control, health)
+	admin, err := NewRuntimeHostAdminClient(control, health)
 	if err != nil {
-		t.Fatalf("NewRuntimeAdminClient: %v", err)
+		t.Fatalf("NewRuntimeHostAdminClient: %v", err)
 	}
-	handle, err := admin.Start(context.Background(), StartConfig{Mode: ModeHub})
+	handle, err := admin.Start(context.Background(), testRuntimeHostStartRequest{
+		payload: map[string]any{"mode": "test-runtime"},
+	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -63,7 +65,7 @@ func TestRuntimeAdminReadinessComposesLifecycleAndHealth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Readiness: %v", err)
 	}
-	if !readiness.Ready || readiness.LifecycleState != DaemonRunning {
+	if !readiness.Ready || readiness.LifecycleState != RuntimeRunning {
 		t.Fatalf("unexpected readiness: %#v", readiness)
 	}
 	if len(readiness.Messages) != 2 {
@@ -75,41 +77,43 @@ func TestRuntimeAdminReadinessComposesLifecycleAndHealth(t *testing.T) {
 }
 
 func TestRuntimeAdminRejectsMissingHandle(t *testing.T) {
-	control, err := NewDaemonControl(&memoryDaemonTransport{})
+	control, err := NewRuntimeHost(&memoryDaemonTransport{})
 	if err != nil {
-		t.Fatalf("NewDaemonControl: %v", err)
+		t.Fatalf("NewRuntimeHost: %v", err)
 	}
-	admin, err := NewRuntimeAdminClient(control, nil)
+	admin, err := NewRuntimeHostAdminClient(control, nil)
 	if err != nil {
-		t.Fatalf("NewRuntimeAdminClient: %v", err)
+		t.Fatalf("NewRuntimeHostAdminClient: %v", err)
 	}
 	if _, err := admin.Status(context.Background(), nil); err == nil {
 		t.Fatal("Status accepted nil handle")
 	}
-	if _, err := NewRuntimeAdminClient(nil, nil); err == nil {
-		t.Fatal("NewRuntimeAdminClient accepted nil control")
+	if _, err := NewRuntimeHostAdminClient(nil, nil); err == nil {
+		t.Fatal("NewRuntimeHostAdminClient accepted nil control")
 	}
 }
 
-func TestRuntimeAdminUsesRuntimeLifecycleInterface(t *testing.T) {
+func TestRuntimeAdminUsesRuntimeHostLifecycleInterface(t *testing.T) {
 	lifecycle := &runtimeAdminLifecycleStub{
 		transport: &memoryDaemonTransport{
 			statusJSON: `{"handle_id":"runtime-1","state":"Running","mode":"hub","endpoints":{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/runtime.sock"}}`,
 		},
 	}
-	admin, err := NewRuntimeAdminClient(lifecycle, nil)
+	admin, err := NewRuntimeHostAdminClient(lifecycle, nil)
 	if err != nil {
-		t.Fatalf("NewRuntimeAdminClient: %v", err)
+		t.Fatalf("NewRuntimeHostAdminClient: %v", err)
 	}
 
-	endpoints, err := admin.Discover(context.Background(), DiscoverOptions{})
+	endpoints, err := admin.Discover(context.Background(), RuntimeHostDiscoverOptions{})
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
 	if !lifecycle.discovered || endpoints.InvocationEndpoint != "unix:///tmp/runtime.sock" {
 		t.Fatalf("runtime lifecycle interface was not used: endpoints=%#v discovered=%v", endpoints, lifecycle.discovered)
 	}
-	handle, err := admin.Start(context.Background(), StartConfig{Mode: ModeHub})
+	handle, err := admin.Start(context.Background(), testRuntimeHostStartRequest{
+		payload: map[string]any{"mode": "test-runtime"},
+	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -368,7 +372,7 @@ type runtimeAdminLifecycleStub struct {
 	started    bool
 }
 
-func (s *runtimeAdminLifecycleStub) Discover(context.Context, DiscoverOptions) (Endpoints, error) {
+func (s *runtimeAdminLifecycleStub) DiscoverRuntime(context.Context, RuntimeHostDiscoverRequest) (Endpoints, error) {
 	s.discovered = true
 	return Endpoints{
 		ControlEndpoint:    "unix:///tmp/control.sock",
@@ -376,12 +380,12 @@ func (s *runtimeAdminLifecycleStub) Discover(context.Context, DiscoverOptions) (
 	}, nil
 }
 
-func (s *runtimeAdminLifecycleStub) Start(context.Context, StartConfig) (*RuntimeHandle, error) {
+func (s *runtimeAdminLifecycleStub) StartRuntime(context.Context, RuntimeHostStartRequest) (*RuntimeHandle, error) {
 	s.started = true
 	return newRuntimeHandle(s.transport, RuntimeLifecycleStatus{
 		HandleID: "runtime-1",
 		State:    RuntimeRunning,
-		Mode:     ModeHub,
+		Mode:     RuntimeMode("test-runtime"),
 		Endpoints: Endpoints{
 			ControlEndpoint:    "unix:///tmp/control.sock",
 			InvocationEndpoint: "unix:///tmp/runtime.sock",
@@ -389,8 +393,10 @@ func (s *runtimeAdminLifecycleStub) Start(context.Context, StartConfig) (*Runtim
 	})
 }
 
-func (s *runtimeAdminLifecycleStub) Attach(context.Context, AttachOptions) (*RuntimeHandle, error) {
-	return s.Start(context.Background(), StartConfig{Mode: ModeHub})
+func (s *runtimeAdminLifecycleStub) AttachRuntime(context.Context, RuntimeHostAttachOptions) (*RuntimeHandle, error) {
+	return s.StartRuntime(context.Background(), testRuntimeHostStartRequest{
+		payload: map[string]any{"mode": "test-runtime"},
+	})
 }
 
 func (s *runtimeAdminLifecycleStub) ConnectLocal(context.Context, ConnectOptions) (*RuntimeClient, error) {

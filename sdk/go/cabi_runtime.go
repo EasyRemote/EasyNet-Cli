@@ -241,9 +241,6 @@ type CABIRuntimeLifecycleTransport struct {
 	closed   bool
 }
 
-// CABIDaemonTransport is kept as a source-compatible alias.
-type CABIDaemonTransport = CABIRuntimeLifecycleTransport
-
 // OpenCABIRuntimeLifecycleTransport loads libeasynet_cli and exposes runtime
 // lifecycle operations through the existing Go SDK facade interfaces.
 func OpenCABIRuntimeLifecycleTransport(path string) (*CABIRuntimeLifecycleTransport, error) {
@@ -274,11 +271,6 @@ func OpenCABIRuntimeLifecycleTransport(path string) (*CABIRuntimeLifecycleTransp
 	}, nil
 }
 
-// OpenCABIDaemonTransport loads libeasynet_cli through the legacy daemon name.
-func OpenCABIDaemonTransport(path string) (*CABIDaemonTransport, error) {
-	return OpenCABIRuntimeLifecycleTransport(path)
-}
-
 // NewCABIRuntimeHost creates a runtime host facade over libeasynet_cli.
 // The returned transport owns the dynamic library and C ABI handles; callers
 // must close it when the facade is no longer needed.
@@ -293,11 +285,6 @@ func NewCABIRuntimeHost(path string) (*RuntimeHost, *CABIRuntimeLifecycleTranspo
 		return nil, nil, err
 	}
 	return host, transport, nil
-}
-
-// NewCABIDaemonControl creates a daemon control facade over libeasynet_cli.
-func NewCABIDaemonControl(path string) (*DaemonControl, *CABIDaemonTransport, error) {
-	return NewCABIRuntimeHost(path)
 }
 
 func (t *CABIRuntimeLifecycleTransport) Discover(ctx context.Context, optionsJSON []byte) ([]byte, error) {

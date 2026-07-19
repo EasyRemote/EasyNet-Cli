@@ -96,7 +96,7 @@ def validate_release_policy(policy: dict[str, Any], root: Path) -> None:
         fail("removal_version_is_not_a_future_major_cutover")
 
     adapters = policy.get("adapters")
-    if not isinstance(adapters, list) or not adapters:
+    if not isinstance(adapters, list):
         fail("edge_adapters_required")
     adapter_ids = [
         adapter.get("id") for adapter in adapters if isinstance(adapter, dict)
@@ -874,12 +874,13 @@ def run_self_test(policy: dict[str, Any], manifest: dict[str, Any]) -> None:
         ),
     )
 
-    changed_adapter_shape = copy.deepcopy(manifest)
-    changed_adapter_shape["shape_sha256"]["go"]["Attach"] = "0" * 64
-    expect_policy_error(
-        "edge_adapter_public_shape_change",
-        lambda: validate_policy(policy, changed_adapter_shape, root=ROOT),
-    )
+    if policy["adapters"]:
+        changed_adapter_shape = copy.deepcopy(manifest)
+        changed_adapter_shape["shape_sha256"]["go"]["Attach"] = "0" * 64
+        expect_policy_error(
+            "edge_adapter_public_shape_change",
+            lambda: validate_policy(policy, changed_adapter_shape, root=ROOT),
+        )
 
     invalid_removal = copy.deepcopy(policy)
     invalid_removal["release_policy"]["removal_version"] = "0.96.8"
@@ -892,58 +893,59 @@ def run_self_test(policy: dict[str, Any], manifest: dict[str, Any]) -> None:
         ),
     )
 
-    with tempfile.TemporaryDirectory(prefix="edge-adapter-policy-self-test-") as raw:
-        fixture = Path(raw)
-        copy_source_tree(ROOT / "sdk/go", fixture / "sdk/go", ".go")
-        copy_source_tree(ROOT / "sdk/python", fixture / "sdk/python", ".py")
-        (fixture / "VERSION").write_text(
-            (ROOT / "VERSION").read_text(encoding="utf-8"), encoding="utf-8"
-        )
-        python_project = fixture / "sdk/python/pyproject.toml"
-        python_project.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / "sdk/python/pyproject.toml", python_project)
+    if policy["adapters"]:
+        with tempfile.TemporaryDirectory(prefix="edge-adapter-policy-self-test-") as raw:
+            fixture = Path(raw)
+            copy_source_tree(ROOT / "sdk/go", fixture / "sdk/go", ".go")
+            copy_source_tree(ROOT / "sdk/python", fixture / "sdk/python", ".py")
+            (fixture / "VERSION").write_text(
+                (ROOT / "VERSION").read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            python_project = fixture / "sdk/python/pyproject.toml"
+            python_project.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / "sdk/python/pyproject.toml", python_project)
 
-        go_negative = fixture / "sdk/go/edge_adapter_policy_negative.go"
-        go_negative.write_text(
-            "package easynet\n"
-            "func edgeAdapterPolicyNegativeConstruction() {\n"
-            "\t_ = runtimeLifecycleCompatibilityAdapter{}\n"
-            "}\n",
-            encoding="utf-8",
-        )
-        expect_policy_error(
-            "go_adapter_construction",
-            lambda: validate_policy(policy, manifest, root=fixture),
-        )
-        go_negative.write_text(
-            "package easynet\n"
-            "func edgeAdapterPolicyNegativeCall(transport DaemonTransport) {\n"
-            "\t_, _ = NewDaemonControl(transport)\n"
-            "}\n",
-            encoding="utf-8",
-        )
-        expect_policy_error(
-            "go_old_facade_call",
-            lambda: validate_policy(policy, manifest, root=fixture),
-        )
-        go_negative.unlink()
+            go_negative = fixture / "sdk/go/edge_adapter_policy_negative.go"
+            go_negative.write_text(
+                "package easynet\n"
+                "func edgeAdapterPolicyNegativeConstruction() {\n"
+                "\t_ = runtimeLifecycleCompatibilityAdapter{}\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            expect_policy_error(
+                "go_adapter_construction",
+                lambda: validate_policy(policy, manifest, root=fixture),
+            )
+            go_negative.write_text(
+                "package easynet\n"
+                "func edgeAdapterPolicyNegativeCall(transport DaemonTransport) {\n"
+                "\t_, _ = NewDaemonControl(transport)\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            expect_policy_error(
+                "go_old_facade_call",
+                lambda: validate_policy(policy, manifest, root=fixture),
+            )
+            go_negative.unlink()
 
-        go_consumer = fixture / "sdk/go/consumer/edge_adapter_policy_negative.go"
-        go_consumer.parent.mkdir(parents=True)
-        go_consumer.write_text(
-            "package consumer\n"
-            'import runtimesdk "easynet.run/cli/sdk/go"\n'
-            "func edgeAdapterPolicyNegativeQualifiedCall() {\n"
-            "\t_, _ = runtimesdk.NewDaemonControl(nil)\n"
-            "}\n",
-            encoding="utf-8",
-        )
-        expect_policy_error(
-            "go_qualified_old_facade_call",
-            lambda: validate_policy(policy, manifest, root=fixture),
-        )
-        go_consumer.unlink()
-        go_consumer.parent.rmdir()
+            go_consumer = fixture / "sdk/go/consumer/edge_adapter_policy_negative.go"
+            go_consumer.parent.mkdir(parents=True)
+            go_consumer.write_text(
+                "package consumer\n"
+                'import runtimesdk "easynet.run/cli/sdk/go"\n'
+                "func edgeAdapterPolicyNegativeQualifiedCall() {\n"
+                "\t_, _ = runtimesdk.NewDaemonControl(nil)\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            expect_policy_error(
+                "go_qualified_old_facade_call",
+                lambda: validate_policy(policy, manifest, root=fixture),
+            )
+            go_consumer.unlink()
+            go_consumer.parent.rmdir()
 
 
 def main() -> int:

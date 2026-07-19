@@ -40,10 +40,10 @@ func connectNativeRuntime(ctx context.Context, transport RuntimeLifecycleTranspo
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if options.StartConfig != nil {
+	if options.StartRequest != nil {
 		return startNativeRuntime(ctx, host, options)
 	}
-	endpoints, err := host.Discover(ctx, RuntimeHostDiscoverOptions{ControlPath: options.ControlPath})
+	endpoints, err := host.DiscoverRuntime(ctx, RuntimeHostDiscoverOptions{ControlPath: options.ControlPath})
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -74,8 +74,7 @@ func connectNativeRuntime(ctx context.Context, transport RuntimeLifecycleTranspo
 }
 
 func startNativeRuntime(ctx context.Context, host *RuntimeHost, options NativeRuntimeOptions) (*RuntimeClient, *HealthClient, func(context.Context) error, error) {
-	startConfig := *options.StartConfig
-	handle, err := host.Start(ctx, startConfig)
+	handle, err := host.StartRuntime(ctx, options.StartRequest)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -94,7 +93,7 @@ func startNativeRuntime(ctx context.Context, host *RuntimeHost, options NativeRu
 	}
 	if options.StopDaemonOnClose {
 		return runtime, health, func(closeCtx context.Context) error {
-			return handle.Stop(closeCtx, StopOptions{})
+			return handle.StopRuntime(closeCtx, RuntimeHostStopOptions{})
 		}, nil
 	}
 	detachErr := handle.Detach(ctx)

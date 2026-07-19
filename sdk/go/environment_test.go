@@ -28,7 +28,7 @@ func TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime(t *testing.T) {
 	}}
 	env, err := NewSdkEnvironment(discovery, daemon, SdkEnvironmentOptions{
 		ExpectedABIVersion: 5,
-		Discover:           DiscoverOptions{ControlPath: "/tmp/control.sock"},
+		Discover:           RuntimeHostDiscoverOptions{ControlPath: "/tmp/control.sock"},
 		Connect:            ConnectOptions{MaxMessageBytes: 4096},
 	})
 	if err != nil {
@@ -43,9 +43,9 @@ func TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime(t *testing.T) {
 		t.Fatalf("unexpected feature discovery: %#v calls=%d", features, discovery.featureCalls)
 	}
 
-	endpoints, err := env.DiscoverDaemon(context.Background(), DiscoverOptions{})
+	endpoints, err := env.DiscoverRuntime(context.Background(), RuntimeHostDiscoverOptions{})
 	if err != nil {
-		t.Fatalf("DiscoverDaemon: %v", err)
+		t.Fatalf("DiscoverRuntime: %v", err)
 	}
 	if endpoints.InvocationEndpoint != "/tmp/daemon.sock" || daemon.seenOptions["control_path"] != "/tmp/control.sock" {
 		t.Fatalf("unexpected daemon discovery endpoints=%#v options=%#v", endpoints, daemon.seenOptions)
@@ -74,8 +74,8 @@ func TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime(t *testing.T) {
 	if _, err := env.FeatureDiscovery(context.Background()); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("FeatureDiscovery after Close = %v, want %s", err, ErrInvalidArgument)
 	}
-	if _, err := env.DaemonControl(context.Background()); !IsCode(err, ErrInvalidArgument) {
-		t.Fatalf("DaemonControl after Close = %v, want %s", err, ErrInvalidArgument)
+	if _, err := env.RuntimeHost(context.Background()); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("RuntimeHost after Close = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 

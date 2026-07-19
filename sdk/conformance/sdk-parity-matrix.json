@@ -133550,7 +133550,7 @@
         },
         {
           "item": "NativeRuntimeOptions",
-          "sha256": "565b0734045aaaef8c24088a90f2b13d1527d81f6ba9142488f656da8f6f7da0"
+          "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
         },
         {
           "item": "OpenNativeRuntime",
@@ -133629,8 +133629,8 @@
           "sha256": "619eb6284adcd6861cec96a1d11d5babc4650a0db1e8490996a47c6fc48cdc59"
         },
         {
-          "item": "NativeRuntimeOptions.StartConfig",
-          "sha256": "d296b4499504aa1a81dba169a1f084b6c4f6b336a4e68e46cfc95886cf3e2a7b"
+          "item": "NativeRuntimeOptions.StartRequest",
+          "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
         },
         {
           "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -133697,7 +133697,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "565b0734045aaaef8c24088a90f2b13d1527d81f6ba9142488f656da8f6f7da0"
+              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
             },
             {
               "item": "OpenNativeRuntime",
@@ -133776,8 +133776,8 @@
               "sha256": "619eb6284adcd6861cec96a1d11d5babc4650a0db1e8490996a47c6fc48cdc59"
             },
             {
-              "item": "NativeRuntimeOptions.StartConfig",
-              "sha256": "d296b4499504aa1a81dba169a1f084b6c4f6b336a4e68e46cfc95886cf3e2a7b"
+              "item": "NativeRuntimeOptions.StartRequest",
+              "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -133844,7 +133844,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "565b0734045aaaef8c24088a90f2b13d1527d81f6ba9142488f656da8f6f7da0"
+              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
             },
             {
               "item": "OpenNativeRuntime",
@@ -133923,8 +133923,8 @@
               "sha256": "619eb6284adcd6861cec96a1d11d5babc4650a0db1e8490996a47c6fc48cdc59"
             },
             {
-              "item": "NativeRuntimeOptions.StartConfig",
-              "sha256": "d296b4499504aa1a81dba169a1f084b6c4f6b336a4e68e46cfc95886cf3e2a7b"
+              "item": "NativeRuntimeOptions.StartRequest",
+              "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -133991,7 +133991,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "565b0734045aaaef8c24088a90f2b13d1527d81f6ba9142488f656da8f6f7da0"
+              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
             },
             {
               "item": "OpenNativeRuntime",
@@ -134070,8 +134070,8 @@
               "sha256": "619eb6284adcd6861cec96a1d11d5babc4650a0db1e8490996a47c6fc48cdc59"
             },
             {
-              "item": "NativeRuntimeOptions.StartConfig",
-              "sha256": "d296b4499504aa1a81dba169a1f084b6c4f6b336a4e68e46cfc95886cf3e2a7b"
+              "item": "NativeRuntimeOptions.StartRequest",
+              "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -134138,7 +134138,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "565b0734045aaaef8c24088a90f2b13d1527d81f6ba9142488f656da8f6f7da0"
+              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
             },
             {
               "item": "OpenNativeRuntime",
@@ -134217,8 +134217,8 @@
               "sha256": "619eb6284adcd6861cec96a1d11d5babc4650a0db1e8490996a47c6fc48cdc59"
             },
             {
-              "item": "NativeRuntimeOptions.StartConfig",
-              "sha256": "d296b4499504aa1a81dba169a1f084b6c4f6b336a4e68e46cfc95886cf3e2a7b"
+              "item": "NativeRuntimeOptions.StartRequest",
+              "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -134285,7 +134285,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "565b0734045aaaef8c24088a90f2b13d1527d81f6ba9142488f656da8f6f7da0"
+              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
             },
             {
               "item": "OpenNativeRuntime",
@@ -134364,8 +134364,8 @@
               "sha256": "619eb6284adcd6861cec96a1d11d5babc4650a0db1e8490996a47c6fc48cdc59"
             },
             {
-              "item": "NativeRuntimeOptions.StartConfig",
-              "sha256": "d296b4499504aa1a81dba169a1f084b6c4f6b336a4e68e46cfc95886cf3e2a7b"
+              "item": "NativeRuntimeOptions.StartRequest",
+              "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -134432,7 +134432,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "565b0734045aaaef8c24088a90f2b13d1527d81f6ba9142488f656da8f6f7da0"
+              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
             },
             {
               "item": "OpenNativeRuntime",
@@ -134511,8 +134511,8 @@
               "sha256": "619eb6284adcd6861cec96a1d11d5babc4650a0db1e8490996a47c6fc48cdc59"
             },
             {
-              "item": "NativeRuntimeOptions.StartConfig",
-              "sha256": "d296b4499504aa1a81dba169a1f084b6c4f6b336a4e68e46cfc95886cf3e2a7b"
+              "item": "NativeRuntimeOptions.StartRequest",
+              "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -134579,7 +134579,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "565b0734045aaaef8c24088a90f2b13d1527d81f6ba9142488f656da8f6f7da0"
+              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
             },
             {
               "item": "OpenNativeRuntime",
@@ -134658,8 +134658,8 @@
               "sha256": "619eb6284adcd6861cec96a1d11d5babc4650a0db1e8490996a47c6fc48cdc59"
             },
             {
-              "item": "NativeRuntimeOptions.StartConfig",
-              "sha256": "d296b4499504aa1a81dba169a1f084b6c4f6b336a4e68e46cfc95886cf3e2a7b"
+              "item": "NativeRuntimeOptions.StartRequest",
+              "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -134726,7 +134726,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "565b0734045aaaef8c24088a90f2b13d1527d81f6ba9142488f656da8f6f7da0"
+              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
             },
             {
               "item": "OpenNativeRuntime",
@@ -134805,8 +134805,8 @@
               "sha256": "619eb6284adcd6861cec96a1d11d5babc4650a0db1e8490996a47c6fc48cdc59"
             },
             {
-              "item": "NativeRuntimeOptions.StartConfig",
-              "sha256": "d296b4499504aa1a81dba169a1f084b6c4f6b336a4e68e46cfc95886cf3e2a7b"
+              "item": "NativeRuntimeOptions.StartRequest",
+              "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -180523,10 +180523,6 @@
           "sha256": "acf3b04887dd140e7947cb1871945e5465a8211f8a73eb58561385ed712c1336"
         },
         {
-          "item": "NewRuntimeAdminClient",
-          "sha256": "5763d63d923a08186063d1594e57c9cea6dbbc518954d3d321d085e3d1b35842"
-        },
-        {
           "item": "RuntimeAdminAbilityClient",
           "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
         },
@@ -180624,7 +180620,7 @@
         },
         {
           "item": "RuntimeAdminClient.Start",
-          "sha256": "6f90243e3bc3aba08960e97ab1d0a5db8607966b02db3faa49adf823b35d8c04"
+          "sha256": "2c0727f4f91ff12de791176c9da0c5d5ec0be332d1d4bf4b6328fc787b1316b7"
         },
         {
           "item": "RuntimeAdminClient.Status",
@@ -180734,10 +180730,6 @@
               "sha256": "acf3b04887dd140e7947cb1871945e5465a8211f8a73eb58561385ed712c1336"
             },
             {
-              "item": "NewRuntimeAdminClient",
-              "sha256": "5763d63d923a08186063d1594e57c9cea6dbbc518954d3d321d085e3d1b35842"
-            },
-            {
               "item": "RuntimeAdminAbilityClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -180835,7 +180827,7 @@
             },
             {
               "item": "RuntimeAdminClient.Start",
-              "sha256": "6f90243e3bc3aba08960e97ab1d0a5db8607966b02db3faa49adf823b35d8c04"
+              "sha256": "2c0727f4f91ff12de791176c9da0c5d5ec0be332d1d4bf4b6328fc787b1316b7"
             },
             {
               "item": "RuntimeAdminClient.Status",
@@ -180945,10 +180937,6 @@
               "sha256": "acf3b04887dd140e7947cb1871945e5465a8211f8a73eb58561385ed712c1336"
             },
             {
-              "item": "NewRuntimeAdminClient",
-              "sha256": "5763d63d923a08186063d1594e57c9cea6dbbc518954d3d321d085e3d1b35842"
-            },
-            {
               "item": "RuntimeAdminAbilityClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -181046,7 +181034,7 @@
             },
             {
               "item": "RuntimeAdminClient.Start",
-              "sha256": "6f90243e3bc3aba08960e97ab1d0a5db8607966b02db3faa49adf823b35d8c04"
+              "sha256": "2c0727f4f91ff12de791176c9da0c5d5ec0be332d1d4bf4b6328fc787b1316b7"
             },
             {
               "item": "RuntimeAdminClient.Status",
@@ -181156,10 +181144,6 @@
               "sha256": "acf3b04887dd140e7947cb1871945e5465a8211f8a73eb58561385ed712c1336"
             },
             {
-              "item": "NewRuntimeAdminClient",
-              "sha256": "5763d63d923a08186063d1594e57c9cea6dbbc518954d3d321d085e3d1b35842"
-            },
-            {
               "item": "RuntimeAdminAbilityClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -181257,7 +181241,7 @@
             },
             {
               "item": "RuntimeAdminClient.Start",
-              "sha256": "6f90243e3bc3aba08960e97ab1d0a5db8607966b02db3faa49adf823b35d8c04"
+              "sha256": "2c0727f4f91ff12de791176c9da0c5d5ec0be332d1d4bf4b6328fc787b1316b7"
             },
             {
               "item": "RuntimeAdminClient.Status",
@@ -196594,32 +196578,12 @@
       "unproven_requirement_ids": [],
       "shape_evidence": [
         {
-          "item": "Attach",
-          "sha256": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6"
-        },
-        {
-          "item": "AttachOptions",
-          "sha256": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1"
-        },
-        {
           "item": "AttachRuntimeHost",
           "sha256": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac"
         },
         {
-          "item": "ConnectLocal",
-          "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-        },
-        {
           "item": "ConnectLocalRuntimeHost",
           "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-        },
-        {
-          "item": "Discover",
-          "sha256": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84"
-        },
-        {
-          "item": "DiscoverOptions",
-          "sha256": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304"
         },
         {
           "item": "DiscoverRuntimeHost",
@@ -196664,10 +196628,6 @@
         {
           "item": "InvocationLifecycleUnspecified",
           "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
-        },
-        {
-          "item": "ModeBoth",
-          "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
         },
         {
           "item": "NewEndpointsFromJSON",
@@ -196727,7 +196687,7 @@
         },
         {
           "item": "RuntimeHostDiscoverOptions",
-          "sha256": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2"
+          "sha256": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779"
         },
         {
           "item": "RuntimeHostEndpoints",
@@ -196740,10 +196700,6 @@
         {
           "item": "RuntimeHostMode",
           "sha256": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7"
-        },
-        {
-          "item": "RuntimeHostStartConfig",
-          "sha256": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8"
         },
         {
           "item": "RuntimeHostStartRequest",
@@ -196766,10 +196722,6 @@
           "sha256": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0"
         },
         {
-          "item": "RuntimeLifecycle",
-          "sha256": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89"
-        },
-        {
           "item": "RuntimeLifecycleState",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
@@ -196788,10 +196740,6 @@
         {
           "item": "RuntimeMode",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
-          "item": "RuntimeModeBoth",
-          "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
         },
         {
           "item": "RuntimePermissionDenied",
@@ -196842,20 +196790,8 @@
           "sha256": "5b632b3e4c3bf7ac3a8161170020a855284d7ab3f3f946067ededb11ea8475ba"
         },
         {
-          "item": "Start",
-          "sha256": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714"
-        },
-        {
-          "item": "StartConfig",
-          "sha256": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9"
-        },
-        {
           "item": "StartRuntimeHost",
           "sha256": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9"
-        },
-        {
-          "item": "StopOptions",
-          "sha256": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065"
         },
         {
           "item": "Endpoints.ControlEndpoint",
@@ -196894,16 +196830,8 @@
           "sha256": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59"
         },
         {
-          "item": "RuntimeHandle.Stop",
-          "sha256": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3"
-        },
-        {
           "item": "RuntimeHandle.StopRuntime",
           "sha256": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7"
-        },
-        {
-          "item": "RuntimeHost.Attach",
-          "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
         },
         {
           "item": "RuntimeHost.AttachRuntime",
@@ -196914,16 +196842,8 @@
           "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
         },
         {
-          "item": "RuntimeHost.Discover",
-          "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-        },
-        {
           "item": "RuntimeHost.DiscoverRuntime",
           "sha256": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099"
-        },
-        {
-          "item": "RuntimeHost.Start",
-          "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
         },
         {
           "item": "RuntimeHost.StartRuntime",
@@ -196940,6 +196860,18 @@
         {
           "item": "RuntimeHostAttachOptions.InvocationEndpoint",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
+          "item": "RuntimeHostDiscoverOptions.ControlEndpoint",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
+          "item": "RuntimeHostDiscoverOptions.ControlPath",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
+          "item": "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
+          "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
         },
         {
           "item": "RuntimeHostLifecycle.AttachRuntime",
@@ -196972,22 +196904,6 @@
         {
           "item": "RuntimeHostStopOptions.GracefulTimeoutMS",
           "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-        },
-        {
-          "item": "RuntimeLifecycle.Attach",
-          "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
-        },
-        {
-          "item": "RuntimeLifecycle.ConnectLocal",
-          "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
-        },
-        {
-          "item": "RuntimeLifecycle.Discover",
-          "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-        },
-        {
-          "item": "RuntimeLifecycle.Start",
-          "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
         },
         {
           "item": "RuntimeLifecycleStatus.Diagnostics",
@@ -197197,32 +197113,12 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "Attach",
-              "sha256": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6"
-            },
-            {
-              "item": "AttachOptions",
-              "sha256": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1"
-            },
-            {
               "item": "AttachRuntimeHost",
               "sha256": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac"
             },
             {
-              "item": "ConnectLocal",
-              "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
               "item": "ConnectLocalRuntimeHost",
               "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
-              "item": "Discover",
-              "sha256": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84"
-            },
-            {
-              "item": "DiscoverOptions",
-              "sha256": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304"
             },
             {
               "item": "DiscoverRuntimeHost",
@@ -197267,10 +197163,6 @@
             {
               "item": "InvocationLifecycleUnspecified",
               "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
-            },
-            {
-              "item": "ModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "NewEndpointsFromJSON",
@@ -197330,7 +197222,7 @@
             },
             {
               "item": "RuntimeHostDiscoverOptions",
-              "sha256": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2"
+              "sha256": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779"
             },
             {
               "item": "RuntimeHostEndpoints",
@@ -197343,10 +197235,6 @@
             {
               "item": "RuntimeHostMode",
               "sha256": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7"
-            },
-            {
-              "item": "RuntimeHostStartConfig",
-              "sha256": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8"
             },
             {
               "item": "RuntimeHostStartRequest",
@@ -197369,10 +197257,6 @@
               "sha256": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0"
             },
             {
-              "item": "RuntimeLifecycle",
-              "sha256": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89"
-            },
-            {
               "item": "RuntimeLifecycleState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -197391,10 +197275,6 @@
             {
               "item": "RuntimeMode",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "RuntimeModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "RuntimePermissionDenied",
@@ -197445,20 +197325,8 @@
               "sha256": "5b632b3e4c3bf7ac3a8161170020a855284d7ab3f3f946067ededb11ea8475ba"
             },
             {
-              "item": "Start",
-              "sha256": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714"
-            },
-            {
-              "item": "StartConfig",
-              "sha256": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9"
-            },
-            {
               "item": "StartRuntimeHost",
               "sha256": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9"
-            },
-            {
-              "item": "StopOptions",
-              "sha256": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065"
             },
             {
               "item": "Endpoints.ControlEndpoint",
@@ -197497,16 +197365,8 @@
               "sha256": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59"
             },
             {
-              "item": "RuntimeHandle.Stop",
-              "sha256": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3"
-            },
-            {
               "item": "RuntimeHandle.StopRuntime",
               "sha256": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7"
-            },
-            {
-              "item": "RuntimeHost.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
             },
             {
               "item": "RuntimeHost.AttachRuntime",
@@ -197517,16 +197377,8 @@
               "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
             },
             {
-              "item": "RuntimeHost.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
               "item": "RuntimeHost.DiscoverRuntime",
               "sha256": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099"
-            },
-            {
-              "item": "RuntimeHost.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeHost.StartRuntime",
@@ -197543,6 +197395,18 @@
             {
               "item": "RuntimeHostAttachOptions.InvocationEndpoint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlPath",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "RuntimeHostLifecycle.AttachRuntime",
@@ -197575,22 +197439,6 @@
             {
               "item": "RuntimeHostStopOptions.GracefulTimeoutMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeLifecycle.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
-            },
-            {
-              "item": "RuntimeLifecycle.ConnectLocal",
-              "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
-            },
-            {
-              "item": "RuntimeLifecycle.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
-              "item": "RuntimeLifecycle.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeLifecycleStatus.Diagnostics",
@@ -197800,32 +197648,12 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "Attach",
-              "sha256": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6"
-            },
-            {
-              "item": "AttachOptions",
-              "sha256": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1"
-            },
-            {
               "item": "AttachRuntimeHost",
               "sha256": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac"
             },
             {
-              "item": "ConnectLocal",
-              "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
               "item": "ConnectLocalRuntimeHost",
               "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
-              "item": "Discover",
-              "sha256": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84"
-            },
-            {
-              "item": "DiscoverOptions",
-              "sha256": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304"
             },
             {
               "item": "DiscoverRuntimeHost",
@@ -197870,10 +197698,6 @@
             {
               "item": "InvocationLifecycleUnspecified",
               "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
-            },
-            {
-              "item": "ModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "NewEndpointsFromJSON",
@@ -197933,7 +197757,7 @@
             },
             {
               "item": "RuntimeHostDiscoverOptions",
-              "sha256": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2"
+              "sha256": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779"
             },
             {
               "item": "RuntimeHostEndpoints",
@@ -197946,10 +197770,6 @@
             {
               "item": "RuntimeHostMode",
               "sha256": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7"
-            },
-            {
-              "item": "RuntimeHostStartConfig",
-              "sha256": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8"
             },
             {
               "item": "RuntimeHostStartRequest",
@@ -197972,10 +197792,6 @@
               "sha256": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0"
             },
             {
-              "item": "RuntimeLifecycle",
-              "sha256": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89"
-            },
-            {
               "item": "RuntimeLifecycleState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -197994,10 +197810,6 @@
             {
               "item": "RuntimeMode",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "RuntimeModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "RuntimePermissionDenied",
@@ -198048,20 +197860,8 @@
               "sha256": "5b632b3e4c3bf7ac3a8161170020a855284d7ab3f3f946067ededb11ea8475ba"
             },
             {
-              "item": "Start",
-              "sha256": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714"
-            },
-            {
-              "item": "StartConfig",
-              "sha256": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9"
-            },
-            {
               "item": "StartRuntimeHost",
               "sha256": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9"
-            },
-            {
-              "item": "StopOptions",
-              "sha256": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065"
             },
             {
               "item": "Endpoints.ControlEndpoint",
@@ -198100,16 +197900,8 @@
               "sha256": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59"
             },
             {
-              "item": "RuntimeHandle.Stop",
-              "sha256": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3"
-            },
-            {
               "item": "RuntimeHandle.StopRuntime",
               "sha256": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7"
-            },
-            {
-              "item": "RuntimeHost.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
             },
             {
               "item": "RuntimeHost.AttachRuntime",
@@ -198120,16 +197912,8 @@
               "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
             },
             {
-              "item": "RuntimeHost.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
               "item": "RuntimeHost.DiscoverRuntime",
               "sha256": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099"
-            },
-            {
-              "item": "RuntimeHost.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeHost.StartRuntime",
@@ -198146,6 +197930,18 @@
             {
               "item": "RuntimeHostAttachOptions.InvocationEndpoint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlPath",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "RuntimeHostLifecycle.AttachRuntime",
@@ -198178,22 +197974,6 @@
             {
               "item": "RuntimeHostStopOptions.GracefulTimeoutMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeLifecycle.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
-            },
-            {
-              "item": "RuntimeLifecycle.ConnectLocal",
-              "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
-            },
-            {
-              "item": "RuntimeLifecycle.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
-              "item": "RuntimeLifecycle.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeLifecycleStatus.Diagnostics",
@@ -198403,32 +198183,12 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "Attach",
-              "sha256": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6"
-            },
-            {
-              "item": "AttachOptions",
-              "sha256": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1"
-            },
-            {
               "item": "AttachRuntimeHost",
               "sha256": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac"
             },
             {
-              "item": "ConnectLocal",
-              "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
               "item": "ConnectLocalRuntimeHost",
               "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
-              "item": "Discover",
-              "sha256": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84"
-            },
-            {
-              "item": "DiscoverOptions",
-              "sha256": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304"
             },
             {
               "item": "DiscoverRuntimeHost",
@@ -198473,10 +198233,6 @@
             {
               "item": "InvocationLifecycleUnspecified",
               "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
-            },
-            {
-              "item": "ModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "NewEndpointsFromJSON",
@@ -198536,7 +198292,7 @@
             },
             {
               "item": "RuntimeHostDiscoverOptions",
-              "sha256": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2"
+              "sha256": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779"
             },
             {
               "item": "RuntimeHostEndpoints",
@@ -198549,10 +198305,6 @@
             {
               "item": "RuntimeHostMode",
               "sha256": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7"
-            },
-            {
-              "item": "RuntimeHostStartConfig",
-              "sha256": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8"
             },
             {
               "item": "RuntimeHostStartRequest",
@@ -198575,10 +198327,6 @@
               "sha256": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0"
             },
             {
-              "item": "RuntimeLifecycle",
-              "sha256": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89"
-            },
-            {
               "item": "RuntimeLifecycleState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -198597,10 +198345,6 @@
             {
               "item": "RuntimeMode",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "RuntimeModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "RuntimePermissionDenied",
@@ -198651,20 +198395,8 @@
               "sha256": "5b632b3e4c3bf7ac3a8161170020a855284d7ab3f3f946067ededb11ea8475ba"
             },
             {
-              "item": "Start",
-              "sha256": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714"
-            },
-            {
-              "item": "StartConfig",
-              "sha256": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9"
-            },
-            {
               "item": "StartRuntimeHost",
               "sha256": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9"
-            },
-            {
-              "item": "StopOptions",
-              "sha256": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065"
             },
             {
               "item": "Endpoints.ControlEndpoint",
@@ -198703,16 +198435,8 @@
               "sha256": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59"
             },
             {
-              "item": "RuntimeHandle.Stop",
-              "sha256": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3"
-            },
-            {
               "item": "RuntimeHandle.StopRuntime",
               "sha256": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7"
-            },
-            {
-              "item": "RuntimeHost.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
             },
             {
               "item": "RuntimeHost.AttachRuntime",
@@ -198723,16 +198447,8 @@
               "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
             },
             {
-              "item": "RuntimeHost.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
               "item": "RuntimeHost.DiscoverRuntime",
               "sha256": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099"
-            },
-            {
-              "item": "RuntimeHost.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeHost.StartRuntime",
@@ -198749,6 +198465,18 @@
             {
               "item": "RuntimeHostAttachOptions.InvocationEndpoint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlPath",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "RuntimeHostLifecycle.AttachRuntime",
@@ -198781,22 +198509,6 @@
             {
               "item": "RuntimeHostStopOptions.GracefulTimeoutMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeLifecycle.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
-            },
-            {
-              "item": "RuntimeLifecycle.ConnectLocal",
-              "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
-            },
-            {
-              "item": "RuntimeLifecycle.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
-              "item": "RuntimeLifecycle.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeLifecycleStatus.Diagnostics",
@@ -199006,32 +198718,12 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "Attach",
-              "sha256": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6"
-            },
-            {
-              "item": "AttachOptions",
-              "sha256": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1"
-            },
-            {
               "item": "AttachRuntimeHost",
               "sha256": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac"
             },
             {
-              "item": "ConnectLocal",
-              "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
               "item": "ConnectLocalRuntimeHost",
               "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
-              "item": "Discover",
-              "sha256": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84"
-            },
-            {
-              "item": "DiscoverOptions",
-              "sha256": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304"
             },
             {
               "item": "DiscoverRuntimeHost",
@@ -199076,10 +198768,6 @@
             {
               "item": "InvocationLifecycleUnspecified",
               "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
-            },
-            {
-              "item": "ModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "NewEndpointsFromJSON",
@@ -199139,7 +198827,7 @@
             },
             {
               "item": "RuntimeHostDiscoverOptions",
-              "sha256": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2"
+              "sha256": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779"
             },
             {
               "item": "RuntimeHostEndpoints",
@@ -199152,10 +198840,6 @@
             {
               "item": "RuntimeHostMode",
               "sha256": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7"
-            },
-            {
-              "item": "RuntimeHostStartConfig",
-              "sha256": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8"
             },
             {
               "item": "RuntimeHostStartRequest",
@@ -199178,10 +198862,6 @@
               "sha256": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0"
             },
             {
-              "item": "RuntimeLifecycle",
-              "sha256": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89"
-            },
-            {
               "item": "RuntimeLifecycleState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -199200,10 +198880,6 @@
             {
               "item": "RuntimeMode",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "RuntimeModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "RuntimePermissionDenied",
@@ -199254,20 +198930,8 @@
               "sha256": "5b632b3e4c3bf7ac3a8161170020a855284d7ab3f3f946067ededb11ea8475ba"
             },
             {
-              "item": "Start",
-              "sha256": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714"
-            },
-            {
-              "item": "StartConfig",
-              "sha256": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9"
-            },
-            {
               "item": "StartRuntimeHost",
               "sha256": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9"
-            },
-            {
-              "item": "StopOptions",
-              "sha256": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065"
             },
             {
               "item": "Endpoints.ControlEndpoint",
@@ -199306,16 +198970,8 @@
               "sha256": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59"
             },
             {
-              "item": "RuntimeHandle.Stop",
-              "sha256": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3"
-            },
-            {
               "item": "RuntimeHandle.StopRuntime",
               "sha256": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7"
-            },
-            {
-              "item": "RuntimeHost.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
             },
             {
               "item": "RuntimeHost.AttachRuntime",
@@ -199326,16 +198982,8 @@
               "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
             },
             {
-              "item": "RuntimeHost.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
               "item": "RuntimeHost.DiscoverRuntime",
               "sha256": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099"
-            },
-            {
-              "item": "RuntimeHost.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeHost.StartRuntime",
@@ -199352,6 +199000,18 @@
             {
               "item": "RuntimeHostAttachOptions.InvocationEndpoint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlPath",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "RuntimeHostLifecycle.AttachRuntime",
@@ -199384,22 +199044,6 @@
             {
               "item": "RuntimeHostStopOptions.GracefulTimeoutMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeLifecycle.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
-            },
-            {
-              "item": "RuntimeLifecycle.ConnectLocal",
-              "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
-            },
-            {
-              "item": "RuntimeLifecycle.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
-              "item": "RuntimeLifecycle.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeLifecycleStatus.Diagnostics",
@@ -199609,32 +199253,12 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "Attach",
-              "sha256": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6"
-            },
-            {
-              "item": "AttachOptions",
-              "sha256": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1"
-            },
-            {
               "item": "AttachRuntimeHost",
               "sha256": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac"
             },
             {
-              "item": "ConnectLocal",
-              "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
               "item": "ConnectLocalRuntimeHost",
               "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
-              "item": "Discover",
-              "sha256": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84"
-            },
-            {
-              "item": "DiscoverOptions",
-              "sha256": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304"
             },
             {
               "item": "DiscoverRuntimeHost",
@@ -199679,10 +199303,6 @@
             {
               "item": "InvocationLifecycleUnspecified",
               "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
-            },
-            {
-              "item": "ModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "NewEndpointsFromJSON",
@@ -199742,7 +199362,7 @@
             },
             {
               "item": "RuntimeHostDiscoverOptions",
-              "sha256": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2"
+              "sha256": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779"
             },
             {
               "item": "RuntimeHostEndpoints",
@@ -199755,10 +199375,6 @@
             {
               "item": "RuntimeHostMode",
               "sha256": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7"
-            },
-            {
-              "item": "RuntimeHostStartConfig",
-              "sha256": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8"
             },
             {
               "item": "RuntimeHostStartRequest",
@@ -199781,10 +199397,6 @@
               "sha256": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0"
             },
             {
-              "item": "RuntimeLifecycle",
-              "sha256": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89"
-            },
-            {
               "item": "RuntimeLifecycleState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -199803,10 +199415,6 @@
             {
               "item": "RuntimeMode",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "RuntimeModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "RuntimePermissionDenied",
@@ -199857,20 +199465,8 @@
               "sha256": "5b632b3e4c3bf7ac3a8161170020a855284d7ab3f3f946067ededb11ea8475ba"
             },
             {
-              "item": "Start",
-              "sha256": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714"
-            },
-            {
-              "item": "StartConfig",
-              "sha256": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9"
-            },
-            {
               "item": "StartRuntimeHost",
               "sha256": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9"
-            },
-            {
-              "item": "StopOptions",
-              "sha256": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065"
             },
             {
               "item": "Endpoints.ControlEndpoint",
@@ -199909,16 +199505,8 @@
               "sha256": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59"
             },
             {
-              "item": "RuntimeHandle.Stop",
-              "sha256": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3"
-            },
-            {
               "item": "RuntimeHandle.StopRuntime",
               "sha256": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7"
-            },
-            {
-              "item": "RuntimeHost.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
             },
             {
               "item": "RuntimeHost.AttachRuntime",
@@ -199929,16 +199517,8 @@
               "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
             },
             {
-              "item": "RuntimeHost.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
               "item": "RuntimeHost.DiscoverRuntime",
               "sha256": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099"
-            },
-            {
-              "item": "RuntimeHost.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeHost.StartRuntime",
@@ -199955,6 +199535,18 @@
             {
               "item": "RuntimeHostAttachOptions.InvocationEndpoint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlPath",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "RuntimeHostLifecycle.AttachRuntime",
@@ -199987,22 +199579,6 @@
             {
               "item": "RuntimeHostStopOptions.GracefulTimeoutMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeLifecycle.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
-            },
-            {
-              "item": "RuntimeLifecycle.ConnectLocal",
-              "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
-            },
-            {
-              "item": "RuntimeLifecycle.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
-              "item": "RuntimeLifecycle.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeLifecycleStatus.Diagnostics",
@@ -200212,32 +199788,12 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "Attach",
-              "sha256": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6"
-            },
-            {
-              "item": "AttachOptions",
-              "sha256": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1"
-            },
-            {
               "item": "AttachRuntimeHost",
               "sha256": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac"
             },
             {
-              "item": "ConnectLocal",
-              "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
               "item": "ConnectLocalRuntimeHost",
               "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
-              "item": "Discover",
-              "sha256": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84"
-            },
-            {
-              "item": "DiscoverOptions",
-              "sha256": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304"
             },
             {
               "item": "DiscoverRuntimeHost",
@@ -200282,10 +199838,6 @@
             {
               "item": "InvocationLifecycleUnspecified",
               "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
-            },
-            {
-              "item": "ModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "NewEndpointsFromJSON",
@@ -200345,7 +199897,7 @@
             },
             {
               "item": "RuntimeHostDiscoverOptions",
-              "sha256": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2"
+              "sha256": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779"
             },
             {
               "item": "RuntimeHostEndpoints",
@@ -200358,10 +199910,6 @@
             {
               "item": "RuntimeHostMode",
               "sha256": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7"
-            },
-            {
-              "item": "RuntimeHostStartConfig",
-              "sha256": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8"
             },
             {
               "item": "RuntimeHostStartRequest",
@@ -200384,10 +199932,6 @@
               "sha256": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0"
             },
             {
-              "item": "RuntimeLifecycle",
-              "sha256": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89"
-            },
-            {
               "item": "RuntimeLifecycleState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -200406,10 +199950,6 @@
             {
               "item": "RuntimeMode",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "RuntimeModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "RuntimePermissionDenied",
@@ -200460,20 +200000,8 @@
               "sha256": "5b632b3e4c3bf7ac3a8161170020a855284d7ab3f3f946067ededb11ea8475ba"
             },
             {
-              "item": "Start",
-              "sha256": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714"
-            },
-            {
-              "item": "StartConfig",
-              "sha256": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9"
-            },
-            {
               "item": "StartRuntimeHost",
               "sha256": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9"
-            },
-            {
-              "item": "StopOptions",
-              "sha256": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065"
             },
             {
               "item": "Endpoints.ControlEndpoint",
@@ -200512,16 +200040,8 @@
               "sha256": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59"
             },
             {
-              "item": "RuntimeHandle.Stop",
-              "sha256": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3"
-            },
-            {
               "item": "RuntimeHandle.StopRuntime",
               "sha256": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7"
-            },
-            {
-              "item": "RuntimeHost.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
             },
             {
               "item": "RuntimeHost.AttachRuntime",
@@ -200532,16 +200052,8 @@
               "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
             },
             {
-              "item": "RuntimeHost.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
               "item": "RuntimeHost.DiscoverRuntime",
               "sha256": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099"
-            },
-            {
-              "item": "RuntimeHost.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeHost.StartRuntime",
@@ -200558,6 +200070,18 @@
             {
               "item": "RuntimeHostAttachOptions.InvocationEndpoint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlPath",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "RuntimeHostLifecycle.AttachRuntime",
@@ -200590,22 +200114,6 @@
             {
               "item": "RuntimeHostStopOptions.GracefulTimeoutMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeLifecycle.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
-            },
-            {
-              "item": "RuntimeLifecycle.ConnectLocal",
-              "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
-            },
-            {
-              "item": "RuntimeLifecycle.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
-              "item": "RuntimeLifecycle.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeLifecycleStatus.Diagnostics",
@@ -200815,32 +200323,12 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "Attach",
-              "sha256": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6"
-            },
-            {
-              "item": "AttachOptions",
-              "sha256": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1"
-            },
-            {
               "item": "AttachRuntimeHost",
               "sha256": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac"
             },
             {
-              "item": "ConnectLocal",
-              "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
               "item": "ConnectLocalRuntimeHost",
               "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
-              "item": "Discover",
-              "sha256": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84"
-            },
-            {
-              "item": "DiscoverOptions",
-              "sha256": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304"
             },
             {
               "item": "DiscoverRuntimeHost",
@@ -200885,10 +200373,6 @@
             {
               "item": "InvocationLifecycleUnspecified",
               "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
-            },
-            {
-              "item": "ModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "NewEndpointsFromJSON",
@@ -200948,7 +200432,7 @@
             },
             {
               "item": "RuntimeHostDiscoverOptions",
-              "sha256": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2"
+              "sha256": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779"
             },
             {
               "item": "RuntimeHostEndpoints",
@@ -200961,10 +200445,6 @@
             {
               "item": "RuntimeHostMode",
               "sha256": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7"
-            },
-            {
-              "item": "RuntimeHostStartConfig",
-              "sha256": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8"
             },
             {
               "item": "RuntimeHostStartRequest",
@@ -200987,10 +200467,6 @@
               "sha256": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0"
             },
             {
-              "item": "RuntimeLifecycle",
-              "sha256": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89"
-            },
-            {
               "item": "RuntimeLifecycleState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -201009,10 +200485,6 @@
             {
               "item": "RuntimeMode",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "RuntimeModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "RuntimePermissionDenied",
@@ -201063,20 +200535,8 @@
               "sha256": "5b632b3e4c3bf7ac3a8161170020a855284d7ab3f3f946067ededb11ea8475ba"
             },
             {
-              "item": "Start",
-              "sha256": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714"
-            },
-            {
-              "item": "StartConfig",
-              "sha256": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9"
-            },
-            {
               "item": "StartRuntimeHost",
               "sha256": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9"
-            },
-            {
-              "item": "StopOptions",
-              "sha256": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065"
             },
             {
               "item": "Endpoints.ControlEndpoint",
@@ -201115,16 +200575,8 @@
               "sha256": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59"
             },
             {
-              "item": "RuntimeHandle.Stop",
-              "sha256": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3"
-            },
-            {
               "item": "RuntimeHandle.StopRuntime",
               "sha256": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7"
-            },
-            {
-              "item": "RuntimeHost.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
             },
             {
               "item": "RuntimeHost.AttachRuntime",
@@ -201135,16 +200587,8 @@
               "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
             },
             {
-              "item": "RuntimeHost.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
               "item": "RuntimeHost.DiscoverRuntime",
               "sha256": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099"
-            },
-            {
-              "item": "RuntimeHost.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeHost.StartRuntime",
@@ -201161,6 +200605,18 @@
             {
               "item": "RuntimeHostAttachOptions.InvocationEndpoint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlPath",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "RuntimeHostLifecycle.AttachRuntime",
@@ -201193,22 +200649,6 @@
             {
               "item": "RuntimeHostStopOptions.GracefulTimeoutMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeLifecycle.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
-            },
-            {
-              "item": "RuntimeLifecycle.ConnectLocal",
-              "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
-            },
-            {
-              "item": "RuntimeLifecycle.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
-              "item": "RuntimeLifecycle.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeLifecycleStatus.Diagnostics",
@@ -201418,32 +200858,12 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "Attach",
-              "sha256": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6"
-            },
-            {
-              "item": "AttachOptions",
-              "sha256": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1"
-            },
-            {
               "item": "AttachRuntimeHost",
               "sha256": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac"
             },
             {
-              "item": "ConnectLocal",
-              "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
               "item": "ConnectLocalRuntimeHost",
               "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
-              "item": "Discover",
-              "sha256": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84"
-            },
-            {
-              "item": "DiscoverOptions",
-              "sha256": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304"
             },
             {
               "item": "DiscoverRuntimeHost",
@@ -201488,10 +200908,6 @@
             {
               "item": "InvocationLifecycleUnspecified",
               "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
-            },
-            {
-              "item": "ModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "NewEndpointsFromJSON",
@@ -201551,7 +200967,7 @@
             },
             {
               "item": "RuntimeHostDiscoverOptions",
-              "sha256": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2"
+              "sha256": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779"
             },
             {
               "item": "RuntimeHostEndpoints",
@@ -201564,10 +200980,6 @@
             {
               "item": "RuntimeHostMode",
               "sha256": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7"
-            },
-            {
-              "item": "RuntimeHostStartConfig",
-              "sha256": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8"
             },
             {
               "item": "RuntimeHostStartRequest",
@@ -201590,10 +201002,6 @@
               "sha256": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0"
             },
             {
-              "item": "RuntimeLifecycle",
-              "sha256": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89"
-            },
-            {
               "item": "RuntimeLifecycleState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -201612,10 +201020,6 @@
             {
               "item": "RuntimeMode",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "RuntimeModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "RuntimePermissionDenied",
@@ -201666,20 +201070,8 @@
               "sha256": "5b632b3e4c3bf7ac3a8161170020a855284d7ab3f3f946067ededb11ea8475ba"
             },
             {
-              "item": "Start",
-              "sha256": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714"
-            },
-            {
-              "item": "StartConfig",
-              "sha256": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9"
-            },
-            {
               "item": "StartRuntimeHost",
               "sha256": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9"
-            },
-            {
-              "item": "StopOptions",
-              "sha256": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065"
             },
             {
               "item": "Endpoints.ControlEndpoint",
@@ -201718,16 +201110,8 @@
               "sha256": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59"
             },
             {
-              "item": "RuntimeHandle.Stop",
-              "sha256": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3"
-            },
-            {
               "item": "RuntimeHandle.StopRuntime",
               "sha256": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7"
-            },
-            {
-              "item": "RuntimeHost.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
             },
             {
               "item": "RuntimeHost.AttachRuntime",
@@ -201738,16 +201122,8 @@
               "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
             },
             {
-              "item": "RuntimeHost.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
               "item": "RuntimeHost.DiscoverRuntime",
               "sha256": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099"
-            },
-            {
-              "item": "RuntimeHost.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeHost.StartRuntime",
@@ -201764,6 +201140,18 @@
             {
               "item": "RuntimeHostAttachOptions.InvocationEndpoint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlPath",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "RuntimeHostLifecycle.AttachRuntime",
@@ -201796,22 +201184,6 @@
             {
               "item": "RuntimeHostStopOptions.GracefulTimeoutMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeLifecycle.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
-            },
-            {
-              "item": "RuntimeLifecycle.ConnectLocal",
-              "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
-            },
-            {
-              "item": "RuntimeLifecycle.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
-              "item": "RuntimeLifecycle.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeLifecycleStatus.Diagnostics",
@@ -202021,32 +201393,12 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "Attach",
-              "sha256": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6"
-            },
-            {
-              "item": "AttachOptions",
-              "sha256": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1"
-            },
-            {
               "item": "AttachRuntimeHost",
               "sha256": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac"
             },
             {
-              "item": "ConnectLocal",
-              "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
               "item": "ConnectLocalRuntimeHost",
               "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
-              "item": "Discover",
-              "sha256": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84"
-            },
-            {
-              "item": "DiscoverOptions",
-              "sha256": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304"
             },
             {
               "item": "DiscoverRuntimeHost",
@@ -202091,10 +201443,6 @@
             {
               "item": "InvocationLifecycleUnspecified",
               "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
-            },
-            {
-              "item": "ModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "NewEndpointsFromJSON",
@@ -202154,7 +201502,7 @@
             },
             {
               "item": "RuntimeHostDiscoverOptions",
-              "sha256": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2"
+              "sha256": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779"
             },
             {
               "item": "RuntimeHostEndpoints",
@@ -202167,10 +201515,6 @@
             {
               "item": "RuntimeHostMode",
               "sha256": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7"
-            },
-            {
-              "item": "RuntimeHostStartConfig",
-              "sha256": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8"
             },
             {
               "item": "RuntimeHostStartRequest",
@@ -202193,10 +201537,6 @@
               "sha256": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0"
             },
             {
-              "item": "RuntimeLifecycle",
-              "sha256": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89"
-            },
-            {
               "item": "RuntimeLifecycleState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -202215,10 +201555,6 @@
             {
               "item": "RuntimeMode",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "RuntimeModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "RuntimePermissionDenied",
@@ -202269,20 +201605,8 @@
               "sha256": "5b632b3e4c3bf7ac3a8161170020a855284d7ab3f3f946067ededb11ea8475ba"
             },
             {
-              "item": "Start",
-              "sha256": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714"
-            },
-            {
-              "item": "StartConfig",
-              "sha256": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9"
-            },
-            {
               "item": "StartRuntimeHost",
               "sha256": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9"
-            },
-            {
-              "item": "StopOptions",
-              "sha256": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065"
             },
             {
               "item": "Endpoints.ControlEndpoint",
@@ -202321,16 +201645,8 @@
               "sha256": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59"
             },
             {
-              "item": "RuntimeHandle.Stop",
-              "sha256": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3"
-            },
-            {
               "item": "RuntimeHandle.StopRuntime",
               "sha256": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7"
-            },
-            {
-              "item": "RuntimeHost.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
             },
             {
               "item": "RuntimeHost.AttachRuntime",
@@ -202341,16 +201657,8 @@
               "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
             },
             {
-              "item": "RuntimeHost.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
               "item": "RuntimeHost.DiscoverRuntime",
               "sha256": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099"
-            },
-            {
-              "item": "RuntimeHost.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeHost.StartRuntime",
@@ -202367,6 +201675,18 @@
             {
               "item": "RuntimeHostAttachOptions.InvocationEndpoint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlPath",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "RuntimeHostLifecycle.AttachRuntime",
@@ -202399,22 +201719,6 @@
             {
               "item": "RuntimeHostStopOptions.GracefulTimeoutMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeLifecycle.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
-            },
-            {
-              "item": "RuntimeLifecycle.ConnectLocal",
-              "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
-            },
-            {
-              "item": "RuntimeLifecycle.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
-              "item": "RuntimeLifecycle.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeLifecycleStatus.Diagnostics",
@@ -202624,32 +201928,12 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "Attach",
-              "sha256": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6"
-            },
-            {
-              "item": "AttachOptions",
-              "sha256": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1"
-            },
-            {
               "item": "AttachRuntimeHost",
               "sha256": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac"
             },
             {
-              "item": "ConnectLocal",
-              "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
               "item": "ConnectLocalRuntimeHost",
               "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
-              "item": "Discover",
-              "sha256": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84"
-            },
-            {
-              "item": "DiscoverOptions",
-              "sha256": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304"
             },
             {
               "item": "DiscoverRuntimeHost",
@@ -202694,10 +201978,6 @@
             {
               "item": "InvocationLifecycleUnspecified",
               "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
-            },
-            {
-              "item": "ModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "NewEndpointsFromJSON",
@@ -202757,7 +202037,7 @@
             },
             {
               "item": "RuntimeHostDiscoverOptions",
-              "sha256": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2"
+              "sha256": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779"
             },
             {
               "item": "RuntimeHostEndpoints",
@@ -202770,10 +202050,6 @@
             {
               "item": "RuntimeHostMode",
               "sha256": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7"
-            },
-            {
-              "item": "RuntimeHostStartConfig",
-              "sha256": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8"
             },
             {
               "item": "RuntimeHostStartRequest",
@@ -202796,10 +202072,6 @@
               "sha256": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0"
             },
             {
-              "item": "RuntimeLifecycle",
-              "sha256": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89"
-            },
-            {
               "item": "RuntimeLifecycleState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -202818,10 +202090,6 @@
             {
               "item": "RuntimeMode",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "RuntimeModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "RuntimePermissionDenied",
@@ -202872,20 +202140,8 @@
               "sha256": "5b632b3e4c3bf7ac3a8161170020a855284d7ab3f3f946067ededb11ea8475ba"
             },
             {
-              "item": "Start",
-              "sha256": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714"
-            },
-            {
-              "item": "StartConfig",
-              "sha256": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9"
-            },
-            {
               "item": "StartRuntimeHost",
               "sha256": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9"
-            },
-            {
-              "item": "StopOptions",
-              "sha256": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065"
             },
             {
               "item": "Endpoints.ControlEndpoint",
@@ -202924,16 +202180,8 @@
               "sha256": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59"
             },
             {
-              "item": "RuntimeHandle.Stop",
-              "sha256": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3"
-            },
-            {
               "item": "RuntimeHandle.StopRuntime",
               "sha256": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7"
-            },
-            {
-              "item": "RuntimeHost.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
             },
             {
               "item": "RuntimeHost.AttachRuntime",
@@ -202944,16 +202192,8 @@
               "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
             },
             {
-              "item": "RuntimeHost.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
               "item": "RuntimeHost.DiscoverRuntime",
               "sha256": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099"
-            },
-            {
-              "item": "RuntimeHost.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeHost.StartRuntime",
@@ -202970,6 +202210,18 @@
             {
               "item": "RuntimeHostAttachOptions.InvocationEndpoint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlPath",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "RuntimeHostLifecycle.AttachRuntime",
@@ -203002,22 +202254,6 @@
             {
               "item": "RuntimeHostStopOptions.GracefulTimeoutMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeLifecycle.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
-            },
-            {
-              "item": "RuntimeLifecycle.ConnectLocal",
-              "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
-            },
-            {
-              "item": "RuntimeLifecycle.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
-              "item": "RuntimeLifecycle.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeLifecycleStatus.Diagnostics",
@@ -203227,32 +202463,12 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "Attach",
-              "sha256": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6"
-            },
-            {
-              "item": "AttachOptions",
-              "sha256": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1"
-            },
-            {
               "item": "AttachRuntimeHost",
               "sha256": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac"
             },
             {
-              "item": "ConnectLocal",
-              "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
               "item": "ConnectLocalRuntimeHost",
               "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
-              "item": "Discover",
-              "sha256": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84"
-            },
-            {
-              "item": "DiscoverOptions",
-              "sha256": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304"
             },
             {
               "item": "DiscoverRuntimeHost",
@@ -203297,10 +202513,6 @@
             {
               "item": "InvocationLifecycleUnspecified",
               "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
-            },
-            {
-              "item": "ModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "NewEndpointsFromJSON",
@@ -203360,7 +202572,7 @@
             },
             {
               "item": "RuntimeHostDiscoverOptions",
-              "sha256": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2"
+              "sha256": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779"
             },
             {
               "item": "RuntimeHostEndpoints",
@@ -203373,10 +202585,6 @@
             {
               "item": "RuntimeHostMode",
               "sha256": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7"
-            },
-            {
-              "item": "RuntimeHostStartConfig",
-              "sha256": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8"
             },
             {
               "item": "RuntimeHostStartRequest",
@@ -203399,10 +202607,6 @@
               "sha256": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0"
             },
             {
-              "item": "RuntimeLifecycle",
-              "sha256": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89"
-            },
-            {
               "item": "RuntimeLifecycleState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -203421,10 +202625,6 @@
             {
               "item": "RuntimeMode",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "RuntimeModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "RuntimePermissionDenied",
@@ -203475,20 +202675,8 @@
               "sha256": "5b632b3e4c3bf7ac3a8161170020a855284d7ab3f3f946067ededb11ea8475ba"
             },
             {
-              "item": "Start",
-              "sha256": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714"
-            },
-            {
-              "item": "StartConfig",
-              "sha256": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9"
-            },
-            {
               "item": "StartRuntimeHost",
               "sha256": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9"
-            },
-            {
-              "item": "StopOptions",
-              "sha256": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065"
             },
             {
               "item": "Endpoints.ControlEndpoint",
@@ -203527,16 +202715,8 @@
               "sha256": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59"
             },
             {
-              "item": "RuntimeHandle.Stop",
-              "sha256": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3"
-            },
-            {
               "item": "RuntimeHandle.StopRuntime",
               "sha256": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7"
-            },
-            {
-              "item": "RuntimeHost.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
             },
             {
               "item": "RuntimeHost.AttachRuntime",
@@ -203547,16 +202727,8 @@
               "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
             },
             {
-              "item": "RuntimeHost.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
               "item": "RuntimeHost.DiscoverRuntime",
               "sha256": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099"
-            },
-            {
-              "item": "RuntimeHost.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeHost.StartRuntime",
@@ -203573,6 +202745,18 @@
             {
               "item": "RuntimeHostAttachOptions.InvocationEndpoint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlPath",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "RuntimeHostLifecycle.AttachRuntime",
@@ -203605,22 +202789,6 @@
             {
               "item": "RuntimeHostStopOptions.GracefulTimeoutMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeLifecycle.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
-            },
-            {
-              "item": "RuntimeLifecycle.ConnectLocal",
-              "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
-            },
-            {
-              "item": "RuntimeLifecycle.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
-              "item": "RuntimeLifecycle.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeLifecycleStatus.Diagnostics",
@@ -203830,32 +202998,12 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "Attach",
-              "sha256": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6"
-            },
-            {
-              "item": "AttachOptions",
-              "sha256": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1"
-            },
-            {
               "item": "AttachRuntimeHost",
               "sha256": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac"
             },
             {
-              "item": "ConnectLocal",
-              "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
               "item": "ConnectLocalRuntimeHost",
               "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
-              "item": "Discover",
-              "sha256": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84"
-            },
-            {
-              "item": "DiscoverOptions",
-              "sha256": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304"
             },
             {
               "item": "DiscoverRuntimeHost",
@@ -203900,10 +203048,6 @@
             {
               "item": "InvocationLifecycleUnspecified",
               "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
-            },
-            {
-              "item": "ModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "NewEndpointsFromJSON",
@@ -203963,7 +203107,7 @@
             },
             {
               "item": "RuntimeHostDiscoverOptions",
-              "sha256": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2"
+              "sha256": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779"
             },
             {
               "item": "RuntimeHostEndpoints",
@@ -203976,10 +203120,6 @@
             {
               "item": "RuntimeHostMode",
               "sha256": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7"
-            },
-            {
-              "item": "RuntimeHostStartConfig",
-              "sha256": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8"
             },
             {
               "item": "RuntimeHostStartRequest",
@@ -204002,10 +203142,6 @@
               "sha256": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0"
             },
             {
-              "item": "RuntimeLifecycle",
-              "sha256": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89"
-            },
-            {
               "item": "RuntimeLifecycleState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -204024,10 +203160,6 @@
             {
               "item": "RuntimeMode",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "RuntimeModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "RuntimePermissionDenied",
@@ -204078,20 +203210,8 @@
               "sha256": "5b632b3e4c3bf7ac3a8161170020a855284d7ab3f3f946067ededb11ea8475ba"
             },
             {
-              "item": "Start",
-              "sha256": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714"
-            },
-            {
-              "item": "StartConfig",
-              "sha256": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9"
-            },
-            {
               "item": "StartRuntimeHost",
               "sha256": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9"
-            },
-            {
-              "item": "StopOptions",
-              "sha256": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065"
             },
             {
               "item": "Endpoints.ControlEndpoint",
@@ -204130,16 +203250,8 @@
               "sha256": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59"
             },
             {
-              "item": "RuntimeHandle.Stop",
-              "sha256": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3"
-            },
-            {
               "item": "RuntimeHandle.StopRuntime",
               "sha256": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7"
-            },
-            {
-              "item": "RuntimeHost.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
             },
             {
               "item": "RuntimeHost.AttachRuntime",
@@ -204150,16 +203262,8 @@
               "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
             },
             {
-              "item": "RuntimeHost.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
               "item": "RuntimeHost.DiscoverRuntime",
               "sha256": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099"
-            },
-            {
-              "item": "RuntimeHost.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeHost.StartRuntime",
@@ -204176,6 +203280,18 @@
             {
               "item": "RuntimeHostAttachOptions.InvocationEndpoint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlPath",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "RuntimeHostLifecycle.AttachRuntime",
@@ -204208,22 +203324,6 @@
             {
               "item": "RuntimeHostStopOptions.GracefulTimeoutMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeLifecycle.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
-            },
-            {
-              "item": "RuntimeLifecycle.ConnectLocal",
-              "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
-            },
-            {
-              "item": "RuntimeLifecycle.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
-              "item": "RuntimeLifecycle.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeLifecycleStatus.Diagnostics",
@@ -204433,32 +203533,12 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "Attach",
-              "sha256": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6"
-            },
-            {
-              "item": "AttachOptions",
-              "sha256": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1"
-            },
-            {
               "item": "AttachRuntimeHost",
               "sha256": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac"
             },
             {
-              "item": "ConnectLocal",
-              "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
               "item": "ConnectLocalRuntimeHost",
               "sha256": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715"
-            },
-            {
-              "item": "Discover",
-              "sha256": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84"
-            },
-            {
-              "item": "DiscoverOptions",
-              "sha256": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304"
             },
             {
               "item": "DiscoverRuntimeHost",
@@ -204503,10 +203583,6 @@
             {
               "item": "InvocationLifecycleUnspecified",
               "sha256": "590ec7d22dd77c3a4ebc2366398d49b456f2b29851d0def579d3a449b2daf391"
-            },
-            {
-              "item": "ModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "NewEndpointsFromJSON",
@@ -204566,7 +203642,7 @@
             },
             {
               "item": "RuntimeHostDiscoverOptions",
-              "sha256": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2"
+              "sha256": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779"
             },
             {
               "item": "RuntimeHostEndpoints",
@@ -204579,10 +203655,6 @@
             {
               "item": "RuntimeHostMode",
               "sha256": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7"
-            },
-            {
-              "item": "RuntimeHostStartConfig",
-              "sha256": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8"
             },
             {
               "item": "RuntimeHostStartRequest",
@@ -204605,10 +203677,6 @@
               "sha256": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0"
             },
             {
-              "item": "RuntimeLifecycle",
-              "sha256": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89"
-            },
-            {
               "item": "RuntimeLifecycleState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -204627,10 +203695,6 @@
             {
               "item": "RuntimeMode",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "RuntimeModeBoth",
-              "sha256": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc"
             },
             {
               "item": "RuntimePermissionDenied",
@@ -204681,20 +203745,8 @@
               "sha256": "5b632b3e4c3bf7ac3a8161170020a855284d7ab3f3f946067ededb11ea8475ba"
             },
             {
-              "item": "Start",
-              "sha256": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714"
-            },
-            {
-              "item": "StartConfig",
-              "sha256": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9"
-            },
-            {
               "item": "StartRuntimeHost",
               "sha256": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9"
-            },
-            {
-              "item": "StopOptions",
-              "sha256": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065"
             },
             {
               "item": "Endpoints.ControlEndpoint",
@@ -204733,16 +203785,8 @@
               "sha256": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59"
             },
             {
-              "item": "RuntimeHandle.Stop",
-              "sha256": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3"
-            },
-            {
               "item": "RuntimeHandle.StopRuntime",
               "sha256": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7"
-            },
-            {
-              "item": "RuntimeHost.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
             },
             {
               "item": "RuntimeHost.AttachRuntime",
@@ -204753,16 +203797,8 @@
               "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
             },
             {
-              "item": "RuntimeHost.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
               "item": "RuntimeHost.DiscoverRuntime",
               "sha256": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099"
-            },
-            {
-              "item": "RuntimeHost.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeHost.StartRuntime",
@@ -204779,6 +203815,18 @@
             {
               "item": "RuntimeHostAttachOptions.InvocationEndpoint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.ControlPath",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
+              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
             },
             {
               "item": "RuntimeHostLifecycle.AttachRuntime",
@@ -204811,22 +203859,6 @@
             {
               "item": "RuntimeHostStopOptions.GracefulTimeoutMS",
               "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "RuntimeLifecycle.Attach",
-              "sha256": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64"
-            },
-            {
-              "item": "RuntimeLifecycle.ConnectLocal",
-              "sha256": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741"
-            },
-            {
-              "item": "RuntimeLifecycle.Discover",
-              "sha256": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7"
-            },
-            {
-              "item": "RuntimeLifecycle.Start",
-              "sha256": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9"
             },
             {
               "item": "RuntimeLifecycleStatus.Diagnostics",

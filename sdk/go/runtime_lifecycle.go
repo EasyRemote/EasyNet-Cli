@@ -56,6 +56,17 @@ func (o runtimeEndpointDiscoveryRequest) RuntimeHostDiscoverPayload() ([]byte, e
 	return json.Marshal(o)
 }
 
+// RuntimeHostDiscoverOptions identifies a runtime host by canonical endpoint
+// locators. Product directory roots remain provider-owned request fields.
+type RuntimeHostDiscoverOptions struct {
+	ControlEndpoint string `json:"control_endpoint,omitempty"`
+	ControlPath     string `json:"control_path,omitempty"`
+}
+
+func (o RuntimeHostDiscoverOptions) RuntimeHostDiscoverPayload() ([]byte, error) {
+	return json.Marshal(o)
+}
+
 // RuntimeHostAttachOptions identifies an existing runtime host.
 type RuntimeHostAttachOptions struct {
 	ControlEndpoint    string `json:"control_endpoint,omitempty"`
@@ -534,10 +545,6 @@ func NewRuntimeLifecycleStatusFromJSON(raw []byte) (RuntimeLifecycleStatus, erro
 		return RuntimeLifecycleStatus{}, invalidRuntimePayload("invalid daemon lifecycle state", nil)
 	}
 	return status, nil
-}
-
-func NewDaemonStatusFromJSON(raw []byte) (DaemonStatus, error) {
-	return NewRuntimeLifecycleStatusFromJSON(raw)
 }
 
 func validRuntimeLifecycleState(state RuntimeLifecycleState) bool {

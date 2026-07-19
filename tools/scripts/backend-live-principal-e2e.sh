@@ -83,7 +83,7 @@ backend_live_principal_self_test() (
   test -f "$backend_module_root/internal/logic/user/register_user_signing_key_live_daemon_test.go"
   grep -q "backend_live_daemon" "$backend_module_root/internal/logic/user/register_user_signing_key_live_daemon_test.go"
   grep -q "TestRegisterUserSigningKey_BackendAccountFlowUsesLiveDaemonPrincipalLifecycle" "$backend_module_root/internal/logic/user/register_user_signing_key_live_daemon_test.go"
-  grep -q "OpenCABIDaemonTransport" "$backend_module_root/internal/logic/user/register_user_signing_key_live_daemon_test.go"
+  grep -q "OpenCABIRuntimeLifecycleTransport" "$backend_module_root/internal/logic/user/register_user_signing_key_live_daemon_test.go"
   grep -q "principalprofile.NewClient" "$backend_module_root/internal/logic/user/register_user_signing_key_live_daemon_test.go"
   echo "backend-live-principal-e2e self-test ok"
 )

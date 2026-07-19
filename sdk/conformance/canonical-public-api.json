@@ -438,8 +438,6 @@
       "AddressingProjection",
       "AgentRef",
       "AgentURA",
-      "Attach",
-      "AttachOptions",
       "AttachRuntimeHost",
       "AuthorityArtifact",
       "AuthorityClient",
@@ -499,7 +497,6 @@
       "Client",
       "ClockIdempotencySource",
       "ConfigureRecoveryRequest",
-      "ConnectLocal",
       "ConnectLocalRuntimeHost",
       "ConnectOptions",
       "ConnectionClosed",
@@ -566,8 +563,6 @@
       "DirectorySubscriptionLive",
       "DirectorySubscriptionSnapshotting",
       "DirectorySubscriptionState",
-      "Discover",
-      "DiscoverOptions",
       "DiscoverRuntimeHost",
       "DiscoveryTransport",
       "DiscoveryTransportFunc",
@@ -700,7 +695,6 @@
       "MaxReceiptHistoryLimit",
       "MaxRuntimeEventPageLimit",
       "MaxStreamBufferedEvents",
-      "ModeBoth",
       "NativeRuntimeHandle",
       "NativeRuntimeOptions",
       "NewAbilityDescriptorClient",
@@ -739,7 +733,6 @@
       "NewRuntimeAbilityDescriptorProvider",
       "NewRuntimeAccessControlProvider",
       "NewRuntimeAdminAbilityClient",
-      "NewRuntimeAdminClient",
       "NewRuntimeClient",
       "NewRuntimeClientDescriptorProvider",
       "NewRuntimeClientSessionRuntimeProvider",
@@ -905,7 +898,6 @@
       "RuntimeHostEndpoints",
       "RuntimeHostLifecycle",
       "RuntimeHostMode",
-      "RuntimeHostStartConfig",
       "RuntimeHostStartRequest",
       "RuntimeHostStatus",
       "RuntimeHostStopOptions",
@@ -913,13 +905,11 @@
       "RuntimeInvocationAuthority",
       "RuntimeInvocationDown",
       "RuntimeInvocationReady",
-      "RuntimeLifecycle",
       "RuntimeLifecycleState",
       "RuntimeLifecycleStatus",
       "RuntimeLifecycleTransport",
       "RuntimeLifecycleTransportFunc",
       "RuntimeMode",
-      "RuntimeModeBoth",
       "RuntimePermissionDenied",
       "RuntimePrincipalProvider",
       "RuntimeProvider",
@@ -986,12 +976,9 @@
       "SignerPolicy",
       "SignerProvider",
       "SigningMaterial",
-      "Start",
-      "StartConfig",
       "StartRuntimeHost",
       "StaticCallerIdentityProvider",
       "StaticSignatureProvider",
-      "StopOptions",
       "StreamCancel",
       "StreamCancelRequested",
       "StreamCancelled",
@@ -2625,7 +2612,7 @@
       "NativeRuntimeOptions.LibraryPath",
       "NativeRuntimeOptions.MaxMessageBytes",
       "NativeRuntimeOptions.Signer",
-      "NativeRuntimeOptions.StartConfig",
+      "NativeRuntimeOptions.StartRequest",
       "ParsedAbility.LocalName",
       "ParsedAbility.Namespace",
       "ParsedAbility.Owner",
@@ -2912,7 +2899,6 @@
       "RuntimeHandle.OpenRuntime",
       "RuntimeHandle.State",
       "RuntimeHandle.Status",
-      "RuntimeHandle.Stop",
       "RuntimeHandle.StopRuntime",
       "RuntimeHandleEventProvider.ReadEvents",
       "RuntimeHealth.ABIVersion",
@@ -2926,16 +2912,16 @@
       "RuntimeHealth.RuntimeReady",
       "RuntimeHealth.TrustReady",
       "RuntimeHealth.Version",
-      "RuntimeHost.Attach",
       "RuntimeHost.AttachRuntime",
       "RuntimeHost.ConnectLocal",
-      "RuntimeHost.Discover",
       "RuntimeHost.DiscoverRuntime",
-      "RuntimeHost.Start",
       "RuntimeHost.StartRuntime",
       "RuntimeHostAttachOptions.ControlEndpoint",
       "RuntimeHostAttachOptions.ControlPath",
       "RuntimeHostAttachOptions.InvocationEndpoint",
+      "RuntimeHostDiscoverOptions.ControlEndpoint",
+      "RuntimeHostDiscoverOptions.ControlPath",
+      "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
       "RuntimeHostDiscoverRequest.RuntimeHostDiscoverPayload",
       "RuntimeHostLifecycle.AttachRuntime",
       "RuntimeHostLifecycle.ConnectLocal",
@@ -2950,10 +2936,6 @@
       "RuntimeIdentityProjection.Realm",
       "RuntimeIdentityProjection.RuntimeInstanceID",
       "RuntimeInvocationAuthority.Metadata",
-      "RuntimeLifecycle.Attach",
-      "RuntimeLifecycle.ConnectLocal",
-      "RuntimeLifecycle.Discover",
-      "RuntimeLifecycle.Start",
       "RuntimeLifecycleStatus.Diagnostics",
       "RuntimeLifecycleStatus.Endpoints",
       "RuntimeLifecycleStatus.HandleID",
@@ -6481,7 +6463,6 @@
         "AbilityOwnerHub",
         "AccessControlPrincipalDevice",
         "AccessControlPrincipalHub",
-        "CABIDaemonTransport",
         "CABIDiscoveryTransport",
         "CABIRuntimeLifecycleTransport",
         "CABIRuntimeTransport",
@@ -6489,29 +6470,7 @@
         "ControlDiscoveryReader",
         "ControlDiscoveryReaderFunc",
         "ControlDiscoveryRuntimeConnector",
-        "DaemonConfigInvalid",
-        "DaemonControl",
-        "DaemonControlOnly",
-        "DaemonControlReady",
-        "DaemonCrashLoop",
-        "DaemonDiscovered",
-        "DaemonHandle",
-        "DaemonInvocationDown",
-        "DaemonInvocationReady",
         "DaemonKeyServiceRejection",
-        "DaemonLifecycleState",
-        "DaemonMode",
-        "DaemonPermissionDenied",
-        "DaemonRunning",
-        "DaemonStartFailed",
-        "DaemonStarting",
-        "DaemonStatus",
-        "DaemonStopped",
-        "DaemonStopping",
-        "DaemonTransport",
-        "DaemonTransportFunc",
-        "DaemonUnknown",
-        "DaemonVersionMismatch",
         "DecodeDaemonErrorJSON",
         "DeviceNodeIDInRealm",
         "DirectRuntimeConnector",
@@ -6525,27 +6484,19 @@
         "ErrRuntimeIdentityUnavailable",
         "FederationRevokePayload",
         "FileControlDiscoveryReader",
-        "ModeDevice",
-        "ModeHub",
         "NewCABIClient",
-        "NewCABIDaemonControl",
         "NewCABIRuntimeHost",
         "NewControlDiscoveryFromJSON",
         "NewControlDiscoveryRuntimeConnector",
-        "NewDaemonControl",
-        "NewDaemonStatusFromJSON",
         "NewDirectRuntimeConnector",
         "NewDirectRuntimeConnectorWithOptions",
-        "OpenCABIDaemonTransport",
         "OpenCABIDiscoveryTransport",
         "OpenCABIRuntimeLifecycleTransport",
         "OpenDirectRuntimeTransport",
         "RealmDevicePrefix",
         "ResolveControlDiscoveryPath",
         "RuntimeDeviceRevokeRequest",
-        "RuntimeDeviceRevokeResult",
-        "RuntimeModeDevice",
-        "RuntimeModeHub"
+        "RuntimeDeviceRevokeResult"
       ],
       "python": [
         "ControlDiscovery",
@@ -6645,9 +6596,7 @@
         "RuntimeDeviceRevokeResult.Raw",
         "RuntimeDeviceRevokeResult.RuntimeCatalogNotReady",
         "RuntimeDeviceRevokeResult.RuntimeNotReady",
-        "RuntimeDeviceRevokeResult.SystemAbility",
-        "SdkEnvironment.DaemonControl",
-        "SdkEnvironment.DiscoverDaemon"
+        "RuntimeDeviceRevokeResult.SystemAbility"
       ],
       "python": [
         "AccessControlPrincipalKind.DEVICE",
@@ -7260,14 +7209,6 @@
           "removal_phase": "quarantined",
           "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
         },
-        "CABIDaemonTransport": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
         "CABIDiscoveryTransport": {
           "canonical_replacement": [
             "capability_inventory.native_runtime"
@@ -7324,185 +7265,9 @@
           "removal_phase": "quarantined",
           "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
         },
-        "DaemonConfigInvalid": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonControl": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonControlOnly": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonControlReady": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonCrashLoop": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonDiscovered": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonHandle": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonInvocationDown": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonInvocationReady": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
         "DaemonKeyServiceRejection": {
           "canonical_replacement": [
             "capability_inventory.managed_signing"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonLifecycleState": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonMode": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonPermissionDenied": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonRunning": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartFailed": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStarting": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStatus": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStopped": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStopping": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonTransport": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonTransportFunc": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonUnknown": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonVersionMismatch": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
           ],
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
@@ -7612,22 +7377,6 @@
           "removal_phase": "quarantined",
           "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
         },
-        "ModeDevice": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
-        "ModeHub": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
         "NewCABIClient": {
           "canonical_replacement": [
             "capability_inventory.native_runtime"
@@ -7635,14 +7384,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "NewCABIDaemonControl": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
         },
         "NewCABIRuntimeHost": {
           "canonical_replacement": [
@@ -7668,22 +7409,6 @@
           "removal_phase": "quarantined",
           "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
         },
-        "NewDaemonControl": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "NewDaemonStatusFromJSON": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
         "NewDirectRuntimeConnector": {
           "canonical_replacement": [
             "capability_inventory.native_runtime"
@@ -7699,14 +7424,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Direct runtime exports are EasyNet daemon provider/source-compatibility surface, not canonical SDK capability evidence."
-        },
-        "OpenCABIDaemonTransport": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
         },
         "OpenCABIDiscoveryTransport": {
           "canonical_replacement": [
@@ -7763,22 +7480,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeModeDevice": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
-        "RuntimeModeHub": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
         }
       },
       "python": {
@@ -8502,22 +8203,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "SdkEnvironment.DaemonControl": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_environment"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "SdkEnvironment.DiscoverDaemon": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_environment"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
         }
       },
       "python": {
@@ -12424,7 +12109,7 @@
           "NativeRuntimeOptions.LibraryPath",
           "NativeRuntimeOptions.MaxMessageBytes",
           "NativeRuntimeOptions.Signer",
-          "NativeRuntimeOptions.StartConfig",
+          "NativeRuntimeOptions.StartRequest",
           "RuntimeEndpointPathOptions.DefaultPath",
           "RuntimeEndpointPathOptions.EnvVar",
           "RuntimeEndpointPathOptions.Path",
@@ -13852,7 +13537,6 @@
       "go": {
         "symbols": [
           "NewRuntimeAdminAbilityClient",
-          "NewRuntimeAdminClient",
           "RuntimeAdminAbilityClient",
           "RuntimeAdminAttach",
           "RuntimeAdminClient",
@@ -14698,13 +14382,8 @@
       },
       "go": {
         "symbols": [
-          "Attach",
-          "AttachOptions",
           "AttachRuntimeHost",
-          "ConnectLocal",
           "ConnectLocalRuntimeHost",
-          "Discover",
-          "DiscoverOptions",
           "DiscoverRuntimeHost",
           "Endpoints",
           "InvocationLifecycleAccepted",
@@ -14716,7 +14395,6 @@
           "InvocationLifecycleRunning",
           "InvocationLifecycleTimedOut",
           "InvocationLifecycleUnspecified",
-          "ModeBoth",
           "NewEndpointsFromJSON",
           "NewRuntimeHost",
           "NewRuntimeHostAdminClient",
@@ -14735,19 +14413,16 @@
           "RuntimeHostEndpoints",
           "RuntimeHostLifecycle",
           "RuntimeHostMode",
-          "RuntimeHostStartConfig",
           "RuntimeHostStartRequest",
           "RuntimeHostStatus",
           "RuntimeHostStopOptions",
           "RuntimeInvocationDown",
           "RuntimeInvocationReady",
-          "RuntimeLifecycle",
           "RuntimeLifecycleState",
           "RuntimeLifecycleStatus",
           "RuntimeLifecycleTransport",
           "RuntimeLifecycleTransportFunc",
           "RuntimeMode",
-          "RuntimeModeBoth",
           "RuntimePermissionDenied",
           "RuntimeRecoveryEvent",
           "RuntimeRecoveryReport",
@@ -14760,10 +14435,7 @@
           "RuntimeStopping",
           "RuntimeUnknown",
           "RuntimeVersionMismatch",
-          "Start",
-          "StartConfig",
-          "StartRuntimeHost",
-          "StopOptions"
+          "StartRuntimeHost"
         ],
         "members": [
           "Endpoints.ControlEndpoint",
@@ -14775,18 +14447,17 @@
           "RuntimeHandle.OpenRuntime",
           "RuntimeHandle.State",
           "RuntimeHandle.Status",
-          "RuntimeHandle.Stop",
           "RuntimeHandle.StopRuntime",
-          "RuntimeHost.Attach",
           "RuntimeHost.AttachRuntime",
           "RuntimeHost.ConnectLocal",
-          "RuntimeHost.Discover",
           "RuntimeHost.DiscoverRuntime",
-          "RuntimeHost.Start",
           "RuntimeHost.StartRuntime",
           "RuntimeHostAttachOptions.ControlEndpoint",
           "RuntimeHostAttachOptions.ControlPath",
           "RuntimeHostAttachOptions.InvocationEndpoint",
+          "RuntimeHostDiscoverOptions.ControlEndpoint",
+          "RuntimeHostDiscoverOptions.ControlPath",
+          "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload",
           "RuntimeHostLifecycle.AttachRuntime",
           "RuntimeHostLifecycle.ConnectLocal",
           "RuntimeHostLifecycle.DiscoverRuntime",
@@ -14795,10 +14466,6 @@
           "RuntimeHostStartRequest.Validate",
           "RuntimeHostStopOptions.Force",
           "RuntimeHostStopOptions.GracefulTimeoutMS",
-          "RuntimeLifecycle.Attach",
-          "RuntimeLifecycle.ConnectLocal",
-          "RuntimeLifecycle.Discover",
-          "RuntimeLifecycle.Start",
           "RuntimeLifecycleStatus.Diagnostics",
           "RuntimeLifecycleStatus.Endpoints",
           "RuntimeLifecycleStatus.HandleID",
@@ -16930,7 +16597,7 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/cabi_runtime.go",
-          "sha256": "44a49c516ab68a51333c8c62d824d5177d0cfe710e4a8df3eb930c8b5bb97dd9",
+          "sha256": "2b9c4ec0ed45572ec3a0236f4c40f06ca1730f9681916796ea58917528604957",
           "interface": "CABIRuntimeTransport",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -17282,7 +16949,7 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/cabi_runtime.go",
-          "sha256": "44a49c516ab68a51333c8c62d824d5177d0cfe710e4a8df3eb930c8b5bb97dd9",
+          "sha256": "2b9c4ec0ed45572ec3a0236f4c40f06ca1730f9681916796ea58917528604957",
           "interface": "CABIRuntimeTransport",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -18825,8 +18492,6 @@
       "AgentRef": "ded90611f797d6c3190fd75ec4860f1d907401da7b461095f474777ed2669e9e",
       "AgentRef.URA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AgentURA": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
-      "Attach": "c550d7adcaeb5f67205e8c303023ba48f2a1aba7e47fc5a65fbd766d007e94b6",
-      "AttachOptions": "da528719dbe1dc18b68368724ddefe7885c23b4d299b9d4544f4cfaffdc1efb1",
       "AttachRuntimeHost": "ba31cc7c8287e56aa3f9ae29cfc9f286f1632480a57216e918eea18afa3d7fac",
       "AuthorityArtifact": "0849a88b96b6e09a7e8ee9dcc8b08622994ae30c5e303ebc35e56f7ce4891959",
       "AuthorityArtifact.Admission": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415",
@@ -18984,7 +18649,6 @@
       "BindPrincipalKeyRequest.KeyID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "BindPrincipalKeyRequest.PrincipalURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "BindPrincipalKeyRequest.PublicKey": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e",
-      "CABIDaemonTransport": "2867ff43953ab54f7ff70faf344595e1e17eaf26daf59260a4432372e7a06e2b",
       "CABIDiscoveryTransport": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "CABIDiscoveryTransport.Close": "0d464a887ccc7c5ec145a263e02280f50af96ec1b1fd7e770a900867d4a8ba14",
       "CABIDiscoveryTransport.FeatureDiscovery": "acd209fa37ca173b020bc9532b22f94fcd3aed9f54a27bf9e858889adf95fdbf",
@@ -19084,7 +18748,6 @@
       "ConfigureRecoveryRequest.Command": "dcbeb224267733666cd0d0b0d1377e7c538e6b1a194bd708bf31e2311f311562",
       "ConfigureRecoveryRequest.PolicyRef": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "ConfigureRecoveryRequest.PrincipalURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "ConnectLocal": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715",
       "ConnectLocalRuntimeHost": "2e4574647971f515c700243f2348ee6ceabf801eaee4dfb3f8e64f22ba3b5715",
       "ConnectOptions": "42da8d124368b19545c07cdf0fd58b5e0d83c4cdad446e48ff9f659e5209bb54",
       "ConnectOptions.ControlPath": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
@@ -19135,33 +18798,11 @@
       "CreatePrincipalRequest": "f905eecf6f8c587e058280040b0cbed66f9de04da665334cbe1499372161a195",
       "CreatePrincipalRequest.Command": "dcbeb224267733666cd0d0b0d1377e7c538e6b1a194bd708bf31e2311f311562",
       "CreatePrincipalRequest.PrincipalURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "DaemonConfigInvalid": "47ee199d4be793b7b4bc17f83d9691526fcdaf48abd8b75b48874500d2d60906",
-      "DaemonControl": "dca226fc025245cf868dcb4a822996ef4c96438642565e62cb0c169686a2068d",
-      "DaemonControlOnly": "29ce10196558609ec67b782e82d0f116049913f5f514fbc0a2b973d52cebd150",
-      "DaemonControlReady": "f5530997d92b903c5577bd0d4f6d947e769f51b62851428f98e3865b4add06b2",
-      "DaemonCrashLoop": "789c151f5b791113b72c02ccc0c4937dd85edcd2c558ab72c3f21aaf3159893e",
-      "DaemonDiscovered": "6f2d5c00fc28c0602db8131a57a9d5b48e24d438eabc9b54d6a2ca151376deee",
-      "DaemonHandle": "5dbf089aa71535ed7ded6d5ad5b148b5db178ddf406ef881bda4752286b6e481",
-      "DaemonInvocationDown": "0373c8ba45e37850e4f50992c7ae6b67f380ec0325b1fbbc0e39c059b6d63999",
-      "DaemonInvocationReady": "9f95da61d9d208ef3f291d195357e8305fca088d4541db44298279ef0bcd2961",
       "DaemonKeyServiceRejection": "1de5f44853b7522d2b2a8e22a494e5e3cf7725ec05ede510bc776c7c8c217e32",
       "DaemonKeyServiceRejection.Error": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "DaemonKeyServiceRejection.Kind": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "DaemonKeyServiceRejection.Message": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "DaemonKeyServiceRejection.Unwrap": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb",
-      "DaemonLifecycleState": "4a53b21cbbe26072c6c8cf376f62733693aa5f38af822630eb12ec2f5e417360",
-      "DaemonMode": "896d5eca76cdb551619e69707166ce9c9da9fd0d4b5344af92dbcf7ab93c7157",
-      "DaemonPermissionDenied": "715e2f91ab2675edce89f47c9209d4ce7c80a87c417cc97ecb936c8934cd64d7",
-      "DaemonRunning": "b6656d93d983b76446c59924674e7e730418770ad4d68a5ceda86c338bb3b64a",
-      "DaemonStartFailed": "e7d9c407e4af97fb5c06ca28a2d6b08fd4af262eb3b953d56c58231d7e24f277",
-      "DaemonStarting": "d7944d1f4c52a2343dc74073b900dd0466ef0d8e4347e06a01f8ca0986e1ea8f",
-      "DaemonStatus": "5db16b813e211fb3ea94a7696966693a406f18eaac4275eec6dbcc3cafec9523",
-      "DaemonStopped": "85e6b5ac56ed1924b1948d4347eb8e95d7955267874f1db22498404e82d17a38",
-      "DaemonStopping": "bb7f451934274d310338e46fead4e7c50c5e2bfa8e3d9fdbfe663a97b4ad13be",
-      "DaemonTransport": "9b8ad449c57d83684d14908215b6fba0dbc4d48396fb6c1101aa4ff087394cb2",
-      "DaemonTransportFunc": "595eca745aed24e4e548a1ed6a773c80fb5cd4eca292f861cf0f85d895d9523c",
-      "DaemonUnknown": "80d1ea31808791e00d4f5f86eb3982bd76ca77987946fe38903d2a8fa0fcd0a4",
-      "DaemonVersionMismatch": "9e8bea3605059b48dc4b7378689479ffbca66e468f2c94527caee45c7cbfdabc",
       "DecodeDaemonErrorJSON": "3ffd709d25084ed7182857d4b07298d282b64f77c5bb3d38d9760fc9b3439705",
       "DefaultDirectoryPageLimit": "4bdfbcc03de0e1be3f60c602ba79892450166e1ffe081579cf06515f0e98a273",
       "DefaultReceiptHistoryLimit": "4bdfbcc03de0e1be3f60c602ba79892450166e1ffe081579cf06515f0e98a273",
@@ -19386,8 +19027,6 @@
       "DirectorySubscriptionLive": "ad920a159016560e5b75d149061742fe28d64f5e7eba37c3b5bc131da61843ae",
       "DirectorySubscriptionSnapshotting": "97ee7d7aec3937445f212b8ccfad20d371f328a5c4c6ede0d3ad8036ed3931c3",
       "DirectorySubscriptionState": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "Discover": "aab10f45dd6665ef8487aa3d54aaa211b4ce5741c1a5208a4b65c95469ee3f84",
-      "DiscoverOptions": "9678a6b53f0f341880ff3a8f0716df73cfe05b1a472e671801e3d5a86810b304",
       "DiscoverRuntimeHost": "962f5daeeac3516edc02c5371c08e4a8a70f36cfe703adf1dc61ea0705a173a0",
       "DiscoveryTransport": "ae673e155dddb73e60d85cbd7fd8d9e4b46b7b3141bcd9e4d2a49d958eec9c1f",
       "DiscoveryTransport.Close": "0d464a887ccc7c5ec145a263e02280f50af96ec1b1fd7e770a900867d4a8ba14",
@@ -19729,16 +19368,13 @@
       "MaxReceiptHistoryLimit": "e833f956ad7afa7efda7b939e26668bfeae982c04929ffbada7239023494d0d7",
       "MaxRuntimeEventPageLimit": "e833f956ad7afa7efda7b939e26668bfeae982c04929ffbada7239023494d0d7",
       "MaxStreamBufferedEvents": "8b01559ce9705b80f80cdabb8fa7496c486cb02a1fcf2d5a24b7a6ceb00f5174",
-      "ModeBoth": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc",
-      "ModeDevice": "41282ed26a2ba62312b593f408d3691127ec595c912c927e8abe0c4d327229cf",
-      "ModeHub": "e0c1407ba19fb28fccc18c09f2b7af602e8d05a3bdd74a15ce6d10ea40dffe94",
       "NativeRuntimeHandle": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "NativeRuntimeHandle.AbilityClient": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2",
       "NativeRuntimeHandle.Addressing": "2d1cb08e2d3da60c042d82c8801e107fb54bb3a01bb98fa47a9616dcc4c0c54c",
       "NativeRuntimeHandle.Client": "0e7b9fb0f4fa531c0e7de61de1bc04fcc194be908d8639d9858e71a23b23c23e",
       "NativeRuntimeHandle.Close": "0d464a887ccc7c5ec145a263e02280f50af96ec1b1fd7e770a900867d4a8ba14",
       "NativeRuntimeHandle.Health": "df9c36e5c23181c2be64eaeac96f5a6f03f4e1dacc6b427899ecf4c69e7705b0",
-      "NativeRuntimeOptions": "565b0734045aaaef8c24088a90f2b13d1527d81f6ba9142488f656da8f6f7da0",
+      "NativeRuntimeOptions": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4",
       "NativeRuntimeOptions.ControlPath": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "NativeRuntimeOptions.DialTimeoutMS": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57",
       "NativeRuntimeOptions.Endpoint": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
@@ -19746,7 +19382,7 @@
       "NativeRuntimeOptions.LibraryPath": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "NativeRuntimeOptions.MaxMessageBytes": "6da88c34ba124c41f977db66a4fc5c1a951708d285c81bb0d47c3206f4c27ca8",
       "NativeRuntimeOptions.Signer": "619eb6284adcd6861cec96a1d11d5babc4650a0db1e8490996a47c6fc48cdc59",
-      "NativeRuntimeOptions.StartConfig": "d296b4499504aa1a81dba169a1f084b6c4f6b336a4e68e46cfc95886cf3e2a7b",
+      "NativeRuntimeOptions.StartRequest": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b",
       "NativeRuntimeOptions.StopDaemonOnClose": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903",
       "NewAbilityDescriptorClient": "48965da53523fc507e0fb6b7d5e58ca71943b9f487794bcbe2641a3b6368611d",
       "NewAccessControlClient": "f3dea579460b66b9fb7a26cc128316a674133470069f3a47a39366154b6a6362",
@@ -19760,7 +19396,6 @@
       "NewBidiSessionFromJSON": "8884bdbf8dc41cb0fccbd889617df21eb22e57108240b34f5f32afed7a543701",
       "NewBidiTerminalFrame": "d8138489677192af88d7d17e1820f9c618e40e4fd05160743fcae94557c07e54",
       "NewCABIClient": "ba77caf7e500ee026016a6a08edcf23173eda2c4704146aef107090cbf7e868e",
-      "NewCABIDaemonControl": "be7c5a53013920300eadc4dfb1064873c4ae587988a76ff93087c2a3046e0049",
       "NewCABIRuntimeHost": "1ac9157f5a12f450921972589411ff8354770acf5d53108f5112523ee0484789",
       "NewCanonicalAddressing": "c7e90d7d6cced84f257083408db41fcb15df345342aabbed33fdd83fd2e0362d",
       "NewCanonicalAuthorityClient": "f19b1dbdb1444807ce2fa497d54bcc63aab002d28bbcf2950a6fcf1182a53c03",
@@ -19768,8 +19403,6 @@
       "NewClient": "fea27df51c76ac18cc7b713c67d2f578fbf5bc303f8de0670caa526fe328ccd1",
       "NewControlDiscoveryFromJSON": "ce4bacbdfbe10834de39fd38b522bb9ecd135e7518a295c99c342bd687b896e2",
       "NewControlDiscoveryRuntimeConnector": "a03690958533383375fef4a0cc24303a661f5b00dd53adce03129a8b8734cada",
-      "NewDaemonControl": "3c7ca262a3616bd7f9f0ca268bf2bd5d7e39b38224200171a2cba08fa76efe56",
-      "NewDaemonStatusFromJSON": "e8c8208969f2b369105eb7b31c7fa501bc88c9f3df3133e9c62a049184d0c43c",
       "NewDelegationProofFromMetadata": "3e9c6b26655be4d8bb727a55e2d154406ba5a93bf591fda88c5e89afc80b9e63",
       "NewDiagnosticsReportFromJSON": "e9530ce5ef8fcac1488f7333ddf3cf20cea6af2c975870cf0ff533276d2824eb",
       "NewDirectRuntimeConnector": "4ea7602de28ef6a5419752734ff7bf2df89fad088b0f249f1d8ba48e8a10637d",
@@ -19793,7 +19426,6 @@
       "NewRuntimeAbilityDescriptorProvider": "2ffca1d564db584c9198e8f7d0221acd740d838aa554897a4c834f99b7a080ae",
       "NewRuntimeAccessControlProvider": "7e1f56526ad32a03ac54557a6b5bbb215ed94b73728235fe74e76ece73a297a4",
       "NewRuntimeAdminAbilityClient": "acf3b04887dd140e7947cb1871945e5465a8211f8a73eb58561385ed712c1336",
-      "NewRuntimeAdminClient": "5763d63d923a08186063d1594e57c9cea6dbbc518954d3d321d085e3d1b35842",
       "NewRuntimeClient": "659c870b1ab0f837280dee1ef444376a7725ddcc176376d57206b2b432dc76e8",
       "NewRuntimeClientDescriptorProvider": "93cfece7eb65e11354edef8f4b5d1fdd64ce00030d1bb9e4d1759e922b80d512",
       "NewRuntimeClientSessionRuntimeProvider": "89c7e77008af7f05ff056fc6a901177b84b847c6b187a7a1b4c75b6b96e5955c",
@@ -19821,7 +19453,6 @@
       "NewStreamEventFromJSON": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a",
       "NewStreamHandleFromJSON": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644",
       "NewStreamTerminalEvent": "3ff95303f595f98d1d45f53610298f5fe6291baf1db63e3298dd2a50c9cb2e44",
-      "OpenCABIDaemonTransport": "fb1e58aaf95b714433f427c46fc6fb9a30a539f241db437b7b665ac6757a8c9d",
       "OpenCABIDiscoveryTransport": "d0ea59b16423f6d83bd018dd27b08eb56d3bbf54e6c23bc1eede9d4f1cd1392b",
       "OpenCABIRuntimeLifecycleTransport": "f26ae57fd66e4e8fc64b7d0303cd313ade6025ec0178d4cd5ed47850aa201bd4",
       "OpenDirectRuntimeTransport": "78797e743952da09e50c21b7ed66e3c8b3b611caa6b0eac563f3ffe279cffd9c",
@@ -20122,7 +19753,7 @@
       "RuntimeAdminClient.Health": "9d8685927efec3c2d0333f65403f4661d59508d3708d61c77fd9f53827b05932",
       "RuntimeAdminClient.OpenRuntime": "71121220272ffacfa1faf113cc9899767aa029b66ee9799c372795e7ad01a20d",
       "RuntimeAdminClient.Readiness": "1f2fd50f07c34cb88e11803d0919b26d80a6d2a8160947e727bc1510e2e56094",
-      "RuntimeAdminClient.Start": "6f90243e3bc3aba08960e97ab1d0a5db8607966b02db3faa49adf823b35d8c04",
+      "RuntimeAdminClient.Start": "2c0727f4f91ff12de791176c9da0c5d5ec0be332d1d4bf4b6328fc787b1316b7",
       "RuntimeAdminClient.Status": "f2bf4a982c3d84029e39bde56b80c4bf8c6af02d26ad7c76d87a9df2c9367032",
       "RuntimeAdminClient.Stop": "e7480724db99eba16b4f33f3bec467ec9a6a236efe39f75805777ae17b66dbc7",
       "RuntimeAdminCommand": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
@@ -20255,7 +19886,6 @@
       "RuntimeHandle.OpenRuntime": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741",
       "RuntimeHandle.State": "90b8fa76573ac3e4e3dd2b8f611227cdabe8662df237f8353cdf2871b9b6492b",
       "RuntimeHandle.Status": "d8256183c191661befa312aac36833a2e1ace60d13003fd9c9591ccbbb099c59",
-      "RuntimeHandle.Stop": "672f5657ad1de786c042b23a03905e719a9b14b286d68e3e3e74ecadd0dbb7c3",
       "RuntimeHandle.StopRuntime": "222bad658557281a93ee49a6d7af51faf5e6dc969195729e73f94ef5522c29f7",
       "RuntimeHandleEventProvider": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "RuntimeHandleEventProvider.ReadEvents": "93c88d1b9312129da055e2edf6d1cac8f8e30efa7a309bb388ef9711612f0ff2",
@@ -20272,18 +19902,18 @@
       "RuntimeHealth.TrustReady": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903",
       "RuntimeHealth.Version": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5",
       "RuntimeHost": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
-      "RuntimeHost.Attach": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64",
       "RuntimeHost.AttachRuntime": "b7d66019d700c507b433f179b63eed242c3e0f48bdc52c70dc47aebd06a07a85",
       "RuntimeHost.ConnectLocal": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741",
-      "RuntimeHost.Discover": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7",
       "RuntimeHost.DiscoverRuntime": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099",
-      "RuntimeHost.Start": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9",
       "RuntimeHost.StartRuntime": "2c0727f4f91ff12de791176c9da0c5d5ec0be332d1d4bf4b6328fc787b1316b7",
       "RuntimeHostAttachOptions": "b192e12db70ccb9963fd2a7c300e6ec52b6e187e90a515eba7d893a980848240",
       "RuntimeHostAttachOptions.ControlEndpoint": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RuntimeHostAttachOptions.ControlPath": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RuntimeHostAttachOptions.InvocationEndpoint": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "RuntimeHostDiscoverOptions": "b7ac9d385caba896ab760a699fcd793ef9af48a38faab181e3e5527ea68906c2",
+      "RuntimeHostDiscoverOptions": "548b8f9f6084cb227affa8e054dbe2992b8d55ffcac0dd7de7f28a1c17ddd779",
+      "RuntimeHostDiscoverOptions.ControlEndpoint": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
+      "RuntimeHostDiscoverOptions.ControlPath": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
+      "RuntimeHostDiscoverOptions.RuntimeHostDiscoverPayload": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200",
       "RuntimeHostDiscoverRequest": "b690fb35d0477c1480a22d08a622736ee9a9197cb3a7809d4cce14641ef6a9cc",
       "RuntimeHostDiscoverRequest.RuntimeHostDiscoverPayload": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200",
       "RuntimeHostEndpoints": "fce7fec2a58c8b49e4deba672461d849ec0df43da356de68d0cd8d47ce3eefa3",
@@ -20293,7 +19923,6 @@
       "RuntimeHostLifecycle.DiscoverRuntime": "e05ccc555aa876d7ea01d3584de7e8cfd9b7035b7506d5ff960f64fadd576099",
       "RuntimeHostLifecycle.StartRuntime": "2c0727f4f91ff12de791176c9da0c5d5ec0be332d1d4bf4b6328fc787b1316b7",
       "RuntimeHostMode": "ec64524ebedf3a7f669bc74561c73b2fed35a660bd45e36b6ab6b00e5dc780d7",
-      "RuntimeHostStartConfig": "93bb73b42c85abc2bde24bb12e7a87cf7732248306e1b4d289ac6e068427bdf8",
       "RuntimeHostStartRequest": "887cb1938337e790ddb6576ddd0cee2a4f140888dc150045b69ea18cc191f943",
       "RuntimeHostStartRequest.RuntimeHostStartPayload": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200",
       "RuntimeHostStartRequest.Validate": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb",
@@ -20310,11 +19939,6 @@
       "RuntimeInvocationAuthority.Metadata": "20f54ecaf56c81179795ddb98aeb1ceace4b2660d74960f97f69d47363cd535d",
       "RuntimeInvocationDown": "0342ead559467b54ac7db48c0113ff0755a129827803f682831862f5055dc670",
       "RuntimeInvocationReady": "0f34abc62f4307b193bbabf74ee761ed7f81ff16b5974ca125c0ecef80e86ee0",
-      "RuntimeLifecycle": "4e1455119cd1df1c0c791d4487afb4a1f275688ee441f788d9b80f3c7fbd1e89",
-      "RuntimeLifecycle.Attach": "a19f90c737004bef744c4ef94ff909f911cf3c34dcc005554c1e7aec1eff1d64",
-      "RuntimeLifecycle.ConnectLocal": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741",
-      "RuntimeLifecycle.Discover": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7",
-      "RuntimeLifecycle.Start": "47a5c08a191fd899659c39ae6e28b280f62c3e26711a16c7d726e41ebcf58ba9",
       "RuntimeLifecycleState": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RuntimeLifecycleStatus": "2c2c15425a9b42121305f87deff3cf5b0d785046f0b58ff151a95710293e810c",
       "RuntimeLifecycleStatus.Diagnostics": "4af101177fe720bf0766557228231c42b38635920ef7206f518a04030b3dcdf0",
@@ -20349,9 +19973,6 @@
       "RuntimeLifecycleTransportFunc.Stop": "229ca570364556950a3a27b838ff262ebc7ac2b108b4a46c3b5a9cd5b8166bac",
       "RuntimeLifecycleTransportFunc.StopFunc": "229ca570364556950a3a27b838ff262ebc7ac2b108b4a46c3b5a9cd5b8166bac",
       "RuntimeMode": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "RuntimeModeBoth": "539429b0d45ddb08ebf69a4ac2bdae2a754a16d7ff23521d9bd130b34d7f2ddc",
-      "RuntimeModeDevice": "41282ed26a2ba62312b593f408d3691127ec595c912c927e8abe0c4d327229cf",
-      "RuntimeModeHub": "e0c1407ba19fb28fccc18c09f2b7af602e8d05a3bdd74a15ce6d10ea40dffe94",
       "RuntimePermissionDenied": "1ae54f9d727c85724c1d114b765fcb0ad43e7a22ae8e6406383f5a21000c8ad9",
       "RuntimePrincipalProvider": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "RuntimePrincipalProvider.AddKey": "1160636405161608bb720cdc9942347d86dd3f253576a4ccb167ac9c3a188165",
@@ -20608,9 +20229,7 @@
       "SdkEnvironment": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "SdkEnvironment.Close": "0d464a887ccc7c5ec145a263e02280f50af96ec1b1fd7e770a900867d4a8ba14",
       "SdkEnvironment.ConnectLocal": "e3b2a4028add2d8d75b35af345ccc5c421518893ee41cb3e3891a04a09581741",
-      "SdkEnvironment.DaemonControl": "9e11f0c75325d345eba4e3c84deedb69546f3b7b0d67be797e3e12b17e4a118f",
       "SdkEnvironment.Defaults": "b4dea7a666949fa354ffca63ea944885b2530ed655dff1ad5928c8e3ba6485bf",
-      "SdkEnvironment.DiscoverDaemon": "e4c24e445b62ac3444624c05b1da6a57db62d5ca56e71d5395c7c0fbe6cb8ae7",
       "SdkEnvironment.DiscoverRuntime": "24df18d7188d0ab349eed269bf905a298ba4cc0ce1476d238a26696f50e0ae2f",
       "SdkEnvironment.FeatureDiscovery": "c38da5decc991e757f7c6cbb123e24fb5f82a38fcaf734ccc4c56c3d214843ed",
       "SdkEnvironment.ReadRuntimeIdentityProjection": "e1fea48af75362911bfbbf5bb1b141ccf84e2d98d1d457e9829ae90760c8fa52",
@@ -20729,15 +20348,12 @@
       "SigningMaterial.NonceBase64": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "SigningMaterial.SignedFields": "9392955705c3e635c49cb6ac5992063177893ccb34641eb23c1e430623fcc584",
       "SigningMaterial.SignerPolicy": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a",
-      "Start": "a6783784579892ed279b9105a1f8ef13bb2bcdf88f352753d4a49d1948869714",
-      "StartConfig": "ad38189d9ffc8a5106dee1871ac77ee0bb478fde9c66b88f9a46694bf7e6bfd9",
       "StartRuntimeHost": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9",
       "StaticCallerIdentityProvider": "8153f57163d3abd01894fb7760262fb3b0ba5afe112b3400efd5ae3d240eafba",
       "StaticCallerIdentityProvider.Caller": "f140734733c8ad836bdcbfaf22d72239ef36f16f6c00c4067a1cdcaa8b5d51c1",
       "StaticCallerIdentityProvider.CallerIdentity": "fb4d6d15c417d7a67cbe2a989cf219e5121793fa37130b62d840c7ed71b30bf1",
       "StaticSignatureProvider": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "StaticSignatureProvider.Sign": "7203e9cc5593b866631b644305983bdd618542c5568e8f7d2a4297d45cfdd40d",
-      "StopOptions": "cc548b98b0eeb03add3a41dbeb0ac8444b3ef4a5550c9a87e6c432913054b065",
       "StreamCancel": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "StreamCancel.Cancelled": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a",
       "StreamCancel.State": "f1dfc2e0357d9dac374107a4e24b88721ff26430928eff3ca3e106a8d3c42f93",
@@ -25067,10 +24683,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/cabi_runtime.go",
-      "sha256": "44a49c516ab68a51333c8c62d824d5177d0cfe710e4a8df3eb930c8b5bb97dd9",
+      "sha256": "2b9c4ec0ed45572ec3a0236f4c40f06ca1730f9681916796ea58917528604957",
       "interface": "CABIRuntimeTransport",
       "interface_path": "sdk/go/cabi_runtime.go",
-      "interface_sha256": "44a49c516ab68a51333c8c62d824d5177d0cfe710e4a8df3eb930c8b5bb97dd9",
+      "interface_sha256": "2b9c4ec0ed45572ec3a0236f4c40f06ca1730f9681916796ea58917528604957",
       "capability_ids": [
         "stream",
         "bidi"

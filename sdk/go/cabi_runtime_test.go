@@ -13,9 +13,11 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	easynetprovider "easynet.run/cli/sdk/go/provider/easynet"
 )
 
-var _ DaemonTransport = (*CABIRuntimeLifecycleTransport)(nil)
+var _ RuntimeLifecycleTransport = (*CABIRuntimeLifecycleTransport)(nil)
 var _ RuntimeTransport = (*CABIRuntimeTransport)(nil)
 var _ HealthTransport = (*CABIRuntimeTransport)(nil)
 
@@ -294,8 +296,8 @@ func TestCABIDaemonStatusProjectionFromFlatAndNestedShapes(t *testing.T) {
 	if status["handle_id"] != "42" {
 		t.Fatalf("handle_id = %v, want 42", status["handle_id"])
 	}
-	if status["state"] != string(DaemonControlOnly) {
-		t.Fatalf("state = %v, want %s", status["state"], DaemonControlOnly)
+	if status["state"] != string(RuntimeControlOnly) {
+		t.Fatalf("state = %v, want %s", status["state"], RuntimeControlOnly)
 	}
 	endpoints, ok := status["endpoints"].(map[string]any)
 	if !ok {
@@ -851,7 +853,10 @@ func openFakeCABIRuntime(t *testing.T) *RuntimeClient {
 		_ = transport.Close(context.Background())
 		t.Fatalf("NewRuntimeHost: %v", err)
 	}
-	handle, err := control.Start(context.Background(), StartConfig{Mode: ModeDevice, DeviceID: "dev-a"})
+	handle, err := control.StartRuntime(context.Background(), easynetprovider.StartConfig{
+		Mode:     easynetprovider.ModeDevice,
+		DeviceID: "dev-a",
+	})
 	if err != nil {
 		_ = transport.Close(context.Background())
 		t.Fatalf("Start: %v", err)
