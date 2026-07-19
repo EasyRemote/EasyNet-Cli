@@ -274,9 +274,9 @@ public final class RuntimeClient: @unchecked Sendable {
         return StreamHandle(source: try await transport.openStream(draft))
     }
 
-    public func openBidi(_ draft: InvocationDraft, frame0: BidiFrame) async throws -> BidiSession {
+    public func openBidi(_ draft: InvocationDraft, frame0: BidiFrame?) async throws -> BidiSession {
         try requireOpen()
-        return BidiSession(source: try await transport.openBidi(draft, frame0: frame0))
+        return BidiSession(source: try await transport.openBidi(draft, frame0: try Self.requireBidiFrameZero(frame0)))
     }
 
     public func close() async throws {
@@ -291,6 +291,13 @@ public final class RuntimeClient: @unchecked Sendable {
         if closed {
             throw SDKError.closed("runtime")
         }
+    }
+
+    static func requireBidiFrameZero(_ frame0: BidiFrame?) throws -> BidiFrame {
+        guard let frame0 else {
+            throw SDKError.validation("runtime", "bidi frame0 is required")
+        }
+        return frame0
     }
 }
 

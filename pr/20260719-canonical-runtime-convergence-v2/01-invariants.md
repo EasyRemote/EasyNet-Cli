@@ -25,3 +25,11 @@
    before calling the transport. A mock transport that receives an empty stream
    vector is not valid proof, because it has already crossed the runtime-session
    entry boundary.
+10. Java bidi open exposes frame-0 directly rather than a stream descriptor
+    vector. A null frame-0 is still the same missing construction material and
+    must fail as canonical `SDKError.INVALID_ARGUMENT` before the runtime
+    transport is called.
+11. Swift bidi open also exposes frame-0 directly. Static non-optional typing is
+    not sufficient conformance evidence for `open_bidi_without_frame0`; the SDK
+    facade must provide an executable nil frame-0 rejection path that fails
+    before runtime transport entry.

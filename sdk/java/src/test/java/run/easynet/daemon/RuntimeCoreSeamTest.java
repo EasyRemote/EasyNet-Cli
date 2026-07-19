@@ -22,6 +22,7 @@ public final class RuntimeCoreSeamTest {
           "invocationResultUsesTerminalReceipt",
           "authorityMetadataIsTypedAndMutuallyExclusive",
           "streamAndBidiLifecyclesAreBounded",
+          "bidiFrame0IsRequiredBeforeRuntimeSessionEntry",
           "asyncRuntimeDelegatesToTheSameRuntimeStateMachine",
           "typedErrorsPreserveStableCategories",
           "abiCompatibleAcceptsExactVersion",
@@ -67,6 +68,8 @@ public final class RuntimeCoreSeamTest {
       case "authorityMetadataIsTypedAndMutuallyExclusive" ->
           authorityMetadataIsTypedAndMutuallyExclusive();
       case "streamAndBidiLifecyclesAreBounded" -> streamAndBidiLifecyclesAreBounded();
+      case "bidiFrame0IsRequiredBeforeRuntimeSessionEntry" ->
+          bidiFrame0IsRequiredBeforeRuntimeSessionEntry();
       case "asyncRuntimeDelegatesToTheSameRuntimeStateMachine" ->
           asyncRuntimeDelegatesToTheSameRuntimeStateMachine();
       case "typedErrorsPreserveStableCategories" -> typedErrorsPreserveStableCategories();
@@ -325,6 +328,18 @@ public final class RuntimeCoreSeamTest {
     bidi.close();
   }
 
+  private static void bidiFrame0IsRequiredBeforeRuntimeSessionEntry() {
+    MemoryRuntimeTransport transport = new MemoryRuntimeTransport();
+    RuntimeClient runtime = new RuntimeClient(transport);
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> runtime.openBidi(completeDraft(runtime), null));
+    check(transport.openedBidi == 0, "missing bidi frame0 must not enter runtime transport");
+
+    AsyncRuntimeClient async = new AsyncRuntimeClient(transport, Runnable::run);
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT, () -> async.openBidiAsync(completeDraft(async), null));
+    check(transport.openedBidi == 0, "async missing bidi frame0 must not enter runtime transport");
+  }
+
   private static void asyncRuntimeDelegatesToTheSameRuntimeStateMachine() throws Exception {
     AsyncRuntimeClient runtime = new AsyncRuntimeClient(new MemoryRuntimeTransport(), Runnable::run);
     InvocationResult result = runtime.invokeAsync(completeDraft(runtime)).get();
@@ -556,6 +571,7 @@ public final class RuntimeCoreSeamTest {
   private static final class MemoryRuntimeTransport implements RuntimeTransport {
     private String submittedSigner = "";
     private long eventHandleId = 7;
+    private int openedBidi = 0;
 
     @Override
     public InvocationResult invoke(InvocationDraft draft) {
@@ -649,6 +665,7 @@ public final class RuntimeCoreSeamTest {
 
     @Override
     public BidiSource openBidi(InvocationDraft draft, BidiFrame frame0) {
+      openedBidi++;
       return new CountingBidiSource();
     }
   }

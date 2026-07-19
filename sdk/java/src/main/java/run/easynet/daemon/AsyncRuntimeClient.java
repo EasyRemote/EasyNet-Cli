@@ -38,7 +38,7 @@ public final class AsyncRuntimeClient implements AutoCloseable {
   public RuntimeFuture<BidiSession> openBidiAsync(InvocationDraft draft, BidiFrame frame0) {
     requireOpen();
     Objects.requireNonNull(draft, "draft");
-    Objects.requireNonNull(frame0, "frame0");
+    RuntimeClient.requireBidiFrameZero(frame0);
     return RuntimeFuture.supply(() -> runtime.openBidi(draft, frame0), () -> {}, executor);
   }
 
