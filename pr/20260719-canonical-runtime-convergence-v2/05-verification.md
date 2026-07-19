@@ -25,6 +25,10 @@ Completed in this slice:
 - `SDK_CONFORMANCE_RUN_NONCE=0879d40513b38bb77f7d9cc2259d573f8903a1e26f38c51d869233b31866e424 PATH="$HOME/.cargo/bin:$PATH" cargo run -p sdk-conformance-runner -- --language c_abi --adapter-report sdk/conformance/runner/c-abi-action-adapter-report.json --format json`
 - `PATH="$HOME/.nvm/versions/node/v22.16.0/bin:$PATH" npm test --prefix sdk/node`
 - `SDK_CONFORMANCE_RUN_NONCE=<issued> PATH="$HOME/.cargo/bin:$HOME/.nvm/versions/node/v22.16.0/bin:$PATH" cargo run -p sdk-conformance-runner -- --language node --adapter-report sdk/conformance/runner/node-action-adapter-report.json --format json`
+- `PATH="$HOME/.cargo/bin:$HOME/.nvm/versions/node/v22.16.0/bin:/opt/homebrew/bin:$PATH" mvn -q -f sdk/java/pom.xml test`
+- `SDK_CONFORMANCE_RUN_NONCE=<issued> PATH="$HOME/.cargo/bin:$HOME/.nvm/versions/node/v22.16.0/bin:/opt/homebrew/bin:$PATH" cargo run -p sdk-conformance-runner -- --language java --adapter-report sdk/conformance/runner/java-action-adapter-report.json --format json`
+- `swift test --package-path sdk/swift`
+- `SDK_CONFORMANCE_RUN_NONCE=<issued> CARGO_TARGET_DIR=target/codex-conformance-swift PATH="$HOME/.cargo/bin:$HOME/.nvm/versions/node/v22.16.0/bin:/opt/homebrew/bin:$PATH" cargo run -p sdk-conformance-runner -- --language swift --adapter-report sdk/conformance/runner/swift-action-adapter-report.json --format json`
 
 Evidence reports:
 
@@ -57,5 +61,15 @@ Observed closure:
   requirement.
 - Node now has direct executable `bidi/frame0_required` evidence in the SDK
   runtime facade. `RuntimeClient.openBidi` rejects omitted or empty stream
-  descriptors before the transport is called; Rust, Java, and Swift remain
-  listed as unproven for that requirement.
+  descriptors before the transport is called; Rust and Swift remain listed as
+  unproven for that requirement.
+- Java now has direct executable `bidi/frame0_required` evidence in the runtime
+  facade. `RuntimeClient.openBidi` and `AsyncRuntimeClient.openBidiAsync`
+  reject null frame-0 material as canonical `SDKError.INVALID_ARGUMENT` before
+  the runtime transport is called; Rust remains listed as unproven for that
+  requirement.
+- Swift now has direct executable `bidi/frame0_required` evidence in the runtime
+  facade. `RuntimeClient.openBidi` accepts the existing non-nil `BidiFrame`
+  caller shape while rejecting nil frame-0 material as canonical
+  `SDKError.invalidArgument` before the runtime transport is called; Rust
+  remains listed as unproven for that requirement.

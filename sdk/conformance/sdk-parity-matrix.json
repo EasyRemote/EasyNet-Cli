@@ -71926,11 +71926,10 @@
       "status": "seam",
       "evidence_case_ids": [
         "bidi/close_send_not_cancel",
+        "bidi/frame0_required",
         "stream/backpressure_bound"
       ],
-      "unproven_requirement_ids": [
-        "bidi/frame0_required_other_languages"
-      ],
+      "unproven_requirement_ids": [],
       "shape_evidence": [
         {
           "item": "BidiFrame",
@@ -74225,7 +74224,7 @@
         {
           "case_id": "bidi/frame0_required",
           "action": "open_bidi_without_frame0",
-          "execution_case_bound": false,
+          "execution_case_bound": true,
           "items": [
             {
               "item": "BidiFrame",
@@ -74360,7 +74359,7 @@
         {
           "case_id": "bidi/frame0_required",
           "action": "reject_before_runtime_session_entry",
-          "execution_case_bound": false,
+          "execution_case_bound": true,
           "items": [
             {
               "item": "BidiFrame",
@@ -75043,11 +75042,10 @@
       "status": "seam",
       "evidence_case_ids": [
         "bidi/close_send_not_cancel",
+        "bidi/frame0_required",
         "stream/backpressure_bound"
       ],
-      "unproven_requirement_ids": [
-        "bidi/frame0_required_other_languages"
-      ],
+      "unproven_requirement_ids": [],
       "shape_evidence": [
         {
           "item": "BidiFrame",
@@ -79382,7 +79380,7 @@
         {
           "case_id": "bidi/frame0_required",
           "action": "open_bidi_without_frame0",
-          "execution_case_bound": false,
+          "execution_case_bound": true,
           "items": [
             {
               "item": "BidiFrame",
@@ -79637,7 +79635,7 @@
         {
           "case_id": "bidi/frame0_required",
           "action": "reject_before_runtime_session_entry",
-          "execution_case_bound": false,
+          "execution_case_bound": true,
           "items": [
             {
               "item": "BidiFrame",
@@ -274685,7 +274683,7 @@
         },
         {
           "item": "RuntimeClient.openBidi(_:frame0:)",
-          "sha256": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29"
+          "sha256": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33"
         },
         {
           "item": "RuntimeClient.openStream(_:)",
@@ -274868,7 +274866,7 @@
             },
             {
               "item": "RuntimeClient.openBidi(_:frame0:)",
-              "sha256": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29"
+              "sha256": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33"
             },
             {
               "item": "RuntimeClient.openStream(_:)",
@@ -275051,7 +275049,7 @@
             },
             {
               "item": "RuntimeClient.openBidi(_:frame0:)",
-              "sha256": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29"
+              "sha256": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33"
             },
             {
               "item": "RuntimeClient.openStream(_:)",
@@ -275234,7 +275232,7 @@
             },
             {
               "item": "RuntimeClient.openBidi(_:frame0:)",
-              "sha256": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29"
+              "sha256": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33"
             },
             {
               "item": "RuntimeClient.openStream(_:)",
@@ -275417,7 +275415,7 @@
             },
             {
               "item": "RuntimeClient.openBidi(_:frame0:)",
-              "sha256": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29"
+              "sha256": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33"
             },
             {
               "item": "RuntimeClient.openStream(_:)",
@@ -275600,7 +275598,7 @@
             },
             {
               "item": "RuntimeClient.openBidi(_:frame0:)",
-              "sha256": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29"
+              "sha256": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33"
             },
             {
               "item": "RuntimeClient.openStream(_:)",
@@ -275783,7 +275781,7 @@
             },
             {
               "item": "RuntimeClient.openBidi(_:frame0:)",
-              "sha256": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29"
+              "sha256": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33"
             },
             {
               "item": "RuntimeClient.openStream(_:)",
@@ -275966,7 +275964,7 @@
             },
             {
               "item": "RuntimeClient.openBidi(_:frame0:)",
-              "sha256": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29"
+              "sha256": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33"
             },
             {
               "item": "RuntimeClient.openStream(_:)",
@@ -276149,7 +276147,7 @@
             },
             {
               "item": "RuntimeClient.openBidi(_:frame0:)",
-              "sha256": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29"
+              "sha256": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33"
             },
             {
               "item": "RuntimeClient.openStream(_:)",
@@ -276332,7 +276330,7 @@
             },
             {
               "item": "RuntimeClient.openBidi(_:frame0:)",
-              "sha256": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29"
+              "sha256": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33"
             },
             {
               "item": "RuntimeClient.openStream(_:)",
@@ -276515,7 +276513,7 @@
             },
             {
               "item": "RuntimeClient.openBidi(_:frame0:)",
-              "sha256": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29"
+              "sha256": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33"
             },
             {
               "item": "RuntimeClient.openStream(_:)",
@@ -276698,7 +276696,7 @@
             },
             {
               "item": "RuntimeClient.openBidi(_:frame0:)",
-              "sha256": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29"
+              "sha256": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33"
             },
             {
               "item": "RuntimeClient.openStream(_:)",
@@ -276881,7 +276879,7 @@
             },
             {
               "item": "RuntimeClient.openBidi(_:frame0:)",
-              "sha256": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29"
+              "sha256": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33"
             },
             {
               "item": "RuntimeClient.openStream(_:)",
@@ -277064,7 +277062,7 @@
             },
             {
               "item": "RuntimeClient.openBidi(_:frame0:)",
-              "sha256": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29"
+              "sha256": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33"
             },
             {
               "item": "RuntimeClient.openStream(_:)",

@@ -82,7 +82,7 @@ public final class RuntimeClient implements AutoCloseable {
   public BidiSession openBidi(InvocationDraft draft, BidiFrame frame0) {
     requireOpen();
     return new BidiSession(
-        transport.openBidi(Objects.requireNonNull(draft, "draft"), Objects.requireNonNull(frame0)));
+        transport.openBidi(Objects.requireNonNull(draft, "draft"), requireBidiFrameZero(frame0)));
   }
 
   @Override
@@ -98,5 +98,12 @@ public final class RuntimeClient implements AutoCloseable {
     if (closed) {
       throw SDKError.closed("runtime");
     }
+  }
+
+  static BidiFrame requireBidiFrameZero(BidiFrame frame0) {
+    if (frame0 == null) {
+      throw SDKError.validation("runtime", "bidi frame0 is required");
+    }
+    return frame0;
   }
 }

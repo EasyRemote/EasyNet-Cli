@@ -273,6 +273,16 @@ final class RuntimeCoreSeamTests: XCTestCase {
         try await bidi.close()
     }
 
+    func testBidiFrame0IsRequiredBeforeRuntimeSessionEntry() async throws {
+        let transport = MemoryRuntimeTransport(descriptor: descriptor)
+        let runtime = RuntimeClient(transport: transport)
+        await expectSDKError(.invalidArgument) {
+            _ = try await runtime.openBidi(try self.completeDraft(runtime), frame0: nil)
+        }
+        let openedBidi = await transport.openedBidiCount()
+        XCTAssertEqual(openedBidi, 0)
+    }
+
     func testTypedErrorsPreserveStableCategories() {
         XCTAssertEqual(SDKError.validation("test", "bad").errorClass, .validation)
         XCTAssertEqual(
@@ -482,6 +492,7 @@ actor MemoryRuntimeTransport: RuntimeTransport {
     private let descriptor: String
     private var signer = ""
     private var eventHandleId: Int64 = 7
+    private var openedBidi = 0
 
     init(descriptor: String) {
         self.descriptor = descriptor
@@ -579,7 +590,8 @@ actor MemoryRuntimeTransport: RuntimeTransport {
     }
 
     func openBidi(_ draft: InvocationDraft, frame0: BidiFrame) -> BidiSource {
-        CountingBidiSource(initial: frame0)
+        openedBidi += 1
+        return CountingBidiSource(initial: frame0)
     }
 
     func close() {}
@@ -590,6 +602,10 @@ actor MemoryRuntimeTransport: RuntimeTransport {
 
     func setEventHandleId(_ handleId: Int64) {
         eventHandleId = handleId
+    }
+
+    func openedBidiCount() -> Int {
+        openedBidi
     }
 }
 

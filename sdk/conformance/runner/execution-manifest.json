@@ -595,6 +595,14 @@
     },
     {
       "language": "java",
+      "case_id": "bidi/frame0_required",
+      "selector": "bidiFrame0IsRequiredBeforeRuntimeSessionEntry",
+      "evidence": [
+        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
       "case_id": "error/retry_hint",
       "selector": "retryHintsPreserveRetryability",
       "evidence": [
@@ -1405,6 +1413,14 @@
       "language": "swift",
       "case_id": "bidi/close_send_not_cancel",
       "selector": "testStreamAndBidiStateMachinesAreBounded",
+      "evidence": [
+        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "bidi/frame0_required",
+      "selector": "testBidiFrame0IsRequiredBeforeRuntimeSessionEntry",
       "evidence": [
         "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
       ]

@@ -8630,15 +8630,13 @@
         {
           "requirement_id": "bidi/frame0_required_other_languages",
           "languages": [
-            "rust",
-            "java",
-            "swift"
+            "rust"
           ],
           "acceptance_steps": [
             "open_bidi_without_frame0",
             "reject_before_runtime_session_entry"
           ],
-          "reason": "Rust, Java, and Swift still lack executable proof that omitted frame0 is rejected before runtime session entry."
+          "reason": "Rust still lacks executable proof that omitted frame0 is rejected before runtime session entry."
         }
       ]
     },
@@ -23236,7 +23234,7 @@
       "RuntimeClient.init(transport:)": "ee370cae8d840cbd5b1cb8bd49d794c4ce10c76401fc4b5aa09f0ea91b0aa725",
       "RuntimeClient.invoke(_:)": "638836cfe061a7c2150b6d1ec6688b1f40dbad7b4fe31a4a1c0d2a1a486b2b79",
       "RuntimeClient.newInvocation()": "dbd5dba6ed2375b0d15aff14176ee10a66089ce5a8f03b2096ea8789c52d4c6e",
-      "RuntimeClient.openBidi(_:frame0:)": "7c475762df478f7ccff5d03da4e3498d5558ec328590cc71ccca5eda65110b29",
+      "RuntimeClient.openBidi(_:frame0:)": "3af34e4bace574b2a64a0a78bfc0d18da3e23b5c8f0db5ef9cc81686a785aa33",
       "RuntimeClient.openStream(_:)": "81d620faf51b3100472c3ed04c484f0f6b64107b963fed2a4c7a4fb232defdfa",
       "RuntimeClient.prepare(_:options:)": "2f98c690c0ecd4fc3781128c49acd497f99e41e902bb8773d79fce07f370cd38",
       "RuntimeClient.submitSigned(_:)": "84eb6a57d8c5b4c6641962bfe4b2e4d56448ddc648872af74c340b9fdd3a559f",
