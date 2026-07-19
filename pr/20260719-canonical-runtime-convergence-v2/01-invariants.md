@@ -18,3 +18,6 @@
    result/error emission. Unary declarative exec helper coverage must not imply
    stream or bidi helper coverage. Templates must not hand-write sidecar JSON
    frames.
+8. Bidi frame-0 terminality evidence is language-specific. A C ABI proof must
+   exercise the C ABI boundary itself, reject before allocating an active bidi
+   session, and must not rely on Go/Python wrapper evidence.

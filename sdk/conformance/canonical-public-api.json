@@ -8631,7 +8631,6 @@
           "requirement_id": "bidi/frame0_required_other_languages",
           "languages": [
             "rust",
-            "c_abi",
             "node",
             "java",
             "swift"
@@ -8640,7 +8639,7 @@
             "open_bidi_without_frame0",
             "reject_before_runtime_session_entry"
           ],
-          "reason": "Rust, C ABI, Node, Java, and Swift still lack executable proof that omitted frame0 is rejected before runtime session entry."
+          "reason": "Rust, Node, Java, and Swift still lack executable proof that omitted frame0 is rejected before runtime session entry."
         }
       ]
     },
