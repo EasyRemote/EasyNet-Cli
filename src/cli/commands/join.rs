@@ -1276,6 +1276,40 @@ fn pairing_status_error_message(code: u16, body: &str) -> String {
     }
 }
 
+fn looks_like_plain_http_tls_mismatch(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("invalidcontenttype")
+        || lower.contains("corrupt message")
+        || (lower.contains("tls") && lower.contains("invalid content type"))
+}
+
+fn pairing_transport_error_message(base: &str, error: &dyn std::fmt::Display) -> String {
+    let base = base.trim_end_matches('/');
+    let error = error.to_string();
+    let mut message = format!("cannot reach Hub at {base}: {error}");
+
+    if let Some(parts) = parse_url_endpoint(base) {
+        if parts.scheme.eq_ignore_ascii_case("https")
+            && is_loopback_or_localhost(&parts.host)
+            && looks_like_plain_http_tls_mismatch(&error)
+        {
+            let http_base = format!(
+                "http://{}{}",
+                format_authority(&parts.host, parts.port.as_deref()),
+                parts.suffix
+            );
+            message.push_str(
+                "\n  The URL uses https://, but the local Hub API appears to be speaking plain HTTP.",
+            );
+            message.push_str(&format!("\n  Retry with `--hub {http_base}`."));
+            return message;
+        }
+    }
+
+    message.push_str("\n  Check your network connection and Hub URL.");
+    message
+}
+
 fn validate_pairing_response(
     envelope: PairingCredentialEnvelope,
 ) -> anyhow::Result<PairingCredentialEnvelope> {
@@ -1476,9 +1510,7 @@ fn preflight_pairing_token(token: &str, hub_base: &str) -> anyhow::Result<Pairin
             anyhow::bail!("{}", pairing_status_error_message(code, &body));
         }
         Err(ureq::Error::Transport(e)) => {
-            anyhow::bail!(
-                "cannot reach Hub at {base}: {e}\n  Check your network connection and Hub URL."
-            );
+            anyhow::bail!("{}", pairing_transport_error_message(base, &e));
         }
     };
 
@@ -1518,9 +1550,7 @@ fn validate_pairing_token(
             anyhow::bail!("{}", pairing_status_error_message(code, &body));
         }
         Err(ureq::Error::Transport(e)) => {
-            anyhow::bail!(
-                "cannot reach Hub at {base}: {e}\n  Check your network connection and Hub URL."
-            );
+            anyhow::bail!("{}", pairing_transport_error_message(base, &e));
         }
     };
 
@@ -1735,6 +1765,27 @@ mod tests {
             pairing_status_error_message(500, "oops"),
             "Hub rejected pairing (HTTP 500): oops"
         );
+    }
+
+    #[test]
+    fn pairing_transport_error_message_explains_local_https_plain_http_mismatch() {
+        let error =
+            "tls connection init failed: received corrupt message of type InvalidContentType";
+        let message = pairing_transport_error_message("https://localhost:8080", &error);
+
+        assert!(message.contains("cannot reach Hub at https://localhost:8080"));
+        assert!(message.contains("appears to be speaking plain HTTP"));
+        assert!(message.contains("--hub http://localhost:8080"));
+    }
+
+    #[test]
+    fn pairing_transport_error_message_keeps_generic_network_hint_for_other_failures() {
+        let message =
+            pairing_transport_error_message("https://hub.acme.internal", &"connection refused");
+
+        assert!(message.contains("cannot reach Hub at https://hub.acme.internal"));
+        assert!(message.contains("Check your network connection and Hub URL"));
+        assert!(!message.contains("plain HTTP"));
     }
 
     #[test]
