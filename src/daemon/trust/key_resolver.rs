@@ -175,6 +175,33 @@ mod tests {
     }
 
     #[test]
+    fn resolve_rejects_bare_user_ura() {
+        let user_ura = "easynet:///r/test/user/dev";
+        let signing_key = SigningKey::from_bytes(&[0x58; 32]);
+        let entry = TrustedAgent {
+            agent_ura: user_ura.to_string(),
+            public_key_b64: B64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
+            role: TrustedAgentRole::User,
+            added_at_unix_ms: 1_700_000_000_000,
+            origin_realm: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        };
+        let anchor = RealmTrustAnchor::from_entries(vec![entry]).expect("user anchor");
+        let resolver = RealmTrustAnchorKeyResolver::new(SharedTrustAnchor::new(Arc::new(anchor)));
+
+        let err = resolver
+            .resolve(user_ura)
+            .expect_err("bare user URA must not select a signing key");
+        assert_eq!(err.code, ErrorCode::CallerKeyNotFound);
+        let keys = resolver
+            .resolve_all(user_ura)
+            .expect("explicit multi-key resolver remains supported");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].to_bytes(), signing_key.verifying_key().to_bytes());
+    }
+
+    #[test]
     fn resolve_all_falls_back_to_single_for_devices() {
         let signing_key = SigningKey::from_bytes(&[0x77; 32]);
         let anchor = make_anchor_with("easynet:///r/test/device/d1", &signing_key);

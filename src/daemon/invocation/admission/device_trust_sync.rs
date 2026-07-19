@@ -321,7 +321,7 @@ impl DeviceTrustSync {
             } => anchor.lookup_user_by_pubkey(caller_ura, pk).is_some(),
             SyncableCaller::User {
                 presented_pubkey_b64: None,
-            } => anchor.lookup(caller_ura).is_some(),
+            } => false,
         }
     }
 

@@ -6474,6 +6474,77 @@ if bidi_dispatcher.exists():
                 )
 
 
+# Rule 67: trust-anchor bare URA lookup must stay singleton-only.
+# User-role trust rows are DEC-EU multi-key bindings; selecting one
+# key from a user bucket by bare URA reintroduces a second signer
+# resolution authority and can mask missing descriptor-bound signer
+# material. Callers must use lookup_user_by_pubkey/lookup_user_all
+# for user entries.
+trust_anchor = cli_root / "src/daemon/trust/anchor.rs"
+if trust_anchor.exists():
+    text = trust_anchor.read_text(encoding="utf-8", errors="replace")
+    body = rust_method_body(source(trust_anchor), "lookup")
+    if body is None:
+        add(
+            "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK",
+            trust_anchor,
+            1,
+            "RealmTrustAnchor::lookup must exist as the singleton trust-anchor lookup",
+        )
+    else:
+        offset, lookup_body = body
+        for token, detail in (
+            (
+                "self.users",
+                "bare RealmTrustAnchor::lookup must not read user multi-key buckets",
+            ),
+            (
+                "lookup_user_by_pubkey",
+                "bare RealmTrustAnchor::lookup must not delegate to user-key lookup without a presented pubkey",
+            ),
+            (
+                "lookup_user_all",
+                "bare RealmTrustAnchor::lookup must not enumerate user keys",
+            ),
+        ):
+            if token in lookup_body:
+                add(
+                    "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK",
+                    trust_anchor,
+                    line_number(source(trust_anchor), offset),
+                    detail,
+                )
+        if "self.by_ura.get(agent_ura)" not in lookup_body:
+            add(
+                "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK",
+                trust_anchor,
+                line_number(source(trust_anchor), offset),
+                "RealmTrustAnchor::lookup must resolve through the singleton by_ura map",
+            )
+    for pattern, detail in (
+        (
+            r"User bucket fallback",
+            "trust anchor must not document or preserve user bucket fallback",
+        ),
+        (
+            r"lex-smallest",
+            "trust anchor must not select arbitrary user keys by deterministic ordering",
+        ),
+        (
+            r"single-keypair fallback",
+            "trust anchor must not preserve single-keypair user fallback semantics",
+        ),
+    ):
+        match = re.search(pattern, text, flags=re.I)
+        if match:
+            add(
+                "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK",
+                trust_anchor,
+                line_number(text, match.start()),
+                detail,
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(

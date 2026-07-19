@@ -840,8 +840,8 @@ pub fn handle_resolve_key(
 ) -> Option<ResolveKeyResponse> {
     // DEC-EU multi-device user URAs: caller supplies the pubkey it
     // observed on the envelope; we confirm it's in the user bucket.
-    // Single-value roles (hub/backend/device) ignore this field and
-    // fall through to the legacy lookup below.
+    // Singleton roles (hub/backend/device) ignore this field and
+    // fall through to exact singleton trust-anchor lookup below.
     let presented_pubkey_b64 = request
         .presented_pubkey_b64
         .as_deref()

@@ -141,12 +141,11 @@ pub enum TrustedAgentRole {
     /// holds an Ed25519 keypair and signs mutating envelopes
     /// directly instead of being a Subject under hub-as-Caller.
     ///
-    /// DEC-EU step 1 (this commit): single-keypair-per-user.
-    /// Multi-device (a user logged in on browser + phone, each
-    /// with its own non-exportable keypair) is a known followup;
-    /// it requires either a per-device user URA suffix or a
-    /// multimap relaxation of Invariant 1. Both paths are RFC-001
-    /// amendments — see DEC-EU §multi-device.
+    /// DEC-EU multi-device: one user URA may own multiple
+    /// non-exportable signing keys. Admission and key resolution
+    /// must therefore bind user trust by `(user_ura, pubkey)`;
+    /// a bare user URA is intentionally not sufficient to select
+    /// signing material.
     User,
 }
 
@@ -602,32 +601,16 @@ impl RealmTrustAnchor {
 
     /// Look up the trust entry for an agent URA.
     ///
-    /// For hub / backend / device URAs (1:1 mapping) this is the
-    /// authoritative resolution.
-    ///
-    /// For user URAs (1:N — DEC-EU multi-device) this returns the
-    /// FIRST registered pubkey in lex order. Callers that need to
-    /// verify against the exact pubkey the envelope presented must
-    /// use [`lookup_user_by_pubkey`](#method.lookup_user_by_pubkey)
-    /// instead. The single-value fallback exists so the existing
-    /// `KeyResolver` trait (which takes only `caller_ura`) keeps
-    /// working for the same-realm single-keypair common case; a
-    /// full multi-pubkey resolver extension is tracked under
-    /// DEC-EU §multi-realm.
+    /// This method intentionally excludes user entries. User URAs
+    /// are 1:N under DEC-EU multi-device and therefore require
+    /// explicit pubkey binding through
+    /// [`lookup_user_by_pubkey`](#method.lookup_user_by_pubkey) or
+    /// explicit enumeration through [`lookup_user_all`](#method.lookup_user_all).
+    /// A bare user URA must not synthesize or select signing
+    /// material.
     #[must_use]
     pub fn lookup(&self, agent_ura: &str) -> Option<&TrustedAgent> {
-        if let Some(entry) = self.by_ura.get(agent_ura) {
-            return Some(entry);
-        }
-        // User bucket fallback. Pick the lex-smallest pubkey so the
-        // choice is deterministic across daemon restarts; the
-        // single-pubkey trait shape is the caller's constraint, not
-        // an ontological one.
-        self.users.get(agent_ura).and_then(|bucket| {
-            let mut sorted: Vec<&TrustedAgent> = bucket.iter().collect();
-            sorted.sort_by(|a, b| a.public_key_b64.cmp(&b.public_key_b64));
-            sorted.into_iter().next()
-        })
+        self.by_ura.get(agent_ura)
     }
 
     #[must_use]
@@ -1587,15 +1570,10 @@ added_at_unix_ms = 1714492800000
             )
             .expect("user entry present");
         assert_eq!(entry.role, TrustedAgentRole::User);
-        // Single-keypair fallback path: lookup() returns the
-        // user's only registered pubkey when no presented_pubkey
-        // can disambiguate. Multi-device test
-        // (user_multi_pubkey_lookup_returns_deterministic_first)
-        // covers the deterministic ordering invariant.
-        let any = anchor
-            .lookup("easynet:///r/realm/user/alice")
-            .expect("user single-keypair lookup returns the registered entry");
-        assert_eq!(any.role, TrustedAgentRole::User);
+        assert!(
+            anchor.lookup("easynet:///r/realm/user/alice").is_none(),
+            "bare user URA lookup must not select signing material"
+        );
     }
 
     #[test]
@@ -1838,17 +1816,14 @@ added_at_unix_ms = 1714492800000
     }
 
     #[test]
-    fn user_multi_pubkey_lookup_returns_deterministic_first() {
-        // KeyResolver trait takes only the URA; for multi-device
-        // users it gets the lex-smallest pubkey. Determinism is
-        // load-bearing — admission must give the same answer
-        // across restarts and across daemons.
+    fn user_multi_pubkey_lookup_requires_presented_pubkey() {
+        // User trust is a composite `(user_ura, pubkey)` binding.
+        // A bare URA lookup must fail closed instead of selecting
+        // a deterministic but semantically arbitrary key.
         let alice = "easynet:///r/realm/user/alice";
         let pk_a = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
         let pk_b = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=";
         let mut anchor = RealmTrustAnchor::default();
-        // Insert in reverse-lex order; lookup() must still return
-        // pk_a (the lex-smallest).
         for pk in [pk_b, pk_a] {
             anchor
                 .append_agent(TrustedAgent {
@@ -1862,8 +1837,21 @@ added_at_unix_ms = 1714492800000
                 })
                 .expect("append");
         }
-        let resolved = anchor.lookup(alice).expect("resolves");
-        assert_eq!(resolved.public_key_b64, pk_a);
+        assert!(anchor.lookup(alice).is_none());
+        assert_eq!(
+            anchor
+                .lookup_user_by_pubkey(alice, pk_a)
+                .expect("explicit key resolves")
+                .public_key_b64,
+            pk_a
+        );
+        assert_eq!(
+            anchor
+                .lookup_user_by_pubkey(alice, pk_b)
+                .expect("explicit key resolves")
+                .public_key_b64,
+            pk_b
+        );
     }
 
     #[test]

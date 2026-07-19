@@ -4857,6 +4857,35 @@ expect_fail \
   "R65_LEDGER_SINK_SYSTEM_FALLBACK"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/trust"
+cat >"$CLI/src/daemon/trust/anchor.rs" <<'EOF'
+use std::collections::HashMap;
+
+struct TrustedAgent {
+    public_key_b64: String,
+}
+
+struct RealmTrustAnchor {
+    by_ura: HashMap<String, TrustedAgent>,
+    users: HashMap<String, Vec<TrustedAgent>>,
+}
+
+impl RealmTrustAnchor {
+    pub fn lookup(&self, agent_ura: &str) -> Option<&TrustedAgent> {
+        if let Some(entry) = self.by_ura.get(agent_ura) {
+            return Some(entry);
+        }
+        self.users
+            .get(agent_ura)
+            .and_then(|bucket| bucket.iter().next())
+    }
+}
+EOF
+expect_fail \
+  "trust anchor user bucket lookup fork" \
+  "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK"
+
+make_good_fixture
 expect_pass "fixture restored after all negative cases"
 
 printf 'test_check_architecture_convergence.sh: all cases passed\n'
