@@ -168,6 +168,12 @@ fn run_init(args: InitArgs) -> anyhow::Result<()> {
                 project.path.display()
             )
         }
+        PluginTemplateLanguage::Node => {
+            format!(
+                "cd '{}' && npm install && easynet plugin install .",
+                project.path.display()
+            )
+        }
     };
     output::detail("next", &next);
     Ok(())

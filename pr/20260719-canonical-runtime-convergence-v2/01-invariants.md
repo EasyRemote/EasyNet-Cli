@@ -11,4 +11,10 @@
 5. Hardware media checks must be host-gated and skip-safe by default so CI and
    Docker gates remain deterministic.
 6. Two-node product evidence must include provider-hosted user Agent lifecycle
-   and canonical invocation gap detection until that product route is migrated.
+   and a successful caller-to-provider-Agent canonical invocation with exactly
+   one verified caller receipt chain.
+7. Plugin sidecar templates may be exposed only for language/call-mode cells
+   with a provider-scoped SDK helper that owns stdin/stdout frame parsing and
+   result/error emission. Unary declarative exec helper coverage must not imply
+   stream or bidi helper coverage. Templates must not hand-write sidecar JSON
+   frames.

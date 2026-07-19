@@ -20,6 +20,7 @@ use clap::ValueEnum;
 pub enum PluginTemplateLanguage {
     Python,
     Go,
+    Node,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,9 +31,17 @@ pub enum ProviderSidecarHelperState {
     CutoverReady,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ProviderSidecarCallMode {
+    ExecInvoke,
+    ExecStream,
+    ExecBidi,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderSidecarHelperCapability {
     pub language: &'static str,
+    pub call_mode: ProviderSidecarCallMode,
     pub state: ProviderSidecarHelperState,
     pub template_available: bool,
     pub helper_package: Option<&'static str>,
@@ -41,36 +50,126 @@ pub struct ProviderSidecarHelperCapability {
 pub const PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX: &[ProviderSidecarHelperCapability] = &[
     ProviderSidecarHelperCapability {
         language: "python",
+        call_mode: ProviderSidecarCallMode::ExecInvoke,
         state: ProviderSidecarHelperState::CutoverReady,
         template_available: true,
         helper_package: Some("easynet_sdk.providers.easynet.plugin_exec"),
     },
     ProviderSidecarHelperCapability {
         language: "go",
+        call_mode: ProviderSidecarCallMode::ExecInvoke,
         state: ProviderSidecarHelperState::CutoverReady,
         template_available: true,
         helper_package: Some("easynet.run/cli/sdk/go/provider/easynet/pluginexec"),
     },
     ProviderSidecarHelperCapability {
         language: "rust",
+        call_mode: ProviderSidecarCallMode::ExecInvoke,
         state: ProviderSidecarHelperState::Seam,
         template_available: false,
         helper_package: None,
     },
     ProviderSidecarHelperCapability {
         language: "node",
-        state: ProviderSidecarHelperState::Seam,
-        template_available: false,
-        helper_package: None,
+        call_mode: ProviderSidecarCallMode::ExecInvoke,
+        state: ProviderSidecarHelperState::CutoverReady,
+        template_available: true,
+        helper_package: Some("@easynet/daemon-sdk/provider/easynet/pluginexec"),
     },
     ProviderSidecarHelperCapability {
         language: "java",
+        call_mode: ProviderSidecarCallMode::ExecInvoke,
         state: ProviderSidecarHelperState::Seam,
         template_available: false,
         helper_package: None,
     },
     ProviderSidecarHelperCapability {
         language: "c/c++",
+        call_mode: ProviderSidecarCallMode::ExecInvoke,
+        state: ProviderSidecarHelperState::Unsupported,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "python",
+        call_mode: ProviderSidecarCallMode::ExecStream,
+        state: ProviderSidecarHelperState::Seam,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "go",
+        call_mode: ProviderSidecarCallMode::ExecStream,
+        state: ProviderSidecarHelperState::Seam,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "rust",
+        call_mode: ProviderSidecarCallMode::ExecStream,
+        state: ProviderSidecarHelperState::Seam,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "node",
+        call_mode: ProviderSidecarCallMode::ExecStream,
+        state: ProviderSidecarHelperState::Seam,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "java",
+        call_mode: ProviderSidecarCallMode::ExecStream,
+        state: ProviderSidecarHelperState::Seam,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "c/c++",
+        call_mode: ProviderSidecarCallMode::ExecStream,
+        state: ProviderSidecarHelperState::Unsupported,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "python",
+        call_mode: ProviderSidecarCallMode::ExecBidi,
+        state: ProviderSidecarHelperState::Seam,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "go",
+        call_mode: ProviderSidecarCallMode::ExecBidi,
+        state: ProviderSidecarHelperState::Seam,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "rust",
+        call_mode: ProviderSidecarCallMode::ExecBidi,
+        state: ProviderSidecarHelperState::Seam,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "node",
+        call_mode: ProviderSidecarCallMode::ExecBidi,
+        state: ProviderSidecarHelperState::Seam,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "java",
+        call_mode: ProviderSidecarCallMode::ExecBidi,
+        state: ProviderSidecarHelperState::Seam,
+        template_available: false,
+        helper_package: None,
+    },
+    ProviderSidecarHelperCapability {
+        language: "c/c++",
+        call_mode: ProviderSidecarCallMode::ExecBidi,
         state: ProviderSidecarHelperState::Unsupported,
         template_available: false,
         helper_package: None,
@@ -82,14 +181,18 @@ impl PluginTemplateLanguage {
         match self {
             Self::Python => "python",
             Self::Go => "go",
+            Self::Node => "node",
         }
     }
 
     pub fn sidecar_helper_capability(self) -> &'static ProviderSidecarHelperCapability {
         PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX
             .iter()
-            .find(|capability| capability.language == self.label())
-            .expect("plugin template language must have a provider helper matrix row")
+            .find(|capability| {
+                capability.language == self.label()
+                    && capability.call_mode == ProviderSidecarCallMode::ExecInvoke
+            })
+            .expect("plugin template language must have an exec-invoke provider helper matrix row")
     }
 }
 
@@ -204,6 +307,13 @@ impl HelloPluginTemplate {
                 write_new_file(&cmd_dir.join("main.go"), GO_EXEC_PLUGIN)?;
                 write_new_file(&bin_dir.join(".gitkeep"), "")?;
             }
+            PluginTemplateLanguage::Node => {
+                write_new_file(&self.target.join("package.json"), &self.node_package_json())?;
+                let exec_path = bin_dir.join("exec-plugin");
+                write_new_file(&exec_path, NODE_EXEC_WRAPPER)?;
+                make_executable(&exec_path)?;
+                write_new_file(&bin_dir.join("exec-plugin.mjs"), NODE_EXEC_PLUGIN)?;
+            }
         }
         Ok(())
     }
@@ -301,6 +411,23 @@ easynet plugin install .
 The daemon runs `bin/exec-plugin`; it does not run `go run` at invocation time.
 "#
             }
+            PluginTemplateLanguage::Node => {
+                r#"This template uses the Node CLI SDK provider helper:
+
+```js
+import { serveExecPlugin } from "@easynet/daemon-sdk/provider/easynet/pluginexec.js";
+```
+
+Install dependencies before install:
+
+```bash
+npm install
+easynet plugin install .
+```
+
+The daemon runs `bin/exec-plugin`, which executes the checked-in Node module.
+"#
+            }
         };
         format!(
             r#"# {package_id}
@@ -345,7 +472,7 @@ easynet ability list --format json
 Then call the descriptor-bound ability:
 
 ```bash
-easynet ability stream '<descriptor-ref>' \
+easynet ability invoke '<descriptor-ref>' \
   --subject 'easynet:///r/local/resource/plugin/hello' \
   --causal-root \
   --args '{{"message":"hello from plugin"}}' \
@@ -380,6 +507,24 @@ replace easynet.run/cli/sdk/go => {sdk_path}
 "#,
             slug = self.slug,
             sdk_path = default_go_sdk_replace_path().display(),
+        )
+    }
+
+    fn node_package_json(&self) -> String {
+        format!(
+            r#"{{
+  "name": "{package_name}",
+  "version": "{package_version}",
+  "private": true,
+  "type": "module",
+  "dependencies": {{
+    "@easynet/daemon-sdk": "file:{sdk_path}"
+  }}
+}}
+"#,
+            package_name = self.package_id.replace('.', "-"),
+            package_version = self.package_version,
+            sdk_path = default_node_sdk_file_path().display(),
         )
     }
 }
@@ -435,8 +580,31 @@ build:
 	go build -o bin/exec-plugin ./cmd/exec-plugin
 "#;
 
+const NODE_EXEC_WRAPPER: &str = r#"#!/usr/bin/env sh
+set -eu
+exec node "$(dirname "$0")/exec-plugin.mjs"
+"#;
+
+const NODE_EXEC_PLUGIN: &str = r#"import { serveExecPlugin } from "@easynet/daemon-sdk/provider/easynet/pluginexec.js";
+
+await serveExecPlugin((invocation) => ({
+  ok: true,
+  source: "hello-plugin",
+  message: invocation.args.message,
+  caller: invocation.caller,
+  callee: invocation.callee,
+  subject: invocation.subject,
+  ability: invocation.ability,
+  invocation_nonce_len: invocation.invocationNonce.length,
+}));
+"#;
+
 fn default_go_sdk_replace_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sdk/go")
+}
+
+fn default_node_sdk_file_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sdk/node")
 }
 
 fn ensure_empty_or_missing_dir(path: &Path) -> anyhow::Result<()> {
@@ -595,11 +763,27 @@ mod tests {
     fn sidecar_helper_matrix_keeps_templates_provider_backed() {
         let rows: std::collections::BTreeMap<_, _> = PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX
             .iter()
-            .map(|row| (row.language, row))
+            .map(|row| ((row.language, row.call_mode), row))
             .collect();
 
         assert_eq!(rows.len(), PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX.len());
-        for language in [PluginTemplateLanguage::Python, PluginTemplateLanguage::Go] {
+        for language in ["python", "go", "rust", "node", "java", "c/c++"] {
+            for call_mode in [
+                ProviderSidecarCallMode::ExecInvoke,
+                ProviderSidecarCallMode::ExecStream,
+                ProviderSidecarCallMode::ExecBidi,
+            ] {
+                assert!(
+                    rows.contains_key(&(language, call_mode)),
+                    "missing sidecar helper matrix row for {language}/{call_mode:?}"
+                );
+            }
+        }
+        for language in [
+            PluginTemplateLanguage::Python,
+            PluginTemplateLanguage::Go,
+            PluginTemplateLanguage::Node,
+        ] {
             let capability = language.sidecar_helper_capability();
             assert!(capability.template_available);
             assert!(matches!(
@@ -613,9 +797,9 @@ mod tests {
                 language.label()
             );
         }
-        for language in ["rust", "node", "java", "c/c++"] {
+        for language in ["rust", "java", "c/c++"] {
             let capability = rows
-                .get(language)
+                .get(&(language, ProviderSidecarCallMode::ExecInvoke))
                 .unwrap_or_else(|| panic!("missing sidecar helper matrix row for {language}"));
             assert!(
                 !capability.template_available,
@@ -625,6 +809,26 @@ mod tests {
                 capability.state,
                 ProviderSidecarHelperState::Unsupported | ProviderSidecarHelperState::Seam
             ));
+        }
+        for language in ["python", "go", "rust", "node", "java", "c/c++"] {
+            for call_mode in [
+                ProviderSidecarCallMode::ExecStream,
+                ProviderSidecarCallMode::ExecBidi,
+            ] {
+                let capability = rows[&(language, call_mode)];
+                assert!(
+                    !capability.template_available,
+                    "{language}/{call_mode:?} template must stay closed until its provider helper owns streaming frames"
+                );
+                assert!(matches!(
+                    capability.state,
+                    ProviderSidecarHelperState::Unsupported | ProviderSidecarHelperState::Seam
+                ));
+                assert!(
+                    capability.helper_package.is_none(),
+                    "{language}/{call_mode:?} must not claim unary exec helper coverage"
+                );
+            }
         }
     }
 
@@ -662,6 +866,37 @@ mod tests {
         let readme = fs::read_to_string(target.join("README.md")).expect("readme");
         assert!(readme.contains("Build the executable before install"));
         assert!(readme.contains("make build"));
+    }
+
+    #[test]
+    fn init_hello_plugin_generates_node_project() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let target = root.path().join("hello-node-plugin");
+
+        let project = init_hello_plugin(PluginTemplateInit {
+            path: target.clone(),
+            package_id: Some("local.hello_node_plugin".to_string()),
+            ability_name: Some("hello_node_plugin.echo".to_string()),
+            package_version: "0.1.0".to_string(),
+            descriptor_version: "1.0.0".to_string(),
+            language: PluginTemplateLanguage::Node,
+        })
+        .expect("generate node plugin");
+
+        assert_eq!(project.language, PluginTemplateLanguage::Node);
+        assert!(target.join("plugin.toml").is_file());
+        assert!(target.join("package.json").is_file());
+        assert!(target.join("bin/exec-plugin").is_file());
+        assert!(target.join("bin/exec-plugin.mjs").is_file());
+        let main_body = fs::read_to_string(target.join("bin/exec-plugin.mjs")).expect("node main");
+        assert!(main_body.contains("serveExecPlugin"));
+        assert!(!main_body.contains("JSON.parse"));
+        let package_json = fs::read_to_string(target.join("package.json")).expect("package json");
+        assert!(package_json.contains("\"@easynet/daemon-sdk\": \"file:"));
+        assert!(package_json.contains("/sdk/node"));
+        let readme = fs::read_to_string(target.join("README.md")).expect("readme");
+        assert!(readme.contains("npm install"));
+        assert!(readme.contains("@easynet/daemon-sdk/provider/easynet/pluginexec.js"));
     }
 
     #[test]
