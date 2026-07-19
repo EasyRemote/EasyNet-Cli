@@ -416,6 +416,16 @@ check_adapter_report_evidence() {
   python3 "$SOURCE_ROOT/sdk/conformance/refresh_adapter_report_evidence.py" --check
 }
 
+prepare_report_gate_toolchains() {
+  # The report gate executes language-owned selectors, but those selectors may
+  # delegate to repository gates. For example, the Go matrix conformance case
+  # runs check-sdk-parity-matrix.sh, whose validator requires pytest even when
+  # the selected language slice is not python. Resolve the Python toolchain once
+  # at the report-gate boundary so source snapshots do not depend on an ignored
+  # sdk/python/.venv or on the caller's ambient shell.
+  resolve_sdk_python_toolchain "$SOURCE_ROOT" pytest
+}
+
 if [[ "${1:-}" == "--self-test" ]]; then
   tmp="$(mktemp -d "$REPO_ROOT/target/sdk-conformance-report-gate.XXXXXX")"
   SELF_TEST_TMP="$tmp"
@@ -610,6 +620,28 @@ EOF
   )
 
   (
+    fake_python="$tmp/python-for-go-slice"
+    cat >"$fake_python" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "-m" && "${2:-}" == "pytest" && "${3:-}" == "--version" ]]; then
+  printf 'pytest fixture\n'
+  exit 0
+fi
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'Python fixture\n'
+  exit 0
+fi
+exit 1
+EOF
+    chmod +x "$fake_python"
+    SDK_CONFORMANCE_PYTHON="$fake_python"
+    REQUESTED_LANGUAGES="go"
+    prepare_report_gate_toolchains
+    [[ "$SDK_CONFORMANCE_PYTHON" == "$fake_python" ]]
+  )
+
+  (
     fake_python="$tmp/python-from-public-config"
     cat >"$fake_python" <<'EOF'
 #!/usr/bin/env bash
@@ -663,9 +695,7 @@ fi
 
 rm -rf "$RESULT_DIR"
 check_adapter_report_evidence
-if [[ -z "$REQUESTED_LANGUAGES" || ",$REQUESTED_LANGUAGES," == *",python,"* ]]; then
-  resolve_sdk_python_toolchain "$SOURCE_ROOT" pytest
-fi
+prepare_report_gate_toolchains
 create_source_snapshot
 write_source_attestation_manifest
 ensure_run_nonce
