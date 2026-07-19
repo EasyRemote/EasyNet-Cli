@@ -124,9 +124,11 @@ use trust::{
 /// One provider graph shared by Axon's canonical caller authentication,
 /// daemon product policy, cross-hub routing, and SIGHUP reload.
 ///
-/// The graph is complete before `LocalRuntime` is constructed. It therefore
-/// cannot drift into the former shape where Axon admitted against a local-only
-/// resolver while the daemon facade held a separate federated resolver.
+/// The resolver graph is shared before `LocalRuntime` is constructed. The
+/// PrincipalLifecycle read model is then installed into that same resolver
+/// when transport boot derives the trust-anchor-backed store path, so Axon
+/// admission and the daemon facade cannot drift into separate key-resolution
+/// paths.
 #[derive(Clone)]
 pub struct InvocationFederationRuntime {
     resolver: Arc<FederatedKeyResolver>,
@@ -144,6 +146,10 @@ impl InvocationFederationRuntime {
 
     fn resolver(&self) -> Arc<FederatedKeyResolver> {
         Arc::clone(&self.resolver)
+    }
+
+    fn attach_principal_lifecycle_reader(&self, reader: PrincipalLifecycleReader) {
+        self.resolver.attach_principal_lifecycle_reader(reader);
     }
 
     fn client(&self) -> Option<Arc<dyn crate::daemon::federation::client::FederationClient>> {
@@ -490,13 +496,15 @@ pub fn start_daemon_invocation_transport(
     // Device-mode daemons never originate federation calls, so
     // both surfaces stay local-only.
     let dialer = federation_runtime.client();
+    let principal_lifecycle_reader = PrincipalLifecycleReader::new(
+        principal_lifecycle_store_path_for_trust_anchor(&trust_anchor_path),
+    );
+    federation_runtime.attach_principal_lifecycle_reader(principal_lifecycle_reader.clone());
     let mut admission =
         AdmissionFacade::with_trust_anchor_cell(trust_anchor_cell.clone(), daemon_ura.clone())
             .with_access_control_stores(access_control_stores);
     admission = admission.with_ability_catalog(Arc::clone(&local_ability_catalog));
-    admission = admission.with_principal_lifecycle_reader(PrincipalLifecycleReader::new(
-        principal_lifecycle_store_path_for_trust_anchor(&trust_anchor_path),
-    ));
+    admission = admission.with_principal_lifecycle_reader(principal_lifecycle_reader);
     admission = admission.with_federated_key_resolver(federation_runtime.resolver());
     // #185: one hot-swappable quota gate is shared by both listeners.
     // The gate exists even when quota starts disabled so SIGHUP can

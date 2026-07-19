@@ -48,7 +48,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use axon_sdk::invocation::axiom::KeyResolver;
@@ -56,10 +56,12 @@ use axon_sdk::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, Secu
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::VerifyingKey;
 
+use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::peer_envelope_signer::PeerInvokeRequest;
+use crate::daemon::invocation::admission::principal_lifecycle::PrincipalLifecycleReader;
 use crate::daemon::trust::cell::SharedTrustAnchor;
 #[cfg(test)]
 use axon_sdk::pb::axon::v1::InvokeRequest;
@@ -161,6 +163,13 @@ pub struct FederatedKeyResolver {
     cache: SharedFederatedKeyCache,
     cache_ttl: Duration,
     hub_signer: Option<Arc<dyn CanonicalSigner>>,
+    /// Late-bound read model for same-realm User principal keys. Daemon boot
+    /// constructs the Axon LocalRuntime before the transport layer derives the
+    /// trust-anchor-backed lifecycle store path, so the resolver owns the
+    /// stable provider graph and the transport installs this read model once
+    /// the path is known. Runtime key admission and `federation.resolve_key`
+    /// therefore consume the same PrincipalLifecycle aggregate.
+    principal_lifecycle: Arc<RwLock<Option<PrincipalLifecycleReader>>>,
 }
 
 enum LocalKeyResolutionError {
@@ -190,6 +199,7 @@ impl FederatedKeyResolver {
             cache: SharedFederatedKeyCache::new(),
             cache_ttl: DEFAULT_FEDERATED_RESOLVE_CACHE_TTL,
             hub_signer: None,
+            principal_lifecycle: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -241,6 +251,17 @@ impl FederatedKeyResolver {
     pub fn with_hub_signer(mut self, signer: Arc<dyn CanonicalSigner>) -> Self {
         self.hub_signer = Some(signer);
         self
+    }
+
+    pub(crate) fn attach_principal_lifecycle_reader(&self, reader: PrincipalLifecycleReader) {
+        match self.principal_lifecycle.write() {
+            Ok(mut guard) => {
+                *guard = Some(reader);
+            }
+            Err(poisoned) => {
+                *poisoned.into_inner() = Some(reader);
+            }
+        }
     }
 
     /// Drop every cached entry. Re-exported on the resolver for
@@ -330,19 +351,80 @@ impl FederatedKeyResolver {
     /// so existing single-realm setups behave identically.
     fn resolve_local(&self, agent_ura: &str) -> Result<VerifyingKey, LocalKeyResolutionError> {
         let trust_anchor = self.trust_anchor.snapshot();
-        let entry = match self.presented_pubkey_b64.as_deref() {
+        if let Some(entry) = match self.presented_pubkey_b64.as_deref() {
             Some(pk) => trust_anchor.lookup_user_by_pubkey(agent_ura, pk),
             None => trust_anchor.lookup(agent_ura),
+        } {
+            return Self::decode_local_public_key_b64(
+                agent_ura,
+                &entry.public_key_b64,
+                "local_trust_anchor",
+            );
         }
-        .ok_or(LocalKeyResolutionError::Missing)?;
+        if let Some(key) = self.resolve_principal_lifecycle_local_key(agent_ura)? {
+            return Ok(key);
+        }
+        Err(LocalKeyResolutionError::Missing)
+    }
+
+    fn resolve_principal_lifecycle_local_key(
+        &self,
+        agent_ura: &str,
+    ) -> Result<Option<VerifyingKey>, LocalKeyResolutionError> {
+        let Some(self_realm) = self.self_realm.as_deref() else {
+            return Ok(None);
+        };
+        let Ok(agent) = parse_ura(agent_ura) else {
+            return Ok(None);
+        };
+        if agent.kind != URAKind::User || agent.realm != self_realm {
+            return Ok(None);
+        }
+        let reader = match self.principal_lifecycle.read() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        let Some(reader) = reader else {
+            return Ok(None);
+        };
+        let public_key_b64 = reader
+            .active_public_keys_b64(agent_ura, self.presented_pubkey_b64.as_deref())
+            .map_err(|status| {
+                LocalKeyResolutionError::InvalidAuthority(
+                    caller_key_not_found(
+                        agent_ura,
+                        &format!("principal_lifecycle_read_failed:{}", status.message()),
+                    )
+                    .with_context("authority_source", "principal_lifecycle"),
+                )
+            })?
+            .into_iter()
+            .next();
+        let Some(public_key_b64) = public_key_b64 else {
+            return Ok(None);
+        };
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = principal_lifecycle_resolve_key_succeeded,
+            agent_ura = agent_ura,
+        );
+        Self::decode_local_public_key_b64(agent_ura, &public_key_b64, "principal_lifecycle")
+            .map(Some)
+    }
+
+    fn decode_local_public_key_b64(
+        agent_ura: &str,
+        public_key_b64: &str,
+        authority_source: &'static str,
+    ) -> Result<VerifyingKey, LocalKeyResolutionError> {
         let invalid_authority = |detail: String| {
             LocalKeyResolutionError::InvalidAuthority(
                 caller_key_not_found(agent_ura, detail.as_str())
-                    .with_context("authority_source", "local_trust_anchor"),
+                    .with_context("authority_source", authority_source),
             )
         };
         let raw = BASE64_STANDARD
-            .decode(&entry.public_key_b64)
+            .decode(public_key_b64)
             .map_err(|error| invalid_authority(format!("public_key_b64_decode_failed:{error}")))?;
         let arr: [u8; 32] = raw.as_slice().try_into().map_err(|_| {
             invalid_authority(format!(
@@ -570,7 +652,9 @@ mod tests {
     use crate::daemon::identity::self_identity::TestCanonicalSigner;
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
     use ed25519_dalek::SigningKey;
+    use serde_json::json;
     use std::collections::BTreeMap;
+    use tempfile::tempdir;
 
     fn test_resolver(
         trust_anchor: Arc<RealmTrustAnchor>,
@@ -736,6 +820,51 @@ mod tests {
         resolver
             .resolve(cross_ura)
             .expect("same resolver observes peer replacement");
+    }
+
+    #[test]
+    fn same_realm_principal_lifecycle_key_resolves_local_miss_without_dial() {
+        let (_signing, pk_b64) = ed25519_pubkey_b64();
+        let dir = tempdir().expect("tempdir");
+        let user = "easynet:///r/realm-a/user/alice";
+        let mut principals = serde_json::Map::new();
+        principals.insert(
+            user.to_string(),
+            json!({
+                "principal_ura": user,
+                "state": "active",
+                "version": 2,
+                "bindings": [{
+                    "binding_id": "bind-alice",
+                    "principal_ura": user,
+                    "public_key_b64": pk_b64,
+                    "state": "active",
+                    "created_unix_ms": 1
+                }],
+                "created_unix_ms": 1,
+                "updated_unix_ms": 1
+            }),
+        );
+        let store_path = dir.path().join("principal-lifecycle.json");
+        std::fs::write(
+            &store_path,
+            serde_json::to_vec(&json!({ "principals": principals })).expect("store json"),
+        )
+        .expect("write lifecycle store");
+
+        let resolver = test_resolver(
+            Arc::new(RealmTrustAnchor::default()),
+            Some(Arc::new(DialFailedClient)),
+            Arc::new(BTreeMap::new()),
+            Some("realm-a".to_string()),
+        )
+        .with_presented_pubkey_b64(pk_b64.clone());
+        resolver.attach_principal_lifecycle_reader(PrincipalLifecycleReader::new(store_path));
+
+        let resolved = resolver
+            .resolve(user)
+            .expect("same-realm User key should resolve from PrincipalLifecycle");
+        assert_eq!(BASE64_STANDARD.encode(resolved.to_bytes()), pk_b64);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

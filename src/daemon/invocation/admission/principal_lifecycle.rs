@@ -94,6 +94,38 @@ impl PrincipalLifecycleReader {
             .unwrap_or(PrincipalAdmissionState::Missing))
     }
 
+    pub(crate) fn active_public_keys_b64(
+        &self,
+        principal_ura: &str,
+        presented_pubkey_b64: Option<&str>,
+    ) -> Result<Vec<String>, Status> {
+        let store =
+            PrincipalStore::load(&self.store_path, "principal.lifecycle.active_public_keys")?;
+        let Some(record) = store.principals.get(principal_ura) else {
+            return Ok(Vec::new());
+        };
+        if record.state != PrincipalState::Active {
+            return Ok(Vec::new());
+        }
+        let presented = presented_pubkey_b64
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        Ok(record
+            .bindings
+            .iter()
+            .filter(|binding| binding.state == KeyBindingState::Active)
+            .filter(|binding| {
+                binding
+                    .expires_unix_ms
+                    .is_none_or(|expires| expires > now_unix_ms() as i64)
+            })
+            .map(|binding| binding.public_key_b64.trim())
+            .filter(|public_key_b64| !public_key_b64.is_empty())
+            .filter(|public_key_b64| presented.is_none_or(|presented| presented == *public_key_b64))
+            .map(str::to_string)
+            .collect())
+    }
+
     pub(crate) fn verify_join_enrollment_proof(
         &self,
         principal_ura: &str,
@@ -1897,6 +1929,68 @@ mod tests {
             reloaded.principals.get(user).unwrap().state,
             PrincipalState::Active
         );
+    }
+
+    #[test]
+    fn lifecycle_reader_resolves_only_active_unexpired_public_keys() {
+        let (_dir, ctx) = context();
+        let user = "easynet:///r/realm/user/alice";
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_CREATE,
+            json!({
+                "command": command("create-1", "bootstrap", None),
+                "principal_ura": user
+            }),
+        );
+        let out = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            json!({
+                "command": command_with_ref("bind-1", "bootstrap", "proof:create-1", Some(1)),
+                "principal_ura": user,
+                "public_key_b64": b64_pubkey(1)
+            }),
+        );
+        let binding_id = out["principal"]["bindings"][0]["binding_id"]
+            .as_str()
+            .expect("binding id");
+        let reader = ctx.reader();
+
+        assert_eq!(
+            reader.active_public_keys_b64(user, None).unwrap(),
+            vec![b64_pubkey(1)]
+        );
+        assert_eq!(
+            reader
+                .active_public_keys_b64(user, Some(&b64_pubkey(1)))
+                .unwrap(),
+            vec![b64_pubkey(1)]
+        );
+        assert!(reader
+            .active_public_keys_b64(user, Some(&b64_pubkey(2)))
+            .unwrap()
+            .is_empty());
+
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_SUSPEND,
+            json!({
+                "command": command_for_actor_with_ref(
+                    user,
+                    "suspend-1",
+                    "active_key",
+                    binding_id,
+                    Some(2)
+                ),
+                "principal_ura": user
+            }),
+        );
+
+        assert!(reader
+            .active_public_keys_b64(user, None)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

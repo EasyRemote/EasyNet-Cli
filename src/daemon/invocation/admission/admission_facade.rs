@@ -874,14 +874,16 @@ impl AdmissionFacade {
         )
     }
 
-    /// Resolve a caller public key through the same canonical resolver used by
-    /// strict Axon admission, returning base64-encoded Ed25519 bytes for the
-    /// `federation.resolve_key` wire surface.
+    /// Resolve a caller public key through the same canonical resolver inputs
+    /// used by strict Axon admission, returning base64-encoded Ed25519 bytes
+    /// for the `federation.resolve_key` wire surface.
     ///
     /// Local trust-anchor hits are handled by `federation_wrappers` before this
-    /// method is called. This method owns the federated miss path so execution
-    /// hosts that ask their local hub to resolve an external caller get the same
-    /// local-first, explicit-peer-gated semantics as transport admission.
+    /// method is called. Same-realm User misses then consult the durable
+    /// PrincipalLifecycle aggregate, because the trust anchor is a key
+    /// projection while PrincipalLifecycle owns the canonical principal/key
+    /// lifecycle. Only external callers continue into the explicit-peer-gated
+    /// federated resolver.
     pub fn resolve_federated_key_b64(
         &self,
         agent_ura: &str,
@@ -1043,24 +1045,11 @@ impl AdmissionFacade {
         }
 
         let trust_anchor = self.trust_anchor.snapshot();
-        let trusted_role = match trust_anchor.lookup(caller_ura) {
-            Some(entry) => entry.role,
-            None if self.is_federated_caller(caller_ura) => federated_caller_role(caller_ura)
-                .ok_or_else(|| {
-                    self.signature_denied_status(
-                        &input.envelope,
-                        &input.ability,
-                        permission_denied_unknown_caller(caller_ura),
-                    )
-                })?,
-            None => {
-                return Err(self.signature_denied_status(
-                    &input.envelope,
-                    &input.ability,
-                    permission_denied_unknown_caller(caller_ura),
-                ));
-            }
-        };
+        let trusted_role = self
+            .trusted_role_for_caller(caller_ura, trust_anchor.as_ref())
+            .map_err(|status| {
+                self.signature_denied_status(&input.envelope, &input.ability, status)
+            })?;
         reject_public_hosted_agent_delegation_metadata(Some(&input.metadata))?;
         let authority = self.enforce_runtime_admitted_policy(
             &input.envelope,
@@ -1115,6 +1104,61 @@ impl AdmissionFacade {
     pub fn with_federated_key_resolver(mut self, resolver: Arc<FederatedKeyResolver>) -> Self {
         self.federated_keys = Some(resolver);
         self
+    }
+
+    fn trusted_role_for_caller(
+        &self,
+        caller_ura: &str,
+        trust_anchor: &RealmTrustAnchor,
+    ) -> Result<TrustedAgentRole, Status> {
+        if let Some(entry) = trust_anchor.lookup(caller_ura) {
+            return Ok(entry.role);
+        }
+        if let Some(role) = self.principal_lifecycle_role_for_caller(caller_ura)? {
+            return Ok(role);
+        }
+        if self.is_federated_caller(caller_ura) {
+            return federated_caller_role(caller_ura)
+                .ok_or_else(|| permission_denied_unknown_caller(caller_ura));
+        }
+        Err(permission_denied_unknown_caller(caller_ura))
+    }
+
+    fn principal_lifecycle_role_for_caller(
+        &self,
+        caller_ura: &str,
+    ) -> Result<Option<TrustedAgentRole>, Status> {
+        let Some(reader) = self.principal_lifecycle.as_ref() else {
+            return Ok(None);
+        };
+        let Ok(caller) = parse_ura(caller_ura) else {
+            return Ok(None);
+        };
+        if caller.kind != URAKind::User {
+            return Ok(None);
+        }
+        let Some(daemon_realm) = self
+            .daemon_ura
+            .as_deref()
+            .and_then(|daemon_ura| parse_ura(daemon_ura).ok())
+            .map(|daemon| daemon.realm)
+        else {
+            return Ok(None);
+        };
+        if caller.realm != daemon_realm {
+            return Ok(None);
+        }
+        let state = reader.admission_state(caller_ura)?;
+        match state {
+            PrincipalAdmissionState::Active => Ok(Some(TrustedAgentRole::User)),
+            PrincipalAdmissionState::Missing => Ok(None),
+            PrincipalAdmissionState::Pending
+            | PrincipalAdmissionState::Suspended
+            | PrincipalAdmissionState::Deleted => Err(Status::permission_denied(format!(
+                "PRINCIPAL_LIFECYCLE_DENIED: caller URA `{caller_ura}` is {} and cannot invoke",
+                principal_admission_state_label(state)
+            ))),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2497,9 +2541,8 @@ fn current_unix_ms() -> i64 {
 
 fn permission_denied_unknown_caller(caller_ura: &str) -> Status {
     Status::permission_denied(format!(
-        "{REASON_CALLER_UNKNOWN}: caller URA `{caller_ura}` is not in the realm trust anchor; \
-         pairing-flow registration via `identity.register_pubkey` \
-         (PR-7 commit 5/N) populates the trust set",
+        "{REASON_CALLER_UNKNOWN}: caller URA `{caller_ura}` is not in the canonical local \
+         PrincipalLifecycle aggregate or realm trust-anchor projection",
     ))
 }
 
@@ -2612,7 +2655,9 @@ mod tests {
         sha256, AgentIdentity, CausalContext, InvocationEnvelope, SubjectIdentity, UraProfile,
     };
     use axon_sdk::pb::axon::v1::{InvokeRequest, InvokeResponse};
+    use serde_json::json;
     use std::collections::BTreeMap;
+    use tempfile::tempdir;
 
     const TEST_DESCRIPTOR_REF: &str = "easynet:///r/policy/ability/policy.worker.run@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
 
@@ -2745,6 +2790,42 @@ mod tests {
             Some(crate::core::ura::hub_ura("self-realm")),
         )
         .with_federated_key_resolver(resolver)
+    }
+
+    #[test]
+    fn caller_role_resolves_active_same_realm_user_from_principal_lifecycle() {
+        let dir = tempdir().expect("tempdir");
+        let user = "easynet:///r/self-realm/user/alice";
+        let mut principals = serde_json::Map::new();
+        principals.insert(
+            user.to_string(),
+            json!({
+                "principal_ura": user,
+                "state": "active",
+                "version": 2,
+                "bindings": [],
+                "created_unix_ms": 1,
+                "updated_unix_ms": 1
+            }),
+        );
+        let store_path = dir.path().join("principal-lifecycle.json");
+        std::fs::write(
+            &store_path,
+            serde_json::to_vec(&json!({ "principals": principals })).expect("store json"),
+        )
+        .expect("write lifecycle store");
+        let facade = AdmissionFacade::with_trust_anchor_cell(
+            SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default())),
+            Some(crate::core::ura::hub_ura("self-realm")),
+        )
+        .with_principal_lifecycle_reader(PrincipalLifecycleReader::new(store_path));
+
+        assert_eq!(
+            facade
+                .trusted_role_for_caller(user, &RealmTrustAnchor::default())
+                .expect("active lifecycle user should be trusted as User"),
+            TrustedAgentRole::User
+        );
     }
 
     #[test]

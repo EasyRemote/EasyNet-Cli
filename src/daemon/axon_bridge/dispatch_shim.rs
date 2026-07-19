@@ -307,14 +307,25 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
                 terminal_receipt: Some(finalized.terminal_receipt),
             }
         }
-        Err(error) => RpcDispatchOutcome {
-            invocation_id,
-            state: handle.current_state().await,
-            payload_bytes: Vec::new(),
-            error: Some(error),
-            admission_receipt: None,
-            terminal_receipt: None,
-        },
+        Err(error) => {
+            let state = handle.current_state().await;
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = axon_rpc_finalization_failed,
+                invocation_id = invocation_id.as_deref().unwrap_or(""),
+                state = state.as_str(),
+                reason = error.reason.as_str(),
+                detail = error.message.as_str(),
+            );
+            RpcDispatchOutcome {
+                invocation_id,
+                state,
+                payload_bytes: Vec::new(),
+                error: Some(error),
+                admission_receipt: None,
+                terminal_receipt: None,
+            }
+        }
     }
 }
 
@@ -339,6 +350,12 @@ async fn dispatch_rpc(
     let prepared = match request_for_wire_dispatch(AxonInvocationCallMode::Rpc, wire) {
         Ok(prepared) => prepared,
         Err(err) => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = axon_rpc_request_prepare_failed,
+                reason = err.reason.as_str(),
+                detail = err.message.as_str(),
+            );
             return RpcDispatchOutcome {
                 invocation_id: None,
                 state: InvocationState::Failed,
@@ -372,14 +389,22 @@ async fn dispatch_rpc(
             let _ = lifecycle.finalized().await;
             outcome
         }
-        Err(err) => RpcDispatchOutcome {
-            invocation_id: None,
-            state: InvocationState::Failed,
-            payload_bytes: Vec::new(),
-            error: Some(err),
-            admission_receipt: None,
-            terminal_receipt: None,
-        },
+        Err(err) => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = axon_rpc_admission_failed,
+                reason = err.reason.as_str(),
+                detail = err.message.as_str(),
+            );
+            RpcDispatchOutcome {
+                invocation_id: None,
+                state: InvocationState::Failed,
+                payload_bytes: Vec::new(),
+                error: Some(err),
+                admission_receipt: None,
+                terminal_receipt: None,
+            }
+        }
     }
 }
 
