@@ -49,7 +49,8 @@ use crate::ffi::errors::{
     ERR_TIMEOUT,
 };
 use crate::ffi::errors::{
-    set_last_error_code, ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER,
+    set_last_error_code, set_last_error_projection, ErrorProjection, ERR_INVALID_HANDLE,
+    ERR_INVALID_UTF8, ERR_NULL_POINTER,
 };
 #[cfg(feature = "axon-pb")]
 use crate::ffi::strings::alloc_output_cstring;
@@ -115,6 +116,16 @@ const PROVIDER_CANCEL_REASON: &str = "consumer_request";
 fn record_invocation_error(code: i32, message: impl Into<String>) -> i32 {
     set_last_error_code(code, message);
     code
+}
+
+#[cfg(feature = "axon-pb")]
+fn record_invocation_projected_error(
+    abi_code: i32,
+    projection: ErrorProjection,
+    message: impl Into<String>,
+) -> i32 {
+    set_last_error_projection(abi_code, projection, message);
+    abi_code
 }
 
 #[cfg(not(feature = "axon-pb"))]
@@ -386,12 +397,75 @@ pub unsafe extern "C" fn easynet_runtime_resolve_descriptor_ref(
                 clear_last_error();
                 EASYNET_OK
             }
-            Err(error) => record_invocation_error(
-                ERR_NOT_FOUND,
-                format!("easynet_runtime_resolve_descriptor_ref: {error:#}"),
-            ),
+            Err(error) => {
+                let message = format!("easynet_runtime_resolve_descriptor_ref: {error:#}");
+                let (abi_code, projection) = descriptor_resolution_error_projection(&message);
+                record_invocation_projected_error(abi_code, projection, message)
+            }
         }
     }
+}
+
+#[cfg(feature = "axon-pb")]
+fn descriptor_resolution_error_projection(message: &str) -> (i32, ErrorProjection) {
+    let lowered = message.to_ascii_lowercase();
+    if lowered.contains("request_json is not valid utf-8")
+        || lowered.contains("decode descriptor_ref request")
+        || lowered.contains("descriptor_ref request must be a json object")
+        || lowered.contains("descriptor_ref request missing")
+        || lowered.contains("derive ability ura")
+        || lowered.contains("callee ura is invalid")
+    {
+        return (
+            ERR_INVALID_ARG,
+            ErrorProjection {
+                code: "INVALID_ARGUMENT",
+                stage: "sdk",
+                retry: "never",
+            },
+        );
+    }
+    if lowered.contains("daemon not running") || lowered.contains("listener unreachable") {
+        return (
+            ERR_DAEMON_DOWN,
+            ErrorProjection {
+                code: "DAEMON_OFFLINE",
+                stage: "transport",
+                retry: "after_backoff",
+            },
+        );
+    }
+    if lowered.contains("requires a caller signer") {
+        return (
+            ERR_NOT_FOUND,
+            ErrorProjection {
+                code: "CALLER_SIGNER_UNAVAILABLE",
+                stage: "caller_identity",
+                retry: "never",
+            },
+        );
+    }
+    if lowered.contains("owner is not online")
+        || message.contains("NEGATIVE_REASON_NXDOMAIN")
+        || message.contains("ROUTE_NEGATIVE")
+    {
+        return (
+            ERR_NOT_FOUND,
+            ErrorProjection {
+                code: "DESCRIPTOR_OWNER_OFFLINE",
+                stage: "routing",
+                retry: "after_backoff",
+            },
+        );
+    }
+    (
+        ERR_NOT_FOUND,
+        ErrorProjection {
+            code: "DESCRIPTOR_NOT_FOUND",
+            stage: "routing",
+            retry: "never",
+        },
+    )
 }
 
 /// Allocate a mutable Invocation builder handle.
@@ -8853,6 +8927,31 @@ mod tests {
         assert!(message.contains("descriptor_ref not found in local runtime catalog"));
         assert!(!message.contains("offline-daemon.sock"));
         assert!(!message.contains("ROUTE_NEGATIVE"));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn descriptor_resolution_errors_project_canonical_runtime_codes() {
+        let (abi_code, projection) = descriptor_resolution_error_projection(
+            "easynet_runtime_resolve_descriptor_ref: descriptor_ref not found in local runtime catalog",
+        );
+        assert_eq!(abi_code, ERR_NOT_FOUND);
+        assert_eq!(projection.code, "DESCRIPTOR_NOT_FOUND");
+        assert_eq!(projection.stage, "routing");
+
+        let (abi_code, projection) = descriptor_resolution_error_projection(
+            "easynet_runtime_resolve_descriptor_ref: remote invocation requires a caller signer for `easynet:///r/cli/device/local`",
+        );
+        assert_eq!(abi_code, ERR_NOT_FOUND);
+        assert_eq!(projection.code, "CALLER_SIGNER_UNAVAILABLE");
+        assert_eq!(projection.stage, "caller_identity");
+
+        let (abi_code, projection) = descriptor_resolution_error_projection(
+            "easynet_runtime_resolve_descriptor_ref: ROUTE_NEGATIVE: namespace.resolve negative: NEGATIVE_REASON_NXDOMAIN: owner is not online",
+        );
+        assert_eq!(abi_code, ERR_NOT_FOUND);
+        assert_eq!(projection.code, "DESCRIPTOR_OWNER_OFFLINE");
+        assert_eq!(projection.retry, "after_backoff");
     }
 
     #[cfg(feature = "axon-pb")]

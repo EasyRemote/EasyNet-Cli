@@ -253,7 +253,7 @@ try:
         )
         raise AssertionError("unknown ability unexpectedly resolved descriptor_ref")
     except SDKError as exc:
-        assert exc.code == "NOT_FOUND", exc
+        assert exc.code == "DESCRIPTOR_NOT_FOUND", exc
     print("[python-sdk-live-smoke] missing ability descriptor resolve fails closed")
 
     prepared_failure, _ = runtime.prepare(

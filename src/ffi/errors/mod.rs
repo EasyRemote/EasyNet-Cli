@@ -108,6 +108,14 @@ thread_local! {
 struct LastErrorRecord {
     message: CString,
     code: Option<i32>,
+    projection: Option<ErrorProjection>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ErrorProjection {
+    pub(crate) code: &'static str,
+    pub(crate) stage: &'static str,
+    pub(crate) retry: &'static str,
 }
 
 /// Record an error message for later retrieval by
@@ -115,7 +123,7 @@ struct LastErrorRecord {
 /// immediately before returning a non-zero code.
 #[cfg(test)]
 pub(crate) fn set_last_error(msg: impl Into<String>) {
-    set_last_error_record(None, msg);
+    set_last_error_record(None, None, msg);
 }
 
 /// Record an error code plus message for typed error projection.
@@ -123,17 +131,40 @@ pub(crate) fn set_last_error(msg: impl Into<String>) {
 /// helper lets newer bindings also retrieve a schema-backed JSON DTO
 /// without parsing the human-readable last-error string.
 pub(crate) fn set_last_error_code(code: i32, msg: impl Into<String>) {
-    set_last_error_record(Some(code), msg);
+    set_last_error_record(Some(code), None, msg);
 }
 
-fn set_last_error_record(code: Option<i32>, msg: impl Into<String>) {
+/// Record an ABI code with a more precise canonical runtime error
+/// projection.
+///
+/// The returned integer code remains ABI-stable for existing C callers.
+/// Newer bindings consume `easynet_last_error_json` and should receive the
+/// canonical runtime failure domain for the specific operation instead of a
+/// coarse ABI bucket.
+pub(crate) fn set_last_error_projection(
+    code: i32,
+    projection: ErrorProjection,
+    msg: impl Into<String>,
+) {
+    set_last_error_record(Some(code), Some(projection), msg);
+}
+
+fn set_last_error_record(
+    code: Option<i32>,
+    projection: Option<ErrorProjection>,
+    msg: impl Into<String>,
+) {
     let s = msg.into();
     // Strip any interior NULs so the CString construction cannot
     // fail on well-formed Rust strings that happen to contain a \0.
     let sanitized: String = s.chars().filter(|c| *c != '\0').collect();
     let c = CString::new(sanitized).unwrap_or_else(|_| CString::new("(unrepresentable)").unwrap());
     LAST_ERROR.with(|slot| {
-        *slot.borrow_mut() = Some(LastErrorRecord { message: c, code });
+        *slot.borrow_mut() = Some(LastErrorRecord {
+            message: c,
+            code,
+            projection,
+        });
     });
 }
 
@@ -166,7 +197,11 @@ pub unsafe extern "C" fn easynet_last_error_json(out_error_json: *mut *mut c_cha
     unsafe { *out_error_json = std::ptr::null_mut() };
 
     let json = LAST_ERROR.with(|slot| match &*slot.borrow() {
-        Some(record) => typed_error_json(record.code, record.message.to_string_lossy().as_ref()),
+        Some(record) => typed_error_json_with_projection(
+            record.code,
+            record.projection,
+            record.message.to_string_lossy().as_ref(),
+        ),
         None => serde_json::Value::Null,
     });
     write_json_output("easynet_last_error_json", out_error_json, json)
@@ -253,12 +288,27 @@ fn alloc_output_cstring(s: impl Into<String>) -> *mut c_char {
 }
 
 fn typed_error_json(code: Option<i32>, message: &str) -> serde_json::Value {
+    typed_error_json_with_projection(code, None, message)
+}
+
+fn typed_error_json_with_projection(
+    code: Option<i32>,
+    projection: Option<ErrorProjection>,
+    message: &str,
+) -> serde_json::Value {
     let metadata = error_metadata(code.unwrap_or(ERR_GENERIC));
+    let canonical_code = projection.map(|value| value.code).unwrap_or(metadata.code);
+    let stage = projection
+        .map(|value| value.stage)
+        .unwrap_or(metadata.stage);
+    let retry = projection
+        .map(|value| value.retry)
+        .unwrap_or(metadata.retry);
     serde_json::json!({
-        "code": metadata.code,
-        "stage": metadata.stage,
+        "code": canonical_code,
+        "stage": stage,
         "message": message,
-        "retry": metadata.retry,
+        "retry": retry,
         "source": "c_abi",
         "invocation_id": null,
         "receipt_ura": null,
@@ -420,6 +470,35 @@ mod tests {
             assert_eq!(value["message"], "bad handle");
             assert_eq!(value["details"]["abi_code"], ERR_INVALID_HANDLE);
             assert_eq!(value["details"]["abi_symbol"], "ERR_INVALID_HANDLE");
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn last_error_json_preserves_abi_code_with_canonical_projection() {
+        std::thread::spawn(|| {
+            set_last_error_projection(
+                ERR_NOT_FOUND,
+                ErrorProjection {
+                    code: "DESCRIPTOR_NOT_FOUND",
+                    stage: "routing",
+                    retry: "never",
+                },
+                "descriptor missing",
+            );
+            let mut out: *mut c_char = std::ptr::null_mut();
+            let code = unsafe { easynet_last_error_json(&mut out) };
+            assert_eq!(code, EASYNET_OK);
+            let value: serde_json::Value =
+                unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
+            unsafe { crate::ffi::strings::easynet_string_free(out) };
+            assert_eq!(value["code"], "DESCRIPTOR_NOT_FOUND");
+            assert_eq!(value["stage"], "routing");
+            assert_eq!(value["retry"], "never");
+            assert_eq!(value["message"], "descriptor missing");
+            assert_eq!(value["details"]["abi_code"], ERR_NOT_FOUND);
+            assert_eq!(value["details"]["abi_symbol"], "ERR_NOT_FOUND");
         })
         .join()
         .unwrap();

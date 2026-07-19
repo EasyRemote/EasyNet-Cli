@@ -7,7 +7,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Mapping, Protocol
+from typing import Mapping, Protocol
 
 from .authority import DelegationProof, SessionAuthority
 from .bidi import BidiSession, BidiStreamDescriptor
