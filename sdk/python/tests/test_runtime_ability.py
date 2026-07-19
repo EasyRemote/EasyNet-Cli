@@ -329,10 +329,7 @@ def test_runtime_ability_rejects_authority_subject_mismatch_before_resolution() 
         _call(),
         subject_ura="easynet:///r/example/device/device-a",
     )
-    authority = _runtime_session_authority(
-        call,
-        "00000000-0000-0000-0000-000000000000",
-    )
+    authority = _runtime_session_authority(call, "bob")
 
     with pytest.raises(SDKError, match="does not admit descriptor-bound subject_ura"):
         client.build(
@@ -350,10 +347,7 @@ def test_runtime_ability_validates_raw_authority_metadata() -> None:
         _call(),
         subject_ura="easynet:///r/example/device/device-a",
     )
-    authority = _runtime_session_authority(
-        call,
-        "00000000-0000-0000-0000-000000000000",
-    )
+    authority = _runtime_session_authority(call, "bob")
 
     with pytest.raises(SDKError, match="does not admit descriptor-bound subject_ura"):
         client.build(

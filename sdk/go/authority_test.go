@@ -61,6 +61,18 @@ func TestSessionAuthorityFromMetadataProjectsTypedAuthority(t *testing.T) {
 	}
 }
 
+func TestSessionAuthorityRejectsAllZeroOwner(t *testing.T) {
+	payload := sessionAuthorityPayloadFixture()
+	payload["session_owner_user_id"] = "00000000-0000-0000-0000-000000000000"
+	value := authorityMetadataFixture(t, payload, []byte("session-signature"))
+
+	_, err := NewSessionAuthorityFromMetadata(value)
+
+	if err == nil || !strings.Contains(err.Error(), "session_owner_user_id must not be all-zero") {
+		t.Fatalf("all-zero owner error = %v", err)
+	}
+}
+
 func TestSessionAuthorityRawSigningRoundTrip(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(nil)
 	if err != nil {

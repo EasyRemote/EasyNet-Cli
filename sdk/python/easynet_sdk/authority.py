@@ -10,6 +10,7 @@ from typing import Any, Mapping, Protocol, cast
 
 from .axon_addressing import parse_ura, user_ura
 from .errors import ErrorCode, RetryHint, SDKError
+from ._identity_guards import contains_all_zero_principal
 
 DELEGATION_METADATA_KEY = "x-easynet-delegation"
 SESSION_AUTHORITY_METADATA_KEY = "x-easynet-session-authority"
@@ -883,6 +884,14 @@ def _validate_delegation(proof: DelegationProof) -> None:
         raise _invalid_authority(
             "delegation authority must bind issuer, subject, caller, and audience"
         )
+    _reject_all_zero_authority_fields(
+        {
+            "issuer_ura": proof.issuer_ura,
+            "subject_ura": proof.subject_ura,
+            "caller_ura": proof.caller_ura,
+            "audience": proof.audience,
+        }
+    )
     if not proof.scopes:
         raise _invalid_authority("delegation authority scopes are required")
     if proof.expires_at_ms <= proof.issued_at_ms:
@@ -907,6 +916,18 @@ def _validate_session_authority(authority: SessionAuthority) -> None:
         raise _invalid_authority(
             "session authority must bind issuer, session id, owner, creator principal, callee, subject, and audience"
         )
+    _reject_all_zero_authority_fields(
+        {
+            "issuer_ura": authority.issuer_ura,
+            "session_owner_user_id": authority.session_owner_user_id,
+            "session_owner_ura": authority.session_owner_ura,
+            "creator_principal_id": authority.creator_principal_id,
+            "creator_principal_ura": authority.creator_principal_ura,
+            "callee_ura": authority.callee_ura,
+            "subject_ura": authority.subject_ura,
+            "audience": authority.audience,
+        }
+    )
     if not authority.scopes or any(not scope.strip() for scope in authority.scopes):
         raise _invalid_authority("session authority scopes are required")
     if not authority.allowed_actions or any(
@@ -925,6 +946,12 @@ def _validate_session_authority(authority: SessionAuthority) -> None:
         )
     if not authority.signature:
         raise _invalid_authority("session authority signature is required")
+
+
+def _reject_all_zero_authority_fields(fields: Mapping[str, str]) -> None:
+    for field_name, value in fields.items():
+        if value and contains_all_zero_principal(value):
+            raise _invalid_authority(f"{field_name} must not be all-zero")
 
 
 def _validate_delegation_request(request: DelegationRequest) -> None:

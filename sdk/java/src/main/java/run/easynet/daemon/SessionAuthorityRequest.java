@@ -21,7 +21,7 @@ public record SessionAuthorityRequest(
   public SessionAuthorityRequest {
     issuerURA = AuthoritySupport.requiredURA(issuerURA, "issuer_ura");
     sessionID = AuthoritySupport.requiredString(sessionID, "session_id");
-    sessionOwnerUserID = AuthoritySupport.requiredString(sessionOwnerUserID, "session_owner_user_id");
+    sessionOwnerUserID = AuthoritySupport.requiredPrincipalID(sessionOwnerUserID, "session_owner_user_id");
     creatorPrincipalID = AuthoritySupport.requiredString(creatorPrincipalID, "creator_principal_id");
     calleeURA = AuthoritySupport.requiredURA(calleeURA, "callee_ura");
     subjectURA = AuthoritySupport.requiredURA(subjectURA, "subject_ura");

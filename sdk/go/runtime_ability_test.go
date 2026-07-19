@@ -380,7 +380,7 @@ func TestRuntimeAbilityClientRejectsAuthoritySubjectMismatchBeforeResolution(t *
 	}
 	call := runtimeAbilityTestContext()
 	call.SubjectURA = "easynet:///r/example/device/device-a"
-	authority := runtimeAbilitySessionAuthority(t, call, "00000000-0000-0000-0000-000000000000")
+	authority := runtimeAbilitySessionAuthority(t, call, "bob")
 	call.Authority = &authority
 
 	_, err = client.Build(context.Background(), call, "namespace.resolve", map[string]any{})
@@ -409,7 +409,7 @@ func TestRuntimeAbilityClientValidatesRawAuthorityMetadata(t *testing.T) {
 	}
 	call := runtimeAbilityTestContext()
 	call.SubjectURA = "easynet:///r/example/device/device-a"
-	authority := runtimeAbilitySessionAuthority(t, call, "00000000-0000-0000-0000-000000000000")
+	authority := runtimeAbilitySessionAuthority(t, call, "bob")
 	projection, err := authority.Metadata()
 	if err != nil {
 		t.Fatalf("authority metadata: %v", err)

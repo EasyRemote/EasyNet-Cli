@@ -119,7 +119,7 @@ public struct SessionAuthority: Sendable, Equatable {
     ) throws {
         self.issuerURA = try requiredAuthorityURA(issuerURA, "issuer_ura")
         self.sessionID = try requiredAuthorityString(sessionID, "session_id")
-        self.sessionOwnerUserID = try requiredAuthorityString(sessionOwnerUserID, "session_owner_user_id")
+        self.sessionOwnerUserID = try requiredAuthorityPrincipalID(sessionOwnerUserID, "session_owner_user_id")
         self.creatorPrincipalID = try requiredAuthorityURA(creatorPrincipalID, "creator_principal_id")
         self.calleeURA = try requiredAuthorityURA(calleeURA, "callee_ura")
         self.subjectURA = try requiredAuthorityURA(subjectURA, "subject_ura")
@@ -142,7 +142,7 @@ public struct SessionAuthority: Sendable, Equatable {
         return try SessionAuthority(
             issuerURA: requiredAuthorityString(payload, "issuer_ura"),
             sessionID: requiredAuthorityString(payload, "session_id"),
-            sessionOwnerUserID: requiredAuthorityString(payload, "session_owner_user_id"),
+            sessionOwnerUserID: requiredAuthorityPrincipalID(requiredAuthorityString(payload, "session_owner_user_id"), "session_owner_user_id"),
             creatorPrincipalID: requiredAuthorityString(payload, "creator_principal_id"),
             calleeURA: requiredAuthorityString(payload, "callee_ura"),
             subjectURA: requiredAuthorityString(payload, "subject_ura"),
@@ -218,7 +218,7 @@ public struct SessionAuthorityRequest: Sendable, Equatable {
     public init(issuerURA: String, sessionID: String, sessionOwnerUserID: String, creatorPrincipalID: String, calleeURA: String, subjectURA: String, audience: String, scopes: [String], allowedActions: [String], allowedFollowupAbilities: [String], issuedAtMS: Int64, expiresAtMS: Int64, metadata: [String: JSONValue] = [:]) throws {
         self.issuerURA = try requiredAuthorityURA(issuerURA, "issuer_ura")
         self.sessionID = try requiredAuthorityString(sessionID, "session_id")
-        self.sessionOwnerUserID = try requiredAuthorityString(sessionOwnerUserID, "session_owner_user_id")
+        self.sessionOwnerUserID = try requiredAuthorityPrincipalID(sessionOwnerUserID, "session_owner_user_id")
         self.creatorPrincipalID = try requiredAuthorityURA(creatorPrincipalID, "creator_principal_id")
         self.calleeURA = try requiredAuthorityURA(calleeURA, "callee_ura")
         self.subjectURA = try requiredAuthorityURA(subjectURA, "subject_ura")
@@ -416,10 +416,26 @@ private func requiredAuthorityString(_ object: [String: JSONValue], _ field: Str
 
 private func requiredAuthorityURA(_ value: String, _ field: String) throws -> String {
     let cleaned = try requiredAuthorityString(value, field)
+    try rejectAllZeroAuthorityField(cleaned, field)
     guard cleaned.hasPrefix("easynet:///r/") else {
         throw invalidAuthority("\(field) must be a URA")
     }
     return cleaned
+}
+
+private func requiredAuthorityPrincipalID(_ value: String, _ field: String) throws -> String {
+    let cleaned = try requiredAuthorityString(value, field)
+    try rejectAllZeroAuthorityField(cleaned, field)
+    return cleaned
+}
+
+private func rejectAllZeroAuthorityField(_ value: String, _ field: String) throws {
+    if value.trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+        .contains("00000000-0000-0000-0000-000000000000")
+    {
+        throw invalidAuthority("\(field) must not be all-zero")
+    }
 }
 
 private func requiredAuthorityBase64(_ value: String, _ field: String) throws -> String {

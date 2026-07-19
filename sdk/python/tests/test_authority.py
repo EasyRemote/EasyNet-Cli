@@ -104,6 +104,14 @@ class AuthorityTests(unittest.TestCase):
         self.assertEqual(metadata.key, SESSION_AUTHORITY_METADATA_KEY)
         self.assertEqual(metadata.value, value)
 
+    def test_session_authority_rejects_all_zero_owner(self) -> None:
+        payload = _session_authority_payload()
+        payload["session_owner_user_id"] = "00000000-0000-0000-0000-000000000000"
+        value = _authority_metadata(payload, b"session-signature")
+
+        with self.assertRaisesRegex(SDKError, "session_owner_user_id must not be all-zero"):
+            SessionAuthority.from_metadata(value)
+
     def test_invocation_builder_attaches_one_authority_metadata(self) -> None:
         proof = DelegationProof.from_metadata(
             _authority_metadata(

@@ -887,11 +887,6 @@ func descriptorResolutionFromError(err error) DescriptorResolution {
 	return DescriptorResolution{State: DescriptorUnavailable, Reason: fmt.Sprint(err)}
 }
 
-func containsAllZeroPrincipal(value string) bool {
-	clean := strings.ToLower(strings.TrimSpace(value))
-	return strings.Contains(clean, "00000000-0000-0000-0000-000000000000")
-}
-
 func sessionIntentDetails(intent InvocationIntent) map[string]any {
 	return map[string]any{
 		"caller":           intent.CallerIdentity.Principal.URA,

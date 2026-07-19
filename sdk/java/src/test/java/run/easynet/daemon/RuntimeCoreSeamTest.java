@@ -21,6 +21,7 @@ public final class RuntimeCoreSeamTest {
           "invocationPrepareSignSubmitPreservesTheCompleteTuple",
           "invocationResultUsesTerminalReceipt",
           "authorityMetadataIsTypedAndMutuallyExclusive",
+          "authorityMetadataRejectsAllZeroSessionOwners",
           "streamAndBidiLifecyclesAreBounded",
           "bidiFrame0IsRequiredBeforeRuntimeSessionEntry",
           "asyncRuntimeDelegatesToTheSameRuntimeStateMachine",
@@ -67,6 +68,8 @@ public final class RuntimeCoreSeamTest {
       case "invocationResultUsesTerminalReceipt" -> invocationResultUsesTerminalReceipt();
       case "authorityMetadataIsTypedAndMutuallyExclusive" ->
           authorityMetadataIsTypedAndMutuallyExclusive();
+      case "authorityMetadataRejectsAllZeroSessionOwners" ->
+          authorityMetadataRejectsAllZeroSessionOwners();
       case "streamAndBidiLifecyclesAreBounded" -> streamAndBidiLifecyclesAreBounded();
       case "bidiFrame0IsRequiredBeforeRuntimeSessionEntry" ->
           bidiFrame0IsRequiredBeforeRuntimeSessionEntry();
@@ -297,6 +300,25 @@ public final class RuntimeCoreSeamTest {
                     10,
                     20,
                     Map.of())));
+  }
+
+  private static void authorityMetadataRejectsAllZeroSessionOwners() {
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("issuer_ura", CALLER);
+    payload.put("session_id", "session-1");
+    payload.put("session_owner_user_id", "00000000-0000-0000-0000-000000000000");
+    payload.put("creator_principal_id", CALLER);
+    payload.put("callee_ura", CALLEE);
+    payload.put("subject_ura", "easynet:///r/example/user/alice");
+    payload.put("audience", CALLEE);
+    payload.put("scopes", List.of("invoke"));
+    payload.put("allowed_actions", List.of("invoke"));
+    payload.put("allowed_followup_abilities", List.of("observe.health"));
+    payload.put("issued_at_ms", 10);
+    payload.put("expires_at_ms", 20);
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () -> SessionAuthority.fromMetadata(authorityMetadataValue(payload)));
   }
 
   private static void streamAndBidiLifecyclesAreBounded() {

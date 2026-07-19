@@ -12,6 +12,7 @@ from typing import Mapping, Protocol
 from .authority import DelegationProof, SessionAuthority
 from .bidi import BidiSession, BidiStreamDescriptor
 from .errors import ErrorCode, RetryHint, SDKError
+from ._identity_guards import contains_all_zero_principal
 from .invocation import InvocationBuilder, InvocationDraft, new_invocation_nonce_base64
 from .receipt import (
     ReceiptGetRequest,
@@ -717,7 +718,7 @@ def _runtime_session_intent_metadata(
 def _validate_intent(intent: InvocationIntent) -> None:
     _validate_principal(intent.caller_identity.principal, "caller identity")
     _validate_principal(intent.acting_principal.principal, "acting principal")
-    if not intent.target.ura.strip() or _contains_all_zero(intent.target.ura):
+    if not intent.target.ura.strip() or contains_all_zero_principal(intent.target.ura):
         raise _session_error(
             ErrorCode.INVALID_INVOCATION,
             "intent",
@@ -731,7 +732,7 @@ def _validate_intent(intent: InvocationIntent) -> None:
             "ability is required",
             _intent_details(intent),
         )
-    if not intent.subject.ura.strip() or _contains_all_zero(intent.subject.ura):
+    if not intent.subject.ura.strip() or contains_all_zero_principal(intent.subject.ura):
         raise _session_error(
             ErrorCode.INVALID_INVOCATION,
             "intent",
@@ -775,7 +776,7 @@ def _validate_principal(ref: PrincipalRef, label: str) -> None:
             "intent",
             f"{label} URA is required",
         )
-    if _contains_all_zero(ref.ura):
+    if contains_all_zero_principal(ref.ura):
         raise _session_error(
             ErrorCode.CALLER_IDENTITY_UNAVAILABLE,
             "intent",
@@ -936,10 +937,6 @@ def _descriptor_resolution_from_error(error: BaseException) -> DescriptorResolut
     if "offline" in text.lower():
         return DescriptorResolution(DescriptorResolutionState.OWNER_OFFLINE, reason=text)
     return DescriptorResolution(DescriptorResolutionState.UNAVAILABLE, reason=text)
-
-
-def _contains_all_zero(value: str) -> bool:
-    return "00000000-0000-0000-0000-000000000000" in value.lower().strip()
 
 
 def _intent_details(intent: InvocationIntent) -> dict[str, object]:

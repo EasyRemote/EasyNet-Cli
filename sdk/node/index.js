@@ -2184,6 +2184,12 @@ function validateAuthorityMetadataEnvelope(kind, key) {
 }
 
 function validateDelegationProof(proof) {
+  rejectAllZeroAuthorityFields({
+    issuer_ura: proof.issuerURA,
+    subject_ura: proof.subjectURA,
+    caller_ura: proof.callerURA,
+    audience: proof.audience,
+  });
   if (proof.expiresAtMS <= proof.issuedAtMS) {
     throw invalidAuthority("delegation authority expires_at_ms must be greater than issued_at_ms");
   }
@@ -2193,6 +2199,14 @@ function validateDelegationProof(proof) {
 }
 
 function validateSessionAuthority(authority) {
+  rejectAllZeroAuthorityFields({
+    issuer_ura: authority.issuerURA,
+    session_owner_user_id: authority.sessionOwnerUserID,
+    creator_principal_id: authority.creatorPrincipalID,
+    callee_ura: authority.calleeURA,
+    subject_ura: authority.subjectURA,
+    audience: authority.audience,
+  });
   if (authority.expiresAtMS <= authority.issuedAtMS) {
     throw invalidAuthority("session authority expires_at_ms must be greater than issued_at_ms");
   }
@@ -2202,6 +2216,12 @@ function validateSessionAuthority(authority) {
 }
 
 function validateDelegationRequest(request) {
+  rejectAllZeroAuthorityFields({
+    issuer_ura: request.issuerURA,
+    subject_ura: request.subjectURA,
+    caller_ura: request.callerURA,
+    audience: request.audience,
+  });
   if (request.expiresAtMS <= request.issuedAtMS) {
     throw invalidAuthority("delegation authority expires_at_ms must be greater than issued_at_ms");
   }
@@ -2209,10 +2229,26 @@ function validateDelegationRequest(request) {
 }
 
 function validateSessionAuthorityRequest(request) {
+  rejectAllZeroAuthorityFields({
+    issuer_ura: request.issuerURA,
+    session_owner_user_id: request.sessionOwnerUserID,
+    creator_principal_id: request.creatorPrincipalID,
+    callee_ura: request.calleeURA,
+    subject_ura: request.subjectURA,
+    audience: request.audience,
+  });
   if (request.expiresAtMS <= request.issuedAtMS) {
     throw invalidAuthority("session authority expires_at_ms must be greater than issued_at_ms");
   }
   rejectAuthorityPrivateKeyMetadata(request.metadata);
+}
+
+function rejectAllZeroAuthorityFields(fields) {
+  for (const [field, value] of Object.entries(fields)) {
+    if (String(value ?? "").trim().toLowerCase().includes("00000000-0000-0000-0000-000000000000")) {
+      throw invalidAuthority(`${field} must not be all-zero`);
+    }
+  }
 }
 
 function rejectAuthorityPrivateKeyMetadata(metadata) {

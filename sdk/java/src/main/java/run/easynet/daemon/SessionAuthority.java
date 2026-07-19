@@ -21,7 +21,7 @@ public record SessionAuthority(
   public SessionAuthority {
     issuerURA = AuthoritySupport.requiredURA(issuerURA, "issuer_ura");
     sessionID = AuthoritySupport.requiredString(sessionID, "session_id");
-    sessionOwnerUserID = AuthoritySupport.requiredString(sessionOwnerUserID, "session_owner_user_id");
+    sessionOwnerUserID = AuthoritySupport.requiredPrincipalID(sessionOwnerUserID, "session_owner_user_id");
     creatorPrincipalID = AuthoritySupport.requiredString(creatorPrincipalID, "creator_principal_id");
     calleeURA = AuthoritySupport.requiredURA(calleeURA, "callee_ura");
     subjectURA = AuthoritySupport.requiredURA(subjectURA, "subject_ura");
@@ -42,7 +42,9 @@ public record SessionAuthority(
     return new SessionAuthority(
         AuthoritySupport.requiredString(payload.get("issuer_ura"), "issuer_ura"),
         AuthoritySupport.requiredString(payload.get("session_id"), "session_id"),
-        AuthoritySupport.requiredString(payload.get("session_owner_user_id"), "session_owner_user_id"),
+        AuthoritySupport.requiredPrincipalID(
+            AuthoritySupport.requiredString(payload.get("session_owner_user_id"), "session_owner_user_id"),
+            "session_owner_user_id"),
         AuthoritySupport.requiredString(payload.get("creator_principal_id"), "creator_principal_id"),
         AuthoritySupport.requiredString(payload.get("callee_ura"), "callee_ura"),
         AuthoritySupport.requiredString(payload.get("subject_ura"), "subject_ura"),

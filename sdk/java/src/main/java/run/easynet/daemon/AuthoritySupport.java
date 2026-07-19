@@ -68,10 +68,23 @@ final class AuthoritySupport {
 
   static String requiredURA(String value, String field) {
     String cleaned = requiredString(value, field);
+    rejectAllZero(cleaned, field);
     if (!cleaned.startsWith("easynet:///r/")) {
       throw invalid(field + " must be a URA");
     }
     return cleaned;
+  }
+
+  static String requiredPrincipalID(String value, String field) {
+    String cleaned = requiredString(value, field);
+    rejectAllZero(cleaned, field);
+    return cleaned;
+  }
+
+  private static void rejectAllZero(String value, String field) {
+    if (value.trim().toLowerCase().contains("00000000-0000-0000-0000-000000000000")) {
+      throw invalid(field + " must not be all-zero");
+    }
   }
 
   static String requiredBase64(String value, String field) {

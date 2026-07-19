@@ -489,6 +489,28 @@ test("authority metadata is typed, delegated, and mutually exclusive", async () 
   await authority.close();
 });
 
+test("authority metadata rejects all-zero session owners", () => {
+  assert.throws(
+    () => sdk.SessionAuthority.fromMetadata(
+      authorityValue({
+        issuer_ura: caller,
+        session_id: "session-1",
+        session_owner_user_id: "00000000-0000-0000-0000-000000000000",
+        creator_principal_id: caller,
+        callee_ura: callee,
+        subject_ura: "easynet:///r/example/user/alice",
+        audience: callee,
+        scopes: ["invoke"],
+        allowed_actions: ["invoke"],
+        allowed_followup_abilities: ["observe.health"],
+        issued_at_ms: 10,
+        expires_at_ms: 20,
+      }),
+    ),
+    /session_owner_user_id must not be all-zero/,
+  );
+});
+
 test("stream and bidi state machines retain bounded history", async () => {
   let streamSequence = 0;
   const stream = new sdk.StreamHandle(

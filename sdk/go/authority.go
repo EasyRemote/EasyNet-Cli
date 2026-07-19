@@ -708,6 +708,16 @@ func validateDelegationProof(proof DelegationProof) error {
 		strings.TrimSpace(proof.Audience) == "" {
 		return invalidInvocation("delegation authority must bind issuer, subject, caller, and audience", nil)
 	}
+	for field, value := range map[string]string{
+		"issuer_ura":  proof.IssuerURA,
+		"subject_ura": proof.SubjectURA,
+		"caller_ura":  proof.CallerURA,
+		"audience":    proof.Audience,
+	} {
+		if containsAllZeroPrincipal(value) {
+			return invalidInvocation(field+" must not be all-zero", nil)
+		}
+	}
 	if containsBlankString(proof.Scopes) {
 		return invalidInvocation("delegation authority scopes are required", nil)
 	}
@@ -734,6 +744,20 @@ func validateSessionAuthority(authority SessionAuthority) error {
 		strings.TrimSpace(authority.SubjectURA) == "" ||
 		strings.TrimSpace(authority.Audience) == "" {
 		return invalidInvocation("session authority must bind issuer, session id, owner, creator principal, callee, subject, and audience", nil)
+	}
+	for field, value := range map[string]string{
+		"issuer_ura":            authority.IssuerURA,
+		"session_owner_user_id": authority.SessionOwnerUserID,
+		"session_owner_ura":     authority.SessionOwnerURA,
+		"creator_principal_id":  authority.CreatorPrincipalID,
+		"creator_principal_ura": authority.CreatorPrincipalURA,
+		"callee_ura":            authority.CalleeURA,
+		"subject_ura":           authority.SubjectURA,
+		"audience":              authority.Audience,
+	} {
+		if containsAllZeroPrincipal(value) {
+			return invalidInvocation(field+" must not be all-zero", nil)
+		}
 	}
 	if containsBlankString(authority.Scopes) {
 		return invalidInvocation("session authority scopes are required", nil)

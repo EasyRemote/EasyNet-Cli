@@ -243,6 +243,27 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testAuthorityMetadataRejectsAllZeroSessionOwners() throws {
+        let value = try authorityMetadataValue([
+            "issuer_ura": caller,
+            "session_id": "session-1",
+            "session_owner_user_id": "00000000-0000-0000-0000-000000000000",
+            "creator_principal_id": caller,
+            "callee_ura": callee,
+            "subject_ura": "easynet:///r/example/user/alice",
+            "audience": callee,
+            "scopes": ["invoke"],
+            "allowed_actions": ["invoke"],
+            "allowed_followup_abilities": ["observe.health"],
+            "issued_at_ms": 10,
+            "expires_at_ms": 20,
+        ])
+
+        expectSyncSDKError(.invalidArgument) {
+            _ = try SessionAuthority.fromMetadata(value)
+        }
+    }
+
     func testStreamAndBidiStateMachinesAreBounded() async throws {
         let stream = StreamHandle(source: CountingStreamSource())
         for _ in 0...StreamHandle.maxRetainedEvents {
