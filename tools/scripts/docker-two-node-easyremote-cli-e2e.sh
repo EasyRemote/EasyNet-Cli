@@ -161,7 +161,7 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "native_easynet_receipt_chains_projected" "$0"
   grep -q "caller_observed_native_easynet_ability_removed" "$0"
   grep -q "provider-hosted user external Agent" "$0"
-  grep -q "user_agent_canonical_invocation_gap_detected" "$0"
+  grep -q "caller_invoked_user_agent_chat_through_canonical_invoke" "$0"
   grep -q "caller_observed_user_agent_chat_removed" "$0"
   grep -q "ability list --node" "$0"
   grep -q "ability stream" "$0"
@@ -659,7 +659,7 @@ caller_cli "ability show '$PROVIDER_AGENT_CHAT_URA' --node '$PROVIDER_URA' --for
   >"$OUT_DIR/caller-ability-show-provider-agent-chat.json" 2>"$OUT_DIR/caller-ability-show-provider-agent-chat.err"
 PROVIDER_AGENT_SUBJECT_URA="$(jq -r '.owner_ura' "$OUT_DIR/caller-ability-show-provider-agent-chat.json")"
 [[ "$PROVIDER_AGENT_SUBJECT_URA" == easynet://*/agent/* ]] || die "provider Agent chat show did not expose valid owner Agent URA subject"
-PROVIDER_AGENT_CHAT_DESCRIPTOR_REF="$(extract_descriptor_ref_by_name_mode "$OUT_DIR/caller-ability-list-provider-agent.json" "$PROVIDER_AGENT_CHAT_ABILITY" stream)"
+PROVIDER_AGENT_CHAT_DESCRIPTOR_REF="$(extract_descriptor_ref_by_name_mode "$OUT_DIR/caller-ability-list-provider-agent.json" "$PROVIDER_AGENT_CHAT_ABILITY" rpc)"
 if [[ -z "$PROVIDER_AGENT_CHAT_DESCRIPTOR_REF" ]]; then
   PROVIDER_AGENT_CHAT_DESCRIPTOR_REF="$(jq -r '
   .descriptor_ref //
@@ -668,12 +668,8 @@ if [[ -z "$PROVIDER_AGENT_CHAT_DESCRIPTOR_REF" ]]; then
 fi
 [[ "$PROVIDER_AGENT_CHAT_DESCRIPTOR_REF" == easynet://*@*#*!* ]] || die "caller ability show did not expose descriptor-bound provider Agent chat ref"
 PROVIDER_AGENT_NONCE_HEX="$(random_nonce_hex)"
-set +e
-provider_cli "ability stream '$PROVIDER_AGENT_CHAT_URA' --subject '$PROVIDER_AGENT_SUBJECT_URA' --nonce-hex '$PROVIDER_AGENT_NONCE_HEX' --causal-root --args '$(json_arg agent_chat "$PROVIDER_AGENT_PROMPT")' --format json --raw" \
-  >"$OUT_DIR/provider-cli-provider-agent-chat-stream.json" 2>"$OUT_DIR/provider-cli-provider-agent-chat-stream.err"
-PROVIDER_AGENT_CANONICAL_STATUS=$?
-set -e
-printf '%s\n' "$PROVIDER_AGENT_CANONICAL_STATUS" >"$OUT_DIR/provider-cli-provider-agent-chat-stream.status"
+caller_cli "ability invoke '$PROVIDER_AGENT_CHAT_DESCRIPTOR_REF' --node '$PROVIDER_URA' --subject '$PROVIDER_AGENT_SUBJECT_URA' --nonce-hex '$PROVIDER_AGENT_NONCE_HEX' --causal-root --args '$(json_arg agent_chat "$PROVIDER_AGENT_PROMPT")' --raw" \
+  >"$OUT_DIR/caller-cli-provider-agent-chat-invoke.json" 2>"$OUT_DIR/caller-cli-provider-agent-chat-invoke.err"
 provider_cli "invocation list --ability-ura '$PROVIDER_AGENT_CHAT_URA' --format json" \
   >"$OUT_DIR/provider-invocation-list-provider-agent-after-cli.json" 2>"$OUT_DIR/provider-invocation-list-provider-agent-after-cli.err"
 provider_cli "invocation list --format json" \
@@ -1229,10 +1225,8 @@ def runtime_stream_payloads(value):
 ready = load("easyremote-ready.json") or {}
 native_ready = load("native-easynet-ready.json") or {}
 native_deploy = load("provider-native-deploy.json") or {}
-provider_agent_stream = load("provider-cli-provider-agent-chat-stream.json") or []
+provider_agent_invoke = load("caller-cli-provider-agent-chat-invoke.json") or {}
 provider_agent_show = load("caller-ability-show-provider-agent-chat.json") or {}
-provider_agent_canonical_status = text("provider-cli-provider-agent-chat-stream.status").strip()
-provider_agent_canonical_error = text("provider-cli-provider-agent-chat-stream.err")
 user_plugin_list_after_install = load("provider-plugin-list-after-user-plugin-install.json") or {}
 user_plugin_status = load("provider-plugin-status-user-plugin.json") or {}
 user_plugin_stream = load("caller-cli-user-plugin-stream.json") or []
@@ -1327,14 +1321,40 @@ user_plugin_receipt_chains_verified = (
     and isinstance(user_plugin_records[0]["receipt_chain"].get("anchors"), list)
     and len(user_plugin_records[0]["receipt_chain"]["anchors"]) > 0
 )
+
+def verified_completed_receipt_chain(record) -> bool:
+    return (
+        isinstance(record, dict)
+        and str(record.get("state", "")).lower() == "completed"
+        and isinstance(record.get("receipt_chain"), dict)
+        and record["receipt_chain"].get("verified") is True
+        and isinstance(record["receipt_chain"].get("anchors"), list)
+        and len(record["receipt_chain"]["anchors"]) > 0
+    )
+
+provider_agent_owner_ura = ""
+if isinstance(provider_agent_show, dict):
+    provider_agent_owner_ura = str(provider_agent_show.get("owner_ura") or "")
+provider_agent_canonical_records = [
+    record
+    for record in provider_agent_records
+    if isinstance(record, dict)
+    and record.get("caller_ura") == caller_ura
+    and record.get("ability_ura") == provider_agent_chat_ura
+    and (not provider_agent_owner_ura or record.get("subject_ura") == provider_agent_owner_ura)
+]
 provider_agent_receipt_chains_verified = (
-    len(provider_agent_records) == 1
-    and str(provider_agent_records[0].get("state", "")).lower() == "completed"
-    and isinstance(provider_agent_records[0].get("receipt_chain"), dict)
-    and provider_agent_records[0]["receipt_chain"].get("verified") is True
-    and isinstance(provider_agent_records[0]["receipt_chain"].get("anchors"), list)
-    and len(provider_agent_records[0]["receipt_chain"]["anchors"]) > 0
+    len(provider_agent_canonical_records) == 1
+    and verified_completed_receipt_chain(provider_agent_canonical_records[0])
 )
+provider_agent_reply = ""
+if isinstance(provider_agent_invoke, dict):
+    provider_agent_reply = str(
+        provider_agent_invoke.get("reply")
+        or provider_agent_invoke.get("result")
+        or provider_agent_invoke.get("value")
+        or provider_agent_invoke
+    )
 receipt_chains_verified = (
     len(cli_add_records) == 1
     and str(cli_add_records[0].get("state", "")).lower() == "completed"
@@ -1421,7 +1441,9 @@ report = {
         "name": provider_agent_name,
         "chat_ability": provider_agent_chat_ability,
         "chat_ability_ura": provider_agent_chat_ura,
-        "stream_frames": provider_agent_stream,
+        "invoke_result": provider_agent_invoke,
+        "canonical_invocation_records": provider_agent_canonical_records,
+        "all_invocation_records": provider_agent_records,
     },
     "user_plugin": {
         "package_id": user_plugin_id,
@@ -1458,12 +1480,11 @@ report = {
             and provider_agent_show.get("ability_ura") == provider_agent_chat_ura
             and provider_agent_name in str(provider_agent_show.get("owner_ura") or "")
         ),
-        "user_agent_canonical_invocation_gap_detected": (
-            provider_agent_canonical_status != "0"
-            and (
-                "ADMISSION_DESCRIPTOR_ROUTE_MISMATCH" in provider_agent_canonical_error
-                or "NEGATIVE_REASON_NODATA" in provider_agent_canonical_error
-            )
+        "caller_invoked_user_agent_chat_through_canonical_invoke": (
+            isinstance(provider_agent_invoke, dict)
+            and provider_agent_prompt in provider_agent_reply
+            and f"docker-easyremote-agent[{provider_agent_name}]" in provider_agent_reply
+            and provider_agent_receipt_chains_verified
         ),
         "caller_observed_user_agent_chat_removed": (
             cli_contains("provider-agent-remove", provider_agent_name)
@@ -1646,7 +1667,7 @@ jq -e '
   and .assertions.provider_user_agent_created_and_listed
   and .assertions.provider_user_agent_invoked_via_agent_send
   and .assertions.caller_cli_discovered_user_agent_chat
-  and .assertions.user_agent_canonical_invocation_gap_detected
+  and .assertions.caller_invoked_user_agent_chat_through_canonical_invoke
   and .assertions.caller_observed_user_agent_chat_removed
   and .assertions.user_plugin_package_loaded_in_daemon
   and .assertions.user_plugin_ability_loaded_in_daemon

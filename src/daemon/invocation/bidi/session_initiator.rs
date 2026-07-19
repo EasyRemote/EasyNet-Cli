@@ -436,12 +436,48 @@ pub(crate) struct SessionSupervisorRunConfig<D: SessionFrameDispatcher> {
     pub(crate) dispatcher: Arc<D>,
     pub(crate) escalation_outbox:
         Option<crate::daemon::invocation::bidi::session_escalation::SharedSessionOutbox>,
-    pub(crate) ability_descriptors: Vec<AbilityDescriptor>,
+    pub(crate) ability_inventory: SessionAbilityDescriptorInventory,
     pub(crate) hub_published_abilities: Arc<HubPublishedAbilityStore>,
     pub(crate) initial_admission: Option<InitialSessionAdmissionProbe>,
     pub(crate) user_trust_sync: Option<UserTrustSync>,
     pub(crate) connection_state_sink: Arc<dyn SessionConnectionStateSink>,
     pub(crate) cancel: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[derive(Clone)]
+pub(crate) enum SessionAbilityDescriptorInventory {
+    #[cfg(test)]
+    Fixed(Vec<AbilityDescriptor>),
+    LiveCatalog(Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>),
+}
+
+impl SessionAbilityDescriptorInventory {
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn fixed(descriptors: Vec<AbilityDescriptor>) -> Self {
+        Self::Fixed(descriptors)
+    }
+
+    #[must_use]
+    pub(crate) fn live_catalog(
+        catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
+    ) -> Self {
+        Self::LiveCatalog(catalog)
+    }
+
+    #[must_use]
+    fn snapshot(&self) -> Vec<AbilityDescriptor> {
+        match self {
+            #[cfg(test)]
+            Self::Fixed(descriptors) => descriptors.clone(),
+            Self::LiveCatalog(catalog) => {
+                crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(
+                    catalog.as_ref(),
+                )
+                .all_descriptors()
+            }
+        }
+    }
 }
 
 /// Run one `session.open` bidi against `hub_endpoint`. Connects,
@@ -583,7 +619,7 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
         hub_ca_pem_path,
         dispatcher,
         escalation_outbox,
-        ability_descriptors,
+        ability_inventory,
         hub_published_abilities,
         initial_admission,
         user_trust_sync,
@@ -595,6 +631,7 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
     let mut phase = SessionPhaseTracker::new();
     loop {
         phase.begin_attempt();
+        let ability_descriptors = ability_inventory.snapshot();
         // Arm bodies stay trivial: the dial future holds `&mut phase`
         // for its lifetime, so phase handling (like all result
         // handling) happens after the select expression, once the
@@ -944,6 +981,63 @@ mod tests {
                 .map(String::as_str),
             Some("dev-1"),
             "committed descriptor must remain bound to the execution host"
+        );
+    }
+
+    #[test]
+    fn live_catalog_inventory_refreshes_after_dynamic_control_plane_commit() {
+        let owner_ura = "easynet:///r/acme/device/node-a";
+        let catalog = Arc::new(
+            crate::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
+                crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                    crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                    None,
+                ),
+                crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                    owner_ura,
+                )
+                .expect("test device authority context"),
+            ),
+        );
+        let live_inventory = SessionAbilityDescriptorInventory::live_catalog(Arc::clone(&catalog));
+        let fixed_inventory = SessionAbilityDescriptorInventory::fixed(live_inventory.snapshot());
+
+        let before = live_inventory.snapshot();
+        assert!(
+            !crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::from_descriptors(
+                before.clone()
+            )
+            .resolves(owner_ura, "session.inventory.dynamic"),
+            "fresh test catalog should not publish the dynamic test descriptor"
+        );
+
+        catalog
+            .hot_register_rpc_with_spec(
+                "session.inventory.dynamic",
+                crate::daemon::ability::dispatch::OwnerKind::Device,
+                crate::daemon::ability::manifest::AbilityManifest::new(
+                    "dynamic",
+                    "Dynamic inventory regression descriptor.",
+                    serde_json::json!({"type": "object"}),
+                )
+                .and_then(|manifest| manifest.with_admission_action("invoke"))
+                .expect("test dynamic manifest"),
+                Arc::new(|_args| Ok(serde_json::json!({"ok": true}))),
+            )
+            .expect("dynamic control-plane commit succeeds");
+
+        let after = live_inventory.snapshot();
+        assert!(
+            crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::from_descriptors(
+                after
+            )
+            .resolves(owner_ura, "session.inventory.dynamic"),
+            "live session inventory must observe descriptors committed after supervisor construction"
+        );
+        assert_eq!(
+            fixed_inventory.snapshot().len(),
+            before.len(),
+            "fixed inventories are explicit static test fixtures, not live runtime projections"
         );
     }
 
@@ -1713,7 +1807,7 @@ mod tests {
             hub_ca_pem_path: None,
             dispatcher: Arc::new(RecordingDispatcher::default()),
             escalation_outbox: None,
-            ability_descriptors: Vec::new(),
+            ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
             hub_published_abilities: hub_store(),
             initial_admission: None,
             user_trust_sync: None,
@@ -2219,7 +2313,7 @@ mod tests {
             hub_ca_pem_path: None,
             dispatcher: Arc::new(RecordingDispatcher::default()),
             escalation_outbox: None,
-            ability_descriptors: Vec::new(),
+            ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
             hub_published_abilities: hub_store(),
             initial_admission: Some(probe_a),
             user_trust_sync: None,
@@ -2232,7 +2326,7 @@ mod tests {
             hub_ca_pem_path: None,
             dispatcher: Arc::new(RecordingDispatcher::default()),
             escalation_outbox: None,
-            ability_descriptors: Vec::new(),
+            ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
             hub_published_abilities: hub_store(),
             initial_admission: Some(probe_b),
             user_trust_sync: None,
@@ -2292,7 +2386,7 @@ mod tests {
             hub_ca_pem_path: None,
             dispatcher,
             escalation_outbox: None,
-            ability_descriptors: Vec::new(),
+            ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
             hub_published_abilities: hub_store(),
             initial_admission: None,
             user_trust_sync: None,
@@ -2326,7 +2420,7 @@ mod tests {
             hub_ca_pem_path: None,
             dispatcher,
             escalation_outbox: None,
-            ability_descriptors: Vec::new(),
+            ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
             hub_published_abilities: hub_store(),
             initial_admission: Some(probe),
             user_trust_sync: None,
@@ -2371,7 +2465,7 @@ mod tests {
             hub_ca_pem_path: None,
             dispatcher,
             escalation_outbox: None,
-            ability_descriptors: Vec::new(),
+            ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
             hub_published_abilities: hub_store(),
             initial_admission: Some(probe),
             user_trust_sync: None,
@@ -2418,7 +2512,7 @@ mod tests {
             hub_ca_pem_path: None,
             dispatcher,
             escalation_outbox: None,
-            ability_descriptors: Vec::new(),
+            ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
             hub_published_abilities: hub_store(),
             initial_admission: Some(probe),
             user_trust_sync: None,
