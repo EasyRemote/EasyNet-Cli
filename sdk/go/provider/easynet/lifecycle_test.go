@@ -6,8 +6,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	runtimesdk "easynet.run/cli/sdk/go"
@@ -17,6 +19,69 @@ import (
 type lifecycleTransport struct {
 	startCalls int
 	start      map[string]any
+}
+
+func TestProviderMapsDaemonCredentialsToCanonicalRuntimeIdentity(t *testing.T) {
+	dir := t.TempDir()
+	credentials := filepath.Join(dir, "credentials.json")
+	if err := os.WriteFile(credentials, []byte(`{
+		"realm": "acme",
+		"device_id": "dev-a",
+		"username": "alice",
+		"hub_endpoint": "https://hub.example"
+	}`), 0o600); err != nil {
+		t.Fatalf("write credentials: %v", err)
+	}
+
+	projection, err := easynetprovider.ReadDaemonRuntimeIdentityProjection(context.Background(), credentials)
+	if err != nil {
+		t.Fatalf("ReadDaemonRuntimeIdentityProjection: %v", err)
+	}
+	if projection.Realm != "acme" ||
+		projection.RuntimeInstanceID != "dev-a" ||
+		projection.Principal != "alice" ||
+		projection.ControlPlaneEndpoint != "https://hub.example" {
+		t.Fatalf("unexpected projection: %#v", projection)
+	}
+}
+
+func TestProviderMapsDaemonNodeIDAliasToCanonicalRuntimeIdentity(t *testing.T) {
+	dir := t.TempDir()
+	credentials := filepath.Join(dir, "credentials.json")
+	if err := os.WriteFile(credentials, []byte(`{
+		"realm": "acme",
+		"node_id": "node-a"
+	}`), 0o600); err != nil {
+		t.Fatalf("write credentials: %v", err)
+	}
+
+	projection, err := easynetprovider.ReadDaemonRuntimeIdentityProjection(context.Background(), credentials)
+	if err != nil {
+		t.Fatalf("ReadDaemonRuntimeIdentityProjection: %v", err)
+	}
+	if projection.RuntimeInstanceID != "node-a" {
+		t.Fatalf("runtime instance id = %q", projection.RuntimeInstanceID)
+	}
+}
+
+func TestProviderRejectsConflictingDaemonIdentityAliases(t *testing.T) {
+	dir := t.TempDir()
+	credentials := filepath.Join(dir, "credentials.json")
+	if err := os.WriteFile(credentials, []byte(`{
+		"realm": "acme",
+		"device_id": "dev-a",
+		"node_id": "node-b"
+	}`), 0o600); err != nil {
+		t.Fatalf("write credentials: %v", err)
+	}
+
+	_, err := easynetprovider.ReadDaemonRuntimeIdentityProjection(context.Background(), credentials)
+	if err == nil {
+		t.Fatal("expected conflicting daemon identity aliases to fail")
+	}
+	if !strings.Contains(err.Error(), "conflicting device_id and node_id") {
+		t.Fatalf("error = %v", err)
+	}
 }
 
 func (t *lifecycleTransport) Discover(context.Context, []byte) ([]byte, error) {

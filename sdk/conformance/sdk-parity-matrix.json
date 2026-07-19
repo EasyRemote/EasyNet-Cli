@@ -194212,7 +194212,7 @@
         },
         {
           "item": "RuntimeIdentityProjection",
-          "sha256": "f8761778129f26eac3478aba7ed26978586364bb992ca1cd0b6e8bec0050126a"
+          "sha256": "7117414f61043b2006f5a43c5334d65d2dd36d7dbd7ca439843a7a17204d8261"
         },
         {
           "item": "RuntimeSigningIdentity",
@@ -194247,11 +194247,19 @@
           "sha256": "fb4d6d15c417d7a67cbe2a989cf219e5121793fa37130b62d840c7ed71b30bf1"
         },
         {
+          "item": "RuntimeIdentityProjection.ControlPlaneEndpoint",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
+          "item": "RuntimeIdentityProjection.Principal",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
           "item": "RuntimeIdentityProjection.Realm",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
-          "item": "RuntimeIdentityProjection.Username",
+          "item": "RuntimeIdentityProjection.RuntimeInstanceID",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
@@ -194331,7 +194339,7 @@
             },
             {
               "item": "RuntimeIdentityProjection",
-              "sha256": "f8761778129f26eac3478aba7ed26978586364bb992ca1cd0b6e8bec0050126a"
+              "sha256": "7117414f61043b2006f5a43c5334d65d2dd36d7dbd7ca439843a7a17204d8261"
             },
             {
               "item": "RuntimeSigningIdentity",
@@ -194366,11 +194374,19 @@
               "sha256": "fb4d6d15c417d7a67cbe2a989cf219e5121793fa37130b62d840c7ed71b30bf1"
             },
             {
+              "item": "RuntimeIdentityProjection.ControlPlaneEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeIdentityProjection.Principal",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "RuntimeIdentityProjection.Realm",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
-              "item": "RuntimeIdentityProjection.Username",
+              "item": "RuntimeIdentityProjection.RuntimeInstanceID",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -194450,7 +194466,7 @@
             },
             {
               "item": "RuntimeIdentityProjection",
-              "sha256": "f8761778129f26eac3478aba7ed26978586364bb992ca1cd0b6e8bec0050126a"
+              "sha256": "7117414f61043b2006f5a43c5334d65d2dd36d7dbd7ca439843a7a17204d8261"
             },
             {
               "item": "RuntimeSigningIdentity",
@@ -194485,11 +194501,19 @@
               "sha256": "fb4d6d15c417d7a67cbe2a989cf219e5121793fa37130b62d840c7ed71b30bf1"
             },
             {
+              "item": "RuntimeIdentityProjection.ControlPlaneEndpoint",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeIdentityProjection.Principal",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "RuntimeIdentityProjection.Realm",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
-              "item": "RuntimeIdentityProjection.Username",
+              "item": "RuntimeIdentityProjection.RuntimeInstanceID",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {

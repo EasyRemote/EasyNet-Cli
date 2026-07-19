@@ -12,9 +12,9 @@ func TestRuntimeIdentityProjectionReadsCredentials(t *testing.T) {
 	credentials := filepath.Join(dir, "credentials.json")
 	if err := os.WriteFile(credentials, []byte(`{
 		"realm": "acme",
-		"device_id": "dev-a",
-		"username": "alice",
-		"hub_endpoint": "hub:443"
+		"runtime_instance_id": "runtime-a",
+		"principal": "alice",
+		"control_plane_endpoint": "hub:443"
 	}`), 0o600); err != nil {
 		t.Fatalf("write credentials: %v", err)
 	}
@@ -23,7 +23,10 @@ func TestRuntimeIdentityProjectionReadsCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadRuntimeIdentityProjection: %v", err)
 	}
-	if projection.Realm != "acme" || projection.DeviceID != "dev-a" || projection.Username != "alice" || projection.HubEndpoint != "hub:443" {
+	if projection.Realm != "acme" ||
+		projection.RuntimeInstanceID != "runtime-a" ||
+		projection.Principal != "alice" ||
+		projection.ControlPlaneEndpoint != "hub:443" {
 		t.Fatalf("unexpected projection: %#v", projection)
 	}
 }
@@ -32,6 +35,16 @@ func TestRuntimeIdentityProjectionRejectsNodeIDAlias(t *testing.T) {
 	_, err := NewRuntimeIdentityProjectionFromJSON([]byte(`{"realm":"acme","node_id":"dev-a"}`))
 	if err == nil {
 		t.Fatal("expected node_id-only projection to fail")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestRuntimeIdentityProjectionRejectsDeviceIDAlias(t *testing.T) {
+	_, err := NewRuntimeIdentityProjectionFromJSON([]byte(`{"realm":"acme","device_id":"dev-a"}`))
+	if err == nil {
+		t.Fatal("expected device_id-only projection to fail")
 	}
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
@@ -48,10 +61,10 @@ func TestRuntimeCredentialsPathDerivesFromControlPath(t *testing.T) {
 	}
 }
 
-func TestRuntimeIdentityProjectionRejectsMissingDeviceID(t *testing.T) {
+func TestRuntimeIdentityProjectionRejectsMissingRuntimeInstanceID(t *testing.T) {
 	_, err := NewRuntimeIdentityProjectionFromJSON([]byte(`{"realm":"acme"}`))
 	if err == nil {
-		t.Fatal("expected missing device_id to fail")
+		t.Fatal("expected missing runtime_instance_id to fail")
 	}
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)

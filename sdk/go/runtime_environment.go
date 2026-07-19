@@ -15,10 +15,10 @@ const runtimeCredentialsFilename = "credentials.json"
 // It contains only routable public facts needed by SDK consumers; private-key
 // material and key-service endpoints are deliberately excluded.
 type RuntimeIdentityProjection struct {
-	Realm       string `json:"realm"`
-	DeviceID    string `json:"device_id"`
-	Username    string `json:"username,omitempty"`
-	HubEndpoint string `json:"hub_endpoint,omitempty"`
+	Realm                string `json:"realm"`
+	RuntimeInstanceID    string `json:"runtime_instance_id"`
+	Principal            string `json:"principal,omitempty"`
+	ControlPlaneEndpoint string `json:"control_plane_endpoint,omitempty"`
 }
 
 // RuntimeStateRoot resolves the SDK-owned local runtime state directory.
@@ -87,16 +87,16 @@ func NewRuntimeIdentityProjectionFromJSON(raw []byte) (RuntimeIdentityProjection
 		return RuntimeIdentityProjection{}, invalidRuntimeEnvironment("runtime identity projection must be a JSON object", nil)
 	}
 	projection := RuntimeIdentityProjection{
-		Realm:       runtimeEnvironmentString(decoded, "realm"),
-		DeviceID:    runtimeEnvironmentString(decoded, "device_id"),
-		Username:    runtimeEnvironmentString(decoded, "username"),
-		HubEndpoint: runtimeEnvironmentString(decoded, "hub_endpoint"),
+		Realm:                runtimeEnvironmentString(decoded, "realm"),
+		RuntimeInstanceID:    runtimeEnvironmentString(decoded, "runtime_instance_id"),
+		Principal:            runtimeEnvironmentString(decoded, "principal"),
+		ControlPlaneEndpoint: runtimeEnvironmentString(decoded, "control_plane_endpoint"),
 	}
 	if projection.Realm == "" {
 		return RuntimeIdentityProjection{}, invalidRuntimeEnvironment("runtime identity projection missing realm", nil)
 	}
-	if projection.DeviceID == "" {
-		return RuntimeIdentityProjection{}, invalidRuntimeEnvironment("runtime identity projection missing device_id", nil)
+	if projection.RuntimeInstanceID == "" {
+		return RuntimeIdentityProjection{}, invalidRuntimeEnvironment("runtime identity projection missing runtime_instance_id", nil)
 	}
 	return projection, nil
 }

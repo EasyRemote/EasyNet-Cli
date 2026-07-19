@@ -2945,8 +2945,10 @@
       "RuntimeHostStartRequest.Validate",
       "RuntimeHostStopOptions.Force",
       "RuntimeHostStopOptions.GracefulTimeoutMS",
+      "RuntimeIdentityProjection.ControlPlaneEndpoint",
+      "RuntimeIdentityProjection.Principal",
       "RuntimeIdentityProjection.Realm",
-      "RuntimeIdentityProjection.Username",
+      "RuntimeIdentityProjection.RuntimeInstanceID",
       "RuntimeInvocationAuthority.Metadata",
       "RuntimeLifecycle.Attach",
       "RuntimeLifecycle.ConnectLocal",
@@ -6644,8 +6646,6 @@
         "RuntimeDeviceRevokeResult.RuntimeCatalogNotReady",
         "RuntimeDeviceRevokeResult.RuntimeNotReady",
         "RuntimeDeviceRevokeResult.SystemAbility",
-        "RuntimeIdentityProjection.DeviceID",
-        "RuntimeIdentityProjection.HubEndpoint",
         "SdkEnvironment.DaemonControl",
         "SdkEnvironment.DiscoverDaemon"
       ],
@@ -8502,22 +8502,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeIdentityProjection.DeviceID": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_identity"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device identifiers outside URA grammar expose a product deployment model instead of generic runtime addressing."
-        },
-        "RuntimeIdentityProjection.HubEndpoint": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_identity"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Hub endpoint fields expose a product directory/deployment model instead of a generic runtime concept."
         },
         "SdkEnvironment.DaemonControl": {
           "canonical_replacement": [
@@ -14616,8 +14600,10 @@
           "EnsureRuntimeSigningIdentityRequest.SocketPath",
           "EnsureRuntimeSigningIdentityRequest.Timeout",
           "IdentityProvider.CallerIdentity",
+          "RuntimeIdentityProjection.ControlPlaneEndpoint",
+          "RuntimeIdentityProjection.Principal",
           "RuntimeIdentityProjection.Realm",
-          "RuntimeIdentityProjection.Username",
+          "RuntimeIdentityProjection.RuntimeInstanceID",
           "RuntimeSigningIdentity.OwnerURA",
           "RuntimeSigningIdentity.PublicKey",
           "RuntimeSigningIdentity.Sign",
@@ -20315,11 +20301,11 @@
       "RuntimeHostStopOptions": "dad98c63774bce859ee114851f49f52344d2a82139647350aa479be61690405e",
       "RuntimeHostStopOptions.Force": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903",
       "RuntimeHostStopOptions.GracefulTimeoutMS": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57",
-      "RuntimeIdentityProjection": "f8761778129f26eac3478aba7ed26978586364bb992ca1cd0b6e8bec0050126a",
-      "RuntimeIdentityProjection.DeviceID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "RuntimeIdentityProjection.HubEndpoint": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
+      "RuntimeIdentityProjection": "7117414f61043b2006f5a43c5334d65d2dd36d7dbd7ca439843a7a17204d8261",
+      "RuntimeIdentityProjection.ControlPlaneEndpoint": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
+      "RuntimeIdentityProjection.Principal": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RuntimeIdentityProjection.Realm": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "RuntimeIdentityProjection.Username": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
+      "RuntimeIdentityProjection.RuntimeInstanceID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RuntimeInvocationAuthority": "e0fedc416a12e669eb198cba53b93407b384fe13973fe024dfbdb3b91dc0502c",
       "RuntimeInvocationAuthority.Metadata": "20f54ecaf56c81179795ddb98aeb1ceace4b2660d74960f97f69d47363cd535d",
       "RuntimeInvocationDown": "0342ead559467b54ac7db48c0113ff0755a129827803f682831862f5055dc670",
