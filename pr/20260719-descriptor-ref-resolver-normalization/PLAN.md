@@ -50,3 +50,15 @@ descriptor-bound local ability, but `ResolveDescriptorRef` reports
 - Live-verified the exact failing tuple for
   `easynet:///r/localhost/ability/device.386b1258-3c89-494a-90a2-2321c29bf992.meta.list_resources`
   through the public Python `RuntimeAbilityClient.invoke` facade.
+
+## Delta — local catalog before remote owner route
+
+- New failure: native runtime resolver calls remote `meta.list_abilities` for a
+  device-owned descriptor and fails with `ROUTE_NEGATIVE ... owner is not online`.
+- Invariant refinement: descriptors owned by the local runtime must resolve from
+  the daemon-owned local descriptor catalog before any directory/remote route is
+  attempted.
+- Remote catalog probing remains valid only after local catalog matching fails
+  for a non-local owner.
+- Local runtime owner catalog misses now terminate as local descriptor misses
+  instead of falling through to remote route probing.

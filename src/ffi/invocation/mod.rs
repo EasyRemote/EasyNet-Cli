@@ -1843,15 +1843,6 @@ fn runtime_resolve_descriptor_ref_json(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("rpc");
-    let caller_ura = object
-        .get("caller_ura")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .map(Ok)
-        .unwrap_or_else(|| runtime_owner_ura_from_session(session).map_err(anyhow::Error::msg))?;
-
     let ability_ura = if ability.starts_with("easynet:///r/") {
         let selector = crate::core::ura::AbilitySelector::parse(ability)?;
         selector.ability_ura().to_string()
@@ -1859,6 +1850,35 @@ fn runtime_resolve_descriptor_ref_json(
         crate::core::ura::owner_ability_ura(callee_ura, ability)
             .ok_or_else(|| anyhow::anyhow!("derive ability URA for `{callee_ura}` `{ability}`"))?
     };
+    let runtime_owner_ura = runtime_owner_ura_from_session(session).ok();
+    if runtime_owner_ura.as_deref() == Some(callee_ura) {
+        let catalog = runtime_descriptor_catalog_entries(session, callee_ura);
+        if let Some(resolution) = descriptor_catalog_resolution_from_entries(
+            &catalog.entries,
+            &ability_ura,
+            call_mode,
+            "runtime_local_descriptor_catalog",
+        ) {
+            return Ok(resolution);
+        }
+        anyhow::bail!(
+            "descriptor_ref not found in local runtime catalog for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
+        );
+    }
+
+    let caller_ura = object
+        .get("caller_ura")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .map(Ok)
+        .unwrap_or_else(|| {
+            runtime_owner_ura
+                .clone()
+                .ok_or_else(|| "runtime owner URA is unavailable".to_string())
+                .map_err(anyhow::Error::msg)
+        })?;
     let target_call = RemoteAbilityInvocationTarget::for_target_owned_selector(
         callee_ura,
         "meta.list_abilities",
@@ -1879,28 +1899,17 @@ fn runtime_resolve_descriptor_ref_json(
         .get("abilities")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("meta.list_abilities result omitted abilities array"))?;
-    for row in abilities {
-        let Some(entry) = descriptor_catalog_entry_from_value(row) else {
-            continue;
-        };
-        let entry_ability = entry
-            .get("ability_ura")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        let entry_call_mode = entry
-            .get("call_mode")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("rpc");
-        if entry_ability == ability_ura && entry_call_mode == call_mode {
-            return Ok(serde_json::json!({
-                "descriptor_ref": entry.get("descriptor_ref").cloned().unwrap_or_default(),
-                "ability_ura": entry_ability,
-                "owner_ura": entry.get("owner_ura").cloned().unwrap_or_default(),
-                "name": entry.get("name").cloned().unwrap_or_default(),
-                "call_mode": call_mode,
-                "source": "runtime_meta_list_abilities",
-            }));
-        }
+    let entries: Vec<_> = abilities
+        .iter()
+        .filter_map(descriptor_catalog_entry_from_value)
+        .collect();
+    if let Some(resolution) = descriptor_catalog_resolution_from_entries(
+        &entries,
+        &ability_ura,
+        call_mode,
+        "runtime_meta_list_abilities",
+    ) {
+        return Ok(resolution);
     }
     anyhow::bail!(
         "descriptor_ref not found for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
@@ -2074,6 +2083,36 @@ fn descriptor_catalog_entry_from_value(value: &serde_json::Value) -> Option<serd
         "call_mode": call_mode,
         "admission_action": admission_action,
     }))
+}
+
+#[cfg(feature = "axon-pb")]
+fn descriptor_catalog_resolution_from_entries(
+    entries: &[serde_json::Value],
+    ability_ura: &str,
+    call_mode: &str,
+    source: &str,
+) -> Option<serde_json::Value> {
+    entries.iter().find_map(|entry| {
+        let entry_ability = entry
+            .get("ability_ura")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let entry_call_mode = entry
+            .get("call_mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("rpc");
+        if entry_ability != ability_ura || entry_call_mode != call_mode {
+            return None;
+        }
+        Some(serde_json::json!({
+            "descriptor_ref": entry.get("descriptor_ref").cloned().unwrap_or_default(),
+            "ability_ura": entry_ability,
+            "owner_ura": entry.get("owner_ura").cloned().unwrap_or_default(),
+            "name": entry.get("name").cloned().unwrap_or_default(),
+            "call_mode": call_mode,
+            "source": source,
+        }))
+    })
 }
 
 #[cfg(feature = "axon-pb")]
@@ -8665,6 +8704,126 @@ mod tests {
             "easynet:///r/localhost"
         )));
         assert!(descriptor_ref.ends_with("!read"));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_descriptor_resolver_prefers_local_catalog_for_runtime_owner() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path = dir.path().join("control.json");
+        let node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
+        let device_ura = crate::core::ura::device_ura("localhost", node_id);
+        let ability_ura = format!(
+            "easynet:///r/localhost/ability/device.{node_id}.{}",
+            crate::daemon::ability::names::resources::META_LIST_RESOURCES
+        );
+        crate::daemon::control::discovery::write(
+            &control_path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(dir.path().join("control.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: Some(node_id.to_string()),
+                }),
+                pid: 1,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write control discovery");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            control_path.display().to_string(),
+            Some(dir.path().join("offline-daemon.sock").display().to_string()),
+        );
+
+        let resolved = runtime_resolve_descriptor_ref_json(
+            &session,
+            &serde_json::json!({
+                "callee_ura": device_ura,
+                "caller_ura": device_ura,
+                "subject_ura": device_ura,
+                "ability": ability_ura,
+                "call_mode": "rpc",
+            })
+            .to_string(),
+        )
+        .expect("local runtime owner descriptor resolves without remote presence");
+
+        assert_eq!(resolved["ability_ura"], ability_ura);
+        assert_eq!(resolved["owner_ura"], device_ura);
+        assert_eq!(
+            resolved["name"],
+            crate::daemon::ability::names::resources::META_LIST_RESOURCES
+        );
+        assert_eq!(resolved["call_mode"], "rpc");
+        assert_eq!(resolved["source"], "runtime_local_descriptor_catalog");
+        assert!(resolved["descriptor_ref"]
+            .as_str()
+            .is_some_and(
+                |descriptor_ref| descriptor_ref.starts_with(&format!("{ability_ura}@"))
+                    && descriptor_ref.ends_with("!read")
+            ));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_descriptor_resolver_does_not_remote_probe_local_catalog_miss() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path = dir.path().join("control.json");
+        let node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
+        let device_ura = crate::core::ura::device_ura("localhost", node_id);
+        crate::daemon::control::discovery::write(
+            &control_path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(dir.path().join("control.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: Some(node_id.to_string()),
+                }),
+                pid: 1,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write control discovery");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            control_path.display().to_string(),
+            Some(dir.path().join("offline-daemon.sock").display().to_string()),
+        );
+
+        let error = runtime_resolve_descriptor_ref_json(
+            &session,
+            &serde_json::json!({
+                "callee_ura": device_ura,
+                "caller_ura": device_ura,
+                "subject_ura": device_ura,
+                "ability": format!(
+                    "easynet:///r/localhost/ability/device.{node_id}.missing.local.catalog"
+                ),
+                "call_mode": "rpc",
+            })
+            .to_string(),
+        )
+        .expect_err("local runtime owner descriptor miss must not remote probe");
+
+        let message = error.to_string();
+        assert!(message.contains("descriptor_ref not found in local runtime catalog"));
+        assert!(!message.contains("offline-daemon.sock"));
+        assert!(!message.contains("ROUTE_NEGATIVE"));
     }
 
     #[cfg(feature = "axon-pb")]
