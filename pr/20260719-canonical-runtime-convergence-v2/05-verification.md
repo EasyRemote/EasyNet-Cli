@@ -29,6 +29,8 @@ Completed in this slice:
 - `SDK_CONFORMANCE_RUN_NONCE=<issued> PATH="$HOME/.cargo/bin:$HOME/.nvm/versions/node/v22.16.0/bin:/opt/homebrew/bin:$PATH" cargo run -p sdk-conformance-runner -- --language java --adapter-report sdk/conformance/runner/java-action-adapter-report.json --format json`
 - `swift test --package-path sdk/swift`
 - `SDK_CONFORMANCE_RUN_NONCE=<issued> CARGO_TARGET_DIR=target/codex-conformance-swift PATH="$HOME/.cargo/bin:$HOME/.nvm/versions/node/v22.16.0/bin:/opt/homebrew/bin:$PATH" cargo run -p sdk-conformance-runner -- --language swift --adapter-report sdk/conformance/runner/swift-action-adapter-report.json --format json`
+- `PATH="$HOME/.cargo/bin:$PATH" cargo test rust_bidi_open_rejects_missing_frame_zero_before_session_entry --lib`
+- `SDK_CONFORMANCE_RUN_NONCE=<issued> CARGO_TARGET_DIR=target/codex-conformance-rust PATH="$HOME/.cargo/bin:$PATH" cargo run -p sdk-conformance-runner -- --language rust --adapter-report sdk/conformance/runner/rust-action-adapter-report.json --format json`
 
 Evidence reports:
 
@@ -71,5 +73,9 @@ Observed closure:
 - Swift now has direct executable `bidi/frame0_required` evidence in the runtime
   facade. `RuntimeClient.openBidi` accepts the existing non-nil `BidiFrame`
   caller shape while rejecting nil frame-0 material as canonical
-  `SDKError.invalidArgument` before the runtime transport is called; Rust
-  remains listed as unproven for that requirement.
+  `SDKError.invalidArgument` before the runtime transport is called.
+- Rust now has direct executable `bidi/frame0_required` evidence on the internal
+  Rust open path. `bidi_open_with_axon_pb` rejects missing stream/frame-0
+  construction material before active bidi session allocation. The
+  `bidi/frame0_required_other_languages` unproven requirement is now removed
+  from the canonical public API model.

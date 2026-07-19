@@ -6,6 +6,7 @@ required_for:
   - java
   - node
   - python
+  - rust
   - swift
 description: Runtime Core bidi open rejects a missing or non-EnvelopeOpen frame0 before entering a runtime session.
 steps:

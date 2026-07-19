@@ -52540,11 +52540,10 @@
       "profile": "runtime_core",
       "status": "seam",
       "evidence_case_ids": [
-        "bidi/close_send_not_cancel"
+        "bidi/close_send_not_cancel",
+        "bidi/frame0_required"
       ],
-      "unproven_requirement_ids": [
-        "bidi/frame0_required_other_languages"
-      ],
+      "unproven_requirement_ids": [],
       "shape_evidence": [
         {
           "item": "AbilitySignedBidiOpenOptions",
@@ -53887,7 +53886,7 @@
         {
           "case_id": "bidi/frame0_required",
           "action": "open_bidi_without_frame0",
-          "execution_case_bound": false,
+          "execution_case_bound": true,
           "items": [
             {
               "item": "AbilitySignedBidiOpenOptions",
@@ -53966,7 +53965,7 @@
         {
           "case_id": "bidi/frame0_required",
           "action": "reject_before_runtime_session_entry",
-          "execution_case_bound": false,
+          "execution_case_bound": true,
           "items": [
             {
               "item": "AbilitySignedBidiOpenOptions",

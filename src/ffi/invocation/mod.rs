@@ -8806,6 +8806,50 @@ mod tests {
     }
 
     #[test]
+    fn rust_bidi_open_rejects_missing_frame_zero_before_session_entry() {
+        let (handle, session) = alloc(test_session());
+        let owner = session.binding(handle);
+        let raw = serde_json::json!({
+            "caller_ura": "easynet:///r/acme/device/dev-a",
+            "callee_ura": "easynet:///r/acme/device/dev-a",
+            "descriptor_ref": descriptor_ref(
+                "easynet:///r/acme/device/dev-a",
+                "device.pty.attach",
+                "2.4.0"
+            ),
+            "subject_ura": "easynet:///r/acme/device/dev-a",
+            "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+            "causal_context": {"form": "none"},
+            "args": {"session_id": "pty-1"},
+        })
+        .to_string();
+        let before = active_bidi_len_for_owner(owner);
+        let mut bidi_id: InvocationBidiId = 42;
+
+        let code = bidi_open_with_axon_pb(
+            handle,
+            session,
+            &raw,
+            ignore_bidi_frame,
+            std::ptr::null_mut(),
+            &mut bidi_id,
+        );
+
+        assert_eq!(code, ERR_INVALID_ARG);
+        assert_eq!(
+            active_bidi_len_for_owner(owner),
+            before,
+            "missing Rust bidi frame-0 material must be rejected before runtime session entry"
+        );
+        assert_typed_last_error(
+            "INVALID_ARGUMENT",
+            ERR_INVALID_ARG,
+            "bidi_streams must not be empty",
+        );
+        crate::ffi::client::handle::release(handle);
+    }
+
+    #[test]
     fn invocation_stream_open_requires_callback_before_daemon_io() {
         let (handle, _) = alloc(test_session());
         let raw = valid_invocation_json();

@@ -8625,19 +8625,6 @@
         "bidi/dispatch_provider",
         "bidi/frame0_required",
         "stream/backpressure_bound"
-      ],
-      "unproven_requirements": [
-        {
-          "requirement_id": "bidi/frame0_required_other_languages",
-          "languages": [
-            "rust"
-          ],
-          "acceptance_steps": [
-            "open_bidi_without_frame0",
-            "reject_before_runtime_session_entry"
-          ],
-          "reason": "Rust still lacks executable proof that omitted frame0 is rejected before runtime session entry."
-        }
       ]
     },
     "canonical_addressing": {

@@ -1275,6 +1275,14 @@
     },
     {
       "language": "rust",
+      "case_id": "bidi/frame0_required",
+      "selector": "rust_bidi_open_rejects_missing_frame_zero_before_session_entry",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "rust",
       "case_id": "daemon/permission_denied",
       "selector": "quota_meters_user_abilities_but_exempts_control_plane",
       "evidence": [

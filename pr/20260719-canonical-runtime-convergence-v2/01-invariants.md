@@ -33,3 +33,7 @@
     not sufficient conformance evidence for `open_bidi_without_frame0`; the SDK
     facade must provide an executable nil frame-0 rejection path that fails
     before runtime transport entry.
+12. Rust bidi open must not inherit the C ABI exported-function proof. The Rust
+    runtime boundary is the internal `bidi_open_with_axon_pb` path, and missing
+    frame-0 material must be rejected there before active bidi session
+    allocation.
