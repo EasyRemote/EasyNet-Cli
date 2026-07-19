@@ -44,7 +44,7 @@ use crate::daemon::persistence::config::{
 };
 use crate::support::platform::output;
 
-const DEFAULT_HUB_URL: &str = "http://127.0.0.1:8080";
+pub const DEFAULT_HUB_URL: &str = "http://127.0.0.1:8080";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Persisted auth session. Lives at `~/.easynet/auth.json` mode 0600.
@@ -77,7 +77,7 @@ pub struct AuthSession {
     pub username: Option<String>,
 }
 
-fn auth_session_path() -> PathBuf {
+pub(crate) fn auth_session_path() -> PathBuf {
     state_dir().join("auth.json")
 }
 
@@ -97,7 +97,7 @@ pub fn load_session() -> anyhow::Result<Option<AuthSession>> {
     Ok(Some(session))
 }
 
-fn save_session(session: &AuthSession) -> anyhow::Result<()> {
+pub(crate) fn save_session(session: &AuthSession) -> anyhow::Result<()> {
     let dir = state_dir();
     std::fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(session)? + "\n";
@@ -109,7 +109,7 @@ fn save_session(session: &AuthSession) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn clear_session() -> anyhow::Result<()> {
+pub(crate) fn clear_session() -> anyhow::Result<()> {
     let path = auth_session_path();
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
@@ -236,6 +236,12 @@ struct UserResp {
 }
 
 pub fn run_login(args: LoginArgs) -> anyhow::Result<()> {
+    let session = login_and_save(args)?;
+    render_login_success(&session);
+    Ok(())
+}
+
+pub(crate) fn login_and_save(args: LoginArgs) -> anyhow::Result<AuthSession> {
     let password = match args.password.clone() {
         Some(p) => p,
         None => rpassword::prompt_password("Password: ").context("read password")?,
@@ -275,13 +281,16 @@ pub fn run_login(args: LoginArgs) -> anyhow::Result<()> {
         username,
     };
     save_session(&session)?;
+    Ok(session)
+}
+
+pub(crate) fn render_login_success(session: &AuthSession) {
     println!("✓ logged in as {}", session.email);
     if let Some(uid) = &session.user_id {
         println!("  user_id: {uid}");
     }
     println!("  hub:     {}", session.hub_url);
     println!("  saved to {}", auth_session_path().display());
-    Ok(())
 }
 
 fn post_login(hub: &str, email: &str, password: &str) -> anyhow::Result<AuthResp> {
@@ -449,25 +458,29 @@ pub struct PairArgs {
     pub quiet: bool,
 }
 
-#[derive(Deserialize)]
-struct PairingResp {
-    pairing_token: String,
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct PairingResp {
+    pub pairing_token: String,
     #[serde(default)]
-    realm: Option<String>,
+    pub realm: Option<String>,
     #[serde(default)]
-    endpoint: Option<String>,
+    pub endpoint: Option<String>,
     #[serde(default)]
-    node_id: Option<String>,
+    pub node_id: Option<String>,
     #[serde(default)]
-    expires_in: Option<i64>,
+    pub expires_in: Option<i64>,
 }
 
-pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
-    let resp: PairingResp = auth_post_json(
+pub(crate) fn mint_pairing_token() -> anyhow::Result<PairingResp> {
+    auth_post_json(
         "/api/v1/devices/pairing",
         &serde_json::json!({}),
         HTTP_TIMEOUT,
-    )?;
+    )
+}
+
+pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
+    let resp = mint_pairing_token()?;
 
     if args.quiet {
         println!("{}", resp.pairing_token);

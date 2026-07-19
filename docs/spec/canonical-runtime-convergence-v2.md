@@ -319,5 +319,22 @@ The 2026-07-19 manual recheck found no basis to call RF-1 through RF-9
 independently accepted or production rolled out. The defensible claim is
 gate-conformant implementation evidence at the pinned revisions above.
 
+RF-4 Rust `bidi/frame0_required` evidence was rechecked with the Rust
+conformance runner on 2026-07-19: selector
+`rust_bidi_open_rejects_missing_frame_zero_before_session_entry` passed against
+EasyNet-Cli tree digest
+`31fb9c3c9065194e5c6517c41b6b42977fd87c73648849ec0086b039c42680a4` and
+EasyNet-Axon revision `ad060b8736f715440cbb68680790380ad29fd5f4`.
+The pinned record has case digest
+`bd01cbf63639c2440c3a20e794d66f295907956272911391b9b2ab12b711e7b3`,
+evidence digest
+`d845cd1b4bd9a1895a6d146fcee77ba36a4a39965c94537f2c87b2b10fb06ffa`,
+attestation
+`8336cd5d9d56f345ede68fa63117252698809bd878ef8c68a3c6149db25718e5`, and
+execution output digest
+`1ba91d7062780e6701c4153b748d7efe74199091600252d49699d4e531620199`.
+This closes only the Rust frame-zero admission evidence gap; it does not
+certify unrelated lifecycle cells.
+
 `docs/reviews/canonical-runtime-convergence-v2-closure-2026-07-18.md` remains
 a withdrawn historical closure attempt and is not acceptance evidence.

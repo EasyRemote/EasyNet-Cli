@@ -8,4 +8,3 @@ cut over to LocalRuntime-owned data-plane finalization. It removes the route
 model fork that kept bidi exact routes as an independent string list in
 `BidiDispatcher`, and makes V2 convergence gates consume the same runtime route
 inventory guard used by the architecture convergence gate.
-

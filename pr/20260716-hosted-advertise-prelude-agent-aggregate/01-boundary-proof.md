@@ -14,4 +14,3 @@
 - Duplicate Agent URAs are advertised once.
 - Synthetic `pages` and `files` rows are still derived only when realm and user segment are present and user segment is not `self`.
 - The prelude receives stable `agent_ura` and `short_label` accessors from `AgentHostedAdvertiseEntry`.
-

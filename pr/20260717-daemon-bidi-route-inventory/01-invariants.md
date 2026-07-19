@@ -11,4 +11,3 @@
 - `session.open` remains explicitly identified as further cutover work; this
   slice does not introduce a compatibility fallback or claim terminal
   LocalRuntime finalization for that carrier.
-

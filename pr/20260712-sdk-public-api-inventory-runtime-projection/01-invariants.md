@@ -7,4 +7,3 @@
   invisible convenience methods.
 - No product account, HTTP session, EasyRemote workflow or private-key custody
   concept is introduced into the SDK inventory.
-
