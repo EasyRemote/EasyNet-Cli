@@ -156,7 +156,6 @@ enum LocalDaemonLoopbackCalleePolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LocalDaemonLoopbackSubjectPolicy {
     Explicit(String),
-    CallerDeclaredSubject(String),
     TargetSelf,
 }
 
@@ -230,24 +229,9 @@ impl LocalDaemonLoopbackSubjectPolicy {
         }
     }
 
-    fn explicit_or_caller_declared(
-        caller_declared_subject_ura: &str,
-        subject: Option<String>,
-    ) -> anyhow::Result<Self> {
-        match Self::explicit(subject)? {
-            Some(subject) => Ok(subject),
-            None => Ok(Self::CallerDeclaredSubject(normalized_local_daemon_ura(
-                caller_declared_subject_ura,
-                "caller_declared_subject_ura",
-            )?)),
-        }
-    }
-
     fn resolve(&self, callee_ura: &str) -> anyhow::Result<String> {
         match self {
-            Self::Explicit(subject) | Self::CallerDeclaredSubject(subject) => {
-                normalized_local_daemon_ura(subject, "subject_ura")
-            }
+            Self::Explicit(subject) => normalized_local_daemon_ura(subject, "subject_ura"),
             Self::TargetSelf => normalized_local_daemon_ura(callee_ura, "callee_ura"),
         }
     }
@@ -319,22 +303,18 @@ impl LocalDaemonLoopbackTuplePlan {
         )
     }
 
-    fn targeted_root_with_declared_subject(
+    fn targeted_root_with_subject(
         function_name: &str,
         payload_json: serde_json::Value,
         callee_ura: &str,
-        caller_declared_subject_ura: &str,
-        subject: Option<String>,
+        subject_ura: &str,
         timeout: Duration,
     ) -> anyhow::Result<Self> {
         Self::new(
             function_name,
             payload_json,
             LocalDaemonLoopbackCalleePolicy::explicit(callee_ura)?,
-            LocalDaemonLoopbackSubjectPolicy::explicit_or_caller_declared(
-                caller_declared_subject_ura,
-                subject,
-            )?,
+            LocalDaemonLoopbackSubjectPolicy::required_explicit(subject_ura)?,
             LocalDaemonLoopbackDerivationPolicy::fresh_root(),
             timeout,
         )
@@ -565,16 +545,14 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
     function_name: &str,
     payload_json: serde_json::Value,
     callee_ura: &str,
-    default_subject_ura: &str,
-    subject: Option<String>,
+    subject_ura: &str,
     timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
-    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_declared_subject(
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_subject(
         function_name,
         payload_json,
         callee_ura,
-        default_subject_ura,
-        subject,
+        subject_ura,
         timeout,
     )?;
     invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
@@ -618,17 +596,15 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
     function_name: &str,
     payload_json: serde_json::Value,
     callee_ura: &str,
-    default_subject_ura: &str,
-    subject: Option<String>,
+    subject_ura: &str,
     timeout: Duration,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
-    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_declared_subject(
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_subject(
         function_name,
         payload_json,
         callee_ura,
-        default_subject_ura,
-        subject,
+        subject_ura,
         timeout,
     )?;
     invoke_local_daemon_ability_stream_with_tuple_plan(tuple_plan, max_frames)
@@ -951,8 +927,7 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
     function_name: &str,
     _payload_json: serde_json::Value,
     _callee_ura: &str,
-    _default_subject_ura: &str,
-    _subject: Option<String>,
+    _subject_ura: &str,
     _timeout: Duration,
     _max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
@@ -1931,8 +1906,7 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
     function_name: &str,
     payload_json: serde_json::Value,
     _callee_ura: &str,
-    _default_subject_ura: &str,
-    _subject: Option<String>,
+    _subject_ura: &str,
     _timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
     Err(anyhow::Error::new(
@@ -2035,19 +2009,18 @@ mod tests {
     }
 
     #[test]
-    fn loopback_tuple_plan_names_declared_subject_and_rejects_hidden_defaults() {
-        let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_declared_subject(
+    fn loopback_tuple_plan_requires_explicit_targeted_subject() {
+        let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_subject(
             "job.run",
             serde_json::json!({"job": 1}),
             "easynet:///r/acme/device/edge-1",
             "easynet:///r/acme/resource/user.jobs/job-1",
-            None,
             Duration::from_secs(5),
         )
         .expect("tuple plan");
         assert_eq!(
             tuple_plan.subject_policy,
-            LocalDaemonLoopbackSubjectPolicy::CallerDeclaredSubject(
+            LocalDaemonLoopbackSubjectPolicy::Explicit(
                 "easynet:///r/acme/resource/user.jobs/job-1".to_string()
             )
         );
@@ -2068,17 +2041,14 @@ mod tests {
             Some("easynet:///r/acme/resource/user.jobs/job-1")
         );
 
-        assert!(
-            LocalDaemonLoopbackTuplePlan::targeted_root_with_declared_subject(
-                "job.run",
-                serde_json::json!({"job": 1}),
-                "easynet:///r/acme/device/edge-1",
-                "",
-                None,
-                Duration::from_secs(5),
-            )
-            .is_err()
-        );
+        assert!(LocalDaemonLoopbackTuplePlan::targeted_root_with_subject(
+            "job.run",
+            serde_json::json!({"job": 1}),
+            "easynet:///r/acme/device/edge-1",
+            "",
+            Duration::from_secs(5),
+        )
+        .is_err());
         assert!(LocalDaemonLoopbackTuplePlan::local_root(
             "job.run",
             serde_json::json!({"job": 1}),
@@ -2162,12 +2132,11 @@ mod tests {
         };
         use axon_sdk::pb::axon::v1::InvokeResponse;
 
-        let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_declared_subject(
+        let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_subject(
             "job.run",
             serde_json::json!({"job": 1}),
             "easynet:///r/acme/device/edge-1",
             "easynet:///r/acme/resource/user.jobs/job-1",
-            Some("easynet:///r/acme/resource/user.jobs/job-1".to_string()),
             Duration::from_secs(5),
         )
         .expect("tuple plan");

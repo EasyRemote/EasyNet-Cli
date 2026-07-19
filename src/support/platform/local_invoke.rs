@@ -266,15 +266,14 @@ impl LocalDaemonSystemAbilityIssuer {
     pub fn invoke_target_root_timeout(
         target: &LocalAbilityTarget,
         args: Value,
-        subject: Option<String>,
+        subject_ura: &str,
         timeout: std::time::Duration,
     ) -> anyhow::Result<Value> {
         crate::support::platform::local_daemon_grpc::invoke_local_daemon_system_ability_targeted_root_timeout(
             target.dispatch_name(),
             args,
             target.callee_ura(),
-            target.default_subject_ura(),
-            subject,
+            subject_ura,
             timeout,
         )
     }
@@ -282,7 +281,7 @@ impl LocalDaemonSystemAbilityIssuer {
     pub fn stream_target_root(
         target: &LocalAbilityTarget,
         args: Value,
-        subject: Option<String>,
+        subject_ura: &str,
         timeout: std::time::Duration,
         max_frames: Option<usize>,
     ) -> anyhow::Result<Vec<LocalStreamFrame>> {
@@ -290,8 +289,7 @@ impl LocalDaemonSystemAbilityIssuer {
             target.dispatch_name(),
             args,
             target.callee_ura(),
-            target.default_subject_ura(),
-            subject,
+            subject_ura,
             timeout,
             max_frames,
         )

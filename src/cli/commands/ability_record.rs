@@ -100,7 +100,7 @@ fn run_camera_transition_recording(plan: &RecordingPlan) -> anyhow::Result<()> {
     let start = LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(
         &start_target,
         start_args,
-        Some(plan.subject.clone()),
+        &plan.subject,
         plan.timeout,
     )
     .context("invoke camera.record_start")?;
@@ -119,7 +119,7 @@ fn run_camera_transition_recording(plan: &RecordingPlan) -> anyhow::Result<()> {
     let stop = LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(
         &stop_target,
         json!({ "recording_session_id": session_id }),
-        Some(plan.subject.clone()),
+        &plan.subject,
         plan.timeout,
     )
     .context("invoke camera.record_stop")?;
@@ -265,7 +265,7 @@ impl RecordingPlan {
         LocalDaemonSystemAbilityIssuer::stream_target_root(
             &self.target,
             self.arguments.clone(),
-            Some(self.subject.clone()),
+            &self.subject,
             self.timeout,
             Some(self.max_frames),
         )

@@ -224,7 +224,7 @@ fn invoke_pages_ability(ability: &PagesAbility, args: Value) -> anyhow::Result<V
     LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(
         &target,
         args,
-        None,
+        target.default_subject_ura(),
         std::time::Duration::from_secs(30),
     )
 }

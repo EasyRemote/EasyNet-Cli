@@ -851,7 +851,7 @@ fn invoke_principal_ability(ability: &str, args: Value) -> anyhow::Result<Value>
     LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(
         &target,
         args,
-        None,
+        target.default_subject_ura(),
         std::time::Duration::from_secs(30),
     )
     .with_context(|| format!("invoke {ability}"))

@@ -447,9 +447,31 @@ local_production = production_source(local_text)
 for token in (
     "LocalDaemonSubjectPolicy",
     "local_daemon_loopback_invocation_from_subject_policy",
+    "CallerDeclaredSubject",
+    "targeted_root_with_declared_subject",
+    "explicit_or_caller_declared",
 ):
     if token in local_production:
         violations.append(f"{local_loopback}: obsolete local loopback subject-only policy remains: {token}")
+
+for match in re.finditer(
+    r"invoke_local_daemon_system_ability_targeted_(?:root_timeout|stream_root)\s*\([^)]*subject\s*:\s*Option\s*<\s*String\s*>",
+    local_production,
+    re.S,
+):
+    violations.append(
+        f"{local_loopback}:{local_production.count(chr(10), 0, match.start()) + 1}: targeted daemon-system local invoke must require explicit subject_ura"
+    )
+
+local_invoke_production = production_source(local_invoke_text)
+for match in re.finditer(
+    r"(?:invoke_target_root_timeout|stream_target_root)\s*\([^)]*subject\s*:\s*Option\s*<\s*String\s*>",
+    local_invoke_production,
+    re.S,
+):
+    violations.append(
+        f"{local_invoke}:{local_invoke_production.count(chr(10), 0, match.start()) + 1}: LocalDaemonSystemAbilityIssuer must not accept optional subject fallback"
+    )
 
 for match in re.finditer(r"LocalDaemonLoopbackInvocation::from_target\s*\(", local_production):
     if enclosing_function_name(local_production, match.start()) != "into_invocation":
