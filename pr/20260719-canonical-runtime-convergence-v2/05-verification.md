@@ -17,12 +17,15 @@ Completed in this slice:
 - `PATH="$HOME/.nvm/versions/node/v22.16.0/bin:$PATH" npm test --prefix sdk/node`
 - `PATH="$HOME/.nvm/versions/node/v22.16.0/bin:$PATH" node --check sdk/node/provider/easynet/pluginexec.js`
 - `PATH="$HOME/.cargo/bin:$PATH" cargo test --manifest-path sdk/rust/provider/easynet/pluginexec/Cargo.toml`
+- `PATH="$HOME/.cargo/bin:$HOME/.nvm/versions/node/v22.16.0/bin:/opt/homebrew/bin:$PATH" mvn -q -f sdk/java/pom.xml test`
 - `PATH="$HOME/.cargo/bin:$PATH" cargo test plugin_template --lib`
 - `PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check`
 - `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
 - `bash tools/scripts/docker-media-bidi-e2e.sh --self-test`
 - `bash tools/scripts/docker-media-bidi-e2e.sh --skip-build --project easynet-media-bidi-codex-173432 --out-dir target/e2e/docker-media-bidi/codex-20260719-173432`
 - `bash tools/scripts/docker-media-bidi-e2e.sh --project easynet-media-bidi-codex-full-173456 --out-dir target/e2e/docker-media-bidi/codex-full-20260719-173456`
+- `DOCKER_BIN=/usr/local/bin/docker bash tools/scripts/docker-media-bidi-e2e.sh --skip-build --keep --project easynet-media-bidi-codex-20260719-190347 --out-dir target/e2e/docker-media-bidi/codex-20260719-190347`
+- `DOCKER_BIN=/usr/local/bin/docker bash tools/scripts/docker-media-bidi-e2e.sh --project easynet-media-bidi-codex-full-20260719-190420 --out-dir target/e2e/docker-media-bidi/codex-full-20260719-190420`
 - `PATH="$HOME/.cargo/bin:$PATH" cargo test invocation_bidi_open_rejects_missing_frame_zero_before_session_entry --lib`
 - `SDK_CONFORMANCE_RUN_NONCE=0879d40513b38bb77f7d9cc2259d573f8903a1e26f38c51d869233b31866e424 PATH="$HOME/.cargo/bin:$PATH" cargo run -p sdk-conformance-runner -- --language c_abi --adapter-report sdk/conformance/runner/c-abi-action-adapter-report.json --format json`
 - `PATH="$HOME/.nvm/versions/node/v22.16.0/bin:$PATH" npm test --prefix sdk/node`
@@ -41,6 +44,8 @@ Evidence reports:
 - `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/target/e2e/docker-media-bidi/20260719-170938/report.md`
 - `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/target/e2e/docker-media-bidi/codex-20260719-173432/report.md`
 - `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/target/e2e/docker-media-bidi/codex-full-20260719-173456/report.md`
+- `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/target/e2e/docker-media-bidi/codex-20260719-190347/report.md`
+- `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/target/e2e/docker-media-bidi/codex-full-20260719-190420/report.md`
 - `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/target/e2e/host-media-device/skip-check-2/report.md`
 
 Observed closure:
@@ -56,13 +61,21 @@ Observed closure:
   tests; `plugin init --language node` generates a helper-backed template
   instead of naked sidecar frame parsing.
 - Provider sidecar helper capability evidence is language/call-mode scoped:
-  Python, Go, Rust, and Node are template-backed for declarative exec invoke;
-  stream and bidi helper cells remain closed seams until their helpers own
-  streaming frames.
+  Python, Go, Rust, Java, and Node are template-backed for declarative exec
+  invoke; stream and bidi helper cells remain closed seams until their helpers
+  own streaming frames.
 - Rust plugin templates now use the provider-scoped
   `easynet-provider-pluginexec` helper crate and generate compiled source that
   produces `bin/exec-plugin` through `make build`; the template does not
   hand-write sidecar request parsing.
+- Java plugin templates now use the provider-scoped
+  `run.easynet.daemon.provider.easynet.pluginexec` helper package and the
+  product-neutral `SidecarRuntime.serve` API. They generate compiled source
+  plus a `bin/exec-plugin` JVM wrapper through `make build`; the template does
+  not hand-write sidecar request parsing.
+- Section 12 now pins EasyNet-Cli runtime/source evidence to implementation
+  commit `a1b886d62e5d597505acf37c23a06b77e9afa0df`, the verified Java
+  provider-helper and Docker media-bidi evidence source revision.
 - C ABI now has direct executable `bidi/frame0_required` evidence at the C ABI
   boundary. It rejects missing frame-0 construction material before active bidi
   session allocation; Rust, Java, and Swift remain listed as unproven for that

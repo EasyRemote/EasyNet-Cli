@@ -68,7 +68,7 @@ pub struct InitArgs {
     /// Governed AbilityDescriptor version.
     #[arg(long, default_value = "1.0.0")]
     pub descriptor_version: String,
-    /// Template language. Python and Node are script-backed; Go and Rust generate compiled source.
+    /// Template language. Python and Node are script-backed; Go, Rust, and Java generate compiled source.
     #[arg(long, value_enum, default_value_t = PluginTemplateLanguage::Python)]
     pub language: PluginTemplateLanguage,
 }
@@ -169,6 +169,12 @@ fn run_init(args: InitArgs) -> anyhow::Result<()> {
             )
         }
         PluginTemplateLanguage::Rust => {
+            format!(
+                "cd '{}' && make build && easynet plugin install .",
+                project.path.display()
+            )
+        }
+        PluginTemplateLanguage::Java => {
             format!(
                 "cd '{}' && make build && easynet plugin install .",
                 project.path.display()
