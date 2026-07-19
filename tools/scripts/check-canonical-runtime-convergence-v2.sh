@@ -222,6 +222,7 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
+cli_root = path.parents[4]
 
 required_states = {
     "Unsupported",
@@ -243,6 +244,27 @@ if not required_states.issubset(state_variants):
         + ",".join(sorted(required_states - state_variants))
     )
 
+required_call_modes = {
+    "ExecInvoke",
+    "ExecStream",
+    "ExecBidi",
+}
+call_mode_enum = re.search(
+    r"pub enum ProviderSidecarCallMode\s*\{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if not call_mode_enum:
+    raise SystemExit("plugin_sidecar_call_mode_enum_missing")
+call_mode_variants = set(
+    re.findall(r"\b([A-Z][A-Za-z0-9_]*)\s*,", call_mode_enum.group("body"))
+)
+if not required_call_modes.issubset(call_mode_variants):
+    raise SystemExit(
+        "plugin_sidecar_call_mode_enum_incomplete:"
+        + ",".join(sorted(required_call_modes - call_mode_variants))
+    )
+
 language_enum = re.search(
     r"pub enum PluginTemplateLanguage\s*\{(?P<body>.*?)\n\}",
     text,
@@ -253,7 +275,7 @@ if not language_enum:
 template_variants = set(
     re.findall(r"^\s+([A-Z][A-Za-z0-9_]*)\s*,", language_enum.group("body"), re.M)
 )
-if template_variants != {"Python", "Go"}:
+if template_variants != {"Python", "Go", "Node"}:
     raise SystemExit(
         "plugin_template_language_surface_not_helper_backed:"
         + ",".join(sorted(template_variants))
@@ -275,41 +297,67 @@ for match in re.finditer(
 ):
     body = match.group("body")
     language = re.search(r'language:\s*"([^"]+)"', body)
+    call_mode = re.search(r"call_mode:\s*ProviderSidecarCallMode::([A-Za-z0-9_]+)", body)
     state = re.search(r"state:\s*ProviderSidecarHelperState::([A-Za-z0-9_]+)", body)
     template_available = re.search(r"template_available:\s*(true|false)", body)
     helper = re.search(r'helper_package:\s*(Some\("([^"]+)"\)|None)', body)
-    if not (language and state and template_available and helper):
+    if not (language and call_mode and state and template_available and helper):
         raise SystemExit("plugin_sidecar_helper_matrix_row_malformed")
-    if language.group(1) in rows:
-        raise SystemExit("plugin_sidecar_helper_matrix_duplicate:" + language.group(1))
-    rows[language.group(1)] = {
+    key = (language.group(1), call_mode.group(1))
+    if key in rows:
+        raise SystemExit("plugin_sidecar_helper_matrix_duplicate:" + "/".join(key))
+    rows[key] = {
         "state": state.group(1),
         "template_available": template_available.group(1) == "true",
         "helper_package": helper.group(2),
     }
 
 required_languages = {"python", "go", "rust", "node", "java", "c/c++"}
-if not required_languages.issubset(rows):
+matrix_languages = {language for language, _call_mode in rows}
+if not required_languages.issubset(matrix_languages):
     raise SystemExit(
         "plugin_sidecar_helper_matrix_incomplete:"
-        + ",".join(sorted(required_languages - set(rows)))
+        + ",".join(sorted(required_languages - matrix_languages))
     )
+for language in required_languages:
+    for call_mode in required_call_modes:
+        if (language, call_mode) not in rows:
+            raise SystemExit(f"plugin_sidecar_helper_matrix_missing_cell:{language}:{call_mode}")
 
 expected_helpers = {
     "python": "easynet_sdk.providers.easynet.plugin_exec",
     "go": "easynet.run/cli/sdk/go/provider/easynet/pluginexec",
+    "node": "@easynet/daemon-sdk/provider/easynet/pluginexec",
+}
+expected_helper_files = {
+    "python": [
+        "sdk/python/easynet_sdk/providers/easynet/plugin_exec.py",
+        "sdk/python/tests/test_plugin_exec.py",
+    ],
+    "go": [
+        "sdk/go/provider/easynet/pluginexec/pluginexec.go",
+        "sdk/go/provider/easynet/pluginexec/pluginexec_test.go",
+    ],
+    "node": [
+        "sdk/node/provider/easynet/pluginexec.js",
+        "sdk/node/provider/easynet/pluginexec.d.ts",
+        "sdk/node/test/pluginexec.test.mjs",
+    ],
 }
 for language, helper in expected_helpers.items():
-    row = rows[language]
+    row = rows[(language, "ExecInvoke")]
     if row["state"] not in {"ProviderBacked", "CutoverReady"}:
         raise SystemExit(f"plugin_template_helper_not_provider_backed:{language}")
     if not row["template_available"]:
         raise SystemExit(f"plugin_template_helper_not_exposed:{language}")
     if row["helper_package"] != helper:
         raise SystemExit(f"plugin_template_helper_package_mismatch:{language}")
+    for rel_path in expected_helper_files[language]:
+        if not (cli_root / rel_path).is_file():
+            raise SystemExit(f"plugin_template_helper_source_missing:{language}:{rel_path}")
 
 for language in sorted(required_languages - set(expected_helpers)):
-    row = rows[language]
+    row = rows[(language, "ExecInvoke")]
     if row["state"] not in {"Unsupported", "Seam"}:
         raise SystemExit(f"plugin_unbacked_language_state_open:{language}:{row['state']}")
     if row["template_available"]:
@@ -317,16 +365,30 @@ for language in sorted(required_languages - set(expected_helpers)):
     if row["helper_package"] is not None:
         raise SystemExit(f"plugin_unbacked_language_helper_claim:{language}")
 
+for language in sorted(required_languages):
+    for call_mode in ("ExecStream", "ExecBidi"):
+        row = rows[(language, call_mode)]
+        if row["state"] not in {"Unsupported", "Seam"}:
+            raise SystemExit(
+                f"plugin_streaming_helper_state_open_without_contract:{language}:{call_mode}:{row['state']}"
+            )
+        if row["template_available"]:
+            raise SystemExit(f"plugin_streaming_template_open_without_helper:{language}:{call_mode}")
+        if row["helper_package"] is not None:
+            raise SystemExit(f"plugin_streaming_helper_claim_without_contract:{language}:{call_mode}")
+
 variant_labels = {
     "Python": "python",
     "Go": "go",
+    "Node": "node",
 }
 if {variant_labels[variant] for variant in template_variants} != {
-    language for language, row in rows.items() if row["template_available"]
+    language for (language, call_mode), row in rows.items()
+    if call_mode == "ExecInvoke" and row["template_available"]
 }:
     raise SystemExit("plugin_template_enum_and_matrix_drift")
 
-for const_name in ("PYTHON_EXEC_PLUGIN", "GO_EXEC_PLUGIN"):
+for const_name in ("PYTHON_EXEC_PLUGIN", "GO_EXEC_PLUGIN", "NODE_EXEC_PLUGIN"):
     template = re.search(
         rf'const {const_name}: &str = r#"(.*?)"#;',
         text,
@@ -352,6 +414,8 @@ if "serve_exec_plugin(handle)" not in text:
     raise SystemExit("plugin_python_template_missing_provider_helper")
 if "pluginexec.MustServe" not in text:
     raise SystemExit("plugin_go_template_missing_provider_helper")
+if "serveExecPlugin" not in text:
+    raise SystemExit("plugin_node_template_missing_provider_helper")
 PY
 }
 

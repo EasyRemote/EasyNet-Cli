@@ -13,10 +13,15 @@ Completed in this slice:
 - `tools/scripts/host-media-device-e2e.sh --self-test`
 - `tools/scripts/host-media-device-e2e.sh --out-dir target/e2e/host-media-device/skip-check-2`
 - `tools/scripts/docker-two-node-easyremote-cli-e2e.sh --skip-build --project easynet-easyremote-two-node-codex`
+- `PATH="$HOME/.nvm/versions/node/v22.16.0/bin:$PATH" npm test --prefix sdk/node`
+- `PATH="$HOME/.nvm/versions/node/v22.16.0/bin:$PATH" node --check sdk/node/provider/easynet/pluginexec.js`
+- `PATH="$HOME/.cargo/bin:$PATH" cargo test plugin_template --lib`
 
 Evidence reports:
 
 - `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/target/e2e/docker-two-node-easyremote-cli/20260719-164635/report.md`
+- `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/target/e2e/docker-two-node-easyremote-cli/20260719-170651/report.md`
+- `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/target/e2e/docker-media-bidi/20260719-170938/report.md`
 - `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/target/e2e/host-media-device/skip-check-2/report.md`
 
 Observed closure:
@@ -27,4 +32,11 @@ Observed closure:
   runtime events;
 - downstream SDK consumer cutover is green;
 - two-node Docker product evidence is green and records provider-hosted user
-  Agent lifecycle/gap assertions.
+  Agent lifecycle plus caller-side canonical invocation success;
+- Node plugin sidecar helper is provider-scoped and covered by SDK/helper
+  tests; `plugin init --language node` generates a helper-backed template
+  instead of naked sidecar frame parsing.
+- Provider sidecar helper capability evidence is language/call-mode scoped:
+  Python, Go, and Node are template-backed for declarative exec invoke; stream
+  and bidi helper cells remain closed seams until their helpers own streaming
+  frames.
