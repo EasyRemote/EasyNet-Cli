@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol, TypeVar
 
-from ._key_service import (
+from .providers.easynet.key_service import (
     KeyServiceClient,
     MAX_KEY_SERVICE_CANONICAL_BYTES,
     decode_base64_value,

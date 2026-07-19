@@ -37,6 +37,45 @@ development_loader_violations() {
   rg -n 'target[/\\](debug|release)([/\\]deps)?' "$@"
 }
 
+retired_product_sdk_modules() {
+  cat <<'EOF'
+sdk/go/profiles.go
+sdk/go/admin.go
+sdk/go/companion.go
+sdk/go/compatibility.go
+sdk/go/events.go
+sdk/go/host_binding.go
+sdk/go/identity.go
+sdk/go/mission.go
+sdk/go/publication.go
+sdk/go/surface.go
+sdk/go/wrappers.go
+sdk/python/easynet_sdk/admin.py
+sdk/python/easynet_sdk/companion.py
+sdk/python/easynet_sdk/compatibility.py
+sdk/python/easynet_sdk/_key_service.py
+sdk/python/easynet_sdk/daemon_profiles.py
+sdk/python/easynet_sdk/events.py
+sdk/python/easynet_sdk/host_binding.py
+sdk/python/easynet_sdk/identity.py
+sdk/python/easynet_sdk/mission.py
+sdk/python/easynet_sdk/profile_bridge.py
+sdk/python/easynet_sdk/publication.py
+sdk/python/easynet_sdk/surface.py
+sdk/python/easynet_sdk/system_abilities.py
+sdk/python/easynet_sdk/wrappers.py
+EOF
+}
+
+retired_product_sdk_module_violations() {
+  local scan_root="${1:-.}"
+  local path
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    [[ ! -e "$scan_root/$path" ]] || printf '%s\n' "$path"
+  done < <(retired_product_sdk_modules)
+}
+
 canonical_root_output="$("$PYTHON_BIN" "$CONCEPT_VALIDATOR" --print-neutrality-roots --manifest "$CONCEPTS")" \
   || fail "canonical package manifest validation failed"
 canonical_roots=()
@@ -112,6 +151,13 @@ if [[ "${1:-}" == "--self-test" ]]; then
     fail "self-test failed to detect development deps directory in SDK provider loader"
   fi
   rm -f "$injected"
+  mkdir -p "$tmp/sdk/python/easynet_sdk"
+  injected="$tmp/sdk/python/easynet_sdk/_key_service.py"
+  printf '"""Compatibility exports for the EasyNet key-service provider."""\n' >"$injected"
+  if ! retired_product_sdk_module_violations "$tmp" | grep -Fxq "sdk/python/easynet_sdk/_key_service.py"; then
+    fail "self-test failed to detect retired Python key-service facade"
+  fi
+  rm -f "$injected"
   "$PYTHON_BIN" - "$CONCEPTS" "$tmp/missing-root.json" <<'PY'
 import json, sys
 from pathlib import Path
@@ -148,34 +194,11 @@ fi
 "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$CONCEPTS" >/dev/null \
   || fail "released edge-adapter policy validation failed"
 
-for path in \
-  sdk/go/profiles.go \
-  sdk/go/admin.go \
-  sdk/go/companion.go \
-  sdk/go/compatibility.go \
-  sdk/go/events.go \
-  sdk/go/host_binding.go \
-  sdk/go/identity.go \
-  sdk/go/mission.go \
-  sdk/go/publication.go \
-  sdk/go/surface.go \
-  sdk/go/wrappers.go \
-  sdk/python/easynet_sdk/admin.py \
-  sdk/python/easynet_sdk/companion.py \
-  sdk/python/easynet_sdk/compatibility.py \
-  sdk/python/easynet_sdk/daemon_profiles.py \
-  sdk/python/easynet_sdk/events.py \
-  sdk/python/easynet_sdk/host_binding.py \
-  sdk/python/easynet_sdk/identity.py \
-  sdk/python/easynet_sdk/mission.py \
-  sdk/python/easynet_sdk/profile_bridge.py \
-  sdk/python/easynet_sdk/publication.py \
-  sdk/python/easynet_sdk/surface.py \
-  sdk/python/easynet_sdk/system_abilities.py \
-  sdk/python/easynet_sdk/wrappers.py
-do
-  [[ ! -e "$path" ]] || fail "retired product SDK module still exists: $path"
-done
+retired_module_output="$(retired_product_sdk_module_violations "$ROOT")"
+if [[ -n "$retired_module_output" ]]; then
+  echo "$retired_module_output" >&2
+  fail "retired product SDK module still exists"
+fi
 
 production_sources=()
 while IFS= read -r path; do production_sources+=("$path"); done < <(
