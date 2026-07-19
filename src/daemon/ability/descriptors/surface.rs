@@ -541,6 +541,8 @@ struct AbilityDescriptorWire {
     schema_hash: String,
     #[serde(default)]
     descriptor_hash: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    descriptor_ref: String,
     call_mode: CallMode,
     admission_action: AdmissionAction,
     receipt_semantics: ReceiptSemantics,
@@ -575,13 +577,26 @@ impl AbilityDescriptorWire {
             })?;
         crate::core::ura::AbilitySelector::parse(&ability_ura)
             .map_err(|error| format!("invalid derived Ability URA {ability_ura:?}: {error}"))?;
+        let descriptor_hash = d.descriptor_hash_prefixed();
+        let descriptor_hash_hex = descriptor_hash
+            .strip_prefix("sha256:")
+            .ok_or_else(|| format!("descriptor_hash {descriptor_hash:?} is not sha256-prefixed"))?;
+        let descriptor_ref = axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
+            "{}@{}#{}!{}",
+            ability_ura,
+            d.version,
+            descriptor_hash_hex,
+            d.admission_action.as_str()
+        ))
+        .map_err(|error| format!("invalid derived descriptor_ref: {error}"))?;
         Ok(Self {
             name,
             ability_ura,
             owner_ura: d.owner_ura.clone(),
             version: d.version.clone(),
             schema_hash: d.schema_hash_prefixed(),
-            descriptor_hash: d.descriptor_hash_prefixed(),
+            descriptor_hash,
+            descriptor_ref,
             call_mode: d.call_mode,
             admission_action: d.admission_action,
             receipt_semantics: d.receipt_semantics.clone(),
@@ -601,6 +616,7 @@ impl AbilityDescriptorWire {
         let wire_ability_ura = self.ability_ura.trim().to_string();
         let wire_schema_hash = self.schema_hash.trim().to_string();
         let wire_descriptor_hash = self.descriptor_hash.trim().to_string();
+        let wire_descriptor_ref = self.descriptor_ref.trim().to_string();
         let version = if self.version.trim().is_empty() {
             default_descriptor_version()
         } else {
@@ -679,6 +695,21 @@ impl AbilityDescriptorWire {
             if wire_descriptor_hash != actual {
                 return Err(format!(
                     "wire descriptor_hash {wire_descriptor_hash:?} does not match computed {actual:?}"
+                ));
+            }
+        }
+        if !wire_descriptor_ref.is_empty() {
+            let Some(actual) = descriptor.descriptor_ref() else {
+                return Err(format!(
+                    "wire descriptor_ref {wire_descriptor_ref:?} cannot be validated for owner {:?} \
+                     and name {:?}",
+                    descriptor.owner_ura,
+                    descriptor.public_name()
+                ));
+            };
+            if wire_descriptor_ref != actual {
+                return Err(format!(
+                    "wire descriptor_ref {wire_descriptor_ref:?} does not match computed {actual:?}"
                 ));
             }
         }
@@ -1072,6 +1103,20 @@ impl AbilityDescriptor {
     pub fn descriptor_hash_prefixed(&self) -> String {
         crate::daemon::ability::descriptors::DescriptorHash(self.descriptor_hash_bytes())
             .prefixed_hex()
+    }
+
+    pub fn descriptor_ref(&self) -> Option<String> {
+        let ability_ura = self.canonical_ability_ura()?;
+        let descriptor_hash = self.descriptor_hash_prefixed();
+        let descriptor_hash_hex = descriptor_hash.strip_prefix("sha256:")?;
+        axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
+            "{}@{}#{}!{}",
+            ability_ura,
+            self.version,
+            descriptor_hash_hex,
+            self.admission_action.as_str()
+        ))
+        .ok()
     }
 
     pub fn identity(&self) -> Option<AbilityIdentity> {
@@ -1607,6 +1652,29 @@ mod tests {
             d.identity().map(|id| id.into_string()),
             Some("easynet:///r/acme/ability/device.dev-1.fs.read".to_string())
         );
+    }
+
+    #[test]
+    fn descriptor_wire_exposes_canonical_descriptor_ref() {
+        let descriptor = must(
+            "meta.list_abilities",
+            "easynet:///r/acme/device/dev-1",
+            Visibility::Scoped,
+        )
+        .with_description("List abilities");
+
+        let value = serde_json::to_value(&descriptor).expect("descriptor serializes");
+        let descriptor_ref = value["descriptor_ref"]
+            .as_str()
+            .expect("wire descriptor_ref");
+
+        assert_eq!(
+            Some(descriptor_ref.to_string()),
+            descriptor.descriptor_ref()
+        );
+        assert!(descriptor_ref
+            .starts_with("easynet:///r/acme/ability/device.dev-1.meta.list_abilities@1.0.0#"));
+        assert!(descriptor_ref.ends_with("!invoke"));
     }
 
     #[test]

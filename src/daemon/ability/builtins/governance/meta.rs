@@ -966,6 +966,13 @@ mod tests {
                 .contains("/ability/")),
             "every public row must carry canonical ability_ura: {abilities:?}"
         );
+        assert!(
+            abilities.iter().all(|a| a["descriptor_ref"]
+                .as_str()
+                .is_some_and(|descriptor_ref| descriptor_ref
+                    .starts_with(a["ability_ura"].as_str().unwrap_or_default()))),
+            "every public row must carry canonical descriptor_ref: {abilities:?}"
+        );
     }
 
     #[test]

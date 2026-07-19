@@ -8614,6 +8614,61 @@ mod tests {
 
     #[cfg(feature = "axon-pb")]
     #[test]
+    fn runtime_diagnostics_catalog_includes_device_meta_descriptor_ref() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path = dir.path().join("control.json");
+        let device_ura =
+            crate::core::ura::device_ura("localhost", "386b1258-3c89-494a-90a2-2321c29bf992");
+        crate::daemon::control::discovery::write(
+            &control_path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(dir.path().join("control.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: Some("386b1258-3c89-494a-90a2-2321c29bf992".to_string()),
+                }),
+                pid: 1,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write control discovery");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            control_path.display().to_string(),
+            Some(dir.path().join("daemon.sock").display().to_string()),
+        );
+
+        let diagnostics = runtime_diagnostics_json(&session);
+        let entries = diagnostics["descriptor_catalog"]["entries"]
+            .as_array()
+            .expect("descriptor catalog entries");
+        let meta = entries
+            .iter()
+            .find(|entry| {
+                entry["owner_ura"] == device_ura
+                    && entry["name"]
+                        == crate::daemon::ability::names::governance::META_LIST_ABILITIES
+                    && entry["call_mode"] == "rpc"
+            })
+            .unwrap_or_else(|| panic!("device meta.list_abilities missing: {entries:?}"));
+
+        let descriptor_ref = meta["descriptor_ref"].as_str().expect("descriptor_ref");
+        assert!(descriptor_ref.starts_with(&format!(
+            "{}/ability/device.386b1258-3c89-494a-90a2-2321c29bf992.meta.list_abilities@",
+            "easynet:///r/localhost"
+        )));
+        assert!(descriptor_ref.ends_with("!read"));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
     fn runtime_system_descriptor_catalog_includes_hub_daemon_invocation_contracts() {
         let hub = crate::core::ura::hub_ura("localhost");
         let entries =
