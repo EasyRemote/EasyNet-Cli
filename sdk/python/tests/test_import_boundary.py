@@ -128,6 +128,37 @@ print(json.dumps(leaked))
         leaked = json.loads(completed.stdout)
         self.assertEqual(leaked, [])
 
+    def test_python_sdk_root_import_does_not_require_direct_runtime_provider_deps(
+        self,
+    ) -> None:
+        script = r'''
+import importlib.abc
+import json
+import sys
+
+class BlockGrpc(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "grpc" or fullname.startswith("grpc."):
+            raise ModuleNotFoundError("blocked grpc")
+        return None
+
+sys.meta_path.insert(0, BlockGrpc())
+import easynet_sdk
+print(json.dumps({
+    "has_runtime_client": hasattr(easynet_sdk, "RuntimeClient"),
+    "direct_runtime_loaded": "easynet_sdk.direct_runtime" in sys.modules,
+}))
+'''
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        result = json.loads(completed.stdout)
+        self.assertTrue(result["has_runtime_client"])
+        self.assertFalse(result["direct_runtime_loaded"])
+
     def test_python_sdk_lifecycle_helper_uses_runtime_capability_terms(self) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"
         body = (root / "_lifecycle.py").read_text()

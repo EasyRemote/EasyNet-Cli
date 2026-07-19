@@ -5,45 +5,43 @@ from pathlib import Path
 
 import easynet_sdk
 from easynet_sdk import runtime_lifecycle as canonical_lifecycle
-from easynet_sdk import runtime_identity, transport
+from easynet_sdk import transport
 from easynet_sdk.providers.easynet import keyring as provider_keyring
 from easynet_sdk.providers.easynet import lifecycle as provider_lifecycle
 
 
-def test_daemon_compatibility_exports_are_exact_provider_or_runtime_aliases() -> None:
-    assert easynet_sdk.StartConfig is provider_lifecycle.StartConfig
-    assert easynet_sdk.DiscoverOptions is provider_lifecycle.DiscoverOptions
-    assert easynet_sdk.DaemonMode is provider_lifecycle.DaemonMode
-    assert easynet_sdk.RuntimeHostRole is provider_lifecycle.DaemonMode
-    assert (
-        easynet_sdk.RuntimeHostStartProjection
-        is provider_lifecycle.DaemonStartProjection
+def test_easynet_lifecycle_exports_are_provider_scoped() -> None:
+    assert provider_lifecycle.StartConfig.__module__.endswith("providers.easynet.lifecycle")
+    assert provider_lifecycle.DiscoverOptions.__module__.endswith(
+        "providers.easynet.lifecycle"
     )
-    assert easynet_sdk.DaemonControl is easynet_sdk.RuntimeLifecycle
-    assert easynet_sdk.DaemonHandle is easynet_sdk.RuntimeHandle
+    assert provider_lifecycle.DaemonMode.__module__.endswith("providers.easynet.lifecycle")
+    for name in (
+        "StartConfig",
+        "DiscoverOptions",
+        "DaemonMode",
+        "DaemonStartProjection",
+        "start_daemon",
+        "discover_daemon",
+        "attach_daemon",
+    ):
+        assert not hasattr(easynet_sdk, name), name
 
 
-def test_daemon_transport_aliases_share_one_canonical_state_machine() -> None:
-    assert (
-        easynet_sdk.DaemonInvocationTransport is easynet_sdk.RuntimeInvocationTransport
-    )
-    assert easynet_sdk.DaemonFrameStream is easynet_sdk.RuntimeFrameStream
-    assert easynet_sdk.DaemonBidiChannel is easynet_sdk.RuntimeBidiChannel
+def test_transport_root_exports_only_runtime_transport_names() -> None:
+    assert hasattr(easynet_sdk, "RuntimeInvocationTransport")
+    assert hasattr(transport, "RuntimeInvocationTransport")
+    for name in ("DaemonInvocationTransport", "DaemonFrameStream", "DaemonBidiChannel"):
+        assert not hasattr(easynet_sdk, name), name
+        assert not hasattr(transport, name), name
 
 
-def test_keyring_compatibility_module_has_no_second_implementation() -> None:
-    assert (
-        runtime_identity.RuntimeSigningIdentity
-        is provider_keyring.RuntimeSigningIdentity
+def test_keyring_provider_is_not_reexported_as_canonical_root() -> None:
+    assert provider_keyring.RuntimeSigningIdentity.__module__.endswith(
+        "providers.easynet.keyring"
     )
-    assert (
-        runtime_identity.DaemonKeyringSignatureProvider
-        is provider_keyring.DaemonKeyringSignatureProvider
-    )
-    assert (
-        runtime_identity.load_runtime_signing_identity
-        is provider_keyring.load_runtime_signing_identity
-    )
+    assert not hasattr(easynet_sdk, "DaemonKeyringSignatureProvider")
+    assert not hasattr(easynet_sdk, "RuntimeSigningIdentity")
 
 
 def test_product_lifecycle_dtos_are_not_defined_in_canonical_module() -> None:

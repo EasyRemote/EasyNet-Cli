@@ -18,7 +18,7 @@ from easynet_sdk import (
     AddressingClient,
     AddressingProjection,
     ConnectOptions,
-    DaemonInvocationTransport,
+    RuntimeInvocationTransport,
     ErrorCode,
     InvocationHandle,
     InvocationSignature,
@@ -512,7 +512,7 @@ class DirectRuntimeTests(unittest.TestCase):
         servicer = RecordingInvocationServicer()
         identity = _identity()
         with _fake_daemon(servicer) as endpoint:
-            transport = DaemonInvocationTransport.connect_direct(
+            transport = RuntimeInvocationTransport.connect_direct(
                 options=ConnectOptions(
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
@@ -630,7 +630,7 @@ class DirectRuntimeTests(unittest.TestCase):
     def test_direct_transport_rejects_user_subject_instead_of_rewriting(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
-            transport = DaemonInvocationTransport.connect_direct(
+            transport = RuntimeInvocationTransport.connect_direct(
                 options=ConnectOptions(
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
@@ -660,7 +660,7 @@ class DirectRuntimeTests(unittest.TestCase):
             ),
         )
         with _fake_daemon(servicer) as endpoint:
-            transport = DaemonInvocationTransport.connect_direct(
+            transport = RuntimeInvocationTransport.connect_direct(
                 options=ConnectOptions(
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
@@ -705,7 +705,7 @@ class DirectRuntimeTests(unittest.TestCase):
             _has_args=False,
         )
         with _fake_daemon(servicer) as endpoint:
-            transport = DaemonInvocationTransport.connect_direct(
+            transport = RuntimeInvocationTransport.connect_direct(
                 options=ConnectOptions(
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
@@ -779,7 +779,7 @@ class DirectRuntimeTests(unittest.TestCase):
 
         servicer = FailedServicer()
         with _fake_daemon(servicer) as endpoint:
-            transport = DaemonInvocationTransport.connect_direct(
+            transport = RuntimeInvocationTransport.connect_direct(
                 options=ConnectOptions(
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
@@ -818,7 +818,7 @@ class DirectRuntimeTests(unittest.TestCase):
 
         servicer = CancelledServicer()
         with _fake_daemon(servicer) as endpoint:
-            transport = DaemonInvocationTransport.connect_direct(
+            transport = RuntimeInvocationTransport.connect_direct(
                 options=ConnectOptions(
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
@@ -880,7 +880,7 @@ class DirectRuntimeTests(unittest.TestCase):
     ) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
-            transport = DaemonInvocationTransport.connect_direct(
+            transport = RuntimeInvocationTransport.connect_direct(
                 options=ConnectOptions(
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
@@ -929,7 +929,7 @@ class DirectRuntimeTests(unittest.TestCase):
             )
         ]
         with _fake_daemon(servicer) as endpoint:
-            transport = DaemonInvocationTransport.connect_direct(
+            transport = RuntimeInvocationTransport.connect_direct(
                 options=ConnectOptions(
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
@@ -951,7 +951,7 @@ class DirectRuntimeTests(unittest.TestCase):
     def test_direct_transport_opens_bidi_over_axon_grpc_uds(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
-            transport = DaemonInvocationTransport.connect_direct(
+            transport = RuntimeInvocationTransport.connect_direct(
                 options=ConnectOptions(
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
@@ -1968,7 +1968,7 @@ class DirectRuntimeTests(unittest.TestCase):
     def test_direct_transport_rejects_non_contiguous_bidi_up_sequence(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
-            transport = DaemonInvocationTransport.connect_direct(
+            transport = RuntimeInvocationTransport.connect_direct(
                 options=ConnectOptions(
                     endpoint=endpoint,
                     dial_timeout_ms=1000,
@@ -2146,7 +2146,7 @@ class _DirectAbilityRuntimeTransport:
     def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
         request = json.loads(request_json.decode("utf-8"))
         if request != {
-            "ability": ABILITY_PUBLIC_NAME,
+            "ability": ABILITY_URA,
             "callee_ura": CALLEE_URA,
             "call_mode": "rpc",
             "caller_ura": "easynet:///r/example/agent/alice.sdk",

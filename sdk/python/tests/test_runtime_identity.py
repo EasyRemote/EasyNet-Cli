@@ -6,7 +6,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from easynet_sdk import ErrorCode, SDKError
-from easynet_sdk.runtime_identity import (
+from easynet_sdk.providers.easynet.keyring import (
     ensure_runtime_signing_identity,
     load_runtime_signing_identity,
 )

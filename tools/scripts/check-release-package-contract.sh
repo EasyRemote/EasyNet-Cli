@@ -112,8 +112,8 @@ fi
 
 if require_file "include/easynet_cli.exports.v5"; then
     require_literal "include/easynet_cli.exports.v5" "easynet_abi_version"
-    if [[ "$(wc -l < include/easynet_cli.exports.v5 | tr -d ' ')" != "54" ]]; then
-        record_violation "v5 export allowlist must contain exactly 54 symbols" "include/easynet_cli.exports.v5"
+    if [[ "$(wc -l < include/easynet_cli.exports.v5 | tr -d ' ')" != "55" ]]; then
+        record_violation "v5 export allowlist must contain exactly 55 symbols" "include/easynet_cli.exports.v5"
     fi
 fi
 

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from easynet_sdk import (
     BidiState,
-    DaemonInvocationTransport,
+    RuntimeInvocationTransport,
     BidiSessionAdapter,
     ErrorClass,
     StreamValueAdapter,
@@ -41,10 +41,10 @@ def _load_patch(raw: FakeRawCABI):
     return patch("easynet_sdk._cabi.CLILibrary.load", return_value=CLILibrary(raw))
 
 
-class DaemonInvocationTransportTests(unittest.TestCase):
+class RuntimeInvocationTransportTests(unittest.TestCase):
     def test_invoke_accepts_complete_invocation_mapping(self) -> None:
         runtime = MemoryRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(
+        transport = RuntimeInvocationTransport.from_runtime_client(
             RuntimeClient(runtime)
         )
 
@@ -163,7 +163,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                 )
 
         runtime = ReceiptRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(
+        transport = RuntimeInvocationTransport.from_runtime_client(
             RuntimeClient(runtime)
         )
 
@@ -255,7 +255,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             control_path = _write_control_discovery(tmp)
             with _load_patch(raw):
-                transport = DaemonInvocationTransport.connect(
+                transport = RuntimeInvocationTransport.connect(
                     control_path=str(control_path)
                 )
                 self.assertIsNotNone(transport.connection)
@@ -275,7 +275,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         raw = MemoryRuntimeTransport()
         raw.close_error = RuntimeError("runtime close failed")
         runtime = RuntimeClient(raw)
-        transport = DaemonInvocationTransport.from_runtime_client(runtime)
+        transport = RuntimeInvocationTransport.from_runtime_client(runtime)
 
         with self.assertRaises(SDKError) as first:
             transport.close()
@@ -294,7 +294,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         connector = _CloseFailsRuntimeConnector()
         connection = RuntimeConnection(connector)
         connection.connect(ConnectOptions(endpoint="unix:///daemon.sock"))
-        transport = DaemonInvocationTransport(
+        transport = RuntimeInvocationTransport(
             runtime=connection.runtime_client(),
             connection=connection,
         )
@@ -328,7 +328,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                 release = threading.Event()
                 raw = MemoryRuntimeTransport()
                 runtime = RuntimeClient(raw)
-                transport = DaemonInvocationTransport.from_runtime_client(runtime)
+                transport = RuntimeInvocationTransport.from_runtime_client(runtime)
                 original = getattr(raw, raw_method)
                 operation_errors: list[BaseException] = []
                 close_errors: list[BaseException] = []
@@ -378,7 +378,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
 
     def test_invoke_signed_retains_failed_handle_cleanup_until_close(self) -> None:
         raw = _HandleCleanupFailsOnceRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(RuntimeClient(raw))
+        transport = RuntimeInvocationTransport.from_runtime_client(RuntimeClient(raw))
         signer = Signer.from_signature(
             signer_handle(),
             InvocationSignature(
@@ -414,7 +414,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
             ),
             self.assertRaises(RuntimeError) as caught,
         ):
-            DaemonInvocationTransport.connect()
+            RuntimeInvocationTransport.connect()
 
         self.assertIs(caught.exception, acquisition_error)
         self.assertEqual(connection.close_calls, 1)
@@ -435,7 +435,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
             ),
             self.assertRaises(RuntimeError) as caught,
         ):
-            DaemonInvocationTransport.connect()
+            RuntimeInvocationTransport.connect()
 
         self.assertIs(caught.exception, acquisition_error)
         self.assertIs(caught.exception.__cause__, cleanup_error)
@@ -447,7 +447,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
             control_path = _write_control_discovery(tmp, invocation_endpoint="")
             with _load_patch(raw):
                 with self.assertRaises(SDKError) as caught:
-                    DaemonInvocationTransport.connect(control_path=str(control_path))
+                    RuntimeInvocationTransport.connect(control_path=str(control_path))
 
         self.assertTrue(is_code(caught.exception, ErrorCode.CONTROL_ONLY))
         self.assertEqual(raw.daemon_attaches, [])
@@ -455,7 +455,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
 
     def test_stream_projects_sdk_events_to_dicts(self) -> None:
         runtime = MemoryRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(
+        transport = RuntimeInvocationTransport.from_runtime_client(
             RuntimeClient(runtime)
         )
 
@@ -503,7 +503,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                 )
 
         runtime = TimeoutRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(
+        transport = RuntimeInvocationTransport.from_runtime_client(
             RuntimeClient(runtime)
         )
 
@@ -516,7 +516,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
 
     def test_bidi_keeps_half_close_cancel_and_close_distinct(self) -> None:
         runtime = MemoryRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(
+        transport = RuntimeInvocationTransport.from_runtime_client(
             RuntimeClient(runtime)
         )
         channel = transport.bidi(
@@ -558,7 +558,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                 )
 
         runtime = TimeoutRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(
+        transport = RuntimeInvocationTransport.from_runtime_client(
             RuntimeClient(runtime)
         )
 
@@ -671,7 +671,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
 
     def test_rejects_incomplete_invocation_mapping_before_dispatch(self) -> None:
         runtime = MemoryRuntimeTransport()
-        transport = DaemonInvocationTransport.from_runtime_client(
+        transport = RuntimeInvocationTransport.from_runtime_client(
             RuntimeClient(runtime)
         )
 
@@ -1590,6 +1590,26 @@ class DaemonInvocationTransportTests(unittest.TestCase):
             [item.value for item in StreamValueAdapter(null_value)],
             [None],
         )
+
+    def test_stream_adapter_skips_receipt_only_empty_payload_frame(self) -> None:
+        stream = _FixedFrameStream(
+            [
+                {
+                    "payload_json": None,
+                    "payload_base64": "",
+                    "content_type": "application/json",
+                    "terminal": False,
+                    "admission_receipt": {"verification": "verified"},
+                    "error": None,
+                },
+                _chunk({"value": 5}),
+                _chunk(None, terminal=True),
+            ]
+        )
+
+        values = [item.value for item in StreamValueAdapter(stream)]
+
+        self.assertEqual(values, [{"value": 5}])
 
     def test_stream_adapter_decodes_non_json_payload_bytes(self) -> None:
         stream = _FixedFrameStream(

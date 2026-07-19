@@ -8,7 +8,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "608643ff6a17a5c5624591475fa96fd094bc874594f37ae6f5882e5401ac487c"
+          "sha256": "532080ecdfd99e70f34a7397cfd5eb388f6652cdb8d2678d6b7237c164335268"
         }
       ],
       "profile": "runtime_core"
@@ -30,7 +30,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs",
-          "sha256": "aa8245444b58328f6860578f34bf9a109b3ca4f0da612b14f85965c47ca89cad"
+          "sha256": "ea06f4df24b5ed7ca2f1edf1d7e564f64e8feff88fda94af86c9c5ae999d3c76"
         }
       ],
       "profile": "runtime_core"
@@ -63,7 +63,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "608643ff6a17a5c5624591475fa96fd094bc874594f37ae6f5882e5401ac487c"
+          "sha256": "532080ecdfd99e70f34a7397cfd5eb388f6652cdb8d2678d6b7237c164335268"
         }
       ],
       "profile": "health"
@@ -74,7 +74,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "608643ff6a17a5c5624591475fa96fd094bc874594f37ae6f5882e5401ac487c"
+          "sha256": "532080ecdfd99e70f34a7397cfd5eb388f6652cdb8d2678d6b7237c164335268"
         }
       ],
       "profile": "runtime_core"
@@ -96,7 +96,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "608643ff6a17a5c5624591475fa96fd094bc874594f37ae6f5882e5401ac487c"
+          "sha256": "532080ecdfd99e70f34a7397cfd5eb388f6652cdb8d2678d6b7237c164335268"
         }
       ],
       "profile": "runtime_core"
@@ -118,7 +118,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "608643ff6a17a5c5624591475fa96fd094bc874594f37ae6f5882e5401ac487c"
+          "sha256": "532080ecdfd99e70f34a7397cfd5eb388f6652cdb8d2678d6b7237c164335268"
         }
       ],
       "profile": "runtime_core"
@@ -140,7 +140,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "608643ff6a17a5c5624591475fa96fd094bc874594f37ae6f5882e5401ac487c"
+          "sha256": "532080ecdfd99e70f34a7397cfd5eb388f6652cdb8d2678d6b7237c164335268"
         }
       ],
       "profile": "runtime_core"
@@ -162,7 +162,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "608643ff6a17a5c5624591475fa96fd094bc874594f37ae6f5882e5401ac487c"
+          "sha256": "532080ecdfd99e70f34a7397cfd5eb388f6652cdb8d2678d6b7237c164335268"
         }
       ],
       "profile": "runtime_core"

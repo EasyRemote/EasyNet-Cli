@@ -6,6 +6,7 @@ from .keyring import (
     ensure_runtime_signing_identity,
     load_runtime_signing_identity,
 )
+from .identity import read_daemon_runtime_identity_projection
 from .lifecycle import (
     DaemonMode,
     DaemonStartProjection,
@@ -28,4 +29,5 @@ __all__ = [
     "connect_invocation_transport",
     "ensure_runtime_signing_identity",
     "load_runtime_signing_identity",
+    "read_daemon_runtime_identity_projection",
 ]

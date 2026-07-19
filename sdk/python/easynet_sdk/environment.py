@@ -27,7 +27,7 @@ from .runtime_environment import (
     runtime_credentials_path,
     runtime_state_root,
 )
-from .transport import DaemonInvocationTransport
+from .transport import RuntimeInvocationTransport
 
 
 class _Closable(Protocol):
@@ -179,11 +179,6 @@ class SdkEnvironment:
         self._track(transport)
         return RuntimeLifecycle(transport)
 
-    def daemon_control(self) -> RuntimeLifecycle:
-        """Source-compatible alias for ``runtime_lifecycle``."""
-
-        return self.runtime_lifecycle()
-
     def control_ipc_client(self, *, timeout: float | None = None) -> ControlIpcClient:
         """Open a direct boot/status control IPC client."""
 
@@ -275,12 +270,12 @@ class SdkEnvironment:
 
         return self._track(self.runtime_connection_direct(options).runtime_client())
 
-    def invocation_transport(self) -> DaemonInvocationTransport:
-        """Open the public JSON-friendly daemon Invocation transport facade."""
+    def invocation_transport(self) -> RuntimeInvocationTransport:
+        """Open the public JSON-friendly Runtime Invocation transport facade."""
 
         self._require_open()
         return self._track(
-            DaemonInvocationTransport.connect(
+            RuntimeInvocationTransport.connect(
                 control_path=self.resolved_control_path(),
                 library_path=self.library_path,
             )
@@ -288,12 +283,12 @@ class SdkEnvironment:
 
     def invocation_transport_direct(
         self, options: ConnectOptions = ConnectOptions()
-    ) -> DaemonInvocationTransport:
-        """Open the JSON-friendly daemon Invocation facade over direct UDS."""
+    ) -> RuntimeInvocationTransport:
+        """Open the JSON-friendly Runtime Invocation facade over direct UDS."""
 
         self._require_open()
         return self._track(
-            DaemonInvocationTransport.connect_direct(
+            RuntimeInvocationTransport.connect_direct(
                 control_path=self.resolved_control_path(),
                 library_path=self.library_path,
                 options=self._connect_options(options),

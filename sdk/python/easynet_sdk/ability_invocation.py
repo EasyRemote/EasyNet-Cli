@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Protocol, cast
 
 from .bidi import BidiSession, BidiStreamDescriptor
@@ -34,6 +34,7 @@ class AbilityCallRequest:
     descriptor_ref: str = ""
     ability_ura: str = ""
     descriptor_version: str = "1.0.0"
+    call_mode: str = "rpc"
     content_type: str = "application/json"
     args: Any = field(default_factory=dict)
     arguments_base64: str | None = None
@@ -52,6 +53,7 @@ class AbilityTargetRequest:
     ability_ura: str = ""
     subject_ura: str = ""
     descriptor_version: str = "1.0.0"
+    call_mode: str = "rpc"
     content_type: str = "application/json"
     args: Any = field(default_factory=dict)
     arguments_base64: str | None = None
@@ -87,6 +89,7 @@ class AbilityChildContext:
         ability_ura: str = "",
         subject_ura: str = "",
         descriptor_version: str = "1.0.0",
+        call_mode: str = "rpc",
         content_type: str = "application/json",
         args: Any = None,
         arguments_base64: str | None = None,
@@ -103,6 +106,7 @@ class AbilityChildContext:
             ability_ura=ability_ura,
             subject_ura=subject_ura,
             descriptor_version=descriptor_version,
+            call_mode=call_mode,
             content_type=content_type,
             args={} if args is None else args,
             arguments_base64=arguments_base64,
@@ -118,6 +122,7 @@ class AbilityChildContext:
         descriptor_ref: str = "",
         ability_ura: str = "",
         descriptor_version: str = "1.0.0",
+        call_mode: str = "rpc",
         content_type: str = "application/json",
         args: Any = None,
         arguments_base64: str | None = None,
@@ -135,6 +140,7 @@ class AbilityChildContext:
             descriptor_ref=descriptor_ref,
             ability_ura=ability_ura,
             descriptor_version=descriptor_version,
+            call_mode=call_mode,
             content_type=content_type,
             args={} if args is None else args,
             arguments_base64=arguments_base64,
@@ -173,7 +179,9 @@ class AbilityInvocationClient:
         """Build a complete `InvocationDraft` without dispatching it."""
 
         self._require_open()
-        return _build_direct_ability_invocation(self.addressing, request)
+        return _build_provider_backed_ability_invocation(
+            self.runtime, self.addressing, request
+        )
 
     def resolve_target(self, request: AbilityTargetRequest) -> ResolvedAbilityTarget:
         """Resolve a generic ability target through daemon/Axon identity helpers."""
@@ -190,9 +198,15 @@ class AbilityInvocationClient:
             version = projection.descriptor_version
         elif selector == "ability_ura":
             ability_ura = _required_string(request.ability_ura, "ability_ura")
-            descriptor_ref = self.addressing.canonical_ability_descriptor_ref(
-                ability_ura,
-                version,
+            projection = self.addressing.project_ability_ura(ability_ura)
+            ability_ura = projection.ura
+            subject_ura = request.subject_ura or projection.ura
+            descriptor_ref = self.runtime.resolve_descriptor_ref(
+                callee_ura=projection.owner_ura,
+                ability=ability_ura,
+                call_mode=_call_mode(request.call_mode),
+                caller_ura=request.caller_ura,
+                subject_ura=subject_ura,
             )
         else:
             raise _invalid_ability_invocation("unknown ability target selector")
@@ -238,13 +252,15 @@ class AbilityInvocationClient:
     def invoke_target(self, request: AbilityTargetRequest) -> InvocationResult:
         """Resolve and submit one unary ability Invocation."""
 
-        return self._require_open().invoke(self.build_target_invocation(request))
+        return self._require_open().invoke(
+            self.build_target_invocation(_target_request_call_mode(request, "rpc"))
+        )
 
     def stream_target(self, request: AbilityTargetRequest) -> StreamHandle:
         """Resolve and open one server-stream ability Invocation."""
 
         return self._require_open().invoke_stream(
-            self.build_target_invocation(request)
+            self.build_target_invocation(_target_request_call_mode(request, "stream"))
         )
 
     def bidi_target(
@@ -255,7 +271,8 @@ class AbilityInvocationClient:
         """Resolve and open one bidirectional ability Invocation."""
 
         return self._require_open().open_bidi(
-            self.build_target_invocation(request), streams
+            self.build_target_invocation(_target_request_call_mode(request, "bidi")),
+            streams,
         )
 
     def prepare_target(
@@ -311,12 +328,16 @@ class AbilityInvocationClient:
     def invoke(self, request: AbilityCallRequest) -> InvocationResult:
         """Build and submit one unary ability Invocation."""
 
-        return self._require_open().invoke(self.build_invocation(request))
+        return self._require_open().invoke(
+            self.build_invocation(_call_request_call_mode(request, "rpc"))
+        )
 
     def stream(self, request: AbilityCallRequest) -> StreamHandle:
         """Build and open one server-stream ability Invocation."""
 
-        return self._require_open().invoke_stream(self.build_invocation(request))
+        return self._require_open().invoke_stream(
+            self.build_invocation(_call_request_call_mode(request, "stream"))
+        )
 
     def bidi(
         self,
@@ -325,7 +346,9 @@ class AbilityInvocationClient:
     ) -> BidiSession:
         """Build and open one bidirectional ability Invocation."""
 
-        return self._require_open().open_bidi(self.build_invocation(request), streams)
+        return self._require_open().open_bidi(
+            self.build_invocation(_call_request_call_mode(request, "bidi")), streams
+        )
 
     def prepare(
         self,
@@ -511,15 +534,19 @@ class InvocationObjectAdapter:
         metadata: Mapping[str, object] | None = None,
         caller_signature: InvocationSignature | Mapping[str, object] | object | None = None,
         descriptor_version: str = "",
+        call_mode: str = "rpc",
     ) -> InvocationDraft:
         """Build a complete SDK `InvocationDraft` from an invocation object."""
 
         self.invoker._require_open()
-        return self._wire_projector().build_invocation(
-            tuple_,
-            metadata=metadata,
-            caller_signature=caller_signature,
-            descriptor_version=descriptor_version,
+        return self.invoker.build_invocation(
+            _object_ability_request(
+                tuple_,
+                metadata=metadata,
+                caller_signature=caller_signature,
+                descriptor_version=descriptor_version or self.descriptor_version,
+                call_mode=call_mode,
+            )
         )
 
     def to_wire_dict(
@@ -530,17 +557,23 @@ class InvocationObjectAdapter:
         caller_signature: InvocationSignature | Mapping[str, object] | object | None = None,
         bidi_streams: Sequence[Mapping[str, object] | BidiStreamDescriptor | object] | None = None,
         descriptor_version: str = "",
+        call_mode: str = "",
     ) -> dict[str, object]:
         """Return the daemon Invocation JSON DTO."""
 
         self.invoker._require_open()
-        return self._wire_projector().to_wire_dict(
+        value = self.build_invocation(
             tuple_,
             metadata=metadata,
             caller_signature=caller_signature,
-            bidi_streams=bidi_streams,
             descriptor_version=descriptor_version,
-        )
+            call_mode=call_mode or ("bidi" if bidi_streams else "rpc"),
+        ).to_json_dict()
+        if bidi_streams:
+            value["bidi_streams"] = [
+                _stream_descriptor_dict(stream) for stream in bidi_streams
+            ]
+        return value
 
     def invoke(
         self,
@@ -558,6 +591,7 @@ class InvocationObjectAdapter:
                 metadata=metadata,
                 caller_signature=caller_signature,
                 descriptor_version=descriptor_version,
+                call_mode="rpc",
             )
         )
 
@@ -577,14 +611,15 @@ class InvocationObjectAdapter:
                 metadata=metadata,
                 caller_signature=caller_signature,
                 descriptor_version=descriptor_version,
+                call_mode="stream",
             )
         )
 
     def bidi(
         self,
         tuple_: object,
-        *,
         streams: Sequence[Mapping[str, object] | BidiStreamDescriptor | object] = (),
+        *,
         metadata: Mapping[str, object] | None = None,
         caller_signature: InvocationSignature | Mapping[str, object] | object | None = None,
         descriptor_version: str = "",
@@ -597,6 +632,7 @@ class InvocationObjectAdapter:
                 metadata=metadata,
                 caller_signature=caller_signature,
                 descriptor_version=descriptor_version,
+                call_mode="bidi",
             ),
             tuple(_coerce_bidi_stream_descriptor(stream) for stream in streams),
         )
@@ -613,6 +649,7 @@ def _object_ability_request(
     metadata: Mapping[str, object] | None,
     caller_signature: InvocationSignature | Mapping[str, object] | object | None,
     descriptor_version: str,
+    call_mode: str = "rpc",
 ) -> AbilityCallRequest:
     arguments = _tuple_value(tuple_, "arguments")
     argument_kwargs = _argument_kwargs(arguments)
@@ -629,6 +666,7 @@ def _object_ability_request(
         nonce_base64=_nonce_base64(_tuple_value(tuple_, "nonce")),
         causal_context=_causal_context(_tuple_value(tuple_, "causal")),
         descriptor_version=_required_string(descriptor_version, "descriptor_version"),
+        call_mode=_call_mode(call_mode),
         metadata=dict(metadata or {}),
         caller_signature=_coerce_invocation_signature(caller_signature),
         descriptor_ref=selector_kwargs.get("descriptor_ref", ""),
@@ -642,7 +680,20 @@ def _object_ability_request(
 def _build_direct_ability_invocation(
     addressing: AddressingClient, request: AbilityCallRequest
 ) -> InvocationDraft:
-    descriptor_ref = _ability_descriptor_ref(addressing, request)
+    descriptor_ref = _addressing_descriptor_ref(addressing, request)
+    return _build_ability_invocation_from_descriptor_ref(descriptor_ref, request)
+
+
+def _build_provider_backed_ability_invocation(
+    runtime: RuntimeClient, addressing: AddressingClient, request: AbilityCallRequest
+) -> InvocationDraft:
+    descriptor_ref = _provider_descriptor_ref(runtime, addressing, request)
+    return _build_ability_invocation_from_descriptor_ref(descriptor_ref, request)
+
+
+def _build_ability_invocation_from_descriptor_ref(
+    descriptor_ref: str, request: AbilityCallRequest
+) -> InvocationDraft:
     builder = (
         InvocationBuilder()
         .with_caller_ura(_required_string(request.caller_ura, "caller_ura"))
@@ -665,7 +716,7 @@ def _build_direct_ability_invocation(
     return builder.build()
 
 
-def _ability_descriptor_ref(
+def _addressing_descriptor_ref(
     addressing: AddressingClient, request: AbilityCallRequest
 ) -> str:
     descriptor_ref = _selector_string(request.descriptor_ref, "descriptor_ref")
@@ -681,6 +732,63 @@ def _ability_descriptor_ref(
         ability_ura,
         _required_string(request.descriptor_version, "descriptor_version"),
     )
+
+
+def _provider_descriptor_ref(
+    runtime: RuntimeClient, addressing: AddressingClient, request: AbilityCallRequest
+) -> str:
+    descriptor_ref = _selector_string(request.descriptor_ref, "descriptor_ref")
+    ability_ura = _selector_string(request.ability_ura, "ability_ura")
+    selectors = tuple(value for value in (descriptor_ref, ability_ura) if value)
+    if len(selectors) != 1:
+        raise _invalid_ability_invocation(
+            "exactly one of descriptor_ref or ability_ura is required"
+        )
+    if descriptor_ref:
+        projection = addressing.project_descriptor_ref(descriptor_ref)
+        _require_matching_callee(
+            request.callee_ura, projection.owner_ura, "descriptor_ref"
+        )
+        return projection.descriptor_ref
+    projection = addressing.project_ability_ura(ability_ura)
+    _require_matching_callee(request.callee_ura, projection.owner_ura, "ability_ura")
+    return runtime.resolve_descriptor_ref(
+        callee_ura=_required_string(request.callee_ura, "callee_ura"),
+        ability=projection.ura,
+        call_mode=_call_mode(request.call_mode),
+        caller_ura=request.caller_ura,
+        subject_ura=request.subject_ura,
+    )
+
+
+def _call_mode(value: object) -> str:
+    if not isinstance(value, str):
+        raise _invalid_ability_invocation("call_mode must be a string")
+    mode = value.strip() or "rpc"
+    if mode not in {"rpc", "stream", "bidi"}:
+        raise _invalid_ability_invocation(f"unsupported call_mode {mode!r}")
+    return mode
+
+
+def _require_matching_callee(callee_ura: str, owner_ura: str, selector: str) -> None:
+    callee = _required_string(callee_ura, "callee_ura")
+    owner = _required_string(owner_ura, f"{selector} owner_ura")
+    if callee != owner:
+        raise _invalid_ability_invocation(
+            f"callee_ura must match {selector} owner_ura"
+        )
+
+
+def _call_request_call_mode(
+    request: AbilityCallRequest, call_mode: str
+) -> AbilityCallRequest:
+    return replace(request, call_mode=_call_mode(call_mode))
+
+
+def _target_request_call_mode(
+    request: AbilityTargetRequest, call_mode: str
+) -> AbilityTargetRequest:
+    return replace(request, call_mode=_call_mode(call_mode))
 
 
 def _required_string(value: object, field_name: str) -> str:

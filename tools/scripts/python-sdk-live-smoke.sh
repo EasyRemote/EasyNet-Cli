@@ -3,7 +3,7 @@
 # =========================================================================
 #
 # Builds generic C ABI v5 and the complete daemon process set, starts a hermetic daemon through
-# `easynet_sdk.CABIDaemonTransport`, then exercises Runtime Core unary, stream,
+# `easynet_sdk.CABIRuntimeLifecycleTransport`, then exercises Runtime Core unary, stream,
 # stream, prepare/sign/submit, and typed terminal failure paths through the Python SDK
 # object model.
 
@@ -21,7 +21,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   grep -q "using Python interpreter" "$0"
   grep -q "install uv/python3" "$0"
   grep -q "EXPECTED_ABI_VERSION = 5" "$REPO_ROOT/sdk/python/easynet_sdk/_cabi.py"
-  grep -q "DaemonControl = RuntimeLifecycle" "$REPO_ROOT/sdk/python/easynet_sdk/daemon.py"
+  grep -q "def open_cabi_runtime_lifecycle_transport" "$REPO_ROOT/sdk/python/easynet_sdk/_cabi.py"
   grep -q "class RuntimeClient" "$REPO_ROOT/sdk/python/easynet_sdk/runtime.py"
   echo "python-sdk-live-smoke self-test ok"
   exit 0
@@ -107,18 +107,17 @@ import time
 from pathlib import Path
 
 from easynet_sdk import (
-    DaemonControl,
-    DaemonMode,
     HealthClient,
     InvocationSignature,
     RuntimeEventClient,
     RuntimeEventReadRequest,
     RuntimeEventStreamState,
     RuntimeHandleEventProvider,
-    StartConfig,
+    RuntimeLifecycle,
 )
-from easynet_sdk._cabi import CABIDaemonTransport, CLILibrary
+from easynet_sdk._cabi import CABIRuntimeLifecycleTransport, CLILibrary
 from easynet_sdk.errors import SDKError
+from easynet_sdk.providers.easynet.lifecycle import DaemonMode, StartConfig
 
 
 def wait_until(label, predicate, timeout_s=8.0):
@@ -208,8 +207,8 @@ os.environ["HOME"] = smoke_home
 os.environ["EASYNET_REALM_TRUST_PATH"] = trust_path
 os.environ["EASYNET_PAGES_PORT"] = str(19000 + (os.getpid() % 1000))
 
-transport = CABIDaemonTransport(CLILibrary.load(os.environ["LIB_PATH"]))
-control = DaemonControl(transport)
+transport = CABIRuntimeLifecycleTransport(CLILibrary.load(os.environ["LIB_PATH"]))
+control = RuntimeLifecycle(transport)
 handle = None
 runtime = None
 try:

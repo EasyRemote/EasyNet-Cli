@@ -4,10 +4,7 @@ from pathlib import Path
 from easynet_sdk import (
     AddressingClient,
     AxonAddressingTransport,
-    DaemonControl,
-    DaemonMode,
     RuntimeHandle,
-    RuntimeHostRole,
     RuntimeLifecycle,
     RuntimeLifecycleState,
     RuntimeAbilityClient,
@@ -18,8 +15,8 @@ from easynet_sdk import (
     RuntimeDeviceRevokeRequest,
     RuntimeSessionListRequest,
     SDKError,
-    StartConfig,
 )
+from easynet_sdk.providers.easynet.lifecycle import DaemonMode, StartConfig
 from easynet_sdk._runtime_admin_routes import (
     _PROFILE as _RUNTIME_ADMIN_PROFILE,
     _RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY,
@@ -142,7 +139,7 @@ def test_runtime_admin_readiness_composes_lifecycle_and_health() -> None:
         HealthClient(MemoryHealthTransport()),
     )
 
-    handle = admin.start(StartConfig(mode=RuntimeHostRole.HUB))
+    handle = admin.start(StartConfig(mode=DaemonMode.HUB))
     readiness = admin.readiness(handle)
 
     assert isinstance(handle, RuntimeHandle)
@@ -168,11 +165,6 @@ def test_runtime_admin_rejects_missing_handle_and_control() -> None:
         assert "runtime lifecycle is required" in exc.message
     else:
         raise AssertionError("constructor accepted missing control")
-
-
-def test_runtime_lifecycle_names_keep_daemon_alias_compatibility() -> None:
-    assert DaemonControl is RuntimeLifecycle
-    assert DaemonMode is RuntimeHostRole
 
 
 def test_runtime_admin_ability_client_lists_sessions() -> None:

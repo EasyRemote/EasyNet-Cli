@@ -49,6 +49,7 @@ easynet_last_error_json
 easynet_prepared_invocation_free
 easynet_runtime_diagnostics
 easynet_runtime_health
+easynet_runtime_resolve_descriptor_ref
 easynet_shutdown
 easynet_signed_invocation_free
 easynet_string_free

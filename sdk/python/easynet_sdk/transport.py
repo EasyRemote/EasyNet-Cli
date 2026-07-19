@@ -1081,12 +1081,16 @@ class StreamValueAdapter:
             and not frame.get("payload_base64")
         ):
             return self._NO_VALUE
+        encoded = frame.get("payload_base64")
         if "payload_json" in frame and (
             frame.get("payload_json") is not None
-            or frame.get("content_type") == "application/json"
+            or (
+                frame.get("content_type") == "application/json"
+                and isinstance(encoded, str)
+                and bool(encoded)
+            )
         ):
             return frame["payload_json"]
-        encoded = frame.get("payload_base64")
         if isinstance(encoded, str) and encoded:
             try:
                 return base64.b64decode(encoded)
@@ -1590,10 +1594,3 @@ def _closed_transport(message: str) -> SDKError:
         retryable=False,
         message=message,
     )
-
-
-# REQ-LANG-5 exact aliases. All behavior and state live in the canonical
-# Runtime* classes above; EasyNet connection lowering lives in providers/easynet.
-DaemonInvocationTransport = RuntimeInvocationTransport
-DaemonFrameStream = RuntimeFrameStream
-DaemonBidiChannel = RuntimeBidiChannel

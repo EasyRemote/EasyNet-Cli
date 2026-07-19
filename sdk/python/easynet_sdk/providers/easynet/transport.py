@@ -11,7 +11,6 @@ from ...connection import (
     ControlDiscoveryRuntimeConnector,
     RuntimeConnection,
 )
-from ...direct_runtime import DirectRuntimeConnector
 from ...errors import ErrorCode, RetryHint, SDKError
 
 
@@ -59,6 +58,8 @@ def connect_direct_invocation_transport(
 
     resolved_control_path = options.control_path or control_path
     _ = library_path
+    from ...direct_runtime import DirectRuntimeConnector
+
     connection = RuntimeConnection(
         DirectRuntimeConnector(
             control_path=resolved_control_path,

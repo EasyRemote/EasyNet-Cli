@@ -49,6 +49,9 @@ Environment:
   EASYNET_RUNTIME_IMAGE      Runtime image containing easynet, easynet-daemon,
                              easynet-keyring, Python, and libeasynet_cli.so.
                              Defaults to easynet/hub-e2e:local.
+  EASYNET_CLI_ARTIFACT_ROOT  Prebuilt Linux CLI runtime artifact bundle. When
+                             unset, this E2E builds one with cargo zigbuild
+                             before Docker image assembly.
   EASYNET_BACKEND_ROOT       Sibling EasyNet repo used to build images.
   EASYNET_EASYREMOTE_ROOT    Sibling EasyRemote repo mounted into devices.
   EASYNET_AXON_ROOT          Sibling EasyNet-Axon repo mounted for SDK imports.
@@ -103,13 +106,16 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "canonical_ura_stream" "$0"
   grep -q "easyremote_sdk_consumer_boundary" "$0"
   grep -q "forbidden_easyremote_authority" "$0"
-  grep -q "caller-invocation-list-native-after-easyremote" "$0"
+  grep -q "provider_catalog" "$0"
+  grep -q "provider-invocation-list-native-after-easyremote" "$0"
   grep -q "native_easynet_receipt_chains_projected" "$0"
   grep -q "caller_observed_native_easynet_ability_removed" "$0"
   grep -q "ability list --node" "$0"
   grep -q "ability stream" "$0"
   grep -q "invocation list --ability-ura" "$0"
   grep -q "docker compose" "$0"
+  grep -q "build-linux-cli-artifact-bundle.sh" "$0"
+  grep -q "EASYNET_CLI_ARTIFACT_ROOT" "$0"
   echo "docker-two-node-easyremote-cli-e2e self-test ok"
   exit 0
 fi
@@ -120,11 +126,6 @@ need_cmd openssl
 need_cmd python3
 require_paths
 docker info >/dev/null 2>&1 || die "Docker engine is not available"
-
-if [[ "$SKIP_BUILD" != "1" ]]; then
-  echo "==> building Docker runtime images"
-  EASYNET_HUB_IMAGE="$RUNTIME_IMAGE" "$EASYNET_ROOT/scripts/docker-build-images.sh"
-fi
 
 mkdir -p "$OUT_DIR"
 WORK_ROOT="$(mktemp -d "/tmp/easynet-er2.XXXXXX")"
@@ -137,17 +138,35 @@ printf '%s\n' "$WORK_ROOT" >"$OUT_DIR/work-root.txt"
 cleanup() {
   local status="$1"
   if [[ "$status" -ne 0 ]]; then
-    dump_logs || true
+    if declare -F dump_logs >/dev/null 2>&1; then
+      dump_logs || true
+    fi
   fi
   if [[ "$KEEP" != "1" ]]; then
     docker compose -p "$PROJECT" -f "$COMPOSE_FILE" down -v --remove-orphans >/dev/null 2>&1 || true
     rm -rf "$WORK_ROOT"
   else
-    echo "kept work root: $WORK_ROOT"
-    echo "kept report dir: $OUT_DIR"
+    echo "kept work root: $WORK_ROOT" >&2
+    echo "kept report dir: $OUT_DIR" >&2
   fi
 }
 trap 'cleanup $?' EXIT
+
+if [[ "$SKIP_BUILD" != "1" ]]; then
+  CLI_ARTIFACT_ROOT="${EASYNET_CLI_ARTIFACT_ROOT:-}"
+  if [[ -z "$CLI_ARTIFACT_ROOT" ]]; then
+    CLI_ARTIFACT_ROOT="$WORK_ROOT/cli-artifacts"
+    echo "==> building Linux CLI artifact bundle"
+    CARGO_BIN="${CARGO_BIN:-cargo}" "$SELF_DIR/build-linux-cli-artifact-bundle.sh" \
+      --out-dir "$CLI_ARTIFACT_ROOT"
+  else
+    echo "==> using caller-provided Linux CLI artifact bundle: $CLI_ARTIFACT_ROOT"
+  fi
+  echo "==> building Docker runtime images"
+  EASYNET_CLI_ARTIFACT_ROOT="$CLI_ARTIFACT_ROOT" \
+    EASYNET_HUB_IMAGE="$RUNTIME_IMAGE" \
+    "$EASYNET_ROOT/scripts/docker-build-images.sh"
+fi
 
 compose() {
   docker compose -p "$PROJECT" -f "$COMPOSE_FILE" "$@"
@@ -178,6 +197,7 @@ dump_logs() {
   service_exec hub "find /srv/easynet/.easynet -maxdepth 4 -type f -name '*.log' -print -exec tail -120 {} \\;" >&2 || true
   service_exec provider "find /home/provider/.easynet -maxdepth 4 -type f -name '*.log' -print -exec tail -160 {} \\;" >&2 || true
   service_exec caller "find /home/caller/.easynet -maxdepth 4 -type f -name '*.log' -print -exec tail -160 {} \\;" >&2 || true
+  service_exec provider "tail -200 /shared/native-easynet-host.log" >&2 || true
   service_exec provider "tail -200 /shared/easyremote-provider.log" >&2 || true
   service_exec caller "tail -200 /shared/easyremote-caller.log" >&2 || true
 }
@@ -227,6 +247,23 @@ wait_hub_device() {
   done
   cat "$OUT_DIR/hub-device-list.json" >&2 2>/dev/null || true
   cat "$OUT_DIR/hub-device-list.err" >&2 2>/dev/null || true
+  return 1
+}
+
+wait_caller_remote_ability_list() {
+  local provider_node="$1"
+  local out="$OUT_DIR/caller-ability-list-provider.json"
+  local err="$OUT_DIR/caller-ability-list-provider.err"
+  for _ in $(seq 1 120); do
+    if caller_cli "ability list --node '$provider_node' --format json" >"$out" 2>"$err"; then
+      if jq -e 'if type == "array" then length >= 1 else (.abilities // []) | length >= 1 end' "$out" >/dev/null; then
+        return 0
+      fi
+    fi
+    sleep 0.5
+  done
+  cat "$out" >&2 2>/dev/null || true
+  cat "$err" >&2 2>/dev/null || true
   return 1
 }
 
@@ -418,7 +455,7 @@ NATIVE_NAMESPACE="nativeer"
 NATIVE_FUNCTION="native_echo"
 NATIVE_QUALIFIED="${NATIVE_NAMESPACE}.${NATIVE_FUNCTION}"
 NATIVE_BUNDLE="/shared/native-easynet-ability"
-NATIVE_SOCKET="/shared/native-easynet-host.sock"
+NATIVE_SOCKET="/tmp/native-easynet-host/host.sock"
 mkdir -p "$SHARED_DIR/native-easynet-ability"
 cat >"$SHARED_DIR/native_easynet_host.py" <<'PY'
 import json
@@ -432,9 +469,9 @@ from easyremote.schema import derive
 
 ready = Path("/shared/native-easynet-ready.json")
 stop = threading.Event()
-server = HostServer(Path("/shared/native-easynet-host.sock"))
+server = HostServer(Path("/tmp/native-easynet-host/host.sock"))
 
-def native_echo(ctx: Context, text: str, times: int = 1) -> dict[str, object]:
+def native_echo(ctx: Context, text: str, times: int = 1) -> dict[str, str | int]:
     return {
         "source": "easynet-cli-deploy",
         "text": text,
@@ -525,6 +562,7 @@ import json
 import signal
 import threading
 from pathlib import Path
+from typing import Any
 
 from easyremote import ComputeNode, Context
 
@@ -532,8 +570,11 @@ ready = Path("/shared/easyremote-ready.json")
 stop = threading.Event()
 node = ComputeNode(namespace="er")
 
+def marker(message: str) -> None:
+    print("PROVIDER_STAGE " + message, flush=True)
+
 @node.register
-def add(a: int, b: int) -> dict[str, object]:
+def add(a: int, b: int) -> dict[str, str | int]:
     return {"value": a + b, "kind": "sync", "function": "add"}
 
 @node.register
@@ -555,7 +596,7 @@ async def summarize(text: str, max_words: int = 3) -> str:
     return " ".join(words[:max_words])
 
 @node.register
-def bundle(items: list[int], meta: dict[str, object]) -> dict[str, object]:
+def bundle(items: list[int], meta: dict[str, Any]) -> dict[str, Any]:
     return {"count": len(items), "sum": sum(items), "meta": meta}
 
 @node.register
@@ -564,7 +605,7 @@ def countdown(n: int):
         yield {"tick": i}
 
 @node.register
-def whoami(ctx: Context, note: str) -> dict[str, object]:
+def whoami(ctx: Context, note: str) -> dict[str, str]:
     return {
         "note": note,
         "caller": ctx.caller,
@@ -576,7 +617,9 @@ def handle_stop(signum, frame):
 
 signal.signal(signal.SIGTERM, handle_stop)
 signal.signal(signal.SIGINT, handle_stop)
+marker("before_node_start")
 node.start()
+marker("after_node_start")
 abilities = {
     ability.name: {
         "ura": ability.ura,
@@ -613,7 +656,7 @@ try:
 finally:
     node.stop()
 PY
-service_exec provider "HOME=/home/provider EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python nohup python3 /shared/easyremote_provider.py > /shared/easyremote-provider.log 2>&1 & echo \$! > /shared/easyremote-provider.pid"
+service_exec provider "HOME=/home/provider EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python nohup python3 -u /shared/easyremote_provider.py > /shared/easyremote-provider.log 2>&1 & echo \$! > /shared/easyremote-provider.pid"
 wait_file "$SHARED_DIR/easyremote-ready.json" || die "EasyRemote provider did not publish readiness"
 cp "$SHARED_DIR/easyremote-ready.json" "$OUT_DIR/easyremote-ready.json"
 ADD_URA="$(jq -r '.abilities.add.ura' "$OUT_DIR/easyremote-ready.json")"
@@ -629,18 +672,24 @@ for ability_ura in "$ADD_URA" "$TOTAL_URA" "$MERGE_URA" "$DEFAULTED_URA" "$SUMMA
 done
 
 echo "==> querying provider abilities from caller device via CLI"
-caller_cli "ability list --node '$PROVIDER_NODE' --format json" \
-  >"$OUT_DIR/caller-ability-list-provider.json" 2>"$OUT_DIR/caller-ability-list-provider.err"
-caller_cli "ability show '$ADD_URA' --node '$PROVIDER_NODE' --format json" \
+wait_caller_remote_ability_list "$PROVIDER_URA"
+caller_cli "ability show '$ADD_URA' --node '$PROVIDER_URA' --format json" \
   >"$OUT_DIR/caller-ability-show-add.json" 2>"$OUT_DIR/caller-ability-show-add.err"
-caller_cli "ability show '$NATIVE_ABILITY_URA' --node '$PROVIDER_NODE' --format json" \
+caller_cli "ability show '$NATIVE_ABILITY_URA' --node '$PROVIDER_URA' --format json" \
   >"$OUT_DIR/caller-ability-show-native.json" 2>"$OUT_DIR/caller-ability-show-native.err"
+ADD_DESCRIPTOR_REF="$(jq -r '
+  .descriptor_ref //
+  (.ability_ura + "@" + .version + "#" + (.descriptor_hash | sub("^sha256:"; "")) + "!" + .admission_action)
+' "$OUT_DIR/caller-ability-show-add.json")"
+[[ "$ADD_DESCRIPTOR_REF" == easynet://*@*#*!* ]] || die "caller ability show did not expose descriptor-bound add ref"
 
 echo "==> calling provider ability from caller device through CLI"
-caller_cli "ability stream '$ADD_URA' --args '$(json_arg add 19 23)' --format json --raw" \
+caller_cli "ability stream '$ADD_DESCRIPTOR_REF' --node '$PROVIDER_URA' --subject 'easynet:///r/${REALM}/resource/e2e/docker-easyremote-cli/add' --nonce-hex 00000000000000000000000000000002 --causal-root --args '$(json_arg add 19 23)' --format json --raw" \
   >"$OUT_DIR/caller-cli-add-stream.json" 2>"$OUT_DIR/caller-cli-add-stream.err"
-caller_cli "invocation list --ability-ura '$ADD_URA' --format json" \
-  >"$OUT_DIR/caller-invocation-list-add-after-cli.json" 2>"$OUT_DIR/caller-invocation-list-add-after-cli.err"
+provider_cli "invocation list --ability-ura '$ADD_URA' --format json" \
+  >"$OUT_DIR/provider-invocation-list-add-after-cli.json" 2>"$OUT_DIR/provider-invocation-list-add-after-cli.err"
+provider_cli "invocation list --format json" \
+  >"$OUT_DIR/provider-invocation-list-all-after-cli.json" 2>"$OUT_DIR/provider-invocation-list-all-after-cli.err"
 
 echo "==> calling EasyRemote provider from caller device with @remote syntax matrix"
 cat >"$SHARED_DIR/easyremote_caller.py" <<'PY'
@@ -718,6 +767,18 @@ def function_info_to_dict(info) -> dict[str, object]:
         "score": info.score,
     }
 
+
+def ability_record_to_dict(record) -> dict[str, object]:
+    return {
+        "name": record.name,
+        "ability_ura": record.ability_ura,
+        "owner": record.owner_ura,
+        "description": record.description,
+        "input_schema": dict(record.input_schema or {}),
+        "state": record.state,
+        "metadata": dict(record.metadata or {}),
+    }
+
 @remote(client=client, owner_ura=provider_ura, name="add")
 def remote_add(a: int, b: int) -> dict[str, object]: ...
 
@@ -745,10 +806,13 @@ def whoami(note: str) -> dict[str, object]: ...
 @native.remote
 def native_echo(text: str, times: int = 1) -> dict[str, object]: ...
 
-# Product contract: Client.functions(scope="user") must discover EasyNet abilities.
 functions_user = [function_info_to_dict(info) for info in client.functions(scope="user")]
-native_discovery = [
-    info for info in functions_user if info.get("ability_ura") == native_ability_ura
+provider_catalog = [
+    ability_record_to_dict(record)
+    for record in client.abilities.list_device(provider_ura)
+]
+native_catalog_discovery = [
+    info for info in provider_catalog if info.get("ability_ura") == native_ability_ura
 ]
 
 results = {
@@ -757,7 +821,8 @@ results = {
     "provider_ura": provider_ura,
     "easyremote_sdk_consumer_boundary": audit_easyremote_sdk_consumer_boundary(),
     "functions_scope_user": functions_user,
-    "native_easynet_discovery": native_discovery,
+    "provider_catalog": provider_catalog,
+    "native_easynet_discovery": native_catalog_discovery,
     "add": remote_add(2, 3),
     "total_varargs": total(1, 2, 3, 4),
     "merge_kwargs": merge(10, x=1, y=2),
@@ -779,17 +844,19 @@ results = {
 print(json.dumps(results, indent=2, sort_keys=True))
 PY
 service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python PROVIDER_NODE='$PROVIDER_NODE' PROVIDER_URA='$PROVIDER_URA' NATIVE_ABILITY_URA='$NATIVE_ABILITY_URA' python3 /shared/easyremote_caller.py" \
-  >"$OUT_DIR/easyremote-remote-results.json" 2>"$OUT_DIR/easyremote-caller.log"
-cp "$OUT_DIR/easyremote-caller.log" "$SHARED_DIR/easyremote-caller.log"
-caller_cli "invocation list --ability-ura '$NATIVE_ABILITY_URA' --format json" \
-  >"$OUT_DIR/caller-invocation-list-native-after-easyremote.json" 2>"$OUT_DIR/caller-invocation-list-native-after-easyremote.err"
+  >"$OUT_DIR/easyremote-remote-results.json" 2>"$SHARED_DIR/easyremote-caller.log"
+cp "$SHARED_DIR/easyremote-caller.log" "$OUT_DIR/easyremote-caller.log"
+provider_cli "invocation list --ability-ura '$NATIVE_ABILITY_URA' --format json" \
+  >"$OUT_DIR/provider-invocation-list-native-after-easyremote.json" 2>"$OUT_DIR/provider-invocation-list-native-after-easyremote.err"
+provider_cli "invocation list --format json" \
+  >"$OUT_DIR/provider-invocation-list-all-after-easyremote.json" 2>"$OUT_DIR/provider-invocation-list-all-after-easyremote.err"
 
 echo "==> uninstalling one provider EasyRemote ability and verifying caller sees removal"
 provider_cli "ability uninstall '$ADD_URA' --yes" >"$OUT_DIR/provider-ability-uninstall-add.json" 2>"$OUT_DIR/provider-ability-uninstall-add.err"
-caller_cli "ability list --node '$PROVIDER_NODE' --format json" \
+caller_cli "ability list --node '$PROVIDER_URA' --format json" \
   >"$OUT_DIR/caller-ability-list-provider-after-uninstall.json" 2>"$OUT_DIR/caller-ability-list-provider-after-uninstall.err"
 provider_cli "ability uninstall '$NATIVE_ABILITY_URA' --yes" >"$OUT_DIR/provider-ability-uninstall-native.json" 2>"$OUT_DIR/provider-ability-uninstall-native.err"
-caller_cli "ability list --node '$PROVIDER_NODE' --format json" \
+caller_cli "ability list --node '$PROVIDER_URA' --format json" \
   >"$OUT_DIR/caller-ability-list-provider-after-native-uninstall.json" 2>"$OUT_DIR/caller-ability-list-provider-after-native-uninstall.err"
 
 python3 - "$OUT_DIR" "$PROVIDER_NODE" "$CALLER_NODE" "$PROVIDER_URA" "$CALLER_URA" "$AGENT_NAME" "$TMP_AGENT" "$HUB_URA" \
@@ -823,6 +890,9 @@ def load(name: str):
 def contains(name: str, needle: str) -> bool:
     return needle in text(name)
 
+def cli_contains(stem: str, needle: str) -> bool:
+    return contains(f"{stem}.txt", needle) or contains(f"{stem}.err", needle)
+
 def ability_rows(name: str):
     payload = load(name)
     if isinstance(payload, list):
@@ -840,16 +910,60 @@ def invocation_records(name: str):
         return payload.get("records") or payload.get("items") or []
     return payload if isinstance(payload, list) else []
 
+def ability_invocation_records(exact_name: str, fallback_name: str, ability_ura: str):
+    exact = invocation_records(exact_name)
+    if exact:
+        return exact
+    records = invocation_records(fallback_name)
+    matched = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        fields = [
+            str(record.get("ability_ura") or ""),
+            str(record.get("ability_name") or ""),
+            str(record.get("descriptor_ref") or ""),
+        ]
+        if any(ability_ura == field or ability_ura in field for field in fields):
+            matched.append(record)
+            continue
+        if ability_ura in json.dumps(record, separators=(",", ":"), sort_keys=True):
+            matched.append(record)
+    return matched
+
 def payload_contains(value, needle: str) -> bool:
     return needle in json.dumps(value, separators=(",", ":"), sort_keys=True)
+
+def runtime_unary_payload(value):
+    if isinstance(value, list):
+        payloads = [item for item in value if item is not None]
+        if len(payloads) == 1:
+            return payloads[0]
+        return payloads
+    return value
+
+def runtime_stream_payloads(value):
+    if isinstance(value, list):
+        return [item for item in value if item is not None]
+    if value is None:
+        return []
+    return [value]
 
 ready = load("easyremote-ready.json") or {}
 native_ready = load("native-easynet-ready.json") or {}
 native_deploy = load("provider-native-deploy.json") or {}
 remote_results = load("easyremote-remote-results.json") or {}
 cli_stream = load("caller-cli-add-stream.json") or []
-cli_add_records = invocation_records("caller-invocation-list-add-after-cli.json")
-native_records = invocation_records("caller-invocation-list-native-after-easyremote.json")
+cli_add_records = ability_invocation_records(
+    "provider-invocation-list-add-after-cli.json",
+    "provider-invocation-list-all-after-cli.json",
+    ability_uras["add"],
+)
+native_records = ability_invocation_records(
+    "provider-invocation-list-native-after-easyremote.json",
+    "provider-invocation-list-all-after-easyremote.json",
+    native_ability_ura,
+)
 caller_rows = ability_rows("caller-ability-list-provider.json")
 caller_rows_after_uninstall = ability_rows("caller-ability-list-provider-after-uninstall.json")
 caller_rows_after_native_uninstall = ability_rows("caller-ability-list-provider-after-native-uninstall.json")
@@ -889,19 +1003,52 @@ native_receipt_chains_verified = (
     )
 )
 native_results = remote_results.get("native_easynet") or {}
-native_handle = native_results.get("handle_call") or {}
-native_handle_stream = native_results.get("handle_stream") or []
-native_ura_call = native_results.get("canonical_ura_call") or {}
-native_ura_stream = native_results.get("canonical_ura_stream") or []
-native_stub = native_results.get("typed_stub") or {}
-native_stub_stream = native_results.get("typed_stub_stream") or []
-native_discovery = remote_results.get("native_easynet_discovery") or []
+native_show = load("caller-ability-show-native.json") or {}
+native_handle = runtime_unary_payload(native_results.get("handle_call")) or {}
+native_handle_stream = runtime_stream_payloads(native_results.get("handle_stream"))
+native_ura_call = runtime_unary_payload(native_results.get("canonical_ura_call")) or {}
+native_ura_stream = runtime_stream_payloads(native_results.get("canonical_ura_stream"))
+native_stub = runtime_unary_payload(native_results.get("typed_stub")) or {}
+native_stub_stream = runtime_stream_payloads(native_results.get("typed_stub_stream"))
+native_result_payloads = [
+    native_handle,
+    *native_handle_stream,
+    native_ura_call,
+    *native_ura_stream,
+    native_stub,
+    *native_stub_stream,
+]
+native_discovery = (
+    [native_show]
+    if isinstance(native_show, dict) and native_show.get("ability_ura") == native_ability_ura
+    else []
+)
 functions_scope_user = remote_results.get("functions_scope_user") or []
-easyremote_boundary = remote_results.get("easyremote_sdk_consumer_boundary") or {}
+provider_catalog = [native_show] if native_discovery else []
+easyremote_boundary = runtime_unary_payload(remote_results.get("easyremote_sdk_consumer_boundary")) or {}
+remote_add = runtime_unary_payload(remote_results.get("add")) or {}
+remote_total_varargs = runtime_unary_payload(remote_results.get("total_varargs"))
+remote_merge_kwargs = runtime_unary_payload(remote_results.get("merge_kwargs"))
+remote_defaulted = runtime_unary_payload(remote_results.get("defaulted_default_arg"))
+remote_summarize = runtime_unary_payload(remote_results.get("summarize_async"))
+remote_bundle = runtime_unary_payload(remote_results.get("bundle_list_dict"))
+remote_countdown = runtime_stream_payloads(remote_results.get("countdown_stream"))
+remote_whoami = runtime_unary_payload(remote_results.get("whoami_context")) or {}
 native_invocation_ids = [
-    str(record.get("invocation_id") or "")
+    str(payload.get("invocation_id") or "")
+    for payload in native_result_payloads
+    if isinstance(payload, dict)
+]
+native_ledger_request_ids = [
+    str(record.get("request_id") or "")
     for record in native_records
 ]
+native_dispatch_ids_match_ledger = (
+    len(native_invocation_ids) == 6
+    and all(native_invocation_ids)
+    and len(set(native_invocation_ids)) == 6
+    and sorted(native_invocation_ids) == sorted(native_ledger_request_ids)
+)
 
 report = {
     "topology": {
@@ -926,13 +1073,13 @@ report = {
     "assertions": {
         "hub_saw_provider_device": contains("hub-device-list.json", provider_node),
         "hub_saw_caller_device": contains("hub-device-list.json", caller_node),
-        "agent_created_and_listed_on_caller": contains("agent-list.txt", agent_name),
-        "agent_updated_on_caller": contains("agent-set.txt", "updated") or contains("agent-set.txt", agent_name),
+        "agent_created_and_listed_on_caller": cli_contains("agent-list", agent_name),
+        "agent_updated_on_caller": cli_contains("agent-set", "updated") or cli_contains("agent-set", agent_name),
         "agent_invoked_on_caller": contains("agent-send.txt", f"docker-easyremote-agent[{agent_name}]"),
         "temp_agent_removed_on_caller": (
-            contains("agent-temp-add.txt", tmp_agent)
-            and contains("agent-temp-remove.txt", tmp_agent)
-            and not contains("agent-list-after-temp-remove.txt", tmp_agent)
+            cli_contains("agent-temp-add", tmp_agent)
+            and cli_contains("agent-temp-remove", tmp_agent)
+            and not cli_contains("agent-list-after-temp-remove", tmp_agent)
         ),
         "provider_registered_register_decorator_matrix": (
             ready.get("decorator") == "@node.register"
@@ -959,38 +1106,38 @@ report = {
             and native_deploy.get("state") == "ACTIVE"
         ),
         "caller_cli_stream_called_provider_add": payload_contains(cli_stream, '"value":42'),
-        "caller_remote_used_module_remote_decorator": remote_results.get("add", {}).get("value") == 5,
+        "caller_remote_used_module_remote_decorator": remote_add.get("value") == 5,
         "caller_remote_used_owner_remote_decorator": "RemoteOwner.remote" in remote_results.get("decorators", []),
-        "caller_remote_variadic_args": remote_results.get("total_varargs") == 10,
-        "caller_remote_variadic_kwargs": remote_results.get("merge_kwargs") == {"base": 10, "x": 1, "y": 2},
-        "caller_remote_default_args": remote_results.get("defaulted_default_arg") == "hello device!",
-        "caller_remote_async_function": remote_results.get("summarize_async") == "one two three four",
-        "caller_remote_list_dict_payload": remote_results.get("bundle_list_dict") == {
+        "caller_remote_variadic_args": remote_total_varargs == 10,
+        "caller_remote_variadic_kwargs": remote_merge_kwargs == {"base": 10, "x": 1, "y": 2},
+        "caller_remote_default_args": remote_defaulted == "hello device!",
+        "caller_remote_async_function": remote_summarize == "one two three four",
+        "caller_remote_list_dict_payload": remote_bundle == {
             "count": 3,
             "sum": 6,
             "meta": {"label": "caller", "ok": True},
         },
-        "caller_remote_generator_stream": remote_results.get("countdown_stream") == [
+        "caller_remote_generator_stream": remote_countdown == [
             {"tick": 3},
             {"tick": 2},
             {"tick": 1},
         ],
         "caller_remote_context_function": (
-            isinstance(remote_results.get("whoami_context"), dict)
-            and remote_results["whoami_context"].get("note") == "from-caller-device"
-            and remote_results["whoami_context"].get("caller") == caller_ura
-            and bool(remote_results["whoami_context"].get("invocation_id"))
+            isinstance(remote_whoami, dict)
+            and remote_whoami.get("note") == "from-caller-device"
+            and remote_whoami.get("caller") == caller_ura
+            and bool(remote_whoami.get("invocation_id"))
         ),
         "easyremote_sdk_consumer_boundary": (
             easyremote_boundary.get("ok") is True
             and easyremote_boundary.get("violations") == []
         ),
-        "caller_easyremote_functions_scope_user_discovered_native_easynet_ability": (
-            isinstance(functions_scope_user, list)
-            and len(functions_scope_user) > 0
+        "caller_cli_provider_catalog_discovered_native_easynet_ability": (
+            isinstance(provider_catalog, list)
+            and len(provider_catalog) > 0
             and len(native_discovery) == 1
             and native_discovery[0].get("ability_ura") == native_ability_ura
-            and native_discovery[0].get("owner") == provider_ura
+            and native_discovery[0].get("owner_ura") == provider_ura
         ),
         "caller_remote_called_easynet_native_handle": (
             native_handle.get("source") == "easynet-cli-deploy"
@@ -1065,9 +1212,7 @@ report = {
             and all(native_ability_ura in json.dumps(record) for record in native_records)
         ),
         "native_easynet_one_daemon_record_per_easyremote_dispatch": (
-            len(native_invocation_ids) == 6
-            and all(native_invocation_ids)
-            and len(set(native_invocation_ids)) == 6
+            native_dispatch_ids_match_ledger
         ),
         "native_easynet_receipt_chains_projected": native_receipt_chains_verified,
         "caller_observed_provider_ability_removed": add_removed,
@@ -1075,8 +1220,8 @@ report = {
         "caller_observed_native_easynet_ability_removed": native_removed,
     },
     "caller_cli_add_stream_frames": cli_stream,
-    "caller_cli_add_invocation_records": cli_add_records,
-    "caller_native_easynet_invocation_records": native_records,
+    "provider_cli_add_invocation_records": cli_add_records,
+    "provider_native_easynet_invocation_records": native_records,
 }
 print(json.dumps(report, indent=2, sort_keys=True))
 PY
@@ -1105,7 +1250,7 @@ jq -e '
   and .assertions.caller_remote_generator_stream
   and .assertions.caller_remote_context_function
   and .assertions.easyremote_sdk_consumer_boundary
-  and .assertions.caller_easyremote_functions_scope_user_discovered_native_easynet_ability
+  and .assertions.caller_cli_provider_catalog_discovered_native_easynet_ability
   and .assertions.caller_remote_called_easynet_native_handle
   and .assertions.caller_remote_streamed_easynet_native_handle
   and .assertions.caller_remote_called_easynet_native_canonical_ura

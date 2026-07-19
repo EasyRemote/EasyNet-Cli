@@ -945,38 +945,6 @@ def run_self_test(policy: dict[str, Any], manifest: dict[str, Any]) -> None:
         go_consumer.unlink()
         go_consumer.parent.rmdir()
 
-        python_negative = (
-            fixture / "sdk/python/easynet_sdk/edge_adapter_policy_negative.py"
-        )
-        python_negative.write_text(
-            "from easynet_sdk.daemon import start_daemon\n",
-            encoding="utf-8",
-        )
-        expect_policy_error(
-            "python_daemon_import",
-            lambda: validate_policy(policy, manifest, root=fixture),
-        )
-        python_negative.write_text(
-            "from easynet_sdk import start_daemon\n"
-            "def invoke_legacy_facade():\n"
-            "    return start_daemon(None)\n",
-            encoding="utf-8",
-        )
-        expect_policy_error(
-            "python_top_level_reexport_call",
-            lambda: validate_policy(policy, manifest, root=fixture),
-        )
-        python_negative.write_text(
-            "import easynet_sdk as runtime_sdk\n"
-            "def invoke_legacy_facade():\n"
-            "    return runtime_sdk.start_daemon(None)\n",
-            encoding="utf-8",
-        )
-        expect_policy_error(
-            "python_qualified_reexport_call",
-            lambda: validate_policy(policy, manifest, root=fixture),
-        )
-
 
 def main() -> int:
     parser = argparse.ArgumentParser()

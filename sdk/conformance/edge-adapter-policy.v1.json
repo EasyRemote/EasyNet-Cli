@@ -22,14 +22,14 @@
   "frozen_non_canonical_public_surface": {
     "manifest_path": "sdk/conformance/canonical-public-api.json",
     "json_pointer": "/non_canonical",
-    "sha256": "ed08d2cc892c45653073cc13db543d519df56abedc469e0b96ab9439f40857b8",
-    "shape_sha256": "4d6619f4d5d11662bf512ddfd19aa176fd2b9a18377e510690ba5398e8567e65",
+    "sha256": "ce0979ddb61bfff76c6a5ba7f5484c9a24b56488c5887ee15c84f6d54bab3c4f",
+    "shape_sha256": "79d2c851267fcacba5f156bf1d1db1b63614e60c98ff7bacd2ae4f7523824079",
     "counts": {
       "languages": {
         "rust": 0,
         "c_abi": 64,
         "go": 69,
-        "python": 23,
+        "python": 6,
         "node": 0,
         "java": 0,
         "swift": 0
@@ -38,7 +38,7 @@
         "rust": 0,
         "c_abi": 0,
         "go": 87,
-        "python": 70,
+        "python": 46,
         "node": 0,
         "java": 0,
         "swift": 0
@@ -254,183 +254,6 @@
             "kind": "old_facade_call",
             "symbol": "NewDaemonControl",
             "owner": "TestRuntimeAdminRejectsMissingHandle",
-            "occurrences": 1
-          }
-        ]
-      }
-    },
-    {
-      "id": "python-daemon-module-compatibility",
-      "language": "python",
-      "source_path": "sdk/python/easynet_sdk/daemon.py",
-      "release_removal_version": "1.0.0",
-      "frozen_exports": {
-        "symbols": [
-          "AttachOptions",
-          "DaemonControl",
-          "DaemonHandle",
-          "DaemonHandleFacade",
-          "DaemonLifecycleFacade",
-          "DaemonLifecycleState",
-          "DaemonMode",
-          "DaemonStartProjection",
-          "DaemonStatus",
-          "DaemonTransport",
-          "DiscoverOptions",
-          "Endpoints",
-          "RuntimeHandle",
-          "RuntimeHost",
-          "RuntimeHostDiscoverOptions",
-          "RuntimeHostDiscoverRequest",
-          "RuntimeHostHandle",
-          "RuntimeHostRole",
-          "RuntimeHostStartProjection",
-          "RuntimeHostStartRequest",
-          "RuntimeLifecycle",
-          "RuntimeLifecycleState",
-          "RuntimeLifecycleTransport",
-          "RuntimeStatus",
-          "StartConfig",
-          "StopOptions",
-          "attach_daemon",
-          "attach_runtime_host",
-          "connect_local",
-          "connect_runtime_local",
-          "discover_daemon",
-          "discover_runtime_host",
-          "start_daemon",
-          "start_runtime_host"
-        ],
-        "members": [],
-        "shape_sha256": "d9a5369f45c66c4e43245ed3941aba0f58dab5f2cea698e2e02bb68f9de67b50"
-      },
-      "zero_new_caller_gate": {
-        "tracked_module": "easynet_sdk.daemon",
-        "allowed_sites": [
-          {
-            "path": "sdk/python/easynet_sdk/__init__.py",
-            "kind": "import_from",
-            "module": "easynet_sdk.daemon",
-            "owner": "module",
-            "names": [
-              "DaemonControl",
-              "DaemonHandle",
-              "DaemonHandleFacade",
-              "DaemonLifecycleFacade",
-              "DaemonLifecycleState",
-              "DaemonMode",
-              "DaemonStartProjection",
-              "DaemonStatus",
-              "DaemonTransport",
-              "DiscoverOptions",
-              "RuntimeHostRole",
-              "RuntimeHostStartProjection",
-              "StartConfig",
-              "attach_daemon",
-              "connect_local",
-              "discover_daemon",
-              "start_daemon"
-            ],
-            "occurrences": 1
-          },
-          {
-            "path": "sdk/python/tests/test_cabi.py",
-            "kind": "import_legacy_export",
-            "module": "easynet_sdk.daemon",
-            "owner": "module",
-            "names": [
-              "DaemonControl",
-              "DaemonMode",
-              "RuntimeHostRole",
-              "RuntimeLifecycle",
-              "StartConfig"
-            ],
-            "occurrences": 1
-          },
-          {
-            "path": "sdk/python/tests/test_cabi.py",
-            "kind": "legacy_export_call",
-            "module": "easynet_sdk.daemon",
-            "owner": "module.CABITransportTests.test_daemon_handle_has_no_product_profile_factory",
-            "names": [
-              "DaemonControl"
-            ],
-            "occurrences": 1
-          },
-          {
-            "path": "sdk/python/tests/test_cabi.py",
-            "kind": "legacy_export_call",
-            "module": "easynet_sdk.daemon",
-            "owner": "module.CABITransportTests.test_daemon_handle_has_no_product_profile_factory",
-            "names": [
-              "StartConfig"
-            ],
-            "occurrences": 1
-          },
-          {
-            "path": "sdk/python/tests/test_cabi.py",
-            "kind": "legacy_export_call",
-            "module": "easynet_sdk.daemon",
-            "owner": "module.CABITransportTests.test_daemon_runtime_uses_generic_invocation",
-            "names": [
-              "RuntimeLifecycle"
-            ],
-            "occurrences": 1
-          },
-          {
-            "path": "sdk/python/tests/test_cabi.py",
-            "kind": "legacy_export_call",
-            "module": "easynet_sdk.daemon",
-            "owner": "module.CABITransportTests.test_daemon_runtime_uses_generic_invocation",
-            "names": [
-              "StartConfig"
-            ],
-            "occurrences": 1
-          },
-          {
-            "path": "sdk/python/tests/test_runtime_admin.py",
-            "kind": "import_legacy_export",
-            "module": "easynet_sdk.daemon",
-            "owner": "module",
-            "names": [
-              "DaemonControl",
-              "DaemonMode",
-              "RuntimeHandle",
-              "RuntimeHostRole",
-              "RuntimeLifecycle",
-              "RuntimeLifecycleState",
-              "StartConfig"
-            ],
-            "occurrences": 1
-          },
-          {
-            "path": "sdk/python/tests/test_runtime_admin.py",
-            "kind": "legacy_export_call",
-            "module": "easynet_sdk.daemon",
-            "owner": "module.test_runtime_admin_readiness_composes_lifecycle_and_health",
-            "names": [
-              "RuntimeLifecycle"
-            ],
-            "occurrences": 1
-          },
-          {
-            "path": "sdk/python/tests/test_runtime_admin.py",
-            "kind": "legacy_export_call",
-            "module": "easynet_sdk.daemon",
-            "owner": "module.test_runtime_admin_readiness_composes_lifecycle_and_health",
-            "names": [
-              "StartConfig"
-            ],
-            "occurrences": 1
-          },
-          {
-            "path": "sdk/python/tests/test_runtime_admin.py",
-            "kind": "legacy_export_call",
-            "module": "easynet_sdk.daemon",
-            "owner": "module.test_runtime_admin_rejects_missing_handle_and_control",
-            "names": [
-              "RuntimeLifecycle"
-            ],
             "occurrences": 1
           }
         ]

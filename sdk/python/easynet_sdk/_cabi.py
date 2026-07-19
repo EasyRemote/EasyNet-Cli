@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import base64
 import json
+import os
 import queue as queue_module
 import sys
 import threading
@@ -179,6 +181,15 @@ class CLILibrary:
         return self._call_output(
             self._raw.easynet_runtime_diagnostics,
             ctypes.c_uint64(handle),
+        )
+
+    def runtime_resolve_descriptor_ref(
+        self, handle: int, request_json: bytes
+    ) -> bytes:
+        return self._call_output(
+            self._raw.easynet_runtime_resolve_descriptor_ref,
+            ctypes.c_uint64(handle),
+            ctypes.c_char_p(request_json),
         )
 
     def invocation_invoke(self, handle: int, invocation_json: bytes) -> bytes:
@@ -419,6 +430,12 @@ class CLILibrary:
             ctypes.POINTER(ctypes.c_void_p),
         ]
         self._raw.easynet_runtime_diagnostics.restype = ctypes.c_int32
+        self._raw.easynet_runtime_resolve_descriptor_ref.argtypes = [
+            ctypes.c_uint64,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._raw.easynet_runtime_resolve_descriptor_ref.restype = ctypes.c_int32
         self._raw.easynet_invocation_invoke.argtypes = [
             ctypes.c_uint64,
             ctypes.c_char_p,
@@ -761,9 +778,6 @@ class CABIRuntimeLifecycleTransport:
             raise _closed_error("runtime lifecycle transport is closed")
 
 
-CABIDaemonTransport = CABIRuntimeLifecycleTransport
-
-
 @dataclass
 class _CABIPreparedHandle:
     native_id: int
@@ -870,7 +884,24 @@ class CABIRuntimeTransport:
             self.lib.runtime_diagnostics(self._require_open()),
             "runtime diagnostics",
         )
-        return _resolve_descriptor_ref_from_diagnostics(request_json, diagnostics)
+        try:
+            return _resolve_descriptor_ref_from_diagnostics(request_json, diagnostics)
+        except SDKError as exc:
+            if exc.code is not ErrorCode.NOT_FOUND:
+                raise
+            try:
+                return _resolve_descriptor_ref_from_runtime_catalog(
+                    self, request_json, exc
+                )
+            except SDKError as catalog_exc:
+                if catalog_exc.code is not ErrorCode.NOT_FOUND:
+                    raise
+            try:
+                return self.lib.runtime_resolve_descriptor_ref(
+                    self._require_open(), request_json
+                )
+            except SDKError:
+                raise exc
 
     def invoke(self, draft_json: bytes) -> bytes:
         return self.lib.invocation_invoke(self._require_open(), draft_json)
@@ -1238,8 +1269,8 @@ class _CABIStreamTransport:
         self.owner._remove_stream(self.stream_id, self.callback_token)
 
     def _allocate_sequence(self, observed: int | None) -> int:
-        if observed is not None and observed > 0:
-            self._next_sequence = max(self._next_sequence, observed + 1)
+        if observed is not None and observed >= self._next_sequence:
+            self._next_sequence = observed + 1
             return observed
         sequence = self._next_sequence
         self._next_sequence += 1
@@ -1310,8 +1341,8 @@ class _CABIBidiTransport:
         )
 
     def _allocate_sequence(self, observed: int | None) -> int:
-        if observed is not None and observed > 0:
-            self._next_sequence = max(self._next_sequence, observed + 1)
+        if observed is not None and observed >= self._next_sequence:
+            self._next_sequence = observed + 1
             return observed
         sequence = self._next_sequence
         self._next_sequence += 1
@@ -1491,15 +1522,6 @@ def open_cabi_runtime_lifecycle_transport(
     """Open a C ABI runtime host lifecycle transport."""
 
     return CABIRuntimeLifecycleTransport(lib=CLILibrary.load(library_path))
-
-
-def open_cabi_daemon_transport(
-    *,
-    library_path: str | None = None,
-) -> "CABIDaemonTransport":
-    """Source-compatible alias for ``open_cabi_runtime_lifecycle_transport``."""
-
-    return open_cabi_runtime_lifecycle_transport(library_path=library_path)
 
 
 def open_cabi_runtime_transport(
@@ -1798,6 +1820,82 @@ def _resolve_descriptor_ref_from_diagnostics(
             f"ability={ability!r} call_mode={call_mode!r}"
         ),
     )
+
+
+def _resolve_descriptor_ref_from_runtime_catalog(
+    transport: CABIRuntimeTransport,
+    request_json: bytes,
+    original: SDKError,
+) -> bytes:
+    request = _json_object(request_json or b"{}", "descriptor_ref resolution request")
+    callee_ura = _required_string(request, "callee_ura")
+    ability = _required_string(request, "ability")
+    call_mode = str(request.get("call_mode") or "rpc").strip() or "rpc"
+    if not ability.startswith("easynet:///r/"):
+        raise original
+    caller_ura = str(request.get("caller_ura") or "").strip()
+    if not caller_ura:
+        raise original
+
+    try:
+        from .axon_addressing import AddressingClient, AxonAddressingTransport
+        from .runtime import RuntimeClient
+        from .runtime_ability import RuntimeAbilityClient, RuntimeCallContext
+
+        addressing = AddressingClient(AxonAddressingTransport())
+        try:
+            output = RuntimeAbilityClient(
+                RuntimeClient(transport), addressing
+            ).invoke(
+                RuntimeCallContext(
+                    caller_ura=caller_ura,
+                    callee_ura=caller_ura,
+                    subject_ura=caller_ura,
+                    nonce_base64=base64.b64encode(os.urandom(16)).decode("ascii"),
+                    causal_context={"form": "none"},
+                ),
+                "meta.list_abilities",
+                {"scope": "realm", "subject_ura": ability},
+            )
+        finally:
+            addressing.close()
+    except SDKError as exc:
+        if exc.code is ErrorCode.NOT_FOUND:
+            raise original
+        raise
+    except Exception as exc:
+        raise SDKError(
+            code=ErrorCode.NOT_FOUND,
+            stage="cabi",
+            retry=RetryHint.NEVER,
+            message=f"runtime catalog descriptor_ref lookup failed: {exc}",
+            cause=exc,
+        ) from exc
+
+    abilities = output.get("abilities")
+    if not isinstance(abilities, list):
+        raise original
+    for entry in abilities:
+        if not isinstance(entry, dict):
+            continue
+        entry_ability_ura = str(entry.get("ability_ura") or "").strip()
+        entry_call_mode = str(entry.get("call_mode") or "rpc").strip() or "rpc"
+        if entry_ability_ura != ability or entry_call_mode != call_mode:
+            continue
+        descriptor_ref = str(entry.get("descriptor_ref") or "").strip()
+        if not descriptor_ref:
+            continue
+        return _json_bytes(
+            {
+                "descriptor_ref": descriptor_ref,
+                "ability_ura": entry_ability_ura,
+                "owner_ura": str(entry.get("owner_ura") or callee_ura).strip(),
+                "name": str(entry.get("name") or "").strip(),
+                "call_mode": call_mode,
+                "source": "runtime_realm_catalog",
+            }
+        )
+    raise original
 
 
 def _prepared_key(decoded: dict[str, object]) -> str:

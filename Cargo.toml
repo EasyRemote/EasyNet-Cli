@@ -14,7 +14,7 @@ members = [
 ]
 
 [features]
-default = ["axon-pb", "remote-desktop"]
+default = ["axon-pb", "remote-desktop", "native-media"]
 
 # Compile schemas/*.proto into Rust types via prost-build. Off by
 # default in v1 so developers without protoc installed can still
@@ -56,6 +56,17 @@ remote-desktop = [
     "dep:rtc",
     "dep:objc2-screen-capture-kit",
     "dep:objc2-video-toolbox",
+]
+
+# Compile native physical-device media backends. Ordinary product daemon builds
+# keep this enabled by default. Headless Linux runtime artifacts used by Docker
+# E2E disable default features and retain only the canonical runtime invocation
+# plane, avoiding GUI/Wayland/pkg-config coupling for scenarios that do not
+# exercise physical camera/screen/mic hardware.
+native-media = [
+    "dep:cpal",
+    "dep:nokhwa",
+    "dep:xcap",
 ]
 
 # v10.5 R1 (PR-DAEMON): split historical binary-only crate into a
@@ -195,13 +206,13 @@ jpeg-encoder = { version = "0.7", default-features = false }
 # maturity; per AXON-RFC-005-device-backend-selection the macOS
 # default-device sample-rate may diverge from the schema's
 # 16/24/48 kHz set, so a downsampler is added in a follow-up.
-cpal = "0.15"
+cpal = { version = "0.15", optional = true }
 # RFC-005 v3.2 A3/A4 — physical camera capture. Non-macOS camera
 # subscribe/snapshot uses nokhwa's platform-direct backends. macOS
 # snapshot/subscribe use direct AVFoundation bindings below so still
 # photos go through `AVCapturePhotoOutput` instead of preview frames.
 # `input-native` avoids the heavyweight image-pipeline backends.
-nokhwa = { version = "0.10", features = ["input-native"] }
+nokhwa = { version = "0.10", features = ["input-native"], optional = true }
 # RFC-005 v3.2 A4, A8 — physical screen capture
 # (screen.subscribe / screen.snapshot). xcap was picked over
 # `screenshots` and `scrap` for active maintenance and a usable
@@ -210,7 +221,7 @@ nokhwa = { version = "0.10", features = ["input-native"] }
 # system-modal Screen Recording permission dialog; the handler
 # surfaces the permission-denied case as
 # reason="resource_unavailable" rather than a panic.
-xcap = "0.9"
+xcap = { version = "0.9", optional = true }
 # Remote desktop diagnostic media path. OpenH264 is built into the CLI
 # artifact via the crate's source feature, so users do not need ffmpeg or
 # any other system encoder installed for baseline H.264 streaming.

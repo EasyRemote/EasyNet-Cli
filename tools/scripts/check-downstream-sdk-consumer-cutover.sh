@@ -335,7 +335,7 @@ def check_easyremote() -> None:
     for required in [
         "from_runtime_projection",
         "runtime_identity_projection()",
-        "projection.device_id",
+        "projection.runtime_instance_id",
     ]:
         require_contains(local_identity, required, "easyremote:local_identity")
     for forbidden in [
@@ -448,8 +448,8 @@ def check_easyremote() -> None:
     for required in [
         "easynet_sdk.InvocationResultAdapter",
         "easynet_sdk.UnaryDispatchPool",
-        "easynet_sdk.DaemonFrameStream",
-        "easynet_sdk.DaemonBidiChannel",
+        "easynet_sdk.RuntimeFrameStream",
+        "easynet_sdk.RuntimeBidiChannel",
     ]:
         require_contains(transport, required, "easyremote:transport")
     for forbidden in [
@@ -646,7 +646,7 @@ import easynet_sdk
 from .config import runtime_identity_projection
 
 def from_runtime_projection(projection):
-    return projection.device_id
+    return projection.runtime_instance_id
 
 def load():
     return runtime_identity_projection()
@@ -712,8 +712,8 @@ import easynet_sdk
 _ = [
     easynet_sdk.InvocationResultAdapter,
     easynet_sdk.UnaryDispatchPool,
-    easynet_sdk.DaemonFrameStream,
-    easynet_sdk.DaemonBidiChannel,
+    easynet_sdk.RuntimeFrameStream,
+    easynet_sdk.RuntimeBidiChannel,
 ]
 EOF
   cat >"$good_remote/easyremote/client.py" <<'EOF'

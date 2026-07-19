@@ -27,9 +27,9 @@ class RuntimeIdentityProjection:
     """
 
     realm: str
-    device_id: str
-    username: str = ""
-    hub_endpoint: str = ""
+    runtime_instance_id: str
+    principal: str = ""
+    control_plane_endpoint: str = ""
 
 
 def runtime_state_root(control_path: str | Path = "") -> Path:
@@ -80,16 +80,16 @@ def runtime_identity_projection_from_json(
     if not isinstance(decoded, Mapping):
         raise _invalid("runtime identity projection must be a JSON object")
     realm = _projection_text(decoded, "realm")
-    device_id = _projection_text(decoded, "device_id")
+    runtime_instance_id = _projection_text(decoded, "runtime_instance_id")
     if not realm:
         raise _invalid("runtime identity projection missing realm")
-    if not device_id:
-        raise _invalid("runtime identity projection missing device_id")
+    if not runtime_instance_id:
+        raise _invalid("runtime identity projection missing runtime_instance_id")
     return RuntimeIdentityProjection(
         realm=realm,
-        device_id=device_id,
-        username=_projection_text(decoded, "username"),
-        hub_endpoint=_projection_text(decoded, "hub_endpoint"),
+        runtime_instance_id=runtime_instance_id,
+        principal=_projection_text(decoded, "principal"),
+        control_plane_endpoint=_projection_text(decoded, "control_plane_endpoint"),
     )
 
 
@@ -98,7 +98,6 @@ def _projection_text(raw: Mapping[str, object], key: str) -> str:
     if value is None:
         return ""
     return str(value).strip()
-
 
 def _invalid(message: str, cause: Exception | None = None) -> SDKError:
     return SDKError(

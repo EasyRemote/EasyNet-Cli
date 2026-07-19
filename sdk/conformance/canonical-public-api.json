@@ -1057,7 +1057,6 @@
       "DirectorySubscribeRequest",
       "DirectorySubscription",
       "DirectorySubscriptionState",
-      "DiscoverOptions",
       "DiscoveryTransport",
       "Endpoints",
       "EnrollmentCapability",
@@ -1169,7 +1168,6 @@
       "RuntimeHostDiscoverOptions",
       "RuntimeHostDiscoverRequest",
       "RuntimeHostHandle",
-      "RuntimeHostStartProjection",
       "RuntimeHostStartRequest",
       "RuntimeIdentityProjection",
       "RuntimeInvocationTransport",
@@ -1195,7 +1193,6 @@
       "RuntimeSession",
       "RuntimeSessionListRequest",
       "RuntimeSessionPage",
-      "RuntimeSigningIdentity",
       "RuntimeStatus",
       "RuntimeTransport",
       "SDKError",
@@ -1209,7 +1206,6 @@
       "SignerHandle",
       "SignerPolicy",
       "SigningMaterial",
-      "StartConfig",
       "StaticSignatureProvider",
       "StopOptions",
       "StreamCancel",
@@ -1229,7 +1225,6 @@
       "canonical_ability_descriptor_ref",
       "canonical_failure_code",
       "canonical_terminal_state_code",
-      "connect_local",
       "connect_runtime_local",
       "default_control_path",
       "default_environment",
@@ -1237,12 +1232,10 @@
       "device_agent_ura",
       "device_ura",
       "discover_runtime_host",
-      "ensure_runtime_signing_identity",
       "error_class_for_code",
       "grant_actions",
       "hub_ura",
       "is_code",
-      "load_runtime_signing_identity",
       "new_canonical_authority_client",
       "new_invocation_nonce_base64",
       "normalize_error_code",
@@ -3148,6 +3141,7 @@
       "AbilityCallRequest.ability_ura",
       "AbilityCallRequest.args",
       "AbilityCallRequest.arguments_base64",
+      "AbilityCallRequest.call_mode",
       "AbilityCallRequest.callee_ura",
       "AbilityCallRequest.caller_signature",
       "AbilityCallRequest.caller_ura",
@@ -3235,6 +3229,7 @@
       "AbilityTargetRequest.ability_ura",
       "AbilityTargetRequest.args",
       "AbilityTargetRequest.arguments_base64",
+      "AbilityTargetRequest.call_mode",
       "AbilityTargetRequest.caller_signature",
       "AbilityTargetRequest.caller_ura",
       "AbilityTargetRequest.causal_context",
@@ -3814,10 +3809,6 @@
       "DirectorySubscriptionState.FAILED",
       "DirectorySubscriptionState.LIVE",
       "DirectorySubscriptionState.SNAPSHOTTING",
-      "DiscoverOptions.control_endpoint",
-      "DiscoverOptions.control_path",
-      "DiscoverOptions.home_dir",
-      "DiscoverOptions.to_json_bytes",
       "DiscoveryTransport.close",
       "DiscoveryTransport.feature_discovery",
       "Endpoints.control_endpoint",
@@ -4446,8 +4437,10 @@
       "RuntimeHostHandle.stop",
       "RuntimeHostStartRequest.to_json_bytes",
       "RuntimeHostStartRequest.validate",
+      "RuntimeIdentityProjection.control_plane_endpoint",
+      "RuntimeIdentityProjection.principal",
       "RuntimeIdentityProjection.realm",
-      "RuntimeIdentityProjection.username",
+      "RuntimeIdentityProjection.runtime_instance_id",
       "RuntimeInvocationTransport.bidi",
       "RuntimeInvocationTransport.close",
       "RuntimeInvocationTransport.connect",
@@ -4623,11 +4616,6 @@
       "RuntimeSessionPage.sessions",
       "RuntimeSessionPage.state",
       "RuntimeSessionPage.system_ability",
-      "RuntimeSigningIdentity.owner_ura",
-      "RuntimeSigningIdentity.public_key",
-      "RuntimeSigningIdentity.sign_canonical",
-      "RuntimeSigningIdentity.socket_path",
-      "RuntimeSigningIdentity.timeout_seconds",
       "RuntimeStatus.diagnostics",
       "RuntimeStatus.endpoints",
       "RuntimeStatus.from_json",
@@ -4751,20 +4739,6 @@
       "SigningMaterial.nonce_base64",
       "SigningMaterial.signed_fields",
       "SigningMaterial.signer_policy",
-      "StartConfig.detached",
-      "StartConfig.env",
-      "StartConfig.home_dir",
-      "StartConfig.listen_tcp",
-      "StartConfig.log_path",
-      "StartConfig.mode",
-      "StartConfig.realm",
-      "StartConfig.tls_cert_path",
-      "StartConfig.tls_key_path",
-      "StartConfig.to_json_bytes",
-      "StartConfig.to_json_dict",
-      "StartConfig.trust_path",
-      "StartConfig.uds_path",
-      "StartConfig.validate",
       "StaticSignatureProvider.sign",
       "StaticSignatureProvider.signature",
       "StopOptions.force",
@@ -6238,25 +6212,8 @@
         "ControlDiscoveryRuntimeConnector",
         "ControlFrame",
         "ControlIpcClient",
-        "DaemonBidiChannel",
-        "DaemonControl",
-        "DaemonFrameStream",
-        "DaemonHandle",
-        "DaemonHandleFacade",
-        "DaemonInvocationTransport",
-        "DaemonKeyringSignatureProvider",
-        "DaemonLifecycleFacade",
-        "DaemonLifecycleState",
-        "DaemonMode",
-        "DaemonStartProjection",
-        "DaemonStatus",
-        "DaemonTransport",
         "RuntimeDeviceRevokeRequest",
-        "RuntimeDeviceRevokeResult",
-        "RuntimeHostRole",
-        "attach_daemon",
-        "discover_daemon",
-        "start_daemon"
+        "RuntimeDeviceRevokeResult"
       ],
       "node": [],
       "java": [],
@@ -6387,24 +6344,6 @@
         "ControlIpcClient.round_trip",
         "ControlIpcClient.send",
         "ControlIpcClient.subscribe",
-        "DaemonKeyringSignatureProvider.identity",
-        "DaemonKeyringSignatureProvider.sign",
-        "DaemonMode.BOTH",
-        "DaemonMode.DEVICE",
-        "DaemonMode.HUB",
-        "DaemonStartProjection.detached",
-        "DaemonStartProjection.device",
-        "DaemonStartProjection.device_id",
-        "DaemonStartProjection.env",
-        "DaemonStartProjection.from_profile",
-        "DaemonStartProjection.hub",
-        "DaemonStartProjection.log_path",
-        "DaemonStartProjection.mode",
-        "DaemonStartProjection.realm",
-        "DaemonStartProjection.to_json_bytes",
-        "DaemonStartProjection.to_start_config",
-        "DaemonStartProjection.to_wire_dict",
-        "DaemonStartProjection.validate",
         "DirectoryEntry.hub_endpoint",
         "ErrorCode.DAEMON_OFFLINE",
         "PrepareOptions.local_daemon_signing",
@@ -6418,13 +6357,7 @@
         "RuntimeDeviceRevokeResult.runtime_catalog_not_ready",
         "RuntimeDeviceRevokeResult.runtime_not_ready",
         "RuntimeDeviceRevokeResult.system_ability",
-        "RuntimeEndpoint.daemon_version",
-        "RuntimeIdentityProjection.device_id",
-        "RuntimeIdentityProjection.hub_endpoint",
-        "SdkEnvironment.daemon_control",
-        "StartConfig.daemon_bin",
-        "StartConfig.device_id",
-        "StartConfig.hub_endpoint"
+        "RuntimeEndpoint.daemon_version"
       ],
       "node": [],
       "java": [],
@@ -7535,110 +7468,6 @@
           "removal_phase": "quarantined",
           "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
         },
-        "DaemonBidiChannel": {
-          "canonical_replacement": [
-            "capability_inventory.bidi"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonControl": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonFrameStream": {
-          "canonical_replacement": [
-            "capability_inventory.stream"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonHandle": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonHandleFacade": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonInvocationTransport": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonKeyringSignatureProvider": {
-          "canonical_replacement": [
-            "capability_inventory.prepare_sign_submit"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonLifecycleFacade": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonLifecycleState": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonMode": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartProjection": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStatus": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonTransport": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
         "RuntimeDeviceRevokeRequest": {
           "canonical_replacement": [
             "capability_inventory.native_runtime"
@@ -7654,38 +7483,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeHostRole": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Current runtime host role values encode EasyNet device/hub topology and are provider/source-compatibility surface."
-        },
-        "attach_daemon": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "discover_daemon": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "start_daemon": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
         }
       },
       "node": {},
@@ -8650,150 +8447,6 @@
           "removal_phase": "quarantined",
           "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
         },
-        "DaemonKeyringSignatureProvider.identity": {
-          "canonical_replacement": [
-            "capability_inventory.prepare_sign_submit"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonKeyringSignatureProvider.sign": {
-          "canonical_replacement": [
-            "capability_inventory.prepare_sign_submit"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonMode.BOTH": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonMode.DEVICE": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonMode.HUB": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartProjection.detached": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartProjection.device": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartProjection.device_id": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartProjection.env": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartProjection.from_profile": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartProjection.hub": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartProjection.log_path": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartProjection.mode": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartProjection.realm": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartProjection.to_json_bytes": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartProjection.to_start_config": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartProjection.to_wire_dict": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DaemonStartProjection.validate": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
         "DirectoryEntry.hub_endpoint": {
           "canonical_replacement": [
             "capability_inventory.directory_resolution"
@@ -8905,54 +8558,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "RuntimeIdentityProjection.device_id": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_identity"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device identifiers outside URA grammar expose a product deployment model instead of generic runtime addressing."
-        },
-        "RuntimeIdentityProjection.hub_endpoint": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_identity"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Hub endpoint fields expose a product directory/deployment model instead of a generic runtime concept."
-        },
-        "SdkEnvironment.daemon_control": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_environment"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "StartConfig.daemon_bin": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "StartConfig.device_id": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device identifiers outside URA grammar expose a product deployment model instead of generic runtime addressing."
-        },
-        "StartConfig.hub_endpoint": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Hub endpoint fields expose a product directory/deployment model instead of a generic runtime concept."
         }
       },
       "node": {},
@@ -9566,6 +9171,7 @@
           "AbilityCallRequest.ability_ura",
           "AbilityCallRequest.args",
           "AbilityCallRequest.arguments_base64",
+          "AbilityCallRequest.call_mode",
           "AbilityCallRequest.callee_ura",
           "AbilityCallRequest.caller_signature",
           "AbilityCallRequest.caller_ura",
@@ -9614,6 +9220,7 @@
           "AbilityTargetRequest.ability_ura",
           "AbilityTargetRequest.args",
           "AbilityTargetRequest.arguments_base64",
+          "AbilityTargetRequest.call_mode",
           "AbilityTargetRequest.caller_signature",
           "AbilityTargetRequest.caller_ura",
           "AbilityTargetRequest.causal_context",
@@ -13843,7 +13450,6 @@
           "RuntimeConnection",
           "RuntimeConnector",
           "RuntimeEndpoint",
-          "connect_local",
           "default_control_path",
           "read_control_discovery"
         ],
@@ -14402,10 +14008,7 @@
       "python": {
         "symbols": [
           "RuntimeIdentityProjection",
-          "RuntimeSigningIdentity",
           "SignerHandle",
-          "ensure_runtime_signing_identity",
-          "load_runtime_signing_identity",
           "read_runtime_identity_projection",
           "runtime_credentials_path",
           "runtime_identity_projection_from_json",
@@ -14413,13 +14016,10 @@
           "signer_handle_provenance_error"
         ],
         "members": [
+          "RuntimeIdentityProjection.control_plane_endpoint",
+          "RuntimeIdentityProjection.principal",
           "RuntimeIdentityProjection.realm",
-          "RuntimeIdentityProjection.username",
-          "RuntimeSigningIdentity.owner_ura",
-          "RuntimeSigningIdentity.public_key",
-          "RuntimeSigningIdentity.sign_canonical",
-          "RuntimeSigningIdentity.socket_path",
-          "RuntimeSigningIdentity.timeout_seconds",
+          "RuntimeIdentityProjection.runtime_instance_id",
           "SignerHandle.algorithm",
           "SignerHandle.key_id",
           "SignerHandle.metadata",
@@ -14639,13 +14239,11 @@
       "python": {
         "symbols": [
           "AttachOptions",
-          "DiscoverOptions",
           "Endpoints",
           "RuntimeHandle",
           "RuntimeHost",
           "RuntimeHostDiscoverOptions",
           "RuntimeHostHandle",
-          "RuntimeHostStartProjection",
           "RuntimeHostStartRequest",
           "RuntimeLifecycle",
           "RuntimeLifecycleState",
@@ -14655,7 +14253,6 @@
           "RuntimeRecoveryRequest",
           "RuntimeRecoveryTransport",
           "RuntimeStatus",
-          "StartConfig",
           "StopOptions",
           "attach_runtime_host",
           "connect_runtime_local",
@@ -14667,10 +14264,6 @@
           "AttachOptions.control_path",
           "AttachOptions.invocation_endpoint",
           "AttachOptions.to_json_bytes",
-          "DiscoverOptions.control_endpoint",
-          "DiscoverOptions.control_path",
-          "DiscoverOptions.home_dir",
-          "DiscoverOptions.to_json_bytes",
           "Endpoints.control_endpoint",
           "Endpoints.invocation_endpoint",
           "Endpoints.public_endpoint",
@@ -14755,20 +14348,6 @@
           "RuntimeStatus.state",
           "RuntimeStatus.version",
           "SdkEnvironment.runtime_lifecycle",
-          "StartConfig.detached",
-          "StartConfig.env",
-          "StartConfig.home_dir",
-          "StartConfig.listen_tcp",
-          "StartConfig.log_path",
-          "StartConfig.mode",
-          "StartConfig.realm",
-          "StartConfig.tls_cert_path",
-          "StartConfig.tls_key_path",
-          "StartConfig.to_json_bytes",
-          "StartConfig.to_json_dict",
-          "StartConfig.trust_path",
-          "StartConfig.uds_path",
-          "StartConfig.validate",
           "StopOptions.force",
           "StopOptions.graceful_timeout_ms",
           "StopOptions.to_json_bytes"
@@ -16800,7 +16379,7 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/_cabi.py",
-          "sha256": "e10e75ad1961e48007168884420d4c82a6beb5beb93a1fcbeea86f039bbfca66",
+          "sha256": "33445903404a3117766f26cab93bb0cb7c34c7dc9dc07a532f8859a88a9b8caa",
           "interface": "CABIRuntimeTransport",
           "revision": "8574f5644f8f048f0ea834ae4cbe19ffb9612001"
         },
@@ -17177,7 +16756,7 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/_cabi.py",
-          "sha256": "e10e75ad1961e48007168884420d4c82a6beb5beb93a1fcbeea86f039bbfca66",
+          "sha256": "33445903404a3117766f26cab93bb0cb7c34c7dc9dc07a532f8859a88a9b8caa",
           "interface": "CABIRuntimeTransport",
           "revision": "8574f5644f8f048f0ea834ae4cbe19ffb9612001"
         },
@@ -17428,7 +17007,7 @@
           "identity": "ability_invocation_facade",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/ability_invocation.py",
-          "sha256": "c72ee40799da0c664b1ab06405b9f3f114db0d17db0713883e666759523e8f90",
+          "sha256": "5f2eb54a684a6790a3197c46e36bc8cddb011e53bc1a250ec34bb217df29b4ad",
           "interface": "AbilityInvocationClient",
           "revision": "8574f5644f8f048f0ea834ae4cbe19ffb9612001"
         },
@@ -20424,10 +20003,11 @@
       "Version.SDKVersion": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
     },
     "python": {
-      "AbilityCallRequest": "e7017edd92314fce0666d17f53c7c6eddcc7ec674332e39ffdd2fb340152ea45",
+      "AbilityCallRequest": "920641e02128759ceb0110b7f1e949280fe093040ab40a1e5ef29c7546293544",
       "AbilityCallRequest.ability_ura": "bf2f1a9b279ffd577124165d1325f6a897e19910a9ad89dca3543259b131c5a6",
       "AbilityCallRequest.args": "b7cabdbbe790aeff5877c6d4ac1cf866c7b3467c4655d2f508058b6ecdf74055",
       "AbilityCallRequest.arguments_base64": "ad63a5cb0c74baf14b0718eaecb86c300ff7814283661acf538d2b54bab16d5b",
+      "AbilityCallRequest.call_mode": "cf5e6671dd22fd4cbc82d4670cf6c510e4784a695eec9bc41d07e1f650de1bf5",
       "AbilityCallRequest.callee_ura": "b06c14c2e8d0ca2d38f3f7bdb98c179add1dbd6132233a79ce60e8edbff8a8f3",
       "AbilityCallRequest.caller_signature": "2b0c92306ac3955a4fda51978c90f5ce3a50bec5b5dd8b3ac31c14887024b65e",
       "AbilityCallRequest.caller_ura": "46347163b5a459d94f56ac8377a53b414125d0ef5fa30493101ce749a713a4c7",
@@ -20438,10 +20018,10 @@
       "AbilityCallRequest.metadata": "0ad0e67ef1c600046ee4194ff5d839dc18d771ca6ac839b7ea49a758f4bf40d7",
       "AbilityCallRequest.nonce_base64": "cf0c0c0f47cfa53840c15b356b18269df71b9332d26e49b9f67ff16e23622a32",
       "AbilityCallRequest.subject_ura": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e",
-      "AbilityChildContext": "3513e6bc22c0664e28ab79096eaa4e8327b00cb41caed3546587d1d03cc702b5",
+      "AbilityChildContext": "a2f48ab0a235a19b730128249e5e0c2dad932f5910bbf88ddb3e886617006675",
       "AbilityChildContext.build_invocation": "c59e282575d8165186f679fdb5d8baaa67530f54a3c568506f413e98b4ba962a",
       "AbilityChildContext.build_target_invocation": "c29a95b8b694658811685c300f597b9716364ef942024f578b6612c6d3c8ba0a",
-      "AbilityChildContext.call_request": "7ba4180a3d485139fe002c44234fc24ffd61170967abe87d186277462ff628ca",
+      "AbilityChildContext.call_request": "8f4aa727a8da201ec76bce579b76352e055e3c45abe8e7cb994258dd03a35bc9",
       "AbilityChildContext.caller_ura": "46347163b5a459d94f56ac8377a53b414125d0ef5fa30493101ce749a713a4c7",
       "AbilityChildContext.causal_context": "8a339dc8d75c65afde2b1acdeb1eba6c4fb752d30f9ed39526e1d9fb38c33079",
       "AbilityChildContext.invoke": "406d3b11be46e59cf19559d823fe2b39ae51f595e885820b1ec12c0c3e21b6e3",
@@ -20451,7 +20031,7 @@
       "AbilityChildContext.nonce_base64": "cf0c0c0f47cfa53840c15b356b18269df71b9332d26e49b9f67ff16e23622a32",
       "AbilityChildContext.stream": "41857741b82b798ecd828e61f2290392ae85018d791a0f024170acfd8334a370",
       "AbilityChildContext.stream_target": "8b576ac67a6a9833975ca2d32da02d7738fcbdaa0da5f8c9e493e7d8d386f72a",
-      "AbilityChildContext.target_request": "2694823f53541117dd9129c973fde634ca639e295f8331ced252d2ba90595086",
+      "AbilityChildContext.target_request": "6d3a5854cb33dc52d79c9f03ddc3501c8beb22b9177f3ca2e86fcb4395439e6d",
       "AbilityDescriptorClient": "c69aa76450132ac1d56309ebcffa6b5ab2ef5725a57dbc43746e4a52823a723b",
       "AbilityDescriptorClient.get": "5e598bb96c0bdb569160d249bea1364a125e77f3391e1b46c35d0a78fa7ad7a6",
       "AbilityDescriptorClient.list": "4f7fac9211b9c21a5593b2d018ec55e1493629a72806667cb5767c395e710565",
@@ -20499,33 +20079,34 @@
       "AbilityDescriptorRef.ability_ura": "806f5961440fe858381c9a0720eb0b39b6fb2f79d37b137bdce0671df653bfdd",
       "AbilityDescriptorRef.raw": "f575b575d8f4875502c1f79820ccb96cbacc838e2c4c7ede57cea69a0c47b428",
       "AbilityDescriptorRef.version": "5e6df7a0b7e0469f5ce1cf5cef7a691a203348de3d6fb02287ae361f9294620d",
-      "AbilityInvocationClient": "8e72bf596860f617c6fd17681c3fbab7096f91d6073875508451ae4dc6224175",
+      "AbilityInvocationClient": "37cf3e0432047ed8a9953c573ea87ba113f70d45d297f808a423161d75162242",
       "AbilityInvocationClient.addressing": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c",
       "AbilityInvocationClient.await_result": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab",
-      "AbilityInvocationClient.bidi": "33e7afcb2acad8c245a0a9cc7f40dce171dde10b00116beda97d23d6d41bed48",
-      "AbilityInvocationClient.bidi_target": "e4682145cde1212d144d0a32d5864e5ba9dddbc4bf2eaa9bb0f9855ba6eb52f8",
-      "AbilityInvocationClient.build_invocation": "f529587489de3963d6bc804dd8aa8d68e8959facf6b2b634d1b609aae24423aa",
+      "AbilityInvocationClient.bidi": "f66ea52e5a80ddaf0aa90ed28b7be9af285132d481f9938f4f7fc6452c2d8440",
+      "AbilityInvocationClient.bidi_target": "85ae5de42f7f96b2ab9a727a54923bdc505a3cb98b5b689ffd070eaa42576335",
+      "AbilityInvocationClient.build_invocation": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a",
       "AbilityInvocationClient.build_target_invocation": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a",
       "AbilityInvocationClient.cancel": "8d0f58b6d7519bcf73064c6cec1d87a1cb1369542ea3047ed1c5a404e462779b",
       "AbilityInvocationClient.child_context": "b196cf57f11368f820d182e65216deec4614a0e2f9c193c711b22c01ce042ce2",
       "AbilityInvocationClient.close": "083587c038ab5217171e8b97a83957341013b6091d144f85d274f08f48b1689f",
       "AbilityInvocationClient.close_handle": "c7b97c5e7e2a9a905ded57baa748711bb6e1f1853d9a1a11b92b0c4436dcea50",
       "AbilityInvocationClient.events": "7ff65d831e51f51e66493592f171e9d93744d6fe6b4ecf4c3684d9ba6d914f65",
-      "AbilityInvocationClient.invoke": "98d61fab49f21962c8aeb042cc50f910f526698352be332312a83a8c2ee1e9d6",
-      "AbilityInvocationClient.invoke_target": "fe3ae7e1e0d6a1e69346051fdf9d0db03798d404ef8a3b0d605c82e354c43f88",
+      "AbilityInvocationClient.invoke": "7a99b19da3b0b7a9fbb3a48e267bcc9835e707d1f586ea1263e9ca8e4ad915e3",
+      "AbilityInvocationClient.invoke_target": "1e4fa451300d9d2e9551c4d0dc3bb27cf85f869fbebb29dcd1ae09392e997ae6",
       "AbilityInvocationClient.prepare": "d5e132710f2f570e8c9f8d5db41f29ac2b0eb5980f866186e59b15bb32e824c6",
       "AbilityInvocationClient.prepare_and_sign": "be06c9ec8b96739458bfd3ba7dc5c8f455b68fd56758a50b39590d789fdf9bf7",
       "AbilityInvocationClient.prepare_and_sign_target": "78c9becae8c3f9fe249c54014001b7f5068d9ce3be9767fb99e17d51cea666e5",
       "AbilityInvocationClient.prepare_target": "ebdef3dfca5b93fc07baa58f0c4b309d0fec19973e514a9936fb4756afd65313",
-      "AbilityInvocationClient.resolve_target": "5ee94c617ad36cae49c9b7f7095078efac1a51e1bafc995eb0ea5b63daf6a894",
+      "AbilityInvocationClient.resolve_target": "0edc4de892009f89bdd34f30070ce99ade3c896281d6c04f910cc83503215faf",
       "AbilityInvocationClient.runtime": "ec1cc1eb6aa18d32f00d37f5b201a1adfde5c1d5c0d9852208eab16b30ab8a1a",
-      "AbilityInvocationClient.stream": "eb65b120a459562c1c762e26fa2beaa5edad1f23cef8c72741ee03499c11af22",
-      "AbilityInvocationClient.stream_target": "0247536ef622b1eaa767e57519003db416a81ab44b8c322455a46a6d1e65f0e8",
+      "AbilityInvocationClient.stream": "3a0b7b07ef4b7b76df7f992e92b26a686cb8d35de7926e85229204bf0423f5be",
+      "AbilityInvocationClient.stream_target": "9c87d46a31d209fb9166a36ff2053e9c02e9e34a742ac668cd7d500bd8dee5b0",
       "AbilityInvocationClient.submit_signed": "366366930d8d779bb46fe2c24fce87f13f007aabc82e7fe7047d5ee4b6b1987b",
-      "AbilityTargetRequest": "7b6ceb2da538e2d354d1d73ff447fd3b90c79978eb052d9716df9b4a45f6587b",
+      "AbilityTargetRequest": "24f894b7866a86f156c5fe32a2cfc2ef8bcb7d3ac03a1f6d87803832efe95784",
       "AbilityTargetRequest.ability_ura": "bf2f1a9b279ffd577124165d1325f6a897e19910a9ad89dca3543259b131c5a6",
       "AbilityTargetRequest.args": "b7cabdbbe790aeff5877c6d4ac1cf866c7b3467c4655d2f508058b6ecdf74055",
       "AbilityTargetRequest.arguments_base64": "ad63a5cb0c74baf14b0718eaecb86c300ff7814283661acf538d2b54bab16d5b",
+      "AbilityTargetRequest.call_mode": "cf5e6671dd22fd4cbc82d4670cf6c510e4784a695eec9bc41d07e1f650de1bf5",
       "AbilityTargetRequest.caller_signature": "2b0c92306ac3955a4fda51978c90f5ce3a50bec5b5dd8b3ac31c14887024b65e",
       "AbilityTargetRequest.caller_ura": "46347163b5a459d94f56ac8377a53b414125d0ef5fa30493101ce749a713a4c7",
       "AbilityTargetRequest.causal_context": "8a339dc8d75c65afde2b1acdeb1eba6c4fb752d30f9ed39526e1d9fb38c33079",
@@ -21072,37 +20653,6 @@
       "DEFAULT_RECEIPT_PAGE_LIMIT": "0e11690c5c394caebd07f901e29680a74fbc71d246e5fa76d920e2811eb67f8b",
       "DEFAULT_RUNTIME_EVENT_PAGE_LIMIT": "67fb2dac53fb06059464ebe40c3823b16f7f029aa3423f77a7fe23559cc18ea8",
       "DELEGATION_METADATA_KEY": "348c8f844a10a79d62a51f2d20e1f651a1ff21b9419efc9fdb67cdffa055d78f",
-      "DaemonBidiChannel": "eab263f6d6bd42bd01e7f6bba8c712f1db6a79e7015f418485c291f54f3bf2ac",
-      "DaemonControl": "d65d971a5d11eb41b5e93fe89521886ac9bf92bee51f54f88e7ffb6efab01306",
-      "DaemonFrameStream": "274ce3f16f1ef76b30fab6cb8197eb626a25742ab7fe6fbec8d974a653ee2945",
-      "DaemonHandle": "0baf0c477cdfb2efd857d7ab1ed5f7552cbc5648f850b5d0d49e858f5cac1676",
-      "DaemonHandleFacade": "4a58cce6aa876ccaea3b909a72fed71e783f3355b3b8ab510d828d4072c762af",
-      "DaemonInvocationTransport": "1d7efc0fc92789f14b2375b9aac2afc9b778a10251e5a61f4f98044240d5804d",
-      "DaemonKeyringSignatureProvider": "a7c3c14775aa8828c61732a0bcbd7d8fad6ddbb7a92c04b275ec591d7222e7ed",
-      "DaemonKeyringSignatureProvider.identity": "92aa092d00677b221371ed7276b33782a5c43a0e789c4d637aa63da496df0236",
-      "DaemonKeyringSignatureProvider.sign": "fb92741580189dff3080009a515cb39589b7086932dcf9e35301fcaccce2d45a",
-      "DaemonLifecycleFacade": "62aec67061921e626b14f317f0d5fd7e854afb08e2862cdbeabd0837c52b3372",
-      "DaemonLifecycleState": "46c2ceac5a7148eb8e4f4135d36b3e94147fc365ddca900762f0f24d54881f00",
-      "DaemonMode": "60fad083ce5ed8e6cc06442df1aae10a60217098573de566f57d39529f1abd18",
-      "DaemonMode.BOTH": "53d9fc8c9bb9c476038fcb58119765348fa240afb1b0bf5dcb8793fb937acdf5",
-      "DaemonMode.DEVICE": "aee5e0b1f39b0eed02556bd3e7820e8969c46a7466070ad62d15e7a214c65257",
-      "DaemonMode.HUB": "649bb9c911cdee29241a145cae110ffcda682502e65b1c127a996cd430b53c1f",
-      "DaemonStartProjection": "ffd58478071f8d1452f98d2d19c6ce2f73273939f988b61a3ef746d0990c8a45",
-      "DaemonStartProjection.detached": "03b3e6d57728c647d48bd11c99ff4ca448d89cd97fd6a955cebed8d2092ea142",
-      "DaemonStartProjection.device": "e8641bc5d4f6ac69bff0a8cf51f1ea76ba40af8bf4e1f9600ccaad37d97b8846",
-      "DaemonStartProjection.device_id": "e8e318d4f94a41f6110be7a159b7de5f693b6c9e128502037f867a07f534f30d",
-      "DaemonStartProjection.env": "2766fa10a7da4f42c9138354ccaf2192209c59ca1b2fdac3570abced0c31d065",
-      "DaemonStartProjection.from_profile": "8d255b991ad01c08384040f580d792fa9c7de50c086e190c2af1063cbc1f7b1e",
-      "DaemonStartProjection.hub": "f428cded82466af92abbfbd27b84a9a137d4a414085d66882642cab0e5f9381f",
-      "DaemonStartProjection.log_path": "dea244c905e35ad1a17f7a1aace9715e564d28f0b4f1c9706a853b3584568260",
-      "DaemonStartProjection.mode": "9cbf2fa848377fb8ab15e56180f071ee8773e6ce7770e9e3f365825bb9b94884",
-      "DaemonStartProjection.realm": "345a97d252b2f8424a2024c69a50f1c4dfce47e458192bbb2c5c8313ceeaef59",
-      "DaemonStartProjection.to_json_bytes": "14b84b88fb8b7340fc4539a3dfaad75804a75cb47a2b2bbbc0dd5672f3c81752",
-      "DaemonStartProjection.to_start_config": "e3f735cbaa787fa1134638523e1785e1828bd1aa71eb0c46c241b56ba234bf44",
-      "DaemonStartProjection.to_wire_dict": "acfe8ed7ebca757ed4a0d26fe5f1c22f1e0bad49a4c38224615b1854a254ec90",
-      "DaemonStartProjection.validate": "f904ed9f736a02a9c5df1a6f6171db0febf5e18a951cbeaeb0cce609e6f18211",
-      "DaemonStatus": "d794fb12a3c14107550ad00953b1cee189bd9990591b9f7cce4099769f0f9031",
-      "DaemonTransport": "19741e7bd99d0be6f43256def3aea6b7b3430d52a879de2118adcb4e3955d0cc",
       "DelegationProof": "b85018aa09a184bff80f472ee3492a784aa4a3a797b4cff45314cd310e653f81",
       "DelegationProof.audience": "599aa5a3cafb5a6f602db11a9b9c3dd2de7c5787b510ee07d381c48b4ddab27c",
       "DelegationProof.caller_ura": "46347163b5a459d94f56ac8377a53b414125d0ef5fa30493101ce749a713a4c7",
@@ -21258,11 +20808,6 @@
       "DirectorySubscriptionState.FAILED": "e55fd272b45fcb78935046498f840620231f2008b358d4282b737daf07855398",
       "DirectorySubscriptionState.LIVE": "1e79646c00ba5092219470f44323f6af1c2d63d98cb0d628cb43c14c6514d8b5",
       "DirectorySubscriptionState.SNAPSHOTTING": "9618ffdca952d1bee1993e2fbd3212a47af4a5ceddf27bfcf40899927f25fede",
-      "DiscoverOptions": "26f6a866292043764abaeec7c10621ed0b120f0d2ff00e9590c5ad4458af4ffb",
-      "DiscoverOptions.control_endpoint": "381451626c1ef403bbd12dd4928693f36e56f0efc0796690870193ebaeab3544",
-      "DiscoverOptions.control_path": "a8d3140bdabc6ed6cadf524fa80b7b5f399776465c825b9b3b9a2149aa270bd5",
-      "DiscoverOptions.home_dir": "5a39578c4d51139586ebb1dfdb43fa2beef293deb77684dde11495ff6e1c8ead",
-      "DiscoverOptions.to_json_bytes": "758c9c28d524fc7e3181bdeb4bb2f1dfca88bebef2b052dd8cf8398d8cd6dbbb",
       "DiscoveryTransport": "d0b8d444a6667adb68e8b4284f78db4ad9768c6431a53d4bbfdff9964ccab0ac",
       "DiscoveryTransport.close": "1a4f81a57310e03d2e36556a2a6644d05b6c80c70462552c49c9368e7c7fa2c0",
       "DiscoveryTransport.feature_discovery": "ccf67d526c63c0419dfd8748b413a419c0bce8a1f3872fb9a872523e803f6c6f",
@@ -21452,14 +20997,14 @@
       "InvocationLifecycleState.UNSPECIFIED": "ff594dd67a44f957d1741f0704baac30c950d08e0d068dc5556648f663d98ad6",
       "InvocationLifecycleState.from_wire_name": "13eeb9bbfa9989a5e05f85cea2242d9fb071260a51bbb92a70752c2c9f6922fe",
       "InvocationLifecycleState.is_terminal": "4b096ea4f492161fdb91b3f3215c0109ffddc3e9bdca420e060c4616f59e46aa",
-      "InvocationObjectAdapter": "0ea34f4a01d6a8f0fa461f26819b1fd4afdbad23543c47bba6c22e0666636de8",
-      "InvocationObjectAdapter.bidi": "ff1d4c19f1c5bda2b694e5892b0e3d69231c0d595b8e003dfad5d6cc180c486c",
-      "InvocationObjectAdapter.build_invocation": "f003a5d2981868d83bc9d522676502c99a5bc5e46eb6f7028a971da575d3e0ce",
+      "InvocationObjectAdapter": "1d408d37fbd26df287f81bc9f01ff3d3eb208edb437e2dc805a1d810bbda4e98",
+      "InvocationObjectAdapter.bidi": "2e7e2e390529be4f3f431a9d27f46969b2314dc3fbaf685afae8d58fa40ff097",
+      "InvocationObjectAdapter.build_invocation": "a9b95ab13dd1d722718ad6f6eda0b83ea35aa0be547b00853a9a58cfa87d42c7",
       "InvocationObjectAdapter.descriptor_version": "bb3bb8d753ad0a25576aae20615e28efacb3d7b937a74ed67009b7d54018bec0",
-      "InvocationObjectAdapter.invoke": "6f5eec5de4ff998ae13ebcb7b65effa62b652b64245fea4c5fee56621b661d47",
+      "InvocationObjectAdapter.invoke": "47dfe5ea013d5a2dc34f30fc7718cde747886b55b19bab0cc3282e4c78264f73",
       "InvocationObjectAdapter.invoker": "7483102ac1b08c0aaba587334e1e711c9975ccb5503da7905c46df7558d82347",
-      "InvocationObjectAdapter.stream": "7cbf17026a44bf22b9ab2272528540a6205400d31ff876f0d3b75c7f6f56be5a",
-      "InvocationObjectAdapter.to_wire_dict": "6780d34c8175926a05362f99d7c2c6e18f64b15f66e65d033cae213873d89736",
+      "InvocationObjectAdapter.stream": "5b7537278dcca1210bc1968fef8a5a91c75767291ea02d83d6d7c48289e1aea0",
+      "InvocationObjectAdapter.to_wire_dict": "17b5cd232afd4436105017d33774b47371e8dff4063f53ef75814f55f173a1e3",
       "InvocationReceipt": "ddc3bcd00a5821d680e3317577582db3191ccfd3df1dbd828ca9e85c953fc0a8",
       "InvocationReceipt.axiom_binding": "3b0edb8740b08c7d9560fe4542dabbac0c5de5a5e062da7401c7dff4b3242bef",
       "InvocationReceipt.child_invocation_id": "fd3c0597cf1db7bf7b4c2b39a0a3ce4d28240d490b95c39aea9b2c09c03d5ba3",
@@ -22015,16 +21560,14 @@
       "RuntimeHostHandle.open_transport_adapter": "299d8118fd2aa60556d7d813bbab77056ece58043de350cdfb978db457266944",
       "RuntimeHostHandle.status_dict": "3b8fc16cb7e1d1219cd384241278cf1272b77fbfd39238cb6cfcb3e1b9e22748",
       "RuntimeHostHandle.stop": "6f84edb0acb8218bc6a7eea48c8b7ce613b8aa7d9519844156e07b20a66bb41e",
-      "RuntimeHostRole": "370dec1579287133bbcf483a39cc74da1f5be624ab1e516e2da4877a30761f1b",
-      "RuntimeHostStartProjection": "70aea49452cff7dd75644713847cde90e2a381051ea59830bc38e101a270e122",
       "RuntimeHostStartRequest": "0bcb88d9e4020b925a954b108205d29f487408067a1d8508284a43e5846f6f0e",
       "RuntimeHostStartRequest.to_json_bytes": "41323189167c1252a3e10d47f15191351f644bd6132aea429694c237b7311de8",
       "RuntimeHostStartRequest.validate": "949fde048c2b1f2ef78ceaf28c2f1fd7de7185d2b8deb1230ec4ac316f74180d",
-      "RuntimeIdentityProjection": "5ae71b54d0a82f87dceb3882f5fe1394fa0ef5cfe32badde93f13247acfe75a7",
-      "RuntimeIdentityProjection.device_id": "3e6c7f922943145b7faa1132d545fe0c1a50aa064859fd48db47bec9a01ea38c",
-      "RuntimeIdentityProjection.hub_endpoint": "29beefa10b1b25a58ed56c2c70fe22d71c9b824259f953d689e581b6eb1338b2",
+      "RuntimeIdentityProjection": "029857a0acb9ae5ec05ddecbd54662a99abf94842d1b17fcef07864bcf17299a",
+      "RuntimeIdentityProjection.control_plane_endpoint": "be5195182f2d28412dd4946fb1c181a5560c2bfb8978b878de191d916daa8988",
+      "RuntimeIdentityProjection.principal": "78d8aa7d857a0d411ebb292db83ce7185fea83624011ca06e517f38b4c07dec8",
       "RuntimeIdentityProjection.realm": "0a3d7b981b82a1edb44838b24f850004aa388144dac7bb232b9ce89150822d77",
-      "RuntimeIdentityProjection.username": "d519480b03bc331c5cdf273577fb669e933929fbad41b1a2910f42488be67da8",
+      "RuntimeIdentityProjection.runtime_instance_id": "5e8da839f8063ae2bc96c1aa382338fe83ac8535fd2b293fd9038f5f59df3acd",
       "RuntimeInvocationTransport": "2bcaa40d7996e73d85e79c2590b936a2201cf30a7c8cddf322d32be8d820813a",
       "RuntimeInvocationTransport.bidi": "22929be5b8d90510f5956998ca34a40da70c721d56c2d52645060e66b08abf68",
       "RuntimeInvocationTransport.close": "f02d77c46a2b2b224d46d0b267e78a380edd87b3fbd3b510ecdc2a97b064df0d",
@@ -22223,12 +21766,6 @@
       "RuntimeSessionPage.sessions": "a05d86f2ae7aeace72d08b4578ea18862c252a9f8ca98ef00ae4b44f40bf4ee1",
       "RuntimeSessionPage.state": "0180f4a5578e01e54733caf078d73d201ee70a931e8146b9fd1097e9373f1fbc",
       "RuntimeSessionPage.system_ability": "54c13a9bfaf0af63898a00f6ee27b96af227601a1d6c5237789e53e4d5a23c16",
-      "RuntimeSigningIdentity": "afc553d701620061fef658eac79445dfe6c134a827f22f5b598648f1e9659574",
-      "RuntimeSigningIdentity.owner_ura": "67e80e960285bb67d8358e74fbf4735a4146e197f66ece9fb32ff4fc51c46380",
-      "RuntimeSigningIdentity.public_key": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad",
-      "RuntimeSigningIdentity.sign_canonical": "01741ceb5c37e37476a542e0b58d45c65c858c954e0f86007eeb3c8c3e74e847",
-      "RuntimeSigningIdentity.socket_path": "7932d97cc804ad5e044dc95896ec964113b4deca2ca98b73ae12f2e1a073f46a",
-      "RuntimeSigningIdentity.timeout_seconds": "e7ae5d4664552e5b66b88593a70dc1a9253ce75cc03643960b1ccbed84deb0af",
       "RuntimeStatus": "1f89415addc2b385b95736f570d5901fd5f2287305f691e09584cb0cd4b7536a",
       "RuntimeStatus.diagnostics": "22ff309923332ce89e672dd48cca0cec137a745350d184c0a2985e6896912db7",
       "RuntimeStatus.endpoints": "a5d0aa592cffc496830286f8318d954e7a320be015bb67f011661d7422641252",
@@ -22266,7 +21803,7 @@
       "SDKError.source_ref": "fa58a379b962fc590c976789c8fb8cbb968f0a1305b24f6623f16567984e9bd1",
       "SDKError.stage": "8de6c67a6a5fce1debb9a33593857a48da49a61b26d4a3e08b61d3d4f5621cd7",
       "SESSION_AUTHORITY_METADATA_KEY": "4ce3faa583613d281a069f8e9a73eb688a4c34fdb8eb8bae5e7f36bb2e893155",
-      "SdkEnvironment": "c687379c77e977b5caeccb6906cf2da365c30b466c197caba39c5883f237242d",
+      "SdkEnvironment": "28fdd30c76e5a678bd808da2e4fed56db4b47d1a3983db8bb9e17a99a4574fe1",
       "SdkEnvironment.ability_invocation_client": "f47b3671b4b8b8e41b688b74212a584bc462f52d9696c21e12fd3de3524a2afb",
       "SdkEnvironment.addressing_client": "a0c9cf052c5d9c91d2f52045681ae7e54e155492d263dd68fed3c585e2a5d046",
       "SdkEnvironment.client": "625e51e030b02d2cc553fd035f6c356e3d96917dddcded7d775fe2dfc28b19b3",
@@ -22274,11 +21811,10 @@
       "SdkEnvironment.connect_local": "f0295785e21c25fb333d99a6203a923bbb52a57d860f2b4aa9736ee9243cbd96",
       "SdkEnvironment.control_ipc_client": "c820d9e5ba89e5fe57760677c41ae36241cc82f98371fb0f20bb7d713fa22a7d",
       "SdkEnvironment.control_path": "a8d3140bdabc6ed6cadf524fa80b7b5f399776465c825b9b3b9a2149aa270bd5",
-      "SdkEnvironment.daemon_control": "ad688f12e0db41847aab3a94f6955261a289f7f0150cfd2f86eb590933757026",
       "SdkEnvironment.feature_set": "393b95cb31ed38ed2f2cc185930319bc7a2020e1124d4122f532dac5c1c5e26c",
       "SdkEnvironment.health_client": "f6b401b3f6bea7052fb84b1e0bc90680ab0b15a87de70003f8204a6014cb351c",
-      "SdkEnvironment.invocation_transport": "51248892d6b449bc1f320db40a467bab34d38a0bd19b3fdf3e8c8852b0284fdb",
-      "SdkEnvironment.invocation_transport_direct": "2cafee39d9a6568ac1279630444354b1c9fbbc17bc88533e6c1a4009a878f56a",
+      "SdkEnvironment.invocation_transport": "8379abfc80df250f0d8dc75fc4363a032ac1ba2bb4caa4f6bb680c287ca63903",
+      "SdkEnvironment.invocation_transport_direct": "12bb8e7e2251b339607614ed3abca91c1a02591abbdce59f14d2d478b91105bc",
       "SdkEnvironment.library_path": "1a560110d65f07c5ff70c428d1bc68b0268046e632b77809001b6fcb070ac342",
       "SdkEnvironment.native_runtime": "63e5976f44c3c9cc8da6526609f3a0e8d28933612277ec34ca469061d4738f28",
       "SdkEnvironment.resolved_control_path": "2b25d53ebea1e2abfabde4c1725c196cae2183aeb99791d1e9e4dccd5b9a7072",
@@ -22366,24 +21902,6 @@
       "SigningMaterial.nonce_base64": "8db3a87951ec324fd7ce0bb0c436eaddef7cdb53edf725e6f457cc3e28f121e3",
       "SigningMaterial.signed_fields": "e10a11cd9e07503e60529a85f4644db751be8b9a66c5ff2c2507a4f30dc31767",
       "SigningMaterial.signer_policy": "b0a5a66258218832cb966c5fc1d454c3dcaa6a009f9360c7560fc0e46184f8b9",
-      "StartConfig": "4c7b1078bf1acd1dbed69aba802764423276e8132effab5bd69c7b6e56179f27",
-      "StartConfig.daemon_bin": "39374f894c5b649286550bef9bfef5a1244461dac492c4427e87451d6b3f2370",
-      "StartConfig.detached": "c9f88ab61ff764d46645f9d5690dd68a17efb7a7f6de10ae32c1c87f223d02f7",
-      "StartConfig.device_id": "e8e318d4f94a41f6110be7a159b7de5f693b6c9e128502037f867a07f534f30d",
-      "StartConfig.env": "2766fa10a7da4f42c9138354ccaf2192209c59ca1b2fdac3570abced0c31d065",
-      "StartConfig.home_dir": "5a39578c4d51139586ebb1dfdb43fa2beef293deb77684dde11495ff6e1c8ead",
-      "StartConfig.hub_endpoint": "29beefa10b1b25a58ed56c2c70fe22d71c9b824259f953d689e581b6eb1338b2",
-      "StartConfig.listen_tcp": "9d868d27d1414607bbc1051b0ab12478696c171b708b9b9dcce496b34acd591d",
-      "StartConfig.log_path": "dea244c905e35ad1a17f7a1aace9715e564d28f0b4f1c9706a853b3584568260",
-      "StartConfig.mode": "9cbf2fa848377fb8ab15e56180f071ee8773e6ce7770e9e3f365825bb9b94884",
-      "StartConfig.realm": "345a97d252b2f8424a2024c69a50f1c4dfce47e458192bbb2c5c8313ceeaef59",
-      "StartConfig.tls_cert_path": "d916efb9509ac982fa71f1bc25c4182c17d067636a2a5ec7bd44c8fbfd5b4711",
-      "StartConfig.tls_key_path": "cbe568d8500463b20b46a35a0f01bcb5708204096f8ec730df03569edccf346f",
-      "StartConfig.to_json_bytes": "99dadd96797698cc6499612f43c3b9cbd5cef8ba32132405ebeb896714fe2c8e",
-      "StartConfig.to_json_dict": "7c8360f660940233347fc8b0a1038da0cce4579ff605cdb74f8020247c2ec276",
-      "StartConfig.trust_path": "7f17848eff6e191c93cc2d7efcdaf55b6324efdef0c7f337466a61ad177fe885",
-      "StartConfig.uds_path": "df71d601a7e54b34d33da97113ddb830f927cb0e13a5563a32ff6613c14706af",
-      "StartConfig.validate": "5ed52fe4e4d2795c9d44f51061c16657adce1a66b10cf43f81408fdf44fc5918",
       "StaticSignatureProvider": "c9b04650cf167a4dc80010a3ddb784724a8807d45f3b1efd9dacd31dca4891f4",
       "StaticSignatureProvider.sign": "cc3ee8138806f6fb225c509f9493facd17fc6099995300c0e99e4c38f3898b08",
       "StaticSignatureProvider.signature": "0f4c0fb58af7febd67f62490bf790ae3e4031e219bad870accb73394a8495b96",
@@ -22397,11 +21915,11 @@
       "StreamCancel.state": "b7447e35dd38a1849b1b1466a07e64dcb93de4090966a3b0fbd80ffcb27cc30a",
       "StreamCancel.stream_id": "eb1cc7c438d6ba3be2d98e5eb4ff4f33a66a803abf6a5663bf5caff806f6df04",
       "StreamCancel.terminal": "30d72b0cb2f24a12f30ebba7243c1137c081850d6a42a5c74e4261146f1b237f",
-      "StreamEvent": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a",
+      "StreamEvent": "07f3cec7ce2a77f223b768a8e1bf966f3a89bdd83c2bbc2ff7fb2bd336477e5b",
       "StreamEvent.admission_receipt": "92fc2e6cbdb1f12a79a25639d988feb16636a34645ffc4370c06465a323a8d9c",
       "StreamEvent.elapsed_ms": "45bf7a4ed59a2a907ec13c17aa7be7ef99167ee6a11b7adfcc67d3b36d638a2a",
       "StreamEvent.error": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87",
-      "StreamEvent.from_json": "427a7feade396be8f4f17db2e78f2383e6a0cddd6d68e1b1877d731690d748fd",
+      "StreamEvent.from_json": "e1c6594e58925963a864744357e6a3e03da443706233cc9d1b5acfdf8744f5e0",
       "StreamEvent.kind": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba",
       "StreamEvent.payload_base64": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f",
       "StreamEvent.payload_content_type": "ccd6badd7e579f346f8f7324584030fa838bb5453073bba75dbdbff1976a51df",
@@ -22447,7 +21965,7 @@
       "StreamTransport.recv": "a5916244bf9e117f337ffc986d0c2f1f8df02dac7c838de7587c6775ff84ce0a",
       "StreamValue": "991cc8fd4c0e7f68f839a1153398950c9b5312653b458a3beeb9dc4eee3c4a85",
       "StreamValue.value": "11e1bfa8101c1617ca7e24f76f3e746fc1cccbca91298be556ab93786287c5d4",
-      "StreamValueAdapter": "d966cbd2c91d54c4a338f08179dc04ce6ada79841a7d97c78584fb2f42e4f4b8",
+      "StreamValueAdapter": "1ff5e6c1b717c14261ffc90628f092b915be51546f9870c1a4ec549dc76c944f",
       "StreamValueAdapter.close": "5943588132b93cccf4a23c25a09121ce5ae1d3fc295d6a908674c8fb4cd90bc8",
       "UnaryDispatchPool": "da264d16e6f7a358f4e6ab5914f5a28244d0f04854fe6ffa1a429d4fad20ac67",
       "UnaryDispatchPool.close": "c5114b7ac37835287549ee8f81cadc64cf6b11f6d8b692482364a6b1fd3c13e6",
@@ -22469,26 +21987,21 @@
       "Version.abi_version": "15399f644b0b0b61ddba04c0dee9ee7fd03864cdf6dfb765d13c8d7c805c49f6",
       "Version.sdk_version": "3fa6075676e1acfa9483a09e912abb6a781c31972c23a481b2a64d59cd28093b",
       "agent_ura": "30375140fabb499795be4d3a3cea1351f7be87c1a289e1c3353ebfd1e7d9b9eb",
-      "attach_daemon": "3c9acc8bcfa4c8f526a0439cceaeafec7f2ec419cde09cb6530ee0c73fa12ca7",
       "attach_runtime_host": "08437d5b74ed3647c34abab57ec6f4b107c850fdd582cdf71727a36664519f58",
       "canonical_ability_descriptor_ref": "33f40bbb040585dd985aa00b6dd52782dc865f5a5d0cb0d9c6af32154a451ca7",
       "canonical_failure_code": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172",
       "canonical_terminal_state_code": "39877d5b08b70679af690249c6cd2919e37fddaff2f923c2e1fbb250a8224a49",
-      "connect_local": "6fcd4749f6896b20301795c72caeb6c3294ed6afb5113c29148bfa5110f8adbd",
       "connect_runtime_local": "8743952092591cbbc3115cd6dec4b8563b80fce69dc6e5c8f995990fe3ea21fe",
       "default_control_path": "fe12459c5cbafd9a7e3126f724affa4b7f1cb807a21255431e8e31feb463a353",
       "default_environment": "7aba5c300a4b369c79777d057e52a0f2a5de5d96a7de8e4b3ab0e8b5624d2740",
       "device_ability_ura": "12678b9119540fab65243e0f589444d4e478046588a36bc30a17aa312fb8a454",
       "device_agent_ura": "8d7be845e4e8f50960c85dac158554057de56782c87fa727d637ce47819119f4",
       "device_ura": "c57a7de94ea13133b5a30c7874899c3502879f709042c3571d02a0b2cd578038",
-      "discover_daemon": "5709212a6788a6e9fcba18ed64ca41cc0a590249928e8d30f4f2f402aa3962cb",
       "discover_runtime_host": "ec83bf7e829fe65c32cc28971a2726958d4986f13536d35f7c0de3b1869bb3d0",
-      "ensure_runtime_signing_identity": "32d86daa54f082bca6d1da2599768993a26710d67428d9eb38f54e85f1d164a8",
       "error_class_for_code": "fe46d1d076d29ef6bac9887db89a88b96a6480f078ccd95d5645b7de799e3d54",
       "grant_actions": "628b35234cfa844607289b11e553665280b53c76024547eeca4d4c855ccc476c",
       "hub_ura": "abe8a50de406974a8b2642b551e857d31c6ac59027266c2e8f05e2c10e7126ff",
       "is_code": "829e5d5ca2c9a1f74bfe8991f70a59404bbedafb63ed8dd5fdccef156b5739d9",
-      "load_runtime_signing_identity": "93707c570d9e61a021098551ae7d3ff15e308eae3be168c5afd2e4d217c5a2a7",
       "new_canonical_authority_client": "b3df28508002287c5d05894d4935d19df43344c0033e6977ef14042955bc9190",
       "new_invocation_nonce_base64": "678830d2a7bd73cd5df3875877004a185dd533157725230eea4c11e1068ac097",
       "normalize_error_code": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f",
@@ -22505,10 +22018,9 @@
       "resource_ura": "9023d498e3f1a8d68e3979df8aa1d496f1b70aadb8e75ae2cc1036bbbb004a0a",
       "retryable_for_hint": "a40a2da8049667e10c4c894f7520a59e71afbfce282f40eb308cb9968d49a6cd",
       "runtime_credentials_path": "6c1ae4611dddb961afae5da922282a2cd85bf764e353fc97e164267305969291",
-      "runtime_identity_projection_from_json": "7ed41ee79d405c88d458333cd16107f5afb4802bf4704c9a7fcc557ca0b9595e",
+      "runtime_identity_projection_from_json": "be857347b4ed0ba5c1cb7afcab41dd17c1fefc435e983f7aae465c9fca2bac7b",
       "runtime_state_root": "fcc017794dcc7b28cde877fe3b063ab82fae1af0a5ba6d810714ed0b8ecfd327",
       "signer_handle_provenance_error": "aa5868ffdd58327eafaef435f268018806e1fe20599c19b1e3eb8b62a3f088e1",
-      "start_daemon": "4ce64ae34c17d697e00b2b1e92c7739d5d523804bf4b840bdc2590e0a8385f4a",
       "start_runtime_host": "d7bbebf68c08ed7990346d08ddb5e71c4250c067e7c2ecc8991f26fd7b83a137",
       "user_ura": "61cf47948e6fff64d5800601a66b93d73bd1bb71b7b6bfc63157a59f1cb4ffa3",
       "validate_authority_metadata": "605aeff3914db523d4c8622ddbf6372603d70593f830eb0e9149c3a74b3b42fd"
@@ -24384,7 +23896,7 @@
       "item": "StreamEvent.from_json",
       "parent_capability": "stream",
       "role": "serialization_projection",
-      "shape_sha256": "427a7feade396be8f4f17db2e78f2383e6a0cddd6d68e1b1877d731690d748fd",
+      "shape_sha256": "e1c6594e58925963a864744357e6a3e03da443706233cc9d1b5acfdf8744f5e0",
       "shape_group": "serialization_projection:streamevent.deserializejson"
     },
     {
@@ -24589,10 +24101,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/_cabi.py",
-      "sha256": "e10e75ad1961e48007168884420d4c82a6beb5beb93a1fcbeea86f039bbfca66",
+      "sha256": "33445903404a3117766f26cab93bb0cb7c34c7dc9dc07a532f8859a88a9b8caa",
       "interface": "CABIRuntimeTransport",
       "interface_path": "sdk/python/easynet_sdk/_cabi.py",
-      "interface_sha256": "e10e75ad1961e48007168884420d4c82a6beb5beb93a1fcbeea86f039bbfca66",
+      "interface_sha256": "33445903404a3117766f26cab93bb0cb7c34c7dc9dc07a532f8859a88a9b8caa",
       "capability_ids": [
         "stream",
         "bidi"
@@ -24620,10 +24132,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/ability_invocation.py",
-      "sha256": "c72ee40799da0c664b1ab06405b9f3f114db0d17db0713883e666759523e8f90",
+      "sha256": "5f2eb54a684a6790a3197c46e36bc8cddb011e53bc1a250ec34bb217df29b4ad",
       "interface": "AbilityInvocationClient",
       "interface_path": "sdk/python/easynet_sdk/ability_invocation.py",
-      "interface_sha256": "c72ee40799da0c664b1ab06405b9f3f114db0d17db0713883e666759523e8f90",
+      "interface_sha256": "5f2eb54a684a6790a3197c46e36bc8cddb011e53bc1a250ec34bb217df29b4ad",
       "capability_ids": [
         "ability_invocation_facade"
       ],
@@ -25870,7 +25382,7 @@
           "language": "python",
           "section": "members",
           "item": "StreamEvent.from_json",
-          "shape_sha256": "427a7feade396be8f4f17db2e78f2383e6a0cddd6d68e1b1877d731690d748fd"
+          "shape_sha256": "e1c6594e58925963a864744357e6a3e03da443706233cc9d1b5acfdf8744f5e0"
         }
       ],
       "present_languages": [

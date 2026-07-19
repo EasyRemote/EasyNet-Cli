@@ -4,29 +4,26 @@ import unittest
 
 from easynet_sdk import (
     ConnectOptions,
-    DaemonControl,
     ErrorCode,
     BidiFrame,
     BidiState,
     BidiStreamDescriptor,
-    RuntimeHostRole,
     RuntimeLifecycle,
     RuntimeClient,
     SDKError,
-    StartConfig,
-    DaemonMode,
     StreamState,
 )
 from easynet_sdk._cabi import (
-    CABIDaemonTransport,
     CABIRuntimeLifecycleTransport,
     CABIRuntimeTransport,
     CLILibrary,
     EXPECTED_ABI_VERSION,
     MAX_CABI_CALLBACK_QUEUE,
+    _CABIStreamTransport,
     _platform_library_candidates,
     _project_cabi_ordered_event,
 )
+from easynet_sdk.providers.easynet.lifecycle import DaemonMode, StartConfig
 
 from test_runtime import canonical_runtime_receipt_pair, complete_draft
 
@@ -87,6 +84,27 @@ class CABIEventProjectionTests(unittest.TestCase):
 
         self.assertEqual(json.loads(projected)["error"], {"code": "", "message": ""})
 
+    def test_stream_allocator_normalizes_zero_based_remote_sequences(self) -> None:
+        transport = _CABIStreamTransport(None, 1, 1, None)
+
+        first = json.loads(
+            _project_cabi_ordered_event(
+                b'{"sequence":0,"kind":"data"}',
+                transport._allocate_sequence,
+                use_observed_sequence=True,
+            )
+        )
+        second = json.loads(
+            _project_cabi_ordered_event(
+                b'{"sequence":1,"kind":"data"}',
+                transport._allocate_sequence,
+                use_observed_sequence=True,
+            )
+        )
+
+        self.assertEqual(first["sequence"], 1)
+        self.assertEqual(second["sequence"], 2)
+
 
 class FakeRawCABI:
     """Strict generic-v5 fake: product-specific symbol lookups cannot succeed."""
@@ -140,6 +158,9 @@ class FakeRawCABI:
         self.easynet_daemon_open_client = FakeSymbol(self._daemon_open_client)
         self.easynet_runtime_health = FakeSymbol(self._runtime_health)
         self.easynet_runtime_diagnostics = FakeSymbol(self._runtime_diagnostics)
+        self.easynet_runtime_resolve_descriptor_ref = FakeSymbol(
+            self._runtime_resolve_descriptor_ref
+        )
         self.easynet_invocation_invoke = FakeSymbol(self._invocation_invoke)
         self.easynet_invocation_prepare = FakeSymbol(self._invocation_prepare)
         self.easynet_invocation_sign_prepared = FakeSymbol(
@@ -288,6 +309,14 @@ class FakeRawCABI:
             b'"state":"Running","ready":true,"abi_version":5,'
             b'"checks":[],"diagnostics":[]}',
         )
+
+    def _runtime_resolve_descriptor_ref(self, handle, request_json, out_ptr) -> int:
+        _ = handle, request_json, out_ptr
+        self.last_error_json = (
+            b'{"code":"NOT_FOUND","stage":"cabi","message":'
+            b'"descriptor_ref not found","retry":"never","details":{}}'
+        )
+        return 1
 
     def _invocation_invoke(self, handle, raw, out_ptr) -> int:
         draft = json.loads(raw.value.decode("utf-8"))
@@ -556,7 +585,7 @@ class CABITransportTests(unittest.TestCase):
         raw = FakeRawCABI()
         lifecycle = CABIRuntimeLifecycleTransport(CLILibrary(raw))
         handle = RuntimeLifecycle(lifecycle).start(
-            StartConfig(mode=RuntimeHostRole.DEVICE, device_id="dev-a")
+            StartConfig(mode=DaemonMode.DEVICE, device_id="dev-a")
         )
         runtime = handle.open_runtime(ConnectOptions())
 
@@ -566,19 +595,14 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(result.output_json, {"ready": True})
         self.assertEqual(raw.daemon_open_clients, [606])
 
-    def test_daemon_handle_has_no_product_profile_factory(self) -> None:
+    def test_runtime_handle_has_no_product_profile_factory(self) -> None:
         raw = FakeRawCABI()
-        daemon = CABIDaemonTransport(CLILibrary(raw))
-        handle = DaemonControl(daemon).start(
+        lifecycle = CABIRuntimeLifecycleTransport(CLILibrary(raw))
+        handle = RuntimeLifecycle(lifecycle).start(
             StartConfig(mode=DaemonMode.DEVICE, device_id="dev-a")
         )
 
         self.assertFalse(hasattr(handle, "identity"))
-
-    def test_daemon_transport_name_is_source_compatible_alias(self) -> None:
-        self.assertIs(CABIDaemonTransport, CABIRuntimeLifecycleTransport)
-        self.assertIs(DaemonControl, RuntimeLifecycle)
-        self.assertIs(DaemonMode, RuntimeHostRole)
 
     def test_runtime_transport_closes_owned_handle_once(self) -> None:
         raw = FakeRawCABI()
@@ -589,6 +613,121 @@ class CABITransportTests(unittest.TestCase):
         runtime.close()
 
         self.assertEqual(raw.shutdown_handles, [42])
+
+    def test_descriptor_resolution_uses_local_realm_catalog_for_remote_ability(
+        self,
+    ) -> None:
+        caller_ura = "easynet:///r/acme/device/caller"
+        callee_ura = "easynet:///r/acme/device/provider"
+        target_ability = "easynet:///r/acme/ability/device.provider.er.add"
+        target_ref = f"{target_ability}@1.0.0#{'b' * 64}!stream"
+        meta_ability = "easynet:///r/acme/ability/device.caller.meta.list_abilities"
+        meta_ref = f"{meta_ability}@1.0.0#{'a' * 64}!read"
+
+        class RealmCatalogRaw(FakeRawCABI):
+            def _runtime_diagnostics(self, handle, out_ptr) -> int:
+                self.runtime_requests.append(("diagnostics", int(handle.value)))
+                return self._write(
+                    out_ptr,
+                    json.dumps(
+                        {
+                            "profile": "health",
+                            "kind": "diagnostics_report",
+                            "state": "Running",
+                            "ready": True,
+                            "abi_version": 5,
+                            "checks": [],
+                            "diagnostics": [],
+                            "descriptor_catalog": {
+                                "owner_ura": caller_ura,
+                                "source": "runtime_descriptor_catalog",
+                                "entries": [
+                                    {
+                                        "name": "meta.list_abilities",
+                                        "owner_ura": caller_ura,
+                                        "ability_ura": meta_ability,
+                                        "descriptor_ref": meta_ref,
+                                        "version": "1.0.0",
+                                        "descriptor_hash": f"sha256:{'a' * 64}",
+                                        "call_mode": "rpc",
+                                        "admission_action": "read",
+                                    }
+                                ],
+                                "diagnostics": [],
+                            },
+                        },
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode("utf-8"),
+                )
+
+            def _invocation_invoke(self, handle, raw, out_ptr) -> int:
+                draft = json.loads(raw.value.decode("utf-8"))
+                self.runtime_requests.append(("invoke", draft))
+                admission, terminal = canonical_runtime_receipt_pair("inv-cabi")
+                return self._write(
+                    out_ptr,
+                    json.dumps(
+                        {
+                            "ok": True,
+                            "tuple": draft,
+                            "invocation_id": "inv-cabi",
+                            "terminal_state": "Completed",
+                            "output_json": {
+                                "abilities": [
+                                    {
+                                        "name": "er.add",
+                                        "owner_ura": callee_ura,
+                                        "ability_ura": target_ability,
+                                        "descriptor_ref": target_ref,
+                                        "version": "1.0.0",
+                                        "descriptor_hash": f"sha256:{'b' * 64}",
+                                        "call_mode": "stream",
+                                        "admission_action": "stream",
+                                    }
+                                ]
+                            },
+                            "admission_receipt": admission,
+                            "terminal_receipt": terminal,
+                        },
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode("utf-8"),
+                )
+
+        raw = RealmCatalogRaw()
+        transport = CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+
+        resolved = json.loads(
+            transport.resolve_descriptor_ref(
+                json.dumps(
+                    {
+                        "callee_ura": callee_ura,
+                        "ability": target_ability,
+                        "call_mode": "stream",
+                        "caller_ura": caller_ura,
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).decode("utf-8")
+        )
+
+        self.assertEqual(resolved["descriptor_ref"], target_ref)
+        invocations = [
+            request
+            for kind, request in raw.runtime_requests
+            if kind == "invoke"
+        ]
+        self.assertEqual(len(invocations), 1)
+        lookup = invocations[0]
+        self.assertEqual(lookup["callee_ura"], caller_ura)
+        self.assertEqual(lookup["subject_ura"], caller_ura)
+        self.assertEqual(lookup["descriptor_ref"], meta_ref)
+        self.assertEqual(
+            lookup["args"],
+            {"scope": "realm", "subject_ura": target_ability},
+        )
 
     def test_prepare_uses_opaque_c_handle_when_request_id_repeats(self) -> None:
         raw = FakeRawCABI()

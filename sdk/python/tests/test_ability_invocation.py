@@ -91,17 +91,19 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
         self.assertEqual(draft.subject_ura, "easynet:///r/example/device/dev-a")
         self.assertEqual(draft.causal_context, {"form": "none"})
+        self.assertEqual(identity.seen_requests, [{"ura": ABILITY_URA}])
         self.assertEqual(
-            identity.seen_requests,
-            [
-                {"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"},
-            ],
+            runtime.seen_descriptor_request,
+            _descriptor_request(subject_ura="easynet:///r/example/device/dev-a"),
         )
 
-    def test_build_invocation_from_ability_ura_uses_descriptor_builder(self) -> None:
+    def test_build_invocation_from_ability_ura_uses_runtime_descriptor_provider(
+        self,
+    ) -> None:
         identity = _identity_transport()
+        runtime = MemoryRuntimeTransport()
         client = AbilityInvocationClient(
-            runtime=RuntimeClient(MemoryRuntimeTransport()),
+            runtime=RuntimeClient(runtime),
             addressing=AddressingClient(identity),
         )
 
@@ -111,9 +113,10 @@ class AbilityInvocationClientTests(unittest.TestCase):
             draft.descriptor_ref,
             DESCRIPTOR_REF,
         )
+        self.assertEqual(identity.seen_requests, [{"ura": ABILITY_URA}])
         self.assertEqual(
-            identity.seen_requests,
-            [{"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"}],
+            runtime.seen_descriptor_request,
+            _descriptor_request(subject_ura="easynet:///r/example/device/dev-a"),
         )
 
     def test_build_invocation_from_descriptor_ref_canonicalizes_ref(self) -> None:
@@ -133,6 +136,23 @@ class AbilityInvocationClientTests(unittest.TestCase):
             identity.seen_requests,
             [{"descriptor_ref": (DESCRIPTOR_REF)}],
         )
+
+    def test_build_invocation_rejects_callee_owner_mismatch(self) -> None:
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(MemoryRuntimeTransport()),
+            addressing=AddressingClient(_identity_transport()),
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            client.build_invocation(
+                _request_with(
+                    callee_ura="easynet:///r/example/device/other",
+                    ability_ura=ABILITY_URA,
+                )
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("callee_ura", caught.exception.message)
 
     def test_provider_lifecycle_surfaces_dispatch_stream_bidi_cancel_and_receipts(
         self,
@@ -190,6 +210,49 @@ class AbilityInvocationClientTests(unittest.TestCase):
             [{"content_type": "application/json", "stream_id": 1}],
         )
 
+    def test_object_adapter_dispatch_uses_provider_call_modes(self) -> None:
+        identity = _identity_transport()
+        runtime = MemoryRuntimeTransport()
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(runtime),
+            addressing=AddressingClient(identity),
+        )
+        adapter = InvocationObjectAdapter(client)
+        tuple_ = {
+            "caller": "easynet:///r/example/agent/alice.sdk",
+            "callee": "easynet:///r/example/device/dev-a",
+            "ability": ABILITY_URA,
+            "subject": "easynet:///r/example/device/dev-a",
+            "nonce": bytes(range(1, 17)),
+            "causal": None,
+            "arguments": {"args": {"city": "Singapore"}},
+        }
+
+        adapter.invoke(tuple_)
+        self.assertEqual(
+            runtime.seen_descriptor_request,
+            _descriptor_request(subject_ura="easynet:///r/example/device/dev-a"),
+        )
+        adapter.stream(tuple_)
+        self.assertEqual(
+            runtime.seen_descriptor_request,
+            _descriptor_request(
+                subject_ura="easynet:///r/example/device/dev-a",
+                call_mode="stream",
+            ),
+        )
+        adapter.bidi(
+            tuple_,
+            (BidiStreamDescriptor(stream_id=1, content_type="application/json"),),
+        )
+        self.assertEqual(
+            runtime.seen_descriptor_request,
+            _descriptor_request(
+                subject_ura="easynet:///r/example/device/dev-a",
+                call_mode="bidi",
+            ),
+        )
+
     def test_target_invocation_from_ability_ura_derives_tuple_facts(self) -> None:
         identity = _identity_transport()
         runtime = MemoryRuntimeTransport()
@@ -217,10 +280,11 @@ class AbilityInvocationClientTests(unittest.TestCase):
         self.assertEqual(
             identity.seen_requests,
             [
-                {"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"},
+                {"ura": ABILITY_URA},
                 {"ura": ABILITY_URA},
             ],
         )
+        self.assertEqual(runtime.seen_descriptor_request, _descriptor_request())
 
     def test_target_invocation_from_descriptor_ref_uses_projection_once(self) -> None:
         identity = _identity_transport()
@@ -281,11 +345,10 @@ class AbilityInvocationClientTests(unittest.TestCase):
             runtime.seen_draft["descriptor_ref"],
             DESCRIPTOR_REF,
         )
+        self.assertEqual(identity.seen_requests, [{"ura": ABILITY_URA}])
         self.assertEqual(
-            identity.seen_requests,
-            [
-                {"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"},
-            ],
+            runtime.seen_descriptor_request,
+            _descriptor_request(subject_ura="easynet:///r/example/device/dev-a"),
         )
 
     def test_prepare_and_sign_target_keeps_submission_explicit(self) -> None:
@@ -344,10 +407,11 @@ class AbilityInvocationClientTests(unittest.TestCase):
         self.assertEqual(
             identity.seen_requests,
             [
-                {"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"},
+                {"ura": ABILITY_URA},
                 {"ura": ABILITY_URA},
             ],
         )
+        self.assertEqual(runtime.seen_descriptor_request, _descriptor_request())
 
     def test_target_invocation_rejects_ambiguous_or_incomplete_selectors(self) -> None:
         runtime = MemoryRuntimeTransport()
@@ -632,6 +696,20 @@ def _target_request(
         ability_ura=ability_ura,
         args={"ready": True},
     )
+
+
+def _descriptor_request(
+    *,
+    subject_ura: str = ABILITY_URA,
+    call_mode: str = "rpc",
+) -> dict[str, object]:
+    return {
+        "callee_ura": "easynet:///r/example/device/dev-a",
+        "ability": ABILITY_URA,
+        "call_mode": call_mode,
+        "caller_ura": "easynet:///r/example/agent/alice.sdk",
+        "subject_ura": subject_ura,
+    }
 
 
 def _request_with(

@@ -14,7 +14,7 @@ must not be exported from `libeasynet_cli`.
 - Header: `include/easynet_cli.h`
 - Exact export allowlist: `include/easynet_cli.exports.v5`
 - ABI version: `5`
-- Export count: exactly `54`
+- Export count: exactly `55`
 
 Release and CI checks compare both header declarations and normalized dynamic
 library exports against the allowlist. Missing and unexpected symbols are ABI

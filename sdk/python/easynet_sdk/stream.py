@@ -69,17 +69,37 @@ class StreamEvent:
         kind = _optional_string(decoded.get("kind"), "kind")
         if not kind:
             raise _invalid_stream("stream event kind is required")
-        if kind not in {"data", "terminal", "error", "cancelled", "timeout"}:
+        if kind not in {
+            "data",
+            "terminal",
+            "error",
+            "cancelled",
+            "timeout",
+            "receipt_verification_error",
+        }:
             raise _invalid_stream(f"unsupported stream event kind: {kind}")
+        error = decoded.get("error")
+        terminal = _optional_bool(decoded.get("terminal"), "terminal") or False
+        transport_terminal = (
+            _optional_bool(decoded.get("transport_terminal"), "transport_terminal")
+            or False
+        )
+        if kind == "receipt_verification_error":
+            terminal = True
+            transport_terminal = True
+            error = error or {
+                "code": "RECEIPT_VERIFICATION_FAILED",
+                "stage": "receipt_verification",
+                "message": _optional_string(decoded.get("message"), "message")
+                or "stream receipt verification failed",
+                "retryable": False,
+            }
         return cls(
             sequence=_required_positive_int(decoded, "sequence"),
             kind=kind,
             state=_optional_string(decoded.get("state"), "state") or "",
-            terminal=_optional_bool(decoded.get("terminal"), "terminal") or False,
-            transport_terminal=_optional_bool(
-                decoded.get("transport_terminal"), "transport_terminal"
-            )
-            or False,
+            terminal=terminal,
+            transport_terminal=transport_terminal,
             payload_content_type=_optional_string(
                 decoded.get("payload_content_type"), "payload_content_type"
             )
@@ -92,7 +112,7 @@ class StreamEvent:
             elapsed_ms=_optional_non_negative_int(
                 decoded.get("elapsed_ms"), "elapsed_ms"
             ),
-            error=decoded.get("error"),
+            error=error,
             admission_receipt=decoded.get("admission_receipt"),
             terminal_receipt=decoded.get("terminal_receipt"),
         )

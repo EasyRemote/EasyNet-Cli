@@ -113,6 +113,11 @@ int32_t easynet_runtime_diagnostics(
     EasynetHandle handle,
     char **out_diagnostics_json
 );
+int32_t easynet_runtime_resolve_descriptor_ref(
+    EasynetHandle handle,
+    const char *request_json,
+    char **out_descriptor_json
+);
 
 int32_t easynet_invocation_invoke(
     EasynetHandle handle,
