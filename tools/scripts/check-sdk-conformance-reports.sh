@@ -5,6 +5,7 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 REPO_ROOT="$SOURCE_ROOT"
 source "$SOURCE_ROOT/sdk/conformance/python_toolchain.sh"
+source "$SOURCE_ROOT/sdk/conformance/toolchain_path.sh"
 CARGO_BIN="${CARGO:-cargo}"
 REPORT_BUILD_TIMEOUT_SECONDS="${SDK_CONFORMANCE_REPORT_BUILD_TIMEOUT_SECONDS:-300}"
 REPORT_TIMEOUT_SECONDS="${SDK_CONFORMANCE_REPORT_TIMEOUT_SECONDS:-900}"
@@ -423,6 +424,7 @@ prepare_report_gate_toolchains() {
   # the selected language slice is not python. Resolve the Python toolchain once
   # at the report-gate boundary so source snapshots do not depend on an ignored
   # sdk/python/.venv or on the caller's ambient shell.
+  resolve_sdk_toolchain_path "$SOURCE_ROOT"
   resolve_sdk_python_toolchain "$SOURCE_ROOT" pytest
 }
 
@@ -638,6 +640,32 @@ EOF
     SDK_CONFORMANCE_PYTHON="$fake_python"
     REQUESTED_LANGUAGES="go"
     prepare_report_gate_toolchains
+    [[ "$SDK_CONFORMANCE_PYTHON" == "$fake_python" ]]
+  )
+
+  (
+    fake_python="$tmp/python-for-toolchain-prepare"
+    cat >"$fake_python" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "-m" && "${2:-}" == "pytest" && "${3:-}" == "--version" ]]; then
+  printf 'pytest fixture\n'
+  exit 0
+fi
+if [[ "${1:-}" == "--version" ]]; then
+  printf 'Python fixture\n'
+  exit 0
+fi
+exit 1
+EOF
+    chmod +x "$fake_python"
+    toolchain_trace="$tmp/toolchain-prepare.out"
+    resolve_sdk_toolchain_path() {
+      echo "$1" >"$toolchain_trace"
+    }
+    SDK_CONFORMANCE_PYTHON="$fake_python"
+    prepare_report_gate_toolchains
+    grep -Fxq "$SOURCE_ROOT" "$toolchain_trace"
     [[ "$SDK_CONFORMANCE_PYTHON" == "$fake_python" ]]
   )
 
