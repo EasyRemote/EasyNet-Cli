@@ -90,8 +90,7 @@ use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 use crate::daemon::execution::mission::invocation_gateway::MissionInvocationGateway;
 
 fn load_registry_or_warn() {
-    AgentAggregateRepository::load_snapshot()
-        .map(|snapshot| snapshot.registered_agent_registry_projection());
+    AgentAggregateRepository::load_registered_agent_registry_projection();
 }
 
 fn dispatch_step(gateway: &dyn MissionInvocationGateway, request: MissionInvocationRequest) {
@@ -3811,6 +3810,18 @@ fn dispatch_step(client: &InvocationClient, child: ChildInvocation) {
 EOF
 expect_fail \
   "EAL agent dispatch aggregate provider fork" \
+  "R41_EAL_AGENT_DISPATCH_AGGREGATE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/eal/interpreter/dispatch.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+
+fn load_registry_projection_for_dispatch() -> AgentRegistry {
+    AgentAggregateRepository::load_registered_agent_registry_projection().unwrap_or_default()
+}
+EOF
+expect_fail \
+  "EAL agent dispatch empty-registry fallback" \
   "R41_EAL_AGENT_DISPATCH_AGGREGATE_FORK"
 
 make_good_fixture

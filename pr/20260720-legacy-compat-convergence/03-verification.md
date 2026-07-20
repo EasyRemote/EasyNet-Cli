@@ -2,6 +2,29 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-20 EAL agent registry unavailable-state fallback removal
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q eal::interpreter::dispatch::tests::dispatcher_accepts_missing_registry_as_first_run_empty_state --lib`
+  — PASS (`1 passed`; missing `agents.json` remains the valid first-run empty
+  registry state owned by registry persistence).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q eal::interpreter::dispatch::tests::dispatcher_rejects_malformed_registry_instead_of_empty_fallback --lib`
+  — PASS (`1 passed`; malformed `agents.json` prevents
+  `AgentAwareDispatcher` construction instead of becoming an empty registry).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query load_registry_or_warn --limit 30`
+  — PASS; no results.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query load_registry_projection_for_dispatch --limit 30`
+  — PASS; reports the fail-closed EAL registry projection loader.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after updating
+  R41 to require `AgentAggregateRepository::load_registered_agent_registry_projection()`
+  and reject empty-registry fallbacks.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for repository-backed `unwrap_or_default()` fallback.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+
 ## 2026-07-20 Ability catalogue descriptor-ref synthesis removal
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.

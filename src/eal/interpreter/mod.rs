@@ -173,7 +173,7 @@ pub(crate) fn execute_with_gateway_for_trace_with_timeout(
     trace_id: String,
     run_timeout: Option<Duration>,
 ) -> anyhow::Result<ExecutionReport> {
-    let dispatcher = AgentAwareDispatcher::new(gateway);
+    let dispatcher = AgentAwareDispatcher::new(gateway)?;
     execute_with_dispatcher_for_trace_with_timeout(&dispatcher, tenant, ir, trace_id, run_timeout)
 }
 

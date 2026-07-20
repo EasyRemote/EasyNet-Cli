@@ -30,6 +30,7 @@
 
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use serde_json::Value;
 
 use super::*;
@@ -54,43 +55,30 @@ pub(crate) struct AgentAwareDispatcher {
 }
 
 impl AgentAwareDispatcher {
-    pub(crate) fn new(gateway: Arc<dyn MissionInvocationGateway>) -> Self {
-        let registry = load_registry_or_warn();
-        Self {
+    pub(crate) fn new(gateway: Arc<dyn MissionInvocationGateway>) -> anyhow::Result<Self> {
+        let registry = load_registry_projection_for_dispatch()?;
+        Ok(Self {
             registry: Arc::new(registry),
             gateway,
-        }
+        })
     }
 }
 
-/// Load the agent registry, logging a visible warning if the load fails.
+/// Load the exact Agent registry projection required for EAL dispatch.
 ///
-/// Previously this was `load_agents().unwrap_or_default()`, which turned
-/// "registry file is corrupt / home dir missing / permission denied"
-/// into "you have no registered agents", so an EAL member-call like
-/// `claude.chat(...)` would fail downstream with `agent '…' not found
-/// in registry` — a classic false-negative that sends operators hunting
-/// for a mis-registered agent when the real problem is upstream.
+/// A missing registry file is still a valid first-run empty state because
+/// `agent_registry::load_agents()` owns that persistence rule. Any unreadable
+/// or malformed registry is unavailable runtime state and must fail before
+/// child Invocation planning.
 ///
-/// We still want a usable dispatcher when no agents are registered
-/// (that is a legitimate first-run state), so we return an empty
-/// registry on failure *after* logging. The distinction between
-/// "empty by design" and "empty by failure" is preserved in operator-
-/// visible logs rather than hidden from the caller.
-fn load_registry_or_warn() -> crate::daemon::persistence::agent_registry::AgentRegistry {
-    match AgentAggregateRepository::load_snapshot()
-        .map(|snapshot| snapshot.registered_agent_registry_projection())
-    {
-        Ok(registry) => registry,
-        Err(e) => {
-            eprintln!(
-                "[easynet eal] warning: Agent aggregate load failed ({e}); \
-                 dispatching with an empty registry. Any agent-target call \
-                 will fail with `not_found` until the registry is repaired."
-            );
-            crate::daemon::persistence::agent_registry::AgentRegistry::default()
-        }
-    }
+/// EAL does not need hosted-Agent identity state to validate an Agent target,
+/// so this deliberately reads only the registry projection instead of the
+/// broader aggregate snapshot.
+fn load_registry_projection_for_dispatch(
+) -> anyhow::Result<crate::daemon::persistence::agent_registry::AgentRegistry> {
+    AgentAggregateRepository::load_registered_agent_registry_projection()
+        .map_err(|error| error.into_source_or_self())
+        .context("load Agent registry projection for EAL dispatch")
 }
 
 impl StepDispatcher for AgentAwareDispatcher {
@@ -214,6 +202,20 @@ mod tests {
     use super::*;
     use crate::core::agent::id::{AbilityName, AgentId};
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+    use crate::daemon::persistence::config;
+
+    struct UnusedMissionGateway;
+
+    impl MissionInvocationGateway for UnusedMissionGateway {
+        fn invoke(
+            &self,
+            _request: MissionInvocationRequest,
+        ) -> anyhow::Result<
+            crate::daemon::execution::mission::invocation_gateway::MissionInvocationOutcome,
+        > {
+            panic!("registry-load tests must not invoke the Mission gateway");
+        }
+    }
 
     fn claude_chat_target() -> (AgentId, AbilityName) {
         (
@@ -257,6 +259,42 @@ mod tests {
         assert!(
             error.message().contains("unknown ability: claude.chat"),
             "canonical row was not used; unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn dispatcher_accepts_missing_registry_as_first_run_empty_state() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+
+        let dispatcher = AgentAwareDispatcher::new(Arc::new(UnusedMissionGateway));
+
+        assert!(
+            dispatcher.is_ok(),
+            "missing registry file is a valid first-run empty registry"
+        );
+    }
+
+    #[test]
+    fn dispatcher_rejects_malformed_registry_instead_of_empty_fallback() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let state_dir = config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("create isolated state dir");
+        std::fs::write(state_dir.join("agents.json"), "{not json")
+            .expect("seed malformed registry");
+
+        let error = match AgentAwareDispatcher::new(Arc::new(UnusedMissionGateway)) {
+            Ok(_) => panic!("malformed registry must not construct an EAL dispatcher"),
+            Err(error) => error,
+        };
+        let message = format!("{error:#}");
+
+        assert!(
+            message.contains("load Agent registry projection for EAL dispatch"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains("parse"),
+            "malformed registry must surface as parse failure, got: {message}"
         );
     }
 }

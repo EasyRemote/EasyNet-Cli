@@ -2,6 +2,19 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-20 EAL agent registry unavailable-state fallback audit
+
+- `codegraph query load_registry_or_warn` reported the production EAL
+  dispatcher helper in `src/eal/interpreter/dispatch.rs`.
+- `rg` confirmed `AgentAwareDispatcher::new()` loaded the daemon
+  `AgentAggregateRepository` snapshot and, on any load error, printed a warning
+  before returning `AgentRegistry::default()`.
+- The root abstraction problem was false empty-state projection. EAL dispatch
+  needs only the registered-Agent registry projection, not hosted-Agent
+  identity state. A missing registry file is a legitimate empty first-run
+  registry, but a corrupt/unreadable registry is unavailable runtime state and
+  must not become `agent not found` later in the child Invocation path.
+
 ## 2026-07-20 Ability catalogue descriptor-ref synthesis audit
 
 - `codegraph query descriptor_ref` reported

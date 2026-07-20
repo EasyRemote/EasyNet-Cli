@@ -4367,26 +4367,22 @@ for governance_status_surface, surface_label in governance_status_surfaces:
         if token in production_text:
             add("R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK", governance_status_surface, 1, detail)
 
-# Rule 41: EAL agent dispatch consumes Agent aggregate projections. EAL member
-# calls are execution paths; constructing their dispatcher from a registry-only
-# file read revives a second read owner for Agent dispatch proof.
+# Rule 41: EAL agent dispatch consumes the Agent repository-owned registered
+# Agent registry projection. EAL member calls are execution paths; constructing
+# their dispatcher from a direct registry file read revives a second read owner
+# for Agent dispatch proof, while projecting registry load failures as empty
+# state hides unavailable runtime authority.
 eal_dispatch = cli_root / "src/eal/interpreter/dispatch.rs"
 if eal_dispatch.exists():
     text = source(eal_dispatch)
     production_text = text.split("#[cfg(test)]", 1)[0]
-    eal_requirements = (
-        (
-            "AgentAggregateRepository::load_snapshot()",
-            "EAL AgentAwareDispatcher must load through the Agent aggregate repository",
-        ),
-        (
-            "registered_agent_registry_projection()",
-            "EAL AgentAwareDispatcher must consume aggregate registered-Agent projection",
-        ),
-    )
-    for token, detail in eal_requirements:
-        if token not in production_text:
-            add("R41_EAL_AGENT_DISPATCH_AGGREGATE_FORK", eal_dispatch, 1, detail)
+    if "AgentAggregateRepository::load_registered_agent_registry_projection()" not in production_text:
+        add(
+            "R41_EAL_AGENT_DISPATCH_AGGREGATE_FORK",
+            eal_dispatch,
+            1,
+            "EAL AgentAwareDispatcher must consume the repository-owned registered-Agent projection",
+        )
     if "agent_registry::load_agents" in production_text:
         add(
             "R41_EAL_AGENT_DISPATCH_AGGREGATE_FORK",
@@ -4394,6 +4390,14 @@ if eal_dispatch.exists():
             1,
             "EAL AgentAwareDispatcher must not load agents.json directly",
         )
+    for token in ("unwrap_or_default()", "AgentRegistry::default()"):
+        if token in production_text:
+            add(
+                "R41_EAL_AGENT_DISPATCH_AGGREGATE_FORK",
+                eal_dispatch,
+                1,
+                "EAL AgentAwareDispatcher must not project registry load failures as empty registry",
+            )
 
 # Rule 42: hosted owner lookup surfaces consume Agent aggregate projections.
 # CLI ability catalogue filtering and local agent discovery both resolve

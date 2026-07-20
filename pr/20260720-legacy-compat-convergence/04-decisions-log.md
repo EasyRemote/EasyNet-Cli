@@ -2,6 +2,15 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-20 EAL agent registry dispatch authority
+
+- Treat the registered-Agent registry projection as the sole Agent lookup
+  authority for EAL Agent-target dispatch. Dispatch construction reads exactly
+  that projection and does not depend on hosted-Agent identity inventory.
+- Treat malformed/unreadable registry state as unavailable Mission dispatch
+  state. It is not equivalent to an empty first-run registry and must not be
+  rewritten into `AgentRegistry::default()`.
+
 ## 2026-07-20 ability catalogue descriptor facts
 
 - Treat `meta.list_abilities` as the sole descriptor read-model authority for

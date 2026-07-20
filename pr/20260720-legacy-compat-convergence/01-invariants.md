@@ -124,3 +124,7 @@
   `meta.list_abilities` is the descriptor read-model authority; CLI facades
   must fail closed on missing or invalid `descriptor_ref` instead of rebuilding
   it from hash/version/action fields.
+- EAL/Mission dispatch must not project unavailable or corrupt agent registry
+  state as an empty registry. A missing registry file is a valid first-run
+  empty state; an unreadable or malformed registry is unavailable dispatch
+  state and must fail before child Invocation planning.
