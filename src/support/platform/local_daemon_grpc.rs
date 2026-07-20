@@ -773,10 +773,9 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan(
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
     use anyhow::Context;
     use axon_sdk::pb::axon::v1::{
-        invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload,
-        BinaryChunk, ContentEnvelope, EnvelopeOpen, InvokeBidiUp, StreamDescriptor,
+        invoke_bidi_up::Payload as UpPayload, BinaryChunk, ContentEnvelope, EnvelopeOpen,
+        InvokeBidiUp, StreamDescriptor,
     };
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
     let timeout = tuple_plan.timeout;
@@ -874,63 +873,10 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan(
             .await
             .map_err(|status| local_daemon_status_error(&function_name, status))?
         {
-            let sequence = frame.sequence;
-            let Some(payload) = frame.payload else {
+            let Some(projected) =
+                crate::support::platform::local_invoke::project_invoke_bidi_down_frame(frame)?
+            else {
                 continue;
-            };
-            let projected = match payload {
-                DownPayload::BinaryChunk(chunk) => {
-                    let payload = serde_json::from_slice(&chunk.data).unwrap_or_else(|_| {
-                        serde_json::json!({
-                            "type": "binary",
-                            "stream_id": chunk.stream_id,
-                            "data_b64": B64.encode(&chunk.data),
-                        })
-                    });
-                    crate::support::platform::local_invoke::LocalBidiFrame {
-                        sequence,
-                        content_type: "application/json".to_string(),
-                        terminal: false,
-                        payload,
-                    }
-                }
-                DownPayload::Receipt(receipt) => {
-                    let terminal = receipt.state
-                        != axon_sdk::invocation::InvocationState::Admitted.to_wire_i32();
-                    let receipt_payload = if receipt.payload.is_empty() {
-                        serde_json::Value::Null
-                    } else {
-                        serde_json::from_slice(&receipt.payload).unwrap_or_else(|_| {
-                            serde_json::json!({
-                                "data_b64": B64.encode(&receipt.payload),
-                            })
-                        })
-                    };
-                    crate::support::platform::local_invoke::LocalBidiFrame {
-                        sequence,
-                        content_type: receipt.payload_content_type.clone(),
-                        terminal,
-                        payload: serde_json::json!({
-                            "type": "receipt",
-                            "state": receipt.state,
-                            "reason": receipt.reason,
-                            "cleanup_complete": receipt.cleanup_complete,
-                            "failure": receipt.failure.map(|failure| serde_json::json!({
-                                "code": failure.code,
-                                "message": failure.message,
-                                "retryable": failure.retryable,
-                            })),
-                            "payload": receipt_payload,
-                        }),
-                    }
-                }
-                DownPayload::Control(_) => crate::support::platform::local_invoke::LocalBidiFrame {
-                    sequence,
-                    content_type: "application/json".to_string(),
-                    terminal: false,
-                    payload: serde_json::json!({"type": "control"}),
-                },
-                DownPayload::DispatchCall(_) | DownPayload::ReverseDispatchResult(_) => continue,
             };
             let terminal = projected.terminal;
             frames.push(projected);

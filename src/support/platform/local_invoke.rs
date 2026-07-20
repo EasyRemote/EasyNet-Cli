@@ -75,6 +75,106 @@ pub struct LocalBidiFrame {
     pub payload: Value,
 }
 
+/// Project one Axon `InvokeBidiDown` frame into the support-layer JSON frame
+/// shape consumed by CLI/product callers.
+///
+/// Binary chunks are payload bytes by definition, so non-JSON data is exposed
+/// losslessly as `data_b64`. Receipt payloads are different: they are receipt
+/// projection facts. A non-empty receipt payload must declare a JSON content
+/// type and parse as JSON, otherwise the projection fails before product code
+/// can mistake opaque bytes for verified receipt facts.
+#[cfg(feature = "axon-pb")]
+pub fn project_invoke_bidi_down_frame(
+    frame: axon_sdk::pb::axon::v1::InvokeBidiDown,
+) -> anyhow::Result<Option<LocalBidiFrame>> {
+    use axon_sdk::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use serde_json::json;
+
+    let sequence = frame.sequence;
+    let Some(payload) = frame.payload else {
+        return Ok(None);
+    };
+
+    let projected = match payload {
+        DownPayload::BinaryChunk(chunk) => {
+            let payload = serde_json::from_slice(&chunk.data).unwrap_or_else(|_| {
+                json!({
+                    "type": "binary",
+                    "stream_id": chunk.stream_id,
+                    "data_b64": B64.encode(&chunk.data),
+                })
+            });
+            LocalBidiFrame {
+                sequence,
+                content_type: "application/json".to_string(),
+                terminal: false,
+                payload,
+            }
+        }
+        DownPayload::Receipt(receipt) => {
+            let terminal =
+                receipt.state != axon_sdk::invocation::InvocationState::Admitted.to_wire_i32();
+            let receipt_payload =
+                project_receipt_payload_json(&receipt.payload_content_type, &receipt.payload)?;
+            LocalBidiFrame {
+                sequence,
+                content_type: receipt.payload_content_type.clone(),
+                terminal,
+                payload: json!({
+                    "type": "receipt",
+                    "state": receipt.state,
+                    "reason": receipt.reason,
+                    "cleanup_complete": receipt.cleanup_complete,
+                    "failure": receipt.failure.map(|failure| json!({
+                        "code": failure.code,
+                        "message": failure.message,
+                        "retryable": failure.retryable,
+                    })),
+                    "payload": receipt_payload,
+                }),
+            }
+        }
+        DownPayload::Control(_) => LocalBidiFrame {
+            sequence,
+            content_type: "application/json".to_string(),
+            terminal: false,
+            payload: json!({"type": "control"}),
+        },
+        DownPayload::DispatchCall(_) | DownPayload::ReverseDispatchResult(_) => return Ok(None),
+    };
+
+    Ok(Some(projected))
+}
+
+#[cfg(feature = "axon-pb")]
+fn project_receipt_payload_json(content_type: &str, payload: &[u8]) -> anyhow::Result<Value> {
+    if payload.is_empty() {
+        return Ok(Value::Null);
+    }
+    if !is_json_content_type(content_type) {
+        let content_type = if content_type.trim().is_empty() {
+            "<missing>"
+        } else {
+            content_type.trim()
+        };
+        anyhow::bail!("InvokeBidi receipt payload declares non-JSON content_type `{content_type}`");
+    }
+    serde_json::from_slice(payload)
+        .map_err(|err| anyhow::anyhow!("InvokeBidi receipt payload is not valid JSON: {err}"))
+}
+
+#[cfg(feature = "axon-pb")]
+fn is_json_content_type(content_type: &str) -> bool {
+    let essence = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    essence == "application/json" || essence.ends_with("+json")
+}
+
 /// Typed failure classes for local-daemon invocation (F-023).
 ///
 /// Minted at the transport layer where the cause is structurally known
@@ -640,6 +740,77 @@ mod tests {
         assert_eq!(
             classify_invoke_error(&unavailable),
             LocalInvokeErrorKind::Failed
+        );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn bidi_down_projection_preserves_binary_chunk_as_lossless_b64() {
+        use axon_sdk::pb::axon::v1::{
+            invoke_bidi_down::Payload as DownPayload, BinaryChunk, InvokeBidiDown,
+        };
+
+        let frame = project_invoke_bidi_down_frame(InvokeBidiDown {
+            sequence: 7,
+            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                stream_id: 3,
+                data: vec![0xff, 0x00, 0x01],
+                ..BinaryChunk::default()
+            })),
+            ..InvokeBidiDown::default()
+        })
+        .expect("binary chunk projection")
+        .expect("binary chunk frame");
+
+        assert_eq!(frame.sequence, 7);
+        assert_eq!(frame.payload["type"], "binary");
+        assert_eq!(frame.payload["stream_id"], 3);
+        assert_eq!(frame.payload["data_b64"], "/wAB");
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn bidi_receipt_projection_rejects_non_json_payload_content_type() {
+        use axon_sdk::pb::axon::v1::{
+            invoke_bidi_down::Payload as DownPayload, InvocationReceipt, InvokeBidiDown,
+        };
+
+        let error = project_invoke_bidi_down_frame(InvokeBidiDown {
+            payload: Some(DownPayload::Receipt(InvocationReceipt {
+                payload_content_type: "application/octet-stream".to_string(),
+                payload: vec![1, 2, 3],
+                ..InvocationReceipt::default()
+            })),
+            ..InvokeBidiDown::default()
+        })
+        .expect_err("receipt payload content_type must be JSON");
+
+        assert!(
+            error.to_string().contains("non-JSON content_type"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn bidi_receipt_projection_rejects_malformed_json_payload() {
+        use axon_sdk::pb::axon::v1::{
+            invoke_bidi_down::Payload as DownPayload, InvocationReceipt, InvokeBidiDown,
+        };
+
+        let error = project_invoke_bidi_down_frame(InvokeBidiDown {
+            payload: Some(DownPayload::Receipt(InvocationReceipt {
+                payload_content_type: "application/json".to_string(),
+                payload: b"{not-json".to_vec(),
+                ..InvocationReceipt::default()
+            })),
+            ..InvokeBidiDown::default()
+        })
+        .expect_err("receipt payload JSON must parse");
+
+        assert!(
+            error.to_string().contains("not valid JSON"),
+            "wrong error: {error}"
         );
     }
 

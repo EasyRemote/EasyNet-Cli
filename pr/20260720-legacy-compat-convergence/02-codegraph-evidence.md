@@ -2,6 +2,26 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-20 InvokeBidi receipt payload projection fallback audit
+
+- `rg` found identical down-frame projection logic in
+  `src/daemon/invocation/routing/remote_invoke.rs` and
+  `src/support/platform/local_daemon_grpc.rs`: `DownPayload::Receipt` decoded
+  `receipt.payload` as JSON but wrapped malformed bytes as `{"data_b64": ...}`.
+- `codegraph impact LocalBidiFrame --depth 2` showed this projection feeds
+  `ability bidi`, local daemon gRPC tuple drain, and remote target bidi drain.
+  That made the fallback product-visible rather than an internal transport
+  detail.
+- The root abstraction problem was duplicated receipt projection authority:
+  two transport adapters interpreted receipt payload schema locally and both
+  hid malformed receipt facts behind opaque JSON. BinaryChunk payloads are
+  allowed to be bytes; receipt payloads are receipt projection facts and must
+  fail closed when non-empty bytes are not declared/parseable JSON.
+- After the change, `codegraph query project_invoke_bidi_down_frame --limit 40`
+  reports one helper in `src/support/platform/local_invoke.rs`, and
+  `codegraph callers project_invoke_bidi_down_frame --limit 40` reports the two
+  production drains plus focused tests.
+
 ## 2026-07-20 Cross-Hub peer envelope subject fallback audit
 
 - `codegraph impact build_peer_envelope --depth 3` reported production impact

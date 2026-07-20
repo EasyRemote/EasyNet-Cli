@@ -5235,6 +5235,35 @@ expect_fail \
   "R76_PEER_ENVELOPE_EXPLICIT_SUBJECT"
 
 make_good_fixture
+mkdir -p "$CLI/src/support/platform" "$CLI/src/daemon/invocation/routing"
+cat >"$CLI/src/support/platform/local_invoke.rs" <<'EOF'
+pub struct LocalBidiFrame;
+
+pub fn project_invoke_bidi_down_frame(
+    frame: axon_sdk::pb::axon::v1::InvokeBidiDown,
+) -> anyhow::Result<Option<LocalBidiFrame>> {
+    use axon_sdk::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    match frame.payload {
+        Some(DownPayload::Receipt(receipt)) => {
+            let _payload = serde_json::from_slice::<serde_json::Value>(&receipt.payload)
+                .unwrap_or_else(|_| serde_json::json!({"data_b64": B64.encode(&receipt.payload)}));
+            Ok(Some(LocalBidiFrame))
+        }
+        _ => Ok(None),
+    }
+}
+EOF
+cat >"$CLI/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
+fn drain(frame: axon_sdk::pb::axon::v1::InvokeBidiDown) {
+    let _ = frame;
+}
+EOF
+expect_fail \
+  "bidi receipt payload data_b64 fallback" \
+  "R77_BIDI_RECEIPT_PAYLOAD_PROJECTION"
+
+make_good_fixture
 expect_pass "fixture restored after all negative cases"
 
 printf 'test_check_architecture_convergence.sh: all cases passed\n'

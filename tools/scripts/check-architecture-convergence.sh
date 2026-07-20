@@ -7120,6 +7120,78 @@ if peer_envelope_signer.exists():
             )
 
 
+# Rule 77: InvokeBidi down-frame projection has one support-layer owner, and
+# receipt payload facts must fail closed when they are not declared JSON or do
+# not parse as JSON. BinaryChunk data may stay lossless `data_b64`; receipt
+# payloads must not be converted to opaque bytes after JSON parse failure.
+local_invoke = cli_root / "src/support/platform/local_invoke.rs"
+if local_invoke.exists():
+    text = source(local_invoke)
+    for token, detail in (
+        (
+            "pub fn project_invoke_bidi_down_frame",
+            "LocalBidiFrame owner must provide the single InvokeBidiDown projection helper",
+        ),
+        (
+            "fn project_receipt_payload_json",
+            "InvokeBidi receipt payload JSON validation must be centralized",
+        ),
+        (
+            "InvokeBidi receipt payload declares non-JSON content_type",
+            "receipt payload projection must reject non-JSON content types",
+        ),
+        (
+            "InvokeBidi receipt payload is not valid JSON",
+            "receipt payload projection must reject malformed JSON",
+        ),
+    ):
+        if token not in text:
+            add("R77_BIDI_RECEIPT_PAYLOAD_PROJECTION", local_invoke, 1, detail)
+    helper_body = rust_method_body(text, "project_invoke_bidi_down_frame")
+    if helper_body is not None:
+        offset, body = helper_body
+        body_start = text.find("{", offset) + 1
+        receipt_match = re.search(
+            r"DownPayload::Receipt[\s\S]{0,900}data_b64",
+            body,
+        )
+        if receipt_match:
+            add(
+                "R77_BIDI_RECEIPT_PAYLOAD_PROJECTION",
+                local_invoke,
+                line_number(text, body_start + receipt_match.start()),
+                "receipt payload projection must not wrap malformed receipt payload bytes as data_b64",
+            )
+
+for path in (
+    cli_root / "src/support/platform/local_daemon_grpc.rs",
+    cli_root / "src/daemon/invocation/routing/remote_invoke.rs",
+):
+    if not path.exists():
+        continue
+    text = source(path)
+    owns_bidi_drain_projection = (
+        "invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan" in text
+        or "invoke_remote_target_bidi_json_frames" in text
+        or "DownPayload::Receipt" in text
+    )
+    if owns_bidi_drain_projection and "project_invoke_bidi_down_frame(frame)" not in text:
+        add(
+            "R77_BIDI_RECEIPT_PAYLOAD_PROJECTION",
+            path,
+            1,
+            "bidi drain transport must delegate down-frame projection to local_invoke",
+        )
+    receipt_match = re.search(r"DownPayload::Receipt[\s\S]{0,900}data_b64", text)
+    if receipt_match:
+        add(
+            "R77_BIDI_RECEIPT_PAYLOAD_PROJECTION",
+            path,
+            line_number(text, receipt_match.start()),
+            "transport-local bidi drain must not synthesize data_b64 receipt payload fallbacks",
+        )
+
+
 # Rule 73: Device trust sync consumes hub resolve_key responses as
 # schema-bound trust evidence. It must not repair missing `public_keys_b64`
 # from legacy `public_key_b64`, and it must not skip malformed key rows.

@@ -723,11 +723,7 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
     input_frames: Vec<Value>,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
-    use axon_sdk::pb::axon::v1::{
-        invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload,
-        BinaryChunk, InvokeBidiUp,
-    };
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use axon_sdk::pb::axon::v1::{invoke_bidi_up::Payload as UpPayload, BinaryChunk, InvokeBidiUp};
 
     let RemoteInvocationRequest {
         target,
@@ -853,63 +849,10 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
                 status.message(),
             )
         })? {
-            let sequence = frame.sequence;
-            let Some(payload) = frame.payload else {
+            let Some(projected) =
+                crate::support::platform::local_invoke::project_invoke_bidi_down_frame(frame)?
+            else {
                 continue;
-            };
-            let projected = match payload {
-                DownPayload::BinaryChunk(chunk) => {
-                    let payload = serde_json::from_slice(&chunk.data).unwrap_or_else(|_| {
-                        json!({
-                            "type": "binary",
-                            "stream_id": chunk.stream_id,
-                            "data_b64": B64.encode(&chunk.data),
-                        })
-                    });
-                    crate::support::platform::local_invoke::LocalBidiFrame {
-                        sequence,
-                        content_type: "application/json".to_string(),
-                        terminal: false,
-                        payload,
-                    }
-                }
-                DownPayload::Receipt(receipt) => {
-                    let terminal = receipt.state
-                        != axon_sdk::invocation::InvocationState::Admitted.to_wire_i32();
-                    let receipt_payload = if receipt.payload.is_empty() {
-                        Value::Null
-                    } else {
-                        serde_json::from_slice(&receipt.payload).unwrap_or_else(|_| {
-                            json!({
-                                "data_b64": B64.encode(&receipt.payload),
-                            })
-                        })
-                    };
-                    crate::support::platform::local_invoke::LocalBidiFrame {
-                        sequence,
-                        content_type: receipt.payload_content_type.clone(),
-                        terminal,
-                        payload: json!({
-                            "type": "receipt",
-                            "state": receipt.state,
-                            "reason": receipt.reason,
-                            "cleanup_complete": receipt.cleanup_complete,
-                            "failure": receipt.failure.map(|failure| json!({
-                                "code": failure.code,
-                                "message": failure.message,
-                                "retryable": failure.retryable,
-                            })),
-                            "payload": receipt_payload,
-                        }),
-                    }
-                }
-                DownPayload::Control(_) => crate::support::platform::local_invoke::LocalBidiFrame {
-                    sequence,
-                    content_type: "application/json".to_string(),
-                    terminal: false,
-                    payload: json!({"type": "control"}),
-                },
-                DownPayload::DispatchCall(_) | DownPayload::ReverseDispatchResult(_) => continue,
             };
             let terminal = projected.terminal;
             frames.push(projected);

@@ -2,6 +2,19 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-20 InvokeBidi receipt payload projection
+
+- Treat `LocalBidiFrame` as the support-layer owner for projecting
+  `InvokeBidiDown` frames into product-consumable JSON. Local daemon and remote
+  target bidi drains now transport frames and delegate projection; they do not
+  independently interpret receipt payload schema.
+- Preserve lossless `data_b64` only for `BinaryChunk`, where bytes are the
+  actual frame payload. Receipt payload bytes are receipt projection facts:
+  non-empty payloads must declare a JSON content type and parse as JSON.
+- Treat malformed/non-JSON receipt payloads as unavailable receipt projection
+  state. Product callers should receive a direct projection error, not a
+  synthetic JSON object that can be mistaken for verified receipt facts.
+
 ## 2026-07-20 cross-Hub peer invocation subject state
 
 - Treat cross-Hub peer envelope subject selection as explicit state, not an

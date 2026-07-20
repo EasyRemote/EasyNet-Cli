@@ -2,6 +2,26 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-20 InvokeBidi receipt payload projection fallback removal
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q local_invoke --lib --features axon-pb`
+  — PASS (`11 passed`; includes lossless BinaryChunk projection and receipt
+  payload rejection for non-JSON content type / malformed JSON).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --features axon-pb`
+  — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R77 for single-owner InvokeBidi down-frame projection and fail-closed receipt
+  payload parsing.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for `DownPayload::Receipt` malformed payload fallback to
+  `data_b64`.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `git diff --check` — PASS.
+- `rg -n "DownPayload::Receipt[\\s\\S]{0,900}data_b64|serde_json::from_slice\\(&receipt\\.payload\\)\\.unwrap_or_else" ...`
+  — PASS; no production matches in local/remote bidi drain projection.
+
 ## 2026-07-20 Cross-Hub peer envelope subject fallback removal
 
 - `/Users/macbook.silan.tech/.cargo/bin/cargo test -q peer_envelope_signer --lib --features axon-pb`
