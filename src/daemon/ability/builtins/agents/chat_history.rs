@@ -56,12 +56,12 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 /// by default and badge it in the session list.
 fn list_handler(args: Value) -> anyhow::Result<Value> {
     let agent = require_agent(&args)?;
-    let sessions = crate::daemon::persistence::chat_sessions::list_sessions(&agent);
+    let sessions = crate::daemon::persistence::chat_sessions::list_sessions(&agent)?;
     let json_sessions: Vec<Value> = sessions
         .iter()
         .map(|s| serde_json::to_value(s).unwrap_or(Value::Null))
         .collect();
-    let lifelong = crate::daemon::persistence::chat_sessions::lifelong_session(&agent);
+    let lifelong = crate::daemon::persistence::chat_sessions::lifelong_session(&agent)?;
     Ok(json!({
         "agent": agent,
         "lifelong_session_id": lifelong,
@@ -195,6 +195,15 @@ mod tests {
         // reads the field unconditionally.
         let resp = list_handler(json!({"agent": "demot"})).expect("list");
         assert!(resp["lifelong_session_id"].is_null());
+        crate::daemon::persistence::chat_sessions::write_turn(
+            "demot",
+            "sess-1",
+            "hi",
+            "yo",
+            &[],
+            &json!({}),
+        )
+        .expect("seed turn");
         crate::daemon::persistence::chat_sessions::set_lifelong_session("demot", "sess-1")
             .expect("bind");
         let resp = list_handler(json!({"agent": "demot"})).expect("list");

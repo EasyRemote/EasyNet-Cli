@@ -596,7 +596,8 @@ pub(crate) fn invoke_direct_with_progress(
     // with is bound as the pointer after the transcript write).
     let lifelong_requested = parsed.session_id.as_deref() == Some(LIFELONG_SESSION_ID);
     if lifelong_requested {
-        parsed.session_id = crate::daemon::persistence::chat_sessions::lifelong_session(agent_name);
+        parsed.session_id =
+            crate::daemon::persistence::chat_sessions::lifelong_session(agent_name)?;
     }
 
     // Session id resolution. When the caller supplies one we echo
@@ -900,7 +901,8 @@ fn stream_handler(
     // see the comment there and on LIFELONG_SESSION_ID.
     let lifelong_requested = parsed.session_id.as_deref() == Some(LIFELONG_SESSION_ID);
     if lifelong_requested {
-        parsed.session_id = crate::daemon::persistence::chat_sessions::lifelong_session(agent_name);
+        parsed.session_id =
+            crate::daemon::persistence::chat_sessions::lifelong_session(agent_name)?;
     }
     let session_id = parsed
         .session_id
@@ -2013,6 +2015,15 @@ mod tests {
         // literal "lifelong" never appears on the wire as a session id.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let bound = "38e5640c-6843-4f15-8f3a-2c8de75d0209";
+        crate::daemon::persistence::chat_sessions::write_turn(
+            "alice",
+            bound,
+            "seed",
+            "seed",
+            &[],
+            &json!({}),
+        )
+        .expect("seed bound session");
         crate::daemon::persistence::chat_sessions::set_lifelong_session("alice", bound)
             .expect("bind");
         let entry = entry();

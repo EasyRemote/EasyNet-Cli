@@ -29,7 +29,7 @@ fn resolve_session_id(args: &SendArgs) -> anyhow::Result<Option<String>> {
     }
 
     if args.follow {
-        match chat_sessions::latest_session(&args.name) {
+        match chat_sessions::latest_session(&args.name)? {
             Some(sid) => return Ok(Some(sid)),
             None => anyhow::bail!(
                 "agent '{}' has no recorded sessions yet — \
@@ -40,7 +40,7 @@ fn resolve_session_id(args: &SendArgs) -> anyhow::Result<Option<String>> {
     }
 
     if args.resume {
-        let sessions = chat_sessions::list_sessions(&args.name);
+        let sessions = chat_sessions::list_sessions(&args.name)?;
         if sessions.is_empty() {
             anyhow::bail!(
                 "agent '{}' has no recorded sessions yet — \

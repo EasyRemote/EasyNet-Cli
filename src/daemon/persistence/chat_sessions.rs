@@ -122,9 +122,9 @@ pub struct SessionMeta {
 
 /// Pointer file at `<agent>/sessions/index.json`. Read on every
 /// `--follow` / `--resume`; rewritten atomically after every turn
-/// the daemon successfully logs. Scanning the directory works as a
-/// fallback when the index is missing or stale, but the index is
-/// the fast path.
+/// the daemon successfully logs. The index is the canonical session
+/// inventory. JSONL files hold transcript content, not discovery
+/// authority.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionIndex {
     /// Most recently touched session id. `--follow` resumes this.
@@ -172,14 +172,16 @@ fn index_file(agent: &str) -> PathBuf {
     sessions_dir(agent).join("index.json")
 }
 
-/// Read the index file. Returns an empty default if missing or
-/// corrupt — a corrupt index is recoverable by re-scanning the
-/// directory; we don't want a corrupt cache to kill `agent send`.
-pub fn load_index(agent: &str) -> SessionIndex {
+/// Read the canonical session index. Missing index means the agent
+/// has no recorded sessions yet; malformed or unreadable index state
+/// is rejected instead of reconstructed from transcript files.
+pub fn load_index(agent: &str) -> anyhow::Result<SessionIndex> {
     let path = index_file(agent);
     match fs::read_to_string(&path) {
-        Ok(raw) => serde_json::from_str(&raw).unwrap_or_default(),
-        Err(_) => SessionIndex::default(),
+        Ok(raw) => serde_json::from_str(&raw)
+            .with_context(|| format!("parse session index {}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SessionIndex::default()),
+        Err(error) => Err(error).with_context(|| format!("read session index {}", path.display())),
     }
 }
 
@@ -197,26 +199,20 @@ fn save_index(agent: &str, index: &SessionIndex) -> anyhow::Result<()> {
 
 /// Latest session id for `agent`, or `None` when nothing has been
 /// written yet. Backs `easynet agent send --follow`.
-pub fn latest_session(agent: &str) -> Option<String> {
-    let idx = load_index(agent);
+pub fn latest_session(agent: &str) -> anyhow::Result<Option<String>> {
+    let idx = load_index(agent)?;
     if idx.latest.is_empty() {
-        None
+        Ok(None)
     } else {
-        Some(idx.latest)
+        Ok(Some(idx.latest))
     }
 }
 
 /// Every session for `agent`, most-recent-first. Reads the index
-/// when it exists; falls back to a directory scan when it doesn't.
-/// The directory scan is the cold-start path: a daemon that wrote
-/// JSONLs but never updated the index (interrupted process, manual
-/// file copy) still shows up in `--resume`.
-pub fn list_sessions(agent: &str) -> Vec<SessionDescriptor> {
-    let idx = load_index(agent);
-    if !idx.sessions.is_empty() {
-        return idx.sessions;
-    }
-    rescan_dir(agent).unwrap_or_default()
+/// inventory only. Transcript JSONL files are loaded only after the
+/// caller names a session id from this index.
+pub fn list_sessions(agent: &str) -> anyhow::Result<Vec<SessionDescriptor>> {
+    Ok(load_index(agent)?.sessions)
 }
 
 /// Read every JSONL line of one session. Used by
@@ -290,6 +286,7 @@ fn write_turn_inner(
     let path = session_file(agent, session_id);
     let now = chrono::Utc::now().to_rfc3339();
     let is_new_file = !path.exists();
+    let mut idx = load_index(agent)?;
 
     // Append the meta row on first write.
     let mut buf = String::new();
@@ -334,7 +331,6 @@ fn write_turn_inner(
         .with_context(|| format!("append {}", path.display()))?;
 
     // Refresh the index. We update in-place then rewrite atomically.
-    let mut idx = load_index(agent);
     idx.latest = session_id.to_string();
     let preview = make_preview(prompt);
     if let Some(existing) = idx.sessions.iter_mut().find(|s| s.session_id == session_id) {
@@ -361,12 +357,12 @@ fn write_turn_inner(
 /// The agent's lifelong (default) session id, or `None` while no
 /// lifelong turn has been recorded yet. The chat ability resolves
 /// the `lifelong` sentinel through this before dispatch.
-pub fn lifelong_session(agent: &str) -> Option<String> {
-    let idx = load_index(agent);
+pub fn lifelong_session(agent: &str) -> anyhow::Result<Option<String>> {
+    let idx = load_index(agent)?;
     if idx.lifelong.is_empty() {
-        None
+        Ok(None)
     } else {
-        Some(idx.lifelong)
+        Ok(Some(idx.lifelong))
     }
 }
 
@@ -376,7 +372,14 @@ pub fn lifelong_session(agent: &str) -> Option<String> {
 /// refresh in `write_turn` this must not fail the in-flight reply,
 /// hence the best-effort wrapper below.
 pub fn set_lifelong_session(agent: &str, session_id: &str) -> anyhow::Result<()> {
-    let mut idx = load_index(agent);
+    let mut idx = load_index(agent)?;
+    let known = idx.sessions.iter().any(|s| s.session_id == session_id);
+    if !known {
+        anyhow::bail!(
+            "session {session_id} not in {agent}'s index — \
+             nothing to bind as lifelong"
+        );
+    }
     if idx.lifelong == session_id {
         return Ok(());
     }
@@ -401,7 +404,7 @@ pub fn set_lifelong_session_best_effort(agent: &str, session_id: &str) {
 /// unknown id is treated as an error so `--resume` doesn't
 /// accidentally create a placeholder index row.
 pub fn set_latest_session(agent: &str, session_id: &str) -> anyhow::Result<()> {
-    let mut idx = load_index(agent);
+    let mut idx = load_index(agent)?;
     let known = idx.sessions.iter().any(|s| s.session_id == session_id);
     if !known {
         anyhow::bail!(
@@ -461,78 +464,6 @@ fn make_preview(s: &str) -> String {
     } else {
         trimmed
     }
-}
-
-/// Cold-start fallback for `list_sessions` when the index file is
-/// missing or empty. Walks `<agent>/sessions/` for `*.jsonl`,
-/// reads the meta + last turn of each, and assembles a synthetic
-/// index. Slow on directories with thousands of files; fine for
-/// the human-scale single-digit / dozens we expect in practice.
-fn rescan_dir(agent: &str) -> anyhow::Result<Vec<SessionDescriptor>> {
-    let dir = sessions_dir(agent);
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    for entry in
-        fs::read_dir(&dir).with_context(|| format!("scan sessions dir {}", dir.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
-            continue;
-        }
-        let session_id = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-        let raw = match fs::read_to_string(&path) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        let mut started_at = String::new();
-        let mut last_turn_at = String::new();
-        let mut turn_count = 0usize;
-        let mut last_prompt = String::new();
-        for line in raw.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let v: Value = match serde_json::from_str(line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let ts = v
-                .get("timestamp")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            if started_at.is_empty() {
-                started_at = ts.clone();
-            }
-            if v.get("type").and_then(Value::as_str) == Some("turn") {
-                last_turn_at = ts;
-                turn_count += 1;
-                last_prompt = v
-                    .get("prompt")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-            }
-        }
-        if turn_count == 0 {
-            continue; // meta-only file, no turns yet
-        }
-        out.push(SessionDescriptor {
-            session_id,
-            started_at,
-            last_turn_at,
-            turn_count,
-            prompt_preview: make_preview(&last_prompt),
-        });
-    }
-    out.sort_by(|a, b| b.last_turn_at.cmp(&a.last_turn_at));
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -600,7 +531,7 @@ mod tests {
         // sub-second precision via chrono. The second write below
         // has a strictly later RFC3339 stamp.
         write_turn("demot", "newer", "x", "y", &[], &json!({})).unwrap();
-        assert_eq!(latest_session("demot"), Some("newer".to_string()));
+        assert_eq!(latest_session("demot").unwrap(), Some("newer".to_string()));
     }
 
     #[test]
@@ -608,7 +539,7 @@ mod tests {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         write_turn("demot", "a", "first", "r1", &[], &json!({})).unwrap();
         write_turn("demot", "b", "second", "r2", &[], &json!({})).unwrap();
-        let sessions = list_sessions("demot");
+        let sessions = list_sessions("demot").unwrap();
         assert_eq!(sessions.len(), 2);
         assert_eq!(sessions[0].session_id, "b");
         assert_eq!(sessions[0].turn_count, 1);
@@ -617,15 +548,40 @@ mod tests {
     }
 
     #[test]
-    fn list_sessions_falls_back_to_dir_scan_when_index_missing() {
+    fn list_sessions_uses_index_only_when_index_missing() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         write_turn("demot", "scratch", "hi", "ok", &[], &json!({})).unwrap();
-        // Simulate a corrupt / missing index.
+        // Simulate retired local state: transcript JSONL remains but
+        // the canonical inventory is absent.
         let _ = std::fs::remove_file(index_file("demot"));
-        let sessions = list_sessions("demot");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].session_id, "scratch");
-        assert_eq!(sessions[0].turn_count, 1);
+        let sessions = list_sessions("demot").unwrap();
+        assert!(
+            sessions.is_empty(),
+            "JSONL transcript files must not reconstruct session inventory"
+        );
+    }
+
+    #[test]
+    fn list_sessions_rejects_corrupt_index() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        write_turn("demot", "scratch", "hi", "ok", &[], &json!({})).unwrap();
+        std::fs::write(index_file("demot"), b"{not-json").unwrap();
+        let err = list_sessions("demot").expect_err("corrupt index must fail closed");
+        assert!(format!("{err:#}").contains("parse session index"));
+    }
+
+    #[test]
+    fn write_turn_rejects_corrupt_index_before_appending() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        write_turn("demot", "scratch", "hi", "ok", &[], &json!({})).unwrap();
+        let path = session_file("demot", "scratch");
+        let before = std::fs::metadata(&path).unwrap().len();
+        std::fs::write(index_file("demot"), b"{not-json").unwrap();
+        let err = write_turn("demot", "scratch", "again", "nope", &[], &json!({}))
+            .expect_err("corrupt index must fail before transcript append");
+        assert!(format!("{err:#}").contains("parse session index"));
+        let after = std::fs::metadata(&path).unwrap().len();
+        assert_eq!(after, before, "failed index refresh must not append JSONL");
     }
 
     #[test]
@@ -656,11 +612,11 @@ mod tests {
         write_turn("demot", "old", "x", "y", &[], &json!({})).unwrap();
         write_turn("demot", "new", "x", "y", &[], &json!({})).unwrap();
         // After both writes "new" is latest.
-        assert_eq!(latest_session("demot"), Some("new".to_string()));
+        assert_eq!(latest_session("demot").unwrap(), Some("new".to_string()));
         // Pick the older one — pointer must follow without
         // touching the JSONL.
         set_latest_session("demot", "old").expect("known id");
-        assert_eq!(latest_session("demot"), Some("old".to_string()));
+        assert_eq!(latest_session("demot").unwrap(), Some("old".to_string()));
         // The two JSONL files still exist with their original
         // turn counts (only the index pointer moved).
         let old_lines = load_session("demot", "old").unwrap();
@@ -670,19 +626,48 @@ mod tests {
     #[test]
     fn lifelong_session_round_trip() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        assert_eq!(lifelong_session("demot"), None, "fresh agent has none");
+        assert_eq!(
+            lifelong_session("demot").unwrap(),
+            None,
+            "fresh agent has none"
+        );
         write_turn("demot", "sess-1", "hi", "hello", &[], &json!({})).unwrap();
         assert_eq!(
-            lifelong_session("demot"),
+            lifelong_session("demot").unwrap(),
             None,
             "an ordinary turn must not bind the lifelong pointer"
         );
         set_lifelong_session("demot", "sess-1").expect("bind");
-        assert_eq!(lifelong_session("demot"), Some("sess-1".to_string()));
-        // Re-binding the same id is a no-op; a different id moves it.
+        assert_eq!(
+            lifelong_session("demot").unwrap(),
+            Some("sess-1".to_string())
+        );
+        // Re-binding the same id is a no-op; a different indexed id moves it.
         set_lifelong_session("demot", "sess-1").expect("idempotent");
+        write_turn(
+            "demot",
+            "sess-2",
+            "hi again",
+            "hello again",
+            &[],
+            &json!({}),
+        )
+        .unwrap();
         set_lifelong_session("demot", "sess-2").expect("rebind");
-        assert_eq!(lifelong_session("demot"), Some("sess-2".to_string()));
+        assert_eq!(
+            lifelong_session("demot").unwrap(),
+            Some("sess-2".to_string())
+        );
+    }
+
+    #[test]
+    fn set_lifelong_session_rejects_unknown_id() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        write_turn("demot", "real", "x", "y", &[], &json!({})).unwrap();
+        let err = set_lifelong_session("demot", "ghost")
+            .expect_err("unknown id must not become pointer state");
+        assert!(format!("{err}").contains("not in demot's index"));
+        assert_eq!(lifelong_session("demot").unwrap(), None);
     }
 
     #[test]
@@ -703,6 +688,6 @@ mod tests {
             .expect_err("unknown id must surface a typed error");
         assert!(format!("{err}").contains("not in demot's index"));
         // Pointer must not have moved.
-        assert_eq!(latest_session("demot"), Some("real".to_string()));
+        assert_eq!(latest_session("demot").unwrap(), Some("real".to_string()));
     }
 }
