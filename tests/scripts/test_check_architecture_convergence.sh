@@ -5413,6 +5413,49 @@ expect_fail \
   "R91_CABI_DESCRIPTOR_RESOLVE_NOT_FOUND_TYPED"
 
 make_good_fixture
+mkdir -p "$CLI/src/ffi/invocation"
+cat >"$CLI/src/ffi/invocation/mod.rs" <<'EOF'
+fn runtime_system_descriptor_catalog_entries(owner_ura: &str) -> std::result::Result<Vec<serde_json::Value>, String> {
+    Ok(catalog
+        .authority_ability_catalog_snapshot()
+        .into_iter()
+        .filter_map(|row| {
+            row.descriptor
+                .rebind_owner_ura(owner_ura)
+                .ok()
+                .and_then(descriptor_catalog_entry_from_descriptor)
+        })
+        .collect())
+}
+
+fn runtime_meta_descriptor_catalog_entries() -> std::result::Result<Vec<serde_json::Value>, String> {
+    Ok(abilities
+        .iter()
+        .filter_map(descriptor_catalog_entry_from_value)
+        .collect())
+}
+
+fn descriptor_catalog_entry_from_descriptor(
+    descriptor: AbilityDescriptor,
+) -> Option<serde_json::Value> {
+    let ability_ura = descriptor.canonical_ability_ura()?;
+    Some(serde_json::json!({"ability_ura": ability_ura}))
+}
+
+fn descriptor_catalog_entry_from_value(value: &serde_json::Value) -> Option<serde_json::Value> {
+    let ability_ura = value.get("ability_ura")?.as_str()?.trim();
+    let descriptor_hash = value.get("descriptor_hash")?.as_str()?.trim();
+    if descriptor_hash.len() != 64 {
+        return None;
+    }
+    Some(serde_json::json!({"ability_ura": ability_ura}))
+}
+EOF
+expect_fail \
+  "FFI descriptor catalog malformed provider rows skipped" \
+  "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/invocation/dispatch" "$CLI/src/daemon/boot/invocation"
 cat >"$CLI/src/daemon/invocation/dispatch/attempt_audit.rs" <<'EOF'
 struct InvocationAttemptLedger;

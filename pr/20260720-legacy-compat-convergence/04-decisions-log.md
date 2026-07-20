@@ -499,3 +499,8 @@ Decisions will be appended as root-fork choices are made.
   Paired-user trust sync must pin resolve with the locally published
   `presented_pubkey_b64` so key import is bound to the key material the local
   runtime actually holds.
+- Treat FFI descriptor catalog rows as provider evidence, not optional route
+  hints. `meta.list_abilities` and system descriptor catalogs feed SDK
+  descriptor resolution; malformed rows must fail closed as provider payload
+  errors instead of being skipped and reclassified as invisible routes,
+  `descriptor_ref not found`, or `No browser.open_session route is visible`.

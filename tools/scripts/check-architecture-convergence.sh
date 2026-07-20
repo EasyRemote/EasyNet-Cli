@@ -7545,6 +7545,103 @@ for path, missing_token, forbidden_pattern in (
             )
 
 
+# Rule 94: FFI descriptor catalog ingestion is provider evidence for SDK
+# route visibility. Malformed provider rows must fail closed as provider
+# payload errors; they must not be skipped and collapsed into "route not
+# visible" / descriptor not found.
+ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
+if ffi_invocation.exists():
+    text = source(ffi_invocation)
+    if "descriptor_catalog_entry_from_value" in text or "runtime_meta_descriptor_catalog_entries" in text:
+        match = re.search(r"\.filter_map\s*\(\s*descriptor_catalog_entry_from_value", text)
+        if match:
+            add(
+                "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
+                ffi_invocation,
+                line_number(text, match.start()),
+                "FFI descriptor catalog ingestion must not skip malformed provider rows",
+            )
+        for fn_name, signature, details in (
+            (
+                "descriptor_catalog_entry_from_value",
+                "std::result::Result<serde_json::Value, String>",
+                (
+                    "descriptor_catalog_value_required_string",
+                    "descriptor_hash is not canonical hex",
+                    "descriptor_ref is not canonical",
+                ),
+            ),
+            (
+                "descriptor_catalog_entry_from_descriptor",
+                "std::result::Result<serde_json::Value, String>",
+                (
+                    "missing canonical ability URA",
+                    "descriptor_hash missing sha256 prefix",
+                    "descriptor_ref is not canonical",
+                ),
+            ),
+        ):
+            body_info = rust_method_body(text, fn_name)
+            if body_info is None:
+                add(
+                    "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
+                    ffi_invocation,
+                    1,
+                    f"{fn_name} must remain an inspectable fallible descriptor catalog parser",
+                )
+                continue
+            offset, body = body_info
+            if signature not in text[offset : offset + 400]:
+                add(
+                    "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
+                    ffi_invocation,
+                    line_number(text, offset),
+                    f"{fn_name} must return Result instead of Option",
+                )
+            for token in details:
+                if token not in body:
+                    add(
+                        "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
+                        ffi_invocation,
+                        line_number(text, offset),
+                        f"{fn_name} must preserve provider payload error detail `{token}`",
+                    )
+        meta_body = rust_method_body(text, "runtime_meta_descriptor_catalog_entries")
+        if meta_body is not None:
+            offset, body = meta_body
+            if "filter_map" in body:
+                add(
+                    "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
+                    ffi_invocation,
+                    line_number(text, offset + body.find("filter_map")),
+                    "runtime meta descriptor catalog must propagate malformed provider rows",
+                )
+            if ".collect::<std::result::Result<Vec<_>, _>>()?" not in body:
+                add(
+                    "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
+                    ffi_invocation,
+                    line_number(text, offset),
+                    "runtime meta descriptor catalog must collect fallible provider rows",
+                )
+        system_body = rust_method_body(text, "runtime_system_descriptor_catalog_entries")
+        if system_body is not None:
+            offset, body = system_body
+            if "filter_map" in body:
+                add(
+                    "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
+                    ffi_invocation,
+                    line_number(text, offset + body.find("filter_map")),
+                    "runtime system descriptor catalog must not skip malformed system rows",
+                )
+            if "descriptor_catalog_entry_from_descriptor(descriptor)?" not in body:
+                add(
+                    "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED",
+                    ffi_invocation,
+                    line_number(text, offset),
+                    "runtime system descriptor catalog must propagate descriptor projection failures",
+                )
+
+
 # Rule 92: Invocation attempt audit is the product-visible pre-runtime
 # failure ledger. It must fail closed when unavailable or corrupt; otherwise
 # descriptor/admission/route failures disappear from invocation.history.list

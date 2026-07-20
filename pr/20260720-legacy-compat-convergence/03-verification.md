@@ -1608,3 +1608,33 @@ Commands and outcomes will be appended after implementation.
   (`canonical-runtime-convergence-v2: OK`).
 - `PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check` — PASS.
 - `git diff --check` — PASS.
+
+## 2026-07-21 FFI descriptor catalog provider payload fail-closed ingestion
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "descriptor_ref not found owner is not online browser.open_session
+  invocation.history.list AUTHORITY_SUBJECT_MISMATCH
+  target_owned_descriptor_catalog_subject_ura"` — PASS; reports the FFI
+  descriptor resolver, remote `meta.list_abilities` probe, system descriptor
+  catalog, and descriptor binding helpers.
+- `PATH="$HOME/.cargo/bin:$PATH" cargo test -q
+  descriptor_catalog_ingestion_rejects_malformed_provider_rows --lib` — PASS
+  (`1 passed`); covers malformed provider descriptor hashes and missing
+  required provider fields.
+- `PATH="$HOME/.cargo/bin:$PATH" cargo test -q runtime_descriptor_resolver
+  --lib` — PASS (`4 passed`); verifies local descriptor resolution,
+  explicit call mode, no remote probe for local catalog miss, and remote
+  system ability descriptor synthesis.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R94 for fail-closed FFI descriptor catalog ingestion.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture where descriptor catalog rows are skipped with
+  `filter_map`, system row rebind/projection failures are dropped, and parser
+  functions return `Option`.
+- `PATH="$HOME/.cargo/bin:$PATH" cargo check --lib` — PASS.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check` — PASS.
+- `git diff --check` — PASS.

@@ -1600,3 +1600,29 @@ Evidence will be appended after indexing and focused impact queries.
   published `presented_pubkey_b64`, propagates resolve schema failures as
   bootstrap failures, and R93 guards this boundary against legacy response
   repair.
+
+## 2026-07-21 FFI descriptor catalog provider payload audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "descriptor_ref not found owner is not online browser.open_session
+  invocation.history.list AUTHORITY_SUBJECT_MISMATCH
+  target_owned_descriptor_catalog_subject_ura"` identified the C ABI
+  descriptor resolver as a product-facing route-visibility boundary. The
+  relevant source path was `runtime_resolve_descriptor_ref_json` through
+  `runtime_system_descriptor_catalog_entries`,
+  `runtime_meta_descriptor_catalog_entries`, and
+  `descriptor_catalog_entry_from_value`.
+- Targeted source inspection found the compatibility seam: provider catalog
+  rows from `meta.list_abilities` were ingested with
+  `filter_map(descriptor_catalog_entry_from_value)`, and system catalog rows
+  used `.ok().and_then(...)`. A malformed descriptor row could therefore be
+  silently dropped and reported to products as a descriptor miss or invisible
+  route.
+- The root abstraction problem was treating descriptor catalog rows as
+  optional discovery hints. For SDK descriptor resolution they are provider
+  evidence for `(callee_ura, ability, call_mode)`; malformed rows mean the
+  provider payload is unavailable/corrupt, not that the ability is absent.
+- After the change, descriptor catalog ingestion uses fallible row parsers for
+  both provider and system rows, preserves explicit error detail for missing
+  fields, non-canonical descriptor hashes, and invalid descriptor refs, and
+  R94 prevents reintroducing skip-on-error catalog ingestion.
