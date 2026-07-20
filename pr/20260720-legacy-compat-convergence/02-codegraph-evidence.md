@@ -2,6 +2,26 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-20 Cross-Hub peer envelope subject fallback audit
+
+- `codegraph impact build_peer_envelope --depth 3` reported production impact
+  through `PeerInvokeRequest::into_invoke_request`,
+  `FederatedKeyResolver::resolve_federated`,
+  `UnaryRouteDispatcher::dispatch_federation_proxy_list_user_devices`, and
+  `UnaryRouteDispatcher::dispatch_namespace_proxy_resolve`.
+- Targeted `rg` found `caller_envelope.cloned().unwrap_or_default()` and
+  subject fallback to `target_ura.trim().to_string()` in
+  `src/daemon/invocation/admission/peer_envelope_signer.rs`.
+- The root abstraction problem was ambiguous peer invocation subject state:
+  `None` meant both "fresh daemon-owned peer request" and "forwarded product
+  invocation omitted caller envelope". That allowed missing tuple provenance to
+  become a target-self subject and surface later as authority/descriptor/route
+  failure.
+- After the change, `codegraph query PeerInvocationSubject --limit 40`
+  reports the explicit `ForwardedCaller` and `ExplicitSubject` variants, and
+  `PeerInvokeRequest::new(...)` requires `PeerInvocationSubject<'a>` rather
+  than `Option<&Envelope>`.
+
 ## 2026-07-20 Plugin wire profile core-only fallback audit
 
 - `codegraph query PluginRuntimeManager --limit 50` identified the daemon

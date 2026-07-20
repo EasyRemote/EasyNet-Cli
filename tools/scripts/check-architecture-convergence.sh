@@ -7075,6 +7075,51 @@ if ability_wire.exists():
             )
 
 
+# Rule 76: Cross-Hub peer envelopes must carry an explicit subject source.
+# Missing caller envelopes are not target-self invocations; fresh daemon-owned
+# peer requests must declare their subject before crossing the peer transport.
+peer_envelope_signer = cli_root / "src/daemon/invocation/admission/peer_envelope_signer.rs"
+if peer_envelope_signer.exists():
+    text = source(peer_envelope_signer)
+    for token, detail in (
+        (
+            "enum PeerInvocationSubject",
+            "peer envelope signer must model subject source as an explicit state machine",
+        ),
+        (
+            "ForwardedCaller(&'a Envelope)",
+            "peer envelope signer must preserve forwarded caller provenance explicitly",
+        ),
+        (
+            "ExplicitSubject(&'a str)",
+            "peer envelope signer must support fresh peer requests through explicit subject input",
+        ),
+    ):
+        if token not in text:
+            add("R76_PEER_ENVELOPE_EXPLICIT_SUBJECT", peer_envelope_signer, 1, detail)
+    for token, detail in (
+        (
+            "caller_envelope.cloned().unwrap_or_default()",
+            "peer envelope signer must not default a missing caller envelope into an empty envelope",
+        ),
+        (
+            "unwrap_or_else(|| target_ura.trim().to_string())",
+            "peer envelope signer must not default missing subject provenance to target_ura",
+        ),
+        (
+            "caller_envelope: Option<&",
+            "PeerInvokeRequest must require a PeerInvocationSubject instead of optional caller envelope input",
+        ),
+    ):
+        for match in re.finditer(re.escape(token), text):
+            add(
+                "R76_PEER_ENVELOPE_EXPLICIT_SUBJECT",
+                peer_envelope_signer,
+                line_number(text, match.start()),
+                detail,
+            )
+
+
 # Rule 73: Device trust sync consumes hub resolve_key responses as
 # schema-bound trust evidence. It must not repair missing `public_keys_b64`
 # from legacy `public_key_b64`, and it must not skip malformed key rows.

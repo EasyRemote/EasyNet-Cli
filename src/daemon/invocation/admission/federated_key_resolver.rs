@@ -60,7 +60,9 @@ use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::identity::self_identity::CanonicalSigner;
-use crate::daemon::invocation::admission::peer_envelope_signer::PeerInvokeRequest;
+use crate::daemon::invocation::admission::peer_envelope_signer::{
+    PeerInvocationSubject, PeerInvokeRequest,
+};
 use crate::daemon::invocation::admission::principal_lifecycle::PrincipalLifecycleReader;
 use crate::daemon::trust::cell::SharedTrustAnchor;
 #[cfg(test)]
@@ -540,7 +542,7 @@ impl FederatedKeyResolver {
                     .with_message(format!("peer_hub_ura:{peer_hub_ura}:ability:{ability}"))
             })?;
         let request_builder = PeerInvokeRequest::new(
-            None,
+            PeerInvocationSubject::ExplicitSubject(&subject_ura),
             &subject_ura,
             ability,
             args_bytes,

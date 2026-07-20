@@ -32,7 +32,7 @@ use crate::daemon::invocation::admission::register_device_pubkey::parse_realm_fr
 use crate::daemon::invocation::dispatch::invocation_wire::try_entity_ref;
 
 pub(crate) struct PeerInvokeRequest<'a> {
-    caller_envelope: Option<&'a Envelope>,
+    subject: PeerInvocationSubject<'a>,
     target_ura: &'a str,
     function_name: &'a str,
     arguments: Vec<u8>,
@@ -42,7 +42,7 @@ pub(crate) struct PeerInvokeRequest<'a> {
 
 impl<'a> PeerInvokeRequest<'a> {
     pub(crate) fn new(
-        caller_envelope: Option<&'a Envelope>,
+        subject: PeerInvocationSubject<'a>,
         target_ura: &'a str,
         function_name: &'a str,
         arguments: Vec<u8>,
@@ -50,7 +50,7 @@ impl<'a> PeerInvokeRequest<'a> {
         hub_signer: Option<&'a dyn CanonicalSigner>,
     ) -> Self {
         Self {
-            caller_envelope,
+            subject,
             target_ura,
             function_name,
             arguments,
@@ -60,8 +60,7 @@ impl<'a> PeerInvokeRequest<'a> {
     }
 
     pub(crate) async fn into_invoke_request(self) -> Result<InvokeRequest, Status> {
-        let mut envelope =
-            build_peer_envelope(self.caller_envelope, self.target_ura, self.local_realm)?;
+        let mut envelope = build_peer_envelope(self.subject, self.target_ura, self.local_realm)?;
         let descriptor_ref = peer_descriptor_ref_for_envelope(&envelope, self.function_name)?;
         sign_peer_request_envelope(
             &mut envelope,
@@ -91,23 +90,37 @@ impl<'a> PeerInvokeRequest<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum PeerInvocationSubject<'a> {
+    /// Preserve provenance from the incoming invocation. The forwarded caller
+    /// becomes the subject of the peer request until descriptor-bound signing
+    /// normalizes Hub/User provenance into a peer-owned ability subject.
+    ForwardedCaller(&'a Envelope),
+    /// Fresh daemon-owned peer request with an explicit subject chosen by the
+    /// caller-side provider before crossing the peer transport seam.
+    ExplicitSubject(&'a str),
+}
+
 /// Build the strict envelope the cross-hub dialer attaches to the
 /// rebuilt peer `InvokeRequest`.
 ///
 /// This is a new hub-to-hub invocation, not a verbatim re-send:
 /// `caller = local hub`, `callee = target hub`, and `subject =
-/// original caller` when present. Signing normalizes the subject to a
+/// explicit peer invocation subject`. Signing normalizes the subject to a
 /// descriptor-bound EntityRef when the original caller is a Hub/User URA.
 /// Every URA must parse through the canonical URA parser before the peer
 /// request is sent.
 pub(crate) fn build_peer_envelope(
-    caller_envelope: Option<&Envelope>,
+    subject: PeerInvocationSubject<'_>,
     target_ura: &str,
     local_realm: Option<&str>,
 ) -> Result<Envelope, Status> {
     use rand::RngCore as _;
 
-    let mut forwarded = caller_envelope.cloned().unwrap_or_default();
+    let mut forwarded = match subject {
+        PeerInvocationSubject::ForwardedCaller(envelope) => envelope.clone(),
+        PeerInvocationSubject::ExplicitSubject(_) => Envelope::default(),
+    };
     let peer_hub_ura = parse_realm_from_ura(target_ura)
         .map(|realm| crate::core::ura::hub_ura(&realm))
         .ok_or_else(|| {
@@ -130,18 +143,31 @@ pub(crate) fn build_peer_envelope(
     crate::core::ura::parse_ura(&peer_hub_ura).map_err(|err| {
         Status::invalid_argument(format!("peer envelope callee URA is invalid: {err}"))
     })?;
-    // Subject starts as the entity the forwarded invocation acts upon: the
-    // original caller when present, otherwise the target itself. Hub and User
-    // URAs are valid provenance here even though Axon's descriptor-bound
-    // EntityRef deliberately does not model them. `sign_peer_request_envelope`
-    // owns the one canonical normalization step: unsupported subject kinds are
-    // replaced by the target ability URA before canonical bytes are built.
-    // Validating EntityRef here would make that normalization unreachable.
-    let subject_ura = caller_envelope
-        .and_then(|env| env.caller.as_ref())
-        .map(|caller| caller.ura.trim().to_string())
-        .filter(|ura| !ura.is_empty())
-        .unwrap_or_else(|| target_ura.trim().to_string());
+    // Subject starts as explicit peer invocation input. Hub and User URAs are
+    // valid provenance here even though Axon's descriptor-bound EntityRef
+    // deliberately does not model them. `sign_peer_request_envelope` owns the
+    // one canonical normalization step: unsupported subject kinds are replaced
+    // by the target ability URA before canonical bytes are built. Validating
+    // EntityRef here would make that normalization unreachable.
+    let subject_ura = match subject {
+        PeerInvocationSubject::ForwardedCaller(envelope) => envelope
+            .caller
+            .as_ref()
+            .map(|caller| caller.ura.trim().to_string())
+            .filter(|ura| !ura.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument("peer envelope missing forwarded caller URA")
+            })?,
+        PeerInvocationSubject::ExplicitSubject(subject_ura) => {
+            let subject_ura = subject_ura.trim();
+            if subject_ura.is_empty() {
+                return Err(Status::invalid_argument(
+                    "peer envelope explicit subject URA is required",
+                ));
+            }
+            subject_ura.to_string()
+        }
+    };
     crate::core::ura::parse_ura(&subject_ura).map_err(|err| {
         Status::invalid_argument(format!("peer envelope subject URA is invalid: {err}"))
     })?;
@@ -362,7 +388,7 @@ mod tests {
             ..Envelope::default()
         };
         let env = build_peer_envelope(
-            Some(&caller_envelope),
+            PeerInvocationSubject::ForwardedCaller(&caller_envelope),
             "easynet:///r/peer/device/dev-b",
             Some("local"),
         )
@@ -391,8 +417,44 @@ mod tests {
 
     #[test]
     fn build_peer_envelope_rejects_bad_target_ura() {
-        let err = build_peer_envelope(None, "agent://dev-b", Some("local")).unwrap_err();
+        let err = build_peer_envelope(
+            PeerInvocationSubject::ExplicitSubject("easynet:///r/local/device/dev-a"),
+            "agent://dev-b",
+            Some("local"),
+        )
+        .unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn build_peer_envelope_rejects_forwarded_subject_without_caller() {
+        let err = build_peer_envelope(
+            PeerInvocationSubject::ForwardedCaller(&Envelope::default()),
+            "easynet:///r/peer/device/dev-b",
+            Some("local"),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("forwarded caller URA"));
+    }
+
+    #[test]
+    fn build_peer_envelope_accepts_explicit_subject_for_fresh_peer_request() {
+        let env = build_peer_envelope(
+            PeerInvocationSubject::ExplicitSubject(
+                "easynet:///r/peer/ability/authority.federation.resolve_key",
+            ),
+            "easynet:///r/peer/authority",
+            Some("local"),
+        )
+        .unwrap();
+
+        assert_eq!(env.caller.unwrap().ura, crate::core::ura::hub_ura("local"));
+        assert_eq!(env.callee.unwrap().ura, crate::core::ura::hub_ura("peer"));
+        assert_eq!(
+            env.subject.unwrap().ura,
+            "easynet:///r/peer/ability/authority.federation.resolve_key"
+        );
     }
 
     #[tokio::test]
@@ -414,7 +476,7 @@ mod tests {
                 ..Envelope::default()
             };
             let request = PeerInvokeRequest::new(
-                Some(&caller_envelope),
+                PeerInvocationSubject::ForwardedCaller(&caller_envelope),
                 "easynet:///r/peer/authority",
                 "federation.discover",
                 br#"{"q":"chat"}"#.to_vec(),
@@ -516,7 +578,7 @@ mod tests {
     #[tokio::test]
     async fn sign_peer_request_fails_closed_without_hub_signer() {
         let mut env = build_peer_envelope(
-            Some(&Envelope {
+            PeerInvocationSubject::ForwardedCaller(&Envelope {
                 caller: Some(AgentIdentity {
                     ura: "easynet:///r/local/device/dev-a".to_string(),
                     ..AgentIdentity::default()
@@ -546,7 +608,7 @@ mod tests {
     async fn sign_peer_request_rejects_signer_for_another_owner() {
         let signer = test_hub_signer("other");
         let mut env = build_peer_envelope(
-            Some(&Envelope {
+            PeerInvocationSubject::ForwardedCaller(&Envelope {
                 caller: Some(AgentIdentity {
                     ura: "easynet:///r/local/device/dev-a".to_string(),
                     ..AgentIdentity::default()

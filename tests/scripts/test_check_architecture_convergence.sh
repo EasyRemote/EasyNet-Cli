@@ -5205,6 +5205,36 @@ expect_fail \
   "R75_PLUGIN_WIRE_PROFILE_FAIL_CLOSED"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/admission"
+cat >"$CLI/src/daemon/invocation/admission/peer_envelope_signer.rs" <<'EOF'
+use axon_sdk::pb::axon::v1::Envelope;
+
+pub(crate) struct PeerInvokeRequest<'a> {
+    caller_envelope: Option<&'a Envelope>,
+}
+
+pub(crate) fn build_peer_envelope(
+    caller_envelope: Option<&Envelope>,
+    target_ura: &str,
+) -> Envelope {
+    let mut forwarded = caller_envelope.cloned().unwrap_or_default();
+    let subject_ura = caller_envelope
+        .and_then(|env| env.caller.as_ref())
+        .map(|caller| caller.ura.trim().to_string())
+        .filter(|ura| !ura.is_empty())
+        .unwrap_or_else(|| target_ura.trim().to_string());
+    forwarded.subject = Some(axon_sdk::pb::axon::v1::SubjectIdentity {
+        ura: subject_ura,
+        profile: "ura-v1".to_string(),
+    });
+    forwarded
+}
+EOF
+expect_fail \
+  "peer envelope target subject fallback" \
+  "R76_PEER_ENVELOPE_EXPLICIT_SUBJECT"
+
+make_good_fixture
 expect_pass "fixture restored after all negative cases"
 
 printf 'test_check_architecture_convergence.sh: all cases passed\n'

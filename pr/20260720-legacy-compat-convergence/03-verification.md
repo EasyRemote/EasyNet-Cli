@@ -2,6 +2,23 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-20 Cross-Hub peer envelope subject fallback removal
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q peer_envelope_signer --lib --features axon-pb`
+  — PASS (`8 passed`; includes forwarded-caller rejection when caller URA is
+  absent and explicit-subject acceptance for fresh daemon-owned peer requests).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --features axon-pb`
+  — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R76 for explicit peer envelope subject state.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for optional caller envelope defaulting and subject
+  fallback to `target_ura`.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+
 ## 2026-07-20 Plugin wire profile core-only fallback removal
 
 - `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --features remote-desktop`

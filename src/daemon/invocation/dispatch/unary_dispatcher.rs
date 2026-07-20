@@ -47,7 +47,9 @@ use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDe
 use crate::daemon::invocation::admission::hosted_agent_publication::HostedAgentPublication;
 use crate::daemon::invocation::admission::list_user_pubkeys::handle as handle_list_user_pubkeys;
 use crate::daemon::invocation::admission::owner_projection_publication::OwnerProjectionPublicationAuthority;
-use crate::daemon::invocation::admission::peer_envelope_signer::PeerInvokeRequest;
+use crate::daemon::invocation::admission::peer_envelope_signer::{
+    PeerInvocationSubject, PeerInvokeRequest,
+};
 use crate::daemon::invocation::admission::register_device_pubkey::handle as handle_register_device_pubkey;
 use crate::daemon::invocation::admission::register_device_pubkey::parse_register_pubkey_intent;
 use crate::daemon::invocation::admission::revoke_user_pubkey::{
@@ -1358,9 +1360,14 @@ impl UnaryDispatcher {
                 );
                 continue;
             };
+            let caller_envelope = caller_envelope.ok_or_else(|| {
+                Status::invalid_argument(
+                    "federation.proxy_list_user_devices: missing caller envelope",
+                )
+            })?;
             let client = Arc::clone(client);
             let peer_request = PeerInvokeRequest::new(
-                caller_envelope,
+                PeerInvocationSubject::ForwardedCaller(caller_envelope),
                 &peer_entry.agent_ura,
                 ABILITY_FEDERATION_LIST_USER_DEVICES,
                 inner_arguments.clone(),
@@ -1450,9 +1457,12 @@ impl UnaryDispatcher {
                 );
                 continue;
             };
+            let caller_envelope = caller_envelope.ok_or_else(|| {
+                Status::invalid_argument("namespace.proxy_resolve: missing caller envelope")
+            })?;
             let client = Arc::clone(client);
             let peer_request = PeerInvokeRequest::new(
-                caller_envelope,
+                PeerInvocationSubject::ForwardedCaller(caller_envelope),
                 &peer_entry.agent_ura,
                 ABILITY_NAMESPACE_RESOLVE,
                 inner_arguments.clone(),

@@ -2,6 +2,19 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-20 cross-Hub peer invocation subject state
+
+- Treat cross-Hub peer envelope subject selection as explicit state, not an
+  optional caller-envelope fallback. `ForwardedCaller` preserves product
+  invocation provenance; `ExplicitSubject` covers daemon-owned fresh peer
+  requests such as federated key resolution.
+- Treat missing forwarded caller URA as invalid tuple input. It must fail
+  before peer signing/network dispatch instead of becoming a target-self
+  subject and producing later descriptor or authority errors.
+- Keep subject normalization in the signing step: Hub/User provenance may still
+  normalize to a peer-owned descriptor-bound ability subject, but the input to
+  that normalization must be explicit and parseable.
+
 ## 2026-07-20 plugin wire profile projection authority
 
 - Treat plugin catalog registration and plugin bidi wire profile lookup as two
