@@ -485,3 +485,10 @@ Decisions will be appended as root-fork choices are made.
   abilities and masks the signer/admission/route distinctions surfaced by the
   Rust FFI projection. Go and Python now converge on
   `DESCRIPTOR_NOT_FOUND`, and R91 keeps this boundary typed.
+- Treat invocation attempt audit as required pre-runtime observability, not
+  best-effort logging. Axon's receipt ledger remains canonical after runtime
+  admission starts, but malformed targets, unwired routes, signer/admission
+  rejection, and route-selection failures can happen before Axon creates an
+  invocation id. The daemon must either record that attempt or fail closed; it
+  must not continue with a disabled handle, skip corrupt rows, or report an
+  empty product history when the attempt ledger is unavailable.

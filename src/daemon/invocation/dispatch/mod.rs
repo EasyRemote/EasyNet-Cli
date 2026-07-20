@@ -1,6 +1,8 @@
 //! Invocation RPC service shell and local/runtime dispatch implementations.
 
 #[cfg(feature = "axon-pb")]
+pub(crate) mod attempt_audit;
+#[cfg(feature = "axon-pb")]
 pub(crate) mod cancellation;
 #[cfg(feature = "axon-pb")]
 pub mod client;

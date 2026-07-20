@@ -1552,3 +1552,24 @@ Evidence will be appended after indexing and focused impact queries.
   `DESCRIPTOR_NOT_FOUND`, focused regressions cover owner-mismatch catalog
   misses, and architecture rule R91 prevents reintroducing generic
   `NOT_FOUND` in this boundary.
+
+## 2026-07-21 Invocation attempt audit disabled compatibility audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  InvocationAttemptLedger InvocationAttemptHandle invocation.history.list
+  missing_invocation_attempt_ledger invocation_attempt_audit_status` identified
+  the pre-runtime failure path across `DaemonInvocationService`,
+  `InvocationAttemptLedger`, and `invocation.history.list`.
+- Targeted source inspection found three compatibility seams in the current
+  WIP: the service could create a disabled attempt handle when no ledger was
+  wired, boot could continue after attempt ledger open failure, and the JSONL
+  ledger skipped corrupt rows / ignored append failures.
+- The root abstraction problem was treating pre-runtime invocation attempts as
+  optional logging. Product history uses this layer to explain failures that
+  occur before Axon mints a canonical invocation id; an unavailable attempt
+  ledger is therefore unavailable runtime observability, not a harmless missing
+  diagnostic.
+- After the change, production boot opens the attempt ledger as a required
+  dependency, transport entry begins fail closed when audit is not wired or
+  cannot append, and corrupt attempt ledger rows make the history read model
+  fail instead of producing a false partial list.

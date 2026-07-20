@@ -130,7 +130,8 @@ fn make_service_with_presence_and_heartbeat(
     let mut service = DaemonInvocationService::new(presence, admission)
         .with_hub_signer(test_hub_signer("test-realm"))
         .with_local_ability_catalog(local_ability_catalog)
-        .with_daemon_runtime(runtime_assembly);
+        .with_daemon_runtime(runtime_assembly)
+        .with_invocation_attempt_ledger(test_attempt_ledger());
     if let Some(interval) = heartbeat_interval_ms {
         service = service.with_subscribe_v2_heartbeat_interval_ms(interval);
     }
@@ -221,6 +222,21 @@ fn make_unregistered_service_for_route_owner_and_runtime_trust(
         .with_hub_signer(test_hub_signer(&signer_realm))
         .with_local_ability_catalog(local_ability_catalog)
         .with_daemon_runtime(runtime_assembly)
+        .with_invocation_attempt_ledger(test_attempt_ledger())
+}
+
+fn test_attempt_ledger(
+) -> Arc<crate::daemon::invocation::dispatch::attempt_audit::InvocationAttemptLedger> {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let path = std::env::temp_dir().join(format!(
+        "easynet-test-invocation-attempts-{}-{}.jsonl",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    Arc::new(
+        crate::daemon::invocation::dispatch::attempt_audit::InvocationAttemptLedger::open(path)
+            .expect("test invocation attempt ledger"),
+    )
 }
 
 fn test_trust_anchor() -> RealmTrustAnchor {

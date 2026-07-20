@@ -160,6 +160,11 @@ pub(crate) struct RuntimePlane {
     /// (`<ledger_dir>/invocations.redb`); complete unary records are
     /// written through the Axon SDK object.
     pub(crate) invocation_ledger: Option<Arc<axon_sdk::invocation::InvocationLedger>>,
+    /// Transport-boundary attempt audit
+    /// (`<ledger_dir>/invocation-attempts.jsonl`); records requests that
+    /// reject before Axon creates a canonical invocation id.
+    pub(crate) attempt_ledger:
+        Option<Arc<crate::daemon::invocation::dispatch::attempt_audit::InvocationAttemptLedger>>,
     /// Daemon-owned local bidi wire profile registry, projected from
     /// plugin wire metadata at boot.
     pub(crate) ability_wire: Arc<AbilityWireRegistry>,

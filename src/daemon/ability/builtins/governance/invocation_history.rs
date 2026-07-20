@@ -25,6 +25,9 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::daemon::invocation::dispatch::attempt_audit::{
+    attempt_ledger_path, InvocationAttemptLedger, InvocationAttemptRecord,
+};
 use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 use crate::daemon::persistence::daemon_config::{
     default_config_path, default_ledger_dir, DaemonConfig,
@@ -153,12 +156,30 @@ impl InvocationLedgerReader {
             .get("compact")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let include_attempts = args
+            .get("include_attempts")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let path = ledger_path_from_config();
         let mut records = self.fetch_records(&path, query)?;
         retain_by_ability_ura_sets(&mut records, &include_ability_uras, &exclude_ability_uras);
         apply_history_cursor(&mut records, cursor_anchor.as_deref())?;
         let next_cursor = next_history_cursor(&mut records, requested_limit);
-        let records = if compact {
+        let diagnostic_records = if include_attempts {
+            let attempts = filtered_attempt_records(&args, requested_limit)?;
+            Some(merged_diagnostic_records(
+                &records,
+                &attempts,
+                requested_limit,
+            )?)
+        } else {
+            None
+        };
+        let records = if compact && include_attempts {
+            diagnostic_records
+                .clone()
+                .unwrap_or_else(|| Value::Array(Vec::new()))
+        } else if compact {
             compact_records(&records)?
         } else {
             json!(records)
@@ -168,6 +189,11 @@ impl InvocationLedgerReader {
             "ledger_path": path.display().to_string(),
             "records": records,
         });
+        if let Some(diagnostics) = diagnostic_records {
+            response["diagnostic_records"] = diagnostics;
+            response["attempt_ledger_path"] =
+                Value::String(attempt_ledger_path_from_config().display().to_string());
+        }
         if let Some(cursor) = next_cursor {
             response["next_cursor"] = Value::String(cursor);
         }
@@ -175,6 +201,21 @@ impl InvocationLedgerReader {
     }
 
     fn get_history(&self, args: Value) -> anyhow::Result<Value> {
+        if let Some(attempt_id) = args
+            .get("key")
+            .and_then(|key| key.get("attempt_id"))
+            .and_then(non_empty_str)
+        {
+            let path = attempt_ledger_path_from_config();
+            let attempt = InvocationAttemptLedger::open(&path)?.get(attempt_id)?;
+            return Ok(json!({
+                "ledger_ura": ledger_resource_ura(),
+                "ledger_path": ledger_path_from_config().display().to_string(),
+                "attempt_ledger_path": path.display().to_string(),
+                "record": Value::Null,
+                "diagnostic_record": attempt.map(|record| record.diagnostic_value()),
+            }));
+        }
         let query = query_from_args(&args)?.limit(1);
         if query.key.is_none() {
             anyhow::bail!("expected key.ura, key.request_id, or key.trace_id");
@@ -357,6 +398,80 @@ fn compact_record_value(mut value: Value) -> Value {
     value
 }
 
+fn canonical_diagnostic_record(record: &InvocationLedgerRecord) -> anyhow::Result<Value> {
+    let mut value = compact_record_value(serde_json::to_value(record)?);
+    let diagnostic = json!({
+        "summary": record
+            .error
+            .as_ref()
+            .map(|error| error.message.clone())
+            .unwrap_or_else(|| format!("Invocation {}.", record.state)),
+        "suggested_action": canonical_suggested_action(record),
+        "route_ura": Value::Null,
+        "execution_host_ura": Value::Null,
+    });
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "record_kind".to_string(),
+            Value::String("invocation".to_string()),
+        );
+        object.insert("diagnostic".to_string(), diagnostic);
+    }
+    Ok(value)
+}
+
+fn canonical_suggested_action(record: &InvocationLedgerRecord) -> String {
+    match record.error.as_ref().map(|error| error.code.as_str()) {
+        Some("INVALID_ARGUMENT") | Some("PERMISSION_DENIED") => {
+            "Check ability args, caller authority, subject binding, and descriptor ref.".to_string()
+        }
+        Some("UNAVAILABLE") => {
+            "Check selected execution host liveness and upstream session connectivity.".to_string()
+        }
+        Some(_) => "Inspect the canonical invocation record and receipt diagnostics.".to_string(),
+        None => "Canonical invocation completed; inspect receipts for proof details.".to_string(),
+    }
+}
+
+fn merged_diagnostic_records(
+    records: &[InvocationLedgerRecord],
+    attempts: &[InvocationAttemptRecord],
+    limit: usize,
+) -> anyhow::Result<Value> {
+    let mut out = Vec::with_capacity(records.len() + attempts.len());
+    for record in records {
+        out.push(canonical_diagnostic_record(record)?);
+    }
+    for attempt in attempts {
+        out.push(attempt.diagnostic_value());
+    }
+    out.sort_by(|a, b| {
+        diagnostic_started_unix_ms(b)
+            .cmp(&diagnostic_started_unix_ms(a))
+            .then_with(|| diagnostic_id(b).cmp(&diagnostic_id(a)))
+    });
+    if limit > 0 && out.len() > limit {
+        out.truncate(limit);
+    }
+    Ok(Value::Array(out))
+}
+
+fn diagnostic_started_unix_ms(value: &Value) -> i64 {
+    value
+        .get("started_unix_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or_default()
+}
+
+fn diagnostic_id(value: &Value) -> String {
+    value
+        .get("invocation_ura")
+        .or_else(|| value.get("attempt_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
 fn string_set_arg(args: &Value, key: &str) -> HashSet<String> {
     value_string_set(args.get(key))
 }
@@ -513,6 +628,107 @@ fn ledger_path_from_config() -> PathBuf {
         .unwrap_or_else(|_| default_ledger_dir().join("invocations.redb"))
 }
 
+fn attempt_ledger_path_from_config() -> PathBuf {
+    DaemonConfig::load(&default_config_path())
+        .map(|config| attempt_ledger_path(config.ledger_dir()))
+        .unwrap_or_else(|_| attempt_ledger_path(&default_ledger_dir()))
+}
+
+fn filtered_attempt_records(
+    args: &Value,
+    limit: usize,
+) -> anyhow::Result<Vec<InvocationAttemptRecord>> {
+    let path = attempt_ledger_path_from_config();
+    let ledger = InvocationAttemptLedger::open(path)?;
+    let mut attempts = ledger.list_recent(MAX_LIMIT)?;
+    if let Some(filter) = args.get("filter") {
+        let object = filter
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("filter must be an object"))?;
+        attempts.retain(|attempt| attempt_matches_filter(attempt, object));
+    }
+    let include_ability_uras = filter_string_set(args, "ability_uras");
+    if !include_ability_uras.is_empty() {
+        attempts.retain(|attempt| {
+            attempt
+                .ability_ura
+                .as_ref()
+                .is_some_and(|ability| include_ability_uras.contains(ability))
+        });
+    }
+    if limit > 0 && attempts.len() > limit {
+        attempts.truncate(limit);
+    }
+    Ok(attempts)
+}
+
+fn attempt_matches_filter(
+    attempt: &InvocationAttemptRecord,
+    object: &serde_json::Map<String, Value>,
+) -> bool {
+    string_filter_matches(object, "caller_ura", attempt.caller_ura.as_deref())
+        && scoped_attempt_callee_matches(attempt, object)
+        && subject_attempt_filter_matches(attempt, object)
+        && string_filter_matches(object, "ability_ura", attempt.ability_ura.as_deref())
+        && attempt_state_matches(object.get("state").and_then(non_empty_str), attempt)
+        && string_filter_matches(object, "trace_id", attempt.trace_id.as_deref())
+}
+
+fn string_filter_matches(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    actual: Option<&str>,
+) -> bool {
+    object
+        .get(key)
+        .and_then(non_empty_str)
+        .is_none_or(|expected| actual == Some(expected))
+}
+
+fn scoped_attempt_callee_matches(
+    attempt: &InvocationAttemptRecord,
+    object: &serde_json::Map<String, Value>,
+) -> bool {
+    let expected = object
+        .get("callee_ura")
+        .or_else(|| object.get("agent_ura"))
+        .and_then(non_empty_str);
+    expected.is_none_or(|expected| attempt.callee_ura.as_deref() == Some(expected))
+}
+
+fn subject_attempt_filter_matches(
+    attempt: &InvocationAttemptRecord,
+    object: &serde_json::Map<String, Value>,
+) -> bool {
+    if let Some(expected) = object.get("subject_ura").and_then(non_empty_str) {
+        return attempt.subject_ura.as_deref() == Some(expected);
+    }
+    let Some(subjects) = object.get("subject_uras").and_then(Value::as_array) else {
+        return true;
+    };
+    let actual = attempt.subject_ura.as_deref();
+    subjects
+        .iter()
+        .filter_map(non_empty_str)
+        .any(|expected| actual == Some(expected))
+}
+
+fn attempt_state_matches(expected: Option<&str>, attempt: &InvocationAttemptRecord) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    let state = serde_json::to_value(&attempt.state)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default();
+    state == expected
+        || (expected == "failed"
+            && matches!(
+                state.as_str(),
+                "rejected" | "runtime_rejected" | "runtime_failed"
+            ))
+}
+
 fn ledger_resource_ura() -> Option<String> {
     let hosted_identity = AgentAggregateRepository::load_hosted_identity_status().ok()?;
     let parsed = crate::core::ura::parse_ura(hosted_identity.host_device_agent_ura()?).ok()?;
@@ -607,6 +823,10 @@ pub fn list_history_input_schema() -> Value {
                 "description": "Opaque receipt history cursor returned by the previous invocation.history.list page."
             },
             "compact": { "type": "boolean" },
+            "include_attempts": {
+                "type": "boolean",
+                "description": "When true, include pre-runtime invocation attempts and row diagnostics for UI history views."
+            },
             "exclude_ability_uras": {
                 "type": "array",
                 "items": { "type": "string", "minLength": 1 }
@@ -671,7 +891,8 @@ fn key_schema() -> Value {
         "properties": {
             "ura": { "type": "string", "description": "Invocation URA." },
             "request_id": { "type": "string" },
-            "trace_id": { "type": "string" }
+            "trace_id": { "type": "string" },
+            "attempt_id": { "type": "string", "description": "Pre-runtime attempt audit id." }
         },
         "additionalProperties": false,
         "minProperties": 1,
@@ -917,6 +1138,55 @@ mod tests {
         assert!(value.get("result").is_none());
         assert!(value.get("receipt_chain").is_none());
         assert!(value.get("visibility").is_none());
+    }
+
+    #[test]
+    fn diagnostic_records_merge_invocations_and_attempts_for_ui_rows() {
+        let record = sample_record("req-diagnostic");
+        let attempt = crate::daemon::invocation::dispatch::attempt_audit::InvocationAttemptRecord {
+            attempt_id: "att-diagnostic".to_string(),
+            call_mode: "Invoke".to_string(),
+            state: crate::daemon::invocation::dispatch::attempt_audit::AttemptState::Rejected,
+            stage: "runtime_admission".to_string(),
+            started_unix_ms: record.started_unix_ms + 10,
+            completed_unix_ms: Some(record.started_unix_ms + 11),
+            elapsed_ms: Some(1),
+            invocation_ura: None,
+            request_id: Some("req-attempt".to_string()),
+            trace_id: Some("trace-attempt".to_string()),
+            span_id: None,
+            caller_ura: Some("easynet:///r/test/device/caller".to_string()),
+            callee_ura: Some("easynet:///r/test/device/callee".to_string()),
+            subject_ura: Some("easynet:///r/test/agent/alice.pages".to_string()),
+            ability: Some("project_list".to_string()),
+            ability_ura: None,
+            route_ura: None,
+            execution_host_ura: None,
+            status_code: Some("INVALID_ARGUMENT".to_string()),
+            status_message: Some(
+                "runtime session authority does not admit descriptor-bound subject_ura".to_string(),
+            ),
+            error_stage: Some("runtime_admission".to_string()),
+            retryable: Some(false),
+            diagnostic_summary: "runtime_admission: rejected".to_string(),
+            suggested_action: "Check caller/callee/subject URA binding.".to_string(),
+        };
+
+        let merged = merged_diagnostic_records(&[record], &[attempt], 10).expect("merge");
+        let rows = merged.as_array().expect("diagnostic rows");
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["record_kind"], "attempt");
+        assert_eq!(rows[0]["attempt_id"], "att-diagnostic");
+        assert!(rows[0]["diagnostic"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("runtime_admission"));
+        assert_eq!(rows[1]["record_kind"], "invocation");
+        assert!(rows[1]["diagnostic"]["suggested_action"]
+            .as_str()
+            .unwrap()
+            .contains("receipts"));
     }
 
     #[test]

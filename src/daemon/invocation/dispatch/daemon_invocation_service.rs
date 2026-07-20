@@ -385,6 +385,17 @@ fn descriptor_ref_public_name_for_callee(
     Some(selector.public_name().to_string())
 }
 
+fn missing_invocation_attempt_ledger() -> Status {
+    Status::internal(
+        "invocation attempt audit ledger is not wired; refusing to dispatch without \
+         pre-runtime failure observability",
+    )
+}
+
+fn invocation_attempt_audit_status(error: anyhow::Error) -> Status {
+    Status::internal(format!("invocation attempt audit unavailable: {error:#}"))
+}
+
 use axon_sdk::pb::axon::v1::invocation_server::Invocation;
 use axon_sdk::pb::axon::v1::{
     InvokeBidiDown, InvokeBidiUp, InvokeRequest, InvokeResponse, InvokeServerStreamRequest,
@@ -576,6 +587,7 @@ impl DaemonInvocationService {
             runtime: RuntimePlane {
                 binding: RuntimeBinding::Unconfigured,
                 invocation_ledger: None,
+                attempt_ledger: default_invocation_attempt_ledger_for_construction(),
                 ability_wire: Arc::new(crate::daemon::ability::wire::AbilityWireRegistry::core()),
                 cancellations: Default::default(),
             },
@@ -1064,12 +1076,62 @@ impl DaemonInvocationService {
         self
     }
 
+    fn begin_invoke_attempt(
+        &self,
+        request: &InvokeRequest,
+    ) -> Result<crate::daemon::invocation::dispatch::attempt_audit::InvocationAttemptHandle, Status>
+    {
+        self.runtime
+            .attempt_ledger
+            .as_ref()
+            .ok_or_else(missing_invocation_attempt_ledger)?
+            .begin_invoke(request)
+            .map_err(invocation_attempt_audit_status)
+    }
+
+    fn begin_stream_attempt(
+        &self,
+        request: &InvokeServerStreamRequest,
+    ) -> Result<crate::daemon::invocation::dispatch::attempt_audit::InvocationAttemptHandle, Status>
+    {
+        self.runtime
+            .attempt_ledger
+            .as_ref()
+            .ok_or_else(missing_invocation_attempt_ledger)?
+            .begin_stream(request)
+            .map_err(invocation_attempt_audit_status)
+    }
+
+    fn begin_bidi_attempt(
+        &self,
+    ) -> Result<crate::daemon::invocation::dispatch::attempt_audit::InvocationAttemptHandle, Status>
+    {
+        self.runtime
+            .attempt_ledger
+            .as_ref()
+            .ok_or_else(missing_invocation_attempt_ledger)?
+            .begin(
+                "InvokeBidi",
+                crate::daemon::invocation::dispatch::attempt_audit::AttemptIdentity::default(),
+            )
+            .map_err(invocation_attempt_audit_status)
+    }
+
     #[must_use]
     pub fn with_invocation_ledger(
         mut self,
         ledger: Arc<axon_sdk::invocation::InvocationLedger>,
     ) -> Self {
         self.runtime.invocation_ledger = Some(ledger);
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_invocation_attempt_ledger(
+        mut self,
+        ledger: Arc<crate::daemon::invocation::dispatch::attempt_audit::InvocationAttemptLedger>,
+    ) -> Self {
+        self.runtime.attempt_ledger = Some(ledger);
         self
     }
 
@@ -1219,6 +1281,27 @@ impl DaemonInvocationService {
     }
 }
 
+#[cfg(test)]
+fn default_invocation_attempt_ledger_for_construction(
+) -> Option<Arc<crate::daemon::invocation::dispatch::attempt_audit::InvocationAttemptLedger>> {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let path = std::env::temp_dir().join(format!(
+        "easynet-test-daemon-service-attempts-{}-{}.jsonl",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    Some(Arc::new(
+        crate::daemon::invocation::dispatch::attempt_audit::InvocationAttemptLedger::open(path)
+            .expect("test daemon invocation attempt ledger"),
+    ))
+}
+
+#[cfg(not(test))]
+fn default_invocation_attempt_ledger_for_construction(
+) -> Option<Arc<crate::daemon::invocation::dispatch::attempt_audit::InvocationAttemptLedger>> {
+    None
+}
+
 #[tonic::async_trait]
 impl Invocation for DaemonInvocationService {
     /// Spec §2.1 + §4.1 reference. Routes unary calls by exact
@@ -1229,17 +1312,34 @@ impl Invocation for DaemonInvocationService {
         request: Request<InvokeRequest>,
     ) -> Result<Response<InvokeResponse>, Status> {
         let inner = request.into_inner();
-        let function =
-            crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
-                "Invoke",
-                inner.target.as_ref(),
-            )?;
+        let attempt = self.begin_invoke_attempt(&inner)?;
+        let function = match crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+            "Invoke",
+            inner.target.as_ref(),
+        ) {
+            Ok(function) => function,
+            Err(status) => {
+                attempt
+                    .reject_status("target", &status)
+                    .map_err(invocation_attempt_audit_status)?;
+                return Err(status);
+            }
+        };
         let route_function =
             dispatch_function_name_for_route_table(function, inner.envelope.as_ref());
         let daemon_route = DaemonUnaryRoute::from_function(&route_function);
-        let daemon_route_ingress = daemon_route
+        let daemon_route_ingress = match daemon_route
             .map(|route| self.daemon_route_ingress(route, &inner))
-            .transpose()?;
+            .transpose()
+        {
+            Ok(ingress) => ingress,
+            Err(status) => {
+                attempt
+                    .reject_status("daemon_route_ingress", &status)
+                    .map_err(invocation_attempt_audit_status)?;
+                return Err(status);
+            }
+        };
 
         let unary = self.unary_dispatcher();
         let result = match daemon_route {
@@ -1265,7 +1365,20 @@ impl Invocation for DaemonInvocationService {
                 r
             }
         };
-        result
+        match result {
+            Ok(response) => {
+                attempt
+                    .finalize_response("runtime", response.get_ref())
+                    .map_err(invocation_attempt_audit_status)?;
+                Ok(response)
+            }
+            Err(status) => {
+                attempt
+                    .reject_status("routing", &status)
+                    .map_err(invocation_attempt_audit_status)?;
+                Err(status)
+            }
+        }
     }
 
     type InvokeStreamStream = BoxedDownStream<InvokeStreamChunk>;
@@ -1279,18 +1392,40 @@ impl Invocation for DaemonInvocationService {
         request: Request<InvokeServerStreamRequest>,
     ) -> Result<Response<Self::InvokeStreamStream>, Status> {
         let inner = request.into_inner();
-        let function =
-            crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
-                "InvokeStream",
-                inner.target.as_ref(),
-            )?;
+        let attempt = self.begin_stream_attempt(&inner)?;
+        let function = match crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+            "InvokeStream",
+            inner.target.as_ref(),
+        ) {
+            Ok(function) => function,
+            Err(status) => {
+                attempt
+                    .reject_status("target", &status)
+                    .map_err(invocation_attempt_audit_status)?;
+                return Err(status);
+            }
+        };
         let route_function =
             dispatch_function_name_for_route_table(function, inner.envelope.as_ref());
 
         let streams = self.stream_dispatcher();
-        match DaemonStreamRoute::from_function(&route_function) {
+        let result = match DaemonStreamRoute::from_function(&route_function) {
             Some(route) => streams.dispatch_daemon_route_runtime(route, &inner).await,
             None => streams.dispatch_selected_route(&inner).await,
+        };
+        match result {
+            Ok(response) => {
+                attempt
+                    .mark_started("stream_dispatch")
+                    .map_err(invocation_attempt_audit_status)?;
+                Ok(response)
+            }
+            Err(status) => {
+                attempt
+                    .reject_status("stream_dispatch", &status)
+                    .map_err(invocation_attempt_audit_status)?;
+                Err(status)
+            }
         }
     }
 
@@ -1306,30 +1441,75 @@ impl Invocation for DaemonInvocationService {
         &self,
         request: Request<Streaming<InvokeBidiUp>>,
     ) -> Result<Response<Self::InvokeBidiStream>, Status> {
+        let mut attempt = self.begin_bidi_attempt()?;
         let mut up = request.into_inner();
         let frame0 = match up.next().await {
             Some(Ok(f)) => f,
             Some(Err(err)) => {
-                return Err(Status::internal(format!("InvokeBidi frame 0 recv: {err}")));
+                let status = Status::internal(format!("InvokeBidi frame 0 recv: {err}"));
+                attempt
+                    .reject_status("bidi_frame0_recv", &status)
+                    .map_err(invocation_attempt_audit_status)?;
+                return Err(status);
             }
-            None => return Err(Status::invalid_argument("InvokeBidi: empty up stream")),
+            None => {
+                let status = Status::invalid_argument("InvokeBidi: empty up stream");
+                attempt
+                    .reject_status("bidi_frame0", &status)
+                    .map_err(invocation_attempt_audit_status)?;
+                return Err(status);
+            }
         };
 
-        let envelope_open = validate_and_extract_bidi_frame0(&frame0)?;
-        let ability_name =
-            crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
-                "InvokeBidi frame 0",
-                envelope_open.target.as_ref(),
-            )?;
+        let envelope_open = match validate_and_extract_bidi_frame0(&frame0) {
+            Ok(open) => open,
+            Err(status) => {
+                attempt
+                    .reject_status("bidi_frame0", &status)
+                    .map_err(invocation_attempt_audit_status)?;
+                return Err(status);
+            }
+        };
+        attempt = attempt.with_identity(
+            crate::daemon::invocation::dispatch::attempt_audit::AttemptIdentity::from_bidi_open(
+                envelope_open,
+            ),
+        );
+        let ability_name = match crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+            "InvokeBidi frame 0",
+            envelope_open.target.as_ref(),
+        ) {
+            Ok(ability_name) => ability_name,
+            Err(status) => {
+                attempt
+                    .reject_status("target", &status)
+                    .map_err(invocation_attempt_audit_status)?;
+                return Err(status);
+            }
+        };
 
         let dispatcher = self.bidi_dispatcher();
-        match DaemonBidiRoute::from_function(ability_name) {
+        let result = match DaemonBidiRoute::from_function(ability_name) {
             Some(route) => {
                 dispatcher
                     .dispatch_daemon_route_runtime(route, envelope_open, up)
                     .await
             }
             None => dispatcher.dispatch(ability_name, envelope_open, up).await,
+        };
+        match result {
+            Ok(response) => {
+                attempt
+                    .mark_started("bidi_dispatch")
+                    .map_err(invocation_attempt_audit_status)?;
+                Ok(response)
+            }
+            Err(status) => {
+                attempt
+                    .reject_status("bidi_dispatch", &status)
+                    .map_err(invocation_attempt_audit_status)?;
+                Err(status)
+            }
         }
     }
 }

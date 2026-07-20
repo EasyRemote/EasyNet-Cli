@@ -1574,6 +1574,9 @@ impl InvocationModeCapabilities {
 fn start_daemon_invocation_transport(config: DaemonConfig) -> anyhow::Result<()> {
     let capabilities = InvocationModeCapabilities::for_mode(config.mode());
     capabilities.validate(config.mode())?;
+    let attempt_ledger = InvocationAttemptLedger::open(path)
+        .context("refusing to boot without invocation attempt audit ledger")?;
+    service = service.with_invocation_attempt_ledger(attempt_ledger);
     if capabilities.owns_upstream_session() {
         register_purge_recovery_on_outbox_ready(outbox, registrar);
     }
@@ -1674,6 +1677,14 @@ impl UnaryDispatcher {
 }
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'EOF'
+fn missing_invocation_attempt_ledger() -> Status {
+    Status::internal("invocation attempt audit ledger is not wired")
+}
+
+fn invocation_attempt_audit_status(error: Error) -> Status {
+    Status::internal(format!("invocation attempt audit unavailable: {error}"))
+}
+
 impl DaemonInvocationService {
     pub fn with_transport_boundary(mut self, boundary: AdmissionTransportBoundary) -> Self {
         self.admission = self.admission.with_transport_boundary(boundary);
@@ -1734,6 +1745,31 @@ impl DaemonBidiRoute {
 }
 
 pub(crate) const DAEMON_INVOCATION_BIDI_ROUTES: &[DaemonBidiRoute] = &[DaemonBidiRoute::SessionOpen];
+EOF
+  cat >"$CLI/src/daemon/invocation/dispatch/attempt_audit.rs" <<'EOF'
+struct InvocationAttemptLedger;
+struct InvocationAttemptHandle;
+struct InvocationAttemptRecord;
+
+impl InvocationAttemptLedger {
+    pub(crate) fn begin(&self) -> anyhow::Result<InvocationAttemptHandle> {
+        self.append(&InvocationAttemptRecord)?;
+        Ok(InvocationAttemptHandle)
+    }
+
+    fn append(&self, record: &InvocationAttemptRecord) -> anyhow::Result<()> {
+        let _guard = self.writer.lock().map_err(|_| Error)?;
+        let line = serde_json::to_string(record)?;
+        writeln!(file, "{line}")?;
+        Ok(())
+    }
+
+    pub(crate) fn list_recent(&self) -> anyhow::Result<Vec<InvocationAttemptRecord>> {
+        let record = serde_json::from_str::<InvocationAttemptRecord>(&line)
+            .map_err(|err| anyhow::anyhow!("decode invocation attempt ledger row 1: {err}"))?;
+        Ok(vec![record])
+    }
+}
 EOF
   mkdir -p "$CLI/src/daemon/invocation/bidi"
   cat >"$CLI/src/daemon/invocation/bidi/bidi_dispatcher.rs" <<'EOF'
@@ -5299,6 +5335,68 @@ EOF
 expect_fail \
   "C ABI descriptor resolve generic not-found fallback" \
   "R91_CABI_DESCRIPTOR_RESOLVE_NOT_FOUND_TYPED"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/dispatch" "$CLI/src/daemon/boot/invocation"
+cat >"$CLI/src/daemon/invocation/dispatch/attempt_audit.rs" <<'EOF'
+struct InvocationAttemptLedger;
+struct InvocationAttemptHandle;
+struct InvocationAttemptRecord;
+
+impl InvocationAttemptLedger {
+    pub(crate) fn begin(&self) -> InvocationAttemptHandle {
+        self.append(&InvocationAttemptRecord);
+        InvocationAttemptHandle
+    }
+
+    fn append(&self, record: &InvocationAttemptRecord) {
+        let Ok(_guard) = self.writer.lock() else {
+            return;
+        };
+        if let Ok(line) = serde_json::to_string(record) {
+            let _ = writeln!(file, "{line}");
+        }
+    }
+
+    pub(crate) fn list_recent(&self) -> Vec<InvocationAttemptRecord> {
+        let mut records = Vec::new();
+        if let Ok(record) = serde_json::from_str::<InvocationAttemptRecord>(&line) {
+            records.push(record);
+        }
+        records
+    }
+}
+
+impl InvocationAttemptHandle {
+    pub(crate) fn disabled() -> Self {
+        InvocationAttemptHandle
+    }
+}
+EOF
+cat >"$CLI/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'EOF'
+impl DaemonInvocationService {
+    fn begin_invoke_attempt(&self) -> InvocationAttemptHandle {
+        self.runtime
+            .attempt_ledger
+            .as_ref()
+            .map(|ledger| ledger.begin())
+            .unwrap_or_else(InvocationAttemptHandle::disabled)
+    }
+}
+EOF
+cat >"$CLI/src/daemon/boot/invocation/mod.rs" <<'EOF'
+fn start_daemon_invocation_transport() {
+    match InvocationAttemptLedger::open(path) {
+        Ok(ledger) => service = service.with_invocation_attempt_ledger(ledger),
+        Err(err) => {
+            op_event!(kind = invocation_attempt_ledger_disabled, error = err);
+        }
+    }
+}
+EOF
+expect_fail \
+  "invocation attempt audit disabled compatibility" \
+  "R92_INVOCATION_ATTEMPT_AUDIT_FAIL_CLOSED"
 
 make_good_fixture
 cat >"$CLI/src/daemon/identity/receipt_signing.rs" <<'EOF'

@@ -597,6 +597,22 @@ pub fn start_daemon_invocation_transport(
     if let Some(ledger) = resolved_ledger.as_ref() {
         service = service.with_invocation_ledger(Arc::clone(ledger));
     }
+    let attempt_ledger_path =
+        crate::daemon::invocation::dispatch::attempt_audit::attempt_ledger_path(
+            config.ledger_dir(),
+        );
+    let attempt_ledger =
+        crate::daemon::invocation::dispatch::attempt_audit::InvocationAttemptLedger::open(
+            &attempt_ledger_path,
+        )
+        .with_context(|| {
+            format!(
+                "open required invocation attempt audit ledger at {}; refusing to boot without \
+                 pre-runtime failure observability",
+                attempt_ledger_path.display()
+            )
+        })?;
+    service = service.with_invocation_attempt_ledger(Arc::new(attempt_ledger));
 
     // ── Shared LocalRuntime ───────────────────────────────────────
     //

@@ -1549,3 +1549,31 @@ Commands and outcomes will be appended after implementation.
   (`canonical-runtime-convergence-v2: OK`).
 - `PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check` — PASS.
 - `git diff --check` — PASS.
+
+## 2026-07-21 Invocation attempt audit fail-closed history diagnostics
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  InvocationAttemptLedger InvocationAttemptHandle invocation.history.list
+  missing_invocation_attempt_ledger invocation_attempt_audit_status` — PASS;
+  reports the attempt ledger, service wiring, and history consumer boundary.
+- `PATH="$HOME/.cargo/bin:$PATH" cargo test -q
+  invocation::dispatch::attempt_audit --lib` — PASS (`2 passed`); includes
+  append/read ordering and corrupt-row fail-closed regression.
+- `PATH="$HOME/.cargo/bin:$PATH" cargo test -q invocation_history --lib` —
+  PASS (`27 passed`); includes merged invocation/attempt diagnostic rows.
+- `PATH="$HOME/.cargo/bin:$PATH" cargo test -q daemon_invocation_service
+  --lib` — PASS (`120 passed`, `3 ignored`); verifies direct service
+  construction and all three Invocation RPC shells remain wired with the
+  canonical attempt ledger.
+- `PATH="$HOME/.cargo/bin:$PATH" cargo check --lib` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R92 for invocation attempt audit fail-closed semantics.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture with disabled handle, boot-disabled continuation, silent
+  append failure, and corrupt-row skipping.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check` — PASS.
+- `git diff --check` — PASS.

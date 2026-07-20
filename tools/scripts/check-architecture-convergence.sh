@@ -7450,6 +7450,108 @@ for path, missing_token, forbidden_pattern in (
             )
 
 
+# Rule 92: Invocation attempt audit is the product-visible pre-runtime
+# failure ledger. It must fail closed when unavailable or corrupt; otherwise
+# descriptor/admission/route failures disappear from invocation.history.list
+# and products see false empty history rows.
+attempt_audit = cli_root / "src/daemon/invocation/dispatch/attempt_audit.rs"
+if attempt_audit.exists():
+    text = source(attempt_audit)
+    for pattern, detail in (
+        (
+            r"fn\s+disabled\s*\(",
+            "invocation attempt audit must not expose a disabled handle",
+        ),
+        (
+            r"let\s+Ok\s*\([^)]*\)\s*=\s*self\.writer\.lock\(\)\s*else\s*\{\s*return\s*;",
+            "invocation attempt audit must not ignore a poisoned writer lock",
+        ),
+        (
+            r"if\s+let\s+Ok\s*\([^)]*\)\s*=\s*serde_json::from_str::<InvocationAttemptRecord>",
+            "invocation attempt audit must not skip corrupt ledger rows",
+        ),
+        (
+            r"let\s+_\s*=\s*writeln!\(",
+            "invocation attempt audit must not ignore append failures",
+        ),
+    ):
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            add(
+                "R92_INVOCATION_ATTEMPT_AUDIT_FAIL_CLOSED",
+                attempt_audit,
+                line_number(text, match.start()),
+                detail,
+            )
+    for token, detail in (
+        (
+            "anyhow::Result<InvocationAttemptHandle>",
+            "InvocationAttemptLedger::begin must report append failure",
+        ),
+        (
+            "fn append(&self, record: &InvocationAttemptRecord) -> anyhow::Result<()>",
+            "attempt ledger append must return a failure result",
+        ),
+        (
+            "decode invocation attempt ledger row",
+            "attempt ledger reads must fail closed on corrupt rows",
+        ),
+    ):
+        if token not in text:
+            add(
+                "R92_INVOCATION_ATTEMPT_AUDIT_FAIL_CLOSED",
+                attempt_audit,
+                1,
+                detail,
+            )
+
+daemon_service = cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service.rs"
+if daemon_service.exists():
+    text = source(daemon_service)
+    if "InvocationAttemptHandle::disabled" in text or "unwrap_or_else(missing_invocation_attempt_ledger)" in text:
+        add(
+            "R92_INVOCATION_ATTEMPT_AUDIT_FAIL_CLOSED",
+            daemon_service,
+            1,
+            "daemon invocation service must fail closed when attempt audit is not wired",
+        )
+    for token, detail in (
+        (
+            "missing_invocation_attempt_ledger",
+            "daemon invocation service must classify missing attempt audit as an internal boot wiring fault",
+        ),
+        (
+            "invocation_attempt_audit_status",
+            "daemon invocation service must propagate attempt audit write failures",
+        ),
+    ):
+        if token not in text:
+            add(
+                "R92_INVOCATION_ATTEMPT_AUDIT_FAIL_CLOSED",
+                daemon_service,
+                1,
+                detail,
+            )
+
+boot_invocation = cli_root / "src/daemon/boot/invocation/mod.rs"
+if boot_invocation.exists():
+    text = source(boot_invocation)
+    if "invocation_attempt_ledger_disabled" in text:
+        add(
+            "R92_INVOCATION_ATTEMPT_AUDIT_FAIL_CLOSED",
+            boot_invocation,
+            line_number(text, text.index("invocation_attempt_ledger_disabled")),
+            "daemon boot must not continue with invocation attempt audit disabled",
+        )
+    if "refusing to boot without" not in text or "InvocationAttemptLedger::open" not in text:
+        add(
+            "R92_INVOCATION_ATTEMPT_AUDIT_FAIL_CLOSED",
+            boot_invocation,
+            1,
+            "daemon boot must open the required invocation attempt ledger fail-closed",
+        )
+
+
 # Rule 79: Invocation signing custody must be ownership/lease backed. A raw
 # key-service signer capability must not imply descriptor-bound invocation
 # authority by constructing a caller identity from the URA string.
