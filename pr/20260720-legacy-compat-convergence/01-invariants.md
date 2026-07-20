@@ -142,3 +142,8 @@
   callee, subject, audience, action, and ability scope locally so predictable
   authority-subject errors do not leak into daemon admission as product-facing
   runtime failures.
+- Node SDK type/runtime tests are part of the product-neutrality boundary.
+  They must prove product clients are absent from runtime exports and
+  `index.d.ts` without importing removed product symbols, and they must build
+  generic runtime drafts with typed authority metadata rather than opaque
+  compatibility placeholders.

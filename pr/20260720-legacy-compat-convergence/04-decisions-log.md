@@ -318,3 +318,9 @@ Decisions will be appended as root-fork choices are made.
   and ability before transport. This aligns Node with the Python/Go authorized
   runtime binding model and prevents product UI paths from discovering
   authority-subject mismatch only after daemon admission.
+- Treat Node type tests as product-neutrality evidence, not a compatibility
+  import harness. Removed product symbols such as `AdminClient` must be checked
+  by inspecting runtime exports and declarations, never by importing them and
+  relying on a type-error annotation. Generic runtime tests must use typed
+  authority metadata so the test suite cannot preserve opaque authority
+  placeholders after the SDK moves to tuple-bound preflight.

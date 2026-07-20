@@ -956,3 +956,20 @@ Commands and outcomes will be appended after implementation.
   from `sdk/node` — known pre-existing non-slice failure in
   `test/types.test.ts` importing removed product-neutrality symbol
   `AdminClient`; runtime/conformance `.mjs` tests pass.
+
+## 2026-07-20 Node product-neutral type test repair
+
+- `/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node --test --test-reporter=spec`
+  from `sdk/node` — PASS (`35 passed`; includes `test/types.test.ts`).
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R71, which rejects product-symbol runtime imports and opaque authority
+  placeholders in the Node type test.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for `import { AdminClient }` and `opaque-authority`.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query productSymbols --limit 30`
+  — PASS; reports product-neutrality assertion lists in runtime and type tests.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query RuntimeTransport --limit 20`
+  — PASS; reports the generic Node `RuntimeTransport` seam.
+- `rg -n "import \\{[^\\n]*(AdminClient|CompanionClient|CompatibilityClient|DirectoryClient|MissionClient|ReceiptClient|SurfaceClient)|void (AdminClient|CompanionClient|CompatibilityClient|DirectoryClient|MissionClient|ReceiptClient|SurfaceClient)|opaque-authority" sdk/node/test/types.test.ts sdk/node/index.js sdk/node/index.d.ts`
+  — PASS; no product runtime import or opaque authority placeholder remains.

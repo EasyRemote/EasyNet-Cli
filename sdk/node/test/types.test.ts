@@ -1,13 +1,48 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import {
+  DELEGATION_METADATA_KEY,
   AuthorityMetadata,
   InvocationBuilder,
   InvocationSignature,
   RuntimeClient,
   type RuntimeTransport,
 } from "../index.js";
+import * as sdk from "../index.js";
 
-// @ts-expect-error Product profiles are not part of the generic runtime SDK.
-import { AdminClient } from "../index.js";
+const productSymbols = [
+  "AdminClient",
+  "CompanionClient",
+  "CompatibilityClient",
+  "DirectoryClient",
+  "MissionClient",
+  "ReceiptClient",
+  "SurfaceClient",
+];
+
+const declarations = await readFile(new URL("../index.d.ts", import.meta.url), "utf8");
+for (const product of productSymbols) {
+  assert.equal(Object.hasOwn(sdk, product), false, `${product} leaked through runtime exports`);
+  assert.equal(declarations.includes(product), false, `${product} leaked through index.d.ts`);
+}
+
+const callerURA = "easynet:///r/example/agent/alice.sdk";
+const calleeURA = "easynet:///r/example/device/dev-a";
+const descriptorRef = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0";
+const delegation = Buffer.from(
+  JSON.stringify({
+    payload: {
+      issuer_ura: "easynet:///r/example/user/alice",
+      subject_ura: calleeURA,
+      caller_ura: callerURA,
+      audience: calleeURA,
+      scopes: ["observe.health"],
+      issued_at_ms: 10,
+      expires_at_ms: 20,
+    },
+    signature: Buffer.from("signature").toString("base64"),
+  }),
+).toString("base64");
 
 const transport: RuntimeTransport = {
   invoke: async () => JSON.stringify({ ok: true, terminal_receipt: { receipt_ref: "opaque" } }),
@@ -17,7 +52,7 @@ const transport: RuntimeTransport = {
     signing_material: {
       canonical_bytes_base64: "Y2Fub25pY2Fs",
       args_digest_hex: "a".repeat(64),
-      descriptor_ref: "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+      descriptor_ref: descriptorRef,
       expires_at_unix_ms: 4_102_444_800_000,
     },
   }),
@@ -25,18 +60,18 @@ const transport: RuntimeTransport = {
 };
 
 const draft = new InvocationBuilder()
-  .withCallerURA("easynet:///r/example/agent/alice.sdk")
-  .withCalleeURA("easynet:///r/example/device/dev-a")
-  .withDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
-  .withSubjectURA("easynet:///r/example/device/dev-a")
+  .withCallerURA(callerURA)
+  .withCalleeURA(calleeURA)
+  .withDescriptorRef(descriptorRef)
+  .withSubjectURA(calleeURA)
   .withNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==")
   .withCausalContext({ form: "none" })
   .withJSONArgs({ probe: true })
   .withContentType("application/json")
   .withAuthorityMetadata(new AuthorityMetadata({
     kind: "delegation",
-    key: "x-easynet-delegation",
-    value: "opaque-authority",
+    key: DELEGATION_METADATA_KEY,
+    value: delegation,
   }))
   .build();
 
@@ -48,5 +83,3 @@ const signed = prepared.signWithCallerSignature(new InvocationSignature({
   key_id_hint: "caller-key-1",
 }));
 await runtime.submitSigned(signed);
-
-void AdminClient;

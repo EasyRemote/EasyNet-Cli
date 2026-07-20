@@ -4999,6 +4999,30 @@ expect_fail \
   "R70_NODE_AUTHORITY_BINDING_PREFLIGHT"
 
 make_good_fixture
+mkdir -p "$CLI/sdk/node/test"
+cat >"$CLI/sdk/node/test/types.test.ts" <<'EOF'
+import {
+  AuthorityMetadata,
+  InvocationBuilder,
+} from "../index.js";
+
+// @ts-expect-error Product profiles are not part of the generic runtime SDK.
+import { AdminClient } from "../index.js";
+
+new InvocationBuilder()
+  .withAuthorityMetadata(new AuthorityMetadata({
+    kind: "delegation",
+    key: "x-easynet-delegation",
+    value: "opaque-authority",
+  }));
+
+void AdminClient;
+EOF
+expect_fail \
+  "node product-neutral types test fallback" \
+  "R71_NODE_PRODUCT_NEUTRAL_TYPES_TEST"
+
+make_good_fixture
 expect_pass "fixture restored after all negative cases"
 
 printf 'test_check_architecture_convergence.sh: all cases passed\n'

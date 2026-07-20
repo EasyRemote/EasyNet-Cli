@@ -6830,6 +6830,57 @@ if node_sdk.exists():
         )
 
 
+# Rule 71: Node type-level SDK tests must exercise the generic runtime surface
+# without importing removed product clients at runtime. A static ESM import of
+# `AdminClient`/Mission/etc. fails before the test can assert product neutrality
+# and pressures the SDK to restore product compatibility symbols.
+node_types_test = cli_root / "sdk/node/test/types.test.ts"
+if node_types_test.exists():
+    text = source(node_types_test)
+    forbidden_products = (
+        "AdminClient",
+        "CompanionClient",
+        "CompatibilityClient",
+        "DirectoryClient",
+        "MissionClient",
+        "ReceiptClient",
+        "SurfaceClient",
+    )
+    for product in forbidden_products:
+        for token in (
+            f"import {{ {product} }}",
+            f"import {{ type {product} }}",
+            f"import type {{ {product} }}",
+            f"void {product}",
+        ):
+            if token in text:
+                add(
+                    "R71_NODE_PRODUCT_NEUTRAL_TYPES_TEST",
+                    node_types_test,
+                    line_number(text, text.find(token)),
+                    f"Node type tests must not import removed product symbol {product}",
+                )
+    if "opaque-authority" in text:
+        add(
+            "R71_NODE_PRODUCT_NEUTRAL_TYPES_TEST",
+            node_types_test,
+            line_number(text, text.find("opaque-authority")),
+            "Node type tests must use typed authority metadata, not opaque compatibility metadata",
+        )
+    for token, detail in (
+        (
+            "Object.hasOwn(sdk, product)",
+            "Node type tests must assert product symbols are absent from runtime exports",
+        ),
+        (
+            "declarations.includes(product)",
+            "Node type tests must assert product symbols are absent from index.d.ts",
+        ),
+    ):
+        if token not in text:
+            add("R71_NODE_PRODUCT_NEUTRAL_TYPES_TEST", node_types_test, 1, detail)
+
+
 if violations:
     for violation in sorted(violations):
         print(

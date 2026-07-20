@@ -1012,3 +1012,19 @@ Evidence will be appended after indexing and focused impact queries.
   shape-only metadata. That let products build a descriptor-bound Device
   invocation carrying a User session authority, so deterministic
   `AUTHORITY_SUBJECT_MISMATCH` surfaced only after daemon admission.
+
+## 2026-07-20 Node type-test product symbol fallback audit
+
+- `codegraph query productSymbols --limit 30` reports product-neutrality
+  assertion lists in `sdk/node/test/runtime-core.test.mjs` and
+  `sdk/node/test/types.test.ts`; the type test now asserts absence from both
+  runtime exports and `index.d.ts`.
+- `codegraph query RuntimeTransport --limit 20` reports the generic
+  `RuntimeTransport` interface in `sdk/node/index.d.ts`, which remains the type
+  test's transport seam instead of any product client.
+- `rg` for runtime imports/usages of removed product symbols and
+  `opaque-authority` in `sdk/node/test/types.test.ts`, `sdk/node/index.js`,
+  and `sdk/node/index.d.ts` returns no matches. The previous static
+  `import { AdminClient }` failed during ESM loading before the neutrality
+  assertion could run, and the opaque authority value depended on retired
+  shape-only authority semantics.
