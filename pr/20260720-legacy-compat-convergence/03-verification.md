@@ -1442,3 +1442,27 @@ Commands and outcomes will be appended after implementation.
   anyhow::Result<Vec<LoopInstance>>`, `Kernel::loop_status`, and the new poison
   regressions.
 - `git diff --check` — PASS.
+
+## 2026-07-20 Chat cross-agent registry fail-closed discovery
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q agents::chat --lib` —
+  PASS (`61 passed`); includes corrupt-registry regressions for direct
+  cross-agent enumeration, RPC chat, and stream chat.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R88 for chat cross-agent registry fail-closed semantics.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for `Err(_) => return Vec::new()` and non-propagating RPC
+  / stream chat call sites.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --locked --lib --bins` —
+  PASS.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query
+  "enumerate_other_agent_specs cross-agent ability registry projection
+  invoke_direct_with_progress stream_handler" --limit 100` — PASS; reports
+  `enumerate_other_agent_specs(...) -> anyhow::Result<Vec<...>>`,
+  `invoke_direct_with_progress`, `stream_handler`, and the new corrupt-registry
+  regressions.
+- `git diff --check` — PASS.

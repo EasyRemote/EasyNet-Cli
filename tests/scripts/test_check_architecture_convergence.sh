@@ -238,9 +238,11 @@ fn build_invoke_handler_for() {
         .map(|snapshot| snapshot.registered_agent_registry_projection());
 }
 
-fn enumerate_other_agent_specs() {
-    let snapshot = AgentAggregateRepository::load_snapshot().unwrap();
-    snapshot.registered_agents();
+fn enumerate_other_agent_specs() -> anyhow::Result<Vec<AgentAbilitySpec>> {
+    let snapshot = AgentAggregateRepository::load_snapshot().map_err(|error| {
+        anyhow::anyhow!("load cross-agent ability registry projection: {error:#}")
+    })?;
+    Ok(snapshot.registered_agents().collect())
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/agents/lifecycle.rs" <<'EOF'
@@ -5713,6 +5715,40 @@ EOF
 expect_fail \
   "loop cache silent empty unknown fallback" \
   "R87_LOOP_CACHE_FAIL_CLOSED"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/agents"
+cat >"$CLI/src/daemon/ability/builtins/agents/chat.rs" <<'EOF'
+fn invoke_direct_with_progress(agent_name: &str) -> anyhow::Result<Value> {
+    let other_specs = enumerate_other_agent_specs(agent_name);
+    let cross_agent_hint = format_cross_agent_hint(&other_specs);
+    Ok(json!({"hint": cross_agent_hint}))
+}
+
+fn stream_handler(agent_name: &str) -> anyhow::Result<StreamSource> {
+    let other_specs = enumerate_other_agent_specs(agent_name);
+    let cross_agent_hint = format_cross_agent_hint(&other_specs);
+    Ok(StreamSource::Snapshot(vec![json!({"hint": cross_agent_hint})]))
+}
+
+fn enumerate_other_agent_specs(self_agent_name: &str) -> Vec<AgentAbilitySpec> {
+    let snapshot = match AgentAggregateRepository::load_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for (other_name, other_entry) in snapshot.registered_agents() {
+        if other_name == self_agent_name {
+            continue;
+        }
+        out.push(abilities_for(other_name, other_entry));
+    }
+    out
+}
+EOF
+expect_fail \
+  "chat cross-agent registry silent empty fallback" \
+  "R88_CHAT_CROSS_AGENT_REGISTRY_FAIL_CLOSED"
 
 make_good_fixture
 mkdir -p "$CLI/src/daemon/plugins" "$CLI/src/daemon/boot/invocation" "$CLI/src/daemon/ability/wire"

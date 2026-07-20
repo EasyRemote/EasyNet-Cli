@@ -678,7 +678,7 @@ pub(crate) fn invoke_direct_with_progress(
     // has the skill for. Surfaces as a separate context section
     // so the LLM treats own-agent vs other-agent abilities with
     // appropriate precedence.
-    let other_specs = enumerate_other_agent_specs(agent_name);
+    let other_specs = enumerate_other_agent_specs(agent_name)?;
     let cross_agent_hint = format_cross_agent_hint(&other_specs);
 
     // Materialise attachments to a delimited block. Failures bail
@@ -956,7 +956,7 @@ fn stream_handler(
     let skill_specs = enumerate_skill_specs(agent_name, entry, &parsed.skills);
     let skills_loaded: Vec<String> = skill_specs.iter().map(|s| s.name().to_string()).collect();
     let skills_hint = format_skills_hint(&skill_specs);
-    let other_specs = enumerate_other_agent_specs(agent_name);
+    let other_specs = enumerate_other_agent_specs(agent_name)?;
     let cross_agent_hint = format_cross_agent_hint(&other_specs);
     // Files-store root resolved only when a URA attachment is present:
     // root_from_env creates the store directory as a side effect, which
@@ -1174,11 +1174,10 @@ fn enumerate_skill_specs(
 ///     which is what the per-ability route exists to avoid.
 fn enumerate_other_agent_specs(
     self_agent_name: &str,
-) -> Vec<crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec> {
-    let snapshot = match AgentAggregateRepository::load_snapshot() {
-        Ok(snapshot) => snapshot,
-        Err(_) => return Vec::new(),
-    };
+) -> anyhow::Result<Vec<crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec>> {
+    let snapshot = AgentAggregateRepository::load_snapshot().map_err(|error| {
+        anyhow::anyhow!("load cross-agent ability registry projection: {error:#}")
+    })?;
     let mut out = Vec::new();
     for (other_name, other_entry) in snapshot.registered_agents() {
         if other_name == self_agent_name {
@@ -1195,7 +1194,7 @@ fn enumerate_other_agent_specs(
             out.push(spec);
         }
     }
-    out
+    Ok(out)
 }
 
 /// Build the system-prompt-style "Available skills" hint that we
@@ -2535,6 +2534,55 @@ mod tests {
         assert!(hint.contains("- `alice.fs.read` — Read a file from disk."));
         // Multi-line descriptions get trimmed to first line.
         assert!(!hint.contains("More detail"));
+    }
+
+    #[test]
+    fn enumerate_other_agent_specs_rejects_unreadable_registry_projection() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let state_dir = crate::daemon::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("state dir");
+        std::fs::write(state_dir.join("agents.json"), "{not-json")
+            .expect("corrupt agents registry");
+
+        let err = enumerate_other_agent_specs("alice")
+            .expect_err("corrupt registry must fail cross-agent discovery");
+        assert!(
+            format!("{err:#}").contains("load cross-agent ability registry projection"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn invoke_direct_rejects_unreadable_cross_agent_registry_projection() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let state_dir = crate::daemon::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("state dir");
+        std::fs::write(state_dir.join("agents.json"), "{not-json")
+            .expect("corrupt agents registry");
+
+        let err =
+            invoke_direct_with_progress("alice", &entry(), &[], json!({"prompt": "hi"}), None)
+                .expect_err("chat must fail before dispatch on corrupt cross-agent registry");
+        assert!(
+            format!("{err:#}").contains("load cross-agent ability registry projection"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn stream_handler_rejects_unreadable_cross_agent_registry_projection() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let state_dir = crate::daemon::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("state dir");
+        std::fs::write(state_dir.join("agents.json"), "{not-json")
+            .expect("corrupt agents registry");
+
+        let err = stream_handler("alice", &entry(), &[], json!({"prompt": "hi"}))
+            .expect_err("stream chat must fail before dispatch on corrupt cross-agent registry");
+        assert!(
+            format!("{err:#}").contains("load cross-agent ability registry projection"),
+            "{err:#}"
+        );
     }
 
     #[test]

@@ -8403,6 +8403,93 @@ if kernel_mod.exists():
             )
 
 
+# Rule 88: cross-agent chat ability discovery is route/context authority, not
+# a best-effort prompt hint. Agent aggregate projection failures must stop chat
+# context construction; they must not become an empty "other agents" ability
+# list that makes products believe no peer ability exists.
+agents_chat = cli_root / "src/daemon/ability/builtins/agents/chat.rs"
+if agents_chat.exists():
+    text = source(agents_chat)
+    def chat_fn_body(name: str) -> tuple[int, str] | None:
+        return rust_method_body(text, name) or brace_function_body(
+            text, rf"(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+{re.escape(name)}\b"
+        )
+
+    if "enumerate_other_agent_specs" in text:
+        body = chat_fn_body("enumerate_other_agent_specs")
+        if body is None:
+            add(
+                "R88_CHAT_CROSS_AGENT_REGISTRY_FAIL_CLOSED",
+                agents_chat,
+                1,
+                "agents.chat must keep enumerate_other_agent_specs as the cross-agent ability discovery authority",
+            )
+        else:
+            offset, fn_body = body
+            body_start = text.find("{", offset) + 1
+            signature = text[offset:body_start]
+            if "Result<Vec<" not in signature:
+                add(
+                    "R88_CHAT_CROSS_AGENT_REGISTRY_FAIL_CLOSED",
+                    agents_chat,
+                    line_number(text, offset),
+                    "enumerate_other_agent_specs must return Result so registry projection failures cannot become empty peer ability lists",
+                )
+            for token, detail in (
+                (
+                    "Err(_) => return Vec::new()",
+                    "enumerate_other_agent_specs must not hide Agent aggregate load failures as no cross-agent abilities",
+                ),
+                (
+                    "Err(_) => Vec::new()",
+                    "enumerate_other_agent_specs must not hide Agent aggregate load failures as no cross-agent abilities",
+                ),
+                (
+                    "Err(_)",
+                    "enumerate_other_agent_specs must not match-and-ignore Agent aggregate load failures",
+                ),
+            ):
+                if token in fn_body:
+                    add(
+                        "R88_CHAT_CROSS_AGENT_REGISTRY_FAIL_CLOSED",
+                        agents_chat,
+                        line_number(text, body_start + fn_body.find(token)),
+                        detail,
+                    )
+            if "load cross-agent ability registry projection" not in fn_body:
+                add(
+                    "R88_CHAT_CROSS_AGENT_REGISTRY_FAIL_CLOSED",
+                    agents_chat,
+                    line_number(text, offset),
+                    "enumerate_other_agent_specs must classify Agent aggregate load failure as cross-agent ability registry projection failure",
+                )
+
+        required_call_tokens = {
+            "invoke_direct_with_progress": "enumerate_other_agent_specs(agent_name)?",
+            "stream_handler": "enumerate_other_agent_specs(agent_name)?",
+        }
+        for method_name, token in required_call_tokens.items():
+            if method_name not in text:
+                continue
+            call_body = chat_fn_body(method_name)
+            if call_body is None:
+                add(
+                    "R88_CHAT_CROSS_AGENT_REGISTRY_FAIL_CLOSED",
+                    agents_chat,
+                    1,
+                    f"agents.chat {method_name} must preserve cross-agent discovery failures",
+                )
+                continue
+            offset, fn_body = call_body
+            if token not in fn_body:
+                add(
+                    "R88_CHAT_CROSS_AGENT_REGISTRY_FAIL_CLOSED",
+                    agents_chat,
+                    line_number(text, offset),
+                    f"agents.chat {method_name} must propagate enumerate_other_agent_specs failures",
+                )
+
+
 if violations:
     for violation in sorted(violations):
         print(

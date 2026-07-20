@@ -1462,3 +1462,22 @@ Evidence will be appended after indexing and focused impact queries.
   `anyhow::Result<Vec<LoopInstance>>`, resume/subscribe/status callers
   propagate cache failures, and Debug no longer projects unreadable cache state
   as zero loops.
+
+## 2026-07-20 Chat cross-agent registry silent empty fallback audit
+
+- `codegraph query "agents chat Err return Vec new registry projection
+  candidates list agents chat fallback" --limit 120` identified
+  `src/daemon/ability/builtins/agents/chat.rs::enumerate_other_agent_specs`
+  as the cross-agent ability discovery authority used by both RPC chat and
+  stream chat context construction.
+- Targeted source inspection found the compatibility seam:
+  `enumerate_other_agent_specs` called `AgentAggregateRepository::load_snapshot`
+  and mapped every load failure to `Vec::new()`.
+- The root abstraction problem was treating Agent aggregate projection
+  availability as a best-effort prompt hint. A valid empty peer-ability list is
+  only true after the registry projection is readable; an unreadable projection
+  means chat cannot prove cross-agent route/context visibility.
+- After the change, `enumerate_other_agent_specs` returns
+  `anyhow::Result<Vec<AgentAbilitySpec>>`, classifies unreadable aggregate state
+  as `load cross-agent ability registry projection`, and both RPC and stream
+  chat propagate the failure before dispatching any LLM turn.

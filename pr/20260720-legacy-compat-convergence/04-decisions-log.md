@@ -461,3 +461,8 @@ Decisions will be appended as root-fork choices are made.
   `loop.status`, `loop.subscribe`, resume, Kernel loop status, and debug
   projection explicitly instead of becoming unknown-loop, empty-loop-list, or
   zero-loop state.
+- Treat chat cross-agent ability discovery as route/context authority, not as
+  an optional prompt enhancement. A registry with no other agents may produce
+  no cross-agent hint, but an unreadable Agent aggregate projection must fail
+  RPC and stream chat before dispatch; otherwise products receive a false
+  "no peer abilities exist" prompt.
