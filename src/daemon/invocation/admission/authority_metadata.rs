@@ -29,6 +29,8 @@ pub(crate) const REASON_AUTHORITY_FORMAT_INVALID: &str = "AUTHORITY_FORMAT_INVAL
 pub(crate) const REASON_AUTHORITY_EXPIRED: &str = "AUTHORITY_EXPIRED";
 pub(crate) const REASON_AUTHORITY_CLOCK_UNAVAILABLE: &str = "AUTHORITY_CLOCK_UNAVAILABLE";
 
+const ALL_ZERO_PRINCIPAL_ID: &str = "00000000-0000-0000-0000-000000000000";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuthorityMetadataError {
     reason: &'static str,
@@ -159,6 +161,15 @@ pub(crate) fn validate_delegation_payload_shape(
             "authority payload must carry issuer, subject, caller, audience, and at least one non-empty scope",
         ));
     }
+    reject_all_zero_authority_fields(
+        "authority",
+        &[
+            ("issuer_ura", &payload.issuer_ura),
+            ("subject_ura", &payload.subject_ura),
+            ("caller_ura", &payload.caller_ura),
+            ("audience", &payload.audience),
+        ],
+    )?;
     validate_expiry(
         "authority",
         payload.issued_at_ms,
@@ -196,6 +207,17 @@ pub(crate) fn validate_session_authority_payload_shape(
             "session authority must carry issuer, session id, owner, creator principal, callee, subject, audience, scopes, allowed actions, and follow-up abilities",
         ));
     }
+    reject_all_zero_authority_fields(
+        "session authority",
+        &[
+            ("issuer_ura", &payload.issuer_ura),
+            ("session_owner_user_id", &payload.session_owner_user_id),
+            ("creator_principal_id", &payload.creator_principal_id),
+            ("callee_ura", &payload.callee_ura),
+            ("subject_ura", &payload.subject_ura),
+            ("audience", &payload.audience),
+        ],
+    )?;
     let subject_kind = authority_subject_kind(&payload.subject_ura);
     if !matches!(
         subject_kind,
@@ -255,6 +277,25 @@ pub(crate) fn validate_session_authority_payload_shape(
         payload.expires_at_ms,
         now_ms,
     )
+}
+
+fn reject_all_zero_authority_fields(
+    label: &str,
+    fields: &[(&str, &str)],
+) -> Result<(), AuthorityMetadataError> {
+    for (field, value) in fields {
+        if value
+            .trim()
+            .to_ascii_lowercase()
+            .contains(ALL_ZERO_PRINCIPAL_ID)
+        {
+            return Err(AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                format!("{label} {field} must not be all-zero"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn authority_subject_kind(subject_ura: &str) -> AuthoritySubjectKind {
@@ -382,6 +423,27 @@ mod tests {
     }
 
     #[test]
+    fn delegation_payload_rejects_all_zero_principal_placeholders() {
+        let payload = DelegationPayload {
+            issuer_ura: "easynet:///r/example/user/alice".into(),
+            subject_ura: "easynet:///r/example/user/00000000-0000-0000-0000-000000000000".into(),
+            caller_ura: "easynet:///r/example/agent/backend".into(),
+            audience: "easynet:///r/example/device/dev-a".into(),
+            scopes: vec!["device.observe.*".into()],
+            issued_at_ms: 1000,
+            expires_at_ms: 2000,
+        };
+
+        let err = validate_delegation_payload_shape(&payload, None)
+            .expect_err("all-zero authority placeholders must be rejected");
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+        assert!(
+            err.to_string().contains("subject_ura must not be all-zero"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn post_admission_projection_preserves_the_verified_payload() {
         let payload = session_payload();
         let expected = payload.clone();
@@ -424,6 +486,24 @@ mod tests {
         matching_user_subject.subject_ura = "easynet:///r/example/user/alice".into();
         validate_session_authority_payload_shape(&matching_user_subject, None)
             .expect("the declared session owner remains a canonical user subject");
+    }
+
+    #[test]
+    fn session_authority_rejects_all_zero_owner_before_subject_admission() {
+        let all_zero = "00000000-0000-0000-0000-000000000000";
+        let mut payload = session_payload();
+        payload.session_owner_user_id = all_zero.into();
+        payload.subject_ura =
+            format!("easynet:///r/example/resource/user.{all_zero}/session/session-1");
+
+        let err = validate_session_authority_payload_shape(&payload, None)
+            .expect_err("all-zero session owner must fail at authority metadata validation");
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+        assert!(
+            err.to_string()
+                .contains("session_owner_user_id must not be all-zero"),
+            "{err}"
+        );
     }
 
     #[test]

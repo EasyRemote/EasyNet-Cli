@@ -5189,6 +5189,64 @@ expect_fail \
   "R78_AUTHORITY_METADATA_CLOCK_FAIL_CLOSED"
 
 make_good_fixture
+cat >"$CLI/src/daemon/invocation/admission/authority_metadata.rs" <<'EOF'
+const REASON_AUTHORITY_FORMAT_INVALID: &str = "AUTHORITY_FORMAT_INVALID";
+
+struct DelegationPayload {
+    issuer_ura: String,
+    subject_ura: String,
+    caller_ura: String,
+    audience: String,
+    scopes: Vec<String>,
+}
+
+struct SessionAuthorityPayload {
+    issuer_ura: String,
+    session_id: String,
+    session_owner_user_id: String,
+    creator_principal_id: String,
+    callee_ura: String,
+    subject_ura: String,
+    audience: String,
+    scopes: Vec<String>,
+    allowed_actions: Vec<String>,
+    allowed_followup_abilities: Vec<String>,
+}
+
+fn validate_delegation_payload_shape(payload: &DelegationPayload) -> Result<(), Error> {
+    if payload.issuer_ura.trim().is_empty()
+        || payload.subject_ura.trim().is_empty()
+        || payload.caller_ura.trim().is_empty()
+        || payload.audience.trim().is_empty()
+        || payload.scopes.is_empty()
+    {
+        return Err(Error);
+    }
+    Ok(())
+}
+
+fn validate_session_authority_payload_shape(payload: &SessionAuthorityPayload) -> Result<(), Error> {
+    if payload.issuer_ura.trim().is_empty()
+        || payload.session_id.trim().is_empty()
+        || payload.session_owner_user_id.trim().is_empty()
+        || payload.creator_principal_id.trim().is_empty()
+        || payload.callee_ura.trim().is_empty()
+        || payload.subject_ura.trim().is_empty()
+        || payload.audience.trim().is_empty()
+        || payload.scopes.is_empty()
+        || payload.allowed_actions.is_empty()
+        || payload.allowed_followup_abilities.is_empty()
+    {
+        return Err(Error);
+    }
+    Ok(())
+}
+EOF
+expect_fail \
+  "authority metadata all-zero principal fallback" \
+  "R90_AUTHORITY_METADATA_REJECTS_ALL_ZERO_PRINCIPAL"
+
+make_good_fixture
 cat >"$CLI/src/daemon/identity/receipt_signing.rs" <<'EOF'
 struct Provider;
 

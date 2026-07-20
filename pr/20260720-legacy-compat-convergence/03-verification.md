@@ -1496,3 +1496,28 @@ Commands and outcomes will be appended after implementation.
   `PermissionService::pending(...) -> anyhow::Result<Vec<PermissionRequest>>`,
   and the poisoned queue regressions.
 - `git diff --check` — PASS.
+
+## 2026-07-21 Authority metadata all-zero principal fail-closed validation
+
+- `/Users/macbook.silan.tech/.cargo/bin/rustfmt --edition 2021 --check
+  src/daemon/invocation/admission/authority_metadata.rs` — PASS after
+  formatting.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q
+  invocation::admission::authority_metadata --lib` — PASS (`8 passed`);
+  includes all-zero delegation and session-authority regressions.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R90 for daemon-side all-zero principal rejection.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture where authority validators only require non-empty fields
+  and never call the all-zero rejection helper.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "authority metadata
+  all-zero principal session_owner_user_id reject_all_zero_authority_fields
+  validate_session_authority_payload_shape" --limit 80` — PASS; reports
+  `reject_all_zero_authority_fields`,
+  `validate_session_authority_payload_shape`,
+  `ALL_ZERO_PRINCIPAL_ID`, and the new all-zero authority regressions.
+- `git diff --check` — PASS.

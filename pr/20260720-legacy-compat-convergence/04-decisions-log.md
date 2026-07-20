@@ -472,3 +472,9 @@ Decisions will be appended as root-fork choices are made.
   admission state. `Kernel::pending_permission_requests`,
   `consent.list_pending`, and `consent.subscribe` must propagate that failure
   instead of reporting an empty queue or `null` request rows.
+- Treat all-zero principal ids as invalid authority material at the daemon
+  admission boundary. SDK language guards remain useful, but they are not the
+  authority boundary because product ingress can submit raw metadata. Delegated
+  and session authority validators must reject the all-zero placeholder before
+  subject/audience matching so stale defaults do not become misleading
+  `AUTHORITY_SUBJECT_MISMATCH` failures.

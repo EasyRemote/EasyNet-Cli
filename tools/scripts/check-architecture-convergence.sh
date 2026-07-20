@@ -7371,6 +7371,46 @@ if authority_metadata.exists():
         if token not in text:
             add("R78_AUTHORITY_METADATA_CLOCK_FAIL_CLOSED", authority_metadata, 1, detail)
 
+    # Rule 90: Daemon authority metadata must reject all-zero principal
+    # placeholders itself. SDK guards are not sufficient because product
+    # ingress can still submit raw metadata to the daemon admission gate.
+    if authority_metadata.exists():
+        text = source(authority_metadata)
+        for token, detail in (
+            (
+                "ALL_ZERO_PRINCIPAL_ID",
+                "authority metadata must name the all-zero principal placeholder",
+            ),
+            (
+                "fn reject_all_zero_authority_fields",
+                "authority metadata must centralize all-zero field rejection",
+            ),
+        ):
+            if token not in text:
+                add("R90_AUTHORITY_METADATA_REJECTS_ALL_ZERO_PRINCIPAL", authority_metadata, 1, detail)
+        for fn_name, detail in (
+            (
+                "validate_delegation_payload_shape",
+                "delegation authority validation must reject all-zero principal placeholders",
+            ),
+            (
+                "validate_session_authority_payload_shape",
+                "session authority validation must reject all-zero principal placeholders",
+            ),
+        ):
+            body_info = rust_method_body(text, fn_name)
+            if body_info is None:
+                add("R90_AUTHORITY_METADATA_REJECTS_ALL_ZERO_PRINCIPAL", authority_metadata, 1, f"{fn_name} must remain inspectable")
+                continue
+            offset, body = body_info
+            if "reject_all_zero_authority_fields(" not in body:
+                add(
+                    "R90_AUTHORITY_METADATA_REJECTS_ALL_ZERO_PRINCIPAL",
+                    authority_metadata,
+                    line_number(text, offset),
+                    detail,
+                )
+
 
 # Rule 79: Invocation signing custody must be ownership/lease backed. A raw
 # key-service signer capability must not imply descriptor-bound invocation

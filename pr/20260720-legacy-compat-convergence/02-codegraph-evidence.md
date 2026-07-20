@@ -1503,3 +1503,28 @@ Evidence will be appended after indexing and focused impact queries.
   preserves the AllowAll empty state while propagating subscriber failures, and
   `Kernel::pending_permission_requests`, `consent.list_pending`, and
   `consent.subscribe` all fail closed on unreadable pending state.
+
+## 2026-07-21 Authority metadata all-zero principal placeholder audit
+
+- `codegraph query "00000000 session_owner_user_id invocation_history active
+  profile subject authority subject RemoteSystemInvocationIssuer caller signer
+  bootstrap self identity" --limit 120` identified daemon authority metadata,
+  SDK authority builders, `RemoteSystemInvocationIssuer::root_plan`, and
+  caller signer resolution as the chain behind product-visible
+  `AUTHORITY_SUBJECT_MISMATCH` / missing signer failures.
+- Targeted source inspection found the compatibility seam: SDKs already reject
+  all-zero principal ids, and daemon credentials reject all-zero `user_id`, but
+  raw daemon authority metadata validation only required
+  `session_owner_user_id` to be non-empty. A product ingress that hand-built
+  session authority metadata could therefore submit
+  `00000000-0000-0000-0000-000000000000` and reach later admission as a
+  misleading subject mismatch.
+- The root abstraction problem was placing identity-placeholder rejection at
+  language facade boundaries instead of the runtime admission boundary. SDK
+  builders can protect SDK callers, but daemon admission owns canonical raw
+  metadata validation for every product ingress.
+- After the change, `validate_delegation_payload_shape` and
+  `validate_session_authority_payload_shape` both call one centralized
+  all-zero principal rejection helper before subject/audience matching. Raw
+  all-zero authority metadata now fails as `AUTHORITY_FORMAT_INVALID` instead
+  of reaching downstream admission as a false user/session authority.
