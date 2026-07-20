@@ -425,6 +425,16 @@ fn descriptor_resolution_error_projection(message: &str) -> (i32, ErrorProjectio
             },
         );
     }
+    if lowered.contains("descriptor catalog row") {
+        return (
+            ERR_INVALID_ARG,
+            ErrorProjection {
+                code: "INVALID_ARGUMENT",
+                stage: "provider_payload",
+                retry: "never",
+            },
+        );
+    }
     if lowered.contains("daemon not running") || lowered.contains("listener unreachable") {
         return (
             ERR_DAEMON_DOWN,
@@ -1930,7 +1940,7 @@ fn runtime_resolve_descriptor_ref_json(
             &ability_ura,
             call_mode,
             "runtime_local_descriptor_catalog",
-        ) {
+        )? {
             return Ok(resolution);
         }
         anyhow::bail!(
@@ -1943,7 +1953,7 @@ fn runtime_resolve_descriptor_ref_json(
             &ability_ura,
             call_mode,
             "runtime_system_descriptor_catalog",
-        ) {
+        )? {
             return Ok(resolution);
         }
     }
@@ -1954,7 +1964,7 @@ fn runtime_resolve_descriptor_ref_json(
             &ability_ura,
             call_mode,
             "runtime_realm_descriptor_catalog",
-        ) {
+        )? {
             return Ok(resolution);
         }
     }
@@ -2001,7 +2011,7 @@ fn runtime_resolve_descriptor_ref_json(
         &ability_ura,
         call_mode,
         "runtime_meta_list_abilities",
-    ) {
+    )? {
         return Ok(resolution);
     }
     anyhow::bail!(
@@ -2184,29 +2194,63 @@ fn descriptor_catalog_resolution_from_entries(
     ability_ura: &str,
     call_mode: &str,
     source: &str,
-) -> Option<serde_json::Value> {
-    entries.iter().find_map(|entry| {
+) -> anyhow::Result<Option<serde_json::Value>> {
+    for entry in entries {
         let entry_ability = entry
             .get("ability_ura")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if entry_ability != Some(ability_ura) {
+            continue;
+        }
         let entry_call_mode = entry
             .get("call_mode")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .trim();
-        if entry_ability != ability_ura || entry_call_mode != call_mode {
-            return None;
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "descriptor catalog row for ability {ability_ura:?} from {source} missing call_mode"
+                )
+            })?;
+        if entry_call_mode != call_mode {
+            continue;
         }
-        Some(serde_json::json!({
-            "descriptor_ref": entry.get("descriptor_ref").cloned().unwrap_or_default(),
-            "ability_ura": entry_ability,
-            "owner_ura": entry.get("owner_ura").cloned().unwrap_or_default(),
-            "name": entry.get("name").cloned().unwrap_or_default(),
+        let descriptor_ref =
+            descriptor_catalog_required_string(entry, "descriptor_ref", ability_ura, source)?;
+        let owner_ura =
+            descriptor_catalog_required_string(entry, "owner_ura", ability_ura, source)?;
+        let name = descriptor_catalog_required_string(entry, "name", ability_ura, source)?;
+        return Ok(Some(serde_json::json!({
+            "descriptor_ref": descriptor_ref,
+            "ability_ura": ability_ura,
+            "owner_ura": owner_ura,
+            "name": name,
             "call_mode": call_mode,
             "source": source,
-        }))
-    })
+        })));
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "axon-pb")]
+fn descriptor_catalog_required_string<'a>(
+    entry: &'a serde_json::Value,
+    field: &'static str,
+    ability_ura: &str,
+    source: &str,
+) -> anyhow::Result<&'a str> {
+    entry
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "descriptor catalog row for ability {ability_ura:?} from {source} missing {field}"
+            )
+        })
 }
 
 #[cfg(feature = "axon-pb")]
@@ -9011,6 +9055,31 @@ mod tests {
 
     #[cfg(feature = "axon-pb")]
     #[test]
+    fn descriptor_catalog_resolution_rejects_matching_row_without_descriptor_ref() {
+        let ability_ura = "easynet:///r/localhost/ability/device.dev-a.observe.health";
+        let entries = vec![serde_json::json!({
+            "ability_ura": ability_ura,
+            "owner_ura": "easynet:///r/localhost/device/dev-a",
+            "name": "observe.health",
+            "call_mode": "rpc"
+        })];
+
+        let error = descriptor_catalog_resolution_from_entries(
+            &entries,
+            ability_ura,
+            "rpc",
+            "test_descriptor_catalog",
+        )
+        .expect_err("matching descriptor catalog rows must be schema-complete");
+
+        assert!(
+            error.to_string().contains("missing descriptor_ref"),
+            "unexpected descriptor catalog error: {error}"
+        );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
     fn descriptor_resolution_errors_project_canonical_runtime_codes() {
         let (abi_code, projection) = descriptor_resolution_error_projection(
             "easynet_runtime_resolve_descriptor_ref: descriptor_ref not found in local runtime catalog",
@@ -9032,6 +9101,13 @@ mod tests {
         assert_eq!(abi_code, ERR_NOT_FOUND);
         assert_eq!(projection.code, "DESCRIPTOR_OWNER_OFFLINE");
         assert_eq!(projection.retry, "after_backoff");
+
+        let (abi_code, projection) = descriptor_resolution_error_projection(
+            "easynet_runtime_resolve_descriptor_ref: descriptor catalog row for ability \"easynet:///r/localhost/ability/device.dev-a.observe.health\" from runtime_local_descriptor_catalog missing descriptor_ref",
+        );
+        assert_eq!(abi_code, ERR_INVALID_ARG);
+        assert_eq!(projection.code, "INVALID_ARGUMENT");
+        assert_eq!(projection.stage, "provider_payload");
     }
 
     #[cfg(feature = "axon-pb")]

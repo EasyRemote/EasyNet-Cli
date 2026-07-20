@@ -1474,30 +1474,64 @@ func resolveDescriptorRefFromDiagnostics(requestJSON []byte, diagnosticsJSON []b
 	if rawEntries == nil {
 		return nil, invalidRuntimePayload("runtime descriptor_catalog.entries must be an array", nil)
 	}
+	source := cabiStringOrEmpty(catalog["source"])
 	for _, rawEntry := range rawEntries {
 		entry, _ := rawEntry.(map[string]any)
 		if entry == nil {
 			continue
 		}
+		entryAbilityURA := strings.TrimSpace(cabiStringOrEmpty(entry["ability_ura"]))
+		if abilityIsURA {
+			if entryAbilityURA != ability {
+				continue
+			}
+			entryCallMode, err := cabiRequiredCatalogString(entry, "call_mode", ability, source)
+			if err != nil {
+				return nil, err
+			}
+			if entryCallMode != callMode {
+				continue
+			}
+			descriptorRef, err := cabiRequiredCatalogString(entry, "descriptor_ref", ability, source)
+			if err != nil {
+				return nil, err
+			}
+			entryOwnerURA, err := cabiRequiredCatalogString(entry, "owner_ura", ability, source)
+			if err != nil {
+				return nil, err
+			}
+			entryName, err := cabiRequiredCatalogString(entry, "name", ability, source)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(map[string]any{
+				"descriptor_ref": descriptorRef,
+				"ability_ura":    entryAbilityURA,
+				"owner_ura":      entryOwnerURA,
+				"name":           entryName,
+				"call_mode":      callMode,
+				"source":         source,
+			})
+		}
 		entryOwnerURA := strings.TrimSpace(cabiStringOrEmpty(entry["owner_ura"]))
-		entryCallMode := strings.TrimSpace(cabiStringOrEmpty(entry["call_mode"]))
+		entryName := strings.TrimSpace(cabiStringOrEmpty(entry["name"]))
+		if entryOwnerURA != calleeURA || ability != entryName {
+			continue
+		}
+		entryCallMode, err := cabiRequiredCatalogString(entry, "call_mode", ability, source)
+		if err != nil {
+			return nil, err
+		}
 		if entryCallMode != callMode {
 			continue
 		}
-		entryName := strings.TrimSpace(cabiStringOrEmpty(entry["name"]))
-		entryAbilityURA := strings.TrimSpace(cabiStringOrEmpty(entry["ability_ura"]))
-		if abilityIsURA {
-			if ability != entryAbilityURA {
-				continue
-			}
-		} else {
-			if entryOwnerURA != calleeURA || ability != entryName {
-				continue
-			}
+		descriptorRef, err := cabiRequiredCatalogString(entry, "descriptor_ref", ability, source)
+		if err != nil {
+			return nil, err
 		}
-		descriptorRef := strings.TrimSpace(cabiStringOrEmpty(entry["descriptor_ref"]))
-		if descriptorRef == "" {
-			continue
+		entryAbilityURA, err = cabiRequiredCatalogString(entry, "ability_ura", ability, source)
+		if err != nil {
+			return nil, err
 		}
 		return json.Marshal(map[string]any{
 			"descriptor_ref": descriptorRef,
@@ -1505,7 +1539,7 @@ func resolveDescriptorRefFromDiagnostics(requestJSON []byte, diagnosticsJSON []b
 			"owner_ura":      entryOwnerURA,
 			"name":           entryName,
 			"call_mode":      callMode,
-			"source":         cabiStringOrEmpty(catalog["source"]),
+			"source":         source,
 		})
 	}
 	return nil, &SDKError{
@@ -1520,6 +1554,20 @@ func resolveDescriptorRefFromDiagnostics(requestJSON []byte, diagnosticsJSON []b
 			callMode,
 		),
 	}
+}
+
+func cabiRequiredCatalogString(entry map[string]any, field string, ability string, source string) (string, error) {
+	value := strings.TrimSpace(cabiStringOrEmpty(entry[field]))
+	if value != "" {
+		return value, nil
+	}
+	if strings.TrimSpace(source) == "" {
+		source = "descriptor_catalog"
+	}
+	return "", invalidRuntimePayload(
+		fmt.Sprintf("descriptor catalog row for ability %q from %s missing %s", ability, source, field),
+		nil,
+	)
 }
 
 func cabiInvocationStateName(state int64) string {

@@ -4,6 +4,7 @@ package easynet
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -94,5 +95,34 @@ func TestResolveDescriptorRefFromDiagnosticsRequiresCallMode(t *testing.T) {
 	}
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestResolveDescriptorRefFromDiagnosticsRejectsMatchingRowWithoutDescriptorRef(t *testing.T) {
+	diagnostics := []byte(`{
+		"descriptor_catalog": {
+			"source": "test",
+			"entries": [
+				{
+					"name": "page.fetch",
+					"owner_ura": "easynet:///r/test/device/dev-a",
+					"ability_ura": "easynet:///r/test/ability/device.dev-a.page.fetch",
+					"call_mode": "rpc"
+				}
+			]
+		}
+	}`)
+	_, err := resolveDescriptorRefFromDiagnostics(
+		[]byte(`{"callee_ura":"easynet:///r/test/device/dev-a","ability":"page.fetch","call_mode":"rpc"}`),
+		diagnostics,
+	)
+	if err == nil {
+		t.Fatal("descriptor_ref diagnostics resolver accepted a matching row without descriptor_ref")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if got := err.Error(); !strings.Contains(got, "descriptor catalog row") || !strings.Contains(got, "missing descriptor_ref") {
+		t.Fatalf("error = %v, want missing descriptor_ref diagnostic", err)
 	}
 }

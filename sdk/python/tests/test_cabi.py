@@ -54,6 +54,31 @@ class CABIDescriptorDiagnosticsTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, ErrorCode.INVALID_ARGUMENT)
         self.assertIn("call_mode is required", raised.exception.message)
 
+    def test_descriptor_diagnostics_rejects_matching_row_without_descriptor_ref(self) -> None:
+        diagnostics = {
+            "descriptor_catalog": {
+                "source": "test",
+                "entries": [
+                    {
+                        "name": "page.fetch",
+                        "owner_ura": "easynet:///r/test/device/dev-a",
+                        "ability_ura": "easynet:///r/test/ability/device.dev-a.page.fetch",
+                        "call_mode": "rpc",
+                    }
+                ],
+            }
+        }
+
+        with self.assertRaises(SDKError) as raised:
+            _resolve_descriptor_ref_from_diagnostics(
+                b'{"callee_ura":"easynet:///r/test/device/dev-a","ability":"page.fetch","call_mode":"rpc"}',
+                diagnostics,
+            )
+
+        self.assertEqual(raised.exception.code, ErrorCode.INVALID_ARGUMENT)
+        self.assertIn("descriptor catalog row", raised.exception.message)
+        self.assertIn("missing descriptor_ref", raised.exception.message)
+
 
 class FakeSymbol:
     def __init__(self, func):

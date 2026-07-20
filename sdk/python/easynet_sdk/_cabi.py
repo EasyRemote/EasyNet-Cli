@@ -1764,21 +1764,26 @@ def _resolve_descriptor_ref_from_diagnostics(
             retry=RetryHint.NEVER,
             message="runtime descriptor_catalog.entries must be an array",
         )
+    source = str(catalog.get("source") or "descriptor_catalog").strip() or "descriptor_catalog"
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        entry_owner_ura = str(entry.get("owner_ura") or "").strip()
-        if str(entry.get("call_mode") or "").strip() != call_mode:
-            continue
-        entry_name = str(entry.get("name") or "").strip()
         entry_ability_ura = str(entry.get("ability_ura") or "").strip()
         if ability_is_ura:
             if ability != entry_ability_ura:
                 continue
-        elif entry_owner_ura != callee_ura or ability != entry_name:
-            continue
-        descriptor_ref = str(entry.get("descriptor_ref") or "").strip()
-        if descriptor_ref:
+            entry_call_mode = _required_catalog_entry_string(
+                entry, "call_mode", ability, source
+            )
+            if entry_call_mode != call_mode:
+                continue
+            descriptor_ref = _required_catalog_entry_string(
+                entry, "descriptor_ref", ability, source
+            )
+            entry_owner_ura = _required_catalog_entry_string(
+                entry, "owner_ura", ability, source
+            )
+            entry_name = _required_catalog_entry_string(entry, "name", ability, source)
             return _json_bytes(
                 {
                     "descriptor_ref": descriptor_ref,
@@ -1786,9 +1791,34 @@ def _resolve_descriptor_ref_from_diagnostics(
                     "owner_ura": entry_owner_ura,
                     "name": entry_name,
                     "call_mode": call_mode,
-                    "source": catalog.get("source") or "descriptor_catalog",
+                    "source": source,
                 }
             )
+        entry_owner_ura = str(entry.get("owner_ura") or "").strip()
+        entry_name = str(entry.get("name") or "").strip()
+        if entry_owner_ura != callee_ura or ability != entry_name:
+            continue
+        entry_call_mode = _required_catalog_entry_string(
+            entry, "call_mode", ability, source
+        )
+        if entry_call_mode != call_mode:
+            continue
+        descriptor_ref = _required_catalog_entry_string(
+            entry, "descriptor_ref", ability, source
+        )
+        entry_ability_ura = _required_catalog_entry_string(
+            entry, "ability_ura", ability, source
+        )
+        return _json_bytes(
+            {
+                "descriptor_ref": descriptor_ref,
+                "ability_ura": entry_ability_ura,
+                "owner_ura": entry_owner_ura,
+                "name": entry_name,
+                "call_mode": call_mode,
+                "source": source,
+            }
+        )
     raise SDKError(
         code=ErrorCode.NOT_FOUND,
         stage="cabi",
@@ -1796,6 +1826,23 @@ def _resolve_descriptor_ref_from_diagnostics(
         message=(
             f"descriptor_ref not found for callee_ura={callee_ura!r} "
             f"ability={ability!r} call_mode={call_mode!r}"
+        ),
+    )
+
+
+def _required_catalog_entry_string(
+    entry: dict[str, object], field_name: str, ability: str, source: str
+) -> str:
+    value = entry.get(field_name)
+    if isinstance(value, str) and value.strip() != "":
+        return value.strip()
+    raise SDKError(
+        code=ErrorCode.INVALID_ARGUMENT,
+        stage="cabi",
+        retry=RetryHint.NEVER,
+        message=(
+            f"descriptor catalog row for ability {ability!r} from {source} "
+            f"missing {field_name}"
         ),
     )
 
