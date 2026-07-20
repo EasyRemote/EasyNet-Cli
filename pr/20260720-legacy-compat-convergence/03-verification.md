@@ -24,6 +24,23 @@ Commands and outcomes will be appended after implementation.
   — PASS; confirms the current proxy path validates peer rows and converts
   selected-peer fanout errors into explicit failure before response merge.
 
+## 2026-07-21 Namespace proxy resolve fallback removal
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q namespace_proxy_resolve --lib`
+  — PASS (`5 passed`; covers successful typed peer resolve, missing qtype
+  rejection, legacy input alias rejection, selected peer without federation
+  client failure, and malformed peer record schema failure).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore "dispatch_namespace_proxy_resolve selected peer_hub_urls namespace_proxy_resolve_merge_answer namespace_record_merge_key recordType unwrap_or_default fanout_errors"`
+  — PASS; confirms selected peer failures flow to explicit failure and peer
+  records are validated through the canonical merge-key helper before merge.
+
 ## 2026-07-20 InvokeBidi receipt payload projection fallback removal
 
 - `/Users/macbook.silan.tech/.cargo/bin/cargo test -q local_invoke --lib --features axon-pb`

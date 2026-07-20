@@ -17,6 +17,19 @@ Decisions will be appended as root-fork choices are made.
   selected-peer failure is returned as failed/unavailable state, not hidden as
   an empty or partial device list.
 
+## 2026-07-21 namespace proxy resolve projection
+
+- Treat `namespace.proxy_resolve` peer URLs as exact product-selected fanout
+  scope. Empty scope remains a valid empty non-dispatchable resolve answer;
+  selected peers require a configured federation client, trusted hub entry,
+  successful peer invocation, and valid peer resolver output.
+- Treat peer `namespace.resolve` output as a canonical resolver projection.
+  The proxy may merge canonical records but must not skip missing `records`,
+  synthesize empty merge keys, or accept retired camel-case `recordType` rows.
+- Treat peer fanout errors as unavailable resolver state. Returning a partial
+  resolve answer after one selected peer failed would make product route
+  visibility depend on error timing instead of explicit runtime state.
+
 ## 2026-07-20 InvokeBidi receipt payload projection
 
 - Treat `LocalBidiFrame` as the support-layer owner for projecting

@@ -174,3 +174,9 @@
   discovery: missing federation transport, untrusted peers, malformed peer
   rows, and fanout failures are runtime unavailable/configuration facts and
   must not become an empty or partial successful device list.
+- Product namespace proxy resolution must treat `peer_hub_urls` as an exact
+  selected scope. Missing federation transport, untrusted peers, malformed
+  peer resolve answers, and fanout failures are unavailable/configuration
+  facts; they must not be merged into empty or partial
+  `RESOLVE_ANSWER_KIND_NON_DISPATCHABLE` success. Peer records must use the
+  canonical `record_type` field and canonical resolver enum strings.

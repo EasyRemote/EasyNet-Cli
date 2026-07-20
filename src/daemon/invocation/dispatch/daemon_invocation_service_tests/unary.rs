@@ -2127,6 +2127,133 @@ async fn invoke_dispatches_namespace_proxy_resolve_to_typed_peer_surface() {
 }
 
 #[tokio::test]
+async fn invoke_namespace_proxy_resolve_rejects_selected_peers_without_client() {
+    let svc = make_service();
+
+    let resp = svc
+        .invoke(invoke_request(
+            ABILITY_NAMESPACE_PROXY_RESOLVE,
+            r#"{
+                "peer_hub_urls":["https://peer-hub.example:50443"],
+                "query_name":"easynet:///r/peer-realm/device/",
+                "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
+                "caller_ura":"easynet:///r/local-realm/authority",
+                "subject_ura":"easynet:///r/local-realm/user/alice",
+                "realm_hint":"peer-realm"
+            }"#,
+        ))
+        .await
+        .expect("proxy failure is projected in-band")
+        .into_inner();
+    assert_eq!(
+        resp.state,
+        axon_sdk::invocation::InvocationState::Failed.to_wire_i32(),
+        "selected namespace peers must not become an empty successful resolve answer"
+    );
+    let error = resp
+        .error
+        .expect("canonical failed proxy response carries typed error");
+    assert!(
+        error
+            .message
+            .contains("federation client is required when peer_hub_urls are selected"),
+        "failure must name the missing peer runtime; got: {}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn invoke_namespace_proxy_resolve_rejects_malformed_peer_record_schema() {
+    use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
+
+    let peer_hub_url = "https://peer-hub.example:50443";
+    let peer_hub_ura = crate::core::ura::hub_ura("peer-realm");
+    let anchor = Arc::new(test_trust_anchor_with_entries(vec![TrustedAgent {
+        agent_ura: peer_hub_ura,
+        public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+        role: TrustedAgentRole::Hub,
+        added_at_unix_ms: 1_700_000_000_000,
+        origin_realm: Some("peer-realm".to_string()),
+        hub_endpoint: Some(peer_hub_url.to_string()),
+        tls_ca_pem_path: None,
+    }]));
+    let runtime_cell = SharedTrustAnchor::new(anchor.clone());
+    let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URA.to_string()));
+    let canned = InvokeResponse {
+        result: serde_json::to_vec(&serde_json::json!({
+            "answer_kind": "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+            "records": [
+                {
+                    "name": "easynet:///r/peer-realm/device/dev-peer",
+                    "recordType": "RECORD_TYPE_ID",
+                    "value": {
+                        "id": {
+                            "ura": "easynet:///r/peer-realm/device/dev-peer",
+                            "kind": "URA_KIND_DEVICE"
+                        }
+                    }
+                }
+            ],
+            "release_profile": "RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL",
+            "cache_policy": {
+                "ttl_ms": 0,
+                "shared_cacheable": false,
+                "retry_after_unix_ms": 0
+            }
+        }))
+        .expect("malformed resolve answer fixture"),
+        result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+        state: axon_sdk::invocation::InvocationState::Completed.to_wire_i32(),
+        ..InvokeResponse::default()
+    };
+    let recorder = Arc::new(RecordingFederationClient::new(canned));
+    let svc = register_test_daemon_routes(
+        DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
+            .with_hub_signer(test_hub_signer("local-realm"))
+            .with_session_realm("local-realm")
+            .with_federation_client(recorder.clone() as Arc<dyn FederationClient>)
+            .with_test_daemon_runtime(runtime_cell),
+        TEST_DAEMON_URA,
+    );
+
+    let resp = svc
+        .invoke(invoke_request(
+            ABILITY_NAMESPACE_PROXY_RESOLVE,
+            r#"{
+                "peer_hub_urls":["https://peer-hub.example:50443"],
+                "query_name":"easynet:///r/peer-realm/device/",
+                "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
+                "caller_ura":"easynet:///r/local-realm/authority",
+                "subject_ura":"easynet:///r/local-realm/user/alice",
+                "realm_hint":"peer-realm"
+            }"#,
+        ))
+        .await
+        .expect("proxy failure is projected in-band")
+        .into_inner();
+    assert_eq!(
+        resp.state,
+        axon_sdk::invocation::InvocationState::Failed.to_wire_i32(),
+        "malformed peer namespace rows must not be dropped into an empty success"
+    );
+    let error = resp
+        .error
+        .expect("canonical failed proxy response carries typed error");
+    assert!(
+        error.message.contains("records[0].record_type is required"),
+        "failure must surface the canonical schema defect; got: {}",
+        error.message
+    );
+
+    let calls = recorder.calls();
+    assert_eq!(
+        calls.len(),
+        1,
+        "malformed response still came from one peer"
+    );
+}
+
+#[tokio::test]
 async fn invoke_rejects_namespace_proxy_resolve_legacy_camel_case_input_aliases() {
     let svc = make_service();
 

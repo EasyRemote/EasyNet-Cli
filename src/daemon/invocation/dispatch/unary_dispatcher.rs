@@ -41,7 +41,7 @@ use std::collections::BTreeMap;
 
 use crate::daemon::federation::client::FederationClientError;
 use crate::daemon::federation::directory::now_unix_ms;
-use crate::daemon::federation::resolver_contract::ResolveType;
+use crate::daemon::federation::resolver_contract::{RecordType, ResolveAnswerKind, ResolveType};
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::decision::SignatureDecisionReason;
 use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
@@ -1459,31 +1459,37 @@ impl UnaryDispatcher {
         let request: federation_wrappers::NamespaceProxyResolveRequest =
             parse_json_args(arguments)?;
         validate_namespace_proxy_resolve_request(&request)?;
-        let Some(client) = self.federation.client.as_ref() else {
-            return encode_json_payload(&namespace_proxy_resolve_empty_answer(&request));
-        };
-
         let peer_hub_urls = sorted_non_empty_urls(request.peer_hub_urls.clone());
         if peer_hub_urls.is_empty() {
             return encode_json_payload(&namespace_proxy_resolve_empty_answer(&request));
         }
+        let Some(client) = self.federation.client.as_ref() else {
+            return Err(Status::failed_precondition(
+                "namespace.proxy_resolve: federation client is required when peer_hub_urls are selected",
+            ));
+        };
+        let caller_envelope = caller_envelope.ok_or_else(|| {
+            Status::invalid_argument("namespace.proxy_resolve: missing caller envelope")
+        })?;
 
         let inner_arguments = namespace_proxy_resolve_peer_arguments(&request)?;
         let trust_anchor = self.admission.trust_anchor_snapshot();
         let local_realm = self.identity.session_realm.as_deref();
         let mut fanout = FuturesUnordered::new();
         for peer_hub_url in peer_hub_urls {
-            let Some(peer_entry) = trust_anchor.lookup_peer_hub(&peer_hub_url).cloned() else {
-                crate::op_event!(
-                    component = daemon_invocation,
-                    kind = namespace_proxy_resolve_skip_untrusted_peer,
-                    peer_hub_url = peer_hub_url,
-                );
-                continue;
+            let peer_entry = match trust_anchor.lookup_peer_hub(&peer_hub_url).cloned() {
+                Some(peer_entry) => peer_entry,
+                None => {
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = namespace_proxy_resolve_untrusted_peer,
+                        peer_hub_url = peer_hub_url,
+                    );
+                    return Err(Status::failed_precondition(format!(
+                        "namespace.proxy_resolve: selected peer hub `{peer_hub_url}` is not trusted"
+                    )));
+                }
             };
-            let caller_envelope = caller_envelope.ok_or_else(|| {
-                Status::invalid_argument("namespace.proxy_resolve: missing caller envelope")
-            })?;
             let client = Arc::clone(client);
             let peer_request = PeerInvokeRequest::new(
                 PeerInvocationSubject::ForwardedCaller(caller_envelope),
@@ -1504,6 +1510,10 @@ impl UnaryDispatcher {
                                     "decode peer {peer_hub_url} namespace.resolve response: {err}"
                                 )
                             })?;
+                        validate_namespace_proxy_resolve_peer_answer(
+                            &body,
+                            &format!("peer {peer_hub_url} namespace.resolve response"),
+                        )?;
                         Ok(body)
                     }
                     Err(err) => Err(format!(
@@ -1514,18 +1524,26 @@ impl UnaryDispatcher {
         }
 
         let mut peer_answers = Vec::new();
+        let mut fanout_errors = Vec::new();
         while let Some(result) = fanout.next().await {
             match result {
                 Ok(answer) => peer_answers.push(answer),
                 Err(err) => {
-                    let err_msg = err.to_string();
                     crate::op_event!(
                         component = daemon_invocation,
                         kind = namespace_proxy_resolve_fanout_error,
-                        error = err_msg,
+                        error = err,
                     );
+                    fanout_errors.push(err);
                 }
             }
+        }
+        if !fanout_errors.is_empty() {
+            fanout_errors.sort();
+            return Err(Status::unavailable(format!(
+                "namespace.proxy_resolve: peer fanout failed: {}",
+                fanout_errors.join("; ")
+            )));
         }
 
         encode_json_payload(&namespace_proxy_resolve_merge_answer(
@@ -2028,6 +2046,37 @@ fn validate_namespace_proxy_resolve_request(
     Ok(())
 }
 
+fn validate_namespace_proxy_resolve_peer_answer(
+    answer: &serde_json::Value,
+    source: &str,
+) -> Result<(), String> {
+    let Some(object) = answer.as_object() else {
+        return Err(format!("{source}: response must be a JSON object"));
+    };
+    let answer_kind = object
+        .get("answer_kind")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{source}: answer_kind is required"))?;
+    let parsed_answer_kind = ResolveAnswerKind::from_str_name(answer_kind).ok_or_else(|| {
+        format!("{source}: answer_kind {answer_kind:?} is not a canonical ResolveAnswerKind")
+    })?;
+    if parsed_answer_kind == ResolveAnswerKind::Unspecified {
+        return Err(format!(
+            "{source}: answer_kind must not be RESOLVE_ANSWER_KIND_UNSPECIFIED"
+        ));
+    }
+    let records = object
+        .get("records")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| format!("{source}: records array is required"))?;
+    for (index, record) in records.iter().enumerate() {
+        namespace_record_merge_key(record, source, index)?;
+    }
+    Ok(())
+}
+
 fn namespace_proxy_resolve_empty_answer(
     request: &federation_wrappers::NamespaceProxyResolveRequest,
 ) -> serde_json::Value {
@@ -2040,11 +2089,13 @@ fn namespace_proxy_resolve_merge_answer(
 ) -> serde_json::Value {
     let mut records = BTreeMap::<String, serde_json::Value>::new();
     for answer in peer_answers {
-        let Some(rows) = answer.get("records").and_then(serde_json::Value::as_array) else {
-            continue;
-        };
-        for row in rows {
-            let key = namespace_record_merge_key(row);
+        let rows = answer
+            .get("records")
+            .and_then(serde_json::Value::as_array)
+            .expect("peer namespace answer validated before merge");
+        for (index, row) in rows.iter().enumerate() {
+            let key = namespace_record_merge_key(row, "validated peer namespace answer", index)
+                .expect("peer namespace record validated before merge");
             records.entry(key).or_insert_with(|| row.clone());
         }
     }
@@ -2062,17 +2113,35 @@ fn namespace_proxy_resolve_merge_answer(
     })
 }
 
-fn namespace_record_merge_key(row: &serde_json::Value) -> String {
+fn namespace_record_merge_key(
+    row: &serde_json::Value,
+    source: &str,
+    index: usize,
+) -> Result<String, String> {
+    if !row.is_object() {
+        return Err(format!("{source}: records[{index}] must be a JSON object"));
+    }
     let name = row
         .get("name")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| format!("{source}: records[{index}].name is required"))?;
     let record_type = row
-        .get("recordType")
-        .or_else(|| row.get("record_type"))
+        .get("record_type")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    format!("{name}\u{1f}{record_type}")
+        .map(str::trim)
+        .filter(|record_type| !record_type.is_empty())
+        .ok_or_else(|| format!("{source}: records[{index}].record_type is required"))?;
+    let parsed_record_type = RecordType::from_str_name(record_type).ok_or_else(|| {
+        format!("{source}: records[{index}].record_type {record_type:?} is not canonical")
+    })?;
+    if parsed_record_type == RecordType::Unspecified {
+        return Err(format!(
+            "{source}: records[{index}].record_type must not be RECORD_TYPE_UNSPECIFIED"
+        ));
+    }
+    Ok(format!("{name}\u{1f}{record_type}"))
 }
 
 fn non_empty_json_string(value: &str) -> Option<String> {

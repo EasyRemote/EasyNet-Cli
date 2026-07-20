@@ -24,6 +24,28 @@ Evidence will be appended after indexing and focused impact queries.
   preconditions, `validate_list_user_devices_response`, and a fail-closed
   `peer fanout failed` status before any response merge.
 
+## 2026-07-21 Namespace proxy resolve fallback audit
+
+- `codegraph explore "namespace_proxy_resolve_merge_answer namespace_record_merge_key unwrap_or_default records fanout error empty answer"`
+  identified the remaining namespace proxy merge fallback. The dispatcher
+  returned an empty resolve answer when a selected peer scope lacked a
+  federation client, skipped untrusted selected peers, logged fanout errors,
+  and merged whatever peer answers remained.
+- The same query showed `namespace_proxy_resolve_merge_answer` skipping peer
+  answers with no `records` array and `namespace_record_merge_key` using
+  `unwrap_or_default()` for `name`/`record_type`, while also accepting the
+  retired camel-case `recordType` field.
+- The root abstraction problem was duplicate resolver schema authority. Peer
+  `namespace.resolve` output is a canonical resolver projection, not an
+  optional product hint. The proxy may merge records, but it must not repair or
+  reinterpret malformed peer answers.
+- After the change, `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "dispatch_namespace_proxy_resolve selected peer_hub_urls namespace_proxy_resolve_merge_answer namespace_record_merge_key recordType unwrap_or_default fanout_errors"`
+  reports the flow `dispatch_namespace_proxy_resolve ->
+  validate_namespace_proxy_resolve_peer_answer -> namespace_record_merge_key`.
+  Selected-peer failure now aborts before merge, and record merge keys require
+  canonical non-empty `name` plus canonical `record_type`.
+
 ## 2026-07-20 InvokeBidi receipt payload projection fallback audit
 
 - `rg` found identical down-frame projection logic in
