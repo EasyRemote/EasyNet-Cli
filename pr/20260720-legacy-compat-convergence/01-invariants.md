@@ -210,3 +210,10 @@
   declared scalar/list causal context with missing, blank, or malformed receipt
   fields is invalid proof input and must not be skipped or downgraded into
   self-consent or a generic receipt mismatch.
+- Invocation history filters are authority-bearing observation scope. Optional
+  filter fields may be absent, but when present `caller_ura`, `callee_ura`,
+  `agent_ura`, `subject_ura`, `subject_uras`, `ability_ura`,
+  `ability_uras`, `state`, and `trace_id` must satisfy the published schema
+  before either canonical ledger records or pre-runtime attempt records are
+  read/projected. Malformed filter scope must not widen to "all history" or
+  collapse into an empty/no-match result.

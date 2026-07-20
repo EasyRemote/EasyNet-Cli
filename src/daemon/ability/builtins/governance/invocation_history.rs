@@ -145,8 +145,8 @@ impl InvocationLedgerReader {
     fn list_history(&self, args: Value) -> anyhow::Result<Value> {
         let requested_limit = bounded_limit(args.get("limit").and_then(Value::as_u64));
         let cursor_anchor = history_cursor_anchor(args.get("cursor").and_then(non_empty_str))?;
-        let exclude_ability_uras = string_set_arg(&args, "exclude_ability_uras");
-        let include_ability_uras = filter_string_set(&args, "ability_uras");
+        let exclude_ability_uras = string_set_arg(&args, "exclude_ability_uras")?;
+        let include_ability_uras = filter_string_set(&args, "ability_uras")?;
         // Cursor semantics are defined over the daemon-owned, already sorted
         // Axon ledger projection after all supported predicates have been
         // applied. The SDK treats the cursor as opaque; only this provider
@@ -472,25 +472,42 @@ fn diagnostic_id(value: &Value) -> String {
         .to_string()
 }
 
-fn string_set_arg(args: &Value, key: &str) -> HashSet<String> {
-    value_string_set(args.get(key))
+fn string_set_arg(args: &Value, key: &'static str) -> anyhow::Result<HashSet<String>> {
+    value_string_set(args.get(key), key, false)
 }
 
 /// Read a string set from `args.filter.<key>` (e.g. `filter.ability_uras`).
-fn filter_string_set(args: &Value, key: &str) -> HashSet<String> {
-    value_string_set(args.get("filter").and_then(|f| f.get(key)))
+fn filter_string_set(args: &Value, key: &'static str) -> anyhow::Result<HashSet<String>> {
+    let Some(filter) = args.get("filter") else {
+        return Ok(HashSet::new());
+    };
+    let object = filter
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("filter must be an object"))?;
+    value_string_set(object.get(key), &format!("filter.{key}"), true)
 }
 
-fn value_string_set(value: Option<&Value>) -> HashSet<String> {
-    value
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
+fn value_string_set(
+    value: Option<&Value>,
+    field: &str,
+    require_non_empty: bool,
+) -> anyhow::Result<HashSet<String>> {
+    let Some(value) = value else {
+        return Ok(HashSet::new());
+    };
+    let array = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("{field} must be an array of non-empty strings"))?;
+    if require_non_empty && array.is_empty() {
+        anyhow::bail!("{field} must include at least one non-empty string");
+    }
+    let mut out = HashSet::new();
+    for (index, item) in array.iter().enumerate() {
+        let value = non_empty_str(item)
+            .ok_or_else(|| anyhow::anyhow!("{field}[{index}] must be a non-empty string"))?;
+        out.insert(value.to_string());
+    }
+    Ok(out)
 }
 
 /// Apply include/exclude Ability URA sets in place. Empty sets are
@@ -543,7 +560,7 @@ fn apply_filter_object(
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("filter must be an object"))?;
     validate_filter_keys(object)?;
-    if let Some(caller) = object.get("caller_ura").and_then(non_empty_str) {
+    if let Some(caller) = optional_filter_string(object, "caller_ura")? {
         query = query.caller_ura(caller);
     }
     let callee_ura = scoped_callee_ura(object)?;
@@ -553,13 +570,13 @@ fn apply_filter_object(
     if let Some(subjects) = subject_filter_values(object)? {
         query = query.subject_uras(subjects);
     }
-    if let Some(ability_ura) = object.get("ability_ura").and_then(non_empty_str) {
+    if let Some(ability_ura) = optional_filter_string(object, "ability_ura")? {
         query = query.ability_ura(ability_ura);
     }
-    if let Some(state) = object.get("state").and_then(non_empty_str) {
+    if let Some(state) = optional_filter_string(object, "state")? {
         query = query.state(state);
     }
-    if let Some(trace_id) = object.get("trace_id").and_then(non_empty_str) {
+    if let Some(trace_id) = optional_filter_string(object, "trace_id")? {
         query = query.trace_id(trace_id);
     }
     Ok(query)
@@ -577,8 +594,8 @@ fn validate_filter_keys(object: &serde_json::Map<String, Value>) -> anyhow::Resu
 }
 
 fn scoped_callee_ura(object: &serde_json::Map<String, Value>) -> anyhow::Result<Option<String>> {
-    let callee = object.get("callee_ura").and_then(non_empty_str);
-    let agent = object.get("agent_ura").and_then(non_empty_str);
+    let callee = optional_filter_string(object, "callee_ura")?;
+    let agent = optional_filter_string(object, "agent_ura")?;
     match (callee, agent) {
         (Some(callee), Some(agent)) if callee != agent => {
             anyhow::bail!("filter.callee_ura and filter.agent_ura must match when both are set")
@@ -590,6 +607,18 @@ fn scoped_callee_ura(object: &serde_json::Map<String, Value>) -> anyhow::Result<
 
 fn non_empty_str(value: &Value) -> Option<&str> {
     value.as_str().map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn optional_filter_string<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    key: &'static str,
+) -> anyhow::Result<Option<&'a str>> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+    non_empty_str(value)
+        .map(Some)
+        .ok_or_else(|| anyhow::anyhow!("filter.{key} must be a non-empty string"))
 }
 
 fn subject_filter_values(
@@ -611,11 +640,13 @@ fn subject_filter_values(
     let array = value
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("filter.subject_uras must be an array of strings"))?;
-    let subjects = array
-        .iter()
-        .filter_map(non_empty_str)
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+    let mut subjects = Vec::with_capacity(array.len());
+    for (index, item) in array.iter().enumerate() {
+        let subject = non_empty_str(item).ok_or_else(|| {
+            anyhow::anyhow!("filter.subject_uras[{index}] must be a non-empty string")
+        })?;
+        subjects.push(subject.to_string());
+    }
     if subjects.is_empty() {
         anyhow::bail!("filter.subject_uras must include at least one non-empty string");
     }
@@ -645,9 +676,15 @@ fn filtered_attempt_records(
         let object = filter
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("filter must be an object"))?;
-        attempts.retain(|attempt| attempt_matches_filter(attempt, object));
+        let mut filtered = Vec::with_capacity(attempts.len());
+        for attempt in attempts {
+            if attempt_matches_filter(&attempt, object)? {
+                filtered.push(attempt);
+            }
+        }
+        attempts = filtered;
     }
-    let include_ability_uras = filter_string_set(args, "ability_uras");
+    let include_ability_uras = filter_string_set(args, "ability_uras")?;
     if !include_ability_uras.is_empty() {
         attempts.retain(|attempt| {
             attempt
@@ -665,52 +702,44 @@ fn filtered_attempt_records(
 fn attempt_matches_filter(
     attempt: &InvocationAttemptRecord,
     object: &serde_json::Map<String, Value>,
-) -> bool {
-    string_filter_matches(object, "caller_ura", attempt.caller_ura.as_deref())
-        && scoped_attempt_callee_matches(attempt, object)
-        && subject_attempt_filter_matches(attempt, object)
-        && string_filter_matches(object, "ability_ura", attempt.ability_ura.as_deref())
-        && attempt_state_matches(object.get("state").and_then(non_empty_str), attempt)
-        && string_filter_matches(object, "trace_id", attempt.trace_id.as_deref())
+) -> anyhow::Result<bool> {
+    Ok(
+        string_filter_matches(object, "caller_ura", attempt.caller_ura.as_deref())?
+            && scoped_attempt_callee_matches(attempt, object)?
+            && subject_attempt_filter_matches(attempt, object)?
+            && string_filter_matches(object, "ability_ura", attempt.ability_ura.as_deref())?
+            && attempt_state_matches(optional_filter_string(object, "state")?, attempt)
+            && string_filter_matches(object, "trace_id", attempt.trace_id.as_deref())?,
+    )
 }
 
 fn string_filter_matches(
     object: &serde_json::Map<String, Value>,
-    key: &str,
+    key: &'static str,
     actual: Option<&str>,
-) -> bool {
-    object
-        .get(key)
-        .and_then(non_empty_str)
-        .is_none_or(|expected| actual == Some(expected))
+) -> anyhow::Result<bool> {
+    Ok(optional_filter_string(object, key)?.is_none_or(|expected| actual == Some(expected)))
 }
 
 fn scoped_attempt_callee_matches(
     attempt: &InvocationAttemptRecord,
     object: &serde_json::Map<String, Value>,
-) -> bool {
-    let expected = object
-        .get("callee_ura")
-        .or_else(|| object.get("agent_ura"))
-        .and_then(non_empty_str);
-    expected.is_none_or(|expected| attempt.callee_ura.as_deref() == Some(expected))
+) -> anyhow::Result<bool> {
+    let expected = scoped_callee_ura(object)?;
+    Ok(expected
+        .as_deref()
+        .is_none_or(|expected| attempt.callee_ura.as_deref() == Some(expected)))
 }
 
 fn subject_attempt_filter_matches(
     attempt: &InvocationAttemptRecord,
     object: &serde_json::Map<String, Value>,
-) -> bool {
-    if let Some(expected) = object.get("subject_ura").and_then(non_empty_str) {
-        return attempt.subject_ura.as_deref() == Some(expected);
-    }
-    let Some(subjects) = object.get("subject_uras").and_then(Value::as_array) else {
-        return true;
+) -> anyhow::Result<bool> {
+    let Some(subjects) = subject_filter_values(object)? else {
+        return Ok(true);
     };
     let actual = attempt.subject_ura.as_deref();
-    subjects
-        .iter()
-        .filter_map(non_empty_str)
-        .any(|expected| actual == Some(expected))
+    Ok(subjects.iter().any(|expected| actual == Some(expected)))
 }
 
 fn attempt_state_matches(expected: Option<&str>, attempt: &InvocationAttemptRecord) -> bool {
@@ -1370,6 +1399,48 @@ mod tests {
     }
 
     #[test]
+    fn query_from_args_rejects_malformed_subject_array_items() {
+        let err = query_from_args(&json!({
+            "filter": {
+                "subject_uras": [
+                    "easynet:///r/test/device/mac-1",
+                    42
+                ]
+            }
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("filter.subject_uras[1] must be a non-empty string"),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn query_from_args_rejects_malformed_string_filter_fields() {
+        for (field, value) in [
+            ("caller_ura", json!(42)),
+            ("callee_ura", json!("")),
+            ("agent_ura", json!(false)),
+            ("ability_ura", json!([])),
+            ("state", json!("  ")),
+            ("trace_id", json!({})),
+        ] {
+            let err = query_from_args(&json!({
+                "filter": {
+                    field: value
+                }
+            }))
+            .unwrap_err()
+            .to_string();
+            assert!(
+                err.contains(&format!("filter.{field} must be a non-empty string")),
+                "field {field} got {err}"
+            );
+        }
+    }
+
+    #[test]
     fn query_from_args_rejects_ambiguous_subject_scope() {
         let err = query_from_args(&json!({
             "filter": {
@@ -1405,6 +1476,81 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("must match"), "got {err}");
+    }
+
+    #[test]
+    fn list_history_rejects_malformed_ability_set_filters() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("invocations.redb");
+        let ledger = Arc::new(axon_sdk::invocation::InvocationLedger::open(&path).unwrap());
+        let reader = InvocationLedgerReader::new(Some(ledger));
+
+        let err = reader
+            .list_history(json!({
+                "exclude_ability_uras": ["easynet:///r/test/ability/ok", 7]
+            }))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("exclude_ability_uras[1] must be a non-empty string"),
+            "got {err}"
+        );
+
+        let err = reader
+            .list_history(json!({
+                "filter": {
+                    "ability_uras": []
+                }
+            }))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("filter.ability_uras must include at least one non-empty string"),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn attempt_filter_rejects_malformed_subject_scope() {
+        let attempt = crate::daemon::invocation::dispatch::attempt_audit::InvocationAttemptRecord {
+            attempt_id: "att-filter".to_string(),
+            call_mode: "Invoke".to_string(),
+            state: crate::daemon::invocation::dispatch::attempt_audit::AttemptState::Rejected,
+            stage: "runtime_admission".to_string(),
+            started_unix_ms: 1,
+            completed_unix_ms: Some(2),
+            elapsed_ms: Some(1),
+            invocation_ura: None,
+            request_id: Some("req-attempt".to_string()),
+            trace_id: Some("trace-attempt".to_string()),
+            span_id: None,
+            caller_ura: Some("easynet:///r/test/device/caller".to_string()),
+            callee_ura: Some("easynet:///r/test/device/callee".to_string()),
+            subject_ura: Some("easynet:///r/test/user/alice".to_string()),
+            ability: Some("observe.health".to_string()),
+            ability_ura: Some("easynet:///r/test/ability/authority.observe.health".to_string()),
+            route_ura: None,
+            execution_host_ura: None,
+            status_code: Some("PERMISSION_DENIED".to_string()),
+            status_message: Some("rejected".to_string()),
+            error_stage: Some("runtime_admission".to_string()),
+            retryable: Some(false),
+            diagnostic_summary: "runtime_admission: rejected".to_string(),
+            suggested_action: "Check caller/callee/subject URA binding.".to_string(),
+        };
+        let filter = json!({
+            "subject_uras": [
+                "easynet:///r/test/user/alice",
+                {"bad": true}
+            ]
+        });
+        let err = attempt_matches_filter(&attempt, filter.as_object().expect("filter object"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("filter.subject_uras[1] must be a non-empty string"),
+            "got {err}"
+        );
     }
 
     #[test]

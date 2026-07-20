@@ -1936,3 +1936,30 @@ Commands and outcomes will be appended after implementation.
   (`canonical-runtime-convergence-v2: OK`).
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; indexed the
   updated remote-desktop consent receipt projection.
+
+## 2026-07-21 Invocation history filter schema
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "invocation_history filter subject_uras caller_ura callee_ura
+  unwrap_or_default filter_map invalid scope history list"` — PASS; reports
+  `invocation_history.rs` filter parsing, attempt matching, and ledger query
+  relationships.
+- `rg -n
+  "filter_map\\(non_empty_str\\)|filter_string_set\\(|string_set_arg\\(|subject_filter_values\\(|attempt_matches_filter\\("
+  src/daemon/ability/builtins/governance/invocation_history.rs` — PASS; no
+  subject-scope `filter_map(non_empty_str)` remains, and both ledger/attempt
+  filters route through fallible helpers.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q invocation_history
+  --lib` — PASS (`31 passed`); includes malformed subject array rejection,
+  malformed scalar filter-field rejection, malformed ability-set rejection,
+  and attempt-filter malformed subject-scope rejection.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; index was
+  already up to date after the invocation-history filter-schema refactor.

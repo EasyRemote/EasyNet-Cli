@@ -614,3 +614,10 @@ Decisions will be appended as root-fork choices are made.
 - Preserve owner-self consent only for true no-receipt states. A malformed
   receipt-bearing causal context is not equivalent to no causal context and
   must not fall through to `owner_self_consent`.
+- Treat invocation-history filters as schema-bound observation scope. A
+  present but malformed filter is not an omitted filter: it must fail before
+  reading/projecting canonical ledger rows or pre-runtime attempt diagnostics.
+- Keep canonical ledger and attempt-audit filters on one parser. Attempt rows
+  exist specifically to explain signer/admission/route failures before Axon
+  minted an invocation id; they must not use looser scope semantics than the
+  receipt ledger they augment.

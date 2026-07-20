@@ -1881,3 +1881,30 @@ Evidence will be appended after indexing and focused impact queries.
   `receipt_ura` and `receipt_hash` on every row. Malformed causal context
   fails as invalid argument instead of becoming self-consent or a partial
   receipt match.
+
+## 2026-07-21 Invocation history filter schema audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "invocation_history filter subject_uras caller_ura callee_ura
+  unwrap_or_default filter_map invalid scope history list"` identified
+  `src/daemon/ability/builtins/governance/invocation_history.rs` as the
+  product-facing seam where UI/SDK history filters become canonical ledger
+  queries and pre-runtime attempt diagnostic projections.
+- Targeted source inspection found duplicated loose parsing:
+  `subject_filter_values` accepted `filter.subject_uras` as an array but used
+  `filter_map(non_empty_str)`, `value_string_set` ignored non-array or
+  malformed `ability_uras`, and attempt filtering re-read
+  `caller_ura`/`callee_ura`/`subject_ura`/`ability_ura`/`state`/`trace_id`
+  with `and_then(non_empty_str)`. Malformed filter scope could therefore widen
+  to all rows, become an empty ability set, or become a no-match diagnostic
+  result instead of being rejected as invalid observation scope.
+- The root abstraction problem was treating receipt-history filters as
+  best-effort UI predicates after the history request had crossed the daemon
+  boundary. These filters define which caller/callee/subject/ability receipt
+  rows a product is trying to observe; they are authority-bearing read scope
+  and must be schema-bound once provided.
+- After the change, `optional_filter_string`, `value_string_set`, and
+  `subject_filter_values` form a shared fail-closed parser for both Axon ledger
+  records and attempt audit records. Missing optional fields remain no filter;
+  present malformed strings, malformed arrays, empty scoped arrays, and
+  invalid subject array members fail before any history rows are projected.
