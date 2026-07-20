@@ -62,6 +62,8 @@ pub use crate::daemon::federation::wire_contract::{
 };
 use crate::daemon::invocation::bidi::state::presence::PresenceRegistry;
 
+const ED25519_PUBLIC_KEY_LEN: usize = 32;
+
 /// `federation.join` — caller's claimed URA is authoritative; no
 /// hub-side `agent/a-X` minting (spec §5.1 URA scheme migration).
 pub const ABILITY_FEDERATION_JOIN: &str = conformance::ABILITY_FEDERATION_JOIN;
@@ -787,16 +789,47 @@ fn resolved_owner_projection_values(
 
 // ─── federation.resolve_key ────────────────────────────────────────
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolveKeyResponseError {
+    InvalidPublicKeyBase64(String),
+    InvalidPublicKeyLength(usize),
+}
+
+impl std::fmt::Display for ResolveKeyResponseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidPublicKeyBase64(error) => {
+                write!(f, "public_key_b64 is not valid base64: {error}")
+            }
+            Self::InvalidPublicKeyLength(len) => write!(
+                f,
+                "public_key_b64 must decode to exactly {ED25519_PUBLIC_KEY_LEN} bytes, got {len}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ResolveKeyResponseError {}
+
+fn decode_resolve_key_public_key(public_key_b64: &str) -> Result<Vec<u8>, ResolveKeyResponseError> {
+    let public_key = BASE64_STANDARD
+        .decode(public_key_b64.as_bytes())
+        .map_err(|error| ResolveKeyResponseError::InvalidPublicKeyBase64(error.to_string()))?;
+    if public_key.len() != ED25519_PUBLIC_KEY_LEN {
+        return Err(ResolveKeyResponseError::InvalidPublicKeyLength(
+            public_key.len(),
+        ));
+    }
+    Ok(public_key)
+}
+
 pub(crate) fn resolve_key_response(
     public_key_b64: &str,
     all_keys_b64: Vec<String>,
     principal_owner: Option<&crate::daemon::trust::anchor::TrustedPrincipalOwner>,
-) -> ResolveKeyResponse {
-    let public_key_hex = BASE64_STANDARD
-        .decode(public_key_b64.as_bytes())
-        .map(hex::encode)
-        .unwrap_or_default();
-    ResolveKeyResponse {
+) -> Result<ResolveKeyResponse, ResolveKeyResponseError> {
+    let public_key_hex = hex::encode(decode_resolve_key_public_key(public_key_b64)?);
+    Ok(ResolveKeyResponse {
         public_key_b64: public_key_b64.to_string(),
         public_key_hex,
         public_keys_b64: if all_keys_b64.is_empty() {
@@ -807,7 +840,7 @@ pub(crate) fn resolve_key_response(
         principal_owner_ura: principal_owner.map(|owner| owner.owner_ura.clone()),
         principal_owner_user_id: principal_owner.map(|owner| owner.owner_user_id.clone()),
         principal_owner_username: principal_owner.and_then(|owner| owner.owner_username.clone()),
-    }
+    })
 }
 
 /// Every key registered under `agent_ura` when it is a multi-key user
@@ -837,7 +870,7 @@ fn all_user_keys_b64(
 pub fn handle_resolve_key(
     request: &ResolveKeyRequest,
     trust_anchor: &crate::daemon::trust::anchor::RealmTrustAnchor,
-) -> Option<ResolveKeyResponse> {
+) -> Result<Option<ResolveKeyResponse>, ResolveKeyResponseError> {
     // DEC-EU multi-device user URAs: caller supplies the pubkey it
     // observed on the envelope; we confirm it's in the user bucket.
     // Singleton roles (hub/backend/device) ignore this field and
@@ -857,31 +890,35 @@ pub fn handle_resolve_key(
         });
     if let Some(pk) = presented_pubkey_b64.as_deref() {
         if let Some(entry) = trust_anchor.lookup_user_by_pubkey(&request.agent_ura, pk) {
-            return Some(resolve_key_response(
+            return resolve_key_response(
                 &entry.public_key_b64,
                 all_user_keys_b64(trust_anchor, &request.agent_ura),
                 trust_anchor.lookup_principal_owner(&request.agent_ura),
-            ));
+            )
+            .map(Some);
         }
         if matches!(
             crate::core::ura::parse_ura(&request.agent_ura).map(|parsed| parsed.kind),
             Ok(crate::core::ura::URAKind::User)
         ) {
-            return None;
+            return Ok(None);
         }
     }
-    trust_anchor.lookup(&request.agent_ura).and_then(|entry| {
-        if let Some(pk) = presented_pubkey_b64.as_deref() {
-            if entry.public_key_b64 != pk {
-                return None;
+    trust_anchor
+        .lookup(&request.agent_ura)
+        .map_or(Ok(None), |entry| {
+            if let Some(pk) = presented_pubkey_b64.as_deref() {
+                if entry.public_key_b64 != pk {
+                    return Ok(None);
+                }
             }
-        }
-        Some(resolve_key_response(
-            &entry.public_key_b64,
-            all_user_keys_b64(trust_anchor, &request.agent_ura),
-            trust_anchor.lookup_principal_owner(&request.agent_ura),
-        ))
-    })
+            resolve_key_response(
+                &entry.public_key_b64,
+                all_user_keys_b64(trust_anchor, &request.agent_ura),
+                trust_anchor.lookup_principal_owner(&request.agent_ura),
+            )
+            .map(Some)
+        })
 }
 
 // ─── federation.discover (PR-N3 N3-4) ──────────────────────────────
@@ -2124,6 +2161,7 @@ mod tests {
             },
             &anchor,
         )
+        .expect("resolve_key must not fail")
         .expect("hit");
         assert_eq!(
             resp.public_key_b64,
@@ -2154,9 +2192,28 @@ mod tests {
             &anchor,
         );
         assert!(
-            resp.is_none(),
+            resp.expect("resolve_key must not fail").is_none(),
             "miss must surface as None for caller status mapping"
         );
+    }
+
+    #[test]
+    fn resolve_key_response_rejects_invalid_base64_key_material() {
+        let err = resolve_key_response("not-base64", Vec::new(), None)
+            .expect_err("invalid public_key_b64 must not produce an empty public_key_hex");
+
+        assert!(
+            matches!(err, ResolveKeyResponseError::InvalidPublicKeyBase64(_)),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_key_response_rejects_non_ed25519_key_length() {
+        let err = resolve_key_response("AA==", Vec::new(), None)
+            .expect_err("non-32-byte public_key_b64 must fail closed");
+
+        assert_eq!(err, ResolveKeyResponseError::InvalidPublicKeyLength(1));
     }
 
     #[test]
@@ -2186,6 +2243,7 @@ mod tests {
             },
             &anchor,
         )
+        .expect("resolve_key must not fail")
         .expect("pk_a resolves");
         assert_eq!(resp.public_key_b64, pk_a);
 
@@ -2198,6 +2256,7 @@ mod tests {
             },
             &anchor,
         )
+        .expect("resolve_key must not fail")
         .expect("pk_b resolves");
         assert_eq!(resp.public_key_b64, pk_b);
 
@@ -2212,7 +2271,10 @@ mod tests {
             },
             &anchor,
         );
-        assert!(resp.is_none(), "unknown pubkey under known user must miss");
+        assert!(
+            resp.expect("resolve_key must not fail").is_none(),
+            "unknown pubkey under known user must miss"
+        );
     }
 
     #[test]
@@ -2241,6 +2303,7 @@ mod tests {
             },
             &anchor,
         )
+        .expect("resolve_key must not fail")
         .expect("matching presented device key resolves");
         assert_eq!(resp.public_key_b64, pk);
 
@@ -2253,7 +2316,7 @@ mod tests {
             &anchor,
         );
         assert!(
-            resp.is_none(),
+            resp.expect("resolve_key must not fail").is_none(),
             "mismatched presented key must not resolve a stale same-URA device key"
         );
     }

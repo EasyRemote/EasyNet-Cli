@@ -2058,13 +2058,12 @@ async fn invoke_dispatches_federation_resolve_key_uses_federated_resolver_on_loc
     let peer_hub_url = "https://peer-hub.example:50443";
     let peer_caller_ura = "easynet:///r/peer-realm/device/n1";
     let peer_public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let peer_resolve_key_response =
+        federation_wrappers::resolve_key_response(peer_public_key_b64, Vec::new(), None)
+            .expect("resolve_key response is valid");
     let canned = InvokeResponse {
-        result: serde_json::to_vec(&federation_wrappers::resolve_key_response(
-            peer_public_key_b64,
-            Vec::new(),
-            None,
-        ))
-        .expect("resolve_key response serializes"),
+        result: serde_json::to_vec(&peer_resolve_key_response)
+            .expect("resolve_key response serializes"),
         result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
         state: axon_sdk::invocation::InvocationState::Completed.to_wire_i32(),
         ..InvokeResponse::default()

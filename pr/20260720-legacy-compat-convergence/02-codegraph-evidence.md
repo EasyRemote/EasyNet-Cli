@@ -1064,3 +1064,22 @@ Evidence will be appended after indexing and focused impact queries.
   precise canonical projection (`CALLER_SIGNER_UNAVAILABLE`,
   `stage=caller_identity`, `retry=never`), so older ABI classification no
   longer preserves the false ability-not-found story.
+
+## 2026-07-20 Federation resolve-key empty-key fallback audit
+
+- `codegraph callers resolve_key_response --limit 20` identified
+  `handle_resolve_key` as the production builder owner for
+  `federation.resolve_key` responses, with dispatcher fallback constructing
+  the same wire response after federated key-provider lookup.
+- `rg` found `BASE64_STANDARD.decode(public_key_b64.as_bytes()).map(hex::encode).unwrap_or_default()`
+  in `src/daemon/invocation/dispatch/federation_wrappers.rs`, which projected
+  invalid trust-anchor key material into `public_key_hex: ""`.
+- The root abstraction problem was trust material defaultization: a missing
+  trust-anchor entry is a route/trust-set miss, but an existing entry with
+  malformed or non-Ed25519 key material is corrupt authority state. Returning
+  an empty hex field preserves a valid JSON shape while deferring the real
+  failure into later admission, descriptor, or product UI paths.
+- After the change, `resolve_key_response(...)` validates base64 and requires
+  exactly 32 decoded bytes before producing the canonical response. `None`
+  remains reserved for “not in trust set”; invalid key material is a typed
+  resolver error that the dispatcher maps to `FailedPrecondition`.

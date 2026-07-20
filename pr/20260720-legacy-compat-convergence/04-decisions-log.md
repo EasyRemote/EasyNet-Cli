@@ -337,3 +337,8 @@ Decisions will be appended as root-fork choices are made.
   `CALLER_SIGNER_UNAVAILABLE` projection, so wrappers that only understand
   numeric ABI classes no longer convert key-service absence into
   `ABILITY_NOT_FOUND`.
+- Treat `federation.resolve_key` trust material as authority state, not a
+  best-effort read-model field. A resolver miss remains `None`/`NotFound`, but
+  an existing entry with invalid base64 or non-Ed25519 key length is corrupt
+  authority state and must surface as `FailedPrecondition`; it must never be
+  projected as `public_key_hex: ""`.

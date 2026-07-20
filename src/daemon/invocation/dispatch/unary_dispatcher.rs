@@ -1050,8 +1050,8 @@ impl UnaryDispatcher {
         let request: federation_wrappers::ResolveKeyRequest = parse_json_args(arguments)?;
         let trust_anchor = self.admission.trust_anchor_snapshot();
         match federation_wrappers::handle_resolve_key(&request, &trust_anchor) {
-            Some(response) => encode_json_payload(&response),
-            None => {
+            Ok(Some(response)) => encode_json_payload(&response),
+            Ok(None) => {
                 let presented_pubkey_b64 = request
                     .presented_pubkey_b64
                     .as_deref()
@@ -1070,19 +1070,29 @@ impl UnaryDispatcher {
                     presented_pubkey_b64.as_deref(),
                 )?;
                 match resolved {
-                    Some(public_key_b64) => {
-                        encode_json_payload(&federation_wrappers::resolve_key_response(
+                    Some(public_key_b64) => encode_json_payload(
+                        &federation_wrappers::resolve_key_response(
                             &public_key_b64,
                             Vec::new(),
                             None,
-                        ))
-                    }
+                        )
+                        .map_err(|error| {
+                            Status::failed_precondition(format!(
+                                "federation.resolve_key: resolved key material for `{}` is unusable: {error}",
+                                request.agent_ura
+                            ))
+                        })?,
+                    ),
                     None => Err(Status::not_found(format!(
                         "federation.resolve_key: agent_ura `{}` not in this hub's trust set",
                         request.agent_ura
                     ))),
                 }
             }
+            Err(error) => Err(Status::failed_precondition(format!(
+                "federation.resolve_key: trust anchor entry for `{}` is unusable: {error}",
+                request.agent_ura
+            ))),
         }
     }
 

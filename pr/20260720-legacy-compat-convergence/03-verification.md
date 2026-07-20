@@ -1002,3 +1002,26 @@ Commands and outcomes will be appended after implementation.
   gate.
 - `tools/scripts/check-architecture-convergence.sh` — PASS.
 - `tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+
+## 2026-07-20 Federation resolve-key trust material gate
+
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo test -q
+  resolve_key_response --lib` — PASS (`2 passed`); covers invalid base64 and
+  non-32-byte public key rejection.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo test -q
+  handle_resolve_key --lib` — PASS (`4 passed`); preserves hit/miss and
+  presented-key pinning semantics under the new `Result<Option<_>>` state.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo test -q
+  invoke_dispatches_federation_resolve_key --lib` — PASS (`3 passed`);
+  confirms dispatcher behavior after converting corrupt key material into
+  `FailedPrecondition`.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo fmt --check` —
+  PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph callers
+  resolve_key_response --limit 20` — PASS; reports the resolver handler and
+  failure-path tests, while `rg` confirms the previous decode
+  `unwrap_or_default()` path is gone from this resolver response builder.
+- `tools/scripts/check-architecture-convergence.sh` — PASS.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `git diff --check` — PASS.
