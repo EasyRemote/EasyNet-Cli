@@ -1394,3 +1394,25 @@ Commands and outcomes will be appended after implementation.
   list_active get session index lock poisoned device session list attach empty
   snapshot" --limit 100` — PASS; reports
   `SessionService::list_active(...) -> anyhow::Result<Vec<Session>>`.
+
+## 2026-07-20 Discuss room registry fail-closed read model
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q discuss --lib` — PASS
+  (`21 passed`); includes
+  `list_rejects_poisoned_room_registry_instead_of_empty_rooms`.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R86 for discuss room-registry fail-closed semantics.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for `DiscussService::list() -> Vec<_>`,
+  `Err(_) => Vec::new()`, and Kernel `Ok((*self.discuss).list())` projection.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --locked --lib --bins` —
+  PASS.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "DiscussService list
+  room registry lock poisoned list_discuss_rooms" --limit 80` — PASS; reports
+  `DiscussService::list(...) -> anyhow::Result<Vec<DiscussRoom>>`,
+  `Kernel::list_discuss_rooms`, and the new poison regression.
+- `git diff --check` — PASS.

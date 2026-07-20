@@ -8129,6 +8129,84 @@ if kernel_mod.exists():
                 )
 
 
+# Rule 86: discuss room registry is runtime state, not a best-effort
+# discovery cache. A poisoned room registry must surface as unavailable
+# room state; it must not become an empty room list at Kernel/product
+# boundaries.
+discuss_mod = cli_root / "src/daemon/execution/mission/discuss/mod.rs"
+kernel_mod = cli_root / "src/daemon/boot/kernel/mod.rs"
+if discuss_mod.exists():
+    text = source(discuss_mod)
+    body = rust_method_body(text, "list")
+    if body is None:
+        add(
+            "R86_DISCUSS_ROOM_REGISTRY_FAIL_CLOSED",
+            discuss_mod,
+            1,
+            "DiscussService must keep list as the room registry snapshot authority",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if "Result<Vec<DiscussRoom>>" not in signature:
+            add(
+                "R86_DISCUSS_ROOM_REGISTRY_FAIL_CLOSED",
+                discuss_mod,
+                line_number(text, offset),
+                "DiscussService::list must return Result so poisoned room registry state cannot become an empty room list",
+            )
+        for token, detail in (
+            (
+                "Err(_) => Vec::new()",
+                "DiscussService::list must not hide a poisoned room registry behind an empty room list",
+            ),
+            (
+                "Err(_) => return Vec::new()",
+                "DiscussService::list must not hide a poisoned room registry behind an empty room list",
+            ),
+        ):
+            if token in fn_body:
+                add(
+                    "R86_DISCUSS_ROOM_REGISTRY_FAIL_CLOSED",
+                    discuss_mod,
+                    line_number(text, body_start + fn_body.find(token)),
+                    detail,
+                )
+        if "DiscussService room registry lock poisoned" not in fn_body:
+            add(
+                "R86_DISCUSS_ROOM_REGISTRY_FAIL_CLOSED",
+                discuss_mod,
+                line_number(text, offset),
+                "DiscussService::list must preserve poisoned room registry as explicit unavailable state",
+            )
+
+if kernel_mod.exists():
+    text = source(kernel_mod)
+    body = rust_method_body(text, "list_discuss_rooms")
+    if body is None:
+        add(
+            "R86_DISCUSS_ROOM_REGISTRY_FAIL_CLOSED",
+            kernel_mod,
+            1,
+            "Kernel::list_discuss_rooms must preserve DiscussService::list failures",
+        )
+    else:
+        offset, fn_body = body
+        direct_call = "self.discuss.list()" in fn_body or "(*self.discuss).list()" in fn_body
+        wraps_old_projection = (
+            "Ok((*self.discuss).list())" in fn_body
+            or "Ok(self.discuss.list())" in fn_body
+        )
+        if not direct_call or wraps_old_projection:
+            add(
+                "R86_DISCUSS_ROOM_REGISTRY_FAIL_CLOSED",
+                kernel_mod,
+                line_number(text, offset),
+                "Kernel::list_discuss_rooms must return DiscussService::list directly and propagate registry failures",
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(

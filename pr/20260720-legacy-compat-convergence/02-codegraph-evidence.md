@@ -1422,3 +1422,22 @@ Evidence will be appended after indexing and focused impact queries.
   `device.session.list` preserves serialization failures, and
   `device.session.attach` only emits the empty snapshot after proving the index
   is readable.
+
+## 2026-07-20 Discuss room registry silent empty fallback audit
+
+- `codegraph query "DiscussService list lock poisoned Vec::new
+  list_discuss_rooms discuss.list LoopService list lock poisoned" --limit 140`
+  identified `src/daemon/execution/mission/discuss/mod.rs` as the room registry
+  snapshot authority and `Kernel::list_discuss_rooms` as the product-facing
+  boundary.
+- Targeted source inspection found the compatibility seam:
+  `DiscussService::list` returned `Vec<DiscussRoom>` and mapped a poisoned room
+  registry read lock to `Vec::new()`.
+- The root abstraction problem was treating room registry availability as
+  best-effort room discovery. An empty room list is valid only after the runtime
+  proves the registry is readable; an unreadable registry is unavailable runtime
+  state.
+- After the change, `DiscussService::list` returns
+  `anyhow::Result<Vec<DiscussRoom>>`, Kernel returns that result directly, and a
+  poisoned registry fails explicitly instead of projecting false empty room
+  state.

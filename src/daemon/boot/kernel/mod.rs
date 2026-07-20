@@ -589,7 +589,7 @@ impl KernelApi for Kernel {
     }
 
     fn list_discuss_rooms(&self) -> anyhow::Result<Vec<DiscussRoom>> {
-        Ok((*self.discuss).list())
+        self.discuss.list()
     }
 
     fn loop_status(&self, id: &LoopId) -> anyhow::Result<Option<LoopInstance>> {

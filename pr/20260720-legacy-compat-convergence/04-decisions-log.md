@@ -452,3 +452,7 @@ Decisions will be appended as root-fork choices are made.
   cache detail. Unknown session may remain an empty attach snapshot, but a
   poisoned/unavailable session index must fail `session.list`, `session.attach`,
   and Kernel session snapshot paths explicitly.
+- Treat discuss room registry availability as runtime state, not as a
+  best-effort discovery detail. No rooms is a valid empty list only after the
+  registry is readable; a poisoned/unavailable registry must fail Kernel room
+  listing explicitly.

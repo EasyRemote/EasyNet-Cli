@@ -5622,6 +5622,32 @@ expect_fail \
   "R85_SESSION_INDEX_FAIL_CLOSED"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/execution/mission/discuss" "$CLI/src/daemon/boot/kernel"
+cat >"$CLI/src/daemon/execution/mission/discuss/mod.rs" <<'EOF'
+pub struct DiscussRoom;
+pub struct DiscussService {
+    rooms: Lock,
+}
+
+impl DiscussService {
+    pub fn list(&self) -> Vec<DiscussRoom> {
+        match self.rooms.read() {
+            Ok(g) => g.values().map(|s| s.meta.clone()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+}
+EOF
+cat >"$CLI/src/daemon/boot/kernel/mod.rs" <<'EOF'
+fn list_discuss_rooms(&self) -> anyhow::Result<Vec<DiscussRoom>> {
+    Ok((*self.discuss).list())
+}
+EOF
+expect_fail \
+  "discuss room registry silent empty fallback" \
+  "R86_DISCUSS_ROOM_REGISTRY_FAIL_CLOSED"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/plugins" "$CLI/src/daemon/boot/invocation" "$CLI/src/daemon/ability/wire"
 cat >"$CLI/src/daemon/plugins/runtime_manager.rs" <<'EOF'
 use crate::daemon::ability::wire::AbilityWireRegistry;

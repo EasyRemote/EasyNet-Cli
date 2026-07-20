@@ -147,11 +147,20 @@ impl DiscussService {
     }
 
     /// Snapshot every room. Deterministic-ordered (BTreeMap).
-    pub fn list(&self) -> Vec<DiscussRoom> {
-        match self.rooms.read() {
-            Ok(g) => g.values().map(|s| s.meta.clone()).collect(),
-            Err(_) => Vec::new(),
-        }
+    pub fn list(&self) -> anyhow::Result<Vec<DiscussRoom>> {
+        let g = self
+            .rooms
+            .read()
+            .map_err(|_| anyhow::anyhow!("DiscussService room registry lock poisoned"))?;
+        Ok(g.values().map(|s| s.meta.clone()).collect())
+    }
+
+    #[cfg(test)]
+    pub fn poison_rooms_for_test(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.rooms.write().unwrap();
+            panic!("poison discuss room registry");
+        }));
     }
 
     /// Subscribe to live turns posted to a room. Each call returns
@@ -210,11 +219,22 @@ mod tests {
         let id = s
             .create(vec!["alice".into(), "bob".into()], Some("topic".into()))
             .unwrap();
-        let listed = s.list();
+        let listed = s.list().expect("list rooms");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, id);
         assert_eq!(listed[0].participants.len(), 2);
         assert_eq!(listed[0].topic.as_deref(), Some("topic"));
+    }
+
+    #[test]
+    fn list_rejects_poisoned_room_registry_instead_of_empty_rooms() {
+        let s = DiscussService::new();
+        s.poison_rooms_for_test();
+        let err = s.list().expect_err("poisoned room registry must fail");
+        assert!(
+            format!("{err:#}").contains("DiscussService room registry lock poisoned"),
+            "{err:#}"
+        );
     }
 
     #[test]
