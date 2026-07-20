@@ -5483,6 +5483,40 @@ expect_fail \
   "R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER"
 
 make_good_fixture
+mkdir -p "$CLI/sdk/go" "$CLI/sdk/python/easynet_sdk"
+cat >"$CLI/sdk/go/authorized_runtime_session.go" <<'EOF'
+type SessionHistoryOperations struct {
+    session *AuthorizedRuntimeSession
+}
+
+func (o *SessionHistoryOperations) List(ctx context.Context, request ReceiptListRequest) (ReceiptHistoryPage, error) {
+    if err := validateSessionHistoryRuntimeCall(request.Call); err != nil {
+        return ReceiptHistoryPage{}, err
+    }
+    return o.session.receipts.List(ctx, request)
+}
+
+func validateSessionHistoryRuntimeCall(call RuntimeCallContext) error {
+    return validateSessionHistoryAuthorityBinding(call.Authority, call)
+}
+EOF
+cat >"$CLI/sdk/python/easynet_sdk/authorized_runtime_session.py" <<'EOF'
+class SessionHistoryOperations:
+    def __init__(self, session):
+        self._session = session
+
+    def list(self, request):
+        _validate_session_history_call(request.call)
+        return self._session._receipts.list(request)
+
+def _validate_session_history_call(call):
+    _validate_session_history_authority_binding(call.authority, call)
+EOF
+expect_fail \
+  "SDK history filter tuple binding missing" \
+  "R96_SDK_HISTORY_FILTER_TUPLE_BINDING"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/invocation/dispatch" "$CLI/src/daemon/boot/invocation"
 cat >"$CLI/src/daemon/invocation/dispatch/attempt_audit.rs" <<'EOF'
 struct InvocationAttemptLedger;

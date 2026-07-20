@@ -97,6 +97,38 @@ func TestAuthorizedRuntimeSessionHistoryRejectsAuthoritySubjectMismatchBeforeRec
 	}
 }
 
+func TestAuthorizedRuntimeSessionHistoryRejectsFilterSubjectExpansionBeforeReceiptProvider(t *testing.T) {
+	session := newAuthorizedRuntimeSessionFixture(t)
+	request := ReceiptListRequest{
+		Call: RuntimeCallContext{
+			CallerURA:     "easynet:///r/example/agent/backend",
+			CalleeURA:     "easynet:///r/example/device/dev-a",
+			SubjectURA:    "easynet:///r/example/resource/user.alice/session/session-1",
+			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
+			CausalContext: map[string]any{"form": "none"},
+			Authority: sessionAuthorityFixture(t, map[string]any{
+				"scopes":                     []string{"invocation.history.list"},
+				"allowed_followup_abilities": []string{"invocation.history.list"},
+			}),
+		},
+		Filter: ReceiptFilter{
+			SubjectURAs: []string{"easynet:///r/example/device/dev-a"},
+		},
+		Limit: 10,
+	}
+
+	_, err := session.sdk.History().List(context.Background(), request)
+	if err == nil {
+		t.Fatalf("expected filter subject mismatch")
+	}
+	if !IsCode(err, ErrAuthoritySubjectMismatch) {
+		t.Fatalf("error = %v", err)
+	}
+	if session.receipts.listCalls != 0 {
+		t.Fatalf("receipt provider called after filter mismatch: %d", session.receipts.listCalls)
+	}
+}
+
 func TestRuntimeClientSessionRuntimeProviderRejectsUnsignedStreamDowngrade(t *testing.T) {
 	provider := NewRuntimeClientSessionRuntimeProvider(&RuntimeClient{})
 

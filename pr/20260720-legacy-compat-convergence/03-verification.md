@@ -1666,3 +1666,34 @@ Commands and outcomes will be appended after implementation.
   (`canonical-runtime-convergence-v2: OK`).
 - `PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check` — PASS.
 - `git diff --check` — PASS.
+
+## 2026-07-21 SDK authorized history filter tuple binding
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "invocation.history.list subject_ura authority subject
+  session_authority_admits_subject AUTHORITY_SUBJECT_MISMATCH
+  RuntimeReceiptQuery authorized_runtime_session history caller_ura
+  callee_ura"` — PASS; reports the authorized session history operations,
+  receipt providers, and authority subject binding functions.
+- `(cd sdk/go && PATH="/opt/homebrew/bin:$PATH" go test . -run
+  'TestAuthorizedRuntimeSessionHistory')` — PASS; includes authority subject
+  mismatch and filter subject expansion rejection before the receipt provider.
+- `PYTHONPATH=sdk/python:sdk/python/tests
+  sdk/python/.venv/bin/python -m pytest -q
+  sdk/python/tests/test_authorized_runtime_session.py -k 'history'` — PASS
+  (`2 passed, 4 deselected`); mirrors the Go history regressions.
+- `(cd sdk/go && PATH="/opt/homebrew/bin:$PATH" go fmt ./...)` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R96 for cross-SDK authorized history filter tuple binding.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture where Go/Python history list only validates
+  `request.Call` and never checks filter tuple expansion.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python"
+  sdk/python/.venv/bin/python sdk/conformance/rebuild_public_api_model.py
+  --write` — PASS; no public API inventory drift was produced.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `git diff --check` — PASS.

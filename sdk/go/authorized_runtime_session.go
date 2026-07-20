@@ -504,7 +504,7 @@ type SessionHistoryOperations struct {
 }
 
 func (o *SessionHistoryOperations) List(ctx context.Context, request ReceiptListRequest) (ReceiptHistoryPage, error) {
-	if err := validateSessionHistoryRuntimeCall(request.Call); err != nil {
+	if err := validateSessionHistoryRequest(request); err != nil {
 		return ReceiptHistoryPage{}, err
 	}
 	return o.session.receipts.List(ctx, request)
@@ -790,6 +790,13 @@ func descriptorRequestFromIntent(intent InvocationIntent) DescriptorResolutionRe
 	}
 }
 
+func validateSessionHistoryRequest(request ReceiptListRequest) error {
+	if err := validateSessionHistoryRuntimeCall(request.Call); err != nil {
+		return err
+	}
+	return validateSessionHistoryFilterBinding(request.Call, request.Filter)
+}
+
 func validateSessionHistoryRuntimeCall(call RuntimeCallContext) error {
 	if err := validateRuntimeCallContext(call); err != nil {
 		return err
@@ -808,6 +815,50 @@ func validateSessionHistoryRuntimeCall(call RuntimeCallContext) error {
 		)
 	}
 	return validateSessionHistoryAuthorityBinding(authority, call)
+}
+
+func validateSessionHistoryFilterBinding(call RuntimeCallContext, filter ReceiptFilter) error {
+	callerURA := strings.TrimSpace(call.CallerURA)
+	calleeURA := strings.TrimSpace(call.CalleeURA)
+	subjectURA := strings.TrimSpace(call.SubjectURA)
+	details := runtimeCallDetails(call)
+	if filterCaller := strings.TrimSpace(filter.CallerURA); filterCaller != "" && filterCaller != callerURA {
+		details["filter_caller_ura"] = filter.CallerURA
+		return v3SessionError(
+			ErrAuthorityDenied,
+			"history",
+			"receipt filter caller_ura does not match receipt query caller_ura",
+			details,
+			nil,
+		)
+	}
+	if filterCallee := strings.TrimSpace(filter.CalleeURA); filterCallee != "" && filterCallee != calleeURA {
+		details["filter_callee_ura"] = filter.CalleeURA
+		return v3SessionError(
+			ErrAuthorityDenied,
+			"history",
+			"receipt filter callee_ura does not match receipt query callee_ura",
+			details,
+			nil,
+		)
+	}
+	for _, filterSubject := range filter.SubjectURAs {
+		filterSubject = strings.TrimSpace(filterSubject)
+		if filterSubject == "" {
+			continue
+		}
+		if filterSubject != subjectURA {
+			details["filter_subject_ura"] = filterSubject
+			return v3SessionError(
+				ErrAuthoritySubjectMismatch,
+				"history",
+				"receipt filter subject_uras must be bound to receipt query subject_ura",
+				details,
+				nil,
+			)
+		}
+	}
+	return nil
 }
 
 func runtimeCallAuthority(call RuntimeCallContext) (RuntimeInvocationAuthority, error) {

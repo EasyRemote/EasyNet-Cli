@@ -509,3 +509,7 @@ Decisions will be appended as root-fork choices are made.
   `meta.list_abilities`, `caller_ura` is authority material and must be
   supplied by the SDK tuple; the resolver must not synthesize it from
   `runtime_owner_ura` or any ambient local runtime state.
+- Treat authorized receipt history filters as authority-bearing query scope,
+  not passive read predicates. The session authority binds the runtime call
+  tuple; SDK history filters may narrow that tuple but must not substitute a
+  different caller, callee, or subject set after authority validation.

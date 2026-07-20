@@ -1650,3 +1650,28 @@ Evidence will be appended after indexing and focused impact queries.
   before signer lookup or daemon IO, while local owner catalog and system
   descriptor catalog resolution remain available without a remote probe. R95
   prevents reintroducing runtime-owner caller synthesis.
+
+## 2026-07-21 SDK authorized history filter tuple audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "invocation.history.list subject_ura authority subject
+  session_authority_admits_subject AUTHORITY_SUBJECT_MISMATCH
+  RuntimeReceiptQuery authorized_runtime_session history caller_ura
+  callee_ura"` identified the authorized session history facade as the
+  product-facing receipt query boundary. The relevant cross-language nodes
+  were Go `SessionHistoryOperations.List`, Python
+  `SessionHistoryOperations.list`, and their receipt providers.
+- Targeted source inspection found the compatibility seam: both SDKs validated
+  the runtime call authority against `request.Call`, then passed
+  `request.Filter` through unchanged to the receipt provider. A product could
+  authorize a query envelope for one caller/callee/subject tuple while asking
+  the filter to read another caller, callee, or subject scope.
+- The root abstraction problem was treating receipt filters as passive read
+  predicates after authority validation. In an authorized runtime session,
+  history filters are part of the query authority surface because they define
+  which receipt rows the product is attempting to observe.
+- After the change, Go and Python authorized session history list paths both
+  validate the complete request. Optional filter `caller_ura`, `callee_ura`,
+  and `subject_uras` must be bound to the same call tuple already admitted by
+  the runtime authority; mismatches fail before the receipt provider is called.
+  R96 guards this cross-SDK parity.

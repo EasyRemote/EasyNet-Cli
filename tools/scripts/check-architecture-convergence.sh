@@ -7685,6 +7685,90 @@ if ffi_invocation.exists():
         )
 
 
+# Rule 96: Authorized runtime history reads must bind receipt filters to the
+# same tuple validated by the session authority. Otherwise products can submit
+# an authorized envelope for one subject/callee/caller while querying another
+# history scope through filter arguments.
+for path, list_name, request_validator, filter_validator, subject_token in (
+    (
+        cli_root / "sdk/go/authorized_runtime_session.go",
+        "List",
+        "validateSessionHistoryRequest(request)",
+        "validateSessionHistoryFilterBinding(request.Call, request.Filter)",
+        "receipt filter subject_uras must be bound to receipt query subject_ura",
+    ),
+    (
+        cli_root / "sdk/python/easynet_sdk/authorized_runtime_session.py",
+        "list",
+        "_validate_session_history_request(request)",
+        "_validate_session_history_filter_binding(request.call, request.filter)",
+        "receipt filter subject_uras must be bound to receipt query subject_ura",
+    ),
+):
+    if not path.exists():
+        continue
+    text = source(path)
+    if "SessionHistoryOperations" not in text:
+        continue
+    if path.suffix == ".go":
+        list_body = brace_function_body(
+            text,
+            r"func\s*\([^)]*\*SessionHistoryOperations[^)]*\)\s*List\s*\(",
+        )
+    elif path.suffix == ".py":
+        match = re.search(
+            r"class\s+SessionHistoryOperations\b.*?^\s*class\s+",
+            text,
+            re.DOTALL | re.MULTILINE,
+        )
+        list_body = (match.start(), match.group(0)) if match else None
+    else:
+        list_body = None
+    if list_body is None:
+        add(
+            "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
+            path,
+            1,
+            "SessionHistoryOperations list method must remain inspectable",
+        )
+    else:
+        offset, body = list_body
+        if request_validator not in body:
+            add(
+                "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
+                path,
+                line_number(text, offset),
+                "Session history list must validate the complete request, including filters",
+            )
+    if request_validator not in text or filter_validator not in text:
+        add(
+            "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
+            path,
+            1,
+            "Session history request validation must call filter tuple binding",
+        )
+    for token, detail in (
+        (
+            "filter_caller_ura",
+            "history filter caller_ura must be compared with call caller_ura",
+        ),
+        (
+            "filter_callee_ura",
+            "history filter callee_ura must be compared with call callee_ura",
+        ),
+        (
+            "filter_subject_ura",
+            "history filter subject_uras must be compared with call subject_ura",
+        ),
+        (
+            subject_token,
+            "history filter subject mismatch must be reported explicitly",
+        ),
+    ):
+        if token not in text:
+            add("R96_SDK_HISTORY_FILTER_TUPLE_BINDING", path, 1, detail)
+
+
 # Rule 92: Invocation attempt audit is the product-visible pre-runtime
 # failure ledger. It must fail closed when unavailable or corrupt; otherwise
 # descriptor/admission/route failures disappear from invocation.history.list

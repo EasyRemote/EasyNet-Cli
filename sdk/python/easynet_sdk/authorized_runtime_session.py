@@ -21,6 +21,7 @@ from .errors import ErrorCode, RetryHint, SDKError
 from ._identity_guards import contains_all_zero_principal
 from .invocation import InvocationBuilder, InvocationDraft, new_invocation_nonce_base64
 from .receipt import (
+    ReceiptFilter,
     ReceiptGetRequest,
     ReceiptGetResult,
     ReceiptListRequest,
@@ -528,7 +529,7 @@ class SessionHistoryOperations:
         self._session = session
 
     def list(self, request: ReceiptListRequest) -> ReceiptHistoryPage:
-        _validate_session_history_call(request.call)
+        _validate_session_history_request(request)
         return self._session._receipts.list(request)
 
 
@@ -700,6 +701,17 @@ def _descriptor_request_from_intent(
     )
 
 
+def _validate_session_history_request(request: ReceiptListRequest) -> None:
+    if not isinstance(request, ReceiptListRequest):
+        raise _session_error(
+            ErrorCode.INVALID_INVOCATION,
+            "history",
+            "Receipt list request is required",
+        )
+    _validate_session_history_call(request.call)
+    _validate_session_history_filter_binding(request.call, request.filter)
+
+
 def _validate_session_history_call(call: RuntimeCallContext) -> None:
     if not isinstance(call, RuntimeCallContext):
         raise _session_error(
@@ -727,6 +739,55 @@ def _validate_session_history_call(call: RuntimeCallContext) -> None:
             _runtime_call_details(call),
         )
     _validate_session_history_authority_binding(authority, call)
+
+
+def _validate_session_history_filter_binding(
+    call: RuntimeCallContext,
+    receipt_filter: ReceiptFilter | None,
+) -> None:
+    if receipt_filter is None:
+        return
+    if not isinstance(receipt_filter, ReceiptFilter):
+        raise _session_error(
+            ErrorCode.INVALID_INVOCATION,
+            "history",
+            "Receipt filter is required",
+            _runtime_call_details(call),
+        )
+    caller_ura = call.caller_ura.strip()
+    callee_ura = call.callee_ura.strip()
+    subject_ura = call.subject_ura.strip()
+    details = _runtime_call_details(call)
+    filter_caller = receipt_filter.caller_ura.strip()
+    if filter_caller and filter_caller != caller_ura:
+        details["filter_caller_ura"] = receipt_filter.caller_ura
+        raise _session_error(
+            ErrorCode.AUTHORITY_DENIED,
+            "history",
+            "receipt filter caller_ura does not match receipt query caller_ura",
+            details,
+        )
+    filter_callee = receipt_filter.callee_ura.strip()
+    if filter_callee and filter_callee != callee_ura:
+        details["filter_callee_ura"] = receipt_filter.callee_ura
+        raise _session_error(
+            ErrorCode.AUTHORITY_DENIED,
+            "history",
+            "receipt filter callee_ura does not match receipt query callee_ura",
+            details,
+        )
+    for filter_subject in receipt_filter.subject_uras:
+        filter_subject = filter_subject.strip()
+        if not filter_subject:
+            continue
+        if filter_subject != subject_ura:
+            details["filter_subject_ura"] = filter_subject
+            raise _session_error(
+                ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
+                "history",
+                "receipt filter subject_uras must be bound to receipt query subject_ura",
+                details,
+            )
 
 
 def _runtime_call_authority(
