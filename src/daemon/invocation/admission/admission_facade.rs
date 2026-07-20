@@ -1525,21 +1525,9 @@ impl AdmissionFacade {
         let Some(proof) = authority_proof_from_metadata(metadata)? else {
             return Ok(None);
         };
-        let caller_ura = envelope
-            .caller
-            .as_ref()
-            .map(|caller| caller.ura.as_str())
-            .unwrap_or_default();
-        let callee_ura = envelope
-            .callee
-            .as_ref()
-            .map(|callee| callee.ura.as_str())
-            .unwrap_or_default();
-        let subject_ura = envelope
-            .subject
-            .as_ref()
-            .map(|subject| subject.ura.as_str())
-            .unwrap_or_default();
+        let caller_ura = caller_ura_required(envelope)?;
+        let callee_ura = callee_ura_required(envelope)?;
+        let subject_ura = subject_ura_required(envelope)?;
         let ability_ura = ability_ura_for(callee_ura, ability)?;
         let principal = principal_for(trusted_role, caller_ura, trust_anchor);
         let canonical_hash = format!(
@@ -2135,11 +2123,7 @@ fn verify_session_authority_bindings(
     action: AccessAction,
 ) -> Result<(), Status> {
     let ability_view = AuthorityAbilityView::from_envelope(envelope, ability)?;
-    let caller = envelope
-        .caller
-        .as_ref()
-        .map(|c| c.ura.as_str())
-        .unwrap_or("");
+    let caller = caller_ura_required(envelope)?;
     if payload.issuer_ura != caller {
         return Err(Status::permission_denied(format!(
             "{REASON_AUTHORITY_CALLER_MISMATCH}: session issuer `{}` does not match envelope \
@@ -2148,11 +2132,7 @@ fn verify_session_authority_bindings(
         )));
     }
 
-    let subject = envelope
-        .subject
-        .as_ref()
-        .map(|s| s.ura.as_str())
-        .unwrap_or("");
+    let subject = subject_ura_required(envelope)?;
     if !session_authority_admits_subject(payload, subject) {
         return Err(Status::permission_denied(format!(
             "{REASON_AUTHORITY_SUBJECT_MISMATCH}: session subject `{}` owned by `{}` does not \
@@ -2161,11 +2141,7 @@ fn verify_session_authority_bindings(
         )));
     }
 
-    let callee = envelope
-        .callee
-        .as_ref()
-        .map(|c| c.ura.as_str())
-        .unwrap_or("");
+    let callee = callee_ura_required(envelope)?;
     if payload.callee_ura != callee {
         return Err(Status::permission_denied(format!(
             "{REASON_AUTHORITY_AUDIENCE_VIOLATION}: session callee `{}` does not match envelope \
@@ -2444,11 +2420,7 @@ fn verify_delegation_bindings(
     envelope: &Envelope,
     ability: &str,
 ) -> Result<(), Status> {
-    let caller = envelope
-        .caller
-        .as_ref()
-        .map(|c| c.ura.as_str())
-        .unwrap_or("");
+    let caller = caller_ura_required(envelope)?;
     if payload.caller_ura != caller {
         return Err(Status::permission_denied(format!(
             "{REASON_AUTHORITY_CALLER_MISMATCH}: authority caller `{}` does not match envelope \
@@ -2457,11 +2429,7 @@ fn verify_delegation_bindings(
         )));
     }
 
-    let subject = envelope
-        .subject
-        .as_ref()
-        .map(|s| s.ura.as_str())
-        .unwrap_or("");
+    let subject = subject_ura_required(envelope)?;
     if payload.subject_ura != subject {
         return Err(Status::permission_denied(format!(
             "{REASON_AUTHORITY_SUBJECT_MISMATCH}: authority subject `{}` does not match envelope \
@@ -2470,11 +2438,7 @@ fn verify_delegation_bindings(
         )));
     }
 
-    let callee = envelope
-        .callee
-        .as_ref()
-        .map(|c| c.ura.as_str())
-        .unwrap_or("");
+    let callee = callee_ura_required(envelope)?;
     if !audience_admits(&payload.audience, callee) {
         return Err(Status::permission_denied(format!(
             "{REASON_AUTHORITY_AUDIENCE_VIOLATION}: authority audience `{}` does not admit \
@@ -2525,12 +2489,46 @@ fn caller_ura_required(envelope: &Envelope) -> Result<&str, Status> {
     envelope
         .caller
         .as_ref()
-        .map(|c| c.ura.as_str())
+        .map(|c| c.ura.trim())
         .filter(|u| !u.is_empty())
         .ok_or_else(|| {
             Status::invalid_argument(format!(
                 "{REASON_ENVELOPE_INCOMPLETE}: envelope.caller.ura is required \
                  (Invariant 1: caller URA required)"
+            ))
+        })
+}
+
+/// Extract `callee.ura` and reject as `invalid_argument` if absent
+/// or empty. Authority verification must not synthesize an audience
+/// from an incomplete canonical tuple.
+fn callee_ura_required(envelope: &Envelope) -> Result<&str, Status> {
+    envelope
+        .callee
+        .as_ref()
+        .map(|c| c.ura.trim())
+        .filter(|u| !u.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument(format!(
+                "{REASON_ENVELOPE_INCOMPLETE}: envelope.callee.ura is required \
+                 (Invariant 1: callee URA required)"
+            ))
+        })
+}
+
+/// Extract `subject.ura` and reject as `invalid_argument` if absent
+/// or empty. Authority verification must compare explicit subject
+/// facts rather than treating a missing subject as an empty owner.
+fn subject_ura_required(envelope: &Envelope) -> Result<&str, Status> {
+    envelope
+        .subject
+        .as_ref()
+        .map(|s| s.ura.trim())
+        .filter(|u| !u.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument(format!(
+                "{REASON_ENVELOPE_INCOMPLETE}: envelope.subject.ura is required \
+                 (Invariant 1: subject URA required)"
             ))
         })
 }
@@ -2654,7 +2652,10 @@ mod tests {
     use axon_sdk::invocation::{
         sha256, AgentIdentity, CausalContext, InvocationEnvelope, SubjectIdentity, UraProfile,
     };
-    use axon_sdk::pb::axon::v1::{InvokeRequest, InvokeResponse};
+    use axon_sdk::pb::axon::v1::{
+        AgentIdentity as PbAgentIdentity, InvokeRequest, InvokeResponse,
+        SubjectIdentity as PbSubjectIdentity,
+    };
     use serde_json::json;
     use std::collections::BTreeMap;
     use tempfile::tempdir;
@@ -2676,6 +2677,28 @@ mod tests {
             causal_context: CausalContext::None,
         })
         .expect("test receipt policy envelope must be descriptor-bound")
+    }
+
+    fn authority_wire_envelope(
+        caller_ura: Option<&str>,
+        callee_ura: Option<&str>,
+        subject_ura: Option<&str>,
+    ) -> Envelope {
+        Envelope {
+            caller: caller_ura.map(|ura| PbAgentIdentity {
+                ura: ura.to_string(),
+                profile: "axon-strict-v2".to_string(),
+            }),
+            callee: callee_ura.map(|ura| PbAgentIdentity {
+                ura: ura.to_string(),
+                profile: "axon-strict-v2".to_string(),
+            }),
+            subject: subject_ura.map(|ura| PbSubjectIdentity {
+                ura: ura.to_string(),
+                profile: "axon-strict-v2".to_string(),
+            }),
+            ..Envelope::default()
+        }
     }
 
     fn assert_complete_non_self_policy(
@@ -2754,6 +2777,70 @@ mod tests {
         let envelope = receipt_policy_envelope(caller_ura, callee_ura, subject_ura);
 
         assert_complete_non_self_policy(authority, &envelope, "session");
+    }
+
+    #[test]
+    fn session_authority_binding_requires_explicit_envelope_subject() {
+        let caller_ura = "easynet:///r/policy/authority";
+        let callee_ura = "easynet:///r/policy/agent/service.worker";
+        let payload = SessionAuthorityPayload {
+            issuer_ura: caller_ura.to_string(),
+            session_id: "session-42".to_string(),
+            session_owner_user_id: "alice".to_string(),
+            creator_principal_id: "backend".to_string(),
+            callee_ura: callee_ura.to_string(),
+            subject_ura: "easynet:///r/policy/resource/user.alice/session/session-42".to_string(),
+            audience: callee_ura.to_string(),
+            scopes: vec!["run".to_string()],
+            allowed_actions: vec!["invoke".to_string()],
+            allowed_followup_abilities: vec!["run".to_string()],
+            issued_at_ms: 1_700_000_000_000,
+            expires_at_ms: 1_800_000_000_000,
+        };
+        let envelope = authority_wire_envelope(Some(caller_ura), Some(callee_ura), None);
+        let err =
+            verify_session_authority_bindings(&payload, &envelope, "run", AccessAction::Invoke)
+                .expect_err("missing envelope subject must fail as an incomplete tuple");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(
+            err.message().contains(REASON_ENVELOPE_INCOMPLETE)
+                && err.message().contains("envelope.subject.ura"),
+            "unexpected error for missing subject: {err}"
+        );
+        assert!(
+            !err.message().contains(REASON_AUTHORITY_SUBJECT_MISMATCH),
+            "missing subject must not be reported as authority mismatch: {err}"
+        );
+    }
+
+    #[test]
+    fn delegation_binding_requires_explicit_envelope_callee() {
+        let caller_ura = "easynet:///r/policy/agent/alice.delegate";
+        let subject_ura = "easynet:///r/policy/resource/user.bob/document/report";
+        let payload = DelegationPayload {
+            issuer_ura: "easynet:///r/policy/user/alice".to_string(),
+            subject_ura: subject_ura.to_string(),
+            caller_ura: caller_ura.to_string(),
+            audience: "easynet:///r/policy/agent/service.worker".to_string(),
+            scopes: vec!["run".to_string()],
+            issued_at_ms: 1_700_000_000_000,
+            expires_at_ms: 1_800_000_000_000,
+        };
+        let envelope = authority_wire_envelope(Some(caller_ura), None, Some(subject_ura));
+        let err = verify_delegation_bindings(&payload, &envelope, "run")
+            .expect_err("missing envelope callee must fail as an incomplete tuple");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(
+            err.message().contains(REASON_ENVELOPE_INCOMPLETE)
+                && err.message().contains("envelope.callee.ura"),
+            "unexpected error for missing callee: {err}"
+        );
+        assert!(
+            !err.message().contains(REASON_AUTHORITY_AUDIENCE_VIOLATION),
+            "missing callee must not be reported as audience violation: {err}"
+        );
     }
 
     struct RejectingFederationClient;
