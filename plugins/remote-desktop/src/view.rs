@@ -33,7 +33,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
     let local_ice_candidates = session.local_ice_candidates();
     json!({
         "session_id": session.session_id(),
-        "state": session.state().legacy_label(),
+        "state": session.state().json_name(),
         "state_proto": session.state().wire_name(),
         "subject_ura": session.subject_ura(),
         "subject_type": session.subject_type().as_str(),

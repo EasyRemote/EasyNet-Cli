@@ -37,7 +37,7 @@ impl RemoteDesktopSessionState {
         }
     }
 
-    pub(super) fn legacy_label(self) -> &'static str {
+    pub(super) fn json_name(self) -> &'static str {
         match self {
             Self::Unspecified => "unspecified",
             Self::Pending => "pending",
@@ -68,7 +68,7 @@ pub(super) enum RemoteDesktopTransportKind {
 }
 
 impl RemoteDesktopTransportKind {
-    fn legacy_label(self) -> &'static str {
+    fn json_name(self) -> &'static str {
         match self {
             Self::Unspecified => "unspecified",
             Self::WebRtc => "webrtc",
@@ -94,7 +94,7 @@ pub(super) enum RemoteDesktopBackendStatus {
 }
 
 impl RemoteDesktopBackendStatus {
-    fn legacy_label(self) -> &'static str {
+    fn json_name(self) -> &'static str {
         match self {
             Self::Unspecified => "unspecified",
             Self::Available => "available",
@@ -166,7 +166,7 @@ impl RemoteDesktopMediaBackendContract {
         if self.transport_ready && self.status != RemoteDesktopBackendStatus::Available {
             return Err(RemoteDesktopContractError::TransportBackendUnavailable {
                 backend_id: self.backend_id.clone(),
-                status: self.status.legacy_label(),
+                status: self.status.json_name(),
             });
         }
         if self.production_ready {
@@ -180,14 +180,14 @@ impl RemoteDesktopMediaBackendContract {
             if self.status != RemoteDesktopBackendStatus::Available {
                 return Err(RemoteDesktopContractError::ProductionBackendUnavailable {
                     backend_id: self.backend_id.clone(),
-                    status: self.status.legacy_label(),
+                    status: self.status.json_name(),
                 });
             }
             if !self.transport.is_production_media_transport() {
                 return Err(
                     RemoteDesktopContractError::ProductionBackendUsesDiagnosticTransport {
                         backend_id: self.backend_id.clone(),
-                        transport: self.transport.legacy_label(),
+                        transport: self.transport.json_name(),
                     },
                 );
             }
@@ -207,8 +207,8 @@ impl RemoteDesktopMediaBackendContract {
             "backend_id": self.backend_id,
             "sdk_id": self.sdk_id,
             "kind": self.kind,
-            "status": self.status.legacy_label(),
-            "transport": self.transport.legacy_label(),
+            "status": self.status.json_name(),
+            "transport": self.transport.json_name(),
             "capture_api": self.capture_api,
             "encoder": self.encoder,
             "max_capture_fps": self.max_capture_fps,
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn public_state_projection_remains_stable() {
         assert_eq!(
-            RemoteDesktopSessionState::Connected.legacy_label(),
+            RemoteDesktopSessionState::Connected.json_name(),
             "connected"
         );
         assert_eq!(

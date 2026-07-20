@@ -21,7 +21,8 @@ pub fn create_session_description() -> &'static str {
     "Create a remote desktop control session for a display/window/application \
      resource. Subject MUST be the resource_ura in the invocation envelope. \
      The session advertises WebRTC as the production media transport and \
-     exposes quality targets; diagnostic preview paths stay marked fallback."
+     exposes quality targets; preview paths stay marked as diagnostic \
+     transports."
 }
 
 /// JSON input schema for `remote_desktop.create_session`.

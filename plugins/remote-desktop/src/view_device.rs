@@ -58,13 +58,13 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
             "macos_screencapturekit_videotoolbox_webrtc",
             "xcap_video_recorder_openh264_annexb",
             "xcap_openh264_annexb",
-            "xcap_snapshot_fallback"
+            "xcap_snapshot_diagnostic"
         ])
     } else {
         json!([
             "xcap_video_recorder_openh264_annexb",
             "xcap_openh264_annexb",
-            "xcap_snapshot_fallback"
+            "xcap_snapshot_diagnostic"
         ])
     };
     let codec_profiles = if production_ready {

@@ -336,7 +336,7 @@ pub fn production_backend_for_entry(
                 && backend.transport_ready()
                 && backend.production_ready()
                 && backend.supports_entry(entry)
-                && native_compatible_screen_entry(entry)
+                && native_supported_screen_entry(entry)
         })
 }
 
@@ -346,7 +346,7 @@ pub fn webrtc_transport_backend_for_entry(
     if let Some(native) = production_backend_for_entry(entry) {
         return Some(native);
     }
-    if xcap_compatible_screen_entry(entry) {
+    if xcap_supported_screen_entry(entry) {
         return Some(XCAP_OPENH264_WEBRTC_BACKEND);
     }
     None
@@ -388,13 +388,13 @@ mod macos_screen_capture_tcc {
 pub fn select_builtin_h264_backend(
     entry: &ResourceEntry,
 ) -> Option<RemoteDesktopMediaBackendDescriptor> {
-    if xcap_compatible_screen_entry(entry) {
+    if xcap_supported_screen_entry(entry) {
         return Some(XCAP_OPENH264_BACKEND);
     }
     None
 }
 
-fn xcap_compatible_screen_entry(entry: &ResourceEntry) -> bool {
+fn xcap_supported_screen_entry(entry: &ResourceEntry) -> bool {
     let backend = entry.metadata.get("backend").and_then(Value::as_str);
     match entry.kind {
         ResourceType::Display => backend == Some("xcap"),
@@ -413,7 +413,7 @@ fn xcap_compatible_screen_entry(entry: &ResourceEntry) -> bool {
     }
 }
 
-fn native_compatible_screen_entry(entry: &ResourceEntry) -> bool {
+fn native_supported_screen_entry(entry: &ResourceEntry) -> bool {
     match entry.kind {
         ResourceType::Display => true,
         ResourceType::Window | ResourceType::Application => {

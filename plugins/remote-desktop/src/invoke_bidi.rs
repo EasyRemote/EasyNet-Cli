@@ -248,7 +248,7 @@ fn spawn_bidi_frame_loop(config: BidiFrameLoopConfig) {
                 "transport": TRANSPORT_INVOKE_BIDI,
                 "state": "connected",
                 "encoding": "metadata_json_plus_binary",
-                "message": "Diagnostic fallback sends metadata JSON followed by raw binary frame chunks; production remote desktop still requires WebRTC/hardware video encoding.",
+                "message": "Diagnostic transport sends metadata JSON followed by raw binary frame chunks; production remote desktop still requires WebRTC/hardware video encoding.",
             })))
             .await;
         loop {

@@ -16,8 +16,8 @@
 // - In-process session store mirrors the existing voice-call v1 model:
 //   deterministic state transitions, bounded event snapshots, and
 //   idempotent terminal close.
-// - `preview_stream` and InvokeBidi are surfaced as honest diagnostic
-//   fallbacks. They never mark the production WebRTC media plane ready.
+// - `preview_stream` and InvokeBidi are surfaced as diagnostic transports.
+//   They never mark the production WebRTC media plane ready.
 //
 // Usage Contract:
 // - `remote_desktop.create_session` MUST be called with

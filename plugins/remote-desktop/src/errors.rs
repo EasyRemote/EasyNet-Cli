@@ -14,7 +14,7 @@ use crate::daemon::plugins::remote_desktop::constants::{
 /// What this is NOT: a transport error wrapper. Media/WebRTC/process failures
 /// remain projected through session events. This type pins authorization,
 /// identity, and state-transition failures before the ability handler boundary
-/// converts them to `anyhow` for legacy registry compatibility.
+/// converts them to `anyhow` at the ability registry boundary.
 #[derive(Debug, thiserror::Error)]
 pub(in crate::daemon::plugins::remote_desktop) enum RemoteDesktopError {
     #[error("{ability}: {detail}; reason={REASON_INVALID_ARGUMENT}")]

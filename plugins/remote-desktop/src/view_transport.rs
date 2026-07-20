@@ -83,7 +83,7 @@ impl RemoteDesktopTransportView {
                 "ready": session.preview_attached(),
                 "endpoint_ura": null,
                 "metadata": {
-                    "role": "diagnostic_fallback",
+                    "role": "diagnostic_transport",
                     "diagnostic_only": "true",
                     "media_plane": "metadata_json_plus_binary_preview",
                     "drop_stale_frames": "true",
@@ -131,16 +131,16 @@ fn transport_unavailable_reason(session: &RemoteDesktopSession) -> Value {
 
 fn transport_message(session: &RemoteDesktopSession) -> &'static str {
     if session.media_transport_ready() {
-        "Direct device-side WebRTC endpoint is ready; InvokeBidi and preview_stream remain diagnostic fallbacks."
+        "Direct device-side WebRTC endpoint is ready; InvokeBidi and preview_stream remain diagnostic transports."
     } else if session.webrtc_error() == Some("native_media_plugin_required") {
-        "Direct WebRTC RTP/SRTP is blocked until a native capture/encode plugin is installed; InvokeBidi remains an explicit diagnostic fallback."
+        "Direct WebRTC RTP/SRTP is blocked until a native capture/encode plugin is installed; InvokeBidi remains an explicit diagnostic transport."
     } else if session.webrtc_error() == Some("native_media_pipeline_failed") {
         "Native ScreenCaptureKit/VideoToolbox media pipeline failed before producing frames; check the session failure event for the platform error."
     } else if session.webrtc_error() == Some("webrtc_transport_backend_unavailable") {
-        "Direct WebRTC RTP/SRTP is blocked because this capture subject has no available device-side WebRTC backend; InvokeBidi remains an explicit diagnostic fallback."
+        "Direct WebRTC RTP/SRTP is blocked because this capture subject has no available device-side WebRTC backend; InvokeBidi remains an explicit diagnostic transport."
     } else if session.local_description().is_some() {
-        "Direct device-side WebRTC endpoint is negotiating ICE/DTLS; InvokeBidi and preview_stream remain diagnostic-only fallbacks."
+        "Direct device-side WebRTC endpoint is negotiating ICE/DTLS; InvokeBidi and preview_stream remain diagnostic-only transports."
     } else {
-        "WebRTC endpoint requires a browser SDP offer; InvokeBidi and preview_stream are diagnostic-only fallbacks until negotiation completes."
+        "WebRTC endpoint requires a browser SDP offer; InvokeBidi and preview_stream are diagnostic-only transports until negotiation completes."
     }
 }

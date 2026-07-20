@@ -85,7 +85,7 @@ impl RemoteDesktopEventLog {
             "sequence": sequence,
             "event_type": event_type,
             "event_type_proto": event_type_proto_name(event_type),
-            "state": state.legacy_label(),
+            "state": state.json_name(),
             "state_proto": state.wire_name(),
             "terminal": state.is_terminal(),
             "at_ms": now_ms(),
