@@ -11,11 +11,11 @@ use clap::{Args, Subcommand};
 use super::plugin_template::{init_hello_plugin, PluginTemplateInit, PluginTemplateLanguage};
 use crate::daemon::plugins::index::default_plugin_root;
 use crate::daemon::plugins::{
-    DesktopCompanionManager, PluginInstaller, PluginKind, PluginKindView, PluginLoadPlanner,
-    PluginPackageIndex, PluginPackageSurfaceRecord, PluginRealtimeActivationOutcome,
-    PluginRealtimeActivationReport, PluginRealtimeKind, PluginRealtimeMode,
-    PluginRealtimeOutcomeStatus, PluginRealtimePermissionStatus, PluginRealtimeTransport,
-    PluginRealtimeTransportReadinessStatus, PluginSurfaceProjector, PluginSurfaceReport,
+    DesktopCompanionManager, PluginInstaller, PluginKind, PluginKindView, PluginPackageIndex,
+    PluginPackageSurfaceRecord, PluginRealtimeActivationOutcome, PluginRealtimeActivationReport,
+    PluginRealtimeKind, PluginRealtimeMode, PluginRealtimeOutcomeStatus,
+    PluginRealtimePermissionStatus, PluginRealtimeTransport,
+    PluginRealtimeTransportReadinessStatus, PluginSurfaceReport,
 };
 use crate::support::platform::output::{self, OutputFormat};
 
@@ -192,16 +192,7 @@ fn run_init(args: InitArgs) -> anyhow::Result<()> {
 }
 
 fn run_list(args: ListArgs) -> anyhow::Result<()> {
-    let report = match invoke_plugin_status()? {
-        Some(report) => report,
-        None => {
-            output::warn("daemon is not running; showing offline planned plugin status");
-            let index_report = PluginPackageIndex::load_default_resilient()?;
-            let (index, index_errors) = index_report.into_parts();
-            let plan = PluginLoadPlanner::current().plan(&index);
-            PluginSurfaceProjector::project_report_with_daemon(&index, &plan, None, &index_errors)
-        }
-    };
+    let report = require_plugin_control_report(invoke_plugin_status()?, "plugin list")?;
 
     match args.format {
         OutputFormat::Json => {
@@ -337,13 +328,10 @@ fn run_disable(args: CompanionPackageArgs) -> anyhow::Result<()> {
 fn run_status(args: PluginStatusArgs) -> anyhow::Result<()> {
     let package = resolve_package(&args.id, args.version.as_deref())?;
     if package.manifest().kind() == PluginKind::DesktopCompanion {
-        let local_status = DesktopCompanionManager::current().status_json(&package)?;
-        let daemon_status = invoke_companion_status(&args.id, args.version.as_deref())?;
-        let selected = select_companion_status(local_status, daemon_status);
-        if let Some(warning) = selected.warning {
-            output::warn(&warning);
-        }
-        let status = selected.status;
+        let status = require_plugin_control_value(
+            invoke_companion_status(&args.id, args.version.as_deref())?,
+            "plugin status",
+        )?;
         if args.json {
             println!("{}", serde_json::to_string_pretty(&status)?);
         } else {
@@ -352,7 +340,7 @@ fn run_status(args: PluginStatusArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let report = offline_plugin_surface_report()?;
+    let report = require_plugin_control_report(invoke_plugin_status()?, "plugin status")?;
     let Some(row) = report.packages.into_iter().find(|row| {
         row.package_id == args.id
             && args
@@ -471,44 +459,20 @@ fn string_json(value: &serde_json::Value, field: &str) -> String {
         .to_string()
 }
 
-struct CompanionStatusSelection {
-    status: serde_json::Value,
-    warning: Option<String>,
+fn require_plugin_control_report(
+    report: Option<PluginSurfaceReport>,
+    command: &str,
+) -> anyhow::Result<PluginSurfaceReport> {
+    require_plugin_control_value(report, command)
 }
 
-fn select_companion_status(
-    local_status: serde_json::Value,
-    daemon_status: Option<serde_json::Value>,
-) -> CompanionStatusSelection {
-    match daemon_status {
-        Some(daemon_status) if daemon_status == local_status => CompanionStatusSelection {
-            status: daemon_status,
-            warning: None,
-        },
-        Some(_) => CompanionStatusSelection {
-            status: local_status,
-            warning: Some(
-                "daemon companion plugin state may be stale; showing local manager observation"
-                    .to_string(),
-            ),
-        },
-        None => CompanionStatusSelection {
-            status: local_status,
-            warning: None,
-        },
-    }
-}
-
-fn offline_plugin_surface_report() -> anyhow::Result<PluginSurfaceReport> {
-    let index_report = PluginPackageIndex::load_default_resilient()?;
-    let (index, index_errors) = index_report.into_parts();
-    let plan = PluginLoadPlanner::current().plan(&index);
-    Ok(PluginSurfaceProjector::project_report_with_daemon(
-        &index,
-        &plan,
-        None,
-        &index_errors,
-    ))
+fn require_plugin_control_value<T>(value: Option<T>, command: &str) -> anyhow::Result<T> {
+    value.ok_or_else(|| {
+        anyhow::anyhow!(
+            "`easynet {command}` requires the daemon plugin control ability; \
+             start the daemon and retry"
+        )
+    })
 }
 
 fn resolve_package(
@@ -818,39 +782,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn companion_status_selection_uses_daemon_when_equal() {
+    fn plugin_control_value_accepts_daemon_authority_value() {
         let status = serde_json::json!({
             "kind": "desktop_companion_status",
             "package_id": "easynet.desktop.menubar",
             "projected_state": "running"
         });
 
-        let selected = select_companion_status(status.clone(), Some(status.clone()));
+        let selected = require_plugin_control_value(Some(status.clone()), "plugin status")
+            .expect("daemon value should be accepted");
 
-        assert_eq!(selected.status, status);
-        assert!(selected.warning.is_none());
+        assert_eq!(selected, status);
     }
 
     #[test]
-    fn companion_status_selection_warns_and_uses_local_when_daemon_differs() {
-        let local_status = serde_json::json!({
-            "kind": "desktop_companion_status",
-            "package_id": "easynet.desktop.menubar",
-            "projected_state": "running"
-        });
-        let daemon_status = serde_json::json!({
-            "kind": "desktop_companion_status",
-            "package_id": "easynet.desktop.menubar",
-            "projected_state": "ready_stopped"
-        });
+    fn plugin_control_value_rejects_missing_daemon_authority() {
+        let err = require_plugin_control_value::<serde_json::Value>(None, "plugin status")
+            .expect_err("missing daemon value must fail closed");
 
-        let selected = select_companion_status(local_status.clone(), Some(daemon_status));
-
-        assert_eq!(selected.status, local_status);
-        assert_eq!(
-            selected.warning.as_deref(),
-            Some("daemon companion plugin state may be stale; showing local manager observation")
-        );
+        assert!(err
+            .to_string()
+            .contains("requires the daemon plugin control ability"));
     }
 
     #[test]
