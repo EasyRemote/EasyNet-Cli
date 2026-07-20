@@ -63,7 +63,7 @@ pub(crate) fn load() -> anyhow::Result<OwnerProjectionCursorFile> {
     let _thread_guard = lock_store();
     let data_path = path();
     let _process_guard = ExclusiveFileLock::acquire_for_data_path(&data_path)?;
-    load_and_migrate_unlocked(&data_path)
+    load_unlocked(&data_path)
 }
 
 pub(crate) fn update<T>(
@@ -72,7 +72,7 @@ pub(crate) fn update<T>(
     let _thread_guard = lock_store();
     let data_path = path();
     let _process_guard = ExclusiveFileLock::acquire_for_data_path(&data_path)?;
-    let mut file = load_and_migrate_unlocked(&data_path)?;
+    let mut file = load_unlocked(&data_path)?;
     let output = mutate(&mut file)?;
     save_unlocked(&data_path, &file)?;
     Ok(output)
@@ -93,7 +93,7 @@ fn lock_store() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn load_and_migrate_unlocked(path: &std::path::Path) -> anyhow::Result<OwnerProjectionCursorFile> {
+fn load_unlocked(path: &std::path::Path) -> anyhow::Result<OwnerProjectionCursorFile> {
     let data = match fs::read(path) {
         Ok(data) => data,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -123,7 +123,11 @@ fn load_and_migrate_unlocked(path: &std::path::Path) -> anyhow::Result<OwnerProj
             "unsupported owner projection schema {version} at {}; expected {SCHEMA_VERSION}",
             path.display()
         ),
-        None => migrate_legacy_schema_unlocked(path, value),
+        None => anyhow::bail!(
+            "owner projection store {} is missing schema_version; delete the retired pre-v2 store \
+             and republish owner projections",
+            path.display()
+        ),
     }
 }
 
@@ -133,57 +137,6 @@ fn save_unlocked(path: &std::path::Path, file: &OwnerProjectionCursorFile) -> an
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_vec_pretty(file)?;
     atomic_write_with_permissions(path, &json, WritePermissions::OwnerReadWrite).map_err(Into::into)
-}
-
-#[derive(Deserialize)]
-struct LegacyOwnerProjectionCursorFile {
-    #[serde(default)]
-    projections: Vec<LegacyOwnerProjectionCursor>,
-}
-
-#[derive(Deserialize)]
-struct LegacyOwnerProjectionCursor {
-    owner_ura: String,
-    host_device_ura: String,
-    projection_revision: u64,
-    projection_digest: String,
-    content_fingerprint: String,
-    lease_expires_unix_ms: i64,
-    updated_at: String,
-}
-
-fn migrate_legacy_schema_unlocked(
-    path: &std::path::Path,
-    value: serde_json::Value,
-) -> anyhow::Result<OwnerProjectionCursorFile> {
-    let legacy: LegacyOwnerProjectionCursorFile =
-        serde_json::from_value(value).map_err(|error| {
-            anyhow::anyhow!(
-                "migrate legacy owner projection store {}: {error}",
-                path.display()
-            )
-        })?;
-    let file = OwnerProjectionCursorFile {
-        schema_version: SCHEMA_VERSION,
-        projections: legacy
-            .projections
-            .into_iter()
-            .map(|cursor| OwnerProjectionCursor {
-                owner_ura: cursor.owner_ura,
-                host_device_ura: cursor.host_device_ura,
-                generation: 1,
-                lifecycle: OwnerProjectionCursorLifecycle::Active,
-                projection_revision: cursor.projection_revision,
-                projection_digest: cursor.projection_digest,
-                content_fingerprint: cursor.content_fingerprint,
-                lease_expires_unix_ms: cursor.lease_expires_unix_ms,
-                updated_at: cursor.updated_at,
-            })
-            .collect(),
-    };
-    file.validate()?;
-    save_unlocked(path, &file)?;
-    Ok(file)
 }
 
 impl OwnerProjectionCursorFile {
@@ -260,13 +213,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_store_is_migrated_once_without_losing_revision_high_water() {
+    fn schema_less_store_is_rejected_without_rewrite() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let data_path = path();
         fs::create_dir_all(data_path.parent().unwrap()).unwrap();
-        fs::write(
-            &data_path,
-            br#"{
+        let retired_store = br#"{
   "projections": [{
     "owner_ura": "easynet:///r/acme/agent/alice.worker",
     "host_device_ura": "easynet:///r/acme/device/01DEV",
@@ -276,25 +227,45 @@ mod tests {
     "lease_expires_unix_ms": 0,
     "updated_at": "2026-07-01T00:00:00Z"
   }]
-}"#,
-        )
-        .unwrap();
+}"#;
+        fs::write(&data_path, retired_store).unwrap();
 
-        let migrated = load().expect("legacy store migrates under the writer lock");
-        let cursor = migrated
-            .cursor_for("easynet:///r/acme/agent/alice.worker")
-            .unwrap();
-        assert_eq!(migrated.schema_version, SCHEMA_VERSION);
-        assert_eq!(cursor.generation, 1);
-        assert_eq!(cursor.lifecycle, OwnerProjectionCursorLifecycle::Active);
-        assert_eq!(cursor.projection_revision, 19);
+        let error = load().expect_err("schema-less retired store must fail closed");
+        assert!(
+            error.to_string().contains("missing schema_version"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(fs::read(&data_path).unwrap(), retired_store);
+    }
 
-        let persisted: serde_json::Value =
-            serde_json::from_slice(&fs::read(&data_path).unwrap()).unwrap();
-        assert_eq!(persisted["schema_version"], SCHEMA_VERSION);
-        assert_eq!(persisted["projections"][0]["generation"], 1);
-        assert_eq!(persisted["projections"][0]["lifecycle"], "active");
-        assert_eq!(load().unwrap(), migrated);
+    #[test]
+    fn update_rejects_schema_less_store_before_mutating() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let data_path = path();
+        fs::create_dir_all(data_path.parent().unwrap()).unwrap();
+        let retired_store = br#"{
+  "projections": [{
+    "owner_ura": "easynet:///r/acme/agent/alice.worker",
+    "host_device_ura": "easynet:///r/acme/device/01DEV",
+    "projection_revision": 19,
+    "projection_digest": "digest-19",
+    "content_fingerprint": "fingerprint-19",
+    "lease_expires_unix_ms": 0,
+    "updated_at": "2026-07-01T00:00:00Z"
+  }]
+}"#;
+        fs::write(&data_path, retired_store).unwrap();
+
+        let error = update(|file| {
+            file.projections.clear();
+            Ok(())
+        })
+        .expect_err("schema-less retired store must block update");
+        assert!(
+            error.to_string().contains("missing schema_version"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(fs::read(&data_path).unwrap(), retired_store);
     }
 
     #[test]
