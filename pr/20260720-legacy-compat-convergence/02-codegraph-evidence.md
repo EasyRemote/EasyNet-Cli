@@ -1481,3 +1481,25 @@ Evidence will be appended after indexing and focused impact queries.
   `anyhow::Result<Vec<AgentAbilitySpec>>`, classifies unreadable aggregate state
   as `load cross-agent ability registry projection`, and both RPC and stream
   chat propagate the failure before dispatching any LLM turn.
+
+## 2026-07-21 Permission pending queue silent empty fallback audit
+
+- `codegraph query "SubscriberBroker pending_snapshot pending queue lock
+  poisoned consent list_pending subscribe PermissionService pending" --limit
+  80` identified `SubscriberBroker::pending_snapshot`,
+  `PermissionService::pending`, `consent.list_pending`, and
+  `consent.subscribe` as one admission/operator read-model chain.
+- Targeted source inspection found the compatibility seam:
+  `SubscriberBroker::pending_snapshot` erased a poisoned pending queue through
+  `.read().ok()` and `unwrap_or_default()`, and `PermissionService::pending`
+  preserved that false-empty projection for Kernel and consent surfaces.
+- The root abstraction problem was treating pending consent queue availability
+  as an optional UI snapshot. An absent subscriber broker can mean the
+  AllowAll policy has no queue; a present but unreadable pending queue is
+  unavailable admission state and must not be projected as "no pending
+  permissions."
+- After the change, `SubscriberBroker::pending_snapshot` returns
+  `anyhow::Result<Vec<PermissionRequest>>`, `PermissionService::pending`
+  preserves the AllowAll empty state while propagating subscriber failures, and
+  `Kernel::pending_permission_requests`, `consent.list_pending`, and
+  `consent.subscribe` all fail closed on unreadable pending state.

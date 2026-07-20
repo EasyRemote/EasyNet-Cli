@@ -150,12 +150,22 @@ impl SubscriberBroker {
     /// `consent.subscribe` handler emits this snapshot
     /// before tailing live updates so a Client sees the full
     /// queue on first connection.
-    pub fn pending_snapshot(&self) -> Vec<PermissionRequest> {
-        self.pending
+    pub fn pending_snapshot(&self) -> anyhow::Result<Vec<PermissionRequest>> {
+        Ok(self
+            .pending
             .read()
-            .ok()
-            .map(|g| g.values().map(|p| p.request.clone()).collect())
-            .unwrap_or_default()
+            .map_err(|_| anyhow::anyhow!("SubscriberBroker pending queue lock poisoned"))?
+            .values()
+            .map(|p| p.request.clone())
+            .collect())
+    }
+
+    #[cfg(test)]
+    pub fn poison_pending_for_test(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.pending.write().unwrap();
+            panic!("poison permission pending queue");
+        }));
     }
 
     /// Deliver a decision. Removes the pending state, sends the
@@ -343,11 +353,18 @@ impl PermissionService {
 
     /// Snapshot the pending queue (or empty when AllowAllBroker
     /// is installed).
-    pub fn pending(&self) -> Vec<PermissionRequest> {
-        self.subscriber
-            .as_ref()
-            .map(|s| s.pending_snapshot())
-            .unwrap_or_default()
+    pub fn pending(&self) -> anyhow::Result<Vec<PermissionRequest>> {
+        match &self.subscriber {
+            Some(s) => s.pending_snapshot(),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn poison_pending_for_test(&self) {
+        if let Some(subscriber) = &self.subscriber {
+            subscriber.poison_pending_for_test();
+        }
     }
 }
 
@@ -400,6 +417,30 @@ mod tests {
             .decide(&PermissionId::new("ghost"), PermissionDecision::Allow)
             .unwrap_err();
         assert!(format!("{err}").contains("unknown"));
+    }
+
+    #[test]
+    fn subscriber_pending_snapshot_rejects_poisoned_queue_instead_of_empty() {
+        let b = SubscriberBroker::new();
+        b.poison_pending_for_test();
+        let err = b
+            .pending_snapshot()
+            .expect_err("poisoned pending queue must fail");
+        assert!(
+            format!("{err:#}").contains("SubscriberBroker pending queue lock poisoned"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn permission_service_pending_rejects_poisoned_subscriber_queue() {
+        let s = PermissionService::with_subscriber_broker();
+        s.poison_pending_for_test();
+        let err = s.pending().expect_err("poisoned pending queue must fail");
+        assert!(
+            format!("{err:#}").contains("SubscriberBroker pending queue lock poisoned"),
+            "{err:#}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

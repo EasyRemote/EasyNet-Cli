@@ -1466,3 +1466,33 @@ Commands and outcomes will be appended after implementation.
   `invoke_direct_with_progress`, `stream_handler`, and the new corrupt-registry
   regressions.
 - `git diff --check` — PASS.
+
+## 2026-07-21 Permission pending queue fail-closed read model
+
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R89 for permission pending queue fail-closed semantics.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for `SubscriberBroker::pending_snapshot() -> Vec<_>`,
+  `.read().ok()`, `unwrap_or_default()`, non-result
+  `PermissionService::pending`, consent `unwrap_or(Value::Null)`, and Kernel
+  `Ok(self.permission.pending())` projection.
+- `/Users/macbook.silan.tech/.cargo/bin/rustfmt --edition 2021 --check
+  src/daemon/execution/permission/mod.rs
+  src/daemon/ability/builtins/governance/consent.rs
+  src/daemon/boot/kernel/mod.rs` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q governance::consent
+  --lib` — PASS (`7 passed`); includes poisoned pending queue regressions for
+  `consent.list_pending` and `consent.subscribe`.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q permission --lib` —
+  PASS (`45 passed`); includes poisoned pending queue regressions for
+  `SubscriberBroker` and `PermissionService`.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "SubscriberBroker
+  pending_snapshot pending queue lock poisoned consent list_pending subscribe
+  PermissionService pending" --limit 80` — PASS; reports
+  `SubscriberBroker::pending_snapshot(...) ->
+  anyhow::Result<Vec<PermissionRequest>>`,
+  `PermissionService::pending(...) -> anyhow::Result<Vec<PermissionRequest>>`,
+  and the poisoned queue regressions.
+- `git diff --check` — PASS.

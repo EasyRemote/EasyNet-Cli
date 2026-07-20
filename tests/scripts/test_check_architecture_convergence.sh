@@ -5751,6 +5751,65 @@ expect_fail \
   "R88_CHAT_CROSS_AGENT_REGISTRY_FAIL_CLOSED"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/execution/permission" "$CLI/src/daemon/ability/builtins/governance" "$CLI/src/daemon/boot/kernel"
+cat >"$CLI/src/daemon/execution/permission/mod.rs" <<'EOF'
+pub struct PermissionRequest;
+pub struct SubscriberBroker {
+    pending: Lock,
+}
+
+impl SubscriberBroker {
+    pub fn pending_snapshot(&self) -> Vec<PermissionRequest> {
+        self.pending
+            .read()
+            .ok()
+            .map(|g| g.values().map(|p| p.request.clone()).collect())
+            .unwrap_or_default()
+    }
+}
+
+pub struct PermissionService {
+    subscriber: Option<SubscriberBroker>,
+}
+
+impl PermissionService {
+    pub fn pending(&self) -> Vec<PermissionRequest> {
+        self.subscriber
+            .as_ref()
+            .map(|s| s.pending_snapshot())
+            .unwrap_or_default()
+    }
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/governance/consent.rs" <<'EOF'
+fn subscribe_handler(svc: &PermissionService) -> anyhow::Result<StreamSource> {
+    let snapshot: Vec<Value> = svc
+        .pending()
+        .into_iter()
+        .map(|r| serde_json::to_value(r).unwrap_or(Value::Null))
+        .collect();
+    Ok(StreamSource::Snapshot(snapshot))
+}
+
+fn list_pending_handler(svc: &PermissionService) -> anyhow::Result<Value> {
+    let snapshot: Vec<Value> = svc
+        .pending()
+        .into_iter()
+        .map(|r| serde_json::to_value(r).unwrap_or(Value::Null))
+        .collect();
+    Ok(json!({ "requests": snapshot }))
+}
+EOF
+cat >"$CLI/src/daemon/boot/kernel/mod.rs" <<'EOF'
+fn pending_permission_requests(&self) -> anyhow::Result<Vec<PermissionRequest>> {
+    Ok(self.permission.pending())
+}
+EOF
+expect_fail \
+  "permission pending queue silent empty fallback" \
+  "R89_PERMISSION_PENDING_QUEUE_FAIL_CLOSED"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/plugins" "$CLI/src/daemon/boot/invocation" "$CLI/src/daemon/ability/wire"
 cat >"$CLI/src/daemon/plugins/runtime_manager.rs" <<'EOF'
 use crate::daemon::ability::wire::AbilityWireRegistry;

@@ -552,7 +552,7 @@ impl KernelApi for Kernel {
     }
 
     fn pending_permission_requests(&self) -> anyhow::Result<Vec<PermissionRequest>> {
-        Ok(self.permission.pending())
+        self.permission.pending()
     }
 
     fn decide_permission(

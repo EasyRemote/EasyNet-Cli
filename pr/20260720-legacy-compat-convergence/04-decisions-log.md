@@ -466,3 +466,9 @@ Decisions will be appended as root-fork choices are made.
   no cross-agent hint, but an unreadable Agent aggregate projection must fail
   RPC and stream chat before dispatch; otherwise products receive a false
   "no peer abilities exist" prompt.
+- Treat the permission pending queue as admission/operator state. A
+  non-subscriber permission broker can legitimately expose no pending queue,
+  but a subscriber broker whose pending queue cannot be read is unavailable
+  admission state. `Kernel::pending_permission_requests`,
+  `consent.list_pending`, and `consent.subscribe` must propagate that failure
+  instead of reporting an empty queue or `null` request rows.

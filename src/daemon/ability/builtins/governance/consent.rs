@@ -75,10 +75,10 @@ pub fn register(reg: &mut AxonAbilityCatalog, perms: Arc<PermissionService>) {
 /// returns an empty Snapshot — the queue is structurally empty.
 fn subscribe_handler(svc: &PermissionService, _args: Value) -> anyhow::Result<StreamSource> {
     let snapshot: Vec<Value> = svc
-        .pending()
+        .pending()?
         .into_iter()
-        .map(|r| serde_json::to_value(r).unwrap_or(Value::Null))
-        .collect();
+        .map(serde_json::to_value)
+        .collect::<Result<_, _>>()?;
     match svc.subscriber() {
         Some(sub) => {
             // Convert PermissionRequest broadcast → JSON Value
@@ -91,7 +91,13 @@ fn subscribe_handler(svc: &PermissionService, _args: Value) -> anyhow::Result<St
                 loop {
                     match typed_rx.recv().await {
                         Ok(req) => {
-                            let v = serde_json::to_value(&req).unwrap_or(Value::Null);
+                            let v = serde_json::to_value(&req).unwrap_or_else(|error| {
+                                json!({
+                                    "type": "error",
+                                    "stage": "permission_pending_serialize",
+                                    "error": format!("serialize PermissionRequest: {error}"),
+                                })
+                            });
                             // If no live IPC subscribers attached the
                             // first message gets dropped; that's fine —
                             // late attaches see it via the snapshot.
@@ -125,10 +131,10 @@ fn subscribe_handler(svc: &PermissionService, _args: Value) -> anyhow::Result<St
 /// have to wire up StreamSource handling.
 fn list_pending_handler(svc: &PermissionService) -> anyhow::Result<Value> {
     let snapshot: Vec<Value> = svc
-        .pending()
+        .pending()?
         .into_iter()
-        .map(|r| serde_json::to_value(r).unwrap_or(Value::Null))
-        .collect();
+        .map(serde_json::to_value)
+        .collect::<Result<_, _>>()?;
     Ok(json!({ "requests": snapshot }))
 }
 
@@ -225,11 +231,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn list_pending_propagates_poisoned_pending_queue() {
+        let svc = fresh();
+        svc.poison_pending_for_test();
+        let err = list_pending_handler(&svc).expect_err("poisoned queue must fail list");
+        assert!(
+            format!("{err:#}").contains("SubscriberBroker pending queue lock poisoned"),
+            "{err:#}"
+        );
+    }
+
     #[tokio::test]
     async fn subscribe_returns_empty_for_idle_queue() {
         let svc = fresh();
         let frames = subscribe_handler(&svc, json!({})).unwrap().into_snapshot();
         assert!(frames.is_empty());
+    }
+
+    #[test]
+    fn subscribe_propagates_poisoned_pending_queue() {
+        let svc = fresh();
+        svc.poison_pending_for_test();
+        let err = subscribe_handler(&svc, json!({})).expect_err("poisoned queue must fail stream");
+        assert!(
+            format!("{err:#}").contains("SubscriberBroker pending queue lock poisoned"),
+            "{err:#}"
+        );
     }
 
     #[test]

@@ -8490,6 +8490,129 @@ if agents_chat.exists():
                 )
 
 
+# Rule 89: permission pending queue is admission/operator state, not a
+# best-effort UI cache. A poisoned SubscriberBroker pending queue must fail
+# consent list/subscribe and Kernel pending snapshots; it must not become an
+# empty queue or null request row.
+permission_mod = cli_root / "src/daemon/execution/permission/mod.rs"
+consent_mod = cli_root / "src/daemon/ability/builtins/governance/consent.rs"
+kernel_mod = cli_root / "src/daemon/boot/kernel/mod.rs"
+if permission_mod.exists():
+    text = source(permission_mod)
+    body = rust_method_body(text, "pending_snapshot")
+    if body is None:
+        add(
+            "R89_PERMISSION_PENDING_QUEUE_FAIL_CLOSED",
+            permission_mod,
+            1,
+            "SubscriberBroker must keep pending_snapshot as the pending queue snapshot authority",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if "Result<Vec<PermissionRequest>>" not in signature:
+            add(
+                "R89_PERMISSION_PENDING_QUEUE_FAIL_CLOSED",
+                permission_mod,
+                line_number(text, offset),
+                "SubscriberBroker::pending_snapshot must return Result so poisoned queue state cannot become an empty pending list",
+            )
+        for token, detail in (
+            (
+                ".read()\n            .ok()",
+                "SubscriberBroker::pending_snapshot must not erase poisoned queue errors with .ok()",
+            ),
+            (
+                ".read().ok()",
+                "SubscriberBroker::pending_snapshot must not erase poisoned queue errors with .ok()",
+            ),
+            (
+                "unwrap_or_default()",
+                "SubscriberBroker::pending_snapshot must not project unavailable queue state as empty pending list",
+            ),
+        ):
+            if token in fn_body:
+                add(
+                    "R89_PERMISSION_PENDING_QUEUE_FAIL_CLOSED",
+                    permission_mod,
+                    line_number(text, body_start + fn_body.find(token)),
+                    detail,
+                )
+        if "SubscriberBroker pending queue lock poisoned" not in fn_body:
+            add(
+                "R89_PERMISSION_PENDING_QUEUE_FAIL_CLOSED",
+                permission_mod,
+                line_number(text, offset),
+                "SubscriberBroker::pending_snapshot must preserve poisoned queue as explicit unavailable state",
+            )
+
+    body = rust_method_body(text, "pending")
+    if body is not None:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if "Result<Vec<PermissionRequest>>" not in signature:
+            add(
+                "R89_PERMISSION_PENDING_QUEUE_FAIL_CLOSED",
+                permission_mod,
+                line_number(text, offset),
+                "PermissionService::pending must return Result so SubscriberBroker failures propagate",
+            )
+        if "s.pending_snapshot()" not in fn_body or "unwrap_or_default()" in fn_body:
+            add(
+                "R89_PERMISSION_PENDING_QUEUE_FAIL_CLOSED",
+                permission_mod,
+                line_number(text, offset),
+                "PermissionService::pending must propagate SubscriberBroker::pending_snapshot and only return empty when no SubscriberBroker exists",
+            )
+
+if consent_mod.exists():
+    text = source(consent_mod)
+    for method_name, detail in (
+        (
+            "subscribe_handler",
+            "consent.subscribe must propagate PermissionService::pending failures before creating a stream snapshot",
+        ),
+        (
+            "list_pending_handler",
+            "consent.list_pending must propagate PermissionService::pending failures",
+        ),
+    ):
+        body = rust_method_body(text, method_name)
+        if body is None:
+            continue
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        if ".pending()?" not in fn_body:
+            add(
+                "R89_PERMISSION_PENDING_QUEUE_FAIL_CLOSED",
+                consent_mod,
+                line_number(text, offset),
+                detail,
+            )
+        if "unwrap_or(Value::Null)" in fn_body:
+            add(
+                "R89_PERMISSION_PENDING_QUEUE_FAIL_CLOSED",
+                consent_mod,
+                line_number(text, body_start + fn_body.find("unwrap_or(Value::Null)")),
+                "consent pending snapshots must not serialize failed PermissionRequest rows as null",
+            )
+
+if kernel_mod.exists():
+    text = source(kernel_mod)
+    body = rust_method_body(text, "pending_permission_requests")
+    if body is not None:
+        offset, fn_body = body
+        if "self.permission.pending()" not in fn_body or "Ok(self.permission.pending())" in fn_body:
+            add(
+                "R89_PERMISSION_PENDING_QUEUE_FAIL_CLOSED",
+                kernel_mod,
+                line_number(text, offset),
+                "Kernel::pending_permission_requests must return PermissionService::pending directly and propagate pending queue failures",
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(
