@@ -52,8 +52,9 @@ use crate::daemon::federation::read_model::advertised_agents::{
     AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
 };
 #[cfg(test)]
+use crate::daemon::federation::resolver_contract::{GateResult, RecordType};
 use crate::daemon::federation::resolver_contract::{
-    GateResult, NegativeReason, RecordType, ResolveAnswerKind, ResolverReleaseProfile,
+    NegativeReason, ResolveAnswerKind, ResolveType, ResolverReleaseProfile,
 };
 pub use crate::daemon::federation::wire_contract::{
     DiscoverRequest, DiscoverResponse, ListUserDevicesRequest, ListUserDevicesResponse,
@@ -729,6 +730,9 @@ pub(crate) fn handle_namespace_resolve_at(
     catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
     now_unix_ms: i64,
 ) -> Value {
+    if let Err(error) = validate_namespace_resolve_query(query) {
+        return namespace_resolve_input_failure(query, &error);
+    }
     crate::daemon::invocation::routing::route_resolver::DaemonRouteResolver::new(
         registry,
         advertised_agents,
@@ -736,6 +740,63 @@ pub(crate) fn handle_namespace_resolve_at(
     )
     .at(now_unix_ms)
     .resolve_query_json(query)
+}
+
+fn validate_namespace_resolve_query(query: &Value) -> Result<(), String> {
+    let object = query
+        .as_object()
+        .ok_or_else(|| "namespace.resolve request must be a JSON object".to_string())?;
+    let qtype = object
+        .get("qtype")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|qtype| !qtype.is_empty())
+        .ok_or_else(|| "namespace.resolve request missing canonical qtype".to_string())?;
+    let parsed = ResolveType::from_str_name(qtype).ok_or_else(|| {
+        format!("namespace.resolve qtype {qtype:?} is not a canonical ResolveType enum string")
+    })?;
+    if parsed == ResolveType::Unspecified {
+        return Err("namespace.resolve qtype must not be RESOLVE_TYPE_UNSPECIFIED".to_string());
+    }
+    Ok(())
+}
+
+fn namespace_resolve_input_failure(query: &Value, detail: &str) -> Value {
+    let query_name = query
+        .get("query_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let realm = crate::core::ura::parse_ura(query_name)
+        .ok()
+        .map(|parsed| parsed.realm)
+        .filter(|realm| !realm.is_empty())
+        .unwrap_or_else(|| "localhost".to_string());
+    serde_json::json!({
+        "answer_kind": ResolveAnswerKind::Negative.as_str_name(),
+        "next_hop": {
+            "no_route": {}
+        },
+        "records": [],
+        "release_profile": ResolverReleaseProfile::AuthoritativeLocal.as_str_name(),
+        "authority": {
+            "authority_ura": crate::core::ura::hub_ura(&realm),
+            "zone_ref": format!("realm:{realm}"),
+            "algorithm": "daemon-local",
+            "signature": "",
+            "issued_unix_ms": 0,
+        },
+        "cache_policy": {
+            "ttl_ms": 0,
+            "shared_cacheable": false,
+            "retry_after_unix_ms": 0,
+        },
+        "negative": {
+            "reason": NegativeReason::Refused.as_str_name(),
+            "query_name": query_name,
+            "detail": detail,
+        }
+    })
 }
 
 /// Namespace-safe ability summaries for one in-presence owner. Local rows
@@ -2091,7 +2152,7 @@ mod tests {
         let answer = handle_namespace_resolve_at(
             &serde_json::json!({
                 "query_name": owner_ura,
-                "qtype": "ROUTE",
+                "qtype": "RESOLVE_TYPE_ROUTE",
                 "ability_name": "agent.list",
             }),
             &registry,
@@ -2109,6 +2170,69 @@ mod tests {
             NegativeReason::Nodata.as_str_name()
         );
         assert_eq!(answer["next_hop"]["no_route"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn namespace_resolve_rejects_missing_qtype_without_guessing_route_shape() {
+        let registry = PresenceRegistry::new();
+        let owner_ura = "easynet:///r/realm/device/dev-1";
+        registry.insert(owner_ura.to_string(), make_dispatch_sender());
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
+        let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, "agent.list")
+            .expect("device ability ura");
+        catalog.upsert_projection(projection_row_for(
+            owner_ura,
+            vec![projection_summary(owner_ura, &ability_ura, "agent", "list")],
+        ));
+
+        let answer = handle_namespace_resolve_at(
+            &serde_json::json!({
+                "query_name": owner_ura,
+                "ability_name": "agent.list",
+            }),
+            &registry,
+            None,
+            Some(&catalog),
+            1_714_493_100_000,
+        );
+
+        assert_eq!(
+            answer["answer_kind"],
+            ResolveAnswerKind::Negative.as_str_name()
+        );
+        assert_eq!(
+            answer["negative"]["reason"],
+            NegativeReason::Refused.as_str_name()
+        );
+        assert!(answer["negative"]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("missing canonical qtype")));
+        assert!(answer.get("ability_ura").is_none());
+    }
+
+    #[test]
+    fn namespace_resolve_rejects_short_qtype_aliases_at_public_ingress() {
+        let registry = PresenceRegistry::new();
+        let answer = handle_namespace_resolve_at(
+            &serde_json::json!({
+                "query_name": "easynet:///r/realm/device/dev-1",
+                "qtype": "ROUTE",
+                "ability_name": "agent.list",
+            }),
+            &registry,
+            None,
+            None,
+            1_714_493_100_000,
+        );
+
+        assert_eq!(
+            answer["answer_kind"],
+            ResolveAnswerKind::Negative.as_str_name()
+        );
+        assert!(answer["negative"]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("not a canonical ResolveType enum string")));
     }
 
     #[test]

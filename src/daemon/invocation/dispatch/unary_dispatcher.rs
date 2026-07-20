@@ -41,6 +41,7 @@ use std::collections::BTreeMap;
 
 use crate::daemon::federation::client::FederationClientError;
 use crate::daemon::federation::directory::now_unix_ms;
+use crate::daemon::federation::resolver_contract::ResolveType;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::decision::SignatureDecisionReason;
 use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
@@ -1438,6 +1439,7 @@ impl UnaryDispatcher {
 
         let request: federation_wrappers::NamespaceProxyResolveRequest =
             parse_json_args(arguments)?;
+        validate_namespace_proxy_resolve_request(&request)?;
         let Some(client) = self.federation.client.as_ref() else {
             return encode_json_payload(&namespace_proxy_resolve_empty_answer(&request));
         };
@@ -1972,8 +1974,7 @@ fn namespace_proxy_resolve_peer_arguments(
 ) -> Result<Vec<u8>, Status> {
     serde_json::to_vec(&serde_json::json!({
         "query_name": non_empty_json_string(&request.query_name),
-        "qtype": non_empty_json_string(&request.qtype)
-            .unwrap_or_else(|| "RESOLVE_TYPE_DIRECTORY_LISTING".to_string()),
+        "qtype": request.qtype.trim(),
         "caller_ura": non_empty_json_string(&request.caller_ura),
         "subject_ura": non_empty_json_string(&request.subject_ura),
         "realm_hint": non_empty_json_string(&request.realm_hint),
@@ -1984,6 +1985,28 @@ fn namespace_proxy_resolve_peer_arguments(
             "namespace.proxy_resolve: encode peer request: {err}"
         ))
     })
+}
+
+fn validate_namespace_proxy_resolve_request(
+    request: &federation_wrappers::NamespaceProxyResolveRequest,
+) -> Result<(), Status> {
+    let qtype = request.qtype.trim();
+    if qtype.is_empty() {
+        return Err(Status::invalid_argument(
+            "namespace.proxy_resolve: request missing canonical qtype",
+        ));
+    }
+    let parsed = ResolveType::from_str_name(qtype).ok_or_else(|| {
+        Status::invalid_argument(format!(
+            "namespace.proxy_resolve: qtype {qtype:?} is not a canonical ResolveType enum string"
+        ))
+    })?;
+    if parsed == ResolveType::Unspecified {
+        return Err(Status::invalid_argument(
+            "namespace.proxy_resolve: qtype must not be RESOLVE_TYPE_UNSPECIFIED",
+        ));
+    }
+    Ok(())
 }
 
 fn namespace_proxy_resolve_empty_answer(

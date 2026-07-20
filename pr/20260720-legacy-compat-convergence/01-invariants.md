@@ -164,3 +164,8 @@
   only until the daemon proves the device with a signed health probe; failed
   probes may be reported as unavailable evidence but must not enter selectable
   `nodes` or return stale ability summaries.
+- Namespace resolver ingress must be schema-bound before route selection. The
+  public `namespace.resolve` and `namespace.proxy_resolve` daemon abilities
+  require an explicit canonical `ResolveType` enum string; missing, empty,
+  unspecified, numeric, or shorthand qtype values must fail closed instead of
+  being inferred from `query_name` / `ability_name`.

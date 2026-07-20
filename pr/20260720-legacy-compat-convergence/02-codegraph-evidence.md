@@ -1698,3 +1698,25 @@ Evidence will be appended after indexing and focused impact queries.
   successful signed probe, while preserving failed probe evidence for
   diagnostics. `resolve_device_record` rejects unrouteable remote devices
   before returning stale `ability_summaries`.
+
+## 2026-07-21 Namespace resolver qtype ingress audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "namespace.resolve qtype query_name ability_name default infer empty string
+  route directory fallback"` identified the public resolver boundary across
+  `handle_namespace_resolve_at`, `DaemonRouteResolver::resolve_query_json`,
+  `NamespaceProxyResolveRequest`, and `namespace_proxy_resolve_peer_arguments`.
+- Targeted source inspection found two compatibility seams. Local
+  `namespace.resolve` inferred the resolve kind when `qtype` was missing, and
+  `namespace.proxy_resolve` defaulted missing `qtype` to
+  `RESOLVE_TYPE_DIRECTORY_LISTING` before forwarding to peers.
+- The root abstraction problem was treating resolver input shape as a
+  convenience envelope. `qtype` selects the resolver state machine; deriving it
+  from `query_name` / `ability_name` allows incomplete product tuples to
+  continue into route selection and makes bad product ingress look like
+  ordinary route invisibility.
+- After the change, public resolver ingress validates canonical `ResolveType`
+  enum strings before dispatch or peer fanout. Missing, empty, unspecified, or
+  shorthand qtype values fail closed with typed refused errors; the lower
+  resolver object remains a pure route/directory engine once it receives
+  schema-bound input.

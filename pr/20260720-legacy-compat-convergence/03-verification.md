@@ -1721,3 +1721,33 @@ Commands and outcomes will be appended after implementation.
   SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
   tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
   (`canonical-runtime-convergence-v2: OK`).
+
+## 2026-07-21 Namespace resolver qtype ingress
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "namespace.resolve qtype query_name ability_name default infer empty string
+  route directory fallback"` — PASS; reports public resolver ingress,
+  resolver state selection, and proxy forwarding.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q namespace_resolve --lib`
+  — PASS (`7 passed`); includes missing-qtype and shorthand-qtype rejection at
+  local public ingress.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q
+  invoke_rejects_namespace_proxy_resolve_missing_qtype --lib` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q
+  invoke_dispatches_namespace_proxy_resolve_to_typed_peer_surface --lib` —
+  PASS; proves canonical proxy qtype still forwards to peer
+  `namespace.resolve`.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query
+  "validate_namespace_resolve_query"` — PASS; indexed local ingress validator.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query
+  "validate_namespace_proxy_resolve_request"` — PASS; indexed proxy ingress
+  validator.

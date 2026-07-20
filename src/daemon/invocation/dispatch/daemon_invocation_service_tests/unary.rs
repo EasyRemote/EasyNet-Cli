@@ -2015,6 +2015,32 @@ async fn invoke_rejects_namespace_proxy_resolve_legacy_camel_case_input_aliases(
 }
 
 #[tokio::test]
+async fn invoke_rejects_namespace_proxy_resolve_missing_qtype() {
+    let svc = make_service();
+
+    let error = expect_canonical_in_band_failure(
+        svc.invoke(invoke_request(
+            ABILITY_NAMESPACE_PROXY_RESOLVE,
+            r#"{
+                "peer_hub_urls":[],
+                "query_name":"easynet:///r/peer-realm/device/",
+                "caller_ura":"easynet:///r/local-realm/authority",
+                "subject_ura":"easynet:///r/local-realm/user/alice",
+                "realm_hint":"peer-realm"
+            }"#,
+        ))
+        .await,
+        axon_sdk::invocation::ErrorCode::RequestPayloadInvalid,
+        "namespace.proxy_resolve must reject missing qtype before defaulting to directory listing",
+    );
+    assert!(
+        error.message.contains("missing canonical qtype"),
+        "rejection must name the missing canonical qtype; got: {}",
+        error.message
+    );
+}
+
+#[tokio::test]
 async fn invoke_dispatches_federation_resolve_key_returns_pubkey_when_present() {
     // PR-N2 commit 2/N: peer-side `federation.resolve_key`
     // surfaces the local trust anchor's `public_key_b64` for

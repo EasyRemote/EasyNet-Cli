@@ -519,3 +519,8 @@ Decisions will be appended as root-fork choices are made.
   signed health route to that owner. Probe-failed rows are preserved under
   `unavailable_nodes` / network-health diagnostics and explicit
   `node.describe` fails closed instead of returning stale ability summaries.
+- Treat `qtype` as the public namespace resolver state-machine selector, not
+  a convenience hint. `namespace.resolve` and `namespace.proxy_resolve` must
+  reject missing, empty, unspecified, numeric, or shorthand qtype values before
+  route selection or peer fanout; products must submit the canonical
+  `ResolveType` enum string that describes the operation they intend.
