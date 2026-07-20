@@ -2062,3 +2062,26 @@ Evidence will be appended after indexing and focused impact queries.
   first malformed row and validates non-empty id/timestamp/device/ability/file
   facts plus safe capture path segments. CLI, ability handlers, and capture
   lookup now propagate store errors instead of projecting empty product state.
+
+## 2026-07-21 Global skill pool package inventory audit
+
+- `.codegraph/` remains absent in the checkout; codegraph 1.4.1 is installed
+  but unavailable for indexed queries. Targeted source search identified this
+  seam.
+- `rg -n "scan_global_pool_into|global_skill_record_from_dir|skill_dir_in_global_pool|filter_map|flatten|\\.ok\\(\\)|unwrap_or_default"
+  src/daemon/resources/skills/store.rs
+  src/daemon/ability/builtins/resources/skills/list.rs
+  src/daemon/ability/builtins/resources/skills/publish.rs -S` identified the
+  global skill inventory path: `skill.list` used `scan_global_pool_into`, which
+  walked pool entries with `flatten`; `global_skill_record_from_dir` returned
+  `Option`; `skill_dir_in_global_pool` returned `Option`; missing
+  `SKILL.md` frontmatter name therefore looked the same as "no such skill".
+- The root abstraction problem was conflating optional environment roots with
+  corrupt package state. A missing global pool is a valid empty environment,
+  but a directory with skill package shape is package authority and must not be
+  silently removed from product inventory.
+- After the change, global pool scan and lookup are fallible. Directory entry
+  errors, unreadable pools, unreadable `SKILL.md`, missing frontmatter `name`,
+  and metadata read failures surface as inventory errors. `skill.list` and
+  `skill.publish` now propagate those errors, while non-skill user directories
+  under the global pool remain ignored.

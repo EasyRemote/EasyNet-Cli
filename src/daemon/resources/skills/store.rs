@@ -275,9 +275,8 @@ fn extract_tar_gz(tar_path: &Path, out_dir: &Path) -> anyhow::Result<()> {
 
 fn single_top_dir(dir: &Path) -> anyhow::Result<PathBuf> {
     let mut entries: Vec<PathBuf> = fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .collect();
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
     anyhow::ensure!(
         entries.len() == 1 && entries[0].is_dir(),
         "expected exactly one top-level directory in archive, got {} entries",
@@ -348,26 +347,26 @@ impl GlobalSkillPoolRef {
         global_skill_pool_dirs_for_label(&self.label)
     }
 
-    pub(crate) fn skill_dir(&self, skill_name: &str) -> Option<std::path::PathBuf> {
+    pub(crate) fn skill_dir(&self, skill_name: &str) -> anyhow::Result<Option<std::path::PathBuf>> {
         for pool_dir in self.dirs() {
-            if let Some(path) = skill_dir_in_global_pool(&pool_dir, skill_name) {
-                return Some(path);
+            if let Some(path) = skill_dir_in_global_pool(&pool_dir, skill_name)? {
+                return Ok(Some(path));
             }
         }
-        None
+        Ok(None)
     }
 }
 
 pub(crate) fn global_skill_dir_for(
     layout: AgentSkillLayout,
     skill_name: &str,
-) -> Option<std::path::PathBuf> {
+) -> anyhow::Result<Option<std::path::PathBuf>> {
     for (_label, pool_dir) in global_skill_pools_for(layout) {
-        if let Some(path) = skill_dir_in_global_pool(&pool_dir, skill_name) {
-            return Some(path);
+        if let Some(path) = skill_dir_in_global_pool(&pool_dir, skill_name)? {
+            return Ok(Some(path));
         }
     }
-    None
+    Ok(None)
 }
 
 fn global_skill_pool_dirs_for_label(pool_label: &str) -> Vec<std::path::PathBuf> {
@@ -389,20 +388,33 @@ fn global_skill_pool_dirs_for_label(pool_label: &str) -> Vec<std::path::PathBuf>
     dirs
 }
 
-fn skill_dir_in_global_pool(pool_dir: &Path, skill_name: &str) -> Option<std::path::PathBuf> {
+fn skill_dir_in_global_pool(
+    pool_dir: &Path,
+    skill_name: &str,
+) -> anyhow::Result<Option<std::path::PathBuf>> {
     let direct = pool_dir.join(skill_name);
     if direct
         .file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| !name.starts_with('.'))
         && direct.is_dir()
-        && global_skill_declared_name(&direct).as_deref() == Some(skill_name)
+        && looks_like_skill_dir(&direct)
     {
-        return Some(direct);
+        let declared = required_global_skill_declared_name(&direct)?;
+        if declared == skill_name {
+            return Ok(Some(direct));
+        }
     }
 
-    let entries = fs::read_dir(pool_dir).ok()?;
-    for dir_entry in entries.flatten() {
+    let entries = match fs::read_dir(pool_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => anyhow::bail!("read global skill pool {}: {err}", pool_dir.display()),
+    };
+    for dir_entry in entries {
+        let dir_entry = dir_entry.map_err(|err| {
+            anyhow::anyhow!("scan global skill pool {}: {err}", pool_dir.display())
+        })?;
         let path = dir_entry.path();
         if !path.is_dir() {
             continue;
@@ -414,11 +426,11 @@ fn skill_dir_in_global_pool(pool_dir: &Path, skill_name: &str) -> Option<std::pa
         if !looks_like_skill_dir(&path) {
             continue;
         }
-        if global_skill_declared_name(&path).as_deref() == Some(skill_name) {
-            return Some(path);
+        if required_global_skill_declared_name(&path)? == skill_name {
+            return Ok(Some(path));
         }
     }
-    None
+    Ok(None)
 }
 
 /// Walk a global skill pool and append one synthetic InstallRecord per declared
@@ -434,9 +446,9 @@ pub(crate) fn scan_global_pool_into(
     pool_label: &str,
     pool_dir: &std::path::Path,
     rows: &mut Vec<InstallRecord>,
-) {
+) -> anyhow::Result<()> {
     if !pool_dir.is_dir() {
-        return;
+        return Ok(());
     }
     let entries = match fs::read_dir(pool_dir) {
         Ok(e) => e,
@@ -445,10 +457,13 @@ pub(crate) fn scan_global_pool_into(
                 "[warn] global skill pool {} unreadable: {e}",
                 pool_dir.display()
             );
-            return;
+            anyhow::bail!("global skill pool {} unreadable: {e}", pool_dir.display());
         }
     };
-    for dir_entry in entries.flatten() {
+    for dir_entry in entries {
+        let dir_entry = dir_entry.map_err(|err| {
+            anyhow::anyhow!("scan global skill pool {}: {err}", pool_dir.display())
+        })?;
         let path = dir_entry.path();
         if !path.is_dir() {
             continue;
@@ -466,32 +481,34 @@ pub(crate) fn scan_global_pool_into(
             // user folder under ~/.claude. Silent skip.
             continue;
         }
-        if let Some(record) = global_skill_record_from_dir(agent_name, pool_label, &path) {
+        if let Some(record) = global_skill_record_from_dir(agent_name, pool_label, &path)? {
             rows.push(record);
         }
     }
+    Ok(())
 }
 
 pub(crate) fn global_skill_record_from_dir(
     agent_name: &str,
     pool_label: &str,
     path: &std::path::Path,
-) -> Option<InstallRecord> {
+) -> anyhow::Result<Option<InstallRecord>> {
     if !path.is_dir() || !looks_like_skill_dir(path) {
-        return None;
+        return Ok(None);
     }
-    let dir_name = path.file_name().and_then(|s| s.to_str())?;
+    let Some(dir_name) = path.file_name().and_then(|s| s.to_str()) else {
+        return Ok(None);
+    };
     if dir_name.starts_with('.') {
-        return None;
+        return Ok(None);
     }
-    let skill_md = path.join("SKILL.md");
-    let parsed_name = parse_skill_md_name(&skill_md)?;
+    let metadata = required_global_skill_metadata(path)?;
     let size_bytes = directory_size_bytes(path);
-    let installed_at = file_mtime_iso(path).unwrap_or_default();
+    let installed_at = file_mtime_iso(path)?;
 
-    Some(InstallRecord {
-        name: parsed_name,
-        description: skill_description_from_dir(path),
+    Ok(Some(InstallRecord {
+        name: metadata.name,
+        description: metadata.description,
         agent_id: agent_name.to_string(),
         source: SkillSource {
             // `kind = "global"` distinguishes these from the
@@ -514,18 +531,34 @@ pub(crate) fn global_skill_record_from_dir(
         installed_at,
         last_checked_at: None,
         upgrade_available: false,
-    })
+    }))
 }
 
 fn looks_like_skill_dir(path: &std::path::Path) -> bool {
     path.join("SKILL.md").exists() || path.join("skill.json").exists()
 }
 
-fn global_skill_declared_name(path: &std::path::Path) -> Option<String> {
-    if !path.is_dir() || !looks_like_skill_dir(path) {
-        return None;
-    }
-    parse_skill_md_name(&path.join("SKILL.md"))
+struct SkillMarkdownMetadata {
+    name: String,
+    description: String,
+}
+
+fn required_global_skill_declared_name(path: &std::path::Path) -> anyhow::Result<String> {
+    Ok(required_global_skill_metadata(path)?.name)
+}
+
+fn required_global_skill_metadata(path: &std::path::Path) -> anyhow::Result<SkillMarkdownMetadata> {
+    let skill_md = path.join("SKILL.md");
+    let content = fs::read_to_string(&skill_md)
+        .map_err(|err| anyhow::anyhow!("read {}: {err}", skill_md.display()))?;
+    let name = parse_skill_md_name_from_content(&content)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "global skill package {} must declare frontmatter name in SKILL.md",
+            path.display()
+        )
+    })?;
+    let description = skill_description_from_markdown_content(&content);
+    Ok(SkillMarkdownMetadata { name, description })
 }
 
 pub(crate) fn skill_description_from_dir(path: &std::path::Path) -> String {
@@ -534,9 +567,13 @@ pub(crate) fn skill_description_from_dir(path: &std::path::Path) -> String {
 
 fn skill_description_from_markdown(path: &std::path::Path) -> Option<String> {
     let content = fs::read_to_string(path).ok()?;
+    Some(skill_description_from_markdown_content(&content))
+}
+
+fn skill_description_from_markdown_content(content: &str) -> String {
     if let Some(frontmatter) = skill_md_frontmatter(&content) {
         if let Some(description) = frontmatter_field(frontmatter, "description") {
-            return Some(description);
+            return description;
         }
     }
     content
@@ -544,16 +581,15 @@ fn skill_description_from_markdown(path: &std::path::Path) -> Option<String> {
         .map(str::trim)
         .find(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("---"))
         .map(|line| line.to_string())
+        .unwrap_or_default()
 }
 
-/// Extract the `name:` field from a SKILL.md YAML frontmatter block. Returns
-/// None on parse failure. Global skill pools treat that as an unnamed package,
-/// not as permission to infer public identity from filesystem layout.
-fn parse_skill_md_name(skill_md: &std::path::Path) -> Option<String> {
-    let content = fs::read_to_string(skill_md).ok()?;
+fn parse_skill_md_name_from_content(content: &str) -> anyhow::Result<Option<String>> {
     // Frontmatter is delimited by `---` lines at the top.
-    let frontmatter = skill_md_frontmatter(&content)?;
-    frontmatter_field(frontmatter, "name")
+    let Some(frontmatter) = skill_md_frontmatter(content) else {
+        return Ok(None);
+    };
+    Ok(frontmatter_field(frontmatter, "name"))
 }
 
 fn skill_md_frontmatter(content: &str) -> Option<&str> {
@@ -599,11 +635,14 @@ fn directory_size_bytes(dir: &std::path::Path) -> u64 {
 
 /// ISO-8601 mtime of a path, best-effort. Returns None if the
 /// metadata read fails.
-fn file_mtime_iso(path: &std::path::Path) -> Option<String> {
-    let meta = fs::metadata(path).ok()?;
-    let modified = meta.modified().ok()?;
+fn file_mtime_iso(path: &std::path::Path) -> anyhow::Result<String> {
+    let meta = fs::metadata(path)
+        .map_err(|err| anyhow::anyhow!("read metadata {}: {err}", path.display()))?;
+    let modified = meta
+        .modified()
+        .map_err(|err| anyhow::anyhow!("read modified time {}: {err}", path.display()))?;
     let dt: chrono::DateTime<chrono::Utc> = modified.into();
-    Some(dt.to_rfc3339())
+    Ok(dt.to_rfc3339())
 }
 
 /// new ref into place, and returns the new InstallRecord on success.
@@ -1013,12 +1052,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            pool.skill_dir("directory-name").as_deref(),
+            pool.skill_dir("directory-name").unwrap().as_deref(),
             None,
             "global pool lookup must not treat physical directory names as public skill identity"
         );
         assert_eq!(
-            pool.skill_dir("frontmatter-alias").as_deref(),
+            pool.skill_dir("frontmatter-alias").unwrap().as_deref(),
             Some(skill_dir.as_path())
         );
     }
@@ -1030,9 +1069,10 @@ mod tests {
         fs::create_dir_all(&unnamed).unwrap();
         fs::write(unnamed.join("SKILL.md"), "# No declared name\n").unwrap();
 
+        let error = global_skill_record_from_dir("alice", "claude-global", &unnamed).unwrap_err();
         assert!(
-            global_skill_record_from_dir("alice", "claude-global", &unnamed).is_none(),
-            "global skill rows must not infer semantic package identity from directory names"
+            error.to_string().contains("must declare frontmatter name"),
+            "wrong error: {error}"
         );
 
         fs::write(
@@ -1040,8 +1080,9 @@ mod tests {
             "---\nname: declared-name\ndescription: Declared\n---\n# Declared\n",
         )
         .unwrap();
-        let record =
-            global_skill_record_from_dir("alice", "claude-global", &unnamed).expect("record");
+        let record = global_skill_record_from_dir("alice", "claude-global", &unnamed)
+            .expect("record")
+            .expect("record present");
 
         assert_eq!(record.name, "declared-name");
         assert_eq!(record.source.subpath.as_deref(), Some("directory-name"));
@@ -1054,10 +1095,13 @@ mod tests {
         fs::create_dir_all(&direct).unwrap();
         fs::write(direct.join("SKILL.md"), "# Missing frontmatter name\n").unwrap();
 
+        let error = skill_dir_in_global_pool(dir.path(), "declared-name").unwrap_err();
         assert!(
-            skill_dir_in_global_pool(dir.path(), "declared-name").is_none(),
-            "direct directory matches must still validate SKILL.md declared identity"
+            error.to_string().contains("must declare frontmatter name"),
+            "wrong error: {error}"
         );
+
+        fs::remove_dir_all(&direct).unwrap();
 
         let renamed = dir.path().join("physical-package");
         fs::create_dir_all(&renamed).unwrap();
@@ -1068,7 +1112,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            skill_dir_in_global_pool(dir.path(), "declared-name").as_deref(),
+            skill_dir_in_global_pool(dir.path(), "declared-name")
+                .unwrap()
+                .as_deref(),
             Some(renamed.as_path())
         );
     }

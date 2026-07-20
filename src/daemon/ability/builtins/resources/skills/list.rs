@@ -125,7 +125,7 @@ impl<'a> SkillInventoryBuilder<'a> {
         mut self,
     ) -> anyhow::Result<Vec<crate::daemon::resources::skills::store::InstallRecord>> {
         if let Some(global_pool) = self.scope.global_pool() {
-            self.collect_global_pool(global_pool);
+            self.collect_global_pool(global_pool)?;
             return Ok(self.rows);
         }
 
@@ -137,7 +137,7 @@ impl<'a> SkillInventoryBuilder<'a> {
                 .snapshot
                 .registered_agent_workspace(name, "skill.list")?;
             self.collect_managed_installs(&workspace)?;
-            self.collect_global_pools(name, workspace.skill_layout());
+            self.collect_global_pools(name, workspace.skill_layout())?;
         }
         self.retain_skill_name_filter();
         Ok(self.rows)
@@ -188,43 +188,49 @@ impl<'a> SkillInventoryBuilder<'a> {
         }
     }
 
-    fn collect_global_pools(&mut self, agent_name: &str, layout: AgentSkillLayout) {
+    fn collect_global_pools(
+        &mut self,
+        agent_name: &str,
+        layout: AgentSkillLayout,
+    ) -> anyhow::Result<()> {
         for (label, pool_dir) in
             crate::daemon::resources::skills::store::global_skill_pools_for(layout)
         {
             if self.scope.is_agent_scoped() {
                 self.rows.extend(
                     self.global_pool_cache
-                        .rows_for_agent(agent_name, label, &pool_dir),
+                        .rows_for_agent(agent_name, label, &pool_dir)?,
                 );
             } else if self.emitted_unscoped_global_pools.insert(pool_dir.clone()) {
                 self.rows.extend(
                     self.global_pool_cache
-                        .rows_for_global_pool(label, &pool_dir),
+                        .rows_for_global_pool(label, &pool_dir)?,
                 );
             }
         }
+        Ok(())
     }
 
     fn collect_global_pool(
         &mut self,
         global_pool: &crate::daemon::resources::skills::store::GlobalSkillPoolRef,
-    ) {
+    ) -> anyhow::Result<()> {
         if let Some(skill_name) = self.scope.skill_name.as_deref() {
             self.rows.extend(
                 self.global_pool_cache
-                    .rows_for_global_skill(global_pool, skill_name),
+                    .rows_for_global_skill(global_pool, skill_name)?,
             );
-            return;
+            return Ok(());
         }
         for pool_dir in global_pool.dirs() {
             if self.emitted_unscoped_global_pools.insert(pool_dir.clone()) {
                 self.rows.extend(
                     self.global_pool_cache
-                        .rows_for_global_pool(global_pool.label(), &pool_dir),
+                        .rows_for_global_pool(global_pool.label(), &pool_dir)?,
                 );
             }
         }
+        Ok(())
     }
 }
 
@@ -239,32 +245,35 @@ impl GlobalSkillPoolCache {
         &mut self,
         pool_label: &str,
         pool_dir: &std::path::Path,
-    ) -> Vec<crate::daemon::resources::skills::store::InstallRecord> {
-        self.templates_for(pool_label, pool_dir)
+    ) -> anyhow::Result<Vec<crate::daemon::resources::skills::store::InstallRecord>> {
+        Ok(self
+            .templates_for(pool_label, pool_dir)?
             .iter()
             .cloned()
             .map(|mut row| {
                 row.agent_id = format!("global:{pool_label}");
                 row
             })
-            .collect()
+            .collect())
     }
 
     fn rows_for_global_skill(
         &mut self,
         global_pool: &crate::daemon::resources::skills::store::GlobalSkillPoolRef,
         skill_name: &str,
-    ) -> Vec<crate::daemon::resources::skills::store::InstallRecord> {
-        let Some(skill_dir) = global_pool.skill_dir(skill_name) else {
-            return Vec::new();
+    ) -> anyhow::Result<Vec<crate::daemon::resources::skills::store::InstallRecord>> {
+        let Some(skill_dir) = global_pool.skill_dir(skill_name)? else {
+            return Ok(Vec::new());
         };
-        crate::daemon::resources::skills::store::global_skill_record_from_dir(
-            &global_pool.owner_agent_id(),
-            global_pool.label(),
-            &skill_dir,
+        Ok(
+            crate::daemon::resources::skills::store::global_skill_record_from_dir(
+                &global_pool.owner_agent_id(),
+                global_pool.label(),
+                &skill_dir,
+            )?
+            .into_iter()
+            .collect(),
         )
-        .into_iter()
-        .collect()
     }
 
     fn rows_for_agent(
@@ -272,34 +281,38 @@ impl GlobalSkillPoolCache {
         agent_name: &str,
         pool_label: &str,
         pool_dir: &std::path::Path,
-    ) -> Vec<crate::daemon::resources::skills::store::InstallRecord> {
-        self.templates_for(pool_label, pool_dir)
+    ) -> anyhow::Result<Vec<crate::daemon::resources::skills::store::InstallRecord>> {
+        Ok(self
+            .templates_for(pool_label, pool_dir)?
             .iter()
             .cloned()
             .map(|mut row| {
                 row.agent_id = agent_name.to_string();
                 row
             })
-            .collect()
+            .collect())
     }
 
     fn templates_for(
         &mut self,
         pool_label: &str,
         pool_dir: &std::path::Path,
-    ) -> &Vec<crate::daemon::resources::skills::store::InstallRecord> {
-        self.templates_by_dir
-            .entry(pool_dir.to_path_buf())
-            .or_insert_with(|| {
-                let mut templates = Vec::new();
-                crate::daemon::resources::skills::store::scan_global_pool_into(
-                    "",
-                    pool_label,
-                    pool_dir,
-                    &mut templates,
-                );
-                templates
-            })
+    ) -> anyhow::Result<&Vec<crate::daemon::resources::skills::store::InstallRecord>> {
+        if !self.templates_by_dir.contains_key(pool_dir) {
+            let mut templates = Vec::new();
+            crate::daemon::resources::skills::store::scan_global_pool_into(
+                "",
+                pool_label,
+                pool_dir,
+                &mut templates,
+            )?;
+            self.templates_by_dir
+                .insert(pool_dir.to_path_buf(), templates);
+        }
+        Ok(self
+            .templates_by_dir
+            .get(pool_dir)
+            .expect("global skill pool template inserted"))
     }
 }
 
@@ -549,13 +562,17 @@ mod tests {
         .expect("skill md");
 
         let mut cache = GlobalSkillPoolCache::default();
-        let first = cache.rows_for_agent("alice", "claude-global", dir.path());
+        let first = cache
+            .rows_for_agent("alice", "claude-global", dir.path())
+            .expect("first scan");
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].agent_id, "alice");
         assert_eq!(first[0].name, "summarize");
 
         std::fs::remove_file(skill_dir.join("SKILL.md")).expect("remove marker");
-        let second = cache.rows_for_agent("bob", "claude-global", dir.path());
+        let second = cache
+            .rows_for_agent("bob", "claude-global", dir.path())
+            .expect("cached projection");
         assert_eq!(
             second.len(),
             1,
@@ -577,11 +594,31 @@ mod tests {
         .expect("skill md");
 
         let mut cache = GlobalSkillPoolCache::default();
-        let rows = cache.rows_for_global_pool("claude-global", dir.path());
+        let rows = cache
+            .rows_for_global_pool("claude-global", dir.path())
+            .expect("global pool rows");
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].agent_id, "global:claude-global");
         assert_eq!(rows[0].name, "summarize");
+    }
+
+    #[test]
+    fn global_skill_pool_cache_rejects_corrupt_skill_package() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = dir.path().join("broken");
+        std::fs::create_dir_all(&skill_dir).expect("skill dir");
+        std::fs::write(skill_dir.join("SKILL.md"), "# Missing declared name\n").expect("skill md");
+
+        let mut cache = GlobalSkillPoolCache::default();
+        let error = cache
+            .rows_for_global_pool("claude-global", dir.path())
+            .expect_err("corrupt skill package must not disappear");
+
+        assert!(
+            error.to_string().contains("must declare frontmatter name"),
+            "wrong error: {error}"
+        );
     }
 
     #[test]
@@ -656,6 +693,23 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["agent_id"], "global:claude-global");
         assert_eq!(items[0]["name"], "summarize");
+    }
+
+    #[test]
+    fn list_handler_rejects_corrupt_global_skill_package() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let home = std::path::PathBuf::from(std::env::var("HOME").expect("home"));
+        let skill_dir = home.join(".claude").join("skills").join("broken");
+        std::fs::create_dir_all(&skill_dir).expect("skill dir");
+        std::fs::write(skill_dir.join("SKILL.md"), "# Missing declared name\n").expect("skill md");
+
+        let error = handle(json!({"owner_agent_id": "global:claude-global"}))
+            .expect_err("corrupt global skill package must fail inventory");
+
+        assert!(
+            error.to_string().contains("must declare frontmatter name"),
+            "wrong error: {error}"
+        );
     }
 
     #[test]

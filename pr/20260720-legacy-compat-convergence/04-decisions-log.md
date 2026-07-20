@@ -670,3 +670,15 @@ Decisions will be appended as root-fork choices are made.
 - Treat the clipboard tracker as a consumer of Context config authority. If
   `config.json` is corrupt, the tracker does not capture and does not rewrite
   the file; it reports the unavailable config and retries later.
+- Treat global skill pool roots and global skill packages as different states.
+  A missing pool directory is an optional environment absence. A directory
+  inside a pool that has skill package shape is package state and must declare
+  semantic identity in `SKILL.md` frontmatter; if it is corrupt, inventory and
+  publish lookup fail instead of projecting a smaller successful skill list.
+- Keep global skill lookup and global skill listing on the same authority
+  parser. `skill.list`, `skill.publish`, and exact `global:<pool>` lookup now
+  use fallible global-pool APIs so a corrupt `SKILL.md` cannot be interpreted
+  as "skill not found" on one path and an operator warning on another.
+- Preserve non-skill user directories under global pool roots as ignorable
+  environment noise. The fail-closed rule starts only after a directory has
+  skill package shape (`SKILL.md` / `skill.json`).

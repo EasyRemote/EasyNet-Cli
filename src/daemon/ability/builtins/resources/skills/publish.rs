@@ -647,7 +647,7 @@ fn skill_dir_candidates_for(
     root: &Path,
     layout: AgentSkillLayout,
     skill_name: &str,
-) -> Vec<PathBuf> {
+) -> anyhow::Result<Vec<PathBuf>> {
     let mut candidates = match layout {
         AgentSkillLayout::ClaudeCode => vec![
             root.join(".claude").join("skills").join(skill_name),
@@ -658,18 +658,18 @@ fn skill_dir_candidates_for(
         }
     };
     if let Some(global_dir) =
-        crate::daemon::resources::skills::store::global_skill_dir_for(layout, skill_name)
+        crate::daemon::resources::skills::store::global_skill_dir_for(layout, skill_name)?
     {
         if !candidates.iter().any(|candidate| candidate == &global_dir) {
             candidates.push(global_dir);
         }
     }
-    candidates
+    Ok(candidates)
 }
 
 fn resolve_skill_dir(owner_id: &str, skill_name: &str, verb: &str) -> anyhow::Result<PathBuf> {
     let (owner_root, layout) = resolve_owner_root_and_layout(owner_id)?;
-    for candidate in skill_dir_candidates_for(&owner_root, layout, skill_name) {
+    for candidate in skill_dir_candidates_for(&owner_root, layout, skill_name)? {
         if candidate.is_dir() {
             return Ok(candidate);
         }
@@ -688,7 +688,7 @@ fn resolve_readable_skill_dir(
     if let Some(global_pool) =
         crate::daemon::resources::skills::store::GlobalSkillPoolRef::parse_owner_id(owner_id, verb)?
     {
-        if let Some(path) = global_pool.skill_dir(skill_name) {
+        if let Some(path) = global_pool.skill_dir(skill_name)? {
             return Ok(path);
         }
         anyhow::bail!(

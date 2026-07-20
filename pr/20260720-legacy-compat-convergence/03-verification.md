@@ -2155,3 +2155,29 @@ Commands and outcomes will be appended after implementation.
   SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
   tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
   (`canonical-runtime-convergence-v2: OK`).
+
+## 2026-07-21 Global skill pool package inventory
+
+- `rg -n
+  "scan_global_pool_into|global_skill_record_from_dir|skill_dir_in_global_pool|filter_map|flatten|\\.ok\\(\\)|unwrap_or_default"
+  src/daemon/resources/skills/store.rs
+  src/daemon/ability/builtins/resources/skills/list.rs
+  src/daemon/ability/builtins/resources/skills/publish.rs -S` — PASS for seam
+  identification; found the global pool `Option` / `flatten` paths that hid
+  corrupt skill packages.
+- `cargo test -q daemon::resources::skills::store --lib` — PASS (`24 passed`);
+  covers declared-name lookup, corrupt package rejection, and archive top-dir
+  scan behavior after removing entry `filter_map`.
+- `cargo test -q resources::skills::list --lib` — PASS (`11 passed`);
+  includes cache-level and handler-level rejection of global skill packages
+  with missing frontmatter `name`.
+- `cargo check --lib --bins` — PASS after migrating `skill.list` and
+  `skill.publish` global-pool lookup to fallible APIs.
+- `cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS
+  (`architecture-convergence: OK`).
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).

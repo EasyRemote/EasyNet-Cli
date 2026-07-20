@@ -256,3 +256,9 @@
   unknown fields, blank authority fields, unsafe capture file paths, and
   malformed JSONL rows must not become disabled tracking, empty folders,
   empty favorites, skipped captures, or "capture not found".
+- Global skill pool directories are optional environment roots, but directories
+  inside them that have skill package shape are package authority. Missing
+  pools may return no rows; corrupt skill packages must not disappear from
+  `skill.list` or `skill.publish` lookup as "not installed". `SKILL.md`
+  must be readable and declare frontmatter `name`; directory entry scan
+  errors and metadata errors must surface as unavailable inventory state.
