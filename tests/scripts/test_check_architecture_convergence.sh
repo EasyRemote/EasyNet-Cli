@@ -117,6 +117,58 @@ fn local_agent_ura(agent: &str) -> anyhow::Result<String> {
     snapshot.hosted_llm_agent_ura(agent).map(str::to_string).ok_or_else(|| anyhow::anyhow!("missing"))
 }
 EOF
+  cat >"$CLI/src/cli/commands/groups/device.rs" <<'EOF'
+struct DeviceLocalIdentity {
+    realm: String,
+    node_id: String,
+}
+
+impl DeviceLocalIdentity {
+    fn from_credentials(creds: &Credentials) -> anyhow::Result<Self> {
+        Ok(Self {
+            realm: creds.realm_str().trim().to_string(),
+            node_id: creds.node_id.trim().to_string(),
+        })
+    }
+
+    fn device_ura(&self) -> String {
+        crate::core::ura::device_ura(&self.realm, &self.node_id)
+    }
+}
+
+fn load_local_device_identity(operation: &str) -> anyhow::Result<DeviceLocalIdentity> {
+    let creds = crate::daemon::persistence::config::load_credentials()
+        .with_context(|| format!("{operation} requires complete local device credentials"))?;
+    DeviceLocalIdentity::from_credentials(&creds)
+}
+
+fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
+    let local_identity = load_local_device_identity("device remove")?;
+    let target_ura = canonicalize_remove_target_ura(args.node_id.trim())?;
+    let local_ura = local_identity.device_ura();
+    invoke_revoke(&target_ura, "reason", local_ura.as_str())
+}
+
+fn describe_target(node_id: &str) -> anyhow::Result<Value> {
+    let trimmed = node_id.trim();
+    if trimmed.eq_ignore_ascii_case("local") {
+        return invoke_local();
+    }
+    let local_identity = load_local_device_identity("device show")?;
+    match classify_device_show_target(trimmed, &local_identity)? {
+        DeviceShowTarget::Local => invoke_local(),
+        DeviceShowTarget::RemoteDevice(target_ura) => invoke_remote_describe(&target_ura),
+    }
+}
+
+fn classify_device_show_target(raw: &str, local_identity: &DeviceLocalIdentity) -> anyhow::Result<DeviceShowTarget> {
+    let target = raw.trim();
+    if target == local_identity.node_id || target == local_identity.device_ura() {
+        return Ok(DeviceShowTarget::Local);
+    }
+    Ok(DeviceShowTarget::RemoteDevice(target.to_string()))
+}
+EOF
   cat >"$CLI/src/daemon/ability/builtins/agents/discover.rs" <<'EOF'
 use crate::daemon::persistence::agent_aggregate::{AgentAggregateRepository, AgentHostedIdentitySnapshot};
 
@@ -6310,6 +6362,46 @@ EOF
 expect_fail \
   "bidi receipt payload data_b64 fallback" \
   "R77_BIDI_RECEIPT_PAYLOAD_PROJECTION"
+
+make_good_fixture
+cat >"$CLI/src/cli/commands/groups/device.rs" <<'EOF'
+fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
+    let creds = crate::daemon::persistence::config::load_credentials().ok();
+    let local_node = creds
+        .as_ref()
+        .map(|c| c.node_id.clone())
+        .unwrap_or_default();
+    let local_tenant = creds.as_ref().map(|c| c.realm.clone()).unwrap_or_default();
+    let local_ura = if !local_tenant.is_empty() && !local_node.is_empty() {
+        crate::core::ura::device_ura(&local_tenant, &local_node)
+    } else {
+        String::new()
+    };
+    if !local_ura.is_empty() {
+        invoke_revoke(args.node_id.as_str(), "reason", local_ura.as_str())?;
+    }
+    Ok(())
+}
+
+fn describe_target(node_id: &str) -> anyhow::Result<Value> {
+    let creds = crate::daemon::persistence::config::load_credentials().ok();
+    let local_node = creds
+        .as_ref()
+        .map(|c| c.node_id.clone())
+        .unwrap_or_default();
+    classify_device_show_target(node_id, &local_node)
+}
+
+fn classify_device_show_target(raw: &str, local_node_id: &str) -> anyhow::Result<DeviceShowTarget> {
+    if raw == local_node_id {
+        return Ok(DeviceShowTarget::Local);
+    }
+    Ok(DeviceShowTarget::RemoteDevice(raw.to_string()))
+}
+EOF
+expect_fail \
+  "device product ingress local identity fallback" \
+  "R94_DEVICE_PRODUCT_INGRESS_REQUIRES_LOCAL_IDENTITY"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

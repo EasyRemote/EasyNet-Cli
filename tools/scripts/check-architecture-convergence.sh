@@ -7507,6 +7507,98 @@ if authority_metadata.exists():
                 )
 
 
+# Rule 94: Product device show/remove must not repair unavailable local
+# pairing identity into empty route/caller facts. Non-local device product
+# ingress needs the local device identity for self-target classification and
+# remote signer/admission context; malformed credentials are unavailable
+# product state, not permission to synthesize empty node/realm/local_ura.
+device_group = cli_root / "src/cli/commands/groups/device.rs"
+if device_group.exists():
+    text = source(device_group)
+    for token, detail in (
+        (
+            "struct DeviceLocalIdentity",
+            "device product ingress must model local identity explicitly",
+        ),
+        (
+            "fn load_local_device_identity",
+            "device product ingress must centralize fallible local credential loading",
+        ),
+        (
+            "fn from_credentials",
+            "device local identity must be built from validated credential facts",
+        ),
+    ):
+        if token not in text:
+            add("R94_DEVICE_PRODUCT_INGRESS_REQUIRES_LOCAL_IDENTITY", device_group, 1, detail)
+
+    for fn_name, detail in (
+        (
+            "run_remove",
+            "device remove must require local device identity instead of defaulting missing credentials",
+        ),
+        (
+            "describe_target",
+            "device show remote/self target resolution must require local device identity",
+        ),
+    ):
+        body_info = rust_method_body(text, fn_name)
+        if body_info is None:
+            add("R94_DEVICE_PRODUCT_INGRESS_REQUIRES_LOCAL_IDENTITY", device_group, 1, f"{fn_name} must remain inspectable")
+            continue
+        offset, body = body_info
+        if "load_local_device_identity(" not in body:
+            add(
+                "R94_DEVICE_PRODUCT_INGRESS_REQUIRES_LOCAL_IDENTITY",
+                device_group,
+                line_number(text, offset),
+                detail,
+            )
+        for pattern, reason in (
+            (
+                "load_credentials().ok()",
+                "device product ingress must not swallow credential load failures",
+            ),
+            (
+                "unwrap_or_default()",
+                "device product ingress must not synthesize empty local identity facts",
+            ),
+            (
+                "String::new()",
+                "device product ingress must not synthesize empty local_ura",
+            ),
+            (
+                "local_ura.is_empty()",
+                "device product ingress must not branch on empty local_ura compatibility state",
+            ),
+        ):
+            if pattern in body:
+                add(
+                    "R94_DEVICE_PRODUCT_INGRESS_REQUIRES_LOCAL_IDENTITY",
+                    device_group,
+                    line_number(text, offset + body.find(pattern)),
+                    reason,
+                )
+
+    classify_body = rust_method_body(text, "classify_device_show_target")
+    if classify_body is None:
+        add(
+            "R94_DEVICE_PRODUCT_INGRESS_REQUIRES_LOCAL_IDENTITY",
+            device_group,
+            1,
+            "device show target classifier must remain inspectable",
+        )
+    else:
+        offset, body = classify_body
+        if "target == local_identity.device_ura()" not in body:
+            add(
+                "R94_DEVICE_PRODUCT_INGRESS_REQUIRES_LOCAL_IDENTITY",
+                device_group,
+                line_number(text, offset),
+                "device show must classify the canonical self Device URA as local instead of routing it remotely",
+            )
+
+
 # Rule 91: C ABI diagnostics descriptor fallback must keep descriptor
 # resolution semantics. A catalog miss is DESCRIPTOR_NOT_FOUND, not generic
 # NOT_FOUND/ABILITY_NOT_FOUND; otherwise products cannot distinguish absent

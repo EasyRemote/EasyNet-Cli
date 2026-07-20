@@ -2106,3 +2106,27 @@ Evidence will be appended after indexing and focused impact queries.
   empty list; unreadable/non-directory API path, directory entry errors, and
   file-type errors fail registration and propagate through
   `register_api_abilities_for_project`.
+
+## 2026-07-21 Device product local identity fallback audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` reported the
+  checkout as not initialized, and the user-provided override path was absent.
+  No new `.codegraph/` index was created; targeted source search was used for
+  this seam.
+- `rg -n "load_credentials\\(\\)\\.ok\\(\\)|unwrap_or_default\\(\\).*local_node|local_tenant|String::new\\(\\).*local_ura|classify_device_show_target\\("
+  src/cli/commands/groups/device.rs -S` identified the remaining product
+  ingress fallback in `device show` / `device remove`: credential load errors
+  were erased with `.ok()`, local node/realm became empty strings, and remote
+  revocation proceeded with an empty `local_ura`.
+- The root abstraction problem was treating local device identity as optional
+  display context while using it to build self-target guards and remote
+  operation authority context. Non-local device inspection/removal is a
+  product runtime operation; missing or malformed credentials are unavailable
+  local identity state, not permission to synthesize empty route/caller facts.
+- After the change, `DeviceLocalIdentity` owns the explicit `(realm, node_id)`
+  state, `load_local_device_identity` is the only product ingress loader, and
+  `device show` / `device remove` fail closed before remote dispatch when
+  local credentials are unavailable. `device show local` remains local-only,
+  and canonical self Device URA is classified as local instead of routed
+  remotely.

@@ -2201,3 +2201,30 @@ Commands and outcomes will be appended after implementation.
   SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
   tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
   (`canonical-runtime-convergence-v2: OK`).
+
+## 2026-07-21 Device product local identity fallback
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — NOT
+  INITIALIZED; no `.codegraph/` index was created for this checkout.
+- `rg -n
+  "load_credentials\\(\\)\\.ok\\(\\)|unwrap_or_default\\(\\).*local_node|local_tenant|String::new\\(\\).*local_ura|classify_device_show_target\\("
+  src/cli/commands/groups/device.rs -S` — PASS; no credentials swallow,
+  empty local identity synthesis, or old classifier signature remains.
+- `cargo test -q cli::commands::groups::device --lib` — PASS (`8 passed`);
+  includes explicit `DeviceLocalIdentity` construction, blank realm/node
+  rejection, canonical self Device URA local classification, bare remote id
+  rejection, and existing `node.describe` schema-bound projections.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  R94 negative fixture for `load_credentials().ok()`, `unwrap_or_default()`,
+  empty `local_ura`, and old local-node-only classifier fallback.
+- `cargo check --lib --bins` — PASS after migrating device show/remove to
+  explicit local identity.
+- `cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS
+  (`architecture-convergence: OK`).
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).

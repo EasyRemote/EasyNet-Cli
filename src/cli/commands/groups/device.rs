@@ -223,29 +223,21 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     // Block self-removal — the operator should use
     // `easynet device reset` for that (the local side of the same
     // operation, which also clears `~/.easynet/credentials.json`).
-    let creds = crate::daemon::persistence::config::load_credentials().ok();
-    let local_node = creds
-        .as_ref()
-        .map(|c| c.node_id.clone())
-        .unwrap_or_default();
-    let local_tenant = creds.as_ref().map(|c| c.realm.clone()).unwrap_or_default();
+    let local_identity = load_local_device_identity("device remove")?;
 
     let trimmed = args.node_id.trim();
-    if !local_node.is_empty() && trimmed == local_node {
+    if trimmed == local_identity.node_id {
         anyhow::bail!(
-            "refusing to revoke this device's own node id ({local_node}); use \
+            "refusing to revoke this device's own node id ({}); use \
              `easynet device reset` to clear local credentials and \
-             deregister cleanly."
+             deregister cleanly.",
+            local_identity.node_id
         );
     }
     let target_ura = canonicalize_remove_target_ura(trimmed)?;
 
-    let local_ura = if !local_tenant.is_empty() && !local_node.is_empty() {
-        crate::core::ura::device_ura(&local_tenant, &local_node)
-    } else {
-        String::new()
-    };
-    if !local_ura.is_empty() && local_ura == target_ura {
+    let local_ura = local_identity.device_ura();
+    if local_ura == target_ura {
         anyhow::bail!(
             "refusing to revoke this device's own URA ({local_ura}); use \
              `easynet device reset` to clear local credentials and \
@@ -316,12 +308,16 @@ fn invoke_revoke(target_ura: &str, _reason: &str, _caller_ura: &str) -> anyhow::
 ///     `node.describe` against that URA.
 fn describe_target(node_id: &str) -> anyhow::Result<Value> {
     let trimmed = node_id.trim();
-    let creds = crate::daemon::persistence::config::load_credentials().ok();
-    let local_node = creds
-        .as_ref()
-        .map(|c| c.node_id.clone())
-        .unwrap_or_default();
-    match classify_device_show_target(trimmed, &local_node)? {
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("local") {
+        return crate::support::platform::local_invoke::invoke_local_ability(
+            "node.describe",
+            serde_json::json!({"node_id": "local"}),
+        )
+        .context("invoke node.describe (local)");
+    }
+
+    let local_identity = load_local_device_identity("device show")?;
+    match classify_device_show_target(trimmed, &local_identity)? {
         DeviceShowTarget::Local => crate::support::platform::local_invoke::invoke_local_ability(
             "node.describe",
             serde_json::json!({"node_id": "local"}),
@@ -346,11 +342,50 @@ enum DeviceShowTarget {
     RemoteDevice(String),
 }
 
-fn classify_device_show_target(raw: &str, local_node_id: &str) -> anyhow::Result<DeviceShowTarget> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DeviceLocalIdentity {
+    realm: String,
+    node_id: String,
+}
+
+impl DeviceLocalIdentity {
+    fn from_credentials(
+        creds: &crate::daemon::persistence::config::Credentials,
+    ) -> anyhow::Result<Self> {
+        let realm = creds.realm_str().trim();
+        let node_id = creds.node_id.trim();
+        if realm.is_empty() {
+            bail!("local device credentials are missing realm");
+        }
+        if node_id.is_empty() {
+            bail!("local device credentials are missing node_id");
+        }
+        Ok(Self {
+            realm: realm.to_string(),
+            node_id: node_id.to_string(),
+        })
+    }
+
+    fn device_ura(&self) -> String {
+        crate::core::ura::device_ura(&self.realm, &self.node_id)
+    }
+}
+
+fn load_local_device_identity(operation: &str) -> anyhow::Result<DeviceLocalIdentity> {
+    let creds = crate::daemon::persistence::config::load_credentials()
+        .with_context(|| format!("{operation} requires complete local device credentials"))?;
+    DeviceLocalIdentity::from_credentials(&creds)
+}
+
+fn classify_device_show_target(
+    raw: &str,
+    local_identity: &DeviceLocalIdentity,
+) -> anyhow::Result<DeviceShowTarget> {
     let target = raw.trim();
     if target.is_empty()
         || target.eq_ignore_ascii_case("local")
-        || (!local_node_id.trim().is_empty() && target == local_node_id.trim())
+        || target == local_identity.node_id
+        || target == local_identity.device_ura()
     {
         return Ok(DeviceShowTarget::Local);
     }
@@ -396,9 +431,33 @@ fn device_show_state(node: &Value) -> anyhow::Result<String> {
 mod tests {
     use super::*;
 
+    fn local_identity() -> DeviceLocalIdentity {
+        DeviceLocalIdentity {
+            realm: "acme".to_string(),
+            node_id: "dev-a".to_string(),
+        }
+    }
+
+    fn complete_credentials() -> crate::daemon::persistence::config::Credentials {
+        crate::daemon::persistence::config::Credentials {
+            node_id: "dev-a".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.example:50051".to_string(),
+            realm: "acme".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".to_string()),
+            user_id: Some("alice-id".to_string()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        }
+    }
+
     #[test]
     fn device_show_rejects_bare_remote_target() {
-        let error = classify_device_show_target("386b1258-3c89-494a-90a2-2321c29bf992", "local")
+        let identity = local_identity();
+        let error = classify_device_show_target("386b1258-3c89-494a-90a2-2321c29bf992", &identity)
             .expect_err("bare remote ids must not be accepted");
 
         let message = error.to_string();
@@ -414,17 +473,51 @@ mod tests {
 
     #[test]
     fn device_show_classifies_local_and_canonical_remote_targets() {
+        let identity = local_identity();
         assert_eq!(
-            classify_device_show_target("local", "dev-a").expect("local"),
+            classify_device_show_target("local", &identity).expect("local"),
             DeviceShowTarget::Local
         );
         assert_eq!(
-            classify_device_show_target("dev-a", "dev-a").expect("self"),
+            classify_device_show_target("dev-a", &identity).expect("self"),
             DeviceShowTarget::Local
         );
         assert_eq!(
-            classify_device_show_target("easynet:///r/acme/device/dev-b", "dev-a").expect("remote"),
+            classify_device_show_target("easynet:///r/acme/device/dev-a", &identity)
+                .expect("self URA"),
+            DeviceShowTarget::Local
+        );
+        assert_eq!(
+            classify_device_show_target("easynet:///r/acme/device/dev-b", &identity)
+                .expect("remote"),
             DeviceShowTarget::RemoteDevice("easynet:///r/acme/device/dev-b".to_string())
+        );
+    }
+
+    #[test]
+    fn local_device_identity_requires_complete_credentials() {
+        let creds = complete_credentials();
+        let identity = DeviceLocalIdentity::from_credentials(&creds).expect("complete credentials");
+        assert_eq!(identity.node_id, "dev-a");
+        assert_eq!(identity.realm, "acme");
+        assert_eq!(identity.device_ura(), "easynet:///r/acme/device/dev-a");
+
+        let mut missing_realm = complete_credentials();
+        missing_realm.realm.clear();
+        let error = DeviceLocalIdentity::from_credentials(&missing_realm)
+            .expect_err("blank realm must fail closed");
+        assert!(
+            error.to_string().contains("missing realm"),
+            "wrong error: {error}"
+        );
+
+        let mut missing_node = complete_credentials();
+        missing_node.node_id.clear();
+        let error = DeviceLocalIdentity::from_credentials(&missing_node)
+            .expect_err("blank node_id must fail closed");
+        assert!(
+            error.to_string().contains("missing node_id"),
+            "wrong error: {error}"
         );
     }
 
