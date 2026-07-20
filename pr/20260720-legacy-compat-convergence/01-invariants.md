@@ -1,0 +1,113 @@
+# Invariants
+
+- No new product-specific abstraction may enter the SDK canonical runtime
+  surface.
+- No second route, proof, admission, receipt, or descriptor authority may remain
+  after callers have migrated.
+- A removed compatibility layer must have its callers migrated in the same
+  change.
+- Edge compatibility may preserve public behavior only by constructing complete
+  descriptor-bound runtime input and delegating to the canonical model.
+- Verification must include the narrow tests for the removed path and at least
+  one architecture/conformance gate that proves the old path cannot reappear.
+- User-role trust is a composite `(user_ura, pubkey)` fact. Runtime code must
+  never resolve a bare user URA into one selected signing key.
+- Descriptor selection at a generic runtime/provider seam must carry an
+  explicit `call_mode`; RPC defaults belong only in higher-level convenience
+  methods before they construct complete tuple input.
+- Session inventory and pointer state must come from the canonical session
+  index only; transcript content files must not become a discovery or repair
+  authority.
+- Runtime lifecycle configuration must be a closed state machine: missing
+  config may select a documented default, but malformed config must fail
+  closed instead of being rewritten to a valid lifecycle state.
+- Canonical resource write surfaces must not infer producer facts. If a blob
+  needs a filename or content type in its public record, the producer must
+  submit that fact explicitly before the runtime stores or projects it.
+- Canonical resource read surfaces must expose one selector model per
+  capability. Product-specific path selectors belong to product abilities such
+  as Pages, not to the generic content-addressed Files resource surface.
+- Product federation directory reads must be user-scoped by default. An
+  unfiltered cross-realm directory read is an explicit operator/audit capability,
+  not a product fallback and not a shared helper default.
+- If a caller supplies `local_user_id`, daemon dispatch must either apply the
+  federated user-binding filter or fail closed. Missing filter dependencies
+  (`FederatedBindingsStore`, `session_realm`) are invalid lifecycle assembly,
+  not permission to return the unfiltered directory.
+- Durable agent specs must be self-describing. A missing `agent.toml`
+  `schema_version` is retired pre-stamp local state and must fail closed;
+  current writers and test fixtures must use the canonical `AgentSpec` writer
+  instead of hand-written implicit-schema TOML.
+- Global skill pool identity must be declared by package metadata. `SKILL.md`
+  frontmatter `name` is the public semantic package identity; filesystem
+  directory names are physical source subpaths only and must not be used as
+  fallback skill names.
+- Product fleet status must not project directory read failures as empty
+  directory state. Signer, admission, namespace, or descriptor failures are
+  runtime facts that must surface as unavailable/error, not as zero peers.
+- Product device inspection must not synthesize remote targets from bare ids
+  or repair missing ability facts from the local catalogue. Remote device
+  inspection requires a canonical Device URA, and hosted abilities must come
+  from the `node.describe` payload returned by the inspected device.
+- Product device removal must not synthesize revocation targets from bare ids
+  or current-pairing realm. Removing a remote substrate requires an explicit
+  canonical Device URA; self-removal remains the separate local `device reset`
+  lifecycle.
+- Product plugin runtime/status surfaces must be daemon-authoritative. The CLI
+  may mutate the installed package index while the daemon is offline, but
+  `plugin list` and `plugin status` must not project local package plans,
+  companion manager observations, or stale daemon/local disagreement into
+  runtime status facts.
+- Operator federation peer inspection may treat a missing config file as an
+  empty local configuration, but an existing unreadable or malformed
+  daemon-config/realm-trust file is unavailable state. It must not be projected
+  as "no peers" or "no trusted hubs".
+- Product doctor agent inspection must distinguish an empty daemon-owned agent
+  registry from an unavailable daemon-owned agent registry. `agent.list`
+  failures and invalid daemon projection rows are runtime facts, not permission
+  to synthesize default local CLI probe results.
+- Local CLI probing is a product diagnostic over declared runtime kinds, not a
+  fallback descriptor authority. `external` agents have no default local binary
+  probe, and `codex-app-server` maps explicitly to the Codex CLI probe instead
+  of falling through a "not claude means codex" branch.
+- Product device inspection must treat `node.describe` as a schema-bound
+  projection. Device show may render unknown string states, but it must not
+  translate missing or numeric legacy SDK enum state into display facts.
+- Product ability catalogue grouping/classification must be owner-authoritative.
+  `owner_ura` is the section and KIND classifier; legacy handler hints such as
+  `fulfilled_by` may not override the canonical owner kind.
+- Product device list must treat federated `DirectoryEntry` rows as
+  schema-bound input. A projected device row requires a canonical Device URA,
+  explicit matching `node_id`, and explicit supported status; missing fields,
+  mismatched ids, or unknown status must fail closed instead of rendering empty
+  ids, active state, or `UNKNOWN`.
+- PrincipalLifecycle CLI key binding must not accept anonymous external public
+  key projections. When the operator supplies public key material directly
+  instead of using daemon-managed custody, the binding request must include an
+  explicit non-empty key id.
+- PrincipalLifecycle CLI commands must not synthesize proof references from
+  idempotency keys. `proof.reference` is proof evidence supplied by the caller,
+  not a receipt/idempotency namespace repair.
+- FFI externally supplied caller signatures must carry explicit non-empty
+  `key_id_hint` identity material. `signer_public_key_base64` is key material,
+  not a key identity, and the FFI boundary must not project it into
+  `key_id_hint` or default missing identity to an empty string.
+- Authority admission must verify complete canonical tuples before comparing
+  authority facts. Missing or blank caller/callee/subject URAs are
+  `ENVELOPE_INCOMPLETE` input defects, not empty-string identities that can be
+  reclassified as caller, subject, or audience mismatches.
+- Descriptor catalog resolution must fail closed on schema-incomplete matching
+  rows. A row that matches the requested ability/call mode but lacks
+  descriptor_ref, owner_ura, ability_ura, or public name is invalid provider
+  output, not a "descriptor not found" miss and not a row that may be projected
+  with empty strings.
+- Runtime caller signer custody must be classified explicitly before any
+  key-service lookup. User callers use the managed, subject-bound signing
+  inventory; Device, Authority, and Agent callers use runtime-owner custody;
+  malformed or non-principal URAs fail closed instead of being tried as owner
+  key names.
+- Device/Both daemon boot must not publish Invocation readiness unless the
+  paired User URA is present, has a managed runtime signing key, and that key's
+  public projection has been registered into runtime trust. Missing paired User
+  identity is invalid boot state, not permission to defer repair until a
+  remote descriptor invocation fails.

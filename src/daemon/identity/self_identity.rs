@@ -235,21 +235,83 @@ impl CanonicalSigner for RuntimeSigningIdentity {
 pub fn load_runtime_caller_signer(
     owner_ura: impl Into<String>,
 ) -> Result<Arc<dyn CanonicalSigner>, SelfIdentityError> {
-    let owner_ura = owner_ura.into();
-    let provider = Arc::new(KeyringClient::default_path());
-    if is_user_owner_ura(&owner_ura) {
-        return ManagedRuntimeSigningIdentity::load_user(owner_ura, provider)
-            .map(|signer| Arc::new(signer) as Arc<dyn CanonicalSigner>);
+    RuntimeCallerSignerResolver::default_path().load(owner_ura)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeCallerCustody {
+    ManagedUser,
+    RuntimeOwner,
+}
+
+impl RuntimeCallerCustody {
+    fn classify(owner_ura: &str) -> Result<Self, SelfIdentityError> {
+        let owner_ura = owner_ura.trim();
+        if owner_ura.is_empty() {
+            return Err(SelfIdentityError::InvalidOwner);
+        }
+        let parsed = crate::core::ura::parse_ura(owner_ura).map_err(|error| {
+            SelfIdentityError::Rejected {
+                kind: "invalid_argument".into(),
+                message: format!("runtime caller signer owner URA is invalid: {error}"),
+            }
+        })?;
+        match parsed.kind {
+            crate::core::ura::URAKind::User => Ok(Self::ManagedUser),
+            crate::core::ura::URAKind::Agent
+            | crate::core::ura::URAKind::Device
+            | crate::core::ura::URAKind::Authority => Ok(Self::RuntimeOwner),
+            other => Err(SelfIdentityError::Rejected {
+                kind: "invalid_argument".into(),
+                message: format!(
+                    "runtime caller signer requires a principal owner URA, got {other:?}"
+                ),
+            }),
+        }
     }
-    let self_identity_provider: Arc<dyn SelfIdentity> = provider.clone();
-    RuntimeSigningIdentity::load(owner_ura, self_identity_provider)
-        .map(|signer| Arc::new(signer) as Arc<dyn CanonicalSigner>)
+}
+
+struct RuntimeCallerSignerResolver {
+    provider: Arc<KeyringClient>,
+}
+
+impl RuntimeCallerSignerResolver {
+    fn default_path() -> Self {
+        Self {
+            provider: Arc::new(KeyringClient::default_path()),
+        }
+    }
+
+    #[cfg(test)]
+    fn new(provider: Arc<KeyringClient>) -> Self {
+        Self { provider }
+    }
+
+    fn load(
+        &self,
+        owner_ura: impl Into<String>,
+    ) -> Result<Arc<dyn CanonicalSigner>, SelfIdentityError> {
+        let owner_ura = owner_ura.into();
+        let owner_ura = owner_ura.trim();
+        match RuntimeCallerCustody::classify(owner_ura)? {
+            RuntimeCallerCustody::ManagedUser => {
+                ManagedRuntimeSigningIdentity::load_user(owner_ura, Arc::clone(&self.provider))
+                    .map(|signer| Arc::new(signer) as Arc<dyn CanonicalSigner>)
+            }
+            RuntimeCallerCustody::RuntimeOwner => {
+                let self_identity_provider: Arc<dyn SelfIdentity> = self.provider.clone();
+                RuntimeSigningIdentity::load(owner_ura.to_string(), self_identity_provider)
+                    .map(|signer| Arc::new(signer) as Arc<dyn CanonicalSigner>)
+            }
+        }
+    }
 }
 
 fn is_user_owner_ura(owner_ura: &str) -> bool {
-    crate::core::ura::parse_ura(owner_ura)
-        .map(|parsed| parsed.kind == crate::core::ura::URAKind::User)
-        .unwrap_or(false)
+    matches!(
+        RuntimeCallerCustody::classify(owner_ura),
+        Ok(RuntimeCallerCustody::ManagedUser)
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1326,6 +1388,73 @@ mod tests {
             .unwrap()
             .verify(b"canonical user call", &signature)
             .expect("managed signature verifies");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn runtime_caller_custody_classifies_user_as_managed_identity() {
+        assert_eq!(
+            RuntimeCallerCustody::classify("easynet:///r/acme/user/alice").unwrap(),
+            RuntimeCallerCustody::ManagedUser
+        );
+        assert_eq!(
+            RuntimeCallerCustody::classify("easynet:///r/acme/device/dev-1").unwrap(),
+            RuntimeCallerCustody::RuntimeOwner
+        );
+        assert_eq!(
+            RuntimeCallerCustody::classify("easynet:///r/acme/authority").unwrap(),
+            RuntimeCallerCustody::RuntimeOwner
+        );
+        assert!(matches!(
+            RuntimeCallerCustody::classify("not-a-ura"),
+            Err(SelfIdentityError::Rejected { kind, .. }) if kind == "invalid_argument"
+        ));
+        assert!(matches!(
+            RuntimeCallerCustody::classify("easynet:///r/acme/resource/device.dev-1/blob"),
+            Err(SelfIdentityError::Rejected { kind, .. }) if kind == "invalid_argument"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_caller_signer_resolver_does_not_fall_back_from_user_to_owner_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("key-service.sock");
+        let vault_path = temp.path().join("key-service.enc");
+        let requested_user_ura = "easynet:///r/acme/user/alice";
+        let other_user_ura = "easynet:///r/acme/user/bob";
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let socket_for_server = socket.clone();
+        let server = std::thread::spawn(move || {
+            crate::daemon::keyring::service::run_test_unix_key_service_with_purpose(
+                socket_for_server,
+                vault_path,
+                "test-passphrase".to_string(),
+                other_user_ura.to_string(),
+                USER_SIGNING_CLI_PURPOSE.to_string(),
+                1,
+                ready_tx,
+            );
+        });
+        ready_rx
+            .recv()
+            .expect("test key service reports readiness")
+            .expect("test key service starts");
+        let resolver = RuntimeCallerSignerResolver::new(Arc::new(KeyringClient::new(socket)));
+        let error = match resolver.load(requested_user_ura) {
+            Ok(_) => panic!("missing managed user key must fail"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+
+        assert!(
+            message.contains("managed user signing key not found"),
+            "error must stay in the managed user custody model: {message}"
+        );
+        assert!(
+            !message.contains("keyring entry not found"),
+            "User caller must not fall back to runtime-owner key lookup: {message}"
+        );
         server.join().unwrap();
     }
 

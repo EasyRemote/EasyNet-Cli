@@ -1062,10 +1062,9 @@ fn register_paired_user_runtime_signer(
             config.realm()
         );
     }
-    let user_ura = match credentials.user_ura() {
-        Ok(user_ura) => user_ura,
-        Err(_) => return Ok(()),
-    };
+    let user_ura = credentials
+        .user_ura()
+        .context("paired device credentials must include a canonical User URA")?;
     let client = crate::daemon::identity::self_identity::KeyringClient::default_path();
     let ensured = crate::daemon::identity::self_identity::ensure_user_runtime_signing_identity(
         &client, &user_ura,
