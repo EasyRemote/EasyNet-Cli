@@ -42,8 +42,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-#[cfg(feature = "axon-pb")]
-use anyhow::Context;
+use anyhow::{bail, Context};
 use clap::Args;
 use console::style;
 use serde_json::{json, Value};
@@ -82,7 +81,7 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
         .into_iter()
         .filter(is_device_entry)
         .map(|e| project_directory_entry(e, Some(self_ura.as_str())))
-        .collect();
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     let filtered: Vec<Value> = nodes
         .into_iter()
@@ -175,36 +174,33 @@ fn is_device_entry(entry: &Value) -> bool {
 
 /// Project a `DirectoryEntry` into the row shape `print_device`
 /// + `node::is_online` / `node::node_state_str` already consume.
-/// The mapping is straight-line: `status: "active"` → `state:
-/// "HEALTHY"`, `status: "stale"` → `state: "SUSPECT"` (sweep-
-/// candidate), `status: "draining"` → `state: "DRAINING"`. Any
-/// other value lands as `state: "UNKNOWN"` rather than crashing
-/// the renderer.
-fn project_directory_entry(entry: Value, self_ura: Option<&str>) -> Value {
-    let agent_ura = entry
-        .get("agent_ura")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let node_id = entry
-        .get("node_id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+/// The mapping is schema-bound: canonical Device URA, matching
+/// `node_id`, and explicit supported `status` are required before
+/// the row can be rendered.
+fn project_directory_entry(entry: Value, self_ura: Option<&str>) -> anyhow::Result<Value> {
+    let agent_ura = required_string_field(&entry, "agent_ura")?;
+    let parsed = crate::core::ura::parse_ura(&agent_ura)
+        .map_err(|err| anyhow::anyhow!("directory device row has invalid agent_ura: {err}"))?;
+    if parsed.kind != crate::core::ura::URAKind::Device {
+        bail!("directory device row agent_ura {agent_ura:?} is not a canonical Device URA");
+    }
+    let device_id = parsed
+        .device_id()
+        .ok_or_else(|| anyhow::anyhow!("directory device row agent_ura omitted device id"))?;
+
+    let node_id = required_string_field(&entry, "node_id")?;
+    if node_id != device_id {
+        bail!(
+            "directory device row node_id {node_id:?} does not match Device URA id {device_id:?}"
+        );
+    }
+
     let display_name = entry
         .get("display_name")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let status = entry
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("active");
-    let state = match status {
-        "active" => "HEALTHY",
-        "stale" => "SUSPECT",
-        "draining" => "DRAINING",
-        _ => "UNKNOWN",
-    };
+    let status = required_string_field(&entry, "status")?;
+    let state = directory_device_state(&status)?;
     let online = state == "HEALTHY" || state == "REGISTERED";
     let last_seen_unix_ms = entry.get("last_seen_unix_ms").cloned();
     let origin_realm = entry
@@ -235,7 +231,26 @@ fn project_directory_entry(entry: Value, self_ura: Option<&str>) -> Value {
     if let Some(endpoint) = hub_endpoint {
         row["hub_endpoint"] = Value::String(endpoint);
     }
-    row
+    Ok(row)
+}
+
+fn required_string_field(entry: &Value, field: &str) -> anyhow::Result<String> {
+    entry
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("directory device row omitted string `{field}`"))
+}
+
+fn directory_device_state(status: &str) -> anyhow::Result<&'static str> {
+    Ok(match status {
+        "active" => "HEALTHY",
+        "stale" => "SUSPECT",
+        "draining" => "DRAINING",
+        other => bail!("directory device row has unsupported status {other:?}"),
+    })
 }
 
 fn print_device(n: &Value, current_node_id: &str) {
@@ -395,7 +410,8 @@ mod tests {
             "status": "active",
             "origin_realm": "r1",
         });
-        let row = project_directory_entry(entry, Some("easynet:///r/r1/device/n1"));
+        let row = project_directory_entry(entry, Some("easynet:///r/r1/device/n1"))
+            .expect("valid device directory row");
         assert_eq!(row["state"], "HEALTHY");
         assert_eq!(row["online"], true);
         assert_eq!(row["is_self"], true);
@@ -409,9 +425,71 @@ mod tests {
             "node_id": "n2",
             "status": "stale",
         });
-        let row = project_directory_entry(entry, None);
+        let row = project_directory_entry(entry, None).expect("valid stale device directory row");
         assert_eq!(row["state"], "SUSPECT");
         assert_eq!(row["online"], false);
         assert_eq!(row["is_self"], false);
+    }
+
+    #[test]
+    fn project_rejects_missing_node_id_instead_of_rendering_empty_device() {
+        let entry = json!({
+            "agent_ura": "easynet:///r/r1/device/n1",
+            "status": "active",
+        });
+        let error =
+            project_directory_entry(entry, None).expect_err("missing node_id must fail closed");
+
+        assert!(
+            error.to_string().contains("omitted string `node_id`"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn project_rejects_missing_status_instead_of_defaulting_active() {
+        let entry = json!({
+            "agent_ura": "easynet:///r/r1/device/n1",
+            "node_id": "n1",
+        });
+        let error =
+            project_directory_entry(entry, None).expect_err("missing status must fail closed");
+
+        assert!(
+            error.to_string().contains("omitted string `status`"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn project_rejects_unknown_status_instead_of_rendering_unknown() {
+        let entry = json!({
+            "agent_ura": "easynet:///r/r1/device/n1",
+            "node_id": "n1",
+            "status": "ghost",
+        });
+        let error =
+            project_directory_entry(entry, None).expect_err("unknown status must fail closed");
+
+        assert!(
+            error.to_string().contains("unsupported status"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn project_rejects_node_id_that_disagrees_with_device_ura() {
+        let entry = json!({
+            "agent_ura": "easynet:///r/r1/device/n1",
+            "node_id": "n2",
+            "status": "active",
+        });
+        let error =
+            project_directory_entry(entry, None).expect_err("mismatched node_id must fail closed");
+
+        assert!(
+            error.to_string().contains("does not match Device URA id"),
+            "wrong error: {error}"
+        );
     }
 }
