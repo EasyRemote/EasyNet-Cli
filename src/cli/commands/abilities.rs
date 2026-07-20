@@ -223,24 +223,18 @@ fn extract_columns(entry: &Value) -> (String, String, String, String) {
     let parsed = parse_ura(owner_ura).ok();
 
     // KIND is read straight from the owner URA kind — that's the
-    // authoritative classifier. The legacy `fulfilled_by`
-    // descriptor field still wins when present (handlers that
-    // explicitly tag themselves, e.g. `mcp_proxy`); when absent
-    // we fall back to the owner-kind label rather than guessing
-    // from the ability name. The pre-migration default was
-    // `agent_chat`, which mis-labelled every device-owned and
+    // authoritative classifier. Handler implementation hints such as
+    // `fulfilled_by` describe how an ability runs, not who owns the catalogue
+    // row, so they cannot override owner classification. The pre-migration
+    // default was `agent_chat`, which mis-labelled every device-owned and
     // user-owned verb.
-    let kind = entry
-        .get("fulfilled_by")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| match parsed.as_ref().map(|p| p.kind) {
-            Some(URAKind::Device) => "system".to_string(),
-            Some(URAKind::Authority) => "hub".to_string(),
-            Some(URAKind::Agent) => "agent".to_string(),
-            Some(URAKind::User) => "user".to_string(),
-            _ => "-".to_string(),
-        });
+    let kind = match parsed.as_ref().map(|p| p.kind) {
+        Some(URAKind::Device) => "system".to_string(),
+        Some(URAKind::Authority) => "hub".to_string(),
+        Some(URAKind::Agent) => "agent".to_string(),
+        Some(URAKind::User) => "user".to_string(),
+        _ => "-".to_string(),
+    };
 
     let dash = || "-".to_string();
     let (device, agent, user) = match parsed {
@@ -829,6 +823,36 @@ mod tests {
         assert!(matches!(group_for(&agent), GroupKey::Agent { .. }));
         assert!(matches!(group_for(&user), GroupKey::User { .. }));
         assert!(matches!(group_for(&device), GroupKey::Device(_)));
+    }
+
+    #[test]
+    fn extract_columns_ignores_fulfilled_by_as_kind_classifier() {
+        let device = json!({
+            "name": "fs.read",
+            "owner_ura":
+                "easynet:///r/easynet.run/device/00000000-0000-0000-0000-000000000001",
+            "fulfilled_by": "mcp_proxy",
+        });
+        let hub = json!({
+            "name": "hub.openai.chat_completions",
+            "owner_ura": crate::core::ura::hub_ura("easynet.run"),
+            "fulfilled_by": "agent_chat",
+        });
+        let agent = json!({
+            "name": "alice.codex.chat",
+            "owner_ura": "easynet:///r/easynet.run/agent/alice.codex",
+            "fulfilled_by": "shell",
+        });
+        let user = json!({
+            "name": "alice.api_key.create",
+            "owner_ura": "easynet:///r/easynet.run/user/alice",
+            "fulfilled_by": "device",
+        });
+
+        assert_eq!(extract_columns(&device).3, "system");
+        assert_eq!(extract_columns(&hub).3, "hub");
+        assert_eq!(extract_columns(&agent).3, "agent");
+        assert_eq!(extract_columns(&user).3, "user");
     }
 
     #[test]
