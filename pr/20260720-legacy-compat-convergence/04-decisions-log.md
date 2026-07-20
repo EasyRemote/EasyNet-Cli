@@ -629,3 +629,9 @@ Decisions will be appended as root-fork choices are made.
   Nested `video` and `input_policy` / `input` fields are advertised by dynamic
   registration and static plugin TOML instead of being hidden parser-only
   behavior.
+- Treat remote-desktop direct input frames as schema-bound local control
+  commands. Missing payload facts are invalid frames, not empty clipboard
+  writes, empty file drops, or platform-level key injection failures.
+- Split malformed control frames from unsupported frame types. Missing,
+  non-string, or blank diagnostic Bidi `type` is `invalid_frame`; only
+  schema-valid but unsupported frame names are `unknown_frame`.

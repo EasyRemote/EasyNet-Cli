@@ -75,6 +75,7 @@ impl RemoteDesktopInputFrame {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PointerInputFrame {
     pub action: String,
     #[serde(default)]
@@ -101,6 +102,7 @@ pub struct PointerInputFrame {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KeyInputFrame {
     pub action: String,
     #[serde(default)]
@@ -115,14 +117,14 @@ pub struct KeyInputFrame {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClipboardInputFrame {
-    #[serde(default)]
     pub text: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FileDropInputFrame {
-    #[serde(default)]
     pub files: Vec<String>,
 }
 
@@ -517,18 +519,29 @@ fn validate_input_frame(frame: &RemoteDesktopInputFrame) -> anyhow::Result<()> {
                 anyhow::bail!("pointer wheel deltas must be finite")
             }
         }
-        RemoteDesktopInputFrame::Key(key) => match key.action.as_str() {
-            "down" | "up" => {}
-            other => anyhow::bail!("unsupported key action {other:?}"),
-        },
+        RemoteDesktopInputFrame::Key(key) => {
+            match key.action.as_str() {
+                "down" | "up" => {}
+                other => anyhow::bail!("unsupported key action {other:?}"),
+            }
+            if key.key.trim().is_empty() && key.code.trim().is_empty() {
+                anyhow::bail!("key input frame must include key or code")
+            }
+        }
         RemoteDesktopInputFrame::Clipboard(clipboard) => {
             if clipboard.text.len() > MAX_INPUT_FRAME_BYTES {
                 anyhow::bail!("clipboard input frame is too large")
             }
         }
         RemoteDesktopInputFrame::FileDrop(file_drop) => {
+            if file_drop.files.is_empty() {
+                anyhow::bail!("file drop frame must include at least one path")
+            }
             if file_drop.files.len() > 64 {
                 anyhow::bail!("file drop frame contains too many paths")
+            }
+            if file_drop.files.iter().any(|path| path.trim().is_empty()) {
+                anyhow::bail!("file drop frame paths must be non-empty")
             }
         }
     }
@@ -866,6 +879,35 @@ mod tests {
     fn parses_key_input_frame() {
         let frame = parse_input_frame(r#"{"type":"key","action":"down","code":"KeyA"}"#).unwrap();
         assert_eq!(frame.kind(), RemoteDesktopInputKind::Key);
+    }
+
+    #[test]
+    fn rejects_schema_incomplete_input_frames() {
+        for (raw, expected) in [
+            (
+                r#"{"type":"pointer","action":"move","x":10,"y":20,"legacy":true}"#,
+                "unknown field",
+            ),
+            (
+                r#"{"type":"key","action":"down"}"#,
+                "key input frame must include key or code",
+            ),
+            (r#"{"type":"clipboard"}"#, "missing field `text`"),
+            (r#"{"type":"file_drop"}"#, "missing field `files`"),
+            (
+                r#"{"type":"file_drop","files":[]}"#,
+                "file drop frame must include at least one path",
+            ),
+            (
+                r#"{"type":"file_drop","files":["/tmp/a","  "]}"#,
+                "file drop frame paths must be non-empty",
+            ),
+        ] {
+            let err = parse_input_frame(raw)
+                .expect_err("schema-incomplete input frame must fail closed")
+                .to_string();
+            assert!(err.contains(expected), "expected {expected:?}; got {err}");
+        }
     }
 
     #[test]

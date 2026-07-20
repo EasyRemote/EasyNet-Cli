@@ -1935,3 +1935,32 @@ Evidence will be appended after indexing and focused impact queries.
   and static ability TOML now advertise the same nested video/input policy
   fields that the parser accepts, so descriptor evidence and runtime ingress
   cannot drift into two contracts.
+
+## 2026-07-21 Remote desktop interactive input frame audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "remote_desktop invoke_bidi frame type unwrap_or empty malformed frame
+  ignored input media terminal session"` and
+  `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "remote_desktop input frame serde default deny_unknown_fields
+  bidi_control_frame_type invalid_frame key code clipboard file_drop"`
+  identified `plugins/remote-desktop/src/input.rs` and
+  `plugins/remote-desktop/src/invoke_bidi.rs` as the direct-control seam where
+  WebRTC data-channel / diagnostic InvokeBidi frames become local OS input
+  actions or session diagnostics.
+- Targeted source inspection found input-frame compatibility repair:
+  `ClipboardInputFrame.text` and `FileDropInputFrame.files` defaulted to empty
+  values, key frames could omit both `key` and `code`, unknown payload fields
+  were accepted by Serde, and the diagnostic Bidi control loop classified
+  missing or malformed `type` as `unknown_frame` through `unwrap_or("")`.
+- The root abstraction problem was treating malformed input frames as regular
+  product diagnostics after routing had already accepted the frame. Input
+  frames are device-local control-plane commands; bad shape must fail before
+  session policy or platform injection so products can distinguish corrupt
+  control input from a supported-but-disabled action.
+- After the change, input payload structs deny unknown fields, clipboard and
+  file-drop payload facts are mandatory, key frames require at least one
+  non-empty key identity (`key` or `code`), file-drop paths must be non-empty,
+  and diagnostic Bidi control frame type parsing returns `invalid_frame` for
+  missing/non-string/blank type. `unknown_frame` is now reserved for
+  schema-valid but unsupported frame types.

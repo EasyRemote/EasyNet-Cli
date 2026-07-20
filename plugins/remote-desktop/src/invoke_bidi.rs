@@ -163,7 +163,14 @@ fn spawn_bidi_control_loop(
 ) {
     tokio::spawn(async move {
         while let Some(frame) = from_client.recv().await {
-            match frame.get("type").and_then(Value::as_str).unwrap_or("") {
+            let frame_type = match bidi_control_frame_type(&frame) {
+                Ok(frame_type) => frame_type,
+                Err(warn) => {
+                    let _ = to_client.send(BidiOutputFrame::json(warn)).await;
+                    continue;
+                }
+            };
+            match frame_type {
                 "close" => {
                     let _ = stop_tx.send(true);
                     break;
@@ -197,6 +204,27 @@ fn spawn_bidi_control_loop(
         }
         let _ = stop_tx.send(true);
     });
+}
+
+fn bidi_control_frame_type(frame: &Value) -> Result<&str, Value> {
+    match frame.get("type") {
+        Some(Value::String(frame_type)) if !frame_type.trim().is_empty() => Ok(frame_type),
+        Some(Value::String(_)) => Err(json!({
+            "type": "warn",
+            "code": "invalid_frame",
+            "message": "remote desktop bidi frame type must be a non-empty string",
+        })),
+        Some(_) => Err(json!({
+            "type": "warn",
+            "code": "invalid_frame",
+            "message": "remote desktop bidi frame type must be a string",
+        })),
+        None => Err(json!({
+            "type": "warn",
+            "code": "invalid_frame",
+            "message": "remote desktop bidi frame type is required",
+        })),
+    }
 }
 
 struct BidiFrameLoopConfig {
@@ -456,5 +484,25 @@ mod tests {
         assert_eq!(response["type"], json!("warn"));
         assert_eq!(response["code"], json!("input_disabled"));
         assert_eq!(response["input_type"], json!("pointer"));
+    }
+
+    #[test]
+    fn diagnostic_bidi_control_frame_type_fails_closed() {
+        for (frame, expected) in [
+            (json!({}), "type is required"),
+            (json!({"type": 7}), "type must be a string"),
+            (json!({"type": ""}), "type must be a non-empty string"),
+        ] {
+            let response = bidi_control_frame_type(&frame)
+                .expect_err("malformed control frame type must fail closed");
+            assert_eq!(response["type"], json!("warn"));
+            assert_eq!(response["code"], json!("invalid_frame"));
+            assert!(
+                response["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains(expected)),
+                "expected {expected:?}; got {response}"
+            );
+        }
     }
 }

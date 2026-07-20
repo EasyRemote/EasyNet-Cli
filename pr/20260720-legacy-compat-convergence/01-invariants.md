@@ -224,3 +224,9 @@
   the ability descriptor before a session id, consent grant, lease, media
   policy, or input policy is minted. Malformed preference fields must not be
   repaired into default media/input policy.
+- Remote-desktop interactive input frames are device-local control-plane input,
+  not soft diagnostics. Malformed Bidi control frame type, unknown payload
+  fields, missing key identity, missing clipboard text, or empty file-drop
+  payloads must be rejected at input-frame parsing before policy checks or
+  platform input injection. Unsupported but schema-valid frame types remain
+  distinct `unknown_frame` diagnostics.

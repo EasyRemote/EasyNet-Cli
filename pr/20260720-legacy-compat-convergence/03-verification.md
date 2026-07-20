@@ -1991,3 +1991,39 @@ Commands and outcomes will be appended after implementation.
   (`canonical-runtime-convergence-v2: OK`).
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; indexed
   the updated remote-desktop request parser/schema contract.
+
+## 2026-07-21 Remote desktop interactive input frame schema
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "remote_desktop invoke_bidi frame type unwrap_or empty malformed frame
+  ignored input media terminal session"` — PASS; identified the diagnostic
+  InvokeBidi control-loop `type.unwrap_or("")` seam and the shared input frame
+  parser.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "remote_desktop input frame serde default deny_unknown_fields
+  bidi_control_frame_type invalid_frame key code clipboard file_drop"` —
+  PASS; reports `RemoteDesktopInputFrame`, key/pointer frame DTOs,
+  `handle_bidi_input_frame`, and the new control frame type parser.
+- `rg -n
+  "unwrap_or\\(\\\"\\\"\\)|serde\\(default\\)|filter_map\\(|unknown_frame|invalid_frame|bidi_control_frame_type|key input frame must include"
+  plugins/remote-desktop/src/input.rs
+  plugins/remote-desktop/src/invoke_bidi.rs -S` — PASS for the selected seam;
+  `invoke_bidi.rs` no longer uses empty-string type fallback, and remaining
+  `serde(default)` uses are limited to optional pointer coordinates and the
+  key/code pair guarded by parser validation.
+- `cargo test -q remote_desktop::input --lib --features remote-desktop` —
+  PASS (`6 passed`); includes unknown-field, missing key identity, missing
+  clipboard text, missing/empty file-drop payload, and blank file-drop path
+  rejection.
+- `cargo test -q remote_desktop::invoke_bidi --lib --features
+  remote-desktop` — PASS (`5 passed`); includes malformed control frame type
+  rejection as `invalid_frame` instead of `unknown_frame`.
+- `cargo check --lib --bins --features remote-desktop` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; indexed
+  the updated remote-desktop input-frame and diagnostic Bidi control parser.
