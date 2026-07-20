@@ -1987,3 +1987,26 @@ Evidence will be appended after indexing and focused impact queries.
   appending to the session. Local candidates validate through
   `ice_candidate_text` before session projection; serialization/projection
   failures become `ICE_CANDIDATE_SCHEMA_INVALID` diagnostics.
+
+## 2026-07-21 Desktop companion desired-state store audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "companion state_store unwrap_or_default malformed toml json default empty
+  corrupt plugin desired state"` identified
+  `src/daemon/plugins/companion/state_store.rs` as the durable lifecycle
+  memory for desktop companion packages.
+- Targeted source inspection found compatibility repair on persisted lifecycle
+  rows: `CompanionStateRecord.desired_state` used `#[serde(default)]`, so an
+  existing row missing its desired lifecycle state became
+  `CompanionDesiredState::Disabled`. The TOML parser also accepted unknown row
+  fields, blank identities, and duplicate `(id, version)` rows while
+  `record(...)` selected the first match.
+- The root abstraction problem was conflating missing package state with
+  corrupt package state. Missing file / absent row is a valid fresh-install
+  empty state. An existing row is lifecycle authority consumed by daemon-ready
+  reconciliation, status projection, and cleanup; it must not be repaired into
+  disabled or first-match behavior.
+- After the change, companion state records deny unknown fields, require
+  explicit `desired_state`, and validate non-empty identity plus unique
+  `(id, version)` keys after parsing. Optional action/error telemetry remains
+  optional because it is not the lifecycle decision fact.

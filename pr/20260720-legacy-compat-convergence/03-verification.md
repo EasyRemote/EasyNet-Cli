@@ -2066,3 +2066,33 @@ Commands and outcomes will be appended after implementation.
   (`canonical-runtime-convergence-v2: OK`).
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; indexed
   the updated ICE candidate parser and session projection boundary.
+
+## 2026-07-21 Desktop companion desired-state store schema
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "companion state_store unwrap_or_default malformed toml json default empty
+  corrupt plugin desired state"` — PASS; identified the companion state store
+  row parser and desired-state lifecycle consumers.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "companion state_store desired_state serde default duplicate row missing
+  desired_state validate_state"` — PASS; reports `desired_state`, `record`,
+  `set_desired_state`, and reconciliation/status relationships.
+- `rg -n
+  "CompanionStateRecord|CompanionStateToml|serde\\(default\\)|desired_state|validate_state|duplicate companion"
+  src/daemon/plugins/companion/state_store.rs -S` — PASS for the selected seam;
+  `desired_state` no longer has serde default while optional action/error
+  telemetry remains explicitly optional.
+- `cargo test -q companion::state_store --lib` — PASS (`4 passed`);
+  includes missing `desired_state`, blank identity, unknown field, duplicate
+  row, and fresh missing-file/absent-row disabled-state coverage.
+- `cargo test -q daemon::plugins::companion --lib` — PASS (`41 passed`);
+  verifies the manager/status/reconcile tests do not rely on old row repair.
+- `cargo check --lib --bins` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; indexed
+  the companion desired-state store parser and validation boundary.

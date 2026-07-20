@@ -14,10 +14,10 @@ use super::status::CompanionDesiredState;
 
 /// One desired-state row in `~/.easynet/companions/state.toml`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct CompanionStateRecord {
     pub id: String,
     pub version: String,
-    #[serde(default)]
     pub desired_state: CompanionDesiredState,
     #[serde(default)]
     pub last_action: Option<String>,
@@ -29,6 +29,7 @@ pub struct CompanionStateRecord {
 
 /// File shape for companion desired-state memory.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct CompanionStateToml {
     #[serde(default)]
     pub companion: Vec<CompanionStateRecord>,
@@ -65,10 +66,16 @@ impl DesktopCompanionStateStore {
                 path: self.path.clone(),
                 source,
             })?;
-        toml::from_str(&body).map_err(|source| PluginHostError::InvalidCompanionManifest {
+        let state: CompanionStateToml =
+            toml::from_str(&body).map_err(|source| PluginHostError::InvalidCompanionManifest {
+                id: "state_store".to_string(),
+                reason: format!("parse {}: {source}", self.path.display()),
+            })?;
+        validate_state(&state).map_err(|reason| PluginHostError::InvalidCompanionManifest {
             id: "state_store".to_string(),
-            reason: format!("parse {}: {source}", self.path.display()),
-        })
+            reason: format!("validate {}: {reason}", self.path.display()),
+        })?;
+        Ok(state)
     }
 
     pub fn write(&self, state: &CompanionStateToml) -> Result<()> {
@@ -153,6 +160,26 @@ impl DesktopCompanionStateStore {
     }
 }
 
+fn validate_state(state: &CompanionStateToml) -> std::result::Result<(), String> {
+    let mut seen = std::collections::BTreeSet::new();
+    for (index, record) in state.companion.iter().enumerate() {
+        if record.id.trim().is_empty() {
+            return Err(format!("companion[{index}].id must be non-empty"));
+        }
+        if record.version.trim().is_empty() {
+            return Err(format!("companion[{index}].version must be non-empty"));
+        }
+        let key = (record.id.as_str(), record.version.as_str());
+        if !seen.insert(key) {
+            return Err(format!(
+                "duplicate companion state row for {}@{}",
+                record.id, record.version
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn current_unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -186,6 +213,89 @@ mod tests {
                 .desired_state("easynet.desktop.menubar", "0.1.0")
                 .expect("read"),
             CompanionDesiredState::Enabled
+        );
+    }
+
+    #[test]
+    fn state_store_rejects_schema_incomplete_rows() {
+        let root = tempfile::tempdir().expect("root");
+        let path = root.path().join("state.toml");
+        let store = DesktopCompanionStateStore::new(&path);
+
+        for (body, expected) in [
+            (
+                r#"[[companion]]
+id = "easynet.desktop.menubar"
+version = "0.1.0"
+"#,
+                "missing field `desired_state`",
+            ),
+            (
+                r#"[[companion]]
+id = ""
+version = "0.1.0"
+desired_state = "enabled"
+"#,
+                "companion[0].id must be non-empty",
+            ),
+            (
+                r#"[[companion]]
+id = "easynet.desktop.menubar"
+version = "0.1.0"
+desired_state = "enabled"
+legacy_state = "running"
+"#,
+                "unknown field `legacy_state`",
+            ),
+        ] {
+            std::fs::write(&path, body).expect("write malformed state");
+            let err = store
+                .read()
+                .expect_err("schema-incomplete companion state must fail closed")
+                .to_string();
+            assert!(err.contains(expected), "expected {expected:?}; got {err}");
+        }
+    }
+
+    #[test]
+    fn state_store_rejects_duplicate_rows() {
+        let root = tempfile::tempdir().expect("root");
+        let path = root.path().join("state.toml");
+        std::fs::write(
+            &path,
+            r#"[[companion]]
+id = "easynet.desktop.menubar"
+version = "0.1.0"
+desired_state = "enabled"
+
+[[companion]]
+id = "easynet.desktop.menubar"
+version = "0.1.0"
+desired_state = "disabled"
+"#,
+        )
+        .expect("write duplicate state");
+        let store = DesktopCompanionStateStore::new(path);
+        let err = store
+            .desired_state("easynet.desktop.menubar", "0.1.0")
+            .expect_err("duplicate desired-state rows must fail closed")
+            .to_string();
+        assert!(
+            err.contains("duplicate companion state row"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn state_store_preserves_missing_file_and_absent_record_defaults() {
+        let root = tempfile::tempdir().expect("root");
+        let store = DesktopCompanionStateStore::new(root.path().join("state.toml"));
+
+        assert_eq!(
+            store
+                .desired_state("easynet.desktop.menubar", "0.1.0")
+                .expect("missing state file is fresh-install empty"),
+            CompanionDesiredState::Disabled
         );
     }
 }

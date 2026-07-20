@@ -236,3 +236,9 @@
   projected into the session read model. Only explicit `null` or empty-string
   `candidate` end markers may be omitted; malformed rows must surface as
   invalid input or WebRTC diagnostic state, not as "no candidate".
+- Desktop companion desired-state rows are durable lifecycle authority. A
+  missing state file or absent package row may mean fresh-install disabled, but
+  an existing row with missing `desired_state`, blank identity, unknown fields,
+  or duplicate `(id, version)` is corrupt lifecycle state and must fail closed
+  before daemon-ready reconciliation, status projection, or self-uninstall
+  cleanup.

@@ -641,3 +641,9 @@ Decisions will be appended as root-fork choices are made.
 - Keep explicit end-of-candidates distinct from malformed candidate rows.
   `null` and empty-string `candidate` remain valid end markers; missing or
   non-string `candidate` is invalid signaling schema.
+- Treat desktop companion desired-state rows as lifecycle authority. Missing
+  file / absent row remains the fresh-install disabled state; malformed
+  existing rows fail instead of being repaired into disabled.
+- Reject duplicate companion desired-state rows. Reconciliation and status
+  projection must not depend on first-match TOML order for the same
+  `(id, version)` lifecycle identity.
