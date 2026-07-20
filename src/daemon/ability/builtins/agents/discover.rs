@@ -1436,9 +1436,14 @@ mod tests {
         let root = dir.path().to_path_buf();
         let abilities_dir = root.join("abilities");
         std::fs::create_dir_all(&abilities_dir).unwrap();
+        let spec = crate::core::agent::spec::AgentSpec::new(
+            agent_name,
+            crate::core::agent::spec::RuntimeKind::ClaudeCode,
+        );
         std::fs::write(
             root.join("agent.toml"),
-            format!("name = \"{agent_name}\"\nruntime = \"claude-code\"\n"),
+            spec.to_toml_string()
+                .expect("test AgentSpec serialises with canonical schema stamp"),
         )
         .unwrap();
         for (verb, m) in manifests {

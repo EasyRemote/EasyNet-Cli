@@ -2964,16 +2964,19 @@ mod tests {
         )
         .expect("HomeGuard'd tmp HOME is writable");
 
-        // Also seed a minimal agent.toml so AgentDirectory::open
-        // accepts the root. The fields here mirror what
-        // `easynet agent add` writes; the test is targeting
-        // dispatch, not the agent.toml schema.
+        // Also seed a canonical agent.toml so AgentDirectory::open accepts the
+        // root. The test is targeting dispatch, so it goes through the same
+        // AgentSpec writer as production rather than hand-writing schema
+        // details.
+        let mut spec = crate::core::agent::spec::AgentSpec::new(
+            "alice",
+            crate::core::agent::spec::RuntimeKind::ClaudeCode,
+        );
+        spec.model = Some("sonnet".to_string());
         std::fs::write(
             ws_root.join("agent.toml"),
-            r#"name = "alice"
-runtime = "claude-code"
-model = "sonnet"
-"#,
+            spec.to_toml_string()
+                .expect("test AgentSpec serialises with canonical schema stamp"),
         )
         .expect("agent.toml write");
 
