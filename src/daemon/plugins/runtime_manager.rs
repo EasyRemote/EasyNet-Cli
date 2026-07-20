@@ -96,23 +96,25 @@ pub struct PluginRuntimeManager {
 }
 
 impl PluginRuntimeManager {
-    /// Construct an empty manager. State is loaded lazily so daemon metadata
-    /// queries do not panic if package indexing fails.
+    /// Construct the daemon default manager from the canonical plugin runtime
+    /// snapshot.
     ///
     /// Reads through the shared default-state snapshot (F-050): on a cold
     /// process this is the one boot-time disk read that also primes the
     /// snapshot for every later catalog reader.
-    pub fn new() -> Self {
-        let loaded = super::default_state().map(|state| (*state).clone());
-        let wire_registry = loaded
-            .as_ref()
-            .map(AbilityWireRegistry::from_plugin_runtime_state)
-            .unwrap_or_else(|_| AbilityWireRegistry::core());
-        Self {
-            state: RwLock::new(loaded.map_err(|err| err.to_string())),
+    ///
+    /// Failure is terminal for daemon assembly. The runtime catalog and bidi
+    /// wire registry are two projections of the same plugin state; booting with
+    /// a core-only wire registry after package-state failure makes product
+    /// routes disappear as late `ABILITY_NOT_FOUND`/`No route visible` errors.
+    pub fn new() -> Result<Self> {
+        let loaded = super::default_state().map(|state| (*state).clone())?;
+        let wire_registry = AbilityWireRegistry::from_plugin_runtime_state(&loaded);
+        Ok(Self {
+            state: RwLock::new(Ok(loaded)),
             runtime_host: PluginRuntimeHost::new(),
             wire_registry: Arc::new(wire_registry),
-        }
+        })
     }
 
     /// Construct a manager from an already-computed state snapshot.
@@ -323,12 +325,6 @@ impl PluginRuntimeManager {
         report.registered_abilities = current.into_iter().collect();
         sort_hot_reload_report(&mut report);
         Ok(report)
-    }
-}
-
-impl Default for PluginRuntimeManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

@@ -355,14 +355,20 @@ mod tests {
     use crate::daemon::plugins::PluginRealtimePermissionStatus;
     use crate::daemon::plugins::{
         activation_plans_for_manifest, PluginPackageManifest, PluginPackageSurfaceRecord,
-        PluginRealtimeOutcomeStatus, PluginSurfaceReport,
+        PluginRealtimeOutcomeStatus, PluginRuntimeState, PluginSurfaceReport,
     };
     use std::collections::BTreeSet;
+
+    fn empty_plugin_runtime_manager() -> PluginRuntimeManager {
+        PluginRuntimeManager::from_state(PluginRuntimeState::from_index(
+            crate::daemon::plugins::PluginPackageIndex::default(),
+        ))
+    }
 
     #[test]
     fn reload_rejects_non_empty_args() {
         let cell = SharedPluginRegistryCell::new();
-        let manager = PluginRuntimeManager::new();
+        let manager = empty_plugin_runtime_manager();
         let err = reload_plugins(json!({"unexpected": true}), &cell, &manager).unwrap_err();
         assert!(
             format!("{err}").contains("empty object"),
@@ -373,7 +379,7 @@ mod tests {
     #[test]
     fn reload_fails_typed_before_registry_is_initialised() {
         let cell = SharedPluginRegistryCell::new();
-        let manager = PluginRuntimeManager::new();
+        let manager = empty_plugin_runtime_manager();
         let err = reload_plugins(json!({}), &cell, &manager).unwrap_err();
         assert!(
             format!("{err}").contains("not initialised"),
@@ -384,7 +390,7 @@ mod tests {
     #[test]
     fn status_rejects_non_empty_args() {
         let cell = SharedPluginRegistryCell::new();
-        let manager = PluginRuntimeManager::new();
+        let manager = empty_plugin_runtime_manager();
         let err = plugin_status(json!({"unexpected": true}), &cell, &manager).unwrap_err();
         assert!(
             format!("{err}").contains("empty object"),

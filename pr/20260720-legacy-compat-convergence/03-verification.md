@@ -2,6 +2,23 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-20 Plugin wire profile core-only fallback removal
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --features remote-desktop`
+  — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R75, which rejects daemon plugin wire profile fallback to core-only registry,
+  independent transport profile reload, and process-global helpers that swallow
+  default profile load errors.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture covering `PluginRuntimeManager::new() -> Self`,
+  `unwrap_or_else(|_| AbilityWireRegistry::core())`, transport
+  `ability_wire_registry_load_failed` downgrade, and a free
+  `bidi_wire_kind_for(...)` helper that calls `load_default_profile().ok()`.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+
 ## 2026-07-20 API key credential-store parse fallback removal
 
 - `/Users/macbook.silan.tech/.cargo/bin/cargo test -q api_key --lib` — PASS

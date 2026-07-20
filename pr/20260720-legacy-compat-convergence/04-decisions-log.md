@@ -2,6 +2,23 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-20 plugin wire profile projection authority
+
+- Treat plugin catalog registration and plugin bidi wire profile lookup as two
+  projections of one daemon-owned `PluginRuntimeState`. The daemon default
+  `PluginRuntimeManager` is now fallible; package-state load failure aborts
+  catalog assembly instead of exposing a live manager with a core-only wire
+  registry.
+- Treat invocation transport as a consumer of the catalog-owned plugin runtime
+  manager, not as a second plugin profile reader. If the manager is absent,
+  transport assembly fails instead of independently reloading default plugin
+  state and downgrading to core profiles.
+- Remove process-global wire lookup helpers that swallow
+  `load_default_profile()` errors. Runtime dispatch must use the explicit
+  `AbilityWireRegistry` handle injected from boot so route visibility and bidi
+  wire selection stay bound to the same plugin state that registered the
+  ability.
+
 ## 2026-07-20 Context clipboard history read model
 
 - Treat `context/clipboard.jsonl` as the clipboard history read-model

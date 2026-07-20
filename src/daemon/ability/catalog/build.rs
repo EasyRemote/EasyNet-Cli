@@ -504,7 +504,8 @@ fn build_plugin_runtime_manager(
             );
             crate::daemon::plugins::PluginRuntimeManager::from_state(state)
         }
-        PluginRegistryMode::DefaultDaemon => crate::daemon::plugins::PluginRuntimeManager::new(),
+        PluginRegistryMode::DefaultDaemon => crate::daemon::plugins::PluginRuntimeManager::new()
+            .context("build daemon plugin runtime manager")?,
     };
     Ok(Arc::new(manager))
 }

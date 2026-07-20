@@ -127,20 +127,6 @@ impl Default for AbilityWireRegistry {
     }
 }
 
-/// Return the declared bidi wire profile for a locally hosted ability.
-pub fn bidi_wire_kind_for(ability: &str) -> Option<AbilityBidiWireKind> {
-    core_bidi_wire_kind_for(ability).or_else(|| {
-        AbilityWireRegistry::load_default_profile()
-            .ok()
-            .and_then(|registry| registry.bidi_wire_kind_for(ability))
-    })
-}
-
-/// Return true when the runtime has a daemon/session wire adapter for `ability`.
-pub fn is_bidi_wire_ability(ability: &str) -> bool {
-    bidi_wire_kind_for(ability).is_some()
-}
-
 pub(crate) fn core_bidi_wire_kind_for(ability: &str) -> Option<AbilityBidiWireKind> {
     if ability == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH {
         return Some(AbilityBidiWireKind::Pty);

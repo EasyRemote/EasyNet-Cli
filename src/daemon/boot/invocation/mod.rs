@@ -657,22 +657,11 @@ pub fn start_daemon_invocation_transport(
     let ability_wire_registry = plugin_runtime_manager
         .as_ref()
         .map(|manager| manager.ability_wire_registry())
-        .unwrap_or_else(|| {
-            match crate::daemon::ability::wire::AbilityWireRegistry::load_default_profile() {
-                Ok(registry) => Arc::new(registry),
-                Err(err) => {
-                    let error = err.to_string();
-                    crate::op_event!(
-                        component = daemon_invocation,
-                        kind = ability_wire_registry_load_failed,
-                        level = "warn",
-                        error = error.as_str(),
-                        message = "daemon will use core bidi wire profiles only",
-                    );
-                    Arc::new(crate::daemon::ability::wire::AbilityWireRegistry::core())
-                }
-            }
-        });
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Invocation transport requires plugin runtime manager for ability wire registry"
+            )
+        })?;
 
     service = service.with_daemon_runtime(daemon_runtime.clone());
     service = service.with_ability_wire_registry(Arc::clone(&ability_wire_registry));

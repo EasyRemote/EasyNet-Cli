@@ -2,6 +2,27 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-20 Plugin wire profile core-only fallback audit
+
+- `codegraph query PluginRuntimeManager --limit 50` identified the daemon
+  plugin runtime manager as the owner of default plugin package/load state and
+  the shared `AbilityWireRegistry` handle consumed by catalog/transport
+  assembly.
+- `codegraph query AbilityWireRegistry --limit 50` showed the registry feeds
+  `DaemonInvocationService`, `LocalAxonSessionDispatcher`, and bidi dispatch
+  route selection. A stale or core-only registry therefore becomes a
+  product-visible "route not visible"/`ABILITY_NOT_FOUND` symptom.
+- Targeted `rg` found two hidden defaultization points:
+  `PluginRuntimeManager::new()` mapped default-state load failure to
+  `AbilityWireRegistry::core()`, and invocation transport independently
+  attempted `AbilityWireRegistry::load_default_profile()` before warning and
+  continuing with core bidi profiles.
+- The root abstraction problem was split projection authority. Plugin ability
+  catalog rows and plugin bidi wire profiles are two projections of the same
+  plugin runtime state. Booting one projection while defaulting the other to
+  core-only hides package/sidecar/index failure behind later descriptor/route
+  errors.
+
 ## 2026-07-20 Context clipboard history fallback audit
 
 - `rg` found `fs::read_to_string(clipboard_log_path()).unwrap_or_default()` in

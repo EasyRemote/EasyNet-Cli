@@ -5152,6 +5152,59 @@ expect_fail \
   "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/plugins" "$CLI/src/daemon/boot/invocation" "$CLI/src/daemon/ability/wire"
+cat >"$CLI/src/daemon/plugins/runtime_manager.rs" <<'EOF'
+use crate::daemon::ability::wire::AbilityWireRegistry;
+
+pub struct PluginRuntimeManager;
+
+impl PluginRuntimeManager {
+    pub fn new() -> Self {
+        let loaded: Result<(), String> = Err("broken package state".to_string());
+        let _wire_registry = loaded
+            .as_ref()
+            .map(|_| AbilityWireRegistry::core())
+            .unwrap_or_else(|_| AbilityWireRegistry::core());
+        Self
+    }
+}
+EOF
+cat >"$CLI/src/daemon/boot/invocation/mod.rs" <<'EOF'
+fn attach_wire_registry() {
+    let _registry = match crate::daemon::ability::wire::AbilityWireRegistry::load_default_profile() {
+        Ok(registry) => registry,
+        Err(_err) => {
+            let _kind = "ability_wire_registry_load_failed";
+            let _message = "daemon will use core bidi wire profiles only";
+            crate::daemon::ability::wire::AbilityWireRegistry::core()
+        }
+    };
+}
+EOF
+cat >"$CLI/src/daemon/ability/wire/mod.rs" <<'EOF'
+pub struct AbilityWireRegistry;
+
+impl AbilityWireRegistry {
+    pub fn load_default_profile() -> Result<Self, String> {
+        Ok(Self)
+    }
+
+    pub fn bidi_wire_kind_for(&self, _ability: &str) -> Option<()> {
+        None
+    }
+}
+
+pub fn bidi_wire_kind_for(ability: &str) -> Option<()> {
+    AbilityWireRegistry::load_default_profile()
+        .ok()
+        .and_then(|registry| registry.bidi_wire_kind_for(ability))
+}
+EOF
+expect_fail \
+  "plugin wire profile core-only fallback" \
+  "R75_PLUGIN_WIRE_PROFILE_FAIL_CLOSED"
+
+make_good_fixture
 expect_pass "fixture restored after all negative cases"
 
 printf 'test_check_architecture_convergence.sh: all cases passed\n'

@@ -6991,6 +6991,90 @@ if sidecar_io.exists():
                 )
 
 
+# Rule 75: Plugin bidi wire profiles are a runtime-state projection. Daemon
+# boot must consume the same plugin runtime manager that populated the ability
+# catalog; it must not hide package-state failures by falling back to a
+# core-only wire registry.
+plugin_runtime_manager = cli_root / "src/daemon/plugins/runtime_manager.rs"
+if plugin_runtime_manager.exists():
+    text = source(plugin_runtime_manager)
+    if "pub fn new() -> Result<Self>" not in text:
+        add(
+            "R75_PLUGIN_WIRE_PROFILE_FAIL_CLOSED",
+            plugin_runtime_manager,
+            1,
+            "PluginRuntimeManager::new must be fallible so default package-state failure cannot boot as core-only wire registry",
+        )
+    for token, detail in (
+        (
+            "unwrap_or_else(|_| AbilityWireRegistry::core())",
+            "plugin runtime manager must not downgrade package-state failure to core-only wire registry",
+        ),
+        (
+            "RwLock::new(loaded.map_err",
+            "plugin runtime manager must not retain an unavailable default state while exposing a live core-only wire registry",
+        ),
+    ):
+        for match in re.finditer(re.escape(token), text):
+            add(
+                "R75_PLUGIN_WIRE_PROFILE_FAIL_CLOSED",
+                plugin_runtime_manager,
+                line_number(text, match.start()),
+                detail,
+            )
+
+invocation_boot = cli_root / "src/daemon/boot/invocation/mod.rs"
+if invocation_boot.exists():
+    text = source(invocation_boot)
+    for token, detail in (
+        (
+            "ability_wire_registry_load_failed",
+            "invocation transport must fail assembly on plugin wire registry load failure instead of warning and continuing",
+        ),
+        (
+            "daemon will use core bidi wire profiles only",
+            "invocation transport must not continue with a core-only plugin wire registry",
+        ),
+        (
+            "AbilityWireRegistry::load_default_profile()",
+            "invocation transport must not independently reload plugin wire profiles; consume the catalog-owned manager",
+        ),
+    ):
+        for match in re.finditer(re.escape(token), text):
+            add(
+                "R75_PLUGIN_WIRE_PROFILE_FAIL_CLOSED",
+                invocation_boot,
+                line_number(text, match.start()),
+                detail,
+            )
+
+ability_wire = cli_root / "src/daemon/ability/wire/mod.rs"
+if ability_wire.exists():
+    text = source(ability_wire)
+    for pattern, detail in (
+        (
+            r"load_default_profile\(\)[\s\S]{0,120}\.ok\(\)",
+            "ability wire helpers must not swallow default profile load errors",
+        ),
+        (
+            r"(?m)^pub\s+fn\s+bidi_wire_kind_for\s*\(",
+            "ability wire lookup must require an explicit registry handle, not a process-global default profile read",
+        ),
+        (
+            r"(?m)^pub\s+fn\s+is_bidi_wire_ability\s*\(",
+            "ability wire predicates must require an explicit registry handle, not a process-global default profile read",
+        ),
+    ):
+        match = re.search(pattern, text)
+        if match:
+            add(
+                "R75_PLUGIN_WIRE_PROFILE_FAIL_CLOSED",
+                ability_wire,
+                line_number(text, match.start()),
+                detail,
+            )
+
+
 # Rule 73: Device trust sync consumes hub resolve_key responses as
 # schema-bound trust evidence. It must not repair missing `public_keys_b64`
 # from legacy `public_key_b64`, and it must not skip malformed key rows.
