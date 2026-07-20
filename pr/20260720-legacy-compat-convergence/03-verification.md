@@ -2,6 +2,18 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-20 Local daemon loopback subject fallback removal
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query LocalDaemonLoopbackSubjectPolicy --limit 30` — PASS; reports only the explicit `LocalDaemonSelf` and `Explicit` policy variants.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query invoke_local_ability_with_subject --limit 30` — PASS; reports helper signatures requiring `subject_ura: &str`.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q local_daemon --lib` — PASS (`16 passed`).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+
 ## 2026-07-20 Ability target tuple default fallback removal
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.

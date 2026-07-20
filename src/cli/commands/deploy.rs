@@ -90,7 +90,7 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
             "resource_ref": resource_ref,
             "node_id": args.node,
         }),
-        Some(subject_ura),
+        &subject_ura,
     )
     .context("invoke ability.deploy")?;
     eprintln!("{}", style("✓").green());

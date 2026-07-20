@@ -2,6 +2,28 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-20 Local daemon loopback subject fallback audit
+
+- `codegraph query invocation.history.list`, `codegraph query
+  meta.list_abilities`, and `codegraph query browser.open_session` traced the
+  user-visible failing surfaces back to local daemon Invocation ingress and
+  device/receipt descriptor routes.
+- `rg` on `invoke_local_ability_with_subject` and
+  `LocalDaemonLoopbackSubjectPolicy` found the remaining root fallback inside
+  `src/support/platform/local_daemon_grpc.rs`: `subject: Option<String>` was
+  normalized by `explicit_or_target_self(None) -> TargetSelf`, and `TargetSelf`
+  resolved to the selected callee URA.
+- The root abstraction problem was ambiguous transport state. `None` meant
+  "daemon-local root call" for simple CLI commands and also "caller forgot the
+  subject" for product/public tuple paths. That allows product ingress defects
+  to surface later as admission, descriptor, or timeout errors instead of as
+  incomplete tuple construction.
+- After the change, local loopback subject state is a closed enum with
+  `LocalDaemonSelf` and `Explicit`. `invoke_local_ability(...)` selects the
+  daemon-self root policy explicitly, while
+  `invoke_local_ability_with_subject(...)` and timeout variants require a
+  non-empty `subject_ura`.
+
 ## 2026-07-20 Ability target tuple default fallback audit
 
 - `codegraph query AbilityTargetRequest` identified the Python public

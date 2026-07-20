@@ -156,7 +156,7 @@ enum LocalDaemonLoopbackCalleePolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LocalDaemonLoopbackSubjectPolicy {
     Explicit(String),
-    TargetSelf,
+    LocalDaemonSelf,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -222,27 +222,19 @@ impl LocalDaemonLoopbackSubjectPolicy {
         )?))
     }
 
-    fn explicit_or_target_self(subject: Option<String>) -> anyhow::Result<Self> {
-        match Self::explicit(subject)? {
-            Some(subject) => Ok(subject),
-            None => Ok(Self::TargetSelf),
-        }
+    fn local_daemon_self() -> Self {
+        Self::LocalDaemonSelf
     }
 
     fn resolve(&self, callee_ura: &str) -> anyhow::Result<String> {
         match self {
             Self::Explicit(subject) => normalized_local_daemon_ura(subject, "subject_ura"),
-            Self::TargetSelf => normalized_local_daemon_ura(callee_ura, "callee_ura"),
+            Self::LocalDaemonSelf => normalized_local_daemon_ura(callee_ura, "callee_ura"),
         }
     }
 
-    fn explicit(subject: Option<String>) -> anyhow::Result<Option<Self>> {
-        subject
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|subject| normalized_local_daemon_ura(subject, "subject_ura").map(Self::Explicit))
-            .transpose()
+    fn explicit(subject: &str) -> anyhow::Result<Self> {
+        normalized_local_daemon_ura(subject, "subject_ura").map(Self::Explicit)
     }
 }
 
@@ -290,14 +282,29 @@ impl LocalDaemonLoopbackTuplePlan {
     fn local_root(
         function_name: &str,
         payload_json: serde_json::Value,
-        subject: Option<String>,
         timeout: Duration,
     ) -> anyhow::Result<Self> {
         Self::new(
             function_name,
             payload_json,
             LocalDaemonLoopbackCalleePolicy::local_daemon(),
-            LocalDaemonLoopbackSubjectPolicy::explicit_or_target_self(subject)?,
+            LocalDaemonLoopbackSubjectPolicy::local_daemon_self(),
+            LocalDaemonLoopbackDerivationPolicy::fresh_root(),
+            timeout,
+        )
+    }
+
+    fn local_root_with_subject(
+        function_name: &str,
+        payload_json: serde_json::Value,
+        subject_ura: &str,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        Self::new(
+            function_name,
+            payload_json,
+            LocalDaemonLoopbackCalleePolicy::local_daemon(),
+            LocalDaemonLoopbackSubjectPolicy::explicit(subject_ura)?,
             LocalDaemonLoopbackDerivationPolicy::fresh_root(),
             timeout,
         )
@@ -437,12 +444,12 @@ impl LocalDaemonAbilityClient {
         &self,
         function_name: &str,
         payload_json: serde_json::Value,
-        subject: Option<String>,
+        subject_ura: &str,
     ) -> anyhow::Result<serde_json::Value> {
         self.invoke_with_subject_and_timeout(
             function_name,
             payload_json,
-            subject,
+            subject_ura,
             Duration::from_secs(30),
         )
     }
@@ -451,13 +458,13 @@ impl LocalDaemonAbilityClient {
         &self,
         function_name: &str,
         payload_json: serde_json::Value,
-        subject: Option<String>,
+        subject_ura: &str,
         timeout: Duration,
     ) -> anyhow::Result<serde_json::Value> {
-        let tuple_plan = LocalDaemonLoopbackTuplePlan::local_root(
+        let tuple_plan = LocalDaemonLoopbackTuplePlan::local_root_with_subject(
             function_name,
             payload_json,
-            subject,
+            subject_ura,
             timeout,
         )?;
         invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
@@ -506,37 +513,54 @@ impl LocalDaemonAbilityClient {
         &self,
         function_name: &str,
         payload_json: serde_json::Value,
-        _subject: Option<String>,
+        _subject_ura: &str,
     ) -> anyhow::Result<serde_json::Value> {
         self.invoke(function_name, payload_json)
     }
 }
 
-/// Invoke a daemon-hosted ability through Axon's local Invocation
-/// gRPC transport (`daemon.sock`). Transport-level entry; CLI
-/// surfaces MUST go through [`crate::support::platform::local_invoke::invoke_local_ability_with_subject`]
-/// instead so the "one CLI subcommand = one ability invoke"
-/// contract is held in exactly one module. This free fn exists
-/// for `support`-internal use only (the `local_invoke` shim
-/// forwards here).
+/// Invoke a daemon-hosted ability through Axon's local Invocation gRPC
+/// transport (`daemon.sock`) with an explicit subject. Transport-level entry;
+/// CLI surfaces MUST go through
+/// [`crate::support::platform::local_invoke::invoke_local_ability_with_subject`]
+/// instead so the "one CLI subcommand = one ability invoke" contract is held
+/// in exactly one module. This free fn exists for `support`-internal use only
+/// (the `local_invoke` shim forwards here).
 #[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_local_daemon_ability_with_subject(
     function_name: &str,
     payload_json: serde_json::Value,
-    subject: Option<String>,
+    subject_ura: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    LocalDaemonAbilityClient::new()?.invoke_with_subject(function_name, payload_json, subject)
+    LocalDaemonAbilityClient::new()?.invoke_with_subject(function_name, payload_json, subject_ura)
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_local_daemon_ability(
+    function_name: &str,
+    payload_json: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::local_root(
+        function_name,
+        payload_json,
+        Duration::from_secs(30),
+    )?;
+    invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
 }
 
 #[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_local_daemon_ability_with_subject_timeout(
     function_name: &str,
     payload_json: serde_json::Value,
-    subject: Option<String>,
+    subject_ura: &str,
     timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
-    let tuple_plan =
-        LocalDaemonLoopbackTuplePlan::local_root(function_name, payload_json, subject, timeout)?;
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::local_root_with_subject(
+        function_name,
+        payload_json,
+        subject_ura,
+        timeout,
+    )?;
     invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
 }
 
@@ -1886,7 +1910,7 @@ pub(crate) fn invoke_local_daemon_ability(
 pub(crate) fn invoke_local_daemon_ability_with_subject(
     function_name: &str,
     payload_json: serde_json::Value,
-    _subject: Option<String>,
+    _subject_ura: &str,
 ) -> anyhow::Result<serde_json::Value> {
     invoke_local_daemon_ability(function_name, payload_json)
 }
@@ -1895,7 +1919,7 @@ pub(crate) fn invoke_local_daemon_ability_with_subject(
 pub(crate) fn invoke_local_daemon_ability_with_subject_timeout(
     function_name: &str,
     payload_json: serde_json::Value,
-    _subject: Option<String>,
+    _subject_ura: &str,
     _timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
     invoke_local_daemon_ability(function_name, payload_json)
@@ -1964,7 +1988,7 @@ mod tests {
             serde_json::json!({"query": "capabilities"}),
             LocalDaemonLoopbackCalleePolicy::explicit("easynet:///r/default/agent/dev.worker")
                 .expect("callee policy"),
-            LocalDaemonLoopbackSubjectPolicy::TargetSelf,
+            LocalDaemonLoopbackSubjectPolicy::local_daemon_self(),
             LocalDaemonLoopbackDerivationPolicy::fresh_root(),
             Duration::from_secs(5),
         )
@@ -2052,8 +2076,14 @@ mod tests {
         assert!(LocalDaemonLoopbackTuplePlan::local_root(
             "job.run",
             serde_json::json!({"job": 1}),
-            None,
             Duration::ZERO,
+        )
+        .is_err());
+        assert!(LocalDaemonLoopbackTuplePlan::local_root_with_subject(
+            "job.run",
+            serde_json::json!({"job": 1}),
+            "",
+            Duration::from_secs(5),
         )
         .is_err());
     }

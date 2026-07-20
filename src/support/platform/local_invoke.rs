@@ -224,32 +224,39 @@ pub fn classify_invoke_error(err: &anyhow::Error) -> LocalInvokeErrorKind {
 /// the **one** call site that knows the underlying transport.
 /// Callers that bypass it become per-surface transport coupling.
 pub fn invoke_local_ability(ability: &str, args: Value) -> anyhow::Result<Value> {
-    invoke_local_ability_with_subject(ability, args, None)
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability(ability, args)
 }
 
-/// Same as [`invoke_local_ability`] but threads an optional
-/// envelope subject through to the daemon. The subject lands in
-/// `EnvelopeContext.subject` for handlers that consume it
-/// (e.g. `camera.snapshot`, which routes its frame from the
-/// resource the subject URA names).
+/// Invoke a daemon-hosted ability with an explicit envelope subject.
+///
+/// The subject lands in `EnvelopeContext.subject` for handlers that consume it
+/// (e.g. `camera.snapshot`, which routes its frame from the resource the
+/// subject URA names). Missing subject is not a transport state: callers that
+/// need daemon-self root semantics use [`invoke_local_ability`], while callers
+/// that carry product/public tuple facts must pass a concrete `subject_ura`.
 pub fn invoke_local_ability_with_subject(
     ability: &str,
     args: Value,
-    subject: Option<String>,
+    subject_ura: &str,
 ) -> anyhow::Result<Value> {
     crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_with_subject(
-        ability, args, subject,
+        ability,
+        args,
+        subject_ura,
     )
 }
 
 pub fn invoke_local_ability_with_subject_timeout(
     ability: &str,
     args: Value,
-    subject: Option<String>,
+    subject_ura: &str,
     timeout: std::time::Duration,
 ) -> anyhow::Result<Value> {
     crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_with_subject_timeout(
-        ability, args, subject, timeout,
+        ability,
+        args,
+        subject_ura,
+        timeout,
     )
 }
 

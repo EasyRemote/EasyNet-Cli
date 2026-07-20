@@ -2,6 +2,15 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-20 local daemon loopback subject policy
+
+- Treat daemon-local root invocation subject as an explicit system policy, not
+  as `Option::None` at the transport layer. `invoke_local_ability(...)` owns
+  the daemon-self root policy.
+- Treat `invoke_local_ability_with_subject(...)` as explicit tuple ingress.
+  It now requires a concrete `subject_ura`; callers that have product/public
+  context must choose that subject before entering local gRPC tuple planning.
+
 ## 2026-07-20 ability target tuple ingress
 
 - Treat `AbilityTargetRequest.subject_ura` as explicit invocation tuple input,

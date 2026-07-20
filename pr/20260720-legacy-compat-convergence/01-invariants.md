@@ -116,3 +116,7 @@
   not a fact that may be derived from an ability selector or descriptor
   projection, and `call_mode` absence is invalid provider input rather than
   permission to infer RPC.
+- Local daemon loopback transport must not interpret a missing subject as
+  target-self. Daemon-self root calls and explicit-subject calls are separate
+  named policies; targeted/product/public ingress must supply a concrete
+  subject before the gRPC tuple plan is built.

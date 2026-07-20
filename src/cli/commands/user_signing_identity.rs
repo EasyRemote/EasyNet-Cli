@@ -88,7 +88,7 @@ impl UserPublicKeyRegistry for LocalUserPublicKeyRegistry {
                 "public_key_b64": public_key_b64,
                 "role": "user",
             }),
-            Some(register_subject),
+            &register_subject,
         )
         .map(|_| ())
         .context("invoke identity.register_pubkey")

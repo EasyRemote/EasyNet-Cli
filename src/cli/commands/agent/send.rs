@@ -267,7 +267,7 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
             "source": eal_source,
             "label": format!("agent send {}", args.name),
         }),
-        Some(crate::daemon::identity::local_invocation::local_device_ura()),
+        &crate::daemon::identity::local_invocation::local_device_ura(),
         std::time::Duration::from_secs(3600),
     )?;
     let result: crate::daemon::ability::builtins::automation::mission::MissionRunResponse =

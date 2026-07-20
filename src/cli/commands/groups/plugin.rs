@@ -739,9 +739,7 @@ fn invoke_plugin_control_ability_via_daemon(
         return Ok(None);
     };
     match crate::support::platform::local_invoke::invoke_local_ability_with_subject(
-        ability,
-        args,
-        Some(subject),
+        ability, args, &subject,
     ) {
         Ok(value) => Ok(Some(value)),
         Err(err)

@@ -130,7 +130,10 @@ impl LocalAbilityTarget {
         &self.callee_ura
     }
 
-    /// Subject used when the caller did not provide an explicit subject.
+    /// Descriptor-derived subject policy used only by daemon-system issuers.
+    ///
+    /// Public/product ingress must not use this as a missing-subject fallback;
+    /// it must provide an explicit subject before transport entry.
     #[must_use]
     pub fn default_subject_ura(&self) -> &str {
         &self.default_subject_ura
