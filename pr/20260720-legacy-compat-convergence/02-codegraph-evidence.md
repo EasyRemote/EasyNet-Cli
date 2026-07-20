@@ -2,6 +2,19 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-20 API key store parse fallback audit
+
+- `rg` found `toml::from_str(&text).unwrap_or_default()` in
+  `src/daemon/ability/builtins/governance/api_key.rs::load_store`.
+- `codegraph impact load_store --depth 2` reported the production impact as
+  `<user>.api_key.{create,list,revoke}` plus `resolve_token`, which is consumed
+  by the OpenAI compatibility bearer-auth path.
+- The root abstraction problem was credential lifecycle defaultization:
+  missing `api_keys.toml` is a fresh-install empty store, but a malformed
+  existing store is unavailable credential authority. Projecting parse failure
+  as `ApiKeyStore::default()` makes existing tokens appear unrecognized and can
+  allow create to overwrite the corrupt store.
+
 ## 2026-07-20 EAL agent registry unavailable-state fallback audit
 
 - `codegraph query load_registry_or_warn` reported the production EAL

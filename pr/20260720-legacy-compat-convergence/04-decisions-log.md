@@ -2,6 +2,15 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-20 API key credential store lifecycle
+
+- Treat `api_keys.toml` as credential authority state, not a cache. Missing file
+  remains a documented fresh-install empty state; malformed/unreadable existing
+  files fail create, list, revoke, and bearer-token resolution.
+- Keep operator convenience `api_keys.local.toml` separate from the credential
+  authority. The local default token cache may remain optional because it is not
+  the authority used to admit bearer tokens.
+
 ## 2026-07-20 EAL agent registry dispatch authority
 
 - Treat the registered-Agent registry projection as the sole Agent lookup

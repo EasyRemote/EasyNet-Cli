@@ -6639,6 +6639,59 @@ if trust_anchor.exists():
             )
 
 
+# Rule 68: API key credential store load must fail closed on malformed state.
+# A missing api_keys.toml is a valid fresh-install empty state, but an existing
+# malformed credential authority cannot be projected as "no keys"; doing so
+# turns bearer-auth corruption into "token not recognized" and lets create
+# overwrite the evidence.
+api_key_store = cli_root / "src/daemon/ability/builtins/governance/api_key.rs"
+if api_key_store.exists():
+    text = source(api_key_store)
+    body = rust_method_body(text, "load_store")
+    if body is None:
+        add(
+            "R68_API_KEY_STORE_PARSE_FALLBACK",
+            api_key_store,
+            1,
+            "api_key credential store must have one load_store authority",
+        )
+    else:
+        offset, load_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset : body_start]
+        if "anyhow::Result<ApiKeyStore>" not in signature:
+            add(
+                "R68_API_KEY_STORE_PARSE_FALLBACK",
+                api_key_store,
+                line_number(text, offset),
+                "api_key load_store must return Result so malformed authority state can surface",
+            )
+        for token, detail in (
+            (
+                "toml::from_str(&text).unwrap_or_default()",
+                "api_key load_store must not parse-fallback malformed TOML to an empty store",
+            ),
+            (
+                "toml::from_str(&text).ok()",
+                "api_key load_store must not hide malformed TOML behind Option",
+            ),
+        ):
+            if token in load_body:
+                add(
+                    "R68_API_KEY_STORE_PARSE_FALLBACK",
+                    api_key_store,
+                    line_number(text, body_start + load_body.find(token)),
+                    detail,
+                )
+        if "parse API key store" not in load_body:
+            add(
+                "R68_API_KEY_STORE_PARSE_FALLBACK",
+                api_key_store,
+                line_number(text, offset),
+                "api_key load_store must attach a parse-store diagnostic",
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(

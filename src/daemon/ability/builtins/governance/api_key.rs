@@ -34,6 +34,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use anyhow::Context as _;
 use once_cell::sync::Lazy;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -77,12 +78,18 @@ fn store_path() -> PathBuf {
     PathBuf::from(home).join(".easynet").join("api_keys.toml")
 }
 
-fn load_store() -> ApiKeyStore {
+fn load_store() -> anyhow::Result<ApiKeyStore> {
     let path = store_path();
-    let Ok(text) = fs::read_to_string(&path) else {
-        return ApiKeyStore::default();
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ApiKeyStore::default());
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("read API key store {}", path.display()));
+        }
     };
-    toml::from_str(&text).unwrap_or_default()
+    toml::from_str(&text).with_context(|| format!("parse API key store {}", path.display()))
 }
 
 fn save_store(store: &ApiKeyStore) -> anyhow::Result<()> {
@@ -150,7 +157,7 @@ pub fn handle_create(user: &str, args: Value) -> anyhow::Result<Value> {
 
     let key_ura = {
         let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let mut store = load_store();
+        let mut store = load_store()?;
         store.keys.push(entry.clone());
         save_store(&store)?;
         // INV-2 capability URA: the addressable resource id is the
@@ -175,7 +182,7 @@ pub fn handle_create(user: &str, args: Value) -> anyhow::Result<Value> {
 
 /// List keys (without exposing tokens).
 pub fn handle_list(user: &str, _args: Value) -> anyhow::Result<Value> {
-    let store = load_store();
+    let store = load_store()?;
     let user_ura = crate::core::ura::user_ura(&realm(), user);
     let mine: Vec<_> = store
         .keys
@@ -204,7 +211,7 @@ pub fn handle_revoke(user: &str, args: Value) -> anyhow::Result<Value> {
     let user_ura = crate::core::ura::user_ura(&realm(), user);
 
     let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let mut store = load_store();
+    let mut store = load_store()?;
     let mut found = false;
     for k in store.keys.iter_mut() {
         if k.id_prefix == id_prefix && k.user_ura == user_ura {
@@ -228,7 +235,7 @@ pub fn handle_revoke(user: &str, args: Value) -> anyhow::Result<Value> {
 pub fn resolve_token(token: &str) -> anyhow::Result<(String, String)> {
     let hash = hash_token(token);
     let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let mut store = load_store();
+    let mut store = load_store()?;
     for k in store.keys.iter_mut() {
         if k.token_hash == hash {
             if k.revoked_at.is_some() {
@@ -319,4 +326,75 @@ pub fn register(reg: &mut AxonAbilityCatalog, user: &str) {
         AdmissionAction::Manage,
         revoke_handler,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
+
+    fn seed_malformed_store() {
+        let path = store_path();
+        std::fs::create_dir_all(path.parent().expect("api key store parent"))
+            .expect("create isolated api key state dir");
+        std::fs::write(path, "keys = [").expect("write malformed api key store");
+    }
+
+    fn assert_store_parse_failure(error: anyhow::Error) {
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("parse API key store"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn missing_store_is_fresh_install_empty_state() {
+        let _home = HomeGuard::new();
+
+        let listed = handle_list("alice", json!({})).expect("missing store lists as empty");
+
+        assert_eq!(listed["keys"].as_array().expect("keys array").len(), 0);
+    }
+
+    #[test]
+    fn list_rejects_malformed_store_instead_of_empty_projection() {
+        let _home = HomeGuard::new();
+        seed_malformed_store();
+
+        let error = handle_list("alice", json!({})).expect_err("malformed store must fail list");
+
+        assert_store_parse_failure(error);
+    }
+
+    #[test]
+    fn create_rejects_malformed_store_instead_of_overwriting_authority() {
+        let _home = HomeGuard::new();
+        seed_malformed_store();
+
+        let error = handle_create("alice", json!({"label": "new"}))
+            .expect_err("malformed store must fail create");
+
+        assert_store_parse_failure(error);
+        let body = std::fs::read_to_string(store_path()).expect("malformed store still present");
+        assert_eq!(body, "keys = [");
+    }
+
+    #[test]
+    fn bearer_resolution_rejects_malformed_store_instead_of_unknown_token() {
+        let _home = HomeGuard::new();
+        seed_malformed_store();
+
+        let error = resolve_token("easynet-sk-test").expect_err("malformed store must fail auth");
+        let message = format!("{error:#}");
+
+        assert!(
+            message.contains("parse API key store"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("api key not recognized"),
+            "malformed credential authority must not be projected as unknown token: {message}"
+        );
+    }
 }

@@ -128,3 +128,7 @@
   state as an empty registry. A missing registry file is a valid first-run
   empty state; an unreadable or malformed registry is unavailable dispatch
   state and must fail before child Invocation planning.
+- Bearer API key credential state must be fail-closed. A missing
+  `api_keys.toml` is a valid fresh-install empty store; an existing unreadable
+  or malformed store is unavailable credential authority and must not be
+  projected as "no keys" or overwritten by create/revoke/list flows.

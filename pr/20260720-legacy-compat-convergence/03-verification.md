@@ -2,6 +2,27 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-20 API key credential-store parse fallback removal
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q api_key --lib` — PASS
+  (`5 passed`; includes missing store as fresh-install empty state and
+  malformed store rejection for list/create/bearer resolution).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R68, which requires `load_store() -> anyhow::Result<ApiKeyStore>` and rejects
+  parse fallback to an empty credential store.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for `toml::from_str(&text).unwrap_or_default()` inside the
+  API key credential-store loader.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query load_store --limit 40`
+  — PASS; reports `api_key.rs::load_store() -> anyhow::Result<ApiKeyStore>`.
+- `rg -n "toml::from_str\\(&text\\)\\.unwrap_or_default\\(|fn load_store\\(\\) -> ApiKeyStore|parse API key store" ...`
+  — PASS; legacy parse fallback appears only in architecture-gate/self-test
+  negative fixtures, while production `api_key.rs` carries the parse diagnostic.
+
 ## 2026-07-20 EAL agent registry unavailable-state fallback removal
 
 - `/Users/macbook.silan.tech/.cargo/bin/cargo test -q eal::interpreter::dispatch::tests::dispatcher_accepts_missing_registry_as_first_run_empty_state --lib`

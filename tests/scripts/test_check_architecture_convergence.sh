@@ -4911,6 +4911,25 @@ expect_fail \
   "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK"
 
 make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/governance/api_key.rs" <<'EOF'
+struct ApiKeyStore;
+
+impl Default for ApiKeyStore {
+    fn default() -> Self {
+        Self
+    }
+}
+
+fn load_store() -> ApiKeyStore {
+    let text = std::fs::read_to_string("api_keys.toml").unwrap_or_default();
+    toml::from_str(&text).unwrap_or_default()
+}
+EOF
+expect_fail \
+  "api key store parse fallback" \
+  "R68_API_KEY_STORE_PARSE_FALLBACK"
+
+make_good_fixture
 expect_pass "fixture restored after all negative cases"
 
 printf 'test_check_architecture_convergence.sh: all cases passed\n'
