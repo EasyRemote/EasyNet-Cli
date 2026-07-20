@@ -565,7 +565,7 @@ impl KernelApi for Kernel {
     }
 
     fn list_schedules(&self) -> anyhow::Result<Vec<ScheduleEntry>> {
-        Ok(self.schedule.list())
+        self.schedule.list()
     }
 
     fn add_schedule(&self, entry: ScheduleEntry) -> anyhow::Result<ScheduleId> {

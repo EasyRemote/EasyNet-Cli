@@ -89,7 +89,7 @@ impl ContextLoader for ScheduleLoader {
         let horizon_end = now + chrono::Duration::from_std(self.horizon)?;
 
         let mut upcoming: Vec<(DateTime<Utc>, String, Option<String>)> = Vec::new();
-        for entry in self.svc.list() {
+        for entry in self.svc.list()? {
             if !entry.enabled {
                 continue;
             }

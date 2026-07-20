@@ -94,11 +94,11 @@ fn add_handler(svc: &ScheduleService, args: Value) -> anyhow::Result<Value> {
 }
 
 fn list_handler(svc: &ScheduleService, _args: Value) -> anyhow::Result<Value> {
-    let entries = svc.list();
+    let entries = svc.list()?;
     let arr: Vec<Value> = entries
         .into_iter()
-        .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
-        .collect();
+        .map(serde_json::to_value)
+        .collect::<Result<_, _>>()?;
     Ok(json!({ "schedules": arr }))
 }
 

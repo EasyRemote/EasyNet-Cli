@@ -164,11 +164,12 @@ impl ScheduleService {
 
     /// Snapshot every schedule currently indexed. Deterministic
     /// order via BTreeMap.
-    pub fn list(&self) -> Vec<ScheduleEntry> {
-        match self.cache.read() {
-            Ok(g) => g.values().cloned().collect(),
-            Err(_) => Vec::new(),
-        }
+    pub fn list(&self) -> anyhow::Result<Vec<ScheduleEntry>> {
+        let cache = self
+            .cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("schedule list cache lock poisoned"))?;
+        Ok(cache.values().cloned().collect())
     }
 
     /// Compute the next fire instant for a schedule, given a
@@ -377,7 +378,7 @@ mod tests {
     fn add_then_list_returns_entry_with_assigned_id() {
         let svc = ScheduleService::new();
         let id = svc.add(entry("0 9 * * *", MisfirePolicy::Skip)).unwrap();
-        let listed = svc.list();
+        let listed = svc.list().expect("list");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, id);
         assert!(listed[0].enabled);
@@ -410,7 +411,7 @@ mod tests {
         let svc = ScheduleService::new();
         let id = svc.add(entry("0 9 * * *", MisfirePolicy::Skip)).unwrap();
         svc.enable(&id, false).unwrap();
-        let listed = svc.list();
+        let listed = svc.list().expect("list");
         assert!(!listed[0].enabled);
     }
 
@@ -419,9 +420,21 @@ mod tests {
         let svc = ScheduleService::new();
         let id = svc.add(entry("0 9 * * *", MisfirePolicy::Skip)).unwrap();
         svc.remove(&id).unwrap();
-        assert!(svc.list().is_empty());
+        assert!(svc.list().expect("list").is_empty());
         let err = svc.remove(&id).unwrap_err();
         assert!(format!("{err}").contains("not found"));
+    }
+
+    #[test]
+    fn list_rejects_poisoned_cache_instead_of_empty_schedule_read_model() {
+        let svc = ScheduleService::new();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = svc.cache.write().unwrap();
+            panic!("poison schedule cache");
+        }));
+
+        let err = svc.list().expect_err("poisoned cache must fail");
+        assert!(format!("{err:#}").contains("schedule list cache lock poisoned"));
     }
 
     #[test]

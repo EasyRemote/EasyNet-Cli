@@ -833,11 +833,14 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                 if let Ok(mut g) = last_fire.lock() {
                     g.insert(fire.schedule_id.clone(), now_ms);
                 }
-                let entry = match schedule
-                    .list()
-                    .into_iter()
-                    .find(|s| s.id == fire.schedule_id)
-                {
+                let schedules = match schedule.list() {
+                    Ok(schedules) => schedules,
+                    Err(err) => {
+                        eprintln!("[schedule-tick] schedule snapshot failed: {err:#}");
+                        continue;
+                    }
+                };
+                let entry = match schedules.into_iter().find(|s| s.id == fire.schedule_id) {
                     Some(e) => e,
                     None => {
                         eprintln!(

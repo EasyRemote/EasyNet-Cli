@@ -1325,3 +1325,27 @@ Commands and outcomes will be appended after implementation.
   `spawn_schedule_tick`, and the new corrupt-cron/poisoned-cache regression
   tests.
 - `git diff --check` — PASS.
+
+## 2026-07-20 Schedule snapshot fail-closed read model
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q schedule --lib` — PASS
+  (`32 passed`); includes the new poisoned-cache schedule list regression plus
+  schedule ability/context loader coverage.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after extending
+  R84 to schedule snapshot/list semantics.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for the previous `ScheduleService::list() -> Vec<_>`,
+  poisoned-cache empty list, `schedule.list` error erasure, and `null` row
+  serialization fallback.
+- `CARGO_TARGET_DIR=/tmp/easynet-codex-check-target
+  /Users/macbook.silan.tech/.cargo/bin/cargo check --locked --lib --bins` —
+  PASS. The separate target dir avoided unrelated concurrent cargo build locks.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "ScheduleService list
+  schedule snapshot failed schedule list cache lock poisoned" --limit 80` —
+  PASS; reports `ScheduleService::list(...) ->
+  anyhow::Result<Vec<ScheduleEntry>>`, `list_handler`, and
+  `list_rejects_poisoned_cache_instead_of_empty_schedule_read_model`.

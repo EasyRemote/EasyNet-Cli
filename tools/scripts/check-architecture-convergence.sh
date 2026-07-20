@@ -7704,14 +7704,60 @@ if automation_think.exists():
         )
 
 
-# Rule 84: schedule due selection is runtime lifecycle state, not an
-# optional cache read. A poisoned schedule cache or corrupt enabled cron row
-# must fail the tick observation explicitly; it must never be projected as an
-# empty due list that makes operators believe no schedule is ready.
+# Rule 84: schedule due selection and snapshot projection are runtime
+# lifecycle state, not optional cache reads. A poisoned schedule cache or
+# corrupt enabled cron row must fail the observation explicitly; it must never
+# be projected as an empty due list/schedule list that makes operators believe
+# no schedule exists or is ready.
 schedule_mod = cli_root / "src/daemon/execution/schedule/mod.rs"
 daemon_bin = cli_root / "src/bin/easynet-daemon.rs"
+automation_schedule = cli_root / "src/daemon/ability/builtins/automation/schedule.rs"
 if schedule_mod.exists():
     text = source(schedule_mod)
+    body = rust_method_body(text, "list")
+    if body is None:
+        add(
+            "R84_SCHEDULE_DUE_FAIL_CLOSED",
+            schedule_mod,
+            1,
+            "ScheduleService must keep list as the schedule snapshot authority",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if "Result<Vec<ScheduleEntry>>" not in signature:
+            add(
+                "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                schedule_mod,
+                line_number(text, offset),
+                "ScheduleService::list must return Result so corrupt runtime state cannot become an empty schedule list",
+            )
+        for token, detail in (
+            (
+                "Err(_) => Vec::new()",
+                "ScheduleService::list must not hide a poisoned cache behind an empty schedule list",
+            ),
+            (
+                "Err(_) => return Vec::new()",
+                "ScheduleService::list must not hide a poisoned cache behind an empty schedule list",
+            ),
+        ):
+            if token in fn_body:
+                add(
+                    "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                    schedule_mod,
+                    line_number(text, body_start + fn_body.find(token)),
+                    detail,
+                )
+        if "schedule list cache lock poisoned" not in fn_body:
+            add(
+                "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                schedule_mod,
+                line_number(text, offset),
+                "ScheduleService::list must preserve poisoned cache as explicit unavailable state",
+            )
+
     body = rust_method_body(text, "due")
     if body is None:
         add(
@@ -7792,6 +7838,41 @@ if daemon_bin.exists():
                 daemon_bin,
                 line_number(text, offset),
                 "schedule tick runner must surface due-selection failure instead of treating it as no due fires",
+            )
+        if "schedule snapshot failed" not in fn_body:
+            add(
+                "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                daemon_bin,
+                line_number(text, offset),
+                "schedule tick runner must surface schedule snapshot failure instead of treating it as vanished schedules",
+            )
+
+if automation_schedule.exists():
+    text = source(automation_schedule)
+    body = rust_method_body(text, "list_handler")
+    if body is None:
+        add(
+            "R84_SCHEDULE_DUE_FAIL_CLOSED",
+            automation_schedule,
+            1,
+            "schedule.list handler must preserve schedule snapshot failures",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        if "svc.list()?" not in fn_body:
+            add(
+                "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                automation_schedule,
+                line_number(text, offset),
+                "schedule.list handler must propagate ScheduleService::list errors",
+            )
+        if "unwrap_or(Value::Null)" in fn_body:
+            add(
+                "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                automation_schedule,
+                line_number(text, body_start + fn_body.find("unwrap_or(Value::Null)")),
+                "schedule.list handler must not project schedule serialization failure as null rows",
             )
 
 

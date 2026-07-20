@@ -440,3 +440,7 @@ Decisions will be appended as root-fork choices are made.
   cache read. A poisoned schedule cache or corrupt enabled cron row means the
   tick state is unavailable for this iteration; it must be reported explicitly
   instead of becoming an empty due-fire list.
+- Treat the schedule list read model as the same lifecycle observation plane as
+  due selection. The public `schedule.list` ability, Kernel schedule snapshot,
+  context loader, and tick runner must observe unreadable schedule state as
+  failure, not as an empty catalog or `null` schedule row.

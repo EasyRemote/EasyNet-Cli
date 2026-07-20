@@ -1364,3 +1364,22 @@ Evidence will be appended after indexing and focused impact queries.
   `anyhow::Result<Vec<DueFire>>`, preserves poisoned cache and invalid cron
   rows as explicit errors, and the tick runner logs `due selection failed`
   before skipping only the current tick.
+
+## 2026-07-20 Schedule snapshot empty read-model fallback audit
+
+- Follow-up source inspection on the same `ScheduleService` state machine found
+  `ScheduleService::list` still returning `Vec<ScheduleEntry>` and mapping
+  cache lock poisoning to `Vec::new()`.
+- `codegraph query "ScheduleService list schedule.list handler context loader
+  cache lock poisoned" --limit 100` identified the product-visible consumers:
+  `Kernel::list_schedules`, the `schedule.list` ability handler, the daemon
+  schedule tick runner, and the schedule context loader.
+- The root abstraction problem was inconsistent snapshot ownership: due
+  selection had become fail-closed, but the public schedule read-model still
+  treated unreadable lifecycle state as an empty schedule catalog. That would
+  make products believe no schedules exist even when the runtime cannot prove
+  the schedule state.
+- After the change, `ScheduleService::list` returns
+  `anyhow::Result<Vec<ScheduleEntry>>`; Kernel, `schedule.list`, context
+  loader, and tick runner propagate or log snapshot failure; and `schedule.list`
+  no longer serializes failed rows as `null`.

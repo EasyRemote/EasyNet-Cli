@@ -5412,6 +5412,69 @@ expect_fail \
   "R84_SCHEDULE_DUE_FAIL_CLOSED"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/execution/schedule" "$CLI/src/bin" "$CLI/src/daemon/ability/builtins/automation"
+cat >"$CLI/src/daemon/execution/schedule/mod.rs" <<'EOF'
+pub struct DueFire;
+pub struct ScheduleEntry;
+pub struct ScheduleId;
+pub struct ScheduleService {
+    cache: Cache,
+}
+
+impl ScheduleService {
+    pub fn list(&self) -> Vec<ScheduleEntry> {
+        match self.cache.read() {
+            Ok(g) => g.values().cloned().collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn due(&self) -> Result<Vec<DueFire>> {
+        let cache = self
+            .cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("schedule due cache lock poisoned"))?;
+        for entry in cache.values() {
+            let _cron = parse_cron(&entry.cron_expr)
+                .map_err(|err| anyhow::anyhow!("schedule {} has invalid cron: {err:#}", entry.id))?;
+        }
+        Ok(Vec::new())
+    }
+}
+EOF
+cat >"$CLI/src/bin/easynet-daemon.rs" <<'EOF'
+fn spawn_schedule_tick(schedule: ScheduleService) {
+    let due = match schedule.due() {
+        Ok(due) => due,
+        Err(err) => {
+            eprintln!("due selection failed: {err:#}");
+            return;
+        }
+    };
+    let schedules = match schedule.list() {
+        Ok(schedules) => schedules,
+        Err(err) => {
+            eprintln!("schedule snapshot failed: {err:#}");
+            return;
+        }
+    };
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/automation/schedule.rs" <<'EOF'
+fn list_handler(svc: &ScheduleService, _args: Value) -> anyhow::Result<Value> {
+    let entries = svc.list();
+    let arr: Vec<Value> = entries
+        .into_iter()
+        .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
+        .collect();
+    Ok(json!({ "schedules": arr }))
+}
+EOF
+expect_fail \
+  "schedule list snapshot silent empty fallback" \
+  "R84_SCHEDULE_DUE_FAIL_CLOSED"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/plugins" "$CLI/src/daemon/boot/invocation" "$CLI/src/daemon/ability/wire"
 cat >"$CLI/src/daemon/plugins/runtime_manager.rs" <<'EOF'
 use crate::daemon::ability::wire::AbilityWireRegistry;
