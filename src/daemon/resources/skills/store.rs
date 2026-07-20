@@ -396,7 +396,7 @@ fn skill_dir_in_global_pool(pool_dir: &Path, skill_name: &str) -> Option<std::pa
         .and_then(|name| name.to_str())
         .is_some_and(|name| !name.starts_with('.'))
         && direct.is_dir()
-        && looks_like_skill_dir(&direct)
+        && global_skill_declared_name(&direct).as_deref() == Some(skill_name)
     {
         return Some(direct);
     }
@@ -407,25 +407,24 @@ fn skill_dir_in_global_pool(pool_dir: &Path, skill_name: &str) -> Option<std::pa
         if !path.is_dir() {
             continue;
         }
-        let dir_name = match path.file_name().and_then(|s| s.to_str()) {
-            Some(n) if !n.starts_with('.') => n.to_string(),
+        match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) if !n.starts_with('.') => {}
             _ => continue,
         };
         if !looks_like_skill_dir(&path) {
             continue;
         }
-        let parsed_name =
-            parse_skill_md_name(&path.join("SKILL.md")).unwrap_or_else(|| dir_name.clone());
-        if parsed_name == skill_name || dir_name == skill_name {
+        if global_skill_declared_name(&path).as_deref() == Some(skill_name) {
             return Some(path);
         }
     }
     None
 }
 
-/// Walk a global skill pool and append one synthetic InstallRecord
-/// per skill directory it contains. Skips directories that don't
-/// look like a skill (no `SKILL.md` and no nested `skill.json`).
+/// Walk a global skill pool and append one synthetic InstallRecord per declared
+/// skill package. Global pool identity is semantic: `SKILL.md` frontmatter
+/// `name` is the only public package name authority. Physical directory names
+/// remain source subpaths and never become fallback skill identities.
 ///
 /// We do not propagate IO errors from the walk: a global pool that
 /// is missing or unreadable should not fail the whole listing —
@@ -485,10 +484,8 @@ pub(crate) fn global_skill_record_from_dir(
     if dir_name.starts_with('.') {
         return None;
     }
-    // Best-effort metadata extraction. Frontmatter `name` wins
-    // when present; otherwise the directory name is the fallback.
     let skill_md = path.join("SKILL.md");
-    let parsed_name = parse_skill_md_name(&skill_md).unwrap_or_else(|| dir_name.to_string());
+    let parsed_name = parse_skill_md_name(&skill_md)?;
     let size_bytes = directory_size_bytes(path);
     let installed_at = file_mtime_iso(path).unwrap_or_default();
 
@@ -524,6 +521,13 @@ fn looks_like_skill_dir(path: &std::path::Path) -> bool {
     path.join("SKILL.md").exists() || path.join("skill.json").exists()
 }
 
+fn global_skill_declared_name(path: &std::path::Path) -> Option<String> {
+    if !path.is_dir() || !looks_like_skill_dir(path) {
+        return None;
+    }
+    parse_skill_md_name(&path.join("SKILL.md"))
+}
+
 pub(crate) fn skill_description_from_dir(path: &std::path::Path) -> String {
     skill_description_from_markdown(&path.join("SKILL.md")).unwrap_or_default()
 }
@@ -542,11 +546,9 @@ fn skill_description_from_markdown(path: &std::path::Path) -> Option<String> {
         .map(|line| line.to_string())
 }
 
-/// Extract the `name:` field from a SKILL.md YAML frontmatter
-/// block. Returns None on any parse failure — the caller falls back
-/// to the directory name. We do a minimal hand parse rather than
-/// pulling in a YAML crate because the frontmatter shape we care
-/// about is one line: `name: <value>`.
+/// Extract the `name:` field from a SKILL.md YAML frontmatter block. Returns
+/// None on parse failure. Global skill pools treat that as an unnamed package,
+/// not as permission to infer public identity from filesystem layout.
 fn parse_skill_md_name(skill_md: &std::path::Path) -> Option<String> {
     let content = fs::read_to_string(skill_md).ok()?;
     // Frontmatter is delimited by `---` lines at the top.
@@ -996,7 +998,7 @@ mod tests {
     }
 
     #[test]
-    fn global_skill_pool_ref_resolves_directory_name_without_alias_scan() {
+    fn global_skill_pool_ref_resolves_declared_name_not_directory_alias() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let pool = GlobalSkillPoolRef::from_label("claude-global", "skill.test").unwrap();
         let skill_dir = config::home_dir()
@@ -1012,11 +1014,62 @@ mod tests {
 
         assert_eq!(
             pool.skill_dir("directory-name").as_deref(),
-            Some(skill_dir.as_path())
+            None,
+            "global pool lookup must not treat physical directory names as public skill identity"
         );
         assert_eq!(
             pool.skill_dir("frontmatter-alias").as_deref(),
             Some(skill_dir.as_path())
+        );
+    }
+
+    #[test]
+    fn global_skill_record_requires_declared_frontmatter_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let unnamed = dir.path().join("directory-name");
+        fs::create_dir_all(&unnamed).unwrap();
+        fs::write(unnamed.join("SKILL.md"), "# No declared name\n").unwrap();
+
+        assert!(
+            global_skill_record_from_dir("alice", "claude-global", &unnamed).is_none(),
+            "global skill rows must not infer semantic package identity from directory names"
+        );
+
+        fs::write(
+            unnamed.join("SKILL.md"),
+            "---\nname: declared-name\ndescription: Declared\n---\n# Declared\n",
+        )
+        .unwrap();
+        let record =
+            global_skill_record_from_dir("alice", "claude-global", &unnamed).expect("record");
+
+        assert_eq!(record.name, "declared-name");
+        assert_eq!(record.source.subpath.as_deref(), Some("directory-name"));
+    }
+
+    #[test]
+    fn global_skill_dir_lookup_requires_declared_name_even_for_direct_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let direct = dir.path().join("declared-name");
+        fs::create_dir_all(&direct).unwrap();
+        fs::write(direct.join("SKILL.md"), "# Missing frontmatter name\n").unwrap();
+
+        assert!(
+            skill_dir_in_global_pool(dir.path(), "declared-name").is_none(),
+            "direct directory matches must still validate SKILL.md declared identity"
+        );
+
+        let renamed = dir.path().join("physical-package");
+        fs::create_dir_all(&renamed).unwrap();
+        fs::write(
+            renamed.join("SKILL.md"),
+            "---\nname: declared-name\ndescription: Declared\n---\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            skill_dir_in_global_pool(dir.path(), "declared-name").as_deref(),
+            Some(renamed.as_path())
         );
     }
 
