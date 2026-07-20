@@ -262,3 +262,8 @@
   `skill.list` or `skill.publish` lookup as "not installed". `SKILL.md`
   must be readable and declare frontmatter `name`; directory entry scan
   errors and metadata errors must surface as unavailable inventory state.
+- Published Pages API discovery must distinguish "no API surface" from
+  corrupt API surface. An unpublished project or missing `api/` directory may
+  return no dynamic API abilities; an existing unreadable/non-directory API
+  path, directory entry error, or file-type error must fail registration
+  instead of making product routes disappear from the catalog.

@@ -283,17 +283,20 @@ fn is_api_ability_verb(verb: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-pub(crate) fn api_ability_names_for_project(user: &str, project_id: &str) -> Vec<String> {
+pub(crate) fn api_ability_names_for_project(
+    user: &str,
+    project_id: &str,
+) -> anyhow::Result<Vec<String>> {
     let key = (user.to_string(), project_id.to_string());
     let Some(handle) = PUBLISHED_PROJECTS.get(&key) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let api_dir = handle.canonical_root.join("api");
     drop(handle);
 
     let read_dir = match fs::read_dir(&api_dir) {
         Ok(read_dir) => read_dir,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => {
             let user_field = user;
             let project_field = project_id;
@@ -308,15 +311,21 @@ pub(crate) fn api_ability_names_for_project(user: &str, project_id: &str) -> Vec
                 path = path,
                 error = err_msg,
             );
-            return Vec::new();
+            anyhow::bail!("scan pages API directory {}: {err}", api_dir.display());
         }
     };
 
     let mut names = BTreeSet::new();
-    for entry in read_dir.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
+    for entry in read_dir {
+        let entry = entry.map_err(|err| {
+            anyhow::anyhow!("scan pages API directory {}: {err}", api_dir.display())
+        })?;
+        let file_type = entry.file_type().map_err(|err| {
+            anyhow::anyhow!(
+                "read pages API entry type {}: {err}",
+                entry.path().display()
+            )
+        })?;
         if !file_type.is_file() {
             continue;
         }
@@ -344,7 +353,7 @@ pub(crate) fn api_ability_names_for_project(user: &str, project_id: &str) -> Vec
         }
         names.insert(api_ability_name(user, project_id, verb));
     }
-    names.into_iter().collect()
+    Ok(names.into_iter().collect())
 }
 
 pub(crate) fn register_api_abilities_for_project(
@@ -353,7 +362,7 @@ pub(crate) fn register_api_abilities_for_project(
     project_id: &str,
     authority_scope: AuthorityScope,
 ) -> anyhow::Result<usize> {
-    let names = api_ability_names_for_project(user, project_id);
+    let names = api_ability_names_for_project(user, project_id)?;
     let owner = OwnerKind::User(user.to_string());
     for name in &names {
         let Some(verb) = name.rsplit_once(".api.").map(|(_prefix, verb)| verb) else {
@@ -396,6 +405,10 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("api")).expect("api dir");
         std::fs::write(dir.path().join(format!("api/{verb}.toml")), manifest_toml)
             .expect("manifest");
+        publish_project_root(user, project_id, dir)
+    }
+
+    fn publish_project_root(user: &str, project_id: &str, dir: TempDir) -> TempDir {
         let canonical_root = std::fs::canonicalize(dir.path()).expect("canonical root");
         let folder_handle = open_directory(&canonical_root).expect("open directory");
         PUBLISHED_PROJECTS.insert(
@@ -506,6 +519,39 @@ mod tests {
             "error should point at retired ability field or replacement field: {msg}"
         );
 
+        PUBLISHED_PROJECTS.remove(&key);
+    }
+
+    #[test]
+    fn api_ability_names_missing_api_dir_is_empty_project_api_surface() {
+        let user = "alice-no-api";
+        let project_id = "todo-no-api";
+        let key = (user.to_string(), project_id.to_string());
+        let dir = TempDir::new().expect("tempdir");
+        let _dir = publish_project_root(user, project_id, dir);
+
+        let names = api_ability_names_for_project(user, project_id).expect("scan api names");
+
+        assert!(names.is_empty());
+        PUBLISHED_PROJECTS.remove(&key);
+    }
+
+    #[test]
+    fn api_ability_names_rejects_corrupt_api_directory_state() {
+        let user = "alice-bad-api";
+        let project_id = "todo-bad-api";
+        let key = (user.to_string(), project_id.to_string());
+        let dir = TempDir::new().expect("tempdir");
+        std::fs::write(dir.path().join("api"), "not a directory").expect("poison api path");
+        let _dir = publish_project_root(user, project_id, dir);
+
+        let error = api_ability_names_for_project(user, project_id)
+            .expect_err("corrupt api path must fail ability discovery");
+
+        assert!(
+            error.to_string().contains("scan pages API directory"),
+            "wrong error: {error}"
+        );
         PUBLISHED_PROJECTS.remove(&key);
     }
 }

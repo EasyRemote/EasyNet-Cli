@@ -2181,3 +2181,23 @@ Commands and outcomes will be appended after implementation.
   SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
   tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
   (`canonical-runtime-convergence-v2: OK`).
+
+## 2026-07-21 Pages dynamic API ability discovery
+
+- `rg -n
+  "api_ability_names_for_project|read_dir\\(&api_dir\\)|read_dir\\.flatten|return Vec::new\\(\\)"
+  src/daemon/ability/builtins/resources/pages/api.rs -S` — PASS for seam
+  identification; found the dynamic API route discovery empty-list fallback.
+- `cargo test -q pages::api --lib` — PASS (`4 passed`); covers missing
+  `api/` as valid no-API state and non-directory `api` path as corrupt state
+  that must fail discovery.
+- `cargo check --lib --bins` — PASS after migrating
+  `register_api_abilities_for_project` to fallible discovery.
+- `cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS
+  (`architecture-convergence: OK`).
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).

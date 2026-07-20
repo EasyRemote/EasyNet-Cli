@@ -682,3 +682,11 @@ Decisions will be appended as root-fork choices are made.
 - Preserve non-skill user directories under global pool roots as ignorable
   environment noise. The fail-closed rule starts only after a directory has
   skill package shape (`SKILL.md` / `skill.json`).
+- Treat Pages API ability discovery as route-registration authority, not a
+  best-effort directory hint. Missing `api/` means a project has no dynamic
+  backend routes; a corrupt existing `api` path means the project API surface
+  is unavailable and registration must fail.
+- Keep filename validation as the filter for user-authored non-route files.
+  Invalid verb names are still skipped with an operator event because they are
+  explicit non-ability artifacts; directory scan and file-type errors are not
+  artifacts and must not hide routes.

@@ -2085,3 +2085,24 @@ Evidence will be appended after indexing and focused impact queries.
   and metadata read failures surface as inventory errors. `skill.list` and
   `skill.publish` now propagate those errors, while non-skill user directories
   under the global pool remain ignored.
+
+## 2026-07-21 Pages dynamic API ability discovery audit
+
+- `.codegraph/` remains absent in the checkout; codegraph 1.4.1 is installed
+  but unavailable for indexed queries. Targeted source search identified this
+  seam.
+- `rg -n "api_ability_names_for_project|read_dir\\(&api_dir\\)|read_dir\\.flatten|return Vec::new\\(\\)"
+  src/daemon/ability/builtins/resources/pages/api.rs -S` identified dynamic
+  API ability discovery as a product route-visibility seam. The old
+  implementation returned an empty list when `api/` was unreadable and used
+  `read_dir.flatten()` plus `file_type` skip behavior, so corrupt API surface
+  state made dynamic routes disappear from the catalog.
+- The root abstraction problem was conflating "project has no API directory"
+  with "project API directory exists but is corrupt/unreadable". Missing
+  `api/` is a valid no-API project state; existing corrupt API surface is
+  unavailable route-registration state.
+- After the change, `api_ability_names_for_project` returns
+  `anyhow::Result<Vec<String>>`. Missing project or missing `api/` returns an
+  empty list; unreadable/non-directory API path, directory entry errors, and
+  file-type errors fail registration and propagate through
+  `register_api_abilities_for_project`.
