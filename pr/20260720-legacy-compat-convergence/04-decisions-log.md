@@ -513,3 +513,9 @@ Decisions will be appended as root-fork choices are made.
   not passive read predicates. The session authority binds the runtime call
   tuple; SDK history filters may narrow that tuple but must not substitute a
   different caller, callee, or subject set after authority validation.
+- Treat product device visibility as route visibility, not directory
+  visibility. Realm directory rows remain useful discovery evidence, but a
+  remote device is not selectable by product surfaces until the daemon proves a
+  signed health route to that owner. Probe-failed rows are preserved under
+  `unavailable_nodes` / network-health diagnostics and explicit
+  `node.describe` fails closed instead of returning stale ability summaries.

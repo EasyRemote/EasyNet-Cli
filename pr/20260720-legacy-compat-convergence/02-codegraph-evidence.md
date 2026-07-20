@@ -1675,3 +1675,26 @@ Evidence will be appended after indexing and focused impact queries.
   and `subject_uras` must be bound to the same call tuple already admitted by
   the runtime authority; mismatches fail before the receipt provider is called.
   R96 guards this cross-SDK parity.
+
+## 2026-07-21 Device visibility route-gate audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "meta.list_abilities browser.open_session route visible owner is not online
+  descriptor_ref stale device"` identified `federation_probe::collect_device_view`
+  and `federation_probe::resolve_device_record` as the product-facing device
+  visibility boundary feeding `node.list`, `node.describe`, and
+  `observe.network_health`.
+- Targeted source inspection found the compatibility seam: realm directory
+  rows that looked like device profiles were always pushed into `nodes`, even
+  when the signed health probe failed with route/owner-offline evidence. The
+  explicit `node.describe` path also returned directory ability summaries for
+  a probe-failed remote device.
+- The root abstraction problem was treating directory visibility as route
+  visibility. A directory row can say a device profile was advertised; it does
+  not prove that the owner is online, has a route-visible descriptor catalog,
+  or can execute `browser.open_session` / `meta.list_abilities` now.
+- After the change, `DeviceNetworkView` separates route-visible `nodes` from
+  `unavailable_nodes`. `collect_device_view` only exposes remote peers after a
+  successful signed probe, while preserving failed probe evidence for
+  diagnostics. `resolve_device_record` rejects unrouteable remote devices
+  before returning stale `ability_summaries`.

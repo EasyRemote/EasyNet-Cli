@@ -70,6 +70,7 @@ pub(crate) struct DeviceNodeSnapshot {
 #[derive(Debug, Clone)]
 pub(crate) struct DeviceNetworkView {
     pub nodes: Vec<DeviceNodeSnapshot>,
+    pub unavailable_nodes: Vec<DeviceNodeSnapshot>,
     pub federation_view: String,
     pub federation_view_reason: Option<String>,
     pub resolve_latency_ms: Option<u64>,
@@ -117,13 +118,25 @@ pub(crate) fn local_device_record(
     }))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ProbeOutcome {
     online: bool,
     state: &'static str,
     probe_status: &'static str,
     probe_error: Option<String>,
     latency_ms: Option<u64>,
+}
+
+trait DeviceProbe {
+    fn probe(&self, agent_ura: &str) -> ProbeOutcome;
+}
+
+struct RemoteDeviceProbe;
+
+impl DeviceProbe for RemoteDeviceProbe {
+    fn probe(&self, agent_ura: &str) -> ProbeOutcome {
+        probe_remote_device(agent_ura)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -169,6 +182,13 @@ pub(crate) fn local_identity() -> LocalIdentity {
 }
 
 pub(crate) fn collect_device_view(resolver: &dyn DiscoverFederationResolver) -> DeviceNetworkView {
+    collect_device_view_with_probe(resolver, &RemoteDeviceProbe)
+}
+
+fn collect_device_view_with_probe(
+    resolver: &dyn DiscoverFederationResolver,
+    probe: &dyn DeviceProbe,
+) -> DeviceNetworkView {
     let local = local_identity();
     let mut nodes = vec![DeviceNodeSnapshot {
         node_id: local.node_id.clone(),
@@ -194,9 +214,11 @@ pub(crate) fn collect_device_view(resolver: &dyn DiscoverFederationResolver) -> 
         probe_error: None,
         latency_ms: None,
     }];
+    let mut unavailable_nodes = Vec::new();
     if !local.paired {
         return DeviceNetworkView {
             nodes,
+            unavailable_nodes,
             federation_view: "local_only".to_string(),
             federation_view_reason: Some(
                 "device is not paired with a realm; only the local daemon can be described"
@@ -211,6 +233,7 @@ pub(crate) fn collect_device_view(resolver: &dyn DiscoverFederationResolver) -> 
         Err(e) => {
             return DeviceNetworkView {
                 nodes,
+                unavailable_nodes,
                 federation_view: "local_only".to_string(),
                 federation_view_reason: Some(format!("device credentials are unavailable: {e}")),
                 resolve_latency_ms: None,
@@ -225,6 +248,7 @@ pub(crate) fn collect_device_view(resolver: &dyn DiscoverFederationResolver) -> 
         Err(e) => {
             return DeviceNetworkView {
                 nodes,
+                unavailable_nodes,
                 federation_view: "local_only".to_string(),
                 federation_view_reason: Some(format!(
                     "federation.resolve failed against realm {:?}: {e}",
@@ -256,19 +280,19 @@ pub(crate) fn collect_device_view(resolver: &dyn DiscoverFederationResolver) -> 
         }
         let probe = if probed < MAX_DEVICE_PROBES {
             probed += 1;
-            probe_remote_device(&agent_ura)
+            probe.probe(&agent_ura)
         } else {
             ProbeOutcome {
-                online: true,
-                state: "PROBATION",
-                probe_status: "directory_only",
+                online: false,
+                state: "UNAVAILABLE",
+                probe_status: "probe_budget_exceeded",
                 probe_error: Some(format!(
-                    "probe budget exceeded after {MAX_DEVICE_PROBES} devices"
+                    "probe budget exceeded after {MAX_DEVICE_PROBES} devices; device is not route-visible"
                 )),
                 latency_ms: None,
             }
         };
-        nodes.push(DeviceNodeSnapshot {
+        let node = DeviceNodeSnapshot {
             node_id,
             tenant_id: local.tenant_id.clone(),
             agent_ura: Some(agent_ura),
@@ -280,7 +304,12 @@ pub(crate) fn collect_device_view(resolver: &dyn DiscoverFederationResolver) -> 
             probe_status: probe.probe_status.to_string(),
             probe_error: probe.probe_error,
             latency_ms: probe.latency_ms,
-        });
+        };
+        if node.online {
+            nodes.push(node);
+        } else {
+            unavailable_nodes.push(node);
+        }
     }
 
     nodes.sort_by(|a, b| {
@@ -288,17 +317,23 @@ pub(crate) fn collect_device_view(resolver: &dyn DiscoverFederationResolver) -> 
             .cmp(&a.is_self)
             .then_with(|| a.node_id.cmp(&b.node_id))
     });
+    unavailable_nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
 
     let federation_view_reason = if nodes.len() == 1 {
-        Some(
-            "realm directory was reachable, but no peer device profiles were advertised"
-                .to_string(),
-        )
+        Some(if unavailable_nodes.is_empty() {
+            "realm directory was reachable, but no peer device profiles were advertised".to_string()
+        } else {
+            format!(
+                "realm directory was reachable, but {} peer device profile(s) were not route-visible",
+                unavailable_nodes.len()
+            )
+        })
     } else {
         None
     };
     DeviceNetworkView {
         nodes,
+        unavailable_nodes,
         federation_view: "federated".to_string(),
         federation_view_reason,
         resolve_latency_ms,
@@ -313,6 +348,14 @@ pub(crate) fn resolve_device_record(
     resolver: &dyn DiscoverFederationResolver,
     node_id: &str,
 ) -> anyhow::Result<Option<ResolvedDeviceRecord>> {
+    resolve_device_record_with_probe(resolver, node_id, &RemoteDeviceProbe)
+}
+
+fn resolve_device_record_with_probe(
+    resolver: &dyn DiscoverFederationResolver,
+    node_id: &str,
+    probe: &dyn DeviceProbe,
+) -> anyhow::Result<Option<ResolvedDeviceRecord>> {
     let local = local_identity();
     if !local.paired {
         return Ok(None);
@@ -323,7 +366,7 @@ pub(crate) fn resolve_device_record(
     let caller_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
 
     if let Some(record) =
-        resolve_device_record_with_filter(resolver, &creds, &caller_ura, node_id, None)?
+        resolve_device_record_with_filter(resolver, &creds, &caller_ura, node_id, None, probe)?
     {
         return Ok(Some(record));
     }
@@ -333,6 +376,7 @@ pub(crate) fn resolve_device_record(
         &caller_ura,
         node_id,
         Some("*".to_string()),
+        probe,
     )
 }
 
@@ -342,6 +386,7 @@ fn resolve_device_record_with_filter(
     caller_ura: &str,
     node_id: &str,
     tenant_filter: Option<String>,
+    probe: &dyn DeviceProbe,
 ) -> anyhow::Result<Option<ResolvedDeviceRecord>> {
     let resolved = resolver
         .resolve_agents(
@@ -379,8 +424,19 @@ fn resolve_device_record_with_filter(
                 latency_ms: None,
             }
         } else {
-            probe_remote_device(&agent.ura)
+            probe.probe(&agent.ura)
         };
+        if !probe.online {
+            anyhow::bail!(
+                "node.describe: node {node_id:?} is not route-visible: {}{}",
+                probe.probe_status,
+                probe
+                    .probe_error
+                    .as_deref()
+                    .map(|error| format!(" ({error})"))
+                    .unwrap_or_default()
+            );
+        }
 
         return Ok(Some(ResolvedDeviceRecord {
             node: DeviceNodeSnapshot {
@@ -521,6 +577,66 @@ fn probe_remote_device(agent_ura: &str) -> ProbeOutcome {
 mod tests {
     use super::*;
 
+    #[derive(Debug)]
+    struct StaticResolver {
+        agents: Vec<ResolvedAgent>,
+    }
+
+    impl DiscoverFederationResolver for StaticResolver {
+        fn resolve_agents(
+            &self,
+            _tenant: &str,
+            _realm: &str,
+            _caller_ura: String,
+            _tenant_filter: Option<String>,
+        ) -> Result<
+            Vec<crate::daemon::federation::client::ability_contract::ResolvedAgent>,
+            crate::daemon::ability::builtins::agents::discover::DiscoverFederationResolveError,
+        > {
+            Ok(self.agents.clone())
+        }
+    }
+
+    #[derive(Debug)]
+    struct FixedProbe {
+        outcome: ProbeOutcome,
+    }
+
+    impl DeviceProbe for FixedProbe {
+        fn probe(&self, _agent_ura: &str) -> ProbeOutcome {
+            self.outcome.clone()
+        }
+    }
+
+    fn save_paired_test_credentials() {
+        config::save_credentials(&config::Credentials {
+            node_id: "local-node".into(),
+            credential_token: "token".into(),
+            hub_endpoint: "https://hub.example:50443".into(),
+            realm: "acme".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        })
+        .expect("save paired test credentials");
+    }
+
+    fn unreachable_probe() -> FixedProbe {
+        FixedProbe {
+            outcome: ProbeOutcome {
+                online: false,
+                state: "SUSPECT",
+                probe_status: "probe_failed",
+                probe_error: Some("owner is not online".into()),
+                latency_ms: Some(7),
+            },
+        }
+    }
+
     #[test]
     fn node_id_from_v414_device_ura_extracts_uuid() {
         // URA v4.1.4: device-profile URA is `device/<uuid>`.
@@ -592,6 +708,76 @@ mod tests {
         assert_eq!(value["online"], Value::Bool(false));
         assert_eq!(value["probe_status"], "probe_failed");
         assert_eq!(value["latency_ms"], 123);
+    }
+
+    #[test]
+    fn collect_device_view_does_not_expose_unrouteable_directory_devices_as_nodes() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        save_paired_test_credentials();
+        let remote_device_ura = crate::core::ura::device_ura("acme", "remote-node");
+        let resolver = StaticResolver {
+            agents: vec![ResolvedAgent {
+                ura: remote_device_ura,
+                status: "active".into(),
+                host_node_id: None,
+                ability_summaries: vec![
+                    ability_summary("easynet:///r/acme/device/remote-node", "observe", "health"),
+                    ability_summary("easynet:///r/acme/device/remote-node", "node", "list"),
+                ],
+            }],
+        };
+
+        let view = collect_device_view_with_probe(&resolver, &unreachable_probe());
+
+        assert_eq!(
+            view.nodes.iter().filter(|node| !node.is_self).count(),
+            0,
+            "unreachable directory rows must not be product-selectable nodes: {view:#?}"
+        );
+        assert_eq!(view.unavailable_nodes.len(), 1);
+        assert_eq!(view.unavailable_nodes[0].node_id, "remote-node");
+        assert_eq!(view.unavailable_nodes[0].probe_status, "probe_failed");
+        assert!(view
+            .federation_view_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("not route-visible")));
+    }
+
+    #[test]
+    fn resolve_device_record_rejects_unrouteable_directory_ability_facts() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        save_paired_test_credentials();
+        let remote_device_ura = crate::core::ura::device_ura("acme", "remote-node");
+        let resolver = StaticResolver {
+            agents: vec![ResolvedAgent {
+                ura: remote_device_ura,
+                status: "active".into(),
+                host_node_id: None,
+                ability_summaries: vec![
+                    ability_summary("easynet:///r/acme/device/remote-node", "observe", "health"),
+                    ability_summary("easynet:///r/acme/device/remote-node", "node", "list"),
+                    ability_summary(
+                        "easynet:///r/acme/device/remote-node",
+                        "browser",
+                        "open_session",
+                    ),
+                ],
+            }],
+        };
+
+        let error =
+            resolve_device_record_with_probe(&resolver, "remote-node", &unreachable_probe())
+                .expect_err("unrouteable device must not return stale ability_summaries");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("not route-visible"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains("owner is not online"),
+            "probe evidence must be preserved: {message}"
+        );
     }
 
     #[test]

@@ -1697,3 +1697,27 @@ Commands and outcomes will be appended after implementation.
   tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
   (`canonical-runtime-convergence-v2: OK`).
 - `git diff --check` — PASS.
+
+## 2026-07-21 Device visibility route-gate
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "meta.list_abilities browser.open_session route visible owner is not online
+  descriptor_ref stale device"` — PASS; reports the product-facing
+  `federation_probe` device visibility helpers and `node.describe` handlers.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS before
+  focused tests.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q federation_probe --lib`
+  — PASS (`10 passed`); includes regression coverage that probe-failed
+  directory devices move to `unavailable_nodes` and that `node.describe` does
+  not return stale ability summaries for unrouteable devices.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q describe_node --lib`
+  — PASS (`2 passed`).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q network_health --lib`
+  — PASS (`4 passed`).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).

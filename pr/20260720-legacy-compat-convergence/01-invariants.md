@@ -159,3 +159,8 @@
   build configs carry one concrete `AbilityAuthorityContext`; daemon boot,
   deterministic snapshots, and tests may choose different profiles, but the
   assembly core must never interpret `None` as local-environment authority.
+- Product device visibility must be route-visible, not directory-visible. A
+  remote device profile row from the realm directory is discovery evidence
+  only until the daemon proves the device with a signed health probe; failed
+  probes may be reported as unavailable evidence but must not enter selectable
+  `nodes` or return stale ability summaries.

@@ -234,8 +234,14 @@ fn list_nodes_handler(
         .iter()
         .map(federation_probe::node_to_json)
         .collect();
+    let unavailable_nodes: Vec<Value> = view
+        .unavailable_nodes
+        .iter()
+        .map(federation_probe::node_to_json)
+        .collect();
     Ok(json!({
         "nodes": nodes,
+        "unavailable_nodes": unavailable_nodes,
         "federation_view": view.federation_view,
         "federation_view_reason": view.federation_view_reason,
         "resolve_latency_ms": view.resolve_latency_ms,

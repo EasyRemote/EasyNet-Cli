@@ -113,7 +113,20 @@ fn handler(resolver: &dyn DiscoverFederationResolver) -> anyhow::Result<Value> {
             "error": node.probe_error.clone(),
         }));
     }
+    for node in &view.unavailable_nodes {
+        links.push(json!({
+            "target": node.agent_ura.clone(),
+            "node_id": node.node_id.clone(),
+            "status": node.probe_status.clone(),
+            "state": node.state.clone(),
+            "online": false,
+            "route_visible": false,
+            "latency_ms": node.latency_ms,
+            "error": node.probe_error.clone(),
+        }));
+    }
     let peer_count = view.nodes.iter().filter(|n| !n.is_self).count();
+    let unavailable_peer_count = view.unavailable_nodes.len();
     let resolve_latency_ms = view.resolve_latency_ms;
     let federation_view = view.federation_view;
     let federation_view_reason = view.federation_view_reason;
@@ -123,6 +136,7 @@ fn handler(resolver: &dyn DiscoverFederationResolver) -> anyhow::Result<Value> {
         "host_device_ura": host_ura,
         "hosted_agent_count": hosted_identity.hosted_agent_count(),
         "peer_count": peer_count,
+        "unavailable_peer_count": unavailable_peer_count,
         "links": Value::Array(links),
         "latency_ms": resolve_latency_ms,
         "schema": "v2",
