@@ -436,3 +436,7 @@ Decisions will be appended as root-fork choices are made.
   catalog, but unreadable/corrupt Agent registry projection must stop the
   curator at `stage = "catalog"` instead of letting it author against false
   empty route visibility.
+- Treat schedule due selection as a lifecycle observation, not a best-effort
+  cache read. A poisoned schedule cache or corrupt enabled cron row means the
+  tick state is unavailable for this iteration; it must be reported explicitly
+  instead of becoming an empty due-fire list.

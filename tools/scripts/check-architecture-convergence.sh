@@ -7704,6 +7704,97 @@ if automation_think.exists():
         )
 
 
+# Rule 84: schedule due selection is runtime lifecycle state, not an
+# optional cache read. A poisoned schedule cache or corrupt enabled cron row
+# must fail the tick observation explicitly; it must never be projected as an
+# empty due list that makes operators believe no schedule is ready.
+schedule_mod = cli_root / "src/daemon/execution/schedule/mod.rs"
+daemon_bin = cli_root / "src/bin/easynet-daemon.rs"
+if schedule_mod.exists():
+    text = source(schedule_mod)
+    body = rust_method_body(text, "due")
+    if body is None:
+        add(
+            "R84_SCHEDULE_DUE_FAIL_CLOSED",
+            schedule_mod,
+            1,
+            "ScheduleService must keep due selection as the tick lifecycle authority",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if "Result<Vec<DueFire>>" not in signature:
+            add(
+                "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                schedule_mod,
+                line_number(text, offset),
+                "ScheduleService::due must return Result so corrupt runtime state cannot become an empty due list",
+            )
+        for token, detail in (
+            (
+                "Err(_) => return Vec::new()",
+                "ScheduleService::due must not hide a poisoned cache behind an empty due list",
+            ),
+            (
+                "Err(_) => continue",
+                "ScheduleService::due must not skip corrupt enabled cron rows",
+            ),
+            (
+                "Err(error) => continue",
+                "ScheduleService::due must not skip corrupt enabled cron rows",
+            ),
+        ):
+            if token in fn_body:
+                add(
+                    "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                    schedule_mod,
+                    line_number(text, body_start + fn_body.find(token)),
+                    detail,
+                )
+        if "schedule due cache lock poisoned" not in fn_body:
+            add(
+                "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                schedule_mod,
+                line_number(text, offset),
+                "ScheduleService::due must preserve poisoned cache as explicit unavailable state",
+            )
+        if "has invalid cron" not in fn_body:
+            add(
+                "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                schedule_mod,
+                line_number(text, offset),
+                "ScheduleService::due must preserve corrupt enabled cron rows as explicit unavailable state",
+            )
+
+if daemon_bin.exists():
+    text = source(daemon_bin)
+    body = rust_method_body(text, "spawn_schedule_tick")
+    if body is None:
+        add(
+            "R84_SCHEDULE_DUE_FAIL_CLOSED",
+            daemon_bin,
+            1,
+            "schedule tick runner must own due-selection failure projection",
+        )
+    else:
+        offset, fn_body = body
+        if "schedule.due(" not in fn_body:
+            add(
+                "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                daemon_bin,
+                line_number(text, offset),
+                "schedule tick runner must consume ScheduleService::due",
+            )
+        if "due selection failed" not in fn_body or "Err(err)" not in fn_body:
+            add(
+                "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                daemon_bin,
+                line_number(text, offset),
+                "schedule tick runner must surface due-selection failure instead of treating it as no due fires",
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(

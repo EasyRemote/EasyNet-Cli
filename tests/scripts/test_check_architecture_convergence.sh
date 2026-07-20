@@ -5375,6 +5375,43 @@ expect_fail \
   "R83_CURATOR_CATALOG_FAIL_CLOSED"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/execution/schedule" "$CLI/src/bin"
+cat >"$CLI/src/daemon/execution/schedule/mod.rs" <<'EOF'
+pub struct DueFire;
+pub struct ScheduleId;
+pub struct ScheduleService {
+    cache: Cache,
+}
+
+impl ScheduleService {
+    pub fn due(&self) -> Vec<DueFire> {
+        let cache = match self.cache.read() {
+            Ok(g) => g,
+            Err(_) => return Vec::new(),
+        };
+        for entry in cache.values() {
+            let _cron = match parse_cron(&entry.cron_expr) {
+                Ok(cron) => cron,
+                Err(_) => continue,
+            };
+        }
+        Vec::new()
+    }
+}
+EOF
+cat >"$CLI/src/bin/easynet-daemon.rs" <<'EOF'
+fn spawn_schedule_tick(schedule: ScheduleService) {
+    let due = schedule.due();
+    if due.is_empty() {
+        return;
+    }
+}
+EOF
+expect_fail \
+  "schedule due selection silent empty fallback" \
+  "R84_SCHEDULE_DUE_FAIL_CLOSED"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/plugins" "$CLI/src/daemon/boot/invocation" "$CLI/src/daemon/ability/wire"
 cat >"$CLI/src/daemon/plugins/runtime_manager.rs" <<'EOF'
 use crate::daemon::ability::wire::AbilityWireRegistry;

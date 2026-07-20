@@ -818,7 +818,13 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                     lf.lock().ok().and_then(|g| g.get(id).copied())
                 }
             };
-            let due = schedule.due(now, lookup_last);
+            let due = match schedule.due(now, lookup_last) {
+                Ok(due) => due,
+                Err(err) => {
+                    eprintln!("[schedule-tick] due selection failed: {err:#}");
+                    continue;
+                }
+            };
             if due.is_empty() {
                 continue;
             }

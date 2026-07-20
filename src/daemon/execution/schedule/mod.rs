@@ -204,17 +204,16 @@ impl ScheduleService {
         &self,
         now: DateTime<Utc>,
         last_fire_unix_ms_for: impl Fn(&ScheduleId) -> Option<i64>,
-    ) -> Vec<DueFire> {
-        let cache = match self.cache.read() {
-            Ok(g) => g,
-            Err(_) => return Vec::new(),
-        };
+    ) -> anyhow::Result<Vec<DueFire>> {
+        let cache = self
+            .cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("schedule due cache lock poisoned"))?;
         let mut out = Vec::new();
         for entry in cache.values().filter(|e| e.enabled) {
-            let cron = match parse_cron(&entry.cron_expr) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
+            let cron = parse_cron(&entry.cron_expr).map_err(|err| {
+                anyhow::anyhow!("schedule {} has invalid cron: {err:#}", entry.id)
+            })?;
             let last_fire = last_fire_unix_ms_for(&entry.id)
                 .and_then(|ms| Utc.timestamp_millis_opt(ms).single());
             let anchor = last_fire
@@ -263,7 +262,7 @@ impl ScheduleService {
                 }
             }
         }
-        out
+        Ok(out)
     }
 }
 
@@ -435,10 +434,12 @@ mod tests {
         // Anchor "last fire" to 6 hours ago.
         let now = Utc.with_ymd_and_hms(2026, 4, 25, 12, 0, 0).unwrap();
         let last_fire_ms = (now - chrono::Duration::hours(6)).timestamp_millis();
-        let due = svc.due(
-            now,
-            |sid| if *sid == id { Some(last_fire_ms) } else { None },
-        );
+        let due = svc
+            .due(
+                now,
+                |sid| if *sid == id { Some(last_fire_ms) } else { None },
+            )
+            .expect("due");
         assert_eq!(due.len(), 1);
         assert!(due[0].catch_up); // collapsed-from-many is still flagged catch_up
     }
@@ -451,16 +452,18 @@ mod tests {
             .unwrap();
         let now = Utc.with_ymd_and_hms(2026, 4, 25, 12, 0, 0).unwrap();
         let last_fire_ms = (now - chrono::Duration::hours(2)).timestamp_millis();
-        let due = svc.due(
-            now,
-            |sid| {
-                if *sid == id {
-                    Some(last_fire_ms)
-                } else {
-                    None
-                }
-            },
-        );
+        let due = svc
+            .due(
+                now,
+                |sid| {
+                    if *sid == id {
+                        Some(last_fire_ms)
+                    } else {
+                        None
+                    }
+                },
+            )
+            .expect("due");
         assert_eq!(due.len(), 1);
         // first miss is the chosen instant
         assert!(due[0].fire_at < now);
@@ -479,16 +482,18 @@ mod tests {
         // = 10:00 + 11:00 + 12:00 — but 10:00 is outside window
         // (now - 2h = 10:00 inclusive, so 10:00 == window edge).
         let last_fire_ms = (now - chrono::Duration::hours(4)).timestamp_millis();
-        let due = svc.due(
-            now,
-            |sid| {
-                if *sid == id {
-                    Some(last_fire_ms)
-                } else {
-                    None
-                }
-            },
-        );
+        let due = svc
+            .due(
+                now,
+                |sid| {
+                    if *sid == id {
+                        Some(last_fire_ms)
+                    } else {
+                        None
+                    }
+                },
+            )
+            .expect("due");
         // Expect 2 or 3 fires (window edge inclusive). The bound
         // is `now - fire <= window`. So 10:00, 11:00, 12:00 fit.
         assert!(due.len() >= 2 && due.len() <= 3);
@@ -501,8 +506,40 @@ mod tests {
         svc.enable(&id, false).unwrap();
         let now = Utc.with_ymd_and_hms(2026, 4, 25, 12, 0, 0).unwrap();
         let last_fire_ms = (now - chrono::Duration::hours(1)).timestamp_millis();
-        let due = svc.due(now, |_| Some(last_fire_ms));
+        let due = svc.due(now, |_| Some(last_fire_ms)).expect("due");
         assert!(due.is_empty());
+    }
+
+    #[test]
+    fn due_rejects_corrupt_cached_cron_instead_of_silent_skip() {
+        let svc = ScheduleService::new();
+        let mut corrupt = entry("totally not cron", MisfirePolicy::Skip);
+        corrupt.id = ScheduleId::new("sched-corrupt");
+        svc.cache
+            .write()
+            .unwrap()
+            .insert(corrupt.id.clone(), corrupt);
+
+        let now = Utc.with_ymd_and_hms(2026, 4, 25, 12, 0, 0).unwrap();
+        let err = svc.due(now, |_| None).expect_err("corrupt cron must fail");
+        let message = format!("{err:#}");
+        assert!(message.contains("sched-corrupt"));
+        assert!(message.contains("invalid cron"));
+    }
+
+    #[test]
+    fn due_rejects_poisoned_cache_instead_of_empty_due_list() {
+        let svc = ScheduleService::new();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = svc.cache.write().unwrap();
+            panic!("poison schedule cache");
+        }));
+
+        let now = Utc.with_ymd_and_hms(2026, 4, 25, 12, 0, 0).unwrap();
+        let err = svc
+            .due(now, |_| None)
+            .expect_err("poisoned cache must fail");
+        assert!(format!("{err:#}").contains("schedule due cache lock poisoned"));
     }
 
     #[test]

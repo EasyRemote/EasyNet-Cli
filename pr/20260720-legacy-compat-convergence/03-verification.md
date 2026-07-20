@@ -1302,3 +1302,26 @@ Commands and outcomes will be appended after implementation.
   --limit 80` — PASS; reports `collect_owner_catalog(owner: &str) ->
   Result<Vec<CatalogEntry>, String>` and the new regression tests.
 - `git diff --check` — PASS.
+
+## 2026-07-20 Schedule due selection fail-closed runtime state
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q due_ --lib` — PASS
+  (`12 passed`); covers existing misfire semantics plus corrupt cached cron
+  rejection and poisoned cache rejection.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --locked --lib --bins` —
+  PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R84 for schedule due-selection fail-closed semantics.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for the previous poisoned-cache empty list and invalid
+  cron row skip.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "ScheduleService due
+  schedule tick due selection failed invalid cron" --limit 80` — PASS; reports
+  `ScheduleService::due(...) -> anyhow::Result<Vec<DueFire>>`,
+  `spawn_schedule_tick`, and the new corrupt-cron/poisoned-cache regression
+  tests.
+- `git diff --check` — PASS.

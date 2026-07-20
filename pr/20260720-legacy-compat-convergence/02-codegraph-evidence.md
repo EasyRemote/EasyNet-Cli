@@ -1343,3 +1343,24 @@ Evidence will be appended after indexing and focused impact queries.
   `owner ability catalog unavailable` and mission.think records
   `curator.stage = "catalog"` without asking the curator to author against a
   false empty catalog.
+
+## 2026-07-20 Schedule due-selection silent empty fallback audit
+
+- `codegraph query "ScheduleService due DueFire schedule tick cache lock
+  poisoned" --limit 100` identified `src/daemon/execution/schedule/mod.rs`
+  as the due-selection authority consumed by
+  `src/bin/easynet-daemon.rs::spawn_schedule_tick`.
+- `codegraph callers due --limit 100` showed the production tick runner plus
+  focused schedule tests as the only callers, making the migration to a
+  fallible due-selection surface bounded.
+- Targeted source inspection found the compatibility seam:
+  `ScheduleService::due` returned `Vec<DueFire>`, mapped cache lock poisoning
+  to `Vec::new()`, and skipped enabled rows with invalid cron expressions.
+- The root abstraction problem was treating schedule due selection as a
+  best-effort cache read. For the tick lifecycle, a poisoned cache or corrupt
+  enabled schedule is unavailable runtime state; it is not proof that no
+  schedule is due.
+- After the change, `ScheduleService::due` returns
+  `anyhow::Result<Vec<DueFire>>`, preserves poisoned cache and invalid cron
+  rows as explicit errors, and the tick runner logs `due selection failed`
+  before skipping only the current tick.
