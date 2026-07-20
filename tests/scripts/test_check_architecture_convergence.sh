@@ -5188,6 +5188,32 @@ expect_fail \
   "R79_INVOCATION_SIGNER_CUSTODY_AUTHORITY"
 
 make_good_fixture
+cat >"$CLI/src/daemon/ability/catalog/build.rs" <<'EOF'
+pub struct RegistryBuildConfig {
+    pub authority_context: Option<AbilityAuthorityContext>,
+}
+
+pub struct RegistryDaemonBuildConfig {
+    pub authority_context: Option<AbilityAuthorityContext>,
+}
+
+fn build_registry_with_services_result_inner(config: RegistryBuildConfig) {
+    let RegistryBuildConfig { authority_context } = config;
+    let authority_context = authority_context.unwrap_or_default();
+    assemble(authority_context);
+}
+
+fn build_absent() -> RegistryBuildConfig {
+    RegistryBuildConfig {
+        authority_context: None,
+    }
+}
+EOF
+expect_fail \
+  "catalog authority context optional fallback" \
+  "R80_CATALOG_AUTHORITY_CONTEXT_REQUIRED"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/plugins" "$CLI/src/daemon/boot/invocation" "$CLI/src/daemon/ability/wire"
 cat >"$CLI/src/daemon/plugins/runtime_manager.rs" <<'EOF'
 use crate::daemon::ability::wire::AbilityWireRegistry;

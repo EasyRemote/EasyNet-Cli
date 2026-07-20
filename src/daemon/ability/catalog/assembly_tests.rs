@@ -744,12 +744,11 @@ fn combined_registry_binds_local_introspection_to_distinct_device_and_hub_roots(
     let device_ura = crate::core::ura::device_ura("realm-b", "dev-b");
     let hub_ura = crate::core::ura::hub_ura("realm-b");
     let mut config = registry_config_for_agents(&agents);
-    config.authority_context = Some(
+    config.authority_context =
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
             device_ura.clone(),
         )
-        .expect("combined authority context"),
-    );
+        .expect("combined authority context");
     let registry = build_registry_with_services_result(config)
         .expect("assemble registry")
         .catalog;
@@ -796,12 +795,11 @@ fn explicit_voice_repository_registers_only_hub_call_aggregate_routes() {
     let device_ura = crate::core::ura::device_ura("voice-fixture", "dev");
     let hub_ura = crate::core::ura::hub_ura("voice-fixture");
     let mut config = registry_config_for_agents(&agents);
-    config.authority_context = Some(
+    config.authority_context =
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
             device_ura.clone(),
         )
-        .expect("combined authority context"),
-    );
+        .expect("combined authority context");
     let voice_shared_root = tempfile::tempdir().expect("create explicit shared Voice fixture root");
     let repository = Arc::new(
         crate::daemon::persistence::voice_calls::HubRealmVoiceCallRepository::open(
@@ -896,12 +894,11 @@ fn pages_management_is_user_owned_and_runs_on_the_declared_pages_agent() {
         realm: Some("pages-owner".to_string()),
         listener_port: Some(8787),
     };
-    config.authority_context = Some(
+    config.authority_context =
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
             device_ura,
         )
-        .expect("pages test Device authority context"),
-    );
+        .expect("pages test Device authority context");
 
     let registry = build_registry_with_services_result(config)
         .expect("assemble registry")
@@ -953,10 +950,9 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
     );
     let mut config = registry_config_for_agents(&agents);
     config.local_runtime = Some(Arc::clone(&runtime));
-    config.authority_context = Some(
+    config.authority_context =
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
-            .expect("Hub authority context"),
-    );
+            .expect("Hub authority context");
     let registry = build_registry_with_services_result(config)
         .expect("assemble registry")
         .catalog;
@@ -1069,12 +1065,11 @@ fn hub_daemon_builder_does_not_read_device_agent_transaction_state() {
             None,
         ),
     );
-    config.authority_context = Some(
+    config.authority_context =
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
             crate::core::ura::hub_ura("hub-only"),
         )
-        .expect("Hub authority context"),
-    );
+        .expect("Hub authority context");
     let built = build_registry_for_daemon_result(config)
         .expect("Hub daemon builder must not parse Device agent transaction state");
     let rows = built.catalog.authority_ability_catalog_snapshot();
@@ -1103,12 +1098,11 @@ fn hub_daemon_builder_starts_without_publishing_unprovided_voice_capabilities() 
             None,
         ),
     );
-    config.authority_context = Some(
+    config.authority_context =
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
             crate::core::ura::hub_ura("voice-provider-required"),
         )
-        .expect("Hub authority context"),
-    );
+        .expect("Hub authority context");
 
     let built = build_registry_for_daemon_result(config)
         .expect("Hub daemon must start when optional voice providers are absent");

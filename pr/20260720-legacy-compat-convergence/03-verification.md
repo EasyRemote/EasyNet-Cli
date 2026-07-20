@@ -1198,3 +1198,24 @@ Commands and outcomes will be appended after implementation.
 - `rg -n "bytes_from_value|bytes_b64|unwrap_or_default\\(\\)|unwrap_or\\(\\\"application/octet-stream\\\"\\)|sha256 != actual_sha256|required_non_empty_string" ...`
   — PASS; production parser requires fields and verifies sha256, while the old
   defaulting pattern remains only in the architecture-gate negative fixture.
+
+## 2026-07-20 Ability catalogue authority-context fallback removal
+
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo fmt --check` —
+  PASS.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo check --locked --lib
+  --bins` — PASS; using `--locked` proved the change does not depend on
+  dependency/version drift.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo test
+  catalog::assembly_tests --lib` — PASS (`38 passed`).
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R80 for concrete catalogue authority context.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for `Option<AbilityAuthorityContext>`,
+  `authority_context.unwrap_or_default()`, and `authority_context: None`.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query RegistryBuildConfig
+  --limit 30` and `codegraph query RegistryDaemonBuildConfig --limit 20` —
+  PASS; reports concrete build config structs and constructors.

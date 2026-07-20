@@ -155,3 +155,7 @@
   signer capability is not sufficient to issue descriptor-bound invocation
   signatures unless it is attached to a self-signed owner authority or a valid
   hosted-agent signing lease.
+- Ability catalogue assembly must be authority-context complete. Registry
+  build configs carry one concrete `AbilityAuthorityContext`; daemon boot,
+  deterministic snapshots, and tests may choose different profiles, but the
+  assembly core must never interpret `None` as local-environment authority.

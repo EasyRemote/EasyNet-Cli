@@ -207,7 +207,7 @@ fn registry_with_temp_home_for_profile(
     let mut config = crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new(
         crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
     );
-    config.authority_context = Some(authority_context_for_real_invoke(profile));
+    config.authority_context = authority_context_for_real_invoke(profile);
     config.local_runtime = Some(canonical_test_runtime());
     config.loaders = Some(Arc::new(Vec::new()));
     let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)
@@ -238,9 +238,8 @@ fn registry_with_voice_temp_home() -> (
     );
     config.shared_stores = crate::daemon::ability::catalog::RegistrySharedStores::default()
         .with_voice_call_provider_assembly(voice.provider());
-    config.authority_context = Some(authority_context_for_real_invoke(
-        RealInvokeAuthorityProfile::CombinedDeviceHub,
-    ));
+    config.authority_context =
+        authority_context_for_real_invoke(RealInvokeAuthorityProfile::CombinedDeviceHub);
     config.local_runtime = Some(canonical_test_runtime());
     config.loaders = Some(Arc::new(Vec::new()));
     let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)
@@ -269,13 +268,12 @@ fn registry_with_joined_temp_home() -> (
     let mut config = crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new(
         crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
     );
-    config.authority_context = Some(
+    config.authority_context =
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
             authority_fixture_device_ura(),
             std::iter::empty::<String>(),
         )
-        .expect("build joined Device authority fixture with hot hosted-Agent inventory"),
-    );
+        .expect("build joined Device authority fixture with hot hosted-Agent inventory");
     config.local_runtime = Some(canonical_test_runtime());
     config.loaders = Some(Arc::new(Vec::new()));
     let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)

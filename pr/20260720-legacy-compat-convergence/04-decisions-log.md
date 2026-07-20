@@ -415,3 +415,8 @@ Decisions will be appended as root-fork choices are made.
   it must never synthesize response bytes, MIME type, attachment policy, or
   sha256. Malformed page.fetch output is an upstream projection failure and
   must not become HTTP 200 with empty/defaulted fields.
+- Treat ability catalogue authority context as mandatory assembly input.
+  `RegistryBuildConfig` and `RegistryDaemonBuildConfig` now carry concrete
+  `AbilityAuthorityContext`; daemon boot and deterministic snapshot builders
+  must select their authority profile before catalogue assembly, not rely on
+  `Option::None` being repaired from local environment.

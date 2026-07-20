@@ -1254,3 +1254,23 @@ Evidence will be appended after indexing and focused impact queries.
   rejects invalid base64, and verifies the sha256 against decoded bytes. Bad
   fetch projections map to HTTP 502 instead of HTTP 200. Rule
   `R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA` rejects the old defaulting path.
+
+## 2026-07-20 Ability catalogue authority-context fallback audit
+
+- Targeted `rg` found
+  `src/daemon/ability/catalog/build.rs::build_registry_with_services_result_inner`
+  using `authority_context.unwrap_or_default()` after accepting
+  `RegistryBuildConfig.authority_context: Option<AbilityAuthorityContext>`.
+- `codegraph query RegistryBuildConfig --limit 30` and
+  `codegraph query RegistryDaemonBuildConfig --limit 20` identified the two
+  assembly config boundaries that feed deterministic snapshots, daemon boot,
+  and assembly tests.
+- The root abstraction problem was optional authority lifecycle state in the
+  catalogue owner. A missing authority context should not be a valid assembly
+  state because the default observes local environment and can publish Device
+  or Hub owner planes the caller did not explicitly select.
+- After the change, both build configs carry concrete `AbilityAuthorityContext`.
+  Constructors still provide intentional defaults at the caller boundary, but
+  the assembly core no longer repairs absent authority state. Daemon boot now
+  constructs a concrete mode-specific context before loading agent registry or
+  receipt authority.

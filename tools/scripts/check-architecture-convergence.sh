@@ -7397,6 +7397,35 @@ if receipt_signing.exists():
             )
 
 
+# Rule 80: Ability catalogue assembly must receive a concrete authority
+# context. Optional authority state plus unwrap/default lets daemon boot and
+# deterministic snapshots silently publish the wrong owner plane.
+catalog_build = cli_root / "src/daemon/ability/catalog/build.rs"
+if catalog_build.exists():
+    text = source(catalog_build)
+    for match in re.finditer(r"authority_context\s*:\s*Option\s*<", text):
+        add(
+            "R80_CATALOG_AUTHORITY_CONTEXT_REQUIRED",
+            catalog_build,
+            line_number(text, match.start()),
+            "catalog build authority_context must be concrete, not Option",
+        )
+    for match in re.finditer(r"authority_context\s*\.unwrap_or_default\s*\(", text):
+        add(
+            "R80_CATALOG_AUTHORITY_CONTEXT_REQUIRED",
+            catalog_build,
+            line_number(text, match.start()),
+            "catalog build must not default missing authority context from local environment",
+        )
+    for match in re.finditer(r"authority_context\s*:\s*None\b", text):
+        add(
+            "R80_CATALOG_AUTHORITY_CONTEXT_REQUIRED",
+            catalog_build,
+            line_number(text, match.start()),
+            "catalog build must not encode absent authority context as a valid assembly state",
+        )
+
+
 if violations:
     for violation in sorted(violations):
         print(

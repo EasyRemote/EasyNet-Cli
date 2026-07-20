@@ -366,11 +366,9 @@ async fn main() -> anyhow::Result<()> {
         DaemonMode::Hub => {
             let hub_ura = easynet_cli::core::ura::hub_ura(daemon_config.realm());
             receipt_owner_uras.push(hub_ura.clone());
-            Some(
-                easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
-                    hub_ura,
-                )?,
-            )
+            easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
+                hub_ura,
+            )?
         }
         DaemonMode::Device | DaemonMode::Both => {
             let creds = config::load_credentials().map_err(|err| {
@@ -389,14 +387,14 @@ async fn main() -> anyhow::Result<()> {
                 )
             })?;
             hosted_agent_device_ura = Some(device_ura.clone());
-            Some(match daemon_config.mode() {
+            match daemon_config.mode() {
                 DaemonMode::Device => easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(device_ura, hosted_agent_uras)?,
                 DaemonMode::Both => {
                     receipt_owner_uras.push(easynet_cli::core::ura::hub_ura(daemon_config.realm()));
                     easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots_with_hosted_agents(device_ura, hosted_agent_uras)?
                 },
                 DaemonMode::Hub => unreachable!("Hub mode handled above"),
-            })
+            }
         }
     };
     let mut receipt_authority_config =
@@ -405,8 +403,7 @@ async fn main() -> anyhow::Result<()> {
         );
     if let Some(device_ura) = hosted_agent_device_ura {
         let inventory = authority_context
-            .as_ref()
-            .and_then(|context| context.hosted_agent_signing_inventory())
+            .hosted_agent_signing_inventory()
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "hosted-Agent receipt authority requires the catalog-owned inventory"

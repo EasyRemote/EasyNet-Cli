@@ -2493,12 +2493,11 @@ mod tests {
             &agents,
         );
         config.local_runtime = local_runtime;
-        config.authority_context = Some(
+        config.authority_context =
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
                 TEST_DEVICE_URA,
             )
-            .expect("test device URA is a valid device authority root"),
-        );
+            .expect("test device URA is a valid device authority root");
         crate::daemon::ability::catalog::build_registry_with_services_result(config)
             .expect("assemble local session dispatcher test catalog")
             .catalog

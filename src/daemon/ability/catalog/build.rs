@@ -116,7 +116,7 @@ pub fn build_registry_snapshot_with_authority_context(
         DeterministicAuthorityProfile::DeviceDefault,
     );
     let config = RegistryBuildConfig {
-        authority_context: Some(authority_context),
+        authority_context,
         ..config
     };
     build_registry_with_services_result_inner(
@@ -374,7 +374,7 @@ pub struct RegistryBuildConfig<'a> {
     pub loaders: Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>,
     pub pages_identity: PagesIdentity,
     pub local_runtime: Option<Arc<axon_sdk::invocation::LocalRuntime>>,
-    pub authority_context: Option<crate::daemon::ability::dispatch::AbilityAuthorityContext>,
+    pub authority_context: crate::daemon::ability::dispatch::AbilityAuthorityContext,
     pub hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
     pub shared_stores: RegistrySharedStores,
 }
@@ -406,7 +406,7 @@ impl<'a> RegistryBuildConfig<'a> {
             loaders: Arc::new(Vec::new()),
             pages_identity: PagesIdentity::default(),
             local_runtime: None,
-            authority_context: Some(authority_context),
+            authority_context,
             hot_agent_registrar_cell: Arc::new(
                 agent_lifecycle_ability::SharedHotRegistrarCell::new(),
             ),
@@ -421,7 +421,7 @@ pub struct RegistryDaemonBuildConfig {
     pub loaders: Option<Arc<Vec<Arc<dyn chat_ability::ContextLoader>>>>,
     pub pages_identity: PagesIdentity,
     pub local_runtime: Option<Arc<axon_sdk::invocation::LocalRuntime>>,
-    pub authority_context: Option<crate::daemon::ability::dispatch::AbilityAuthorityContext>,
+    pub authority_context: crate::daemon::ability::dispatch::AbilityAuthorityContext,
     pub hot_agent_registrar_cell: Arc<agent_lifecycle_ability::SharedHotRegistrarCell>,
     pub shared_stores: RegistrySharedStores,
 }
@@ -435,7 +435,7 @@ impl RegistryDaemonBuildConfig {
             loaders: None,
             pages_identity: PagesIdentity::default(),
             local_runtime: None,
-            authority_context: Some(AbilityAuthorityContext::from_local_environment()),
+            authority_context: AbilityAuthorityContext::from_local_environment(),
             hot_agent_registrar_cell: Arc::new(
                 agent_lifecycle_ability::SharedHotRegistrarCell::new(),
             ),
@@ -539,7 +539,6 @@ fn build_registry_with_services_result_inner(
         crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry::default(
         );
 
-    let authority_context = authority_context.unwrap_or_default();
     let hosts_device_authority = authority_context.hosts_device_authority();
     let hosts_hub_authority = authority_context.hosts_hub_authority();
     let daemon_runtime_assembly = assembly_mode.starts_runtime_services();
@@ -1313,10 +1312,7 @@ pub fn build_registry_for_daemon_result(
         hot_agent_registrar_cell,
         shared_stores,
     } = config;
-    let hosts_device_authority = authority_context
-        .as_ref()
-        .map(AbilityAuthorityContext::hosts_device_authority)
-        .unwrap_or(true);
+    let hosts_device_authority = authority_context.hosts_device_authority();
     let agents = if hosts_device_authority {
         recover_descriptor_import_transactions_before_daemon_registry_boot()?;
         // `load_agents` already defines the one legitimate empty state: a
