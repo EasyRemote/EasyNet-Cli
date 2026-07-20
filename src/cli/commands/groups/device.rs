@@ -127,31 +127,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         .and_then(|v| v.as_str())
         .unwrap_or(&args.node_id);
 
-    // `node.describe` returns a string `state` (HEALTHY /
-    // STANDALONE / REMOVED / etc) and a boolean `paired`. Fall
-    // back to integer-indexed `state` for compatibility with any
-    // future federation-tier handler that still serialises the
-    // Axon SDK enum (the legacy form was 0..=7 → label).
-    let state = node
-        .get("state")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .or_else(|| {
-            node.get("state").and_then(|v| v.as_i64()).map(|n| {
-                match n {
-                    1 => "JOINING",
-                    2 => "PROBATION",
-                    3 => "HEALTHY",
-                    4 => "SUSPECT",
-                    5 => "QUARANTINED",
-                    6 => "DRAINING",
-                    7 => "REMOVED",
-                    _ => "UNKNOWN",
-                }
-                .to_string()
-            })
-        })
-        .unwrap_or_else(|| "UNKNOWN".to_string());
+    let state = device_show_state(node)?;
     let paired = node
         .get("paired")
         .and_then(|v| v.as_bool())
@@ -405,6 +381,17 @@ fn device_show_abilities(node: &Value) -> anyhow::Result<Vec<Value>> {
         })
 }
 
+fn device_show_state(node: &Value) -> anyhow::Result<String> {
+    node.get("state")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "node.describe response omitted string `state`; device show refuses to translate legacy numeric state"
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,6 +450,30 @@ mod tests {
         assert_eq!(
             device_show_abilities(&json!({"abilities": abilities.clone()})).expect("abilities"),
             abilities
+        );
+    }
+
+    #[test]
+    fn device_show_requires_string_describe_state() {
+        let missing = device_show_state(&json!({"abilities": []}))
+            .expect_err("missing state must fail closed");
+        assert!(
+            missing.to_string().contains("omitted string `state`"),
+            "wrong error: {missing}"
+        );
+
+        let numeric = device_show_state(&json!({"state": 3}))
+            .expect_err("numeric legacy enum state must fail closed");
+        assert!(
+            numeric
+                .to_string()
+                .contains("refuses to translate legacy numeric state"),
+            "wrong error: {numeric}"
+        );
+
+        assert_eq!(
+            device_show_state(&json!({"state": "HEALTHY"})).expect("string state"),
+            "HEALTHY"
         );
     }
 
