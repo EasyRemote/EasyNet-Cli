@@ -1028,8 +1028,8 @@ fn build_registry_with_services_result_inner(
     // Default is lazy: `easynet start` must return a ready daemon
     // after the bounded local registry build, while external MCP
     // servers are discovered by a background supervisor against the
-    // dynamic registry overlay. Operators that need legacy blocking
-    // behaviour can set EASYNET_MCP_REFLECTION=eager; production
+    // dynamic registry overlay. Operators that need blocking
+    // reflection can set EASYNET_MCP_REFLECTION=eager; production
     // operators can set `off` and rely solely on
     // `mcp.client.{list,call}`.
     //
@@ -1056,7 +1056,13 @@ fn build_registry_with_services_result_inner(
             .clone()
             .unwrap_or_else(|| crate::core::ura::REALM_EASYNET.to_string());
         crate::daemon::ability::builtins::integrations::mcp::reflective_registry::PostArcReflection::plan(
-            crate::daemon::ability::builtins::integrations::mcp::reflective_registry::McpReflectionMode::from_env(),
+            crate::daemon::ability::builtins::integrations::mcp::reflective_registry::McpReflectionMode::from_env()
+                .with_context(|| {
+                    format!(
+                        "parse {}",
+                        crate::daemon::ability::builtins::integrations::mcp::reflective_registry::ENV_MCP_REFLECTION_MODE
+                    )
+                })?,
             pages_identity.user.as_deref(),
             &reflection_realm,
             &mcp_svc,

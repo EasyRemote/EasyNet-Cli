@@ -83,40 +83,26 @@ pub enum McpReflectionMode {
     /// Return daemon Ready first, then refresh the reflective
     /// catalogue in the dynamic registry overlay.
     Lazy,
-    /// Legacy / benchmark mode: finish reflection before returning
-    /// the registry to the caller.
+    /// Operator-selected blocking mode: finish reflection before
+    /// returning the registry to the caller.
     Eager,
 }
 
 impl McpReflectionMode {
-    /// Read the env-configured mode. Unknown / malformed values
-    /// fall back to `Lazy` AND emit a single `warn` op-event so the
-    /// operator who typo'd `EASYNET_MCP_REFLECTION=eagre` can find
-    /// the misconfiguration in the daemon log instead of silently
-    /// running the wrong mode for the lifetime of the process.
-    pub fn from_env() -> Self {
-        match std::env::var(ENV_MCP_REFLECTION_MODE) {
-            Err(_) => Self::Lazy,
-            Ok(raw) => match Self::parse(&raw) {
-                Ok(mode) => mode,
-                Err(UnknownReflectionMode(unknown)) => {
-                    crate::op_event!(
-                        component = mcp_reflective,
-                        kind = reflection_mode_unknown,
-                        level = "warn",
-                        env = ENV_MCP_REFLECTION_MODE,
-                        raw = unknown,
-                        fallback = Self::Lazy.as_str(),
-                    );
-                    Self::Lazy
-                }
-            },
-        }
+    /// Read the env-configured mode. Unknown or malformed values are
+    /// configuration errors; daemon registry assembly must fail before
+    /// advertising an MCP reflection lifecycle the operator did not
+    /// request.
+    pub fn from_env() -> Result<Self, UnknownReflectionMode> {
+        Self::from_env_value(std::env::var(ENV_MCP_REFLECTION_MODE).ok().as_deref())
+    }
+
+    fn from_env_value(raw: Option<&str>) -> Result<Self, UnknownReflectionMode> {
+        raw.map(Self::parse).unwrap_or(Ok(Self::Lazy))
     }
 
     /// Strict parser. Returns `Err(raw_lowercased)` for unknown
-    /// values so callers can choose between hard-fail (config
-    /// validators) and warn-and-fallback ([`Self::from_env`]).
+    /// values so callers can hard-fail configuration validation.
     /// Empty strings normalize to `Lazy` because env-var-as-empty
     /// is indistinguishable from env-var-absent on many shells.
     pub fn parse(raw: &str) -> Result<Self, UnknownReflectionMode> {
@@ -1943,9 +1929,9 @@ while True:
     #[test]
     fn reflection_mode_parser_rejects_unknown_values() {
         // Typos must surface to the caller. `from_env` is the layer
-        // that turns this `Err` into a logged warning + lazy fallback;
-        // the parser itself stays honest so config validators can
-        // hard-fail when they need to.
+        // that reads process configuration; the parser itself stays
+        // honest so daemon registry assembly can hard-fail before
+        // advertising the wrong lifecycle.
         assert_eq!(
             McpReflectionMode::parse("eagre"),
             Err(UnknownReflectionMode("eagre".to_string()))
@@ -1953,6 +1939,22 @@ while True:
         assert_eq!(
             McpReflectionMode::parse("not-a-mode"),
             Err(UnknownReflectionMode("not-a-mode".to_string()))
+        );
+    }
+
+    #[test]
+    fn reflection_mode_from_env_value_rejects_unknown_instead_of_fallback() {
+        assert_eq!(
+            McpReflectionMode::from_env_value(None),
+            Ok(McpReflectionMode::Lazy)
+        );
+        assert_eq!(
+            McpReflectionMode::from_env_value(Some("")),
+            Ok(McpReflectionMode::Lazy)
+        );
+        assert_eq!(
+            McpReflectionMode::from_env_value(Some("eagre")),
+            Err(UnknownReflectionMode("eagre".to_string()))
         );
     }
 
