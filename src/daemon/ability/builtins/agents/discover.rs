@@ -794,7 +794,21 @@ fn resolve_via_federation(
         // compiles regardless of the `axon-pb` feature. With the
         // feature off, the reader returns an explicit capability error
         // rather than fabricating an empty directory.
-        match crate::daemon::federation::directory_reader::read_federated_directory(None) {
+        let local_user_id = match creds.user_id() {
+            Ok(user_id) => user_id,
+            Err(error) => {
+                return Ok(error_envelope(
+                    "federation_not_joined",
+                    &format!("credentials cannot identify the calling user: {error}"),
+                    scope,
+                    query,
+                ));
+            }
+        };
+        match crate::daemon::federation::directory_reader::read_federated_directory_for_user(
+            None,
+            local_user_id,
+        ) {
             Ok(entries) => rows.extend(federated_directory_candidates(&entries)),
             Err(error) if rows.is_empty() => {
                 return Ok(error_envelope(

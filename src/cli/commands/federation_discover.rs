@@ -61,11 +61,11 @@ pub struct DiscoverArgs {
     #[arg(long)]
     pub agent_ura: Option<String>,
 
-    /// Filter cross-realm entries by the calling user's
-    /// federated bindings (PR-N4 INV-5 privacy default). Only
-    /// entries whose URA is on the calling daemon's own realm
-    /// or has a recorded binding for 'user-id' are returned.
-    /// Absent ⇒ unfiltered (operator / audit query path).
+    /// Filter cross-realm entries by a user's federated bindings
+    /// (PR-N4 INV-5 privacy default). Only entries whose URA is on the
+    /// calling daemon's own realm or has a recorded binding for 'user-id'
+    /// are returned. If absent, this command performs an explicit
+    /// operator/audit read of the unfiltered directory.
     #[arg(long = "user-id")]
     pub local_user_id: Option<String>,
 
@@ -78,10 +78,16 @@ pub struct DiscoverArgs {
 /// service boundary. The facade owns argument mapping and rendering;
 /// transport signing and gRPC details live below it.
 pub fn run(args: DiscoverArgs) -> anyhow::Result<()> {
-    let entries = crate::daemon::federation::directory_reader::read_federated_directory_filtered(
-        args.agent_ura.as_deref(),
-        args.local_user_id.as_deref(),
-    )?;
+    let entries = if let Some(local_user_id) = args.local_user_id.as_deref() {
+        crate::daemon::federation::directory_reader::read_federated_directory_for_user(
+            args.agent_ura.as_deref(),
+            local_user_id,
+        )?
+    } else {
+        crate::daemon::federation::directory_reader::read_federated_directory_for_operator_audit(
+            args.agent_ura.as_deref(),
+        )?
+    };
 
     if args.json {
         let out = json!({ "entries": entries });

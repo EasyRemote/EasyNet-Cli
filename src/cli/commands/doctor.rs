@@ -283,7 +283,9 @@ fn check_federation() -> Check {
 #[cfg(feature = "axon-pb")]
 fn federation_check_impl() -> Check {
     use serde_json::Value;
-    match crate::daemon::invocation::routing::remote_invoke::invoke_federation_discover(None) {
+    match crate::daemon::federation::directory_reader::read_federated_directory_for_current_user(
+        None,
+    ) {
         Ok(entries) => {
             let total = entries.len();
             let stale = entries
@@ -335,7 +337,7 @@ fn federation_check_impl() -> Check {
         Err(e) => Check {
             name: "federation".to_string(),
             status: CheckStatus::Warn,
-            detail: format!("federation.discover unavailable: {e}"),
+            detail: format!("user-scoped federation.discover unavailable: {e}"),
             hint: Some("Check that the daemon is running ('easynet runtime status')."),
         },
     }

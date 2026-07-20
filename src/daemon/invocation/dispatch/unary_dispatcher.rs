@@ -1093,27 +1093,30 @@ impl UnaryDispatcher {
     /// dedupe by agent_ura), returns matching `DirectoryEntry`
     /// list.
     ///
-    /// When the request carries a `local_user_id` AND the
-    /// daemon has both a `FederatedBindingsStore` and a
-    /// `session_realm` wired, the dispatch routes through
-    /// `handle_discover_with_user_filter` so cross-realm
-    /// entries are filtered by the user's binding state per
-    /// PR-N4 INV-5 privacy default. Otherwise (no user id or
-    /// no bindings store), routes through the unfiltered
-    /// `handle_discover` for backwards-compat with operator /
-    /// audit query callers.
+    /// When the request carries a `local_user_id`, the daemon must have both a
+    /// `FederatedBindingsStore` and `session_realm` wired and routes through
+    /// `handle_discover_with_user_filter` so cross-realm entries are filtered
+    /// by the user's binding state per PR-N4 INV-5 privacy default. Requests
+    /// without `local_user_id` are the explicit operator/audit surface and use
+    /// the unfiltered directory.
     ///
     /// Pure read; no I/O — single-realm daemons that haven't
     /// accumulated any peer views just return an empty
     /// response, gracefully degrading to local-only behaviour.
     pub(crate) fn dispatch_federation_discover(&self, arguments: &[u8]) -> Result<Vec<u8>, Status> {
         let request: federation_wrappers::DiscoverRequest = parse_json_args(arguments)?;
-        let federated_response = match (
-            request.local_user_id.as_deref(),
-            self.directory.federated_bindings.as_ref(),
-            self.identity.session_realm.as_deref(),
-        ) {
-            (Some(_user_id), Some(bindings), Some(realm)) => {
+        let federated_response = match request.local_user_id.as_deref() {
+            Some(_user_id) => {
+                let bindings = self.directory.federated_bindings.as_ref().ok_or_else(|| {
+                    Status::failed_precondition(
+                        "federation.discover local_user_id requires a federated bindings store",
+                    )
+                })?;
+                let realm = self.identity.session_realm.as_deref().ok_or_else(|| {
+                    Status::failed_precondition(
+                        "federation.discover local_user_id requires a session realm",
+                    )
+                })?;
                 let resolver = crate::daemon::keyring::resolver::FederatedUserResolver::new(
                     realm,
                     std::sync::Arc::clone(bindings),
@@ -1124,7 +1127,7 @@ impl UnaryDispatcher {
                     &resolver,
                 )
             }
-            _ => {
+            None => {
                 federation_wrappers::handle_discover(&request, &self.directory.federated_directory)
             }
         };

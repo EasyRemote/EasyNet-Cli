@@ -71,20 +71,17 @@ pub struct DevicesArgs {
 }
 
 pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
-    let creds = config::load_credentials().ok();
-    let current_node_id = creds
-        .as_ref()
-        .map(|c| c.node_id.clone())
-        .unwrap_or_default();
-    let self_ura = creds
-        .as_ref()
-        .map(|c| crate::core::ura::device_ura(&c.realm, &c.node_id));
+    let creds = config::load_credentials()
+        .context("device list requires paired credentials for user-scoped federation.discover")?;
+    let current_node_id = creds.node_id.clone();
+    let current_user_id = creds.user_id()?;
+    let self_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
 
-    let entries = fetch_directory_entries(self_ura.as_deref())?;
+    let entries = fetch_directory_entries(current_user_id)?;
     let nodes: Vec<Value> = entries
         .into_iter()
         .filter(is_device_entry)
-        .map(|e| project_directory_entry(e, self_ura.as_deref()))
+        .map(|e| project_directory_entry(e, Some(self_ura.as_str())))
         .collect();
 
     let filtered: Vec<Value> = nodes
@@ -145,13 +142,16 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
 }
 
 #[cfg(feature = "axon-pb")]
-fn fetch_directory_entries(_self_ura: Option<&str>) -> anyhow::Result<Vec<Value>> {
-    crate::daemon::invocation::routing::remote_invoke::invoke_federation_discover(None)
-        .context("invoke federation.discover for device list")
+fn fetch_directory_entries(current_user_id: &str) -> anyhow::Result<Vec<Value>> {
+    crate::daemon::federation::directory_reader::read_federated_directory_for_user(
+        None,
+        current_user_id,
+    )
+    .context("invoke federation.discover for device list")
 }
 
 #[cfg(not(feature = "axon-pb"))]
-fn fetch_directory_entries(_self_ura: Option<&str>) -> anyhow::Result<Vec<Value>> {
+fn fetch_directory_entries(_current_user_id: &str) -> anyhow::Result<Vec<Value>> {
     Err(
         crate::support::platform::local_invoke::federation_not_wired_error(
             "listing devices via federation.discover",

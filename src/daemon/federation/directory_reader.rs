@@ -12,33 +12,58 @@
 
 use serde_json::Value;
 
-/// Read the federated directory through the local daemon's
-/// `federation.discover` ability.
+/// Read the paired user's federated directory through the local daemon's
+/// `federation.discover` ability. Product surfaces must use this path so
+/// cross-realm entries are filtered through the user's binding state.
 #[cfg(feature = "axon-pb")]
-pub fn read_federated_directory(agent_ura_filter: Option<&str>) -> anyhow::Result<Vec<Value>> {
-    crate::daemon::invocation::routing::remote_invoke::invoke_federation_discover(agent_ura_filter)
+pub fn read_federated_directory_for_user(
+    agent_ura_filter: Option<&str>,
+    local_user_id: &str,
+) -> anyhow::Result<Vec<Value>> {
+    crate::daemon::invocation::routing::remote_invoke::invoke_federation_discover_for_user(
+        agent_ura_filter,
+        local_user_id,
+    )
 }
 
 #[cfg(feature = "axon-pb")]
-pub fn read_federated_directory_filtered(
+pub fn read_federated_directory_for_current_user(
     agent_ura_filter: Option<&str>,
-    local_user_id_filter: Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
-    crate::daemon::invocation::routing::remote_invoke::invoke_federation_discover_filtered(
+    let credentials = crate::daemon::persistence::config::load_credentials()?;
+    read_federated_directory_for_user(agent_ura_filter, credentials.user_id()?)
+}
+
+/// Explicit operator/audit read of the full federated directory. This function
+/// is intentionally named so product flows do not accidentally inherit the
+/// unfiltered privacy boundary.
+#[cfg(feature = "axon-pb")]
+pub fn read_federated_directory_for_operator_audit(
+    agent_ura_filter: Option<&str>,
+) -> anyhow::Result<Vec<Value>> {
+    crate::daemon::invocation::routing::remote_invoke::invoke_federation_discover_for_operator_audit(
         agent_ura_filter,
-        local_user_id_filter,
     )
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub fn read_federated_directory(_agent_ura_filter: Option<&str>) -> anyhow::Result<Vec<Value>> {
+pub fn read_federated_directory_for_user(
+    _agent_ura_filter: Option<&str>,
+    _local_user_id: &str,
+) -> anyhow::Result<Vec<Value>> {
     Err(feature_unavailable_error("federation.discover"))
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub fn read_federated_directory_filtered(
+pub fn read_federated_directory_for_current_user(
     _agent_ura_filter: Option<&str>,
-    _local_user_id_filter: Option<&str>,
+) -> anyhow::Result<Vec<Value>> {
+    Err(feature_unavailable_error("federation.discover"))
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub fn read_federated_directory_for_operator_audit(
+    _agent_ura_filter: Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
     Err(feature_unavailable_error("federation.discover"))
 }
@@ -57,7 +82,7 @@ mod tests {
 
     #[test]
     fn feature_off_reports_unavailable_instead_of_empty_success() {
-        let err = read_federated_directory(None).unwrap_err();
+        let err = read_federated_directory_for_current_user(None).unwrap_err();
         assert!(
             err.to_string().contains("without the `axon-pb` feature"),
             "{err}"
@@ -66,7 +91,7 @@ mod tests {
 
     #[test]
     fn feature_off_filtered_reports_same_capability_error() {
-        let err = read_federated_directory_filtered(None, None).unwrap_err();
+        let err = read_federated_directory_for_user(None, "user").unwrap_err();
         assert!(
             err.to_string().contains("without the `axon-pb` feature"),
             "{err}"

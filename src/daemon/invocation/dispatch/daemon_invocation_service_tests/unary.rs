@@ -865,10 +865,13 @@ async fn invoke_discover_with_user_id_filters_unbound_cross_realm_entries() {
     cell.replace(peers);
 
     let bindings = Arc::new(FederatedBindingsStore::in_memory());
-    let svc = make_service()
-        .with_session_realm("realm-b")
-        .with_federated_directory_cell(cell)
-        .with_federated_bindings_store(bindings);
+    let svc = register_test_daemon_routes(
+        make_unregistered_service_for_route_owner(TEST_DAEMON_URA)
+            .with_session_realm("realm-b")
+            .with_federated_directory_cell(cell)
+            .with_federated_bindings_store(bindings),
+        TEST_DAEMON_URA,
+    );
 
     let resp = svc
         .invoke(invoke_request(
@@ -925,6 +928,34 @@ async fn invoke_discover_without_user_id_does_not_filter() {
         body.entries.len(),
         1,
         "unfiltered path must surface every entry regardless of binding state"
+    );
+}
+
+#[tokio::test]
+async fn invoke_discover_with_user_id_rejects_missing_filter_state() {
+    let svc = register_test_daemon_routes(
+        make_unregistered_service_for_route_owner(TEST_DAEMON_URA).with_session_realm("realm-b"),
+        TEST_DAEMON_URA,
+    );
+
+    let response = svc
+        .invoke(invoke_request(
+            ABILITY_FEDERATION_DISCOVER,
+            r#"{"local_user_id":"user-on-b"}"#,
+        ))
+        .await
+        .expect("dispatcher failures are canonical in-band InvokeResponse failures");
+    let body = response.into_inner();
+    let error = body
+        .error
+        .expect("failed invocation must carry error facts");
+    assert_eq!(
+        body.state,
+        axon_sdk::pb::axon::v1::InvocationState::Failed as i32
+    );
+    assert!(
+        error.message.contains("federated bindings store"),
+        "unexpected error: {error:?}"
     );
 }
 

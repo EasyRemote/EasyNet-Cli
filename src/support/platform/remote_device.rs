@@ -92,7 +92,9 @@ where
 /// device URA.
 fn lookup_node_ura_in_directory(node: &str) -> anyhow::Result<Option<String>> {
     let entries =
-        crate::daemon::invocation::routing::remote_invoke::invoke_federation_discover(None)?;
+        crate::daemon::federation::directory_reader::read_federated_directory_for_current_user(
+            None,
+        )?;
     for entry in entries {
         if entry.get("node_id").and_then(Value::as_str) == Some(node) {
             if let Some(ura) = entry.get("agent_ura").and_then(Value::as_str) {

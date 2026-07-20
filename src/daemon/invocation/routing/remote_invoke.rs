@@ -1071,33 +1071,31 @@ fn validate_remote_target_ura(target_ura: &str) -> anyhow::Result<()> {
     }
 }
 
-/// Cross-realm directory query against the local daemon's
-/// `federation.discover` ability. Returns the parsed
-/// `entries: [DirectoryEntry]` array verbatim. The single
-/// dial path (UDS gRPC InvocationClient → daemon's
-/// `dispatch_federation_discover`) is shared with
-/// `easynet federation discover`'s own subcommand — having
-/// one helper means `device list` / `auth devices` / future
-/// fan-out callers cannot drift on caller URA / envelope
-/// shape.
-///
-/// Args:
-///   * `agent_ura_filter` — optional URA filter passed verbatim
-///     to the daemon. `None` returns the full federated
-///     directory; `Some(ura)` returns at most one entry (lex
-///     tie-break on peer realm).
-/// Returns the `entries` array as a `Vec<Value>` (each element
-/// is a `DirectoryEntry`-shaped JSON object).
-pub fn invoke_federation_discover(agent_ura_filter: Option<&str>) -> anyhow::Result<Vec<Value>> {
-    invoke_federation_discover_filtered(agent_ura_filter, None)
+/// Operator/audit cross-realm directory query against the local daemon's
+/// `federation.discover` ability. This intentionally performs an unfiltered
+/// directory read and must not be used by product surfaces that act on behalf
+/// of a paired user.
+pub fn invoke_federation_discover_for_operator_audit(
+    agent_ura_filter: Option<&str>,
+) -> anyhow::Result<Vec<Value>> {
+    invoke_federation_discover_with_user_filter(agent_ura_filter, None)
 }
 
-/// Same daemon-backed discovery path as `invoke_federation_discover`,
-/// with the optional PR-N4 user-binding privacy filter exposed for
-/// the operator CLI. Keeping this in the transport service avoids a
-/// second facade-owned gRPC request builder that can drift from the
-/// signed daemon IPC contract.
-pub fn invoke_federation_discover_filtered(
+/// User-scoped cross-realm directory query. Product surfaces use this path so
+/// the daemon can enforce the PR-N4 user-binding privacy filter. A missing or
+/// empty user id is unresolved caller state, not permission to fall back to the
+/// operator/audit directory.
+pub fn invoke_federation_discover_for_user(
+    agent_ura_filter: Option<&str>,
+    local_user_id_filter: &str,
+) -> anyhow::Result<Vec<Value>> {
+    if local_user_id_filter.trim().is_empty() {
+        anyhow::bail!("federation.discover user filter requires a non-empty local_user_id");
+    }
+    invoke_federation_discover_with_user_filter(agent_ura_filter, Some(local_user_id_filter))
+}
+
+fn invoke_federation_discover_with_user_filter(
     agent_ura_filter: Option<&str>,
     local_user_id_filter: Option<&str>,
 ) -> anyhow::Result<Vec<Value>> {
