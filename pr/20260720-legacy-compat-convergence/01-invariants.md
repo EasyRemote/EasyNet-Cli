@@ -120,3 +120,7 @@
   target-self. Daemon-self root calls and explicit-subject calls are separate
   named policies; targeted/product/public ingress must supply a concrete
   subject before the gRPC tuple plan is built.
+- Product ability catalogue readers must not synthesize descriptor facts.
+  `meta.list_abilities` is the descriptor read-model authority; CLI facades
+  must fail closed on missing or invalid `descriptor_ref` instead of rebuilding
+  it from hash/version/action fields.

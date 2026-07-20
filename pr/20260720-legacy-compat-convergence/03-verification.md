@@ -2,6 +2,19 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-20 Ability catalogue descriptor-ref synthesis removal
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query schema_bound_catalogue_entry --limit 30` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query enrich_descriptor_ref --limit 30` — PASS; no results.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q ability_catalog --lib` — PASS (`13 passed`).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q abilities --lib` — PASS (`123 passed`).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+
 ## 2026-07-20 Local daemon loopback subject fallback removal
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.

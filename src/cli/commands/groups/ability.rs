@@ -198,7 +198,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
             client.fetch_remote_value(node, &action)?
         }
     };
-    let abilities = AbilityCatalogueClient::abilities_from_value(&catalogue);
+    let abilities = AbilityCatalogueClient::abilities_from_value(&catalogue)?;
     let entry = abilities
         .into_iter()
         .find(|e| e.get("ability_ura").and_then(Value::as_str) == Some(args.ability_ura.as_str()))

@@ -2,6 +2,23 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-20 Ability catalogue descriptor-ref synthesis audit
+
+- `codegraph query descriptor_ref` reported
+  `src/cli/daemon_client/ability_catalog.rs::enrich_descriptor_ref` as a CLI
+  facade descriptor-ref owner.
+- `rg` confirmed the helper rebuilt `descriptor_ref` from `ability_ura`,
+  `version`/`ability_version`, `descriptor_hash`, and `admission_action` when
+  the daemon catalogue row omitted the canonical field.
+- The root abstraction problem was duplicated descriptor authority:
+  `meta.list_abilities` owns the descriptor read model, while the CLI was
+  repairing incomplete rows into invokeable-looking rows. That can hide why a
+  product route is not visible or why descriptor resolution later fails.
+- After the change, `codegraph query enrich_descriptor_ref` reports no
+  results. `AbilityCatalogueClient::abilities_from_value` delegates each row
+  to `schema_bound_catalogue_entry`, which requires an object row and a
+  canonical `descriptor_ref` supplied by the daemon read model.
+
 ## 2026-07-20 Local daemon loopback subject fallback audit
 
 - `codegraph query invocation.history.list`, `codegraph query

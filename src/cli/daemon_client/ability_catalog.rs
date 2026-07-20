@@ -66,7 +66,7 @@ impl AbilityCatalogueClient {
 
     pub(crate) fn fetch_local_abilities(&self) -> anyhow::Result<Vec<Value>> {
         let value = self.fetch_local_value()?;
-        Ok(Self::abilities_from_value(&value))
+        Self::abilities_from_value(&value)
     }
 
     pub(crate) fn fetch_remote_value(
@@ -83,56 +83,40 @@ impl AbilityCatalogueClient {
         action_label: &str,
     ) -> anyhow::Result<Vec<Value>> {
         let value = self.fetch_remote_value(node, action_label)?;
-        Ok(Self::abilities_from_value(&value))
+        Self::abilities_from_value(&value)
     }
 
-    pub(crate) fn abilities_from_value(value: &Value) -> Vec<Value> {
-        value
+    pub(crate) fn abilities_from_value(value: &Value) -> anyhow::Result<Vec<Value>> {
+        let entries = value
             .get("abilities")
             .and_then(Value::as_array)
-            .cloned()
-            .map(|entries| entries.into_iter().map(enrich_descriptor_ref).collect())
-            .unwrap_or_default()
+            .ok_or_else(|| {
+                anyhow::anyhow!("meta.list_abilities response missing abilities array")
+            })?;
+        entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| schema_bound_catalogue_entry(entry, index))
+            .collect()
     }
 }
 
-fn enrich_descriptor_ref(mut entry: Value) -> Value {
-    let Some(object) = entry.as_object_mut() else {
-        return entry;
-    };
-    if object.contains_key("descriptor_ref") {
-        return entry;
-    }
-    let Some(ability_ura) = object.get("ability_ura").and_then(Value::as_str) else {
-        return entry;
-    };
-    let Some(version) = object
-        .get("version")
-        .or_else(|| object.get("ability_version"))
+fn schema_bound_catalogue_entry(entry: &Value, index: usize) -> anyhow::Result<Value> {
+    let object = entry
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("meta.list_abilities row #{index} is not an object"))?;
+    let descriptor_ref = object
+        .get("descriptor_ref")
         .and_then(Value::as_str)
-    else {
-        return entry;
-    };
-    let Some(descriptor_hash) = object.get("descriptor_hash").and_then(Value::as_str) else {
-        return entry;
-    };
-    let Some(admission_action) = object.get("admission_action").and_then(Value::as_str) else {
-        return entry;
-    };
-    let Some(hash_hex) = descriptor_hash.trim().strip_prefix("sha256:") else {
-        return entry;
-    };
-    let candidate = format!(
-        "{}@{}#{}!{}",
-        ability_ura.trim(),
-        version.trim(),
-        hash_hex.trim(),
-        admission_action.trim()
-    );
-    if axon_sdk::invocation::canonical_ability_descriptor_ref(&candidate).is_ok() {
-        object.insert("descriptor_ref".to_string(), Value::String(candidate));
-    }
-    entry
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("meta.list_abilities row #{index} missing canonical descriptor_ref")
+        })?;
+    axon_sdk::invocation::canonical_ability_descriptor_ref(descriptor_ref).map_err(|error| {
+        anyhow::anyhow!("meta.list_abilities row #{index} has invalid descriptor_ref: {error}")
+    })?;
+    Ok(entry.clone())
 }
 
 fn invoke_remote_catalogue(
@@ -148,7 +132,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn abilities_from_value_adds_descriptor_bound_ref() {
+    fn abilities_from_value_requires_descriptor_bound_ref() {
         let value = serde_json::json!({
             "abilities": [{
                 "ability_ura": "easynet:///r/acme/ability/device.dev.er.add",
@@ -158,11 +142,37 @@ mod tests {
             }]
         });
 
-        let abilities = AbilityCatalogueClient::abilities_from_value(&value);
+        let err = AbilityCatalogueClient::abilities_from_value(&value)
+            .expect_err("CLI catalogue must not synthesize descriptor_ref")
+            .to_string();
 
-        assert_eq!(
-            abilities[0].get("descriptor_ref").and_then(Value::as_str),
-            Some("easynet:///r/acme/ability/device.dev.er.add@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream")
+        assert!(
+            err.contains("missing canonical descriptor_ref"),
+            "got {err}"
         );
+    }
+
+    #[test]
+    fn abilities_from_value_preserves_daemon_descriptor_ref() {
+        let descriptor_ref = "easynet:///r/acme/ability/device.dev.er.add@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream";
+        let value = serde_json::json!({
+            "abilities": [{
+                "ability_ura": "easynet:///r/acme/ability/device.dev.er.add",
+                "descriptor_ref": descriptor_ref
+            }]
+        });
+
+        let abilities = AbilityCatalogueClient::abilities_from_value(&value)
+            .expect("descriptor-bound catalogue row");
+
+        assert_eq!(abilities[0]["descriptor_ref"], descriptor_ref);
+    }
+
+    #[test]
+    fn abilities_from_value_rejects_missing_abilities_array() {
+        let err = AbilityCatalogueClient::abilities_from_value(&serde_json::json!({}))
+            .expect_err("missing array must fail closed")
+            .to_string();
+        assert!(err.contains("missing abilities array"), "got {err}");
     }
 }

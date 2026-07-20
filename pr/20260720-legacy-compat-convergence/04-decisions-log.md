@@ -2,6 +2,15 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-20 ability catalogue descriptor facts
+
+- Treat `meta.list_abilities` as the sole descriptor read-model authority for
+  product catalogue rows. The CLI may filter and render rows, but it must not
+  rebuild missing descriptor refs from adjacent hash/version/action fields.
+- Treat missing `abilities` arrays and missing/invalid row `descriptor_ref`
+  fields as unavailable/corrupt catalogue state, not as an empty catalogue or
+  repairable projection.
+
 ## 2026-07-20 local daemon loopback subject policy
 
 - Treat daemon-local root invocation subject as an explicit system policy, not
