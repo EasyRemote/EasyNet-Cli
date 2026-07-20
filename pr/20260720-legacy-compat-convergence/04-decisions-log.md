@@ -2,6 +2,23 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-21 pairing auto-wire credential facts
+
+- Treat blank `realm` / `node_id` in pairing credentials as malformed runtime
+  state. These fields bind the local device identity, trust entry, and
+  federated peer target; silently ignoring them turns a local credential defect
+  into later `AUTHORITY_SUBJECT_MISMATCH`, missing signer, or descriptor
+  visibility failures.
+- Preserve only the explicit environment no-op: when no daemon-config exists,
+  there is no local hub-mode federation table to write. That condition is
+  separate from incomplete credential material.
+- Treat `runtime start` realm-trust auto-wire as part of invocation-readiness,
+  not a best-effort compatibility repair. Startup now fails with a local
+  context-rich error if the required trust facts cannot be wired.
+- Keep validated pairing state cohesive through `PairingTrustFacts`. The
+  file-projection helper consumes this typed state so the implementation does
+  not split into outer validation plus inner raw-string interpretation.
+
 ## 2026-07-21 user-device directory projection
 
 - Treat `PresenceRegistry` as the local runtime presence authority, not as a

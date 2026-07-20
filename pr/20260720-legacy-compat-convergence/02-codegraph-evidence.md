@@ -2,6 +2,31 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-21 Pairing auto-wire credential fact audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "auto_wire_self_realm_trust_from_credentials
+  auto_wire_federated_peer_from_credentials required pairing realm node_id let
+  _"` identified `federation_wire` and `runtime start` as the product-facing
+  seam where complete pairing facts become local daemon trust and federation
+  configuration.
+- Targeted source inspection found two legacy compatibility paths:
+  `auto_wire_federated_peer_from_credentials` returned `Ok(())` for blank
+  `realm`, and `auto_wire_self_realm_trust_from_credentials` returned
+  `Ok(())` for blank `realm` or `node_id`. `runtime start` also discarded the
+  realm-trust auto-wire result with `let _ = ...`.
+- The root abstraction problem was treating malformed pairing credentials as
+  an environment no-op. SDK invocation can build canonical tuples, but it
+  cannot repair a daemon that was allowed to boot without the local signer,
+  subject, and trust facts needed for descriptor-bound admission.
+- After the change, both auto-wire helpers require explicit non-empty pairing
+  facts before doing any trust/federated peer work, while preserving the
+  separate no-local-hub-config no-op when `daemon-config.toml` is absent.
+  Runtime start now propagates realm-trust wiring errors before daemon boot.
+  The realm-trust writer receives a `PairingTrustFacts` value so inner file
+  projection uses the same validated state instead of re-reading raw credential
+  strings.
+
 ## 2026-07-21 User-device directory projection fallback audit
 
 - `codegraph explore "unwrap_or_default fallback empty route signer authority receipt history device list user devices parse_ura ok"`

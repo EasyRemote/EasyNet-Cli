@@ -2,6 +2,36 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-21 Pairing auto-wire credential facts
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q federation_wire --lib`
+  — PASS (`20 passed`); includes regressions that federated peer auto-wire
+  rejects blank pairing `realm`, realm-trust auto-wire rejects blank
+  `realm`/`node_id`, and absent daemon-config remains the only successful
+  no-local-hub-config no-op.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "PairingTrustFacts auto_wire_self_realm_trust_from_credentials
+  auto_wire_federated_peer_from_credentials required pairing realm node_id let
+  _"` — PASS; reports both public auto-wire helpers using
+  `required_pairing_fact`, realm-trust projection using `PairingTrustFacts`,
+  and `runtime start` as a caller of the fallible helper.
+- `rg -n "empty tenant is no-op|empty node_id is a no-op|silent no-op|let _ =
+  super::federation_wire::auto_wire_self_realm_trust_from_credentials|creds\.realm\.trim\(\)\.is_empty\(\).*return
+  Ok|creds\.node_id\.trim\(\)\.is_empty\(\).*return
+  Ok|device_ura\(creds\.realm|hub_ura\(creds\.realm|hub_tls_ca_path_for_join\(creds\.realm"
+  src/cli/commands/federation_wire.rs src/cli/commands/start.rs` — PASS; no
+  legacy no-op, swallowed trust auto-wire result, or inner raw credential URA
+  projection remained.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+
 ## 2026-07-21 User-device directory projection fallback removal
 
 - `/Users/macbook.silan.tech/.cargo/bin/cargo test -q list_user_devices --lib`

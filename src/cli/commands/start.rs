@@ -272,7 +272,8 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
 
     crate::daemon::persistence::daemon_config::ensure_minimal_device_config(&creds)
         .context("ensure daemon-config.toml for device mode")?;
-    let _ = super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds);
+    super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds)
+        .context("wire local realm trust for device mode")?;
     bootstrap_local_agent_projection(&creds).context("sync local agent owner projection")?;
 
     record_snapshot(JoinConnectionSnapshot::from_credentials(

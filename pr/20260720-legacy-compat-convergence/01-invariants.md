@@ -180,3 +180,12 @@
   facts; they must not be merged into empty or partial
   `RESOLVE_ANSWER_KIND_NON_DISPATCHABLE` success. Peer records must use the
   canonical `record_type` field and canonical resolver enum strings.
+- Pairing auto-wire requires complete credential facts. Missing or blank
+  pairing `realm` and `node_id` are invalid runtime state, not successful
+  no-ops; join/start must surface them at the local ingress stage instead of
+  letting SDK calls fail later as descriptor, signer, route, or admission
+  errors.
+- Runtime start must not swallow local realm-trust auto-wire failures. If the
+  device cannot write or prove the trust facts required by local
+  self-admission, daemon boot is not invocation-ready and must stop before
+  advertising route visibility.

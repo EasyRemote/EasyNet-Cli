@@ -74,6 +74,41 @@ fn daemon_config_path() -> PathBuf {
 /// emitted with a warning so they know to verify daemon-config.toml.
 const CANONICAL_HUB_TO_HUB_PORT: u16 = 50443;
 
+fn required_pairing_fact<'a>(
+    value: &'a str,
+    field: &str,
+    operation: &str,
+) -> anyhow::Result<&'a str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("{operation} requires non-empty pairing {field}");
+    }
+    Ok(trimmed)
+}
+
+#[derive(Clone, Copy)]
+struct PairingTrustFacts<'a> {
+    realm: &'a str,
+    node_id: &'a str,
+}
+
+impl<'a> PairingTrustFacts<'a> {
+    fn from_credentials(creds: &'a Credentials, operation: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            realm: required_pairing_fact(&creds.realm, "realm", operation)?,
+            node_id: required_pairing_fact(&creds.node_id, "node_id", operation)?,
+        })
+    }
+
+    fn device_ura(self) -> String {
+        crate::core::ura::device_ura(self.realm, self.node_id)
+    }
+
+    fn hub_ura(self) -> String {
+        crate::core::ura::hub_ura(self.realm)
+    }
+}
+
 /// Outcome of resolving the federated_peers value to write. The
 /// classification feeds the operator-facing warning so they know
 /// whether the entry is `Confident` (operator-supplied or already
@@ -175,9 +210,7 @@ pub fn auto_wire_federated_peer_from_credentials(
     creds: &Credentials,
     operator_peer_hub: Option<&str>,
 ) -> anyhow::Result<()> {
-    if creds.realm.trim().is_empty() {
-        return Ok(());
-    }
+    let realm = required_pairing_fact(&creds.realm, "realm", "federated_peers auto-wire")?;
     let path = daemon_config_path();
     if !path.exists() {
         // No daemon-config means no hub-mode daemon on this
@@ -207,7 +240,7 @@ pub fn auto_wire_federated_peer_from_credentials(
     }
     let peer_hub = resolution.endpoint();
 
-    let with_peer = match upsert_federated_peer_in_toml(&raw, &creds.realm, peer_hub) {
+    let with_peer = match upsert_federated_peer_in_toml(&raw, realm, peer_hub) {
         Ok(s) => s,
         Err(err) => {
             anyhow::bail!("could not edit daemon-config.toml for federated_peers: {err}");
@@ -299,9 +332,11 @@ pub fn auto_wire_federated_peer_from_credentials(
 /// ----------------
 /// Mirrors `auto_wire_federated_peer_from_credentials`: the join
 /// command treats this as a best-effort stage, but this helper
-/// returns real errors so operator output remains truthful. Empty
-/// `realm` or `node_id` is a silent no-op (test fixtures with
-/// synthetic credentials hit this).
+/// returns real errors so operator output remains truthful.
+/// Missing `realm` or `node_id` is invalid pairing state, not a
+/// successful no-op: otherwise `runtime start` can proceed with
+/// incomplete authority facts and surface later as route,
+/// descriptor, or admission failures.
 ///
 /// Path resolution
 /// ---------------
@@ -314,9 +349,7 @@ pub fn auto_wire_federated_peer_from_credentials(
 /// operators on production deploys rely on the backend's
 /// `identity.register_pubkey` writer instead.
 pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyhow::Result<()> {
-    if creds.realm.trim().is_empty() || creds.node_id.trim().is_empty() {
-        return Ok(());
-    }
+    let facts = PairingTrustFacts::from_credentials(creds, "realm-trust auto-wire")?;
     if creds
         .hub_pubkey_b64
         .as_deref()
@@ -329,18 +362,19 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     use crate::daemon::identity::self_identity::{CanonicalSigner as _, RuntimeSigningIdentity};
     use base64::Engine as _;
 
-    let agent_ura = crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim());
+    let agent_ura = facts.device_ura();
     let identity = RuntimeSigningIdentity::load_default(agent_ura.clone())
         .map_err(|error| anyhow::anyhow!("resolve joined Device runtime identity: {error}"))?;
     let public_key = identity
         .signing_public_key()
         .map_err(|error| anyhow::anyhow!("project joined Device public key: {error}"))?;
     let public_key_b64 = base64::engine::general_purpose::STANDARD.encode(public_key.to_bytes());
-    auto_wire_self_realm_trust_with_public_key(creds, &public_key_b64)
+    auto_wire_self_realm_trust_with_public_key(creds, facts, &public_key_b64)
 }
 
 fn auto_wire_self_realm_trust_with_public_key(
     creds: &Credentials,
+    facts: PairingTrustFacts<'_>,
     public_key_b64: &str,
 ) -> anyhow::Result<()> {
     let path = realm_trust_path_for_join();
@@ -370,7 +404,7 @@ fn auto_wire_self_realm_trust_with_public_key(
     // `/device/` role segment; emitting the legacy `/agent/`
     // shape would land in a parallel namespace the parser
     // strict-rejects.
-    let agent_ura = crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim());
+    let agent_ura = facts.device_ura();
     let added_at_unix_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -386,7 +420,7 @@ fn auto_wire_self_realm_trust_with_public_key(
     // The hub pubkey is supplied by the pairing response and stored on
     // Credentials.hub_pubkey_b64. Device join must not read hub-host identity
     // files; the Hub URA key is owned by the SDK keyring on the hub runtime.
-    let hub_ura = crate::core::ura::hub_ura(creds.realm.trim());
+    let hub_ura = facts.hub_ura();
     let hub_pubkey_b64_opt: Option<String> = creds
         .hub_pubkey_b64
         .as_ref()
@@ -400,14 +434,14 @@ fn auto_wire_self_realm_trust_with_public_key(
                 anyhow::bail!("could not edit realm-trust.toml for device entry: {err}");
             }
         };
-    let hub_ca_pem_path = persist_hub_tls_ca_pem_for_join(creds)?;
+    let hub_ca_pem_path = persist_hub_tls_ca_pem_for_join(creds, facts.realm)?;
 
     let updated = match hub_pubkey_b64_opt {
         Some(hub_pubkey_b64) => match upsert_hub_trusted_agent(
             &after_device,
             &hub_ura,
             &hub_pubkey_b64,
-            creds.realm.trim(),
+            facts.realm,
             creds.hub_endpoint.trim(),
             hub_ca_pem_path.as_deref(),
             added_at_unix_ms,
@@ -476,7 +510,10 @@ fn hub_tls_ca_path_for_join(realm: &str) -> PathBuf {
     trust_dir.join(format!("{realm}.ca.pem"))
 }
 
-fn persist_hub_tls_ca_pem_for_join(creds: &Credentials) -> anyhow::Result<Option<PathBuf>> {
+fn persist_hub_tls_ca_pem_for_join(
+    creds: &Credentials,
+    realm: &str,
+) -> anyhow::Result<Option<PathBuf>> {
     use anyhow::Context as _;
     use base64::Engine as _;
 
@@ -492,7 +529,7 @@ fn persist_hub_tls_ca_pem_for_join(creds: &Credentials) -> anyhow::Result<Option
     let pem = base64::engine::general_purpose::STANDARD
         .decode(raw_b64)
         .context("decode hub_tls_ca_pem_b64")?;
-    let path = hub_tls_ca_path_for_join(creds.realm.trim());
+    let path = hub_tls_ca_path_for_join(realm);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
@@ -931,11 +968,7 @@ listen_tcp = "127.0.0.1:50443"
     }
 
     #[test]
-    fn auto_wire_returns_ok_when_daemon_config_absent() {
-        // Empty realm is the no-op branch the helper short-
-        // circuits on; this test pins that contract so a Hub
-        // that briefly returns empty realm (or the test
-        // fixture with cleared HOME) does not fail join.
+    fn auto_wire_federated_peer_rejects_empty_realm() {
         let creds = Credentials {
             node_id: "n1".into(),
             credential_token: "tok".into(),
@@ -949,7 +982,33 @@ listen_tcp = "127.0.0.1:50443"
             hub_tls_ca_pem_b64: None,
             join_receipt_hash: None,
         };
-        auto_wire_federated_peer_from_credentials(&creds, None).expect("empty tenant is no-op");
+        let err = auto_wire_federated_peer_from_credentials(&creds, None)
+            .expect_err("empty pairing realm must fail closed");
+        assert!(
+            err.to_string()
+                .contains("federated_peers auto-wire requires non-empty pairing realm"),
+            "error should name the missing pairing realm, got {err:#}"
+        );
+    }
+
+    #[test]
+    fn auto_wire_returns_ok_when_daemon_config_absent() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let creds = Credentials {
+            node_id: "n1".into(),
+            credential_token: "tok".into(),
+            hub_endpoint: "axon://hub:50051".into(),
+            realm: "localhost".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+        auto_wire_federated_peer_from_credentials(&creds, None)
+            .expect("absent daemon-config means no local hub-mode config to wire");
     }
 
     // ── LB-52 Gap 3 — realm-trust auto-wire on join ────────────────
@@ -1042,7 +1101,31 @@ added_at_unix_ms = 1
     }
 
     #[test]
-    fn auto_wire_self_realm_trust_short_circuits_on_empty_node_id() {
+    fn auto_wire_self_realm_trust_rejects_empty_realm() {
+        let creds = Credentials {
+            node_id: "dev-1".into(),
+            credential_token: "tok".into(),
+            hub_endpoint: "axon://hub:50051".into(),
+            realm: String::new(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+        let err = auto_wire_self_realm_trust_from_credentials(&creds)
+            .expect_err("empty pairing realm must fail closed");
+        assert!(
+            err.to_string()
+                .contains("realm-trust auto-wire requires non-empty pairing realm"),
+            "error should name the missing pairing realm, got {err:#}"
+        );
+    }
+
+    #[test]
+    fn auto_wire_self_realm_trust_rejects_empty_node_id() {
         let creds = Credentials {
             node_id: String::new(),
             credential_token: "tok".into(),
@@ -1056,8 +1139,13 @@ added_at_unix_ms = 1
             hub_tls_ca_pem_b64: None,
             join_receipt_hash: None,
         };
-        auto_wire_self_realm_trust_from_credentials(&creds)
-            .expect("empty node_id is a no-op (no panic, no write)");
+        let err = auto_wire_self_realm_trust_from_credentials(&creds)
+            .expect_err("empty pairing node_id must fail closed");
+        assert!(
+            err.to_string()
+                .contains("realm-trust auto-wire requires non-empty pairing node_id"),
+            "error should name the missing pairing node_id, got {err:#}"
+        );
     }
 
     #[test]
@@ -1168,7 +1256,10 @@ added_at_unix_ms = 1
             ),
             join_receipt_hash: None,
         };
-        auto_wire_self_realm_trust_with_public_key(&creds, &expected_dev_pk).expect("auto-wire ok");
+        let facts = PairingTrustFacts::from_credentials(&creds, "realm-trust auto-wire")
+            .expect("validated pairing facts");
+        auto_wire_self_realm_trust_with_public_key(&creds, facts, &expected_dev_pk)
+            .expect("auto-wire ok");
 
         let body = std::fs::read_to_string(&trust_path).expect("file exists");
         let parsed: toml::Value = body.parse().expect("parses");
@@ -1236,7 +1327,7 @@ added_at_unix_ms = 1
 
         // Re-running is idempotent: file size unchanged.
         let body_before = body;
-        auto_wire_self_realm_trust_with_public_key(&creds, &expected_dev_pk)
+        auto_wire_self_realm_trust_with_public_key(&creds, facts, &expected_dev_pk)
             .expect("second auto-wire is a no-op");
         let body_after = std::fs::read_to_string(&trust_path).expect("file exists");
         assert_eq!(body_after, body_before, "second run is byte-identical");
