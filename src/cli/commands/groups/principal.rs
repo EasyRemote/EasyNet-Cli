@@ -105,9 +105,9 @@ impl ProofKindArg {
 pub struct BootstrapArgs {
     #[arg(long)]
     pub principal_ura: String,
-    /// Optional one-time bootstrap proof reference shared by create and bind.
+    /// One-time bootstrap proof reference shared by create and bind.
     #[arg(long)]
-    pub proof_ref: Option<String>,
+    pub proof_ref: String,
     #[arg(long)]
     pub actor_ura: Option<String>,
     #[arg(long)]
@@ -154,7 +154,7 @@ pub struct CreateArgs {
     #[arg(long, value_enum, default_value_t = ProofKindArg::Bootstrap)]
     pub proof_kind: ProofKindArg,
     #[arg(long)]
-    pub proof_ref: Option<String>,
+    pub proof_ref: String,
     #[arg(long)]
     pub actor_ura: Option<String>,
     #[arg(long)]
@@ -469,7 +469,7 @@ fn run_bootstrap(args: BootstrapArgs) -> anyhow::Result<()> {
     let key = ensure_principal_signing_key(&KeyringClient::default_path(), &args.principal_ura)?;
     let create_idempotency_key =
         command_id_with_prefix(args.create_idempotency_key, "principal-bootstrap-create");
-    let proof_ref = bootstrap_proof_ref(args.proof_ref, &create_idempotency_key);
+    let proof_ref = required_proof_ref(&args.proof_ref)?;
     let bind_idempotency_key =
         command_id_with_prefix(args.bind_idempotency_key, "principal-bootstrap-bind");
     let input = FirstKeyRequestInput {
@@ -532,9 +532,7 @@ fn run_enroll(args: EnrollArgs) -> anyhow::Result<()> {
 
 fn run_create(args: CreateArgs) -> anyhow::Result<()> {
     let idempotency_key = command_id(args.idempotency_key);
-    let proof_ref = args
-        .proof_ref
-        .unwrap_or_else(|| default_proof_ref(&idempotency_key));
+    let proof_ref = required_proof_ref(&args.proof_ref)?;
     let request = principal_create_request(
         &args.principal_ura,
         principal_command(
@@ -1200,15 +1198,12 @@ fn command_id_with_prefix(explicit: Option<String>, prefix: &str) -> String {
         .unwrap_or_else(|| format!("{prefix}-{}", Uuid::new_v4().simple()))
 }
 
-fn default_proof_ref(idempotency_key: &str) -> String {
-    format!("proof:{idempotency_key}")
-}
-
-fn bootstrap_proof_ref(explicit: Option<String>, create_idempotency_key: &str) -> String {
-    explicit
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default_proof_ref(create_idempotency_key))
+fn required_proof_ref(value: &str) -> anyhow::Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("principal.lifecycle proof_ref must be explicit and non-empty");
+    }
+    Ok(trimmed.to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -1537,17 +1532,19 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_default_proof_is_recoverable_from_create_idempotency_key() {
+    fn required_proof_ref_trims_explicit_input() {
         assert_eq!(
-            bootstrap_proof_ref(None, "principal-bootstrap-create-1"),
-            "proof:principal-bootstrap-create-1"
-        );
-        assert_eq!(
-            bootstrap_proof_ref(
-                Some(" explicit-proof ".into()),
-                "principal-bootstrap-create-1"
-            ),
+            required_proof_ref(" explicit-proof ").expect("explicit proof"),
             "explicit-proof"
+        );
+    }
+
+    #[test]
+    fn required_proof_ref_rejects_missing_proof_material() {
+        let error = required_proof_ref("   ").expect_err("blank proof_ref must fail closed");
+        assert!(
+            error.to_string().contains("explicit and non-empty"),
+            "wrong error: {error}"
         );
     }
 
