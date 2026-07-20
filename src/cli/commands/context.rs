@@ -97,7 +97,7 @@ fn run_clipboard(args: ClipboardArgs) -> anyhow::Result<()> {
         }
         ClipboardAction::Status => {
             let tracking = context_store::clipboard_tracking();
-            let clips = context_store::list_clips(200);
+            let clips = context_store::list_clips(200)?;
             println!(
                 "tracking: {}   stored clips: {}{}",
                 if tracking {

@@ -909,3 +909,26 @@ Commands and outcomes will be appended after implementation.
 - `git diff --check` — PASS.
 - `bash tools/scripts/check-architecture-convergence.sh` — PASS.
 - `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+
+## 2026-07-20 Context clipboard history fallback removal
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q context_store --lib` —
+  PASS (`8 passed`; includes missing clipboard log as the first-run empty
+  history state and malformed JSONL rejection for list/summaries/remove).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R69, which requires fallible clipboard history loading/projection and rejects
+  empty/skip fallbacks in the read model.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for malformed clipboard JSONL being skipped with
+  `filter_map(... .ok())`/empty fallback.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query read_clipboard_log --limit 30`
+  — PASS; reports `read_clipboard_log() ->
+  anyhow::Result<Option<String>>`.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query parse_clipboard_log --limit 30`
+  — PASS; reports `parse_clipboard_log(content: &str) ->
+  anyhow::Result<Vec<ClipEntry>>`.

@@ -2,6 +2,22 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-20 Context clipboard history fallback audit
+
+- `rg` found `fs::read_to_string(clipboard_log_path()).unwrap_or_default()` in
+  `src/daemon/persistence/context_store.rs::remove_clip`.
+- The same file's clipboard list/read paths used `let Ok(content) = ... else
+  { return Vec::new(); }` and `filter_map(|l| serde_json::from_str(l).ok())`,
+  projecting unreadable logs and malformed rows into empty or partially
+  repaired clipboard history.
+- `codegraph impact clipboard_log_path --depth 2` reported the production
+  impact as `append_clip`, `list_clips`, `list_clip_summaries`,
+  `clip_image_abs_path`, and `remove_clip`, plus the public
+  `context.clipboard.*` ability handlers.
+- The root abstraction problem was treating an append-only read model as an
+  optional cache. Missing `clipboard.jsonl` is fresh empty state; an existing
+  unreadable or malformed log is unavailable/corrupt context state.
+
 ## 2026-07-20 API key store parse fallback audit
 
 - `rg` found `toml::from_str(&text).unwrap_or_default()` in

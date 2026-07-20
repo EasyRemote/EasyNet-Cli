@@ -32,6 +32,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -149,18 +150,15 @@ pub fn append_clip(entry: &ClipEntry) -> anyhow::Result<()> {
 }
 
 /// Newest-first clip entries, capped at `min(limit, LIST_CLIPS_MAX)`.
-pub fn list_clips(limit: usize) -> Vec<ClipEntry> {
+pub fn list_clips(limit: usize) -> anyhow::Result<Vec<ClipEntry>> {
     let cap = limit.clamp(1, LIST_CLIPS_MAX);
-    let Ok(content) = fs::read_to_string(clipboard_log_path()) else {
-        return Vec::new();
+    let Some(content) = read_clipboard_log()? else {
+        return Ok(Vec::new());
     };
-    let mut entries: Vec<ClipEntry> = content
-        .lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect();
+    let mut entries = parse_clipboard_log(&content)?;
     entries.reverse();
     entries.truncate(cap);
-    entries
+    Ok(entries)
 }
 
 /// Newest-first unique clip entries, annotated with repeat counts.
@@ -170,18 +168,15 @@ pub fn list_clips(limit: usize) -> Vec<ClipEntry> {
 /// each content key's latest entry before older duplicates. A hash map
 /// gives O(1) expected duplicate lookup and avoids an O(k log k) sort
 /// over the unique rows.
-pub fn list_clip_summaries(limit: usize) -> Vec<ClipListEntry> {
+pub fn list_clip_summaries(limit: usize) -> anyhow::Result<Vec<ClipListEntry>> {
     let cap = limit.clamp(1, LIST_CLIPS_MAX);
-    let Ok(content) = fs::read_to_string(clipboard_log_path()) else {
-        return Vec::new();
+    let Some(content) = read_clipboard_log()? else {
+        return Ok(Vec::new());
     };
     let mut positions: HashMap<[u8; 32], usize> = HashMap::new();
     let mut summaries: Vec<ClipListEntry> = Vec::new();
-    for entry in content
-        .lines()
-        .rev()
-        .filter_map(|l| serde_json::from_str::<ClipEntry>(l).ok())
-    {
+    let entries = parse_clipboard_log(&content)?;
+    for entry in entries.into_iter().rev() {
         let key = clip_content_key(&entry);
         if let Some(&idx) = positions.get(&key) {
             summaries[idx].occurrence_count += 1;
@@ -196,7 +191,36 @@ pub fn list_clip_summaries(limit: usize) -> Vec<ClipListEntry> {
         }
     }
     summaries.truncate(cap);
-    summaries
+    Ok(summaries)
+}
+
+fn read_clipboard_log() -> anyhow::Result<Option<String>> {
+    let path = clipboard_log_path();
+    match fs::read_to_string(&path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => {
+            Err(error).with_context(|| format!("read context clipboard log {}", path.display()))
+        }
+    }
+}
+
+fn parse_clipboard_log(content: &str) -> anyhow::Result<Vec<ClipEntry>> {
+    let mut entries = Vec::new();
+    for (index, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let entry = serde_json::from_str::<ClipEntry>(line).with_context(|| {
+            format!(
+                "parse context clipboard log {} line {}",
+                clipboard_log_path().display(),
+                index + 1
+            )
+        })?;
+        entries.push(entry);
+    }
+    Ok(entries)
 }
 
 fn clip_content_key(entry: &ClipEntry) -> [u8; 32] {
@@ -215,16 +239,29 @@ fn clip_content_key(entry: &ClipEntry) -> [u8; 32] {
 /// is kept byte-for-byte) and an image clip's PNG is deleted from
 /// `clips_dir()` best-effort. Returns the removed entry.
 pub fn remove_clip(id: &str) -> anyhow::Result<ClipEntry> {
-    let content = fs::read_to_string(clipboard_log_path()).unwrap_or_default();
+    let Some(content) = read_clipboard_log()? else {
+        anyhow::bail!("context clipboard: no clip {id}");
+    };
     let mut removed: Option<ClipEntry> = None;
     let mut kept = String::with_capacity(content.len());
-    for line in content.lines() {
-        match serde_json::from_str::<ClipEntry>(line) {
-            Ok(e) if removed.is_none() && e.id == id => removed = Some(e),
-            _ => {
-                kept.push_str(line);
-                kept.push('\n');
-            }
+    for (index, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            kept.push_str(line);
+            kept.push('\n');
+            continue;
+        }
+        let entry = serde_json::from_str::<ClipEntry>(line).with_context(|| {
+            format!(
+                "parse context clipboard log {} line {}",
+                clipboard_log_path().display(),
+                index + 1
+            )
+        })?;
+        if removed.is_none() && entry.id == id {
+            removed = Some(entry);
+        } else {
+            kept.push_str(line);
+            kept.push('\n');
         }
     }
     let entry = removed.ok_or_else(|| anyhow::anyhow!("context clipboard: no clip {id}"))?;
@@ -244,19 +281,21 @@ pub fn remove_clip(id: &str) -> anyhow::Result<ClipEntry> {
 /// Absolute path of a stored clip image, if the entry exists and is an
 /// image. Resolves strictly inside `clips_dir()` — the id is ours, but
 /// the lookup still refuses separators so a crafted id can't traverse.
-pub fn clip_image_abs_path(id: &str) -> Option<PathBuf> {
+pub fn clip_image_abs_path(id: &str) -> anyhow::Result<Option<PathBuf>> {
     if id.contains('/') || id.contains('\\') || id.contains("..") {
-        return None;
+        return Ok(None);
     }
-    let entry = list_clips(LIST_CLIPS_MAX)
-        .into_iter()
-        .find(|e| e.id == id)?;
-    let file = entry.image_file?;
+    let Some(entry) = list_clips(LIST_CLIPS_MAX)?.into_iter().find(|e| e.id == id) else {
+        return Ok(None);
+    };
+    let Some(file) = entry.image_file else {
+        return Ok(None);
+    };
     if file.contains('/') || file.contains('\\') || file.contains("..") {
-        return None;
+        return Ok(None);
     }
     let p = clips_dir().join(file);
-    p.is_file().then_some(p)
+    Ok(p.is_file().then_some(p))
 }
 
 // ── folder mappings ─────────────────────────────────────────────────
@@ -668,7 +707,7 @@ mod tests {
             })
             .unwrap();
         }
-        let clips = list_clips(2);
+        let clips = list_clips(2).unwrap();
         assert_eq!(clips.len(), 2);
         assert_eq!(clips[0].id, "c2", "newest first");
         assert_eq!(clips[1].id, "c1");
@@ -695,7 +734,7 @@ mod tests {
             .unwrap();
         }
 
-        let clips = list_clip_summaries(10);
+        let clips = list_clip_summaries(10).unwrap();
         assert_eq!(clips.len(), 2, "duplicate content is displayed once");
         assert_eq!(clips[0].entry.id, "new-a", "latest duplicate wins");
         assert_eq!(clips[0].occurrence_count, 2);
@@ -703,6 +742,55 @@ mod tests {
         assert_eq!(clips[1].entry.id, "only-b");
         assert_eq!(clips[1].occurrence_count, 1);
         assert_eq!(clips[1].duplicate_count, 0);
+    }
+
+    #[test]
+    fn clipboard_history_missing_log_is_empty_state() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+
+        assert!(list_clips(10).unwrap().is_empty());
+        assert!(list_clip_summaries(10).unwrap().is_empty());
+        let error = remove_clip("missing").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("context clipboard: no clip missing"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn clipboard_history_malformed_row_fails_closed_instead_of_skipping() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(context_dir()).unwrap();
+        std::fs::write(
+            clipboard_log_path(),
+            concat!(
+                "{\"id\":\"good\",\"timestamp\":\"2026-06-10T00:00:00Z\",",
+                "\"device\":\"easynet:///r/localhost/device/d1\",",
+                "\"kind\":\"text\",\"text\":\"hello\",\"preview\":\"hello\"}\n",
+                "{not json}\n"
+            ),
+        )
+        .unwrap();
+
+        for result in [
+            list_clips(10).map(|_| ()),
+            list_clip_summaries(10).map(|_| ()),
+            remove_clip("good").map(|_| ()),
+        ] {
+            let message = format!("{:#}", result.unwrap_err());
+            assert!(
+                message.contains("parse context clipboard log"),
+                "unexpected error: {message}"
+            );
+        }
+
+        let body = std::fs::read_to_string(clipboard_log_path()).unwrap();
+        assert!(
+            body.contains("{not json}"),
+            "failed remove must not rewrite a corrupt clipboard log"
+        );
     }
 
     #[test]

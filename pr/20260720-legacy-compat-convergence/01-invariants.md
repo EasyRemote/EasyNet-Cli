@@ -132,3 +132,7 @@
   `api_keys.toml` is a valid fresh-install empty store; an existing unreadable
   or malformed store is unavailable credential authority and must not be
   projected as "no keys" or overwritten by create/revoke/list flows.
+- Context clipboard history is an append-only read model. A missing
+  `clipboard.jsonl` is a valid empty history; an existing unreadable file or
+  malformed row is unavailable/corrupt context state and must not be projected
+  as an empty history, skipped row, or "clip not found".

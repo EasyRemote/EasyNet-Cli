@@ -235,7 +235,7 @@ mod tests {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let huge = "y".repeat(TEXT_CAP_BYTES + 10);
         record_text("easynet:///r/localhost/device/d1", &huge).unwrap();
-        let clips = crate::daemon::persistence::context_store::list_clips(1);
+        let clips = crate::daemon::persistence::context_store::list_clips(1).unwrap();
         assert_eq!(clips.len(), 1);
         let stored = clips[0].text.as_deref().unwrap();
         assert!(stored.len() < TEXT_CAP_BYTES);

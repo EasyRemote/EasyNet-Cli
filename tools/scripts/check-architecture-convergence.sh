@@ -6692,6 +6692,83 @@ if api_key_store.exists():
             )
 
 
+# Rule 69: Context clipboard JSONL is an append-only read model, not a cache.
+# Missing clipboard.jsonl is an empty history; unreadable files and malformed
+# rows must surface as unavailable/corrupt context state.
+context_store = cli_root / "src/daemon/persistence/context_store.rs"
+if context_store.exists():
+    text = source(context_store)
+    if "fn read_clipboard_log() -> anyhow::Result<Option<String>>" not in text:
+        add(
+            "R69_CONTEXT_CLIPBOARD_HISTORY_FALLBACK",
+            context_store,
+            1,
+            "context clipboard history must have a fallible missing-vs-unavailable log loader",
+        )
+    for name, expected in (
+        ("list_clips", "anyhow::Result<Vec<ClipEntry>>"),
+        ("list_clip_summaries", "anyhow::Result<Vec<ClipListEntry>>"),
+    ):
+        body = rust_method_body(text, name)
+        if body is None:
+            add(
+                "R69_CONTEXT_CLIPBOARD_HISTORY_FALLBACK",
+                context_store,
+                1,
+                f"context clipboard {name} must remain an explicit read-model surface",
+            )
+            continue
+        offset, load_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if expected not in signature:
+            add(
+                "R69_CONTEXT_CLIPBOARD_HISTORY_FALLBACK",
+                context_store,
+                line_number(text, offset),
+                f"context clipboard {name} must return {expected}",
+            )
+        for token, detail in (
+            (
+                "return Vec::new()",
+                f"context clipboard {name} must not project read failure as empty history",
+            ),
+            (
+                "filter_map(|l| serde_json::from_str",
+                f"context clipboard {name} must not skip malformed JSONL rows",
+            ),
+            (
+                ".ok())",
+                f"context clipboard {name} must not hide malformed JSONL rows behind Option",
+            ),
+        ):
+            if token in load_body:
+                add(
+                    "R69_CONTEXT_CLIPBOARD_HISTORY_FALLBACK",
+                    context_store,
+                    line_number(text, body_start + load_body.find(token)),
+                    detail,
+                )
+    remove_body = rust_method_body(text, "remove_clip")
+    if remove_body is not None:
+        offset, body = remove_body
+        body_start = text.find("{", offset) + 1
+        if "unwrap_or_default()" in body:
+            add(
+                "R69_CONTEXT_CLIPBOARD_HISTORY_FALLBACK",
+                context_store,
+                line_number(text, body_start + body.find("unwrap_or_default()")),
+                "context clipboard remove must not project read failure as empty history",
+            )
+        if "parse context clipboard log" not in body:
+            add(
+                "R69_CONTEXT_CLIPBOARD_HISTORY_FALLBACK",
+                context_store,
+                line_number(text, offset),
+                "context clipboard remove must validate JSONL rows before rewrite",
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(

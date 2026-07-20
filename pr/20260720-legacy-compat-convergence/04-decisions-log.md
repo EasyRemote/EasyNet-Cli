@@ -2,6 +2,16 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-20 Context clipboard history read model
+
+- Treat `context/clipboard.jsonl` as the clipboard history read-model
+  authority. Missing file remains a valid empty history; unreadable files and
+  malformed JSONL rows fail list/get/remove instead of being skipped or
+  reclassified as "not found".
+- Keep `context.clipboard.remove` byte-preserving for non-target rows: the
+  mutation validates every row before rewriting, then drops only the selected
+  row.
+
 ## 2026-07-20 API key credential store lifecycle
 
 - Treat `api_keys.toml` as credential authority state, not a cache. Missing file

@@ -166,7 +166,7 @@ fn clipboard_list_handler(args: Value) -> anyhow::Result<Value> {
         .and_then(Value::as_u64)
         .unwrap_or(100)
         .max(1) as usize;
-    let entries: Vec<Value> = context_store::list_clip_summaries(limit)
+    let entries: Vec<Value> = context_store::list_clip_summaries(limit)?
         .iter()
         .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
         .collect();
@@ -178,13 +178,13 @@ fn clipboard_list_handler(args: Value) -> anyhow::Result<Value> {
 
 fn clipboard_get_handler(args: Value) -> anyhow::Result<Value> {
     let id = require_str(&args, "id", "context.clipboard.get")?;
-    let entry = context_store::list_clips(200)
+    let entry = context_store::list_clips(200)?
         .into_iter()
         .find(|e| e.id == id)
         .ok_or_else(|| anyhow::anyhow!("context.clipboard.get: no clip {id}"))?;
     let mut out = serde_json::to_value(&entry)?;
     if entry.kind == "image" {
-        let path = context_store::clip_image_abs_path(&id)
+        let path = context_store::clip_image_abs_path(&id)?
             .ok_or_else(|| anyhow::anyhow!("context.clipboard.get: image file missing"))?;
         let bytes = std::fs::read(path)?;
         out["data_base64"] = json!(base64::engine::general_purpose::STANDARD.encode(bytes));
@@ -230,7 +230,7 @@ fn catalog_handler(args: Value) -> anyhow::Result<Value> {
             },
         }));
     }
-    for clip in context_store::list_clip_summaries(limit) {
+    for clip in context_store::list_clip_summaries(limit)? {
         items.push(json!({
             "id": format!("clipboard:{}", clip.entry.id),
             "kind": "clipboard",

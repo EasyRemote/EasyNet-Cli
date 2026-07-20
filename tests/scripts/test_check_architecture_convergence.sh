@@ -4930,6 +4930,38 @@ expect_fail \
   "R68_API_KEY_STORE_PARSE_FALLBACK"
 
 make_good_fixture
+cat >"$CLI/src/daemon/persistence/context_store.rs" <<'EOF'
+struct ClipEntry;
+struct ClipListEntry;
+
+fn clipboard_log_path() -> std::path::PathBuf {
+    "clipboard.jsonl".into()
+}
+
+fn list_clips(limit: usize) -> Vec<ClipEntry> {
+    let Ok(content) = std::fs::read_to_string(clipboard_log_path()) else {
+        return Vec::new();
+    };
+    content
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
+}
+
+fn list_clip_summaries(limit: usize) -> Vec<ClipListEntry> {
+    Vec::new()
+}
+
+fn remove_clip(id: &str) -> anyhow::Result<ClipEntry> {
+    let content = std::fs::read_to_string(clipboard_log_path()).unwrap_or_default();
+    anyhow::bail!("context clipboard: no clip {id}")
+}
+EOF
+expect_fail \
+  "context clipboard history fallback" \
+  "R69_CONTEXT_CLIPBOARD_HISTORY_FALLBACK"
+
+make_good_fixture
 expect_pass "fixture restored after all negative cases"
 
 printf 'test_check_architecture_convergence.sh: all cases passed\n'
