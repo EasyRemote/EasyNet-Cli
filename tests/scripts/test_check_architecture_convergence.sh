@@ -4911,6 +4911,32 @@ expect_fail \
   "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/trust"
+cat >"$CLI/src/daemon/trust/key_resolver.rs" <<'EOF'
+struct RealmTrustAnchorKeyResolver;
+struct VerifyingKey;
+struct AxonError;
+
+impl RealmTrustAnchorKeyResolver {
+    fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
+        let user_rows = vec![];
+        let keys: Vec<VerifyingKey> = user_rows
+            .iter()
+            .filter_map(|row| decode_pubkey(&row.public_key_b64, agent_ura).ok())
+            .collect();
+        Ok(keys)
+    }
+}
+
+fn decode_pubkey(public_key_b64: &str, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+    todo!()
+}
+EOF
+expect_fail \
+  "trust key resolver corrupt user key skip" \
+  "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK"
+
+make_good_fixture
 cat >"$CLI/src/daemon/ability/builtins/governance/api_key.rs" <<'EOF'
 struct ApiKeyStore;
 

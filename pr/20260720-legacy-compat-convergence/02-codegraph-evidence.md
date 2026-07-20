@@ -1103,3 +1103,23 @@ Evidence will be appended after indexing and focused impact queries.
   diagnostics, and `collect_stderr(...)` reports reader panic explicitly. Rule
   `R72_PLUGIN_SIDECAR_STDERR_DIAGNOSTICS` now rejects the old empty diagnostic
   fallback.
+
+## 2026-07-20 Trust key resolver corrupt user-key skip audit
+
+- `codegraph callers decode_pubkey --limit 50` identified
+  `RealmTrustAnchorKeyResolver::resolve_all` as the multi-key user bucket
+  adapter feeding Axon's invocation `KeyResolver`.
+- `rg` found the production fallback in
+  `src/daemon/trust/key_resolver.rs`: user bucket rows were decoded through
+  `.filter_map(|row| decode_pubkey(&row.public_key_b64, agent_ura).ok())`,
+  which silently skipped corrupt key material when at least one valid user key
+  remained.
+- The root abstraction problem was partial authority projection. A DEC-EU user
+  bucket is one trust snapshot for a principal; corrupt persisted key material
+  is corrupt authority state, not an optional row. Skipping the row lets a
+  damaged trust anchor continue admitting calls with the remaining keys and
+  pushes operator-visible corruption into later, harder-to-diagnose failures.
+- After the change, `resolve_all` propagates `decode_pubkey` errors with `?`.
+  Any corrupt user key inside the verifier-bounded bucket fails the user
+  principal closed. Rule `R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK` now also
+  rejects `filter_map(...decode_pubkey(...).ok())` in the key resolver.

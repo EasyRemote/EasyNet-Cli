@@ -1048,3 +1048,25 @@ Commands and outcomes will be appended after implementation.
 - `/Users/macbook.silan.tech/.local/bin/codegraph query
   capture_stderr_diagnostics --limit 30` — PASS; reports the single sidecar
   stderr diagnostic helper.
+
+## 2026-07-20 Trust key resolver corrupt user-key gate
+
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo test -q
+  key_resolver --lib` — PASS (`23 passed`); includes
+  `resolve_all_rejects_corrupt_user_key_instead_of_skipping_it`.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo fmt --check` —
+  PASS.
+- `tools/scripts/check-architecture-convergence.sh` — PASS.
+- `tests/scripts/test_check_architecture_convergence.sh` — PASS; includes a
+  negative fixture for the previous
+  `filter_map(|row| decode_pubkey(...).ok())` user-key skip fallback.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo check --lib --bins`
+  — PASS.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query resolve_all --limit
+  30` — PASS; reports `RealmTrustAnchorKeyResolver::resolve_all`.
+- `rg -n "filter_map\\([^\\n]*decode_pubkey|decode_pubkey\\(&row\\.public_key_b64, agent_ura\\)\\.ok\\(|decode_pubkey\\(&row\\.public_key_b64, agent_ura\\)\\?" ...`
+  — PASS; production resolver uses `decode_pubkey(...)?`, and the old skip
+  pattern remains only in the architecture-gate negative fixture.

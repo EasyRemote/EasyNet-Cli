@@ -347,3 +347,8 @@ Decisions will be appended as root-fork choices are made.
   binary data, read failures, and reader panics must remain visible; they must
   not be normalized to empty stderr on process failure, timeout, stream, or
   bidi terminal paths.
+- Treat a DEC-EU user key bucket as one principal authority snapshot. Multi-key
+  admission may verify against any returned key, but the resolver must first
+  prove every bounded bucket row is valid key material. A corrupt row is not
+  optional and must fail the principal closed instead of being skipped while
+  other keys remain admissible.

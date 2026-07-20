@@ -6638,6 +6638,45 @@ if trust_anchor.exists():
                 detail,
             )
 
+trust_key_resolver = cli_root / "src/daemon/trust/key_resolver.rs"
+if trust_key_resolver.exists():
+    text = source(trust_key_resolver)
+    resolve_all = rust_method_body(text, "resolve_all")
+    if resolve_all is None:
+        add(
+            "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK",
+            trust_key_resolver,
+            1,
+            "RealmTrustAnchorKeyResolver::resolve_all must own user bucket key-material validation",
+        )
+    else:
+        offset, body = resolve_all
+        body_start = text.find("{", offset) + 1
+        for token, detail in (
+            (
+                "filter_map",
+                "user key bucket resolution must not skip corrupt key rows",
+            ),
+            (
+                "decode_pubkey(&row.public_key_b64, agent_ura).ok()",
+                "user key bucket resolution must fail closed on corrupt key material",
+            ),
+        ):
+            if token in body:
+                add(
+                    "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK",
+                    trust_key_resolver,
+                    line_number(text, body_start + body.find(token)),
+                    detail,
+                )
+        if "decode_pubkey(&row.public_key_b64, agent_ura)?" not in body:
+            add(
+                "R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK",
+                trust_key_resolver,
+                line_number(text, offset),
+                "user key bucket resolution must propagate decode_pubkey errors",
+            )
+
 
 # Rule 68: API key credential store load must fail closed on malformed state.
 # A missing api_keys.toml is a valid fresh-install empty state, but an existing

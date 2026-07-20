@@ -71,19 +71,23 @@ impl KeyResolver for RealmTrustAnchorKeyResolver {
     /// `verify_invocation_signature` admits if ANY returned key
     /// verifies; its equivalence invariant holds because the user
     /// bucket is partitioned by exact URA. Bounded to the verifier's
-    /// `MAX_KEYS_PER_AGENT_URA` ceiling. A row with a corrupt pubkey
-    /// is skipped rather than poisoning the user's valid keys.
+    /// `MAX_KEYS_PER_AGENT_URA` ceiling. A corrupt pubkey is corrupt
+    /// authority state and fails the whole user bucket closed; skipping
+    /// it would silently turn a damaged trust snapshot into a partial
+    /// signing authority.
     fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
         let anchor = self.trust_anchor.snapshot();
         let user_rows = anchor.lookup_user_all(agent_ura);
         if user_rows.is_empty() {
             return self.resolve(agent_ura).map(|key| vec![key]);
         }
-        let keys: Vec<VerifyingKey> = user_rows
+        let mut keys = Vec::new();
+        for row in user_rows
             .iter()
             .take(axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA)
-            .filter_map(|row| decode_pubkey(&row.public_key_b64, agent_ura).ok())
-            .collect();
+        {
+            keys.push(decode_pubkey(&row.public_key_b64, agent_ura)?);
+        }
         if keys.is_empty() {
             return Err(caller_key_unavailable(agent_ura, "no decodable user key"));
         }
@@ -172,6 +176,44 @@ mod tests {
         assert_eq!(keys.len(), 2, "both user keys must be admissible");
         assert!(got.contains(&key_a.verifying_key().to_bytes()));
         assert!(got.contains(&key_b.verifying_key().to_bytes()));
+    }
+
+    #[test]
+    fn resolve_all_rejects_corrupt_user_key_instead_of_skipping_it() {
+        let user_ura = "easynet:///r/test/user/dev";
+        let valid_key = SigningKey::from_bytes(&[0x57; 32]);
+        let valid = TrustedAgent {
+            agent_ura: user_ura.to_string(),
+            public_key_b64: B64_STANDARD.encode(valid_key.verifying_key().to_bytes()),
+            role: TrustedAgentRole::User,
+            added_at_unix_ms: 1_700_000_000_000,
+            origin_realm: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        };
+        let corrupt = TrustedAgent {
+            agent_ura: user_ura.to_string(),
+            public_key_b64: "not-base64".to_string(),
+            role: TrustedAgentRole::User,
+            added_at_unix_ms: 1_700_000_000_001,
+            origin_realm: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        };
+        let anchor =
+            RealmTrustAnchor::from_entries(vec![valid, corrupt]).expect("anchor shape loads");
+        let resolver = RealmTrustAnchorKeyResolver::new(SharedTrustAnchor::new(Arc::new(anchor)));
+
+        let err = resolver
+            .resolve_all(user_ura)
+            .expect_err("corrupt user key material must fail the bucket closed");
+
+        assert_eq!(err.code, ErrorCode::CallerKeyNotFound);
+        assert_eq!(err.stage, Some(ErrorStage::CallerAuthentication));
+        assert!(
+            err.to_string().contains("pubkey base64 invalid"),
+            "diagnostic must expose corrupt key material: {err}"
+        );
     }
 
     #[test]
