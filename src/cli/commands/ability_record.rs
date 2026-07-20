@@ -189,13 +189,6 @@ impl MediaRecordingKind {
             Self::Camera => "jpg",
         }
     }
-
-    fn fallback_content_type(self) -> &'static str {
-        match self {
-            Self::Mic => "audio/L16",
-            Self::Camera => "image/jpeg",
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -434,7 +427,7 @@ impl RecordingSink {
         let path = self.directory.join(&file_name);
         atomic_write_with_permissions(&path, &bytes, WritePermissions::OwnerReadWrite)
             .with_context(|| format!("write recording artifact {}", path.display()))?;
-        let content_type = frame_content_type(frame, self.kind);
+        let content_type = frame_content_type(frame, self.kind)?;
 
         self.byte_count += bytes.len();
         self.artifact_count += 1;
@@ -494,14 +487,25 @@ struct RecordingArtifact {
     content_type: String,
 }
 
-fn frame_content_type(frame: &LocalStreamFrame, kind: MediaRecordingKind) -> String {
-    frame
+fn frame_content_type(
+    frame: &LocalStreamFrame,
+    kind: MediaRecordingKind,
+) -> anyhow::Result<String> {
+    let content_type = frame
         .payload
         .get("content_type")
         .and_then(Value::as_str)
         .or_else(|| (!frame.content_type.trim().is_empty()).then_some(frame.content_type.as_str()))
-        .unwrap_or_else(|| kind.fallback_content_type())
-        .to_string()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "recording artifact frame {} for {} omitted content_type",
+                frame.sequence,
+                kind.directory_name()
+            )
+        })?;
+    Ok(content_type.to_string())
 }
 
 fn recording_directory(plan: &RecordingPlan, started_at: DateTime<Utc>) -> anyhow::Result<PathBuf> {
@@ -659,5 +663,29 @@ mod tests {
         assert_eq!(manifest["kind"], "mic");
         assert_eq!(manifest["artifact_count"], 1);
         assert_eq!(manifest["artifacts"][0]["file"], "frame-000003.pcm");
+    }
+
+    #[test]
+    fn recording_sink_rejects_artifact_without_content_type() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let output_dir = state_dir().join("test-recordings");
+        let plan = mic_plan(output_dir);
+        let frames = vec![LocalStreamFrame {
+            sequence: 3,
+            content_type: String::new(),
+            terminal: false,
+            payload: json!({
+                "samples_b64": BASE64_STANDARD.encode([0, 1, 2, 3]),
+            }),
+        }];
+
+        let mut sink = RecordingSink::create(&plan).unwrap();
+        let error = sink
+            .write_frames(&frames)
+            .expect_err("artifact content_type is mandatory");
+        assert!(
+            error.to_string().contains("omitted content_type"),
+            "unexpected error: {error}"
+        );
     }
 }
