@@ -1372,3 +1372,25 @@ Commands and outcomes will be appended after implementation.
   — PASS; reports `ScheduleLoader`,
   `ScheduleService::next_fire_for_entry`, `parse_entry_cron`, and the new
   loader regression.
+
+## 2026-07-20 Session index fail-closed read model
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q session --lib` — PASS
+  (`254 passed`); includes `SessionService` poison regressions and
+  device.session list/attach poison propagation tests.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R85 for session-index fail-closed semantics.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for `list_active() -> Vec<_>`, `Err(_) => Vec::new()`,
+  `.read().ok()` lookup erasure, device.session `null` row fallback, and
+  attach empty-snapshot fallback on index failure.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --locked --lib --bins` —
+  PASS.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "SessionService
+  list_active get session index lock poisoned device session list attach empty
+  snapshot" --limit 100` — PASS; reports
+  `SessionService::list_active(...) -> anyhow::Result<Vec<Session>>`.

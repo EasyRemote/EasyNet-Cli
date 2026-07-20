@@ -5566,6 +5566,62 @@ expect_fail \
   "R84_SCHEDULE_DUE_FAIL_CLOSED"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/execution/session" "$CLI/src/daemon/ability/builtins/device_control" "$CLI/src/daemon/boot/kernel"
+cat >"$CLI/src/daemon/execution/session/mod.rs" <<'EOF'
+pub struct Session;
+pub struct SessionId;
+pub struct SessionService {
+    sessions: Lock,
+}
+
+impl SessionService {
+    pub fn list_active(&self) -> Vec<Session> {
+        match self.sessions.read() {
+            Ok(g) => g.values().map(|e| e.meta.clone()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn get(&self, id: &SessionId) -> Option<Session> {
+        self.sessions
+            .read()
+            .ok()
+            .and_then(|g| g.get(id).map(|e| e.meta.clone()))
+    }
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/device_control/session.rs" <<'EOF'
+fn list_handler(svc: &SessionService, args: Value) -> anyhow::Result<Value> {
+    let sessions = svc.list_active();
+    let json_sessions: Vec<Value> = sessions
+        .iter()
+        .map(|s| serde_json::to_value(s).unwrap_or(Value::Null))
+        .collect();
+    Ok(json!({ "sessions": json_sessions }))
+}
+
+fn attach_handler(svc: &SessionService, args: Value) -> anyhow::Result<StreamSource> {
+    let id = SessionId::new("live");
+    if svc.get(&id).is_none() {
+        return Ok(StreamSource::Snapshot(Vec::new()));
+    }
+    Ok(StreamSource::Snapshot(Vec::new()))
+}
+EOF
+cat >"$CLI/src/daemon/boot/kernel/mod.rs" <<'EOF'
+fn list_active_sessions(&self) -> anyhow::Result<Vec<Session>> {
+    Ok(self.session.list_active())
+}
+
+fn get_session(&self, id: &SessionId) -> anyhow::Result<Option<Session>> {
+    Ok(self.session.get(id))
+}
+EOF
+expect_fail \
+  "session index silent empty fallback" \
+  "R85_SESSION_INDEX_FAIL_CLOSED"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/plugins" "$CLI/src/daemon/boot/invocation" "$CLI/src/daemon/ability/wire"
 cat >"$CLI/src/daemon/plugins/runtime_manager.rs" <<'EOF'
 use crate::daemon::ability::wire::AbilityWireRegistry;

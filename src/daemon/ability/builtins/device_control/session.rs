@@ -78,15 +78,15 @@ fn list_handler(svc: &SessionService, args: Value) -> anyhow::Result<Value> {
         .get("include_terminated")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    let sessions = svc.list_active();
+    let sessions = svc.list_active()?;
     let filtered: Vec<&_> = sessions
         .iter()
         .filter(|s| include_terminated || s.ended_unix_ms.is_none())
         .collect();
     let json_sessions: Vec<Value> = filtered
         .iter()
-        .map(|s| serde_json::to_value(s).unwrap_or(Value::Null))
-        .collect();
+        .map(serde_json::to_value)
+        .collect::<Result<_, _>>()?;
     Ok(json!({ "sessions": json_sessions }))
 }
 
@@ -117,7 +117,7 @@ fn attach_handler(svc: &SessionService, args: Value) -> anyhow::Result<StreamSou
         .max(0) as usize;
 
     let id = SessionId::new(&session_id);
-    if svc.get(&id).is_none() {
+    if svc.get(&id)?.is_none() {
         return Ok(StreamSource::Snapshot(Vec::new()));
     }
     let (snapshot, rx) = svc.subscribe_session(&id, since_seq)?;
@@ -244,5 +244,24 @@ mod tests {
         let svc = svc_with(&[]);
         let err = attach_handler(&svc, json!({})).unwrap_err();
         assert!(format!("{err}").contains("session_id"));
+    }
+
+    #[test]
+    fn list_rejects_poisoned_session_index_instead_of_empty_sessions() {
+        let svc = svc_with(&["live"]);
+        svc.poison_index_for_test();
+
+        let err = list_handler(&svc, json!({})).expect_err("poisoned index must fail");
+        assert!(format!("{err:#}").contains("SessionService session index lock poisoned"));
+    }
+
+    #[test]
+    fn attach_rejects_poisoned_session_index_instead_of_empty_snapshot() {
+        let svc = svc_with(&["live"]);
+        svc.poison_index_for_test();
+
+        let err = attach_handler(&svc, json!({"session_id": "live"}))
+            .expect_err("poisoned index must fail");
+        assert!(format!("{err:#}").contains("SessionService session index lock poisoned"));
     }
 }

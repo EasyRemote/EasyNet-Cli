@@ -535,11 +535,11 @@ impl KernelApi for Kernel {
     }
 
     fn list_active_sessions(&self) -> anyhow::Result<Vec<Session>> {
-        Ok(self.session.list_active())
+        self.session.list_active()
     }
 
     fn get_session(&self, id: &SessionId) -> anyhow::Result<Option<Session>> {
-        Ok(self.session.get(id))
+        self.session.get(id)
     }
 
     fn session_events(

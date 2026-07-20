@@ -1403,3 +1403,22 @@ Evidence will be appended after indexing and focused impact queries.
   `ScheduleService::next_fire_for_entry`, backed by shared `parse_entry_cron`.
   `ScheduleLoader` computes next fires from the snapshot entry and propagates
   corrupt cron errors instead of emitting empty context.
+
+## 2026-07-20 Session index silent empty/unknown fallback audit
+
+- `codegraph query "SessionService list lock poisoned Vec::new session.events
+  loop instance discuss room" --limit 120` identified `SessionService` plus
+  the product-facing `device.session.list` / `device.session.attach` handlers
+  as live-session read-model consumers.
+- Targeted source inspection found two compatibility projections:
+  `SessionService::list_active` returned `Vec<Session>` and mapped lock poison
+  to `Vec::new()`, while `SessionService::get` erased lock poison with
+  `.read().ok()` and returned `None`.
+- The root abstraction problem was conflating unknown session with unavailable
+  session index state. Unknown session can remain an empty attach snapshot for
+  stale IDs; poisoned session index must be explicit unavailable runtime state.
+- After the change, `list_active` returns `anyhow::Result<Vec<Session>>`, `get`
+  returns `anyhow::Result<Option<Session>>`, Kernel propagates both results,
+  `device.session.list` preserves serialization failures, and
+  `device.session.attach` only emits the empty snapshot after proving the index
+  is readable.

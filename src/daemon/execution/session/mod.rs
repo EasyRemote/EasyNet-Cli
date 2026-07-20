@@ -63,6 +63,14 @@ impl SessionService {
         Self::default()
     }
 
+    #[cfg(test)]
+    pub fn poison_index_for_test(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.sessions.write().unwrap();
+            panic!("poison session index");
+        }));
+    }
+
     /// Admit a new session. The caller (Kernel::invoke admission
     /// path) supplies the assembled Session handle; this service
     /// indexes it. Returns the inserted handle's id for chaining.
@@ -167,19 +175,21 @@ impl SessionService {
     /// Snapshot of every session currently indexed (active or
     /// terminated). v1 returns Vec; v2 will paginate when the
     /// index grows large.
-    pub fn list_active(&self) -> Vec<Session> {
-        match self.sessions.read() {
-            Ok(g) => g.values().map(|e| e.meta.clone()).collect(),
-            Err(_) => Vec::new(),
-        }
+    pub fn list_active(&self) -> anyhow::Result<Vec<Session>> {
+        let sessions = self
+            .sessions
+            .read()
+            .map_err(|_| anyhow::anyhow!("SessionService session index lock poisoned"))?;
+        Ok(sessions.values().map(|e| e.meta.clone()).collect())
     }
 
     /// Lookup by id.
-    pub fn get(&self, id: &SessionId) -> Option<Session> {
-        self.sessions
+    pub fn get(&self, id: &SessionId) -> anyhow::Result<Option<Session>> {
+        let sessions = self
+            .sessions
             .read()
-            .ok()
-            .and_then(|g| g.get(id).map(|e| e.meta.clone()))
+            .map_err(|_| anyhow::anyhow!("SessionService session index lock poisoned"))?;
+        Ok(sessions.get(id).map(|e| e.meta.clone()))
     }
 
     /// Convenience constructor for admission code paths that have
@@ -220,7 +230,7 @@ mod tests {
     fn admit_then_list_returns_the_session() {
         let svc = SessionService::new();
         svc.admit(s("run-1", "alice")).unwrap();
-        let listed = svc.list_active();
+        let listed = svc.list_active().expect("list active");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, SessionId::new("run-1"));
         assert_eq!(listed[0].agent, AgentId::new("alice"));
@@ -249,10 +259,10 @@ mod tests {
         svc.admit(s("done", "alice")).unwrap();
         svc.terminate(&SessionId::new("done"), 1_700_000_000_000)
             .unwrap();
-        let s = svc.get(&SessionId::new("done")).unwrap();
+        let s = svc.get(&SessionId::new("done")).unwrap().expect("session");
         assert_eq!(s.ended_unix_ms, Some(1_700_000_000_000));
         // Entry kept in the index — list_active surfaces it.
-        assert_eq!(svc.list_active().len(), 1);
+        assert_eq!(svc.list_active().expect("list active").len(), 1);
     }
 
     #[tokio::test]
@@ -320,7 +330,12 @@ mod tests {
         svc.admit(s("c", "a")).unwrap();
         svc.admit(s("a", "a")).unwrap();
         svc.admit(s("b", "a")).unwrap();
-        let ids: Vec<_> = svc.list_active().into_iter().map(|s| s.id).collect();
+        let ids: Vec<_> = svc
+            .list_active()
+            .expect("list active")
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
         assert_eq!(
             ids,
             vec![
@@ -329,5 +344,27 @@ mod tests {
                 SessionId::new("c"),
             ]
         );
+    }
+
+    #[test]
+    fn list_active_rejects_poisoned_index_instead_of_empty_sessions() {
+        let svc = SessionService::new();
+        svc.poison_index_for_test();
+
+        let err = svc
+            .list_active()
+            .expect_err("poisoned session index must fail");
+        assert!(format!("{err:#}").contains("SessionService session index lock poisoned"));
+    }
+
+    #[test]
+    fn get_rejects_poisoned_index_instead_of_unknown_session() {
+        let svc = SessionService::new();
+        svc.poison_index_for_test();
+
+        let err = svc
+            .get(&SessionId::new("any"))
+            .expect_err("poisoned session index must fail");
+        assert!(format!("{err:#}").contains("SessionService session index lock poisoned"));
     }
 }

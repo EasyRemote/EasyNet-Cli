@@ -7950,6 +7950,185 @@ if schedule_loader.exists():
                 )
 
 
+# Rule 85: live session index is runtime state, not a best-effort
+# discovery cache. A poisoned session index must surface as unavailable
+# session state; it must not become an empty session list, an unknown-session
+# attach snapshot, or null rows in device.session.list.
+session_mod = cli_root / "src/daemon/execution/session/mod.rs"
+device_session = cli_root / "src/daemon/ability/builtins/device_control/session.rs"
+kernel_mod = cli_root / "src/daemon/boot/kernel/mod.rs"
+if session_mod.exists():
+    text = source(session_mod)
+    body = rust_method_body(text, "list_active")
+    if body is None:
+        add(
+            "R85_SESSION_INDEX_FAIL_CLOSED",
+            session_mod,
+            1,
+            "SessionService must keep list_active as the live session index snapshot authority",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if "Result<Vec<Session>>" not in signature:
+            add(
+                "R85_SESSION_INDEX_FAIL_CLOSED",
+                session_mod,
+                line_number(text, offset),
+                "SessionService::list_active must return Result so poisoned index state cannot become an empty session list",
+            )
+        for token, detail in (
+            (
+                "Err(_) => Vec::new()",
+                "SessionService::list_active must not hide a poisoned index behind an empty session list",
+            ),
+            (
+                "Err(_) => return Vec::new()",
+                "SessionService::list_active must not hide a poisoned index behind an empty session list",
+            ),
+        ):
+            if token in fn_body:
+                add(
+                    "R85_SESSION_INDEX_FAIL_CLOSED",
+                    session_mod,
+                    line_number(text, body_start + fn_body.find(token)),
+                    detail,
+                )
+        if "SessionService session index lock poisoned" not in fn_body:
+            add(
+                "R85_SESSION_INDEX_FAIL_CLOSED",
+                session_mod,
+                line_number(text, offset),
+                "SessionService::list_active must preserve poisoned index as explicit unavailable state",
+            )
+
+    body = rust_method_body(text, "get")
+    if body is None:
+        add(
+            "R85_SESSION_INDEX_FAIL_CLOSED",
+            session_mod,
+            1,
+            "SessionService must keep get as the session lookup authority",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if "Result<Option<Session>>" not in signature:
+            add(
+                "R85_SESSION_INDEX_FAIL_CLOSED",
+                session_mod,
+                line_number(text, offset),
+                "SessionService::get must return Result so poisoned index state cannot become unknown session",
+            )
+        for token, detail in (
+            (
+                ".read()\n            .ok()",
+                "SessionService::get must not erase poisoned index errors with .ok()",
+            ),
+            (
+                "and_then(|g| g.get(id)",
+                "SessionService::get must not collapse unavailable index state into None",
+            ),
+        ):
+            if token in fn_body:
+                add(
+                    "R85_SESSION_INDEX_FAIL_CLOSED",
+                    session_mod,
+                    line_number(text, body_start + fn_body.find(token)),
+                    detail,
+                )
+        if "SessionService session index lock poisoned" not in fn_body:
+            add(
+                "R85_SESSION_INDEX_FAIL_CLOSED",
+                session_mod,
+                line_number(text, offset),
+                "SessionService::get must preserve poisoned index as explicit unavailable state",
+            )
+
+if device_session.exists():
+    text = source(device_session)
+    body = rust_method_body(text, "list_handler")
+    if body is None:
+        add(
+            "R85_SESSION_INDEX_FAIL_CLOSED",
+            device_session,
+            1,
+            "device.session.list must preserve session index failures",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        if "svc.list_active()?" not in fn_body:
+            add(
+                "R85_SESSION_INDEX_FAIL_CLOSED",
+                device_session,
+                line_number(text, offset),
+                "device.session.list must propagate SessionService::list_active errors",
+            )
+        if "unwrap_or(Value::Null)" in fn_body:
+            add(
+                "R85_SESSION_INDEX_FAIL_CLOSED",
+                device_session,
+                line_number(text, body_start + fn_body.find("unwrap_or(Value::Null)")),
+                "device.session.list must not project session serialization failures as null rows",
+            )
+
+    body = rust_method_body(text, "attach_handler")
+    if body is None:
+        add(
+            "R85_SESSION_INDEX_FAIL_CLOSED",
+            device_session,
+            1,
+            "device.session.attach must preserve session index failures",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        if "svc.get(&id)?.is_none()" not in fn_body:
+            add(
+                "R85_SESSION_INDEX_FAIL_CLOSED",
+                device_session,
+                line_number(text, offset),
+                "device.session.attach must propagate SessionService::get errors before deciding unknown-session snapshot",
+            )
+        if "svc.get(&id).is_none()" in fn_body:
+            add(
+                "R85_SESSION_INDEX_FAIL_CLOSED",
+                device_session,
+                line_number(text, body_start + fn_body.find("svc.get(&id).is_none()")),
+                "device.session.attach must not collapse unavailable index state into an empty snapshot",
+            )
+
+if kernel_mod.exists():
+    text = source(kernel_mod)
+    for method_name, token, detail in (
+        (
+            "list_active_sessions",
+            "self.session.list_active()",
+            "Kernel::list_active_sessions must return SessionService::list_active directly",
+        ),
+        (
+            "get_session",
+            "self.session.get(id)",
+            "Kernel::get_session must return SessionService::get directly",
+        ),
+    ):
+        body = rust_method_body(text, method_name)
+        if body is None:
+            add("R85_SESSION_INDEX_FAIL_CLOSED", kernel_mod, 1, detail)
+        else:
+            offset, fn_body = body
+            if token not in fn_body or "Ok(self.session." in fn_body:
+                add(
+                    "R85_SESSION_INDEX_FAIL_CLOSED",
+                    kernel_mod,
+                    line_number(text, offset),
+                    detail,
+                )
+
+
 if violations:
     for violation in sorted(violations):
         print(

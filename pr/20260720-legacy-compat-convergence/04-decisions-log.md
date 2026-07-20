@@ -448,3 +448,7 @@ Decisions will be appended as root-fork choices are made.
   Context loaders that already hold a `ScheduleEntry` must compute from that
   entry through schedule core validation; they must not re-query by id and
   collapse next-fire errors into absent context.
+- Treat live session index availability as runtime state, not a discovery
+  cache detail. Unknown session may remain an empty attach snapshot, but a
+  poisoned/unavailable session index must fail `session.list`, `session.attach`,
+  and Kernel session snapshot paths explicitly.
