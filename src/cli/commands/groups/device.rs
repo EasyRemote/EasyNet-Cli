@@ -255,16 +255,14 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     let local_tenant = creds.as_ref().map(|c| c.realm.clone()).unwrap_or_default();
 
     let trimmed = args.node_id.trim();
-    let target_ura = if crate::core::ura::parse_ura(trimmed).is_ok() {
-        canonicalize_remove_target_ura(trimmed)?
-    } else if !local_tenant.is_empty() {
-        crate::core::ura::device_ura(&local_tenant, trimmed)
-    } else {
+    if !local_node.is_empty() && trimmed == local_node {
         anyhow::bail!(
-            "cannot resolve node {trimmed:?}: pass a canonical \
-             `easynet:///r/<realm>/device/<id>` URA or pair this device first"
+            "refusing to revoke this device's own node id ({local_node}); use \
+             `easynet device reset` to clear local credentials and \
+             deregister cleanly."
         );
-    };
+    }
+    let target_ura = canonicalize_remove_target_ura(trimmed)?;
 
     let local_ura = if !local_tenant.is_empty() && !local_node.is_empty() {
         crate::core::ura::device_ura(&local_tenant, &local_node)
@@ -297,14 +295,24 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "axon-pb")]
 fn canonicalize_remove_target_ura(ura: &str) -> anyhow::Result<String> {
-    crate::daemon::invocation::routing::remote_invoke::parse_node_ura(ura)
-}
-
-#[cfg(not(feature = "axon-pb"))]
-fn canonicalize_remove_target_ura(ura: &str) -> anyhow::Result<String> {
-    Ok(ura.to_string())
+    let target = ura.trim();
+    if target.is_empty() {
+        bail!("device remove target must not be empty; pass a canonical Device URA");
+    }
+    let parsed = crate::core::ura::parse_ura(target).map_err(|err| {
+        anyhow::anyhow!(
+            "device remove target {target:?} is not a canonical Device URA: {err}. \
+             Pass `easynet:///r/<realm>/device/<id>`."
+        )
+    })?;
+    if parsed.kind != crate::core::ura::URAKind::Device {
+        bail!(
+            "device remove target {target:?} must be a canonical Device URA, got kind={}",
+            parsed.kind
+        );
+    }
+    Ok(target.to_string())
 }
 
 #[cfg(feature = "axon-pb")]
@@ -455,6 +463,37 @@ mod tests {
         assert_eq!(
             device_show_abilities(&json!({"abilities": abilities.clone()})).expect("abilities"),
             abilities
+        );
+    }
+
+    #[test]
+    fn device_remove_rejects_bare_remote_target() {
+        let error = canonicalize_remove_target_ura("386b1258-3c89-494a-90a2-2321c29bf992")
+            .expect_err("bare remote ids must not be accepted");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("not a canonical Device URA"),
+            "wrong error: {message}"
+        );
+        assert!(
+            message.contains("easynet:///r/<realm>/device/<id>"),
+            "wrong error: {message}"
+        );
+    }
+
+    #[test]
+    fn device_remove_accepts_only_canonical_device_ura() {
+        assert_eq!(
+            canonicalize_remove_target_ura("easynet:///r/acme/device/dev-b").expect("device"),
+            "easynet:///r/acme/device/dev-b"
+        );
+
+        let error = canonicalize_remove_target_ura("easynet:///r/acme/authority")
+            .expect_err("authority is not a removable device target");
+        assert!(
+            error.to_string().contains("must be a canonical Device URA"),
+            "wrong error: {error}"
         );
     }
 }
