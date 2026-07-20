@@ -478,3 +478,10 @@ Decisions will be appended as root-fork choices are made.
   and session authority validators must reject the all-zero placeholder before
   subject/audience matching so stale defaults do not become misleading
   `AUTHORITY_SUBJECT_MISMATCH` failures.
+- Treat C ABI descriptor diagnostics fallback as descriptor resolution state,
+  not generic ability discovery. A diagnostics catalog miss means the provider
+  could not prove a descriptor ref for `(callee_ura, ability, call_mode)`;
+  returning generic `NOT_FOUND` makes products collapse it with absent
+  abilities and masks the signer/admission/route distinctions surfaced by the
+  Rust FFI projection. Go and Python now converge on
+  `DESCRIPTOR_NOT_FOUND`, and R91 keeps this boundary typed.

@@ -1521,3 +1521,31 @@ Commands and outcomes will be appended after implementation.
   `validate_session_authority_payload_shape`,
   `ALL_ZERO_PRINCIPAL_ID`, and the new all-zero authority regressions.
 - `git diff --check` — PASS.
+
+## 2026-07-21 C ABI descriptor diagnostics fallback typing
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  resolveDescriptorRefFromDiagnostics _resolve_descriptor_ref_from_diagnostics
+  descriptor_resolution_error_projection` — PASS; reports Go/Python fallback
+  functions, Rust FFI typed projection, and the Go resolver test dependency.
+- `(cd sdk/go && PATH="/opt/homebrew/bin:$PATH" go test -tags
+  'easynet_cabi' . -run 'TestResolveDescriptorRefFromDiagnostics')` — PASS.
+- `PYTHONPATH=sdk/python:sdk/python/tests sdk/python/.venv/bin/python -m
+  pytest -q sdk/python/tests/test_cabi.py -k 'descriptor_diagnostics'` —
+  PASS (`3 passed, 24 deselected`).
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R91 for descriptor fallback typed not-found semantics.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture where Go/Python diagnostics fallback returns generic
+  `NOT_FOUND`.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python"
+  sdk/python/.venv/bin/python sdk/conformance/rebuild_public_api_model.py
+  --write` — PASS; refreshed Go/Python C ABI provider hashes only.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check` — PASS.
+- `git diff --check` — PASS.

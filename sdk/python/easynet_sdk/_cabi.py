@@ -1820,7 +1820,7 @@ def _resolve_descriptor_ref_from_diagnostics(
             }
         )
     raise SDKError(
-        code=ErrorCode.NOT_FOUND,
+        code=ErrorCode.DESCRIPTOR_NOT_FOUND,
         stage="cabi",
         retry=RetryHint.NEVER,
         message=(

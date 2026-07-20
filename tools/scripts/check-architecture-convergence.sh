@@ -7412,6 +7412,44 @@ if authority_metadata.exists():
                 )
 
 
+# Rule 91: C ABI diagnostics descriptor fallback must keep descriptor
+# resolution semantics. A catalog miss is DESCRIPTOR_NOT_FOUND, not generic
+# NOT_FOUND/ABILITY_NOT_FOUND; otherwise products cannot distinguish absent
+# descriptor refs from missing abilities or upstream signer/admission
+# failures.
+for path, missing_token, forbidden_pattern in (
+    (
+        cli_root / "sdk/go/cabi_runtime.go",
+        "ErrDescriptorNotFound",
+        r"Code\s*:\s*ErrNotFound",
+    ),
+    (
+        cli_root / "sdk/python/easynet_sdk/_cabi.py",
+        "ErrorCode.DESCRIPTOR_NOT_FOUND",
+        r"code\s*=\s*ErrorCode\.NOT_FOUND",
+    ),
+):
+    if not path.exists():
+        continue
+    text = source(path)
+    if "resolveDescriptorRefFromDiagnostics" in text or "_resolve_descriptor_ref_from_diagnostics" in text:
+        if missing_token not in text:
+            add(
+                "R91_CABI_DESCRIPTOR_RESOLVE_NOT_FOUND_TYPED",
+                path,
+                1,
+                "C ABI diagnostics descriptor fallback must return DESCRIPTOR_NOT_FOUND",
+            )
+        match = re.search(forbidden_pattern, text)
+        if match:
+            add(
+                "R91_CABI_DESCRIPTOR_RESOLVE_NOT_FOUND_TYPED",
+                path,
+                line_number(text, match.start()),
+                "C ABI diagnostics descriptor fallback must not return generic NOT_FOUND",
+            )
+
+
 # Rule 79: Invocation signing custody must be ownership/lease backed. A raw
 # key-service signer capability must not imply descriptor-bound invocation
 # authority by constructing a caller identity from the URA string.

@@ -1543,7 +1543,7 @@ func resolveDescriptorRefFromDiagnostics(requestJSON []byte, diagnosticsJSON []b
 		})
 	}
 	return nil, &SDKError{
-		Code:      ErrNotFound,
+		Code:      ErrDescriptorNotFound,
 		Stage:     "cabi",
 		Retry:     RetryNever,
 		Retryable: RetryableForHint(RetryNever),

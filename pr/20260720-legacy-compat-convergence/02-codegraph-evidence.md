@@ -1528,3 +1528,27 @@ Evidence will be appended after indexing and focused impact queries.
   all-zero principal rejection helper before subject/audience matching. Raw
   all-zero authority metadata now fails as `AUTHORITY_FORMAT_INVALID` instead
   of reaching downstream admission as a false user/session authority.
+
+## 2026-07-21 C ABI descriptor diagnostics generic not-found fallback audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  resolveDescriptorRefFromDiagnostics _resolve_descriptor_ref_from_diagnostics
+  descriptor_resolution_error_projection` identified the descriptor resolution
+  boundary across Rust FFI, Go C ABI provider, and Python C ABI provider.
+- Rust FFI already projects descriptor resolution failures into typed runtime
+  states: caller signer absence becomes `CALLER_SIGNER_UNAVAILABLE`, offline
+  owners become `DESCRIPTOR_OWNER_OFFLINE`, and unresolved descriptor refs
+  become `DESCRIPTOR_NOT_FOUND`.
+- Targeted source inspection found the remaining compatibility seam in the Go
+  and Python diagnostics fallback providers: when they could not match a
+  descriptor catalog row, they returned generic `NOT_FOUND`. That erased
+  descriptor-resolution semantics and let product callers conflate catalog
+  misses with missing abilities or upstream signer/admission failures.
+- The root abstraction problem was placing a descriptor lookup fallback inside
+  generic ability-not-found semantics. Diagnostics fallback still implements
+  descriptor resolution; therefore its terminal miss state must be
+  descriptor-specific and consistent across SDK languages.
+- After the change, Go and Python C ABI diagnostics fallback paths return
+  `DESCRIPTOR_NOT_FOUND`, focused regressions cover owner-mismatch catalog
+  misses, and architecture rule R91 prevents reintroducing generic
+  `NOT_FOUND` in this boundary.

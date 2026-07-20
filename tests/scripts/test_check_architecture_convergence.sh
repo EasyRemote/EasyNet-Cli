@@ -2253,6 +2253,8 @@ EOF
   close-send is a non-terminal local half-close.
 EOF
   cat >"$CLI/sdk/go/cabi_runtime.go" <<'EOF'
+var _ = ErrDescriptorNotFound
+
 func (s *cabiStreamTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
     return []byte(fmt.Sprintf(`{"stream_id":%q,"cancel_requested":true,"cancelled":false,"state":"CancelRequested","terminal":false}`, streamID)), nil
 }
@@ -2269,6 +2271,8 @@ func resolveDescriptorRefFromDiagnostics(request map[string]string) error {
 }
 EOF
   cat >"$CLI/sdk/python/easynet_sdk/_cabi.py" <<'EOF'
+_EXPECTED_DESCRIPTOR_CODE = ErrorCode.DESCRIPTOR_NOT_FOUND
+
 def _resolve_descriptor_ref_from_diagnostics(request):
     call_mode = _required_string(request, "call_mode")
     return call_mode
@@ -5245,6 +5249,56 @@ EOF
 expect_fail \
   "authority metadata all-zero principal fallback" \
   "R90_AUTHORITY_METADATA_REJECTS_ALL_ZERO_PRINCIPAL"
+
+make_good_fixture
+mkdir -p "$CLI/sdk/go" "$CLI/sdk/python/easynet_sdk"
+cat >"$CLI/sdk/go/cabi_runtime.go" <<'EOF'
+var _ = ErrDescriptorNotFound
+
+type cabiStreamTransport struct{}
+func (s *cabiStreamTransport) Cancel() []byte {
+    return []byte(`{"state":"CancelRequested","terminal":false}`)
+}
+
+type cabiBidiTransport struct{}
+func (b *cabiBidiTransport) Cancel() []byte {
+    return []byte(`{"state":"CancelRequested","terminal":false}`)
+}
+
+func resolveDescriptorRefFromDiagnostics() error {
+    _ = invalidRuntimePayload("call_mode is required for descriptor_ref resolution", nil)
+    return &SDKError{
+        Code:      ErrNotFound,
+        Stage:     "cabi",
+        Retry:     RetryNever,
+        Retryable: RetryableForHint(RetryNever),
+        Message:   "descriptor_ref not found",
+    }
+}
+EOF
+cat >"$CLI/sdk/python/easynet_sdk/_cabi.py" <<'EOF'
+_EXPECTED_DESCRIPTOR_CODE = ErrorCode.DESCRIPTOR_NOT_FOUND
+
+class _CABIStreamTransport:
+    def cancel(self):
+        return {"state": "CancelRequested", "terminal": False}
+
+class _CABIBidiTransport:
+    def cancel(self):
+        return {"state": "CancelRequested", "terminal": False}
+
+def _resolve_descriptor_ref_from_diagnostics():
+    _required_string(request, "call_mode")
+    raise SDKError(
+        code=ErrorCode.NOT_FOUND,
+        stage="cabi",
+        retry=RetryHint.NEVER,
+        message="descriptor_ref not found",
+    )
+EOF
+expect_fail \
+  "C ABI descriptor resolve generic not-found fallback" \
+  "R91_CABI_DESCRIPTOR_RESOLVE_NOT_FOUND_TYPED"
 
 make_good_fixture
 cat >"$CLI/src/daemon/identity/receipt_signing.rs" <<'EOF'

@@ -30,6 +30,9 @@ func TestResolveDescriptorRefFromDiagnosticsNameSelectorRequiresCalleeOwner(t *t
 	if err == nil {
 		t.Fatal("name selector resolved an ability owned by a different owner")
 	}
+	if !IsCode(err, ErrDescriptorNotFound) {
+		t.Fatalf("error = %v, want %s", err, ErrDescriptorNotFound)
+	}
 }
 
 func TestResolveDescriptorRefFromDiagnosticsAbilityURASelectorAllowsHostedOwner(t *testing.T) {

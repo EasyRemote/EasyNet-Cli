@@ -30,6 +30,31 @@ from test_runtime import canonical_runtime_receipt_pair, complete_draft
 
 
 class CABIDescriptorDiagnosticsTests(unittest.TestCase):
+    def test_descriptor_diagnostics_owner_mismatch_is_descriptor_not_found(self) -> None:
+        diagnostics = {
+            "descriptor_catalog": {
+                "source": "test",
+                "entries": [
+                    {
+                        "name": "page.fetch",
+                        "owner_ura": "easynet:///r/test/agent/alice.pages",
+                        "ability_ura": "easynet:///r/test/ability/alice.pages.page.fetch",
+                        "descriptor_ref": "easynet:///r/test/ability/alice.pages.page.fetch@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+                        "call_mode": "rpc",
+                    }
+                ],
+            }
+        }
+
+        with self.assertRaises(SDKError) as raised:
+            _resolve_descriptor_ref_from_diagnostics(
+                b'{"callee_ura":"easynet:///r/test/device/dev-a","ability":"page.fetch","call_mode":"rpc"}',
+                diagnostics,
+            )
+
+        self.assertEqual(raised.exception.code, ErrorCode.DESCRIPTOR_NOT_FOUND)
+        self.assertIn("descriptor_ref not found", raised.exception.message)
+
     def test_descriptor_diagnostics_requires_call_mode(self) -> None:
         diagnostics = {
             "descriptor_catalog": {
