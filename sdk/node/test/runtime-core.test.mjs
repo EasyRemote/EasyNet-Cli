@@ -86,10 +86,10 @@ const authorityValue = (payload) =>
 const delegationValue = () =>
   authorityValue({
     issuer_ura: "easynet:///r/example/user/alice",
-    subject_ura: "easynet:///r/example/user/alice",
+    subject_ura: callee,
     caller_ura: caller,
     audience: callee,
-    scopes: ["invoke"],
+    scopes: ["observe.health"],
     issued_at_ms: 10,
     expires_at_ms: 20,
   });
@@ -104,6 +104,22 @@ const sessionValue = () =>
     subject_ura: "easynet:///r/example/user/alice",
     audience: callee,
     scopes: ["invoke"],
+    allowed_actions: ["invoke"],
+    allowed_followup_abilities: ["observe.health"],
+    issued_at_ms: 10,
+    expires_at_ms: 20,
+  });
+
+const sessionResourceValue = () =>
+  authorityValue({
+    issuer_ura: caller,
+    session_id: "session-1",
+    session_owner_user_id: "alice",
+    creator_principal_id: caller,
+    callee_ura: callee,
+    subject_ura: "easynet:///r/example/resource/user.alice/session/session-1",
+    audience: callee,
+    scopes: ["observe.health"],
     allowed_actions: ["invoke"],
     allowed_followup_abilities: ["observe.health"],
     issued_at_ms: 10,
@@ -429,10 +445,10 @@ test("authority metadata is typed, delegated, and mutually exclusive", async () 
 
   const proof = await authority.mintDelegationProof({
     issuer_ura: "easynet:///r/example/user/alice",
-    subject_ura: "easynet:///r/example/user/alice",
+    subject_ura: callee,
     caller_ura: caller,
     audience: callee,
-    scopes: ["invoke"],
+    scopes: ["observe.health"],
     issued_at_ms: 10,
     expires_at_ms: 20,
     metadata: { trace: "delegation" },
@@ -467,6 +483,39 @@ test("authority metadata is typed, delegated, and mutually exclusive", async () 
     .withAuthorityMetadata(proof.metadata())
     .build();
   assert.equal(authorized.metadata[sdk.DELEGATION_METADATA_KEY], delegation);
+
+  assert.throws(
+    () =>
+      new sdk.InvocationBuilder()
+        .withCallerURA(caller)
+        .withCalleeURA(callee)
+        .withDescriptorRef(descriptor)
+        .withSubjectURA(callee)
+        .withNonceBase64(nonce)
+        .withCausalContext({ form: "none" })
+        .withJSONArgs({})
+        .withContentType("application/json")
+        .withAuthorityMetadata(sessionAuthority.metadata())
+        .build(),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.AUTHORITY_SUBJECT_MISMATCH &&
+      error.stage === "authorize",
+  );
+
+  const userResourceSession = sdk.SessionAuthority.fromMetadata(sessionResourceValue());
+  const resourceAuthorized = new sdk.InvocationBuilder()
+    .withCallerURA(caller)
+    .withCalleeURA(callee)
+    .withDescriptorRef(descriptor)
+    .withSubjectURA("easynet:///r/example/resource/user.alice/session/invocation_history")
+    .withNonceBase64(nonce)
+    .withCausalContext({ form: "none" })
+    .withJSONArgs({})
+    .withContentType("application/json")
+    .withAuthorityMetadata(userResourceSession.metadata())
+    .build();
+  assert.equal(resourceAuthorized.metadata[sdk.SESSION_AUTHORITY_METADATA_KEY], userResourceSession.metadataValue);
 
   assert.throws(
     () =>

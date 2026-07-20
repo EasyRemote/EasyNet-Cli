@@ -6769,6 +6769,67 @@ if context_store.exists():
             )
 
 
+# Rule 70: Node Runtime Core must validate typed authority metadata against the
+# descriptor-bound invocation tuple before transport. Shape-only metadata
+# validation lets product callers submit stale user/session authority for
+# device-owned system abilities and pushes deterministic AUTHORITY_* failures
+# into daemon admission.
+node_sdk = cli_root / "sdk/node/index.js"
+if node_sdk.exists():
+    text = source(node_sdk)
+    required_tokens = (
+        (
+            '"AUTHORITY_SUBJECT_MISMATCH"',
+            "Node SDK must expose the canonical authority-subject mismatch error code",
+        ),
+        (
+            "validateInvocationAuthorityBinding(this);",
+            "InvocationDraft must validate typed authority metadata against the tuple",
+        ),
+        (
+            "function validateInvocationAuthorityBinding(draft)",
+            "Node SDK must own one invocation authority-binding validator",
+        ),
+        (
+            "class InvocationAuthorityBindingValidator",
+            "Node SDK authority-binding validation must stay in a cohesive validator object",
+        ),
+        (
+            "function sessionAuthorityAdmitsSubject(authority, subjectURA)",
+            "Node SDK must mirror daemon session subject-admission semantics",
+        ),
+        (
+            "function authorityScopesAdmit(patterns, ability)",
+            "Node SDK must validate authority scopes against ability view",
+        ),
+    )
+    for token, detail in required_tokens:
+        if token not in text:
+            add("R70_NODE_AUTHORITY_BINDING_PREFLIGHT", node_sdk, 1, detail)
+    draft_offset = text.find("export class InvocationDraft")
+    if draft_offset >= 0:
+        next_class = text.find("\nexport class ", draft_offset + 1)
+        draft_body = text[draft_offset : next_class if next_class >= 0 else len(text)]
+        if "validateAuthorityMetadata(this.metadata);" in draft_body and (
+            "validateInvocationAuthorityBinding(this);" not in draft_body
+        ):
+            add(
+                "R70_NODE_AUTHORITY_BINDING_PREFLIGHT",
+                node_sdk,
+                line_number(text, draft_offset),
+                "InvocationDraft must not stop at shape-only authority metadata validation",
+            )
+    if "authorityMetadataValue(value, SESSION_AUTHORITY_METADATA_KEY);" in text and (
+        "SessionAuthority.fromMetadata(session)" not in text
+    ):
+        add(
+            "R70_NODE_AUTHORITY_BINDING_PREFLIGHT",
+            node_sdk,
+            1,
+            "Node SDK must decode session authority metadata before draft submission",
+        )
+
+
 if violations:
     for violation in sorted(violations):
         print(

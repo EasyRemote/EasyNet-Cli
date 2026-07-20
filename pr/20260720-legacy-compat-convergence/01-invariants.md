@@ -136,3 +136,9 @@
   `clipboard.jsonl` is a valid empty history; an existing unreadable file or
   malformed row is unavailable/corrupt context state and must not be projected
   as an empty history, skipped row, or "clip not found".
+- Node Runtime Core must validate typed authority metadata against the
+  descriptor-bound invocation tuple before transport. Delegation/session
+  metadata is not just shape-valid JSON; it must admit the draft caller,
+  callee, subject, audience, action, and ability scope locally so predictable
+  authority-subject errors do not leak into daemon admission as product-facing
+  runtime failures.

@@ -4962,6 +4962,43 @@ expect_fail \
   "R69_CONTEXT_CLIPBOARD_HISTORY_FALLBACK"
 
 make_good_fixture
+mkdir -p "$CLI/sdk/node"
+cat >"$CLI/sdk/node/index.js" <<'EOF'
+const ERROR_CODES = new Set([
+  "INVALID_ARGUMENT",
+  "AUTHORITY_DENIED",
+]);
+
+export class InvocationDraft {
+  constructor(fields) {
+    this.metadata = fields.metadata ?? {};
+    validateAuthorityMetadata(this.metadata);
+  }
+}
+
+export class SessionAuthority {
+  static fromMetadata(value) {
+    return value;
+  }
+}
+
+function validateAuthorityMetadata(metadata) {
+  const value = metadata ?? {};
+  const session = authorityMetadataValue(value, "x-easynet-session-authority");
+  if (session) {
+    return;
+  }
+}
+
+function authorityMetadataValue(metadata, key) {
+  return metadata[key] ?? "";
+}
+EOF
+expect_fail \
+  "node authority binding preflight fallback" \
+  "R70_NODE_AUTHORITY_BINDING_PREFLIGHT"
+
+make_good_fixture
 expect_pass "fixture restored after all negative cases"
 
 printf 'test_check_architecture_convergence.sh: all cases passed\n'

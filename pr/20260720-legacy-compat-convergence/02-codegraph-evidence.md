@@ -993,3 +993,22 @@ Evidence will be appended after indexing and focused impact queries.
   classification, User callers cannot fall back to owner-key lookup, and
   Device/Both boot requires the paired User URA before registering the managed
   signing key into runtime trust.
+
+## 2026-07-20 Node authority binding preflight audit
+
+- `codegraph query InvocationAuthorityBindingValidator --limit 30` reports the
+  cohesive Node Runtime Core authority-binding validator object in
+  `sdk/node/index.js`, with separate delegation/session validation methods.
+- `codegraph query validateInvocationAuthorityBinding --limit 30` reports the
+  thin `InvocationDraft` entrypoint into that validator.
+- `codegraph query sessionAuthorityAdmitsSubject --limit 30` reports the Node
+  session subject-admission helper mirroring daemon semantics: exact subject
+  match, or resource ownership by `user.<session_owner>` /
+  `agent.<session_owner>.<agent_id>`.
+- `codegraph query abilityViewForInvocation --limit 30` reports the ability
+  view used to match authority scopes against public name, canonical Ability
+  URA, and descriptor wire form.
+- The root abstraction problem was treating Node authority metadata as
+  shape-only metadata. That let products build a descriptor-bound Device
+  invocation carrying a User session authority, so deterministic
+  `AUTHORITY_SUBJECT_MISMATCH` surfaced only after daemon admission.

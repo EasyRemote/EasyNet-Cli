@@ -312,3 +312,9 @@ Decisions will be appended as root-fork choices are made.
   user credentials; the daemon must fail before Invocation readiness instead of
   advertising a runtime that later cannot sign user-as-caller descriptor
   invocations.
+- Treat Node Runtime Core authority metadata as executable tuple authority,
+  not opaque metadata. `InvocationDraft` now rejects delegation/session
+  authority that does not admit the canonical caller, callee, subject, action,
+  and ability before transport. This aligns Node with the Python/Go authorized
+  runtime binding model and prevents product UI paths from discovering
+  authority-subject mismatch only after daemon admission.

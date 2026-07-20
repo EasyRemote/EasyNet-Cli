@@ -15,6 +15,7 @@ const ERROR_CODES = new Set([
   "SIGNATURE_DENIED",
   "POLICY_DENIED",
   "AUTHORITY_DENIED",
+  "AUTHORITY_SUBJECT_MISMATCH",
   "ABILITY_NOT_FOUND",
   "ROUTE_UNAVAILABLE",
   "EXECUTION_FAILED",
@@ -628,6 +629,7 @@ export class InvocationDraft {
     this.callerSignature = fields.callerSignature ?? null;
     this.hasArgs = Boolean(fields.hasArgs);
     validateAuthorityMetadata(this.metadata);
+    validateInvocationAuthorityBinding(this);
     validateInvocationPayloadChoice(this);
     validateBase64(this.nonceBase64, "nonce_base64", 16);
     if (this.argumentsBase64) {
@@ -1919,6 +1921,7 @@ function errorClassForCode(code) {
     case ErrorCode.SIGNATURE_DENIED:
     case ErrorCode.POLICY_DENIED:
     case ErrorCode.AUTHORITY_DENIED:
+    case ErrorCode.AUTHORITY_SUBJECT_MISMATCH:
     case ErrorCode.EXECUTION_FAILED:
     case ErrorCode.ABILITY_FAILED:
       return ErrorClass.ADMISSION;
@@ -2276,6 +2279,245 @@ function validateAuthorityMetadata(metadata) {
   }
 }
 
+function validateInvocationAuthorityBinding(draft) {
+  const authority = invocationAuthorityFromMetadata(draft.metadata);
+  if (!authority) {
+    return;
+  }
+  new InvocationAuthorityBindingValidator(draft, authority).validate();
+}
+
+class InvocationAuthorityBindingValidator {
+  constructor(draft, authority) {
+    this.draft = draft;
+    this.authority = authority;
+    this.ability = abilityViewForInvocation(draft);
+    this.details = {
+      caller_ura: draft.callerURA,
+      callee_ura: draft.calleeURA,
+      subject_ura: draft.subjectURA,
+      descriptor_ref: draft.descriptorRef,
+      authority_session_subject: authority.subjectURA,
+    };
+  }
+
+  validate() {
+    if (this.authority instanceof DelegationProof) {
+      this.validateDelegation();
+      return;
+    }
+    this.validateSession();
+  }
+
+  validateDelegation() {
+    this.require(
+      this.authority.callerURA.trim() === this.draft.callerURA.trim(),
+      ErrorCode.AUTHORITY_DENIED,
+      "delegation authority caller does not match invocation caller_ura",
+    );
+    this.require(
+      this.authority.subjectURA.trim() === this.draft.subjectURA.trim(),
+      ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
+      "delegation authority subject does not match invocation subject_ura",
+    );
+    this.require(
+      authorityAudienceAdmits(this.authority.audience, this.draft.calleeURA),
+      ErrorCode.AUTHORITY_DENIED,
+      "delegation authority audience does not admit invocation callee_ura",
+    );
+    this.require(
+      authorityScopesAdmit(this.authority.scopes, this.ability),
+      ErrorCode.AUTHORITY_DENIED,
+      "delegation authority scopes do not admit invocation ability",
+    );
+  }
+
+  validateSession() {
+    this.require(
+      this.authority.issuerURA.trim() === this.draft.callerURA.trim(),
+      ErrorCode.AUTHORITY_DENIED,
+      "session authority issuer does not match invocation caller_ura",
+    );
+    this.require(
+      this.authority.calleeURA.trim() === this.draft.calleeURA.trim(),
+      ErrorCode.AUTHORITY_DENIED,
+      "session authority callee does not match invocation callee_ura",
+    );
+    this.require(
+      sessionAuthorityAdmitsSubject(this.authority, this.draft.subjectURA),
+      ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
+      "session authority subject does not admit invocation subject_ura",
+    );
+    this.require(
+      authorityAudienceAdmits(this.authority.audience, this.draft.calleeURA),
+      ErrorCode.AUTHORITY_DENIED,
+      "session authority audience does not admit invocation callee_ura",
+    );
+    this.require(
+      authorityListAdmits(this.authority.allowedActions, "invoke"),
+      ErrorCode.AUTHORITY_DENIED,
+      "session authority allowed_actions do not admit invoke",
+    );
+    this.require(
+      authorityScopesAdmit(this.authority.allowedFollowupAbilities, this.ability),
+      ErrorCode.AUTHORITY_DENIED,
+      "session authority allowed_followup_abilities do not admit invocation ability",
+    );
+    this.require(
+      authorityScopesAdmit(this.authority.scopes, this.ability),
+      ErrorCode.AUTHORITY_DENIED,
+      "session authority scopes do not admit invocation ability",
+    );
+  }
+
+  require(condition, code, message) {
+    if (!condition) {
+      throw authorityBindingError(code, message, this.details);
+    }
+  }
+}
+
+function invocationAuthorityFromMetadata(metadata) {
+  const value = objectValue(metadata ?? {}, "metadata");
+  const delegation = authorityMetadataValue(value, DELEGATION_METADATA_KEY);
+  if (delegation) {
+    return DelegationProof.fromMetadata(delegation);
+  }
+  const session = authorityMetadataValue(value, SESSION_AUTHORITY_METADATA_KEY);
+  if (session) {
+    return SessionAuthority.fromMetadata(session);
+  }
+  return null;
+}
+
+function sessionAuthorityAdmitsSubject(authority, subjectURA) {
+  const subject = subjectURA.trim();
+  if (authority.subjectURA.trim() === subject) {
+    return true;
+  }
+  const owner = resourceOwnerId(subject);
+  if (!owner) {
+    return false;
+  }
+  const ownerUserID = authority.sessionOwnerUserID.trim();
+  if (!ownerUserID) {
+    return false;
+  }
+  if (owner === `user.${ownerUserID}`) {
+    return true;
+  }
+  if (!owner.startsWith("agent.")) {
+    return false;
+  }
+  const rest = owner.slice("agent.".length);
+  const dot = rest.indexOf(".");
+  return dot > 0 && rest.slice(0, dot) === ownerUserID;
+}
+
+function resourceOwnerId(ura) {
+  const marker = "/resource/";
+  const index = ura.indexOf(marker);
+  if (index < 0) {
+    return "";
+  }
+  const rest = ura.slice(index + marker.length);
+  const slash = rest.indexOf("/");
+  const owner = slash < 0 ? rest : rest.slice(0, slash);
+  return owner.trim();
+}
+
+function authorityAudienceAdmits(audience, calleeURA) {
+  const pattern = audience.trim();
+  const callee = calleeURA.trim();
+  return pattern === "*" || pattern === callee || (pattern.endsWith("/") && callee.startsWith(pattern));
+}
+
+function authorityScopesAdmit(patterns, ability) {
+  return patterns.some(
+    (pattern) =>
+      authorityScopeMatches(pattern, ability.publicName) ||
+      authorityScopeMatches(pattern, ability.abilityURA) ||
+      authorityScopeMatches(pattern, ability.wire),
+  );
+}
+
+function authorityListAdmits(patterns, value) {
+  return patterns.some((pattern) => authorityScopeMatches(pattern, value));
+}
+
+function authorityScopeMatches(pattern, value) {
+  const cleanPattern = String(pattern ?? "").trim();
+  const cleanValue = String(value ?? "").trim();
+  if (!cleanPattern || !cleanValue) {
+    return false;
+  }
+  if (cleanPattern === "*") {
+    return true;
+  }
+  if (cleanPattern.endsWith("*")) {
+    const prefix = cleanPattern.slice(0, -1);
+    return Boolean(prefix) && cleanValue.startsWith(prefix);
+  }
+  return cleanPattern === cleanValue;
+}
+
+function abilityViewForInvocation(draft) {
+  const wire = descriptorWireAbility(draft.descriptorRef);
+  const abilityURA = descriptorAbilityURA(draft.descriptorRef);
+  const publicName = publicAbilityName(draft.calleeURA, abilityURA || wire);
+  return { wire, abilityURA, publicName };
+}
+
+function descriptorAbilityURA(descriptorRef) {
+  const clean = String(descriptorRef ?? "").trim();
+  const hash = clean.indexOf("#");
+  const bang = clean.indexOf("!");
+  const limit = Math.min(
+    ...[hash, bang].filter((index) => index >= 0),
+    clean.length,
+  );
+  const withoutMode = clean.slice(0, limit);
+  const version = withoutMode.lastIndexOf("@");
+  return (version >= 0 ? withoutMode.slice(0, version) : withoutMode).trim();
+}
+
+function descriptorWireAbility(descriptorRef) {
+  const abilityURA = descriptorAbilityURA(descriptorRef);
+  const marker = "/ability/";
+  const index = abilityURA.indexOf(marker);
+  return (index >= 0 ? abilityURA.slice(index + marker.length) : abilityURA).trim();
+}
+
+function publicAbilityName(calleeURA, ability) {
+  const clean = String(ability ?? "").trim();
+  const owner = abilityOwnerPrefix(calleeURA);
+  if (owner && clean.startsWith(`${owner}.`)) {
+    return clean.slice(owner.length + 1);
+  }
+  const marker = "/ability/";
+  const index = clean.indexOf(marker);
+  if (index >= 0) {
+    return publicAbilityName(calleeURA, clean.slice(index + marker.length));
+  }
+  return clean;
+}
+
+function abilityOwnerPrefix(calleeURA) {
+  const clean = String(calleeURA ?? "").trim();
+  const device = "/device/";
+  const deviceIndex = clean.indexOf(device);
+  if (deviceIndex >= 0) {
+    return `device.${clean.slice(deviceIndex + device.length).split(/[/?#]/, 1)[0]}`;
+  }
+  if (clean.endsWith("/authority")) {
+    const realmMarker = "easynet:///r/";
+    if (clean.startsWith(realmMarker)) {
+      return `hub.${clean.slice(realmMarker.length, -"/authority".length)}`;
+    }
+  }
+  return "";
+}
+
 function authorityMetadataValue(metadata, key) {
   if (!metadata || !Object.hasOwn(metadata, key) || metadata[key] === null || metadata[key] === undefined) {
     return "";
@@ -2367,6 +2609,17 @@ function invalidHealth(message, details = {}) {
 
 function invalidAuthority(message, details = {}) {
   return invalidProfile(AUTHORITY_PROFILE, "authority", message, details);
+}
+
+function authorityBindingError(code, message, details = {}) {
+  return new SDKError({
+    code,
+    stage: "authorize",
+    retry: RetryHint.NEVER,
+    source: AUTHORITY_PROFILE,
+    message,
+    details: profileErrorDetails(AUTHORITY_PROFILE, details),
+  });
 }
 
 function invalidProfile(profile, stage, message, details = {}) {

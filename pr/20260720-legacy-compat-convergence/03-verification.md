@@ -932,3 +932,27 @@ Commands and outcomes will be appended after implementation.
 - `/Users/macbook.silan.tech/.local/bin/codegraph query parse_clipboard_log --limit 30`
   — PASS; reports `parse_clipboard_log(content: &str) ->
   anyhow::Result<Vec<ClipEntry>>`.
+
+## 2026-07-20 Node authority binding preflight removal
+
+- `/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node --test --test-reporter=spec test/runtime-core.test.mjs test/conformance-cases.test.mjs`
+  from `sdk/node` — PASS (`30 passed`; includes session authority subject
+  mismatch rejected at SDK build time and user-owned resource subject admitted).
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R70, which requires Node `InvocationDraft` authority-binding preflight and
+  the canonical `AUTHORITY_SUBJECT_MISMATCH` error code.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for Node shape-only authority metadata validation.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query InvocationAuthorityBindingValidator --limit 30`
+  — PASS; reports the cohesive Node Runtime Core authority-binding validator
+  object and its delegation/session validation methods.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query validateInvocationAuthorityBinding --limit 30`
+  — PASS; reports the thin `InvocationDraft` entrypoint into the validator.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query sessionAuthorityAdmitsSubject --limit 30`
+  — PASS; reports the Node session subject-admission helper.
+- `/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node --test --test-reporter=spec`
+  from `sdk/node` — known pre-existing non-slice failure in
+  `test/types.test.ts` importing removed product-neutrality symbol
+  `AdminClient`; runtime/conformance `.mjs` tests pass.
