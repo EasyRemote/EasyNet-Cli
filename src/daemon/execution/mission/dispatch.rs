@@ -496,7 +496,7 @@ pub fn send_to_agent_with_depth_and_progress(
     // Create a per-run directory. If creation fails (e.g. workspace dir is
     // unwritable), skip persistence — the agent call still runs, but we
     // surface the reason so the operator knows the run is unrecorded.
-    let run_dir: Option<Arc<RunDir>> = match RunDir::create(agent_name) {
+    let run_dir: Option<Arc<RunDir>> = match RunDir::create(root) {
         Ok(dir) => Some(Arc::new(dir)),
         Err(e) => {
             let err_msg = format!("{e}");

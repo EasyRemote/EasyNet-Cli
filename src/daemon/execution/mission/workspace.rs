@@ -178,15 +178,6 @@ pub fn ensure_from_directory(dir: &AgentDirectory) -> anyhow::Result<PathBuf> {
     Ok(root)
 }
 
-/// Legacy path helper retained for a small number of read-side
-/// callers (`cli::agent::read_latest_agent_usage`). The
-/// source of truth for "where does agent N live on disk?" is
-/// `AgentDirectory::root()`; this helper only answers the question
-/// when no `AgentEntry` is in hand.
-pub fn workspace_dir(agent_name: &str) -> PathBuf {
-    config::agents_root().join(agent_name)
-}
-
 // ── .mcp.json — Claude Code project-level MCP discovery ─────────────────────
 
 fn write_mcp_json(ws: &Path, agent_name: &str) -> anyhow::Result<()> {

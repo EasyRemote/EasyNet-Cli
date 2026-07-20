@@ -3,8 +3,8 @@
 //
 // File: src/agent/run_store.rs
 // Description: Per-invocation persistence for agent runs. Every `agent send`
-//              call creates a timestamped directory under the agent's
-//              workspace containing prompt, response, and metadata.
+//              call creates a timestamped directory under the validated
+//              AgentDirectory root containing prompt, response, and metadata.
 //
 // Layout:
 //   ~/.easynet/agents/<agent>/runs/<YYYY-MM-DD_HHMMSS>/
@@ -29,8 +29,6 @@ use std::path::{Path, PathBuf};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 
-use super::workspace;
-
 /// A single persisted run directory. Holds per-run artefact paths
 /// (`prompt.txt`, `response.md`, `meta.json`). The stream event
 /// log lives in the Timeline (see module doc).
@@ -39,10 +37,15 @@ pub struct RunDir {
 }
 
 impl RunDir {
-    /// Create a new timestamped run directory under the agent's workspace.
-    pub fn create(agent_name: &str) -> anyhow::Result<Self> {
-        let ws = workspace::workspace_dir(agent_name);
-        let runs = ws.join("runs");
+    /// Create a new timestamped run directory under the verified agent root.
+    ///
+    /// The caller must pass the `AgentDirectory::root()` it already validated
+    /// from the registry row. Run persistence must not reconstruct an agent
+    /// directory from a name; that would reintroduce the retired
+    /// `agents_root()/name` directory authority next to the registry-owned
+    /// `root_path`.
+    pub fn create(agent_root: &Path) -> anyhow::Result<Self> {
+        let runs = agent_root.join("runs");
         fs::create_dir_all(&runs)?;
         let stamp = Local::now().format("%Y-%m-%d_%H%M%S").to_string();
         let path = allocate_unique_run_dir(&runs, &stamp)?;
@@ -201,5 +204,19 @@ mod tests {
             "expected {N} distinct paths, got {unique:?}"
         );
         let _ = fs::remove_dir_all(&*runs);
+    }
+
+    #[test]
+    fn run_dir_create_uses_supplied_agent_root() {
+        let agent_root = temp_runs().join("custom-agent-root");
+        let run = RunDir::create(&agent_root).expect("run dir under supplied root");
+
+        assert!(
+            run.path().starts_with(agent_root.join("runs")),
+            "run dir must be under the supplied AgentDirectory root, got {}",
+            run.path().display()
+        );
+
+        let _ = fs::remove_dir_all(agent_root);
     }
 }
