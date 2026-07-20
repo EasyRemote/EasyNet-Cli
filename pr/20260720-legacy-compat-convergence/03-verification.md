@@ -1907,3 +1907,32 @@ Commands and outcomes will be appended after implementation.
   (`canonical-runtime-convergence-v2: OK`).
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; indexed the
   updated federation peer projection.
+
+## 2026-07-21 Remote desktop consent receipt projection
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "mission session filter_map serde_json from_value ok corrupt rows skipped
+  session state"` — PASS; reports `session_consent.rs` receipt extraction and
+  access-check relationships.
+- `rg -n
+  "filter_map\\(RemoteDesktopConsentReceipt::from_value\\)|first_receipt_from_causal_context\\(|causal_context_contains_receipt\\("
+  plugins/remote-desktop/src -S` — PASS; no `filter_map` receipt projection
+  remains, and creation/access call sites use the fallible parser.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q
+  remote_desktop::session_consent --lib --features remote-desktop` — PASS
+  (`9 passed`); includes malformed causal-context list row rejection and
+  rejection before owner-self-consent fallback.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q show_session --lib
+  --features remote-desktop` — PASS (`3 passed`); preserves consent receipt
+  binding in the product-visible session projection.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins
+  --features remote-desktop` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; indexed the
+  updated remote-desktop consent receipt projection.

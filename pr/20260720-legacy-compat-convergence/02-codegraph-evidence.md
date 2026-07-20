@@ -1856,3 +1856,28 @@ Evidence will be appended after indexing and focused impact queries.
   missing-file empty state. Hub rows are projected only after daemon trust
   schema validation and after explicit schema-B completeness checks for
   `origin_realm`, `hub_endpoint`, and `tls_ca_pem_path`.
+
+## 2026-07-21 Remote desktop consent receipt projection audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "mission session filter_map serde_json from_value ok corrupt rows skipped
+  session state"` surfaced `plugins/remote-desktop/src/session_consent.rs` as
+  the product-facing receipt projection seam where Axon causal-context receipt
+  facts become remote-desktop consent grants and later session access checks.
+- Targeted source inspection found the compatibility path:
+  `RemoteDesktopConsentReceipt::from_value` returned `Option`,
+  `receipts_from_causal_context` used `filter_map`, and missing `receipts[]`
+  defaulted to an empty vector. A malformed scalar/list causal context could
+  therefore be treated as no receipt, and owner callers could fall back to
+  `owner_self_consent` even though they supplied corrupt receipt proof input.
+- The root abstraction problem was treating causal context as optional UI
+  decoration after Axon admission. For remote desktop, a stored approval
+  receipt is the session access proof fact. Once a caller declares scalar/list
+  causal context, every receipt row is proof input and must be schema-bound
+  before any consent policy fallback or session-token control-plane check.
+- After the change, receipt projection is fallible and shared by creation and
+  later access checks. `kind = "none"` / `kind = "merkle"` remain no-receipt
+  states for this plugin, while `scalar` and `list` require non-empty
+  `receipt_ura` and `receipt_hash` on every row. Malformed causal context
+  fails as invalid argument instead of becoming self-consent or a partial
+  receipt match.

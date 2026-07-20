@@ -607,3 +607,10 @@ Decisions will be appended as root-fork choices are made.
   output now means the same thing the cross-hub dialer requires: canonical
   peer hub URA plus non-empty `origin_realm`, `hub_endpoint`, and
   `tls_ca_pem_path`.
+- Treat remote-desktop causal-context receipts as proof input, not optional
+  UI context. If a caller declares scalar/list causal context, every receipt
+  row must carry non-empty `receipt_ura` and `receipt_hash`; malformed rows
+  fail the session operation instead of being skipped.
+- Preserve owner-self consent only for true no-receipt states. A malformed
+  receipt-bearing causal context is not equivalent to no causal context and
+  must not fall through to `owner_self_consent`.

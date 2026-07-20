@@ -204,3 +204,9 @@
   unminted identity rows may project as explicit non-callable candidates, but
   missing `candidates[]` or non-canonical minted `qualified_name` is corrupt
   discovery read-model state and must fail closed.
+- Product consent/receipt-bound session access must treat causal-context
+  receipt facts as schema-bound proof input. Missing causal context can remain
+  a valid no-receipt state for explicitly modeled owner-self consent, but a
+  declared scalar/list causal context with missing, blank, or malformed receipt
+  fields is invalid proof input and must not be skipped or downgraded into
+  self-consent or a generic receipt mismatch.

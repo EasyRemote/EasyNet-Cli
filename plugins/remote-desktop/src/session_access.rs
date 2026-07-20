@@ -100,7 +100,7 @@ fn ensure_session_consent_receipt_consistent(
     let Some(expected) = session.consent().approval_receipt() else {
         return Ok(());
     };
-    if !causal_context_contains_receipt(Some(env.causal_context()), expected) {
+    if !causal_context_contains_receipt(ability, Some(env.causal_context()), expected)? {
         return Err(RemoteDesktopError::ConsentReceiptMismatch {
             ability,
             expected: expected.receipt_ura().to_string(),

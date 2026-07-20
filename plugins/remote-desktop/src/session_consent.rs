@@ -51,10 +51,12 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopConsentReceip
 }
 
 impl RemoteDesktopConsentReceipt {
-    fn from_value(value: &Value) -> Option<Self> {
-        Some(Self {
-            receipt_ura: value.get("receipt_ura")?.as_str()?.to_string(),
-            receipt_hash: value.get("receipt_hash")?.as_str()?.to_string(),
+    fn from_value(ability: &'static str, value: &Value) -> RemoteDesktopResult<Self> {
+        let receipt_ura = required_receipt_field(ability, value, "receipt_ura")?;
+        let receipt_hash = required_receipt_field(ability, value, "receipt_hash")?;
+        Ok(Self {
+            receipt_ura,
+            receipt_hash,
         })
     }
 
@@ -108,7 +110,9 @@ impl RemoteDesktopConsentGrant {
         session_id: &str,
         env: &EnvelopeContext,
     ) -> RemoteDesktopResult<Self> {
-        if let Some(approval_receipt) = first_receipt_from_causal_context(env.causal_context()) {
+        if let Some(approval_receipt) =
+            first_receipt_from_causal_context(ability, env.causal_context())?
+        {
             return Ok(Self {
                 policy: POLICY_LOCAL_USER_CONSENT,
                 approval_actor_ura: Some(env.caller().to_string()),
@@ -135,7 +139,11 @@ impl RemoteDesktopConsentGrant {
         Self {
             policy: POLICY_LOCAL_USER_CONSENT,
             approval_actor_ura: Some(env.caller().to_string()),
-            approval_receipt: first_receipt_from_causal_context(env.causal_context()),
+            approval_receipt: first_receipt_from_causal_context(
+                "test.ability",
+                env.causal_context(),
+            )
+            .expect("test causal context must be valid"),
         }
     }
 
@@ -156,38 +164,77 @@ impl RemoteDesktopConsentGrant {
 
 /// Return whether `causal_context` contains `expected`.
 pub(in crate::daemon::plugins::remote_desktop) fn causal_context_contains_receipt(
+    ability: &'static str,
     causal_context: Option<&Value>,
     expected: &RemoteDesktopConsentReceipt,
-) -> bool {
+) -> RemoteDesktopResult<bool> {
     let Some(causal_context) = causal_context else {
-        return false;
+        return Ok(false);
     };
-    receipts_from_causal_context(causal_context)
+    Ok(receipts_from_causal_context(ability, causal_context)?
         .iter()
-        .any(|receipt| receipt == expected)
+        .any(|receipt| receipt == expected))
 }
 
-fn first_receipt_from_causal_context(value: &Value) -> Option<RemoteDesktopConsentReceipt> {
-    receipts_from_causal_context(value).into_iter().next()
+fn first_receipt_from_causal_context(
+    ability: &'static str,
+    value: &Value,
+) -> RemoteDesktopResult<Option<RemoteDesktopConsentReceipt>> {
+    Ok(receipts_from_causal_context(ability, value)?
+        .into_iter()
+        .next())
 }
 
-fn receipts_from_causal_context(value: &Value) -> Vec<RemoteDesktopConsentReceipt> {
+fn receipts_from_causal_context(
+    ability: &'static str,
+    value: &Value,
+) -> RemoteDesktopResult<Vec<RemoteDesktopConsentReceipt>> {
     match value.get("kind").and_then(Value::as_str) {
-        Some("scalar") => RemoteDesktopConsentReceipt::from_value(value)
-            .into_iter()
-            .collect(),
-        Some("list") => value
-            .get("receipts")
-            .and_then(Value::as_array)
-            .map(|receipts| {
-                receipts
-                    .iter()
-                    .filter_map(RemoteDesktopConsentReceipt::from_value)
-                    .collect()
-            })
-            .unwrap_or_default(),
-        _ => Vec::new(),
+        Some("none" | "merkle") => Ok(Vec::new()),
+        Some("scalar") => Ok(vec![RemoteDesktopConsentReceipt::from_value(
+            ability, value,
+        )?]),
+        Some("list") => {
+            let receipts = value
+                .get("receipts")
+                .and_then(Value::as_array)
+                .ok_or_else(|| RemoteDesktopError::InvalidArgument {
+                    ability,
+                    detail:
+                        "causal_context list requires a receipts array of consent receipt facts"
+                            .to_string(),
+                })?;
+            receipts
+                .iter()
+                .map(|receipt| RemoteDesktopConsentReceipt::from_value(ability, receipt))
+                .collect()
+        }
+        None if value.is_null() => Ok(Vec::new()),
+        other => Err(RemoteDesktopError::InvalidArgument {
+            ability,
+            detail: format!(
+                "unsupported causal_context kind {:?} for remote desktop consent receipt",
+                other.unwrap_or("<missing>")
+            ),
+        }),
     }
+}
+
+fn required_receipt_field(
+    ability: &'static str,
+    value: &Value,
+    field: &'static str,
+) -> RemoteDesktopResult<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| RemoteDesktopError::InvalidArgument {
+            ability,
+            detail: format!("causal_context receipt requires non-empty {field}"),
+        })
 }
 
 #[cfg(test)]
@@ -204,8 +251,10 @@ mod tests {
             "receipt_ura": "easynet:///r/acme/resource/alice.invocations/1",
             "receipt_hash": "ab",
         });
-        let expected = first_receipt_from_causal_context(&scalar).unwrap();
-        assert!(causal_context_contains_receipt(Some(&scalar), &expected));
+        let expected = first_receipt_from_causal_context("rd.test", &scalar)
+            .unwrap()
+            .unwrap();
+        assert!(causal_context_contains_receipt("rd.test", Some(&scalar), &expected).unwrap());
 
         let list = json!({
             "kind": "list",
@@ -214,7 +263,48 @@ mod tests {
                 expected.to_value(),
             ],
         });
-        assert!(causal_context_contains_receipt(Some(&list), &expected));
+        assert!(causal_context_contains_receipt("rd.test", Some(&list), &expected).unwrap());
+    }
+
+    #[test]
+    fn causal_context_receipt_projection_rejects_malformed_list_rows() {
+        let expected = RemoteDesktopConsentReceipt {
+            receipt_ura: "easynet:///r/acme/resource/alice.invocations/1".to_string(),
+            receipt_hash: "ab".to_string(),
+        };
+        let list = json!({
+            "kind": "list",
+            "receipts": [
+                expected.to_value(),
+                {"receipt_ura": "easynet:///r/acme/resource/alice.invocations/2"}
+            ],
+        });
+
+        let err = causal_context_contains_receipt("rd.test", Some(&list), &expected)
+            .expect_err("malformed receipt rows must not be skipped");
+        assert!(err
+            .to_string()
+            .contains("causal_context receipt requires non-empty receipt_hash"));
+    }
+
+    #[test]
+    fn malformed_causal_context_does_not_fall_back_to_owner_self_consent() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        pair_device("acme", "dev-1", "alice");
+        let env = EnvelopeContext::for_test(
+            "easynet:///r/acme/user/user-alice",
+            "easynet:///r/acme/user/user-alice",
+        )
+        .with_causal_context(json!({
+            "kind": "scalar",
+            "receipt_ura": "easynet:///r/acme/resource/user-alice.invocations/1"
+        }));
+
+        let err = RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s-bad", &env)
+            .expect_err("malformed causal context must fail before self-consent fallback");
+        assert!(err
+            .to_string()
+            .contains("causal_context receipt requires non-empty receipt_hash"));
     }
 
     fn pair_device(realm: &str, node_id: &str, username: &str) {
