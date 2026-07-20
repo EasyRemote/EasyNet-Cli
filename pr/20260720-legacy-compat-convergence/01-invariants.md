@@ -189,3 +189,7 @@
   device cannot write or prove the trust facts required by local
   self-admission, daemon boot is not invocation-ready and must stop before
   advertising route visibility.
+- Product media recording resource selection must treat `meta.list_resources`
+  output as schema-bound read-model state. A matching resource row with
+  missing, blank, wrong-kind, or non-canonical `resource_ura` is corrupt
+  resource inventory, not proof that no mic/camera resource exists.

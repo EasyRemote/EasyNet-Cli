@@ -2,6 +2,20 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-21 ability recording resource inventory projection
+
+- Treat `meta.list_resources` as the resource inventory read-model authority
+  for automatic `ability record` subject selection. Product recording code may
+  select the first valid mic/camera resource, but it must not repair or skip
+  malformed rows.
+- Treat missing resource rows and malformed resource rows as different states.
+  An empty resources array means no matching device inventory exists; a row
+  missing canonical `resource_ura` means the daemon read model is corrupt or
+  schema-incomplete and must fail closed.
+- Keep URA validation delegated to Axon's canonical parser through
+  `crate::core::ura::parse_ura`; the CLI projection only checks that the
+  parsed kind is `Resource`.
+
 ## 2026-07-21 pairing auto-wire credential facts
 
 - Treat blank `realm` / `node_id` in pairing credentials as malformed runtime

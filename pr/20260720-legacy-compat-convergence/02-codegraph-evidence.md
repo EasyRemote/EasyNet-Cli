@@ -2,6 +2,27 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-21 Ability recording resource read-model projection audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "ability_record meta.list_resources filter_map resource_ura resource list
+  recording"` identified `ability_record::default_resource_ura` as the
+  product-facing seam where `meta.list_resources` output becomes the
+  invocation `subject_ura` for `mic.subscribe` and camera recording flows.
+- Targeted source inspection found the compatibility path:
+  `default_resource_ura` filtered rows by `type`, then used `filter_map` over
+  `resource_ura`. A matching `mic` / `camera` row that omitted
+  `resource_ura`, carried a blank value, or carried a non-Resource URA was
+  silently skipped and projected as "no resource is registered".
+- The root abstraction problem was treating resource inventory rows as
+  optional product hints. `meta.list_resources` is a daemon read model; once a
+  row is returned for a requested resource type, its `resource_ura` is the
+  authority-bearing invocation subject and must be schema-bound.
+- After the change, `select_default_resource_ura` validates every returned row
+  through `resource_row_ura`: rows require object shape, matching `type`,
+  non-empty `resource_ura`, and canonical `URAKind::Resource`. Empty arrays
+  remain the only successful "no resource registered" projection.
+
 ## 2026-07-21 Pairing auto-wire credential fact audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph explore

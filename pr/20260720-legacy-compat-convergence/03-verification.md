@@ -2,6 +2,32 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-21 Ability recording resource read-model projection
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q ability_record --lib`
+  — PASS (`11 passed`); includes valid resource row selection, matching row
+  missing `resource_ura`, non-Resource URA rejection, and all-returned-row
+  validation before selecting the first resource subject.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "ability_record select_default_resource_ura resource_row_ura
+  meta.list_resources resource_ura filter_map selected"` — PASS; reports
+  `default_resource_ura -> select_default_resource_ura -> resource_row_ura`,
+  with `resource_row_ura` owning schema-bound row validation.
+- `rg -n "meta\\.list_resources.*filter_map|filter_map\\(\\|entry\\|
+  entry\\.get\\(\\\"resource_ura\\\"\\)|resources\\s*\\.iter\\(\\)\\s*\\.filter_map|resource_ura\\\"\\)\\.and_then\\(Value::as_str\\).*find"
+  src/cli/commands/ability_record.rs` — PASS; no silent
+  `meta.list_resources` resource_ura projection remains in the recording
+  surface.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+
 ## 2026-07-21 Pairing auto-wire credential facts
 
 - `/Users/macbook.silan.tech/.cargo/bin/cargo test -q federation_wire --lib`

@@ -313,23 +313,74 @@ fn default_resource_ura(kind: MediaRecordingKind) -> anyhow::Result<String> {
     let response =
         invoke_local_ability("meta.list_resources", json!({"types": [resource_type]}))
             .with_context(|| format!("invoke meta.list_resources(types=[\"{resource_type}\"])"))?;
+    select_default_resource_ura(kind, &response)
+}
+
+fn select_default_resource_ura(
+    kind: MediaRecordingKind,
+    response: &Value,
+) -> anyhow::Result<String> {
+    let resource_type = kind.resource_type();
     let resources = response
         .get("resources")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("meta.list_resources response missing resources array"))?;
-    resources
-        .iter()
-        .filter(|entry| entry.get("type").and_then(Value::as_str) == Some(resource_type))
-        .filter_map(|entry| entry.get("resource_ura").and_then(Value::as_str))
+    let mut selected = None;
+    for (idx, entry) in resources.iter().enumerate() {
+        let resource_ura = resource_row_ura(idx, entry, resource_type)?;
+        if selected.is_none() {
+            selected = Some(resource_ura.to_string());
+        }
+    }
+    if let Some(resource_ura) = selected {
+        return Ok(resource_ura);
+    }
+    anyhow::bail!(
+        "no {resource_type} resource is registered on this daemon; restart the daemon so \
+         media resource bootstrap can scan devices, or pass --subject with a resource_ura"
+    )
+}
+
+fn resource_row_ura<'a>(
+    idx: usize,
+    entry: &'a Value,
+    expected_type: &str,
+) -> anyhow::Result<&'a str> {
+    let object = entry
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("meta.list_resources resources[{idx}] must be an object"))?;
+    let resource_type = object
+        .get("type")
+        .and_then(Value::as_str)
         .map(str::trim)
-        .find(|resource_ura| !resource_ura.is_empty())
-        .map(str::to_string)
+        .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no {resource_type} resource is registered on this daemon; restart the daemon so \
-                 media resource bootstrap can scan devices, or pass --subject with a resource_ura"
-            )
-        })
+            anyhow::anyhow!("meta.list_resources resources[{idx}] missing non-empty type")
+        })?;
+    if resource_type != expected_type {
+        anyhow::bail!(
+            "meta.list_resources resources[{idx}] type {resource_type:?} did not match requested {expected_type:?}"
+        );
+    }
+    let resource_ura = object
+        .get("resource_ura")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("meta.list_resources resources[{idx}] missing non-empty resource_ura")
+        })?;
+    let parsed = crate::core::ura::parse_ura(resource_ura).map_err(|error| {
+        anyhow::anyhow!(
+            "meta.list_resources resources[{idx}] resource_ura {resource_ura:?} is not canonical: {error}"
+        )
+    })?;
+    if parsed.kind != crate::core::ura::URAKind::Resource {
+        anyhow::bail!(
+            "meta.list_resources resources[{idx}] resource_ura {resource_ura:?} is not a Resource URA"
+        );
+    }
+    Ok(resource_ura)
 }
 
 #[derive(Debug)]
@@ -635,6 +686,95 @@ mod tests {
         assert_eq!(args["codec"], "mjpeg");
         assert_eq!(args["fps"], 5);
         assert_eq!(args["max_duration_ms"], 3_000);
+    }
+
+    #[test]
+    fn default_resource_selection_returns_schema_bound_resource_ura() {
+        let selected = select_default_resource_ura(
+            MediaRecordingKind::Mic,
+            &json!({
+                "resources": [{
+                    "type": "mic",
+                    "resource_ura": "easynet:///r/acme/resource/device.dev/streams/mic.1",
+                    "display_name": "Built-in Mic"
+                }]
+            }),
+        )
+        .expect("valid resource row");
+
+        assert_eq!(
+            selected,
+            "easynet:///r/acme/resource/device.dev/streams/mic.1"
+        );
+    }
+
+    #[test]
+    fn default_resource_selection_rejects_matching_row_without_resource_ura() {
+        let err = select_default_resource_ura(
+            MediaRecordingKind::Mic,
+            &json!({
+                "resources": [{
+                    "type": "mic",
+                    "display_name": "Built-in Mic"
+                }]
+            }),
+        )
+        .expect_err("malformed resource row must fail closed");
+
+        assert!(
+            err.to_string()
+                .contains("resources[0] missing non-empty resource_ura"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.to_string().contains("no mic resource"),
+            "malformed read-model row must not be projected as empty inventory: {err}"
+        );
+    }
+
+    #[test]
+    fn default_resource_selection_rejects_non_resource_ura() {
+        let err = select_default_resource_ura(
+            MediaRecordingKind::Camera,
+            &json!({
+                "resources": [{
+                    "type": "camera",
+                    "resource_ura": "easynet:///r/acme/device/dev"
+                }]
+            }),
+        )
+        .expect_err("resource row must carry Resource URA");
+
+        assert!(
+            err.to_string().contains("is not a Resource URA"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn default_resource_selection_validates_all_returned_rows_before_selecting() {
+        let err = select_default_resource_ura(
+            MediaRecordingKind::Mic,
+            &json!({
+                "resources": [
+                    {
+                        "type": "mic",
+                        "resource_ura": "easynet:///r/acme/resource/device.dev/streams/mic.1"
+                    },
+                    {
+                        "type": "mic",
+                        "resource_ura": ""
+                    }
+                ]
+            }),
+        )
+        .expect_err("later malformed rows must not be hidden by first valid row");
+
+        assert!(
+            err.to_string()
+                .contains("resources[1] missing non-empty resource_ura"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
