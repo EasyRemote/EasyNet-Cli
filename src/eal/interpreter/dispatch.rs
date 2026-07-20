@@ -182,25 +182,15 @@ fn validate_agent_target(
     agent_id: &crate::core::agent::id::AgentId,
     ability: &AbilityName,
 ) -> Result<crate::daemon::ability::manifest::AbilityManifest, EalError> {
-    // Registry is keyed by string today (see Step 4
-    // follow-up: registry will be keyed by AgentId itself).
-    // For now, look up by the canonical Display form.
+    // Registry lookup is canonical-only: AgentId::Display emits the
+    // full `tenant/name` key used by current registry rows. Bare
+    // default-tenant keys are retired local state; callers must
+    // migrate/re-publish the registry instead of dispatching through a
+    // compatibility alias.
     let key = agent_id.to_string();
     let entry = registry
         .agents
         .get(&key)
-        .or_else(|| {
-            // Backwards-compat: registry files written
-            // before the migration may use the bare name
-            // form (`"claude"` instead of `"default/claude"`).
-            // Fall back to the bare name when the agent
-            // is in the default tenant.
-            if agent_id.tenant == crate::core::agent::id::DEFAULT_TENANT {
-                registry.agents.get(&agent_id.name)
-            } else {
-                None
-            }
-        })
         // Missing agent in registry is `not_found`, not `unavailable` —
         // the caller's identifier doesn't resolve and a retry of the
         // same id will not help.
@@ -217,4 +207,56 @@ fn validate_agent_target(
         EalError::NotFound(format!("unknown ability: {}.{bare_ability}", agent_id.name))
     })?;
     Ok(manifest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::agent::id::{AbilityName, AgentId};
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+
+    fn claude_chat_target() -> (AgentId, AbilityName) {
+        (
+            AgentId::parse("claude").expect("valid shorthand agent id"),
+            AbilityName::parse("chat").expect("valid ability name"),
+        )
+    }
+
+    #[test]
+    fn validate_agent_target_rejects_bare_default_registry_key() {
+        let (agent_id, ability) = claude_chat_target();
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert(
+            "claude".to_string(),
+            AgentEntry::new(AgentType::ClaudeCode, None),
+        );
+
+        let error = validate_agent_target(&registry, &agent_id, &ability).unwrap_err();
+
+        assert_eq!(error.error_code(), "not_found");
+        assert!(
+            error
+                .message()
+                .contains("agent 'default/claude' not found in registry"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_agent_target_uses_canonical_registry_key_only() {
+        let (agent_id, ability) = claude_chat_target();
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert(
+            "default/claude".to_string(),
+            AgentEntry::new(AgentType::ClaudeCode, None),
+        );
+
+        let error = validate_agent_target(&registry, &agent_id, &ability).unwrap_err();
+
+        assert_eq!(error.error_code(), "not_found");
+        assert!(
+            error.message().contains("unknown ability: claude.chat"),
+            "canonical row was not used; unexpected error: {error}"
+        );
+    }
 }
