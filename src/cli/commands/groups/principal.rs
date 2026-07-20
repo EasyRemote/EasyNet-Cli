@@ -1286,8 +1286,18 @@ fn resolve_principal_signing_key(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
+        let key_id = source
+            .key_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "explicit public-key projection requires a non-empty key id; \
+                     pass --key-id or --replacement-key-id"
+                )
+            })?;
         return Ok(PrincipalSigningKey {
-            key_id: source.key_id.unwrap_or_default().trim().to_string(),
+            key_id: key_id.to_string(),
             public_key_b64: public_key_b64.to_string(),
         });
     }
@@ -1859,6 +1869,60 @@ mod tests {
 
         assert_eq!(key.key_id, "external-key");
         assert_eq!(key.public_key_b64, "EXTERNAL");
+        assert_eq!(store.create_calls.get(), 0);
+        assert_eq!(store.rotate_calls.get(), 0);
+    }
+
+    #[test]
+    fn resolve_principal_signing_key_rejects_anonymous_public_projection() {
+        let store = FakePrincipalSigningKeyStore::new(
+            Vec::new(),
+            managed_key("created", "", 15),
+            managed_key("rotated", "", 16),
+        );
+
+        let error = resolve_principal_signing_key(
+            &store,
+            "easynet:///r/realm/user/alice",
+            KeySource {
+                public_key_b64: Some("EXTERNAL"),
+                key_id: None,
+                rotate_from_key_id: None,
+            },
+        )
+        .expect_err("explicit public key without key_id must fail closed");
+
+        assert!(
+            error.to_string().contains("requires a non-empty key id"),
+            "wrong error: {error}"
+        );
+        assert_eq!(store.create_calls.get(), 0);
+        assert_eq!(store.rotate_calls.get(), 0);
+    }
+
+    #[test]
+    fn resolve_principal_signing_key_rejects_blank_public_projection_key_id() {
+        let store = FakePrincipalSigningKeyStore::new(
+            Vec::new(),
+            managed_key("created", "", 15),
+            managed_key("rotated", "", 16),
+        );
+
+        let error = resolve_principal_signing_key(
+            &store,
+            "easynet:///r/realm/user/alice",
+            KeySource {
+                public_key_b64: Some("EXTERNAL"),
+                key_id: Some("   "),
+                rotate_from_key_id: None,
+            },
+        )
+        .expect_err("blank key_id must fail closed");
+
+        assert!(
+            error.to_string().contains("requires a non-empty key id"),
+            "wrong error: {error}"
+        );
         assert_eq!(store.create_calls.get(), 0);
         assert_eq!(store.rotate_calls.get(), 0);
     }
