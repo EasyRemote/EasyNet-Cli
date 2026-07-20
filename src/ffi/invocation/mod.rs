@@ -5829,11 +5829,7 @@ fn parse_caller_signature(
 fn caller_signature_key_id_hint(
     obj: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<String, InvocationJsonError> {
-    let key_id_hint = optional_string(obj, "key_id_hint")?.unwrap_or_default();
-    if !key_id_hint.trim().is_empty() {
-        return Ok(key_id_hint);
-    }
-    Ok(optional_string(obj, "signer_public_key_base64")?.unwrap_or_default())
+    required_string(obj, "key_id_hint")
 }
 
 #[cfg(feature = "axon-pb")]
@@ -8626,7 +8622,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_invocation_json_projects_signer_pubkey_to_key_hint() {
+    fn parse_invocation_json_rejects_caller_signature_without_key_hint() {
         let raw = canonical_invocation_json(serde_json::json!({
             "caller_signature": {
                 "algorithm": "ed25519",
@@ -8635,20 +8631,35 @@ mod tests {
             }
         }));
 
-        let signature = InvocationJson::parse(&raw)
-            .unwrap()
-            .caller_signature
-            .expect("caller signature");
+        let error = InvocationJson::parse(&raw)
+            .expect_err("caller signature key identity must be explicit");
+
+        assert_eq!(error.to_string(), "missing field `key_id_hint`");
+    }
+
+    #[test]
+    fn parse_invocation_json_rejects_blank_caller_signature_key_hint() {
+        let raw = canonical_invocation_json(serde_json::json!({
+            "caller_signature": {
+                "algorithm": "ed25519",
+                "signature_base64": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==",
+                "key_id_hint": "   ",
+                "signer_public_key_base64": "o5TNp0VYb4h93vG8tNTXOh9gSePT3OYkGq1hlOYrmsM="
+            }
+        }));
+
+        let error = InvocationJson::parse(&raw)
+            .expect_err("blank caller signature key identity must be rejected");
 
         assert_eq!(
-            signature.key_id_hint,
-            "o5TNp0VYb4h93vG8tNTXOh9gSePT3OYkGq1hlOYrmsM="
+            error.to_string(),
+            "field `key_id_hint` must be a non-empty string"
         );
     }
 
     #[test]
-    fn signature_json_projects_signer_pubkey_to_key_hint() {
-        let parsed = SignatureMaterialJson::parse(
+    fn signature_json_rejects_missing_key_hint() {
+        let error = SignatureMaterialJson::parse(
             &serde_json::json!({
                 "algorithm": "ed25519",
                 "signature_base64": "enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6eg==",
@@ -8656,11 +8667,26 @@ mod tests {
             })
             .to_string(),
         )
-        .unwrap();
+        .expect_err("detached signature key identity must be explicit");
+
+        assert_eq!(error.to_string(), "missing field `key_id_hint`");
+    }
+
+    #[test]
+    fn signature_json_rejects_blank_key_hint() {
+        let error = SignatureMaterialJson::parse(
+            &serde_json::json!({
+                "algorithm": "ed25519",
+                "signature_base64": "enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6eg==",
+                "key_id_hint": "\t"
+            })
+            .to_string(),
+        )
+        .expect_err("blank detached signature key identity must be rejected");
 
         assert_eq!(
-            parsed.key_id_hint,
-            "o5TNp0VYb4h93vG8tNTXOh9gSePT3OYkGq1hlOYrmsM="
+            error.to_string(),
+            "field `key_id_hint` must be a non-empty string"
         );
     }
 
