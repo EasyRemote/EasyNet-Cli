@@ -1219,3 +1219,32 @@ Commands and outcomes will be appended after implementation.
 - `/Users/macbook.silan.tech/.local/bin/codegraph query RegistryBuildConfig
   --limit 30` and `codegraph query RegistryDaemonBuildConfig --limit 20` —
   PASS; reports concrete build config structs and constructors.
+
+## 2026-07-20 Ability publication projection fail-closed gate
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q owner_projection_values
+  --lib` — PASS (`1 passed`); includes corrupt committed descriptor rejection.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q handle_resolve --lib` —
+  PASS (`10 passed`); covers live local publication, hosted-agent projection,
+  no-fabrication, prefix filtering, and expired projection behavior under the
+  new `Result` resolver surface.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q route_resolver --lib` —
+  PASS (`40 passed`); proves namespace/route resolver callers continue to
+  resolve valid projections while retaining explicit negative states.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --locked --lib --bins` —
+  PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R81 for ability publication projection fail-closed semantics.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for the previous `filter_map(... .ok())` local
+  publication path and silent `summary_from_value(...).and_then(...)` merge
+  path.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query
+  "owner_projection_values resolved_owner_projection_values fail closed ability
+  publication" --limit 80` — PASS; reports both production functions with
+  `Result` return types.
+- `git diff --check` — PASS.

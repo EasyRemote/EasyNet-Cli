@@ -927,7 +927,12 @@ impl<'a> DaemonRouteResolver<'a> {
             self.catalog,
             self.device_local.as_ref().map(|source| &source.authority),
             self.now_unix_ms,
-        );
+        )
+        .map_err(|detail| ResolveRouteFailure {
+            query_name: selector.query_name.clone(),
+            reason: NegativeReason::Refused,
+            detail: format!("ability projection unavailable: {detail}"),
+        })?;
 
         let owner = directory
             .agents
@@ -1177,7 +1182,18 @@ impl<'a> DaemonRouteResolver<'a> {
             self.catalog,
             self.device_local.as_ref().map(|source| &source.authority),
             self.now_unix_ms,
-        );
+        )
+        .map_err(|detail| {
+            negative_answer_json(
+                query_name,
+                NegativeReason::Refused,
+                Some(&format!("ability projection unavailable: {detail}")),
+            )
+        });
+        let directory = match directory {
+            Ok(directory) => directory,
+            Err(answer) => return answer,
+        };
         let requested_limit = directory_page_limit(query.get("limit").and_then(Value::as_u64));
         let cursor_anchor =
             match directory_cursor_anchor(query.get("cursor").and_then(Value::as_str)) {

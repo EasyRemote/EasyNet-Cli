@@ -262,7 +262,7 @@ fn describe_node_handler(
         let catalog = local_catalog.get().ok_or_else(|| {
             anyhow::anyhow!("node.describe: live ability catalog is not attached")
         })?;
-        if let Some(record) = federation_probe::local_device_record(catalog.as_ref()) {
+        if let Some(record) = federation_probe::local_device_record(catalog.as_ref())? {
             return Ok(node_json_with_abilities(
                 &record.node,
                 record.ability_summaries,

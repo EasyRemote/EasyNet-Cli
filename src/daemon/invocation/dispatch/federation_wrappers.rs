@@ -597,14 +597,13 @@ pub struct AgentSummary {
 /// `abilities` output field. Hub-mode daemons in production always
 /// wire a catalog; build-without-catalog paths pass `None` and the
 /// abilities slot stays empty.
-#[must_use]
 pub fn handle_resolve(
     request: &ResolveRequest,
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
     catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
     local_catalog: Option<&crate::daemon::ability::dispatch::AxonAbilityCatalog>,
-) -> ResolveResponse {
+) -> Result<ResolveResponse, String> {
     let local_publication = local_catalog.map(
         crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot::capture,
     );
@@ -621,7 +620,6 @@ pub fn handle_resolve(
 /// Deterministic variant of `handle_resolve` for tests and replay checks.
 /// `now_unix_ms` is used only to filter expired owner projection read-model
 /// rows; liveness still comes from `PresenceRegistry`.
-#[must_use]
 pub(crate) fn handle_resolve_at(
     request: &ResolveRequest,
     registry: &PresenceRegistry,
@@ -631,7 +629,7 @@ pub(crate) fn handle_resolve_at(
         &crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot,
     >,
     now_unix_ms: i64,
-) -> ResolveResponse {
+) -> Result<ResolveResponse, String> {
     let prefix = request.effective_ura_prefix();
     let want_abilities = request.wants_abilities();
     let mut agents = std::collections::BTreeMap::<String, ResolveAgentSummary>::new();
@@ -641,7 +639,7 @@ pub(crate) fn handle_resolve_at(
             continue;
         }
         let abilities = if want_abilities {
-            resolved_owner_projection_values(catalog, local_publication, &ura, now_unix_ms)
+            resolved_owner_projection_values(catalog, local_publication, &ura, now_unix_ms)?
         } else {
             Vec::new()
         };
@@ -674,7 +672,7 @@ pub(crate) fn handle_resolve_at(
                     local_publication,
                     &record.agent_ura,
                     now_unix_ms,
-                )
+                )?
             } else {
                 Vec::new()
             };
@@ -697,9 +695,9 @@ pub(crate) fn handle_resolve_at(
         }
     }
 
-    ResolveResponse {
+    Ok(ResolveResponse {
         agents: agents.into_values().collect(),
-    }
+    })
 }
 
 /// Handle RFC-005 `namespace.resolve` using daemon-owned runtime state.
@@ -751,40 +749,61 @@ fn resolved_owner_projection_values(
     >,
     owner_ura: &str,
     now_unix_ms: i64,
-) -> Vec<serde_json::Value> {
+) -> Result<Vec<serde_json::Value>, String> {
     let mut by_public_name = std::collections::BTreeMap::<String, serde_json::Value>::new();
     let mut order = Vec::new();
-    let mut push = |summary: serde_json::Value| {
+    let mut push = |summary: serde_json::Value| -> Result<(), String> {
+        let parsed =
+            match crate::daemon::federation::read_model::owner_projection::summary_from_value(
+                &summary,
+            ) {
+                Some(parsed) => parsed,
+                None => {
+                    return Err(owner_projection_summary_error(
+                        owner_ura,
+                        "contains invalid ability summary",
+                        &summary,
+                    ));
+                }
+            };
         let Some(key) =
-            crate::daemon::federation::read_model::owner_projection::summary_from_value(&summary)
-                .and_then(|parsed| {
-                    crate::daemon::federation::read_model::owner_projection::summary_public_name(
-                        &parsed,
-                    )
-                })
+            crate::daemon::federation::read_model::owner_projection::summary_public_name(&parsed)
         else {
-            return;
+            return Err(owner_projection_summary_error(
+                owner_ura,
+                "contains ability summary without public name",
+                &summary,
+            ));
         };
         if by_public_name.insert(key.clone(), summary).is_none() {
             order.push(key);
         }
+        Ok(())
     };
 
     if let Some(local_publication) = local_publication {
-        for summary in local_publication.owner_projection_values(owner_ura) {
-            push(summary);
+        for summary in local_publication.owner_projection_values(owner_ura)? {
+            push(summary)?;
         }
     }
     if let Some(catalog) = catalog {
         for summary in catalog.get_at(owner_ura, now_unix_ms).unwrap_or_default() {
-            push(summary);
+            push(summary)?;
         }
     }
 
-    order
+    Ok(order
         .into_iter()
         .filter_map(|key| by_public_name.remove(&key))
-        .collect()
+        .collect())
+}
+
+fn owner_projection_summary_error(
+    owner_ura: &str,
+    reason: &str,
+    summary: &serde_json::Value,
+) -> String {
+    format!("owner projection for `{owner_ura}` {reason}: {summary}")
 }
 
 // ─── federation.resolve_key ────────────────────────────────────────
@@ -1783,7 +1802,8 @@ mod tests {
             None,
             None,
             None,
-        );
+        )
+        .expect("resolve");
         let uras: Vec<&str> = resp.agents.iter().map(|a| a.ura.as_str()).collect();
         assert_eq!(
             uras,
@@ -1820,7 +1840,8 @@ mod tests {
             None,
             None,
             None,
-        );
+        )
+        .expect("resolve");
         assert_eq!(resp.agents.len(), 1);
         assert_eq!(resp.agents[0].ura, "easynet:///r/realm-a/device/x");
     }
@@ -1846,7 +1867,8 @@ mod tests {
             None,
             Some(&local_publication),
             1_000,
-        );
+        )
+        .expect("resolve");
 
         assert_eq!(resp.agents.len(), 1);
         let names: std::collections::BTreeSet<_> = resp.agents[0]
@@ -1890,7 +1912,8 @@ mod tests {
             None,
             None,
             None,
-        );
+        )
+        .expect("resolve");
 
         assert_eq!(resp.agents.len(), 1);
         assert!(
@@ -1939,7 +1962,8 @@ mod tests {
             Some(&advertised),
             Some(&catalog),
             None,
-        );
+        )
+        .expect("resolve");
         assert_eq!(resp.agents.len(), 1);
         assert_eq!(resp.agents[0].ura, "easynet:///r/realm/agent/user.alice");
         assert_eq!(resp.agents[0].abilities.len(), 1);
@@ -1987,7 +2011,8 @@ mod tests {
             Some(&catalog),
             None,
             999,
-        );
+        )
+        .expect("resolve");
         assert_eq!(live.agents.len(), 1);
         assert_eq!(live.agents[0].abilities.len(), 1);
 
@@ -2002,7 +2027,8 @@ mod tests {
             Some(&catalog),
             None,
             1_000,
-        );
+        )
+        .expect("resolve");
         assert_eq!(expired.agents.len(), 1);
         assert!(expired.agents[0].abilities.is_empty());
     }

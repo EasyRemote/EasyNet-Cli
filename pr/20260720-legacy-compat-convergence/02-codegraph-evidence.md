@@ -1274,3 +1274,26 @@ Evidence will be appended after indexing and focused impact queries.
   the assembly core no longer repairs absent authority state. Daemon boot now
   constructs a concrete mode-specific context before loading agent registry or
   receipt authority.
+
+## 2026-07-20 Ability publication projection silent-drop audit
+
+- `codegraph query "owner_projection_values resolved_owner_projection_values
+  fail closed ability publication" --limit 80` identified the two production
+  projection seams: `LocalAbilityPublicationSnapshot::owner_projection_values`
+  and `federation_wrappers::resolved_owner_projection_values`.
+- Targeted `rg` found the old local publication path converting
+  `summary_from_descriptor(...)` and `serde_json::to_value(...)` failures into
+  skipped rows through `filter_map(... .ok())`.
+- The same merge path inside `federation.resolve` parsed JSON summaries with an
+  `Option` chain and returned from the push closure on invalid rows. That made
+  corrupt local publication or corrupt ability summaries appear as normal empty
+  route visibility to product callers.
+- The root abstraction problem was treating route/catalog evidence as a lossy
+  render cache. Ability summaries are descriptor/read-model facts used by
+  namespace resolution, device inspection, and product route visibility. A
+  corrupt row is unavailable catalogue state, not an absent ability.
+- After the change, local publication projection returns
+  `Result<Vec<Value>, String>`, `federation.resolve` returns
+  `Result<ResolveResponse, String>`, and route resolver/discover/`node.describe`
+  callers surface projection failure as unavailable/refused state instead of
+  falling through to empty abilities.

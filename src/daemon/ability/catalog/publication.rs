@@ -45,19 +45,31 @@ impl LocalAbilityPublicationSnapshot {
             .is_some_and(|ability_ura| self.ability_uras.contains(&ability_ura))
     }
 
-    #[must_use]
-    pub(crate) fn owner_projection_values(&self, owner_ura: &str) -> Vec<Value> {
+    pub(crate) fn owner_projection_values(&self, owner_ura: &str) -> Result<Vec<Value>, String> {
         self.descriptors_by_owner
             .get(owner_ura)
             .into_iter()
             .flatten()
-            .filter_map(|descriptor| {
+            .map(|descriptor| {
                 crate::daemon::federation::read_model::owner_projection::summary_from_descriptor(
                     descriptor,
                 )
-                .ok()
+                .map_err(|error| {
+                    format!(
+                        "local ability publication for owner `{owner_ura}` descriptor `{}` is invalid: {error}",
+                        descriptor.name
+                    )
+                })
             })
-            .filter_map(|summary| serde_json::to_value(summary).ok())
+            .map(|summary| {
+                summary.and_then(|summary| {
+                    serde_json::to_value(summary).map_err(|error| {
+                        format!(
+                            "local ability publication for owner `{owner_ura}` cannot serialize summary: {error}"
+                        )
+                    })
+                })
+            })
             .collect()
     }
 
@@ -194,11 +206,40 @@ mod tests {
 
         assert!(!before.resolves(owner_ura, "plugin.dynamic"));
         assert!(after.resolves(owner_ura, "plugin.dynamic"));
-        let published = after.owner_projection_values(owner_ura);
+        let published = after
+            .owner_projection_values(owner_ura)
+            .expect("local publication must project");
         assert!(published.iter().any(|summary| {
             summary.get("namespace").and_then(Value::as_str) == Some("plugin")
                 && summary.get("local_name").and_then(Value::as_str) == Some("dynamic")
         }));
+    }
+
+    #[test]
+    fn owner_projection_values_rejects_corrupt_committed_descriptor() {
+        let owner_ura = "easynet:///r/acme/device/node-a";
+        let mut descriptor = AbilityDescriptor::new(
+            "plugin.dynamic",
+            owner_ura,
+            crate::daemon::ability::descriptors::Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+        )
+        .expect("test descriptor");
+        descriptor.owner_ura = "not-a-canonical-owner".to_string();
+        let mut snapshot = LocalAbilityPublicationSnapshot::default();
+        snapshot
+            .descriptors_by_owner
+            .entry("not-a-canonical-owner".to_string())
+            .or_default()
+            .push(descriptor);
+
+        let err = snapshot
+            .owner_projection_values("not-a-canonical-owner")
+            .expect_err("corrupt committed descriptor must not be hidden as empty publication");
+        assert!(
+            err.contains("local ability publication") && err.contains("cannot derive ability URA"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

@@ -1012,7 +1012,10 @@ impl UnaryDispatcher {
             Some(self.directory.advertised_agents.as_ref()),
             Some(self.directory.ability_catalog.as_ref()),
             self.directory.local_ability_catalog.as_deref(),
-        );
+        )
+        .map_err(|error| {
+            Status::failed_precondition(format!("federation.resolve ability projection: {error}"))
+        })?;
         encode_json_payload(&response)
     }
 

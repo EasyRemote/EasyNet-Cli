@@ -420,3 +420,9 @@ Decisions will be appended as root-fork choices are made.
   `AbilityAuthorityContext`; daemon boot and deterministic snapshot builders
   must select their authority profile before catalogue assembly, not rely on
   `Option::None` being repaired from local environment.
+- Treat ability publication summaries as route/catalog evidence. Local
+  publication, federation directory merge, route resolver, local discover, and
+  `node.describe` must propagate corrupt projection state as unavailable or
+  refused runtime state. They must not skip malformed summaries or synthesize
+  empty ability arrays that make product callers believe a route simply is not
+  visible.

@@ -251,7 +251,12 @@ impl DiscoverFederationResolver for LocalDirectoryDiscoverFederationResolver {
             Some(self.advertised_agents.as_ref()),
             Some(self.ability_catalog.as_ref()),
             self.local_ability_catalog.get().map(Arc::as_ref),
-        );
+        )
+        .map_err(|error| {
+            DiscoverFederationResolveError::Unavailable(format!(
+                "federation.resolve ability projection: {error}"
+            ))
+        })?;
         let value = serde_json::to_value(response)
             .map_err(|e| DiscoverFederationResolveError::Unavailable(e.to_string()))?;
         let receipt: crate::daemon::federation::client::ability_contract::ResolveReceipt =

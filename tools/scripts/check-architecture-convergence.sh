@@ -7426,6 +7426,95 @@ if catalog_build.exists():
         )
 
 
+# Rule 81: Ability publication projection is route/catalog evidence, not a
+# lossy render cache. Local publication and federation.resolve must fail closed
+# on corrupt summaries instead of silently dropping rows and making product
+# callers see empty route visibility.
+ability_publication = cli_root / "src/daemon/ability/catalog/publication.rs"
+if ability_publication.exists():
+    text = source(ability_publication)
+    body = rust_method_body(text, "owner_projection_values")
+    if body is None:
+        add(
+            "R81_ABILITY_PUBLICATION_PROJECTION_FAIL_CLOSED",
+            ability_publication,
+            1,
+            "LocalAbilityPublicationSnapshot must expose owner_projection_values",
+        )
+    else:
+        offset, projection_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if "Result<Vec<Value>, String>" not in signature:
+            add(
+                "R81_ABILITY_PUBLICATION_PROJECTION_FAIL_CLOSED",
+                ability_publication,
+                line_number(text, offset),
+                "owner_projection_values must return Result so corrupt local publication cannot become an empty catalogue",
+            )
+        for token, detail in (
+            (
+                "filter_map",
+                "owner_projection_values must not skip corrupt descriptor summaries",
+            ),
+            (
+                ".ok()",
+                "owner_projection_values must not hide summary/JSON projection failures behind Option",
+            ),
+        ):
+            if token in projection_body:
+                add(
+                    "R81_ABILITY_PUBLICATION_PROJECTION_FAIL_CLOSED",
+                    ability_publication,
+                    line_number(text, body_start + projection_body.find(token)),
+                    detail,
+                )
+
+federation_wrappers = cli_root / "src/daemon/invocation/dispatch/federation_wrappers.rs"
+if federation_wrappers.exists():
+    text = source(federation_wrappers)
+    for name, expected in (
+        ("handle_resolve_at", "Result<ResolveResponse, String>"),
+        ("resolved_owner_projection_values", "Result<Vec<serde_json::Value>, String>"),
+    ):
+        body = rust_method_body(text, name)
+        if body is None:
+            add(
+                "R81_ABILITY_PUBLICATION_PROJECTION_FAIL_CLOSED",
+                federation_wrappers,
+                1,
+                f"federation resolve must keep {name} as an explicit projection surface",
+            )
+            continue
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if expected not in signature:
+            add(
+                "R81_ABILITY_PUBLICATION_PROJECTION_FAIL_CLOSED",
+                federation_wrappers,
+                line_number(text, offset),
+                f"{name} must return {expected} so projection failures cannot become empty route visibility",
+            )
+        for token, detail in (
+            (
+                "return;",
+                f"{name} must not silently drop invalid ability summaries",
+            ),
+            (
+                "summary_from_value(&summary).and_then",
+                f"{name} must parse summary rows as required schema-bound input",
+            ),
+        ):
+            if token in fn_body:
+                add(
+                    "R81_ABILITY_PUBLICATION_PROJECTION_FAIL_CLOSED",
+                    federation_wrappers,
+                    line_number(text, body_start + fn_body.find(token)),
+                    detail,
+                )
+
+
 if violations:
     for violation in sorted(violations):
         print(

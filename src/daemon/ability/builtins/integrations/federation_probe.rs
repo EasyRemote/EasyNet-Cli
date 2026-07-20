@@ -86,16 +86,17 @@ pub(crate) struct ResolvedDeviceRecord {
 /// daemon owns its local identity and descriptors even in daemon-only mode.
 pub(crate) fn local_device_record(
     catalog: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
-) -> Option<ResolvedDeviceRecord> {
+) -> anyhow::Result<Option<ResolvedDeviceRecord>> {
     let local = local_identity();
     if !local.paired {
-        return None;
+        return Ok(None);
     }
     let owner_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
     let abilities =
         crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(catalog)
-            .owner_projection_values(&owner_ura);
-    Some(ResolvedDeviceRecord {
+            .owner_projection_values(&owner_ura)
+            .map_err(|error| anyhow::anyhow!("local device ability publication: {error}"))?;
+    Ok(Some(ResolvedDeviceRecord {
         node: DeviceNodeSnapshot {
             node_id: local.node_id.clone(),
             tenant_id: local.tenant_id.clone(),
@@ -113,7 +114,7 @@ pub(crate) fn local_device_record(
             latency_ms: None,
         },
         ability_summaries: abilities,
-    })
+    }))
 }
 
 #[derive(Debug)]

@@ -5214,6 +5214,51 @@ expect_fail \
   "R80_CATALOG_AUTHORITY_CONTEXT_REQUIRED"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/catalog" "$CLI/src/daemon/invocation/dispatch"
+cat >"$CLI/src/daemon/ability/catalog/publication.rs" <<'EOF'
+use serde_json::Value;
+
+pub(crate) struct LocalAbilityPublicationSnapshot;
+
+impl LocalAbilityPublicationSnapshot {
+    #[must_use]
+    pub(crate) fn owner_projection_values(&self, owner_ura: &str) -> Vec<Value> {
+        self.descriptors_by_owner
+            .get(owner_ura)
+            .into_iter()
+            .flatten()
+            .filter_map(|descriptor| summary_from_descriptor(descriptor).ok())
+            .filter_map(|summary| serde_json::to_value(summary).ok())
+            .collect()
+    }
+}
+EOF
+cat >"$CLI/src/daemon/invocation/dispatch/federation_wrappers.rs" <<'EOF'
+use serde_json::Value;
+
+pub(crate) fn handle_resolve_at() -> ResolveResponse {
+    ResolveResponse { agents: Vec::new() }
+}
+
+fn resolved_owner_projection_values() -> Vec<serde_json::Value> {
+    let mut by_public_name = std::collections::BTreeMap::<String, serde_json::Value>::new();
+    let mut order = Vec::new();
+    let mut push = |summary: serde_json::Value| {
+        let Some(key) = summary_from_value(&summary).and_then(|parsed| summary_public_name(&parsed)) else {
+            return;
+        };
+        if by_public_name.insert(key.clone(), summary).is_none() {
+            order.push(key);
+        }
+    };
+    Vec::new()
+}
+EOF
+expect_fail \
+  "ability publication projection silent drop" \
+  "R81_ABILITY_PUBLICATION_PROJECTION_FAIL_CLOSED"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/plugins" "$CLI/src/daemon/boot/invocation" "$CLI/src/daemon/ability/wire"
 cat >"$CLI/src/daemon/plugins/runtime_manager.rs" <<'EOF'
 use crate::daemon::ability::wire::AbilityWireRegistry;
