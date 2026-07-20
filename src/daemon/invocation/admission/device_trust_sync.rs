@@ -392,26 +392,16 @@ impl ResolvedCallerTrust {
     }
 }
 
-/// Parse the hub's resolve_key reply: prefer the multi-key field
-/// (DEC-EU), fall back to the single-key field of older hubs. New hubs also
-/// return principal-owner facts; importing them keeps caller verification and
-/// owner authorization as one trust projection instead of a policy exception.
+/// Parse the hub's resolve_key reply.
+///
+/// The hub response is schema-bound trust evidence. New hubs return
+/// `public_keys_b64` for both single-key and multi-key principals; a missing
+/// field, non-array field, or malformed row is a corrupt authority response,
+/// not a signal to repair from legacy single-key fields. An empty array remains
+/// the explicit "hub has no keys" answer used by negative caching.
 fn parse_resolved_caller_trust(result_bytes: &[u8]) -> anyhow::Result<ResolvedCallerTrust> {
     let response: serde_json::Value = serde_json::from_slice(result_bytes)?;
-    let mut keys: Vec<String> = response
-        .get("public_keys_b64")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|k| k.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-    if keys.is_empty() {
-        if let Some(pk) = response.get("public_key_b64").and_then(|v| v.as_str()) {
-            keys.push(pk.to_string());
-        }
-    }
+    let keys = parse_public_keys_b64_field(&response)?;
     Ok(ResolvedCallerTrust {
         public_keys_b64: keys,
         principal_owner_ura: response
@@ -427,6 +417,28 @@ fn parse_resolved_caller_trust(result_bytes: &[u8]) -> anyhow::Result<ResolvedCa
             .filter(|value| !value.is_empty())
             .map(ToString::to_string),
     })
+}
+
+fn parse_public_keys_b64_field(response: &serde_json::Value) -> anyhow::Result<Vec<String>> {
+    let public_keys = response
+        .get("public_keys_b64")
+        .ok_or_else(|| anyhow::anyhow!("resolve_key_response_missing_public_keys_b64"))?
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("resolve_key_response_public_keys_b64_not_array"))?;
+    public_keys
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let key = value.as_str().ok_or_else(|| {
+                anyhow::anyhow!("resolve_key_response_public_keys_b64[{index}]_not_string")
+            })?;
+            let key = key.trim();
+            if key.is_empty() {
+                anyhow::bail!("resolve_key_response_public_keys_b64[{index}]_empty");
+            }
+            Ok(key.to_string())
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -478,6 +490,54 @@ mod tests {
                 .verifying_key()
                 .to_bytes(),
         )
+    }
+
+    #[test]
+    fn parse_resolved_caller_trust_requires_schema_bound_public_keys() {
+        let legacy_single_key = serde_json::json!({
+            "public_key_b64": test_key_b64()
+        });
+
+        let err = parse_resolved_caller_trust(
+            &serde_json::to_vec(&legacy_single_key).expect("json serializes"),
+        )
+        .expect_err("legacy single-key resolve_key response must not be repaired");
+
+        assert!(
+            err.to_string()
+                .contains("resolve_key_response_missing_public_keys_b64"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_resolved_caller_trust_rejects_malformed_public_key_rows() {
+        let malformed = serde_json::json!({
+            "public_keys_b64": [test_key_b64(), 7]
+        });
+
+        let err =
+            parse_resolved_caller_trust(&serde_json::to_vec(&malformed).expect("json serializes"))
+                .expect_err("malformed key row must not be skipped");
+
+        assert!(
+            err.to_string()
+                .contains("resolve_key_response_public_keys_b64[1]_not_string"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_resolved_caller_trust_accepts_empty_public_key_array_as_hub_miss() {
+        let miss = serde_json::json!({
+            "public_keys_b64": []
+        });
+
+        let resolved =
+            parse_resolved_caller_trust(&serde_json::to_vec(&miss).expect("json serializes"))
+                .expect("empty array is an explicit hub miss");
+
+        assert!(resolved.public_keys_b64.is_empty());
     }
 
     #[tokio::test]

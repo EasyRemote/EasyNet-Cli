@@ -5074,6 +5074,38 @@ expect_fail \
   "R72_PLUGIN_SIDECAR_STDERR_DIAGNOSTICS"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/admission"
+cat >"$CLI/src/daemon/invocation/admission/device_trust_sync.rs" <<'EOF'
+struct ResolvedCallerTrust {
+    public_keys_b64: Vec<String>,
+}
+
+fn parse_resolved_caller_trust(result_bytes: &[u8]) -> anyhow::Result<ResolvedCallerTrust> {
+    let response: serde_json::Value = serde_json::from_slice(result_bytes)?;
+    let mut keys: Vec<String> = response
+        .get("public_keys_b64")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|k| k.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if keys.is_empty() {
+        if let Some(pk) = response.get("public_key_b64").and_then(|v| v.as_str()) {
+            keys.push(pk.to_string());
+        }
+    }
+    Ok(ResolvedCallerTrust {
+        public_keys_b64: keys,
+    })
+}
+EOF
+expect_fail \
+  "device trust sync resolve_key legacy response repair" \
+  "R73_DEVICE_TRUST_SYNC_RESOLVE_KEY_SCHEMA"
+
+make_good_fixture
 expect_pass "fixture restored after all negative cases"
 
 printf 'test_check_architecture_convergence.sh: all cases passed\n'

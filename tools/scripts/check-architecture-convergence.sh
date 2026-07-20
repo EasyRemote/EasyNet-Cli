@@ -6991,6 +6991,83 @@ if sidecar_io.exists():
                 )
 
 
+# Rule 73: Device trust sync consumes hub resolve_key responses as
+# schema-bound trust evidence. It must not repair missing `public_keys_b64`
+# from legacy `public_key_b64`, and it must not skip malformed key rows.
+device_trust_sync = cli_root / "src/daemon/invocation/admission/device_trust_sync.rs"
+if device_trust_sync.exists():
+    text = source(device_trust_sync)
+    parse_body = rust_method_body(text, "parse_resolved_caller_trust")
+    if parse_body is None:
+        add(
+            "R73_DEVICE_TRUST_SYNC_RESOLVE_KEY_SCHEMA",
+            device_trust_sync,
+            1,
+            "device trust sync must own a schema-bound resolve_key response parser",
+        )
+    else:
+        offset, body = parse_body
+        body_start = text.find("{", offset) + 1
+        for token, detail in (
+            (
+                '.get("public_key_b64")',
+                "device trust sync must not repair resolve_key responses from legacy public_key_b64",
+            ),
+            (
+                "filter_map",
+                "device trust sync must not skip malformed public_keys_b64 rows",
+            ),
+            (
+                "unwrap_or_default()",
+                "device trust sync must not default missing public_keys_b64 to an empty key set",
+            ),
+        ):
+            if token in body:
+                add(
+                    "R73_DEVICE_TRUST_SYNC_RESOLVE_KEY_SCHEMA",
+                    device_trust_sync,
+                    line_number(text, body_start + body.find(token)),
+                    detail,
+                )
+        if "parse_public_keys_b64_field(&response)?" not in body:
+            add(
+                "R73_DEVICE_TRUST_SYNC_RESOLVE_KEY_SCHEMA",
+                device_trust_sync,
+                line_number(text, offset),
+                "device trust sync parser must delegate public_keys_b64 validation to a fallible helper",
+            )
+    helper_body = rust_method_body(text, "parse_public_keys_b64_field")
+    if helper_body is None:
+        add(
+            "R73_DEVICE_TRUST_SYNC_RESOLVE_KEY_SCHEMA",
+            device_trust_sync,
+            1,
+            "device trust sync must validate public_keys_b64 with a dedicated helper",
+        )
+    else:
+        offset, body = helper_body
+        for token, detail in (
+            (
+                "resolve_key_response_missing_public_keys_b64",
+                "missing public_keys_b64 must be a typed parse error",
+            ),
+            (
+                "resolve_key_response_public_keys_b64_not_array",
+                "non-array public_keys_b64 must be a typed parse error",
+            ),
+            (
+                "_not_string",
+                "non-string public_keys_b64 rows must be typed parse errors",
+            ),
+            (
+                "_empty",
+                "empty public_keys_b64 rows must be typed parse errors",
+            ),
+        ):
+            if token not in body:
+                add("R73_DEVICE_TRUST_SYNC_RESOLVE_KEY_SCHEMA", device_trust_sync, line_number(text, offset), detail)
+
+
 if violations:
     for violation in sorted(violations):
         print(

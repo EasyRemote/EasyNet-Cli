@@ -1123,3 +1123,22 @@ Evidence will be appended after indexing and focused impact queries.
   Any corrupt user key inside the verifier-bounded bucket fails the user
   principal closed. Rule `R67_TRUST_ANCHOR_USER_BUCKET_LOOKUP_FORK` now also
   rejects `filter_map(...decode_pubkey(...).ok())` in the key resolver.
+
+## 2026-07-20 Device trust sync resolve-key schema fallback audit
+
+- `codegraph query ResolvedCallerTrust --limit 50` identified
+  `parse_resolved_caller_trust` as the parser for hub-attested
+  `federation.resolve_key` responses used by device on-miss trust sync.
+- `rg` found two active fallback paths in the parser: malformed
+  `public_keys_b64` rows were skipped with `filter_map`, and missing or empty
+  multi-key arrays were repaired from legacy `public_key_b64`.
+- The root abstraction problem was response-shape compatibility inside an
+  authority import path. Device trust sync imports hub-attested caller keys into
+  the local trust anchor; it must consume schema-bound trust evidence, not
+  rebuild missing multi-key evidence from older single-key fields or silently
+  discard malformed rows.
+- After the change, `public_keys_b64` is required and must be an array of
+  non-empty strings. An empty array remains the explicit hub miss used by
+  negative caching. Missing arrays, non-arrays, non-string rows, and empty rows
+  fail parsing before any trust import. Rule
+  `R73_DEVICE_TRUST_SYNC_RESOLVE_KEY_SCHEMA` rejects the old repair path.

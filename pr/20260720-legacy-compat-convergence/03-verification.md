@@ -1070,3 +1070,27 @@ Commands and outcomes will be appended after implementation.
 - `rg -n "filter_map\\([^\\n]*decode_pubkey|decode_pubkey\\(&row\\.public_key_b64, agent_ura\\)\\.ok\\(|decode_pubkey\\(&row\\.public_key_b64, agent_ura\\)\\?" ...`
   — PASS; production resolver uses `decode_pubkey(...)?`, and the old skip
   pattern remains only in the architecture-gate negative fixture.
+
+## 2026-07-20 Device trust sync resolve-key schema gate
+
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo test -q
+  device_trust_sync --lib` — PASS (`11 passed`); includes missing
+  `public_keys_b64` rejection, malformed row rejection, and explicit empty
+  array hub-miss handling.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo fmt --check` —
+  PASS.
+- `tools/scripts/check-architecture-convergence.sh` — PASS.
+- `tests/scripts/test_check_architecture_convergence.sh` — PASS; includes a
+  negative fixture for the previous legacy `public_key_b64` repair and
+  malformed-row `filter_map` skip.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo check --lib --bins`
+  — PASS.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query
+  parse_public_keys_b64_field --limit 30` — PASS; reports the schema-bound
+  parser helper.
+- `rg -n "parse_resolved_caller_trust|public_key_b64|filter_map|unwrap_or_default\\(\\)|parse_public_keys_b64_field" ...`
+  — PASS; production parser delegates to `parse_public_keys_b64_field`, and
+  the legacy fallback pattern remains only in tests/gate negative fixtures.

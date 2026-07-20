@@ -352,3 +352,8 @@ Decisions will be appended as root-fork choices are made.
   prove every bounded bucket row is valid key material. A corrupt row is not
   optional and must fail the principal closed instead of being skipped while
   other keys remain admissible.
+- Treat hub `federation.resolve_key` responses consumed by device trust sync as
+  schema-bound trust evidence. `public_keys_b64` is the canonical response
+  field for both single-key and multi-key principals; legacy `public_key_b64`
+  fallback and malformed-row skipping are not allowed in the authority import
+  path. Empty `public_keys_b64` remains the explicit hub-miss state.
