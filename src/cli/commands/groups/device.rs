@@ -34,7 +34,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use clap::{Args, Subcommand};
 use console::style;
 use serde_json::{json, Value};
@@ -104,47 +104,14 @@ pub fn run(args: DeviceArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    // Joint-plan unified path (海峰 + 凉冰, 2026-05-03): every
-    // cross-device dispatch flows through
-    // the canonical `Invocation::Invoke` RPC; each daemon describes ITSELF via
-    // `node.describe {node_id:"local"}`. The CLI is the
-    // routing-decision site:
-    //   * `args.node_id` looks like a canonical URA  → forward to it
-    //   * bare uuid that matches this device's node id → describe self
-    //   * any other bare uuid                          → first consult
-    //                                                    federation.discover
-    //                                                    for a cross-hub
-    //                                                    realm hit, then
-    //                                                    fall back to the
-    //                                                    local realm only
-    //                                                    if discovery
-    //                                                    cannot answer
-    //   * `local`                                      → describe self
-    //
+    // Cross-device dispatch flows through canonical Invocation::Invoke. The
+    // CLI accepts two target states only: local/self, or an explicit canonical
+    // Device URA. Bare remote ids are not enough material to construct a
+    // descriptor-bound route.
     let node = describe_target(&args.node_id)
         .with_context(|| format!("describe node {}", args.node_id))?;
 
-    // Hosted-ability list is `meta.list_abilities` filtered to entries
-    // whose owner matches the target node id. v1 only knows about
-    // the local node — once federation Invoke ships the daemon-side
-    // handler will return per-node ability lists.
-    let abilities = node
-        .get("abilities")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_else(|| {
-            match crate::support::platform::local_invoke::invoke_local_ability(
-                "meta.list_abilities",
-                json!({}),
-            ) {
-                Ok(catalogue) => catalogue
-                    .get("abilities")
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default(),
-                Err(_) => Vec::new(),
-            }
-        });
+    let abilities = device_show_abilities(&node)?;
     // Refer to the borrowed slot below as `&node` to keep parity
     // with the legacy variable name; the dereferences are checked.
     let node = &node;
@@ -357,16 +324,12 @@ fn invoke_revoke(target_ura: &str, _reason: &str, _caller_ura: &str) -> anyhow::
 
 /// Joint-plan unified-path dispatch for `easynet device show`.
 ///
-/// Resolves `node_id` (either a canonical URA or a bare uuid /
-/// the literal `local`) into the right `node.describe` call:
+/// Resolves `node_id` into the right `node.describe` call:
 ///
 ///   * `local` or matches this daemon's own node id → invoke
 ///     `node.describe` locally over the control socket.
 ///   * canonical URA pointing at a remote device → canonical_invoke
 ///     `node.describe` against that URA.
-///   * bare uuid that does not match local → wrap in this device's
-///     realm and canonical_invoke (matches the legacy
-///     `node.describe` same-realm fallback).
 fn describe_target(node_id: &str) -> anyhow::Result<Value> {
     let trimmed = node_id.trim();
     let creds = crate::daemon::persistence::config::load_credentials().ok();
@@ -374,19 +337,14 @@ fn describe_target(node_id: &str) -> anyhow::Result<Value> {
         .as_ref()
         .map(|c| c.node_id.clone())
         .unwrap_or_default();
-    let is_local = trimmed.is_empty()
-        || trimmed.eq_ignore_ascii_case("local")
-        || (!local_node.is_empty() && trimmed == local_node);
-
-    if is_local {
-        return crate::support::platform::local_invoke::invoke_local_ability(
+    match classify_device_show_target(trimmed, &local_node)? {
+        DeviceShowTarget::Local => crate::support::platform::local_invoke::invoke_local_ability(
             "node.describe",
             serde_json::json!({"node_id": "local"}),
         )
-        .context("invoke node.describe (local)");
+        .context("invoke node.describe (local)"),
+        DeviceShowTarget::RemoteDevice(target_ura) => invoke_remote_describe(&target_ura),
     }
-
-    invoke_remote_describe(trimmed)
 }
 
 fn invoke_remote_describe(node: &str) -> anyhow::Result<Value> {
@@ -396,4 +354,107 @@ fn invoke_remote_describe(node: &str) -> anyhow::Result<Value> {
         serde_json::json!({"node_id": "local"}),
         &format!("describing remote device {node:?}"),
     )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DeviceShowTarget {
+    Local,
+    RemoteDevice(String),
+}
+
+fn classify_device_show_target(raw: &str, local_node_id: &str) -> anyhow::Result<DeviceShowTarget> {
+    let target = raw.trim();
+    if target.is_empty()
+        || target.eq_ignore_ascii_case("local")
+        || (!local_node_id.trim().is_empty() && target == local_node_id.trim())
+    {
+        return Ok(DeviceShowTarget::Local);
+    }
+
+    let parsed = crate::core::ura::parse_ura(target).map_err(|err| {
+        anyhow::anyhow!(
+            "device show remote target {target:?} is not a canonical Device URA: {err}. \
+             Pass `easynet:///r/<realm>/device/<id>` or use `local` for this device."
+        )
+    })?;
+    if parsed.kind != crate::core::ura::URAKind::Device {
+        bail!(
+            "device show target {target:?} must be a canonical Device URA, got kind={}",
+            parsed.kind
+        );
+    }
+    Ok(DeviceShowTarget::RemoteDevice(target.to_string()))
+}
+
+fn device_show_abilities(node: &Value) -> anyhow::Result<Vec<Value>> {
+    node.get("abilities")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "node.describe response omitted `abilities`; device show refuses to fall back to local meta.list_abilities"
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_show_rejects_bare_remote_target() {
+        let error = classify_device_show_target("386b1258-3c89-494a-90a2-2321c29bf992", "local")
+            .expect_err("bare remote ids must not be accepted");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("not a canonical Device URA"),
+            "wrong error: {message}"
+        );
+        assert!(
+            message.contains("easynet:///r/<realm>/device/<id>"),
+            "wrong error: {message}"
+        );
+    }
+
+    #[test]
+    fn device_show_classifies_local_and_canonical_remote_targets() {
+        assert_eq!(
+            classify_device_show_target("local", "dev-a").expect("local"),
+            DeviceShowTarget::Local
+        );
+        assert_eq!(
+            classify_device_show_target("dev-a", "dev-a").expect("self"),
+            DeviceShowTarget::Local
+        );
+        assert_eq!(
+            classify_device_show_target("easynet:///r/acme/device/dev-b", "dev-a").expect("remote"),
+            DeviceShowTarget::RemoteDevice("easynet:///r/acme/device/dev-b".to_string())
+        );
+    }
+
+    #[test]
+    fn device_show_requires_describe_payload_abilities() {
+        let error = device_show_abilities(&json!({"node_id": "dev-a"}))
+            .expect_err("missing abilities must fail closed");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("omitted `abilities`"),
+            "wrong error: {message}"
+        );
+        assert!(
+            message.contains("refuses to fall back"),
+            "wrong error: {message}"
+        );
+    }
+
+    #[test]
+    fn device_show_uses_describe_payload_abilities() {
+        let abilities = vec![json!({"name": "meta.list_abilities"})];
+        assert_eq!(
+            device_show_abilities(&json!({"abilities": abilities.clone()})).expect("abilities"),
+            abilities
+        );
+    }
 }
