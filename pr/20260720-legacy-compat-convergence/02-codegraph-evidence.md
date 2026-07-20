@@ -1297,3 +1297,26 @@ Evidence will be appended after indexing and focused impact queries.
   `Result<ResolveResponse, String>`, and route resolver/discover/`node.describe`
   callers surface projection failure as unavailable/refused state instead of
   falling through to empty abilities.
+
+## 2026-07-20 Desktop companion status projection silent-drop audit
+
+- `codegraph query "desktop_companion_statuses status_json companion_error
+  PluginSurfaceProjector" --limit 80` identified two production consumers of
+  companion status projection:
+  `daemon::boot::lifecycle::status::desktop_companion_statuses` and
+  `PluginSurfaceProjector::project_packages_with_daemon`.
+- Targeted `rg` found the runtime-status path returning `Vec::new()` when
+  plugin default state could not be loaded, then using
+  `filter_map(|package| manager.status_json(package).ok())` to skip broken
+  companion DTO projection. The plugin package surface used the same
+  `status_json(package).ok()` pattern when rendering package rows.
+- The root abstraction problem was treating desktop companion status as an
+  optional decoration. Runtime status and plugin package list are operator
+  read-model surfaces: companion manager/index/projection failure is a runtime
+  observation and must remain visible, not disappear as "no companion".
+- After the change, runtime status uses
+  `DesktopCompanionStatusObservation` to carry both companion DTOs and
+  projection errors, `RuntimeStatusReport` exposes
+  `desktop_companion_errors`, `PluginPackageSurfaceRecord` exposes
+  `companion_error`, and `DesktopCompanionManager::status_json` preserves the
+  concrete serialization/projection error source.

@@ -1248,3 +1248,32 @@ Commands and outcomes will be appended after implementation.
   publication" --limit 80` — PASS; reports both production functions with
   `Result` return types.
 - `git diff --check` — PASS.
+
+## 2026-07-20 Desktop companion status projection errors
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q
+  json_payload_exposes_companion --lib` — PASS (`2 passed`); covers successful
+  companion DTO projection and explicit `desktop_companion_errors` JSON output.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q
+  plugin_host_surface_projects_desktop_companion_as_package_only --lib` —
+  PASS (`1 passed`); proves normal desktop companion package rows still expose
+  companion DTOs without `companion_error`.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q
+  activate_realtime_projects_ready_resource_and_permission_actions --lib` —
+  PASS (`1 passed`); covers plugin integration fixture migration for the
+  expanded package surface record.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --locked --lib --bins` —
+  PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R82 for desktop companion projection-error preservation.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for `desktop_companion_statuses() -> Vec<Value>`,
+  `return Vec::new()`, `status_json(package).ok()`, and `.ok()` projection
+  cause erasure inside `DesktopCompanionManager::status_json`.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query
+  "DesktopCompanionStatusObservation desktop_companion_errors companion_error
+  status_json" --limit 80` — PASS; reports the companion manager projector and
+  runtime JSON surface.
+- `git diff --check` — PASS.

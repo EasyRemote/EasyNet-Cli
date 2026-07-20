@@ -40,6 +40,8 @@ pub struct PluginPackageSurfaceRecord {
     pub invokable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub companion: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub companion_error: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub realtime_activation_plans: Vec<PluginRealtimeActivationPlan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -181,11 +183,15 @@ impl PluginSurfaceProjector {
                 })
                 .count();
             let has_abilities = !package.manifest().abilities().is_empty();
-            let companion = if package.manifest().kind() == PluginKind::DesktopCompanion {
-                companion_manager.status_json(package).ok()
-            } else {
-                None
-            };
+            let (companion, companion_error) =
+                if package.manifest().kind() == PluginKind::DesktopCompanion {
+                    match companion_manager.status_json(package) {
+                        Ok(status) => (Some(status), None),
+                        Err(error) => (None, Some(error.to_string())),
+                    }
+                } else {
+                    (None, None)
+                };
             let daemon_runtime_status = match (package.manifest().kind(), daemon_abilities) {
                 (PluginKind::DesktopCompanion, _) if !has_abilities => "n/a",
                 (_, Some(_))
@@ -211,6 +217,7 @@ impl PluginSurfaceProjector {
                 runtime_published: runtime_registered_count > 0,
                 invokable: runtime_registered_count > 0,
                 companion,
+                companion_error,
                 realtime_activation_plans: activation_plans_for_manifest(
                     package.id().as_str(),
                     package.version().as_str(),
@@ -236,6 +243,7 @@ impl PluginSurfaceProjector {
                 runtime_published: false,
                 invokable: false,
                 companion: None,
+                companion_error: None,
                 realtime_activation_plans: Vec::new(),
                 error: Some(format!("{}: {}", error.package_dir.display(), error.reason)),
             });
@@ -526,6 +534,7 @@ mod tests {
         assert!(!package.descriptor_published);
         assert!(!package.runtime_published);
         assert!(!package.invokable);
+        assert!(package.companion_error.is_none());
         let companion = package.companion.as_ref().expect("companion DTO");
         assert_eq!(companion["profile"], "desktop_companion");
         assert_eq!(companion["kind"], "desktop_companion_status");

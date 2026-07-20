@@ -68,7 +68,7 @@ impl RuntimeLifecycleService {
 
     /// Observe the current lifecycle state.
     pub fn status(&self) -> RuntimeStatusReport {
-        RuntimeStatusReport::from_parts_with_observations(
+        RuntimeStatusReport::from_parts_with_companion_observation(
             self.projection_store.load(),
             self.discovery.capture(),
             self.presence_observer.capture(),

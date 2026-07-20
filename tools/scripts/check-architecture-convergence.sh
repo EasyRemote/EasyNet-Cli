@@ -7515,6 +7515,130 @@ if federation_wrappers.exists():
                 )
 
 
+# Rule 82: Desktop companion status is a runtime observation, not an optional
+# decoration. Lifecycle status and plugin package surfaces must preserve
+# companion projection failures as explicit facts instead of collapsing broken
+# manager/index/projection state into an empty companion list.
+lifecycle_status = cli_root / "src/daemon/boot/lifecycle/status.rs"
+if lifecycle_status.exists():
+    text = source(lifecycle_status)
+    if "pub struct DesktopCompanionStatusObservation" not in text:
+        add(
+            "R82_DESKTOP_COMPANION_STATUS_PROJECTION_ERRORS",
+            lifecycle_status,
+            1,
+            "desktop companion runtime status must use a named observation carrying statuses and errors",
+        )
+    if "desktop_companion_errors" not in text:
+        add(
+            "R82_DESKTOP_COMPANION_STATUS_PROJECTION_ERRORS",
+            lifecycle_status,
+            1,
+            "RuntimeStatusReport JSON must expose desktop_companion_errors",
+        )
+    body = rust_method_body(text, "desktop_companion_statuses")
+    if body is None:
+        add(
+            "R82_DESKTOP_COMPANION_STATUS_PROJECTION_ERRORS",
+            lifecycle_status,
+            1,
+            "desktop_companion_statuses must remain the lifecycle companion observation collector",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if "DesktopCompanionStatusObservation" not in signature:
+            add(
+                "R82_DESKTOP_COMPANION_STATUS_PROJECTION_ERRORS",
+                lifecycle_status,
+                line_number(text, offset),
+                "desktop_companion_statuses must return DesktopCompanionStatusObservation, not Vec<Value>",
+            )
+        for token, detail in (
+            (
+                "return Vec::new()",
+                "desktop_companion_statuses must not project plugin-state failure as no companions",
+            ),
+            (
+                "filter_map(|package| manager.status_json(package).ok())",
+                "desktop_companion_statuses must not skip companion status projection errors",
+            ),
+            (
+                "status_json(package).ok()",
+                "desktop_companion_statuses must not hide companion status projection errors behind Option",
+            ),
+        ):
+            if token in fn_body:
+                add(
+                    "R82_DESKTOP_COMPANION_STATUS_PROJECTION_ERRORS",
+                    lifecycle_status,
+                    line_number(text, body_start + fn_body.find(token)),
+                    detail,
+                )
+
+plugin_surface = cli_root / "src/daemon/plugins/surface.rs"
+if plugin_surface.exists():
+    text = source(plugin_surface)
+    if "companion_error" not in text:
+        add(
+            "R82_DESKTOP_COMPANION_STATUS_PROJECTION_ERRORS",
+            plugin_surface,
+            1,
+            "plugin package surface must expose companion_error instead of omitting broken companion status",
+        )
+    body = rust_method_body(text, "project_packages_with_daemon")
+    if body is not None:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        if "status_json(package).ok()" in fn_body:
+            add(
+                "R82_DESKTOP_COMPANION_STATUS_PROJECTION_ERRORS",
+                plugin_surface,
+                line_number(text, body_start + fn_body.find("status_json(package).ok()")),
+                "plugin package surface must preserve companion status projection errors",
+            )
+
+companion_manager = cli_root / "src/daemon/plugins/companion/mod.rs"
+if companion_manager.exists():
+    text = source(companion_manager)
+    body = rust_method_body(text, "status_json")
+    if body is None:
+        add(
+            "R82_DESKTOP_COMPANION_STATUS_PROJECTION_ERRORS",
+            companion_manager,
+            1,
+            "DesktopCompanionManager::status_json must remain the fallible companion DTO projector",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        for token, detail in (
+            (
+                "serde_json::to_value(status)\n            .ok()",
+                "DesktopCompanionManager::status_json must preserve serialization failure causes",
+            ),
+            (
+                "project_status(&value).ok()",
+                "DesktopCompanionManager::status_json must preserve projection failure causes",
+            ),
+        ):
+            if token in fn_body:
+                add(
+                    "R82_DESKTOP_COMPANION_STATUS_PROJECTION_ERRORS",
+                    companion_manager,
+                    line_number(text, body_start + fn_body.find(token)),
+                    detail,
+                )
+        if "companion status projection failed: {source}" not in fn_body:
+            add(
+                "R82_DESKTOP_COMPANION_STATUS_PROJECTION_ERRORS",
+                companion_manager,
+                line_number(text, offset),
+                "DesktopCompanionManager::status_json must report the projection source error",
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(

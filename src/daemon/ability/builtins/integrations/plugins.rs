@@ -431,6 +431,7 @@ mod tests {
             runtime_published: true,
             invokable: true,
             companion: None,
+            companion_error: None,
             realtime_activation_plans: activation_plans_for_manifest(
                 provider.package_id(),
                 manifest.version(),
@@ -532,6 +533,7 @@ quick_add = true
             runtime_published: true,
             invokable: true,
             companion: None,
+            companion_error: None,
             realtime_activation_plans: activation_plans_for_manifest(
                 "easynet.camera",
                 "0.1.0",

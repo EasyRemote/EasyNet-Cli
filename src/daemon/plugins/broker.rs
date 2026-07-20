@@ -466,6 +466,7 @@ resources = ["display"]
                 runtime_published: true,
                 invokable: true,
                 companion: None,
+                companion_error: None,
                 realtime_activation_plans: activation_plans_for_manifest(
                     "test.webrtc",
                     "0.1.0",

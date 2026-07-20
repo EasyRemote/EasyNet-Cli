@@ -5259,6 +5259,68 @@ expect_fail \
   "R81_ABILITY_PUBLICATION_PROJECTION_FAIL_CLOSED"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/boot/lifecycle" "$CLI/src/daemon/plugins/companion" "$CLI/src/daemon/plugins"
+cat >"$CLI/src/daemon/boot/lifecycle/status.rs" <<'EOF'
+use serde_json::Value;
+
+pub struct RuntimeStatusReport {
+    desktop_companions: Vec<Value>,
+}
+
+pub(super) fn desktop_companion_statuses() -> Vec<Value> {
+    let Ok(state) = crate::daemon::plugins::default_state() else {
+        return Vec::new();
+    };
+    let manager = crate::daemon::plugins::DesktopCompanionManager::current();
+    state
+        .index()
+        .packages()
+        .iter()
+        .filter_map(|package| manager.status_json(package).ok())
+        .collect()
+}
+EOF
+cat >"$CLI/src/daemon/plugins/surface.rs" <<'EOF'
+pub struct PluginPackageSurfaceRecord {
+    pub companion: Option<serde_json::Value>,
+}
+
+pub struct PluginSurfaceProjector;
+
+impl PluginSurfaceProjector {
+    pub fn project_packages_with_daemon(index: &PluginPackageIndex) -> Vec<PluginPackageSurfaceRecord> {
+        let companion_manager = DesktopCompanionManager::current();
+        index
+            .packages()
+            .iter()
+            .map(|package| PluginPackageSurfaceRecord {
+                companion: companion_manager.status_json(package).ok(),
+            })
+            .collect()
+    }
+}
+EOF
+cat >"$CLI/src/daemon/plugins/companion/mod.rs" <<'EOF'
+pub struct DesktopCompanionManager;
+
+impl DesktopCompanionManager {
+    pub fn status_json(&self, package: &SharedPluginPackage) -> Result<serde_json::Value> {
+        let status = self.status_for_package(package)?;
+        serde_json::to_value(status)
+            .ok()
+            .and_then(|value| project_status(&value).ok())
+            .ok_or_else(|| PluginHostError::InvalidCompanionManifest {
+                id: package.id().as_str().to_string(),
+                reason: "companion status projection failed".to_string(),
+            })
+    }
+}
+EOF
+expect_fail \
+  "desktop companion status projection silent drop" \
+  "R82_DESKTOP_COMPANION_STATUS_PROJECTION_ERRORS"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/plugins" "$CLI/src/daemon/boot/invocation" "$CLI/src/daemon/ability/wire"
 cat >"$CLI/src/daemon/plugins/runtime_manager.rs" <<'EOF'
 use crate::daemon::ability::wire::AbilityWireRegistry;

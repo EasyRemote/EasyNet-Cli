@@ -394,13 +394,16 @@ impl DesktopCompanionManager {
 
     pub fn status_json(&self, package: &SharedPluginPackage) -> Result<serde_json::Value> {
         let status = self.status_for_package(package)?;
-        serde_json::to_value(status)
-            .ok()
-            .and_then(|value| project_status(&value).ok())
-            .ok_or_else(|| PluginHostError::InvalidCompanionManifest {
+        let value = serde_json::to_value(status).map_err(|source| {
+            PluginHostError::InvalidCompanionManifest {
                 id: package.id().as_str().to_string(),
-                reason: "companion status projection failed".to_string(),
-            })
+                reason: format!("serialize companion status: {source}"),
+            }
+        })?;
+        project_status(&value).map_err(|source| PluginHostError::InvalidCompanionManifest {
+            id: package.id().as_str().to_string(),
+            reason: format!("companion status projection failed: {source}"),
+        })
     }
 
     pub fn start(&self, package: &SharedPluginPackage) -> Result<serde_json::Value> {

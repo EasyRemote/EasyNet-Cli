@@ -426,3 +426,8 @@ Decisions will be appended as root-fork choices are made.
   refused runtime state. They must not skip malformed summaries or synthesize
   empty ability arrays that make product callers believe a route simply is not
   visible.
+- Treat desktop companion status as a lifecycle observation. Runtime status may
+  keep rendering `desktop_companions` for successful DTOs, but plugin default
+  state failures and companion DTO projection failures must be emitted as
+  `desktop_companion_errors` / `companion_error`. A broken companion projection
+  is not equivalent to an absent companion package.

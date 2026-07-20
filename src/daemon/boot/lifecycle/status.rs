@@ -72,6 +72,47 @@ impl RuntimeLifecycleStatus {
     }
 }
 
+/// Desktop companion status observation captured during runtime status.
+///
+/// Status DTOs and projection errors are both operator facts. A companion
+/// manager failure must not be collapsed into an empty companion list because
+/// that makes broken companion projection indistinguishable from "no companion
+/// packages are installed".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DesktopCompanionStatusObservation {
+    statuses: Vec<Value>,
+    errors: Vec<String>,
+}
+
+impl DesktopCompanionStatusObservation {
+    pub fn from_statuses(statuses: Vec<Value>) -> Self {
+        Self {
+            statuses,
+            errors: Vec::new(),
+        }
+    }
+
+    pub fn from_parts(statuses: Vec<Value>, errors: Vec<String>) -> Self {
+        Self { statuses, errors }
+    }
+
+    pub fn push_status(&mut self, status: Value) {
+        self.statuses.push(status);
+    }
+
+    pub fn push_error(&mut self, error: impl Into<String>) {
+        self.errors.push(error.into());
+    }
+
+    pub fn statuses(&self) -> &[Value] {
+        &self.statuses
+    }
+
+    pub fn errors(&self) -> &[String] {
+        &self.errors
+    }
+}
+
 /// Full lifecycle report used by CLI, FFI, and tests.
 ///
 /// Invariants:
@@ -87,6 +128,7 @@ pub struct RuntimeStatusReport {
     daemon: DaemonDiscoverySnapshot,
     product_presence: Option<ProductPresenceSnapshot>,
     desktop_companions: Vec<Value>,
+    desktop_companion_errors: Vec<String>,
     status: RuntimeLifecycleStatus,
 }
 
@@ -115,12 +157,28 @@ impl RuntimeStatusReport {
         product_presence: Option<ProductPresenceSnapshot>,
         desktop_companions: Vec<Value>,
     ) -> Self {
+        Self::from_parts_with_companion_observation(
+            projection,
+            daemon,
+            product_presence,
+            DesktopCompanionStatusObservation::from_statuses(desktop_companions),
+        )
+    }
+
+    /// Build a report from all captured runtime-status observations.
+    pub fn from_parts_with_companion_observation(
+        projection: Option<RuntimeSessionProjection>,
+        daemon: DaemonDiscoverySnapshot,
+        product_presence: Option<ProductPresenceSnapshot>,
+        desktop_companions: DesktopCompanionStatusObservation,
+    ) -> Self {
         let status = classify(projection.as_ref(), &daemon);
         Self {
             projection,
             daemon,
             product_presence,
-            desktop_companions,
+            desktop_companions: desktop_companions.statuses,
+            desktop_companion_errors: desktop_companions.errors,
             status,
         }
     }
@@ -150,6 +208,11 @@ impl RuntimeStatusReport {
         &self.desktop_companions
     }
 
+    /// Desktop companion projection errors captured for runtime status.
+    pub fn desktop_companion_errors(&self) -> &[String] {
+        &self.desktop_companion_errors
+    }
+
     /// JSON representation used by `easynet runtime status --json`.
     pub fn to_json(&self, connection: Value) -> Value {
         json!({
@@ -158,25 +221,37 @@ impl RuntimeStatusReport {
             "runtime": self.projection.as_ref().map(RuntimeSessionProjection::to_json),
             "daemon": self.daemon.to_json(),
             "desktop_companions": self.desktop_companions.clone(),
+            "desktop_companion_errors": self.desktop_companion_errors.clone(),
             "product_presence": self.product_presence.as_ref().map(ProductPresenceSnapshot::to_json),
         })
     }
 }
 
-pub(super) fn desktop_companion_statuses() -> Vec<Value> {
-    let Ok(state) = crate::daemon::plugins::default_state() else {
-        return Vec::new();
+pub(super) fn desktop_companion_statuses() -> DesktopCompanionStatusObservation {
+    let state = match crate::daemon::plugins::default_state() {
+        Ok(state) => state,
+        Err(error) => {
+            return DesktopCompanionStatusObservation::from_parts(
+                Vec::new(),
+                vec![format!("plugin default state unavailable: {error}")],
+            );
+        }
     };
     let manager = crate::daemon::plugins::DesktopCompanionManager::current();
-    state
-        .index()
-        .packages()
-        .iter()
-        .filter(|package| {
-            package.manifest().kind() == crate::daemon::plugins::PluginKind::DesktopCompanion
-        })
-        .filter_map(|package| manager.status_json(package).ok())
-        .collect()
+    let mut observation = DesktopCompanionStatusObservation::default();
+    for package in state.index().packages().iter().filter(|package| {
+        package.manifest().kind() == crate::daemon::plugins::PluginKind::DesktopCompanion
+    }) {
+        match manager.status_json(package) {
+            Ok(status) => observation.push_status(status),
+            Err(error) => observation.push_error(format!(
+                "{}@{}: {error}",
+                package.id().as_str(),
+                package.version().as_str()
+            )),
+        }
+    }
+    observation
 }
 
 fn classify(
@@ -322,11 +397,44 @@ mod tests {
         let companion = &payload["desktop_companions"][0];
 
         assert_eq!(report.desktop_companions().len(), 1);
+        assert!(report.desktop_companion_errors().is_empty());
         assert_eq!(companion["profile"], "desktop_companion");
         assert_eq!(companion["kind"], "desktop_companion_status");
         assert_eq!(companion["package_id"], "easynet.desktop.menubar");
         assert_eq!(companion["projected_state"], "running");
         assert_eq!(companion["metadata"]["source"], "runtime_status_test");
+        assert!(payload["desktop_companion_errors"]
+            .as_array()
+            .expect("desktop companion errors array")
+            .is_empty());
+    }
+
+    #[test]
+    fn json_payload_exposes_companion_projection_errors() {
+        let report = RuntimeStatusReport::from_parts_with_companion_observation(
+            Some(projection()),
+            daemon_with_facts(true, true),
+            None,
+            DesktopCompanionStatusObservation::from_parts(
+                Vec::new(),
+                vec![
+                    "easynet.desktop.menubar@0.1.0: companion status projection failed".to_string(),
+                ],
+            ),
+        );
+
+        let payload = report.to_json(json!({"state": "test"}));
+
+        assert!(report.desktop_companions().is_empty());
+        assert_eq!(report.desktop_companion_errors().len(), 1);
+        assert!(payload["desktop_companions"]
+            .as_array()
+            .expect("desktop companions array")
+            .is_empty());
+        assert_eq!(
+            payload["desktop_companion_errors"][0],
+            "easynet.desktop.menubar@0.1.0: companion status projection failed"
+        );
     }
 
     #[test]
