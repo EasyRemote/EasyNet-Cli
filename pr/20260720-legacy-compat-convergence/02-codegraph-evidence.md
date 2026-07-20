@@ -1142,3 +1142,24 @@ Evidence will be appended after indexing and focused impact queries.
   negative caching. Missing arrays, non-arrays, non-string rows, and empty rows
   fail parsing before any trust import. Rule
   `R73_DEVICE_TRUST_SYNC_RESOLVE_KEY_SCHEMA` rejects the old repair path.
+
+## 2026-07-20 Pages serve fetch projection fallback audit
+
+- `codegraph query pages_serve_ability --limit 50` identified
+  `src/daemon/resources/pages/pages_serve_ability.rs::serve_bytes` as the
+  HTTP Pages adapter over the `<user>.<project>.page.fetch` resource ability.
+- `rg` found the active fallback in `bytes_from_value`: missing `bytes_b64`
+  became `""`, invalid base64 decoded to `Vec::new()`, missing
+  `content_type` became `application/octet-stream`, missing
+  `force_attachment` became `false`, and missing `sha256` became `""`.
+- The root abstraction problem was treating fetch output as best-effort HTTP
+  framing. Pages fetch output is resource evidence: decoded bytes, content
+  type, attachment disposition, and sha256 must be the exact projection from
+  the resource ability. Returning HTTP 200 with empty/defaulted fields hides
+  corrupted resource output and makes browser/product failures hard to
+  diagnose.
+- After the change, `bytes_from_value(...)` is a fallible schema-bound parser:
+  it requires `bytes_b64`, `content_type`, `force_attachment`, and `sha256`,
+  rejects invalid base64, and verifies the sha256 against decoded bytes. Bad
+  fetch projections map to HTTP 502 instead of HTTP 200. Rule
+  `R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA` rejects the old defaulting path.

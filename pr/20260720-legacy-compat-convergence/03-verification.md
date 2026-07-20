@@ -1094,3 +1094,25 @@ Commands and outcomes will be appended after implementation.
 - `rg -n "parse_resolved_caller_trust|public_key_b64|filter_map|unwrap_or_default\\(\\)|parse_public_keys_b64_field" ...`
   — PASS; production parser delegates to `parse_public_keys_b64_field`, and
   the legacy fallback pattern remains only in tests/gate negative fixtures.
+
+## 2026-07-20 Pages serve fetch projection schema gate
+
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo test -q
+  pages_serve_ability --lib` — PASS (`5 passed`); covers valid projection,
+  missing `bytes_b64`, invalid base64, sha mismatch, and non-boolean
+  `force_attachment`.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo fmt --check` —
+  PASS.
+- `tools/scripts/check-architecture-convergence.sh` — PASS.
+- `tests/scripts/test_check_architecture_convergence.sh` — PASS; includes a
+  negative fixture for the previous Pages fetch projection defaults.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo check --lib --bins`
+  — PASS.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query bytes_from_value
+  --limit 30` — PASS; reports the fallible Pages fetch projection parser.
+- `rg -n "bytes_from_value|bytes_b64|unwrap_or_default\\(\\)|unwrap_or\\(\\\"application/octet-stream\\\"\\)|sha256 != actual_sha256|required_non_empty_string" ...`
+  — PASS; production parser requires fields and verifies sha256, while the old
+  defaulting pattern remains only in the architecture-gate negative fixture.

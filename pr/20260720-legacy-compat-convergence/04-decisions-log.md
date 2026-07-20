@@ -357,3 +357,8 @@ Decisions will be appended as root-fork choices are made.
   field for both single-key and multi-key principals; legacy `public_key_b64`
   fallback and malformed-row skipping are not allowed in the authority import
   path. Empty `public_keys_b64` remains the explicit hub-miss state.
+- Treat Pages fetch output as resource evidence, not optional HTTP framing.
+  The serve adapter may map fetch/projection failures to HTTP status codes, but
+  it must never synthesize response bytes, MIME type, attachment policy, or
+  sha256. Malformed page.fetch output is an upstream projection failure and
+  must not become HTTP 200 with empty/defaulted fields.

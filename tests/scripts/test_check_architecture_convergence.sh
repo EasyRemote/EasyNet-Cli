@@ -5106,6 +5106,52 @@ expect_fail \
   "R73_DEVICE_TRUST_SYNC_RESOLVE_KEY_SCHEMA"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/resources/pages"
+cat >"$CLI/src/daemon/resources/pages/pages_serve_ability.rs" <<'EOF'
+use serde_json::Value;
+
+struct ServedBytes {
+    status: u16,
+    bytes: Vec<u8>,
+    content_type: String,
+    force_attachment: bool,
+    sha256: String,
+}
+
+fn bytes_from_value(value: Value) -> ServedBytes {
+    use base64::Engine;
+    let b64 = value.get("bytes_b64").and_then(Value::as_str).unwrap_or("");
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .unwrap_or_default();
+    let content_type = value
+        .get("content_type")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let force_attachment = value
+        .get("force_attachment")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let sha256 = value
+        .get("sha256")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    ServedBytes {
+        status: 200,
+        bytes,
+        content_type,
+        force_attachment,
+        sha256,
+    }
+}
+EOF
+expect_fail \
+  "pages serve fetch projection fallback" \
+  "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA"
+
+make_good_fixture
 expect_pass "fixture restored after all negative cases"
 
 printf 'test_check_architecture_convergence.sh: all cases passed\n'

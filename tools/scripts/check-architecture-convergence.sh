@@ -7068,6 +7068,78 @@ if device_trust_sync.exists():
                 add("R73_DEVICE_TRUST_SYNC_RESOLVE_KEY_SCHEMA", device_trust_sync, line_number(text, offset), detail)
 
 
+# Rule 74: Pages serve adapter must consume page.fetch output as
+# schema-bound resource evidence. Invalid/missing bytes or metadata must not
+# be projected into a 200 response with empty bytes/default MIME/default sha.
+pages_serve = cli_root / "src/daemon/resources/pages/pages_serve_ability.rs"
+if pages_serve.exists():
+    text = source(pages_serve)
+    bytes_body = rust_method_body(text, "bytes_from_value")
+    if bytes_body is None:
+        add(
+            "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA",
+            pages_serve,
+            1,
+            "Pages serve adapter must own a fallible page.fetch projection parser",
+        )
+    else:
+        offset, body = bytes_body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if "anyhow::Result<ServedBytes>" not in signature:
+            add(
+                "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA",
+                pages_serve,
+                line_number(text, offset),
+                "bytes_from_value must return Result so malformed fetch output cannot become HTTP 200",
+            )
+        for token, detail in (
+            (
+                "unwrap_or_default()",
+                "Pages serve adapter must not default invalid bytes_b64 to empty bytes",
+            ),
+            (
+                'unwrap_or("application/octet-stream")',
+                "Pages serve adapter must not default missing content_type",
+            ),
+            (
+                'unwrap_or("")',
+                "Pages serve adapter must not default missing bytes_b64 or sha256 to empty strings",
+            ),
+            (
+                "unwrap_or(false)",
+                "Pages serve adapter must not default missing force_attachment",
+            ),
+        ):
+            if token in body:
+                add(
+                    "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA",
+                    pages_serve,
+                    line_number(text, body_start + body.find(token)),
+                    detail,
+                )
+        for token, detail in (
+            (
+                'required_non_empty_string(&value, "bytes_b64")?',
+                "bytes_from_value must require bytes_b64",
+            ),
+            (
+                'required_non_empty_string(&value, "content_type")?',
+                "bytes_from_value must require content_type",
+            ),
+            (
+                'required_non_empty_string(&value, "sha256")?',
+                "bytes_from_value must require sha256",
+            ),
+            (
+                "sha256 != actual_sha256",
+                "bytes_from_value must verify sha256 against decoded bytes",
+            ),
+        ):
+            if token not in body:
+                add("R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA", pages_serve, line_number(text, offset), detail)
+
+
 if violations:
     for violation in sorted(violations):
         print(
