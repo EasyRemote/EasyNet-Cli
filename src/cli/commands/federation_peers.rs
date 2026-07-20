@@ -62,8 +62,9 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use clap::Args;
 use serde::Serialize;
 
@@ -129,8 +130,8 @@ struct TrustedHubEntry {
 }
 
 pub fn run(args: PeersArgs) -> anyhow::Result<()> {
-    let federated_peers = read_federated_peers().unwrap_or_default();
-    let trusted_hubs = read_trusted_hubs().unwrap_or_default();
+    let federated_peers = read_federated_peers()?;
+    let trusted_hubs = read_trusted_hubs()?;
 
     if args.json {
         let out = PeersOutput {
@@ -194,35 +195,69 @@ fn print_plain(federated_peers: &BTreeMap<String, String>, trusted_hubs: &[Trust
 }
 
 fn read_federated_peers() -> anyhow::Result<BTreeMap<String, String>> {
-    use toml_edit::DocumentMut;
+    read_federated_peers_from_path(&daemon_config_path())
+}
 
-    let path = daemon_config_path();
+fn read_federated_peers_from_path(path: &Path) -> anyhow::Result<BTreeMap<String, String>> {
     if !path.exists() {
         return Ok(BTreeMap::new());
     }
-    let raw = std::fs::read_to_string(&path)?;
+    let raw = std::fs::read_to_string(path).with_context(|| {
+        format!(
+            "could not read daemon federation peer config {}",
+            path.display()
+        )
+    })?;
+    parse_federated_peers_from(&raw)
+        .with_context(|| format!("invalid daemon federation peer config {}", path.display()))
+}
+
+fn parse_federated_peers_from(raw: &str) -> anyhow::Result<BTreeMap<String, String>> {
+    use toml_edit::DocumentMut;
+
     let doc: DocumentMut = raw.parse()?;
     let mut out = BTreeMap::new();
     if let Some(daemon) = doc.get("daemon").and_then(|i| i.as_table()) {
         if let Some(peers) = daemon.get("federated_peers").and_then(|i| i.as_table()) {
             for (k, v) in peers.iter() {
-                if let Some(s) = v.as_str() {
-                    out.insert(k.to_string(), s.to_string());
+                let realm = k.trim();
+                if realm.is_empty() {
+                    anyhow::bail!("[daemon.federated_peers] contains an empty realm key");
                 }
+                let Some(endpoint) = v.as_str().map(str::trim).filter(|value| !value.is_empty())
+                else {
+                    anyhow::bail!(
+                        "[daemon.federated_peers].{k} must be a non-empty hub endpoint string"
+                    );
+                };
+                out.insert(realm.to_string(), endpoint.to_string());
             }
+        } else if daemon.get("federated_peers").is_some() {
+            anyhow::bail!("[daemon.federated_peers] must be a TOML table");
         }
+    } else if doc.get("daemon").is_some() {
+        anyhow::bail!("[daemon] must be a TOML table");
     }
     Ok(out)
 }
 
 fn read_trusted_hubs() -> anyhow::Result<Vec<TrustedHubEntry>> {
-    use toml_edit::DocumentMut;
+    read_trusted_hubs_from_path(&realm_trust_path())
+}
 
-    let path = realm_trust_path();
+fn read_trusted_hubs_from_path(path: &Path) -> anyhow::Result<Vec<TrustedHubEntry>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let raw = std::fs::read_to_string(&path)?;
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("could not read realm trust config {}", path.display()))?;
+    parse_trusted_hubs_from(&raw)
+        .with_context(|| format!("invalid realm trust config {}", path.display()))
+}
+
+fn parse_trusted_hubs_from(raw: &str) -> anyhow::Result<Vec<TrustedHubEntry>> {
+    use toml_edit::DocumentMut;
+
     let doc: DocumentMut = raw.parse()?;
     let mut out = Vec::new();
     if let Some(agents) = doc
@@ -234,12 +269,16 @@ fn read_trusted_hubs() -> anyhow::Result<Vec<TrustedHubEntry>> {
             if role != "hub" {
                 continue;
             }
+            let Some(agent_ura) = table
+                .get("agent_ura")
+                .and_then(|i| i.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                anyhow::bail!("hub trusted_agent entry requires a non-empty agent_ura");
+            };
             let entry = TrustedHubEntry {
-                agent_ura: table
-                    .get("agent_ura")
-                    .and_then(|i| i.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                agent_ura: agent_ura.to_string(),
                 origin_realm: table
                     .get("origin_realm")
                     .and_then(|i| i.as_str())
@@ -255,6 +294,8 @@ fn read_trusted_hubs() -> anyhow::Result<Vec<TrustedHubEntry>> {
             };
             out.push(entry);
         }
+    } else if doc.get("trusted_agent").is_some() {
+        anyhow::bail!("[[trusted_agent]] must be an array of tables");
     }
     Ok(out)
 }
@@ -262,70 +303,6 @@ fn read_trusted_hubs() -> anyhow::Result<Vec<TrustedHubEntry>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-
-    fn write_temp(contents: &str) -> tempfile::NamedTempFile {
-        let mut file = tempfile::NamedTempFile::new().expect("temp file");
-        file.write_all(contents.as_bytes()).expect("write");
-        file
-    }
-
-    /// Drive `read_federated_peers` against an arbitrary path by
-    /// re-using the same TOML parser the production helper does.
-    /// The helper above reads from a fixed env-derived path; this
-    /// shim lets tests pin the parser contract.
-    fn parse_federated_peers_from(raw: &str) -> BTreeMap<String, String> {
-        use toml_edit::DocumentMut;
-        let doc: DocumentMut = raw.parse().expect("parse");
-        let mut out = BTreeMap::new();
-        if let Some(daemon) = doc.get("daemon").and_then(|i| i.as_table()) {
-            if let Some(peers) = daemon.get("federated_peers").and_then(|i| i.as_table()) {
-                for (k, v) in peers.iter() {
-                    if let Some(s) = v.as_str() {
-                        out.insert(k.to_string(), s.to_string());
-                    }
-                }
-            }
-        }
-        out
-    }
-
-    fn parse_trusted_hubs_from(raw: &str) -> Vec<TrustedHubEntry> {
-        use toml_edit::DocumentMut;
-        let doc: DocumentMut = raw.parse().expect("parse");
-        let mut out = Vec::new();
-        if let Some(agents) = doc
-            .get("trusted_agent")
-            .and_then(|i| i.as_array_of_tables())
-        {
-            for table in agents.iter() {
-                let role = table.get("role").and_then(|i| i.as_str()).unwrap_or("");
-                if role != "hub" {
-                    continue;
-                }
-                out.push(TrustedHubEntry {
-                    agent_ura: table
-                        .get("agent_ura")
-                        .and_then(|i| i.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    origin_realm: table
-                        .get("origin_realm")
-                        .and_then(|i| i.as_str())
-                        .map(str::to_string),
-                    hub_endpoint: table
-                        .get("hub_endpoint")
-                        .and_then(|i| i.as_str())
-                        .map(str::to_string),
-                    tls_ca_pem_path: table
-                        .get("tls_ca_pem_path")
-                        .and_then(|i| i.as_str())
-                        .map(str::to_string),
-                });
-            }
-        }
-        out
-    }
 
     #[test]
     fn empty_daemon_config_yields_empty_federated_peers() {
@@ -334,7 +311,7 @@ mod tests {
 mode = "device"
 realm = "r1"
 "#;
-        let peers = parse_federated_peers_from(raw);
+        let peers = parse_federated_peers_from(raw).expect("valid daemon config");
         assert!(peers.is_empty());
     }
 
@@ -349,7 +326,7 @@ realm = "r1"
 "user-a" = "https://hub-a:50443"
 "user-b" = "https://hub-b:50443"
 "#;
-        let peers = parse_federated_peers_from(raw);
+        let peers = parse_federated_peers_from(raw).expect("valid daemon config");
         assert_eq!(peers.len(), 2);
         assert_eq!(
             peers.get("user-a").map(String::as_str),
@@ -389,7 +366,7 @@ hub_endpoint = "https://peer-hub.example:50443"
 tls_ca_pem_path = "/etc/easynet/peer-ca.pem"
 "#
         );
-        let hubs = parse_trusted_hubs_from(&raw);
+        let hubs = parse_trusted_hubs_from(&raw).expect("valid realm trust config");
         assert_eq!(hubs.len(), 1);
         assert_eq!(hubs[0].agent_ura, peer_hub);
         assert_eq!(hubs[0].origin_realm.as_deref(), Some("peer-realm"));
@@ -415,7 +392,7 @@ role = "backend"
 added_at_unix_ms = 1700000000000
 "#
         );
-        let hubs = parse_trusted_hubs_from(&raw);
+        let hubs = parse_trusted_hubs_from(&raw).expect("valid realm trust config");
         assert!(hubs.is_empty());
     }
 
@@ -436,7 +413,7 @@ role = "hub"
 added_at_unix_ms = 1700000000002
 "#
         );
-        let hubs = parse_trusted_hubs_from(&raw);
+        let hubs = parse_trusted_hubs_from(&raw).expect("valid realm trust config");
         assert_eq!(hubs.len(), 1);
         assert_eq!(hubs[0].origin_realm, None);
         assert_eq!(hubs[0].hub_endpoint, None);
@@ -444,17 +421,51 @@ added_at_unix_ms = 1700000000002
     }
 
     #[test]
-    fn missing_files_do_not_panic() {
-        // The production `read_federated_peers` and
-        // `read_trusted_hubs` return Ok(empty) when the file
-        // does not exist. Pin the contract so a fresh device
-        // (no daemon-config, no realm-trust) produces a clean
-        // "(empty)" listing rather than a hard error.
-        let _ = write_temp("");
-        // Direct functions that take env-derived paths cannot be
-        // easily exercised here without setting HOME — that is
-        // covered indirectly by the integration tests that drive
-        // the binary. The pin above (`empty_daemon_config_yields
-        // _empty_federated_peers`) covers the parser side.
+    fn missing_files_are_fresh_empty_state() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let missing_daemon_config = dir.path().join("missing-daemon-config.toml");
+        let missing_realm_trust = dir.path().join("missing-realm-trust.toml");
+
+        assert!(read_federated_peers_from_path(&missing_daemon_config)
+            .expect("missing daemon config should be empty")
+            .is_empty());
+        assert!(read_trusted_hubs_from_path(&missing_realm_trust)
+            .expect("missing realm trust should be empty")
+            .is_empty());
+    }
+
+    #[test]
+    fn malformed_daemon_config_fails_closed() {
+        let err = parse_federated_peers_from(
+            r#"
+[daemon]
+mode = "hub"
+
+[daemon.federated_peers]
+"peer" = 42
+"#,
+        )
+        .expect_err("malformed peer endpoint must fail");
+
+        assert!(err
+            .to_string()
+            .contains("[daemon.federated_peers].peer must be a non-empty hub endpoint string"));
+    }
+
+    #[test]
+    fn malformed_realm_trust_hub_entry_fails_closed() {
+        let err = parse_trusted_hubs_from(
+            r#"
+[[trusted_agent]]
+role = "hub"
+public_key_b64 = "CCCC"
+added_at_unix_ms = 1700000000002
+"#,
+        )
+        .expect_err("hub entry without agent_ura must fail");
+
+        assert!(err
+            .to_string()
+            .contains("hub trusted_agent entry requires a non-empty agent_ura"));
     }
 }
