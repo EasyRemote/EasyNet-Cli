@@ -218,6 +218,36 @@ Evidence will be appended after indexing and focused impact queries.
   `resource/device.<device-id>/streams/<kind>.<id>`. Rewriting the subject
   during upsert hid stale local state and preserved a compatibility lifecycle
   inside the resource store.
+
+## 2026-07-20 Authority metadata clock fallback audit
+
+- `codegraph query AuthorityMetadata --limit 40` identified the typed SDK
+  authority metadata surfaces and the daemon authority metadata core. Focused
+  `rg` found
+  `SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default()` inside
+  `project_admitted_session_authority(...)`.
+- The only production caller is `src/daemon/ability/dispatch.rs`, where
+  admitted Axon request metadata is projected into `EnvelopeContext` for
+  LocalRuntime handlers. That makes clock defaulting a post-admission runtime
+  projection fallback, not a harmless formatting detail.
+- The root abstraction problem was implicit lifecycle state: an unavailable
+  authority clock was being converted into Unix epoch zero before expiry
+  validation. Session authority projection now has a named
+  `AUTHORITY_CLOCK_UNAVAILABLE` state and fails closed.
+
+## 2026-07-20 Invocation signer custody fallback audit
+
+- `codegraph query strict_identity --limit 40` and focused `rg` found
+  `strict_identity(caller_ura).ok()` inside
+  `KeyServiceReceiptAuthorityProvider::resolve(...)` for invocation signing.
+- The receipt-signing provider already has two custody authorities:
+  self-signed owner authority and hosted-agent signing leases. The fallback
+  allowed a raw signer capability entry to become invocation authority by
+  constructing an `AgentIdentity` directly from `caller_ura`.
+- The root abstraction problem was conflating key custody with invocation
+  authority. A signer key is not an ownership/admission fact by itself; the
+  provider must project invocation signing only from self-signed ownership or a
+  valid hosted-agent lease.
 - `resource_bootstrap.rs` also retained a stale pruning detector for old
   bootstrap metadata (`capture_target` plus backend), allowing retired local
   discovery state to influence current resource publication.

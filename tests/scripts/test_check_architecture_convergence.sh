@@ -5152,6 +5152,42 @@ expect_fail \
   "R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA"
 
 make_good_fixture
+cat >"$CLI/src/daemon/invocation/admission/authority_metadata.rs" <<'EOF'
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn project_admitted_session_authority() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+EOF
+expect_fail \
+  "authority metadata clock fallback" \
+  "R78_AUTHORITY_METADATA_CLOCK_FAIL_CLOSED"
+
+make_good_fixture
+cat >"$CLI/src/daemon/identity/receipt_signing.rs" <<'EOF'
+struct Provider;
+
+impl Provider {
+    async fn resolve(&self, caller_ura: &str) -> Result<Option<Authority>, Error> {
+        let signer = self.signer_capabilities.get(caller_ura).unwrap();
+        let caller = self
+            .self_signed
+            .get(caller_ura)
+            .map(|authority| authority.callee_identity().clone())
+            .or_else(|| strict_identity(caller_ura).ok())
+            .ok_or_else(|| Error)?;
+        Ok(Some(Authority { caller, signer }))
+    }
+}
+EOF
+expect_fail \
+  "invocation signer raw key authority fallback" \
+  "R79_INVOCATION_SIGNER_CUSTODY_AUTHORITY"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/plugins" "$CLI/src/daemon/boot/invocation" "$CLI/src/daemon/ability/wire"
 cat >"$CLI/src/daemon/plugins/runtime_manager.rs" <<'EOF'
 use crate::daemon::ability::wire::AbilityWireRegistry;

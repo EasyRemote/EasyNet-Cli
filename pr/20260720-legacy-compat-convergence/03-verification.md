@@ -218,6 +218,34 @@ Commands and outcomes will be appended after implementation.
 - `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
 - `git diff --check` — PASS.
 - `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+
+## 2026-07-20 Authority metadata clock fallback and invocation signer custody removal
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test authority_metadata --lib`
+  — PASS (`6 passed`; includes pre-epoch authority clock rejection instead of
+  epoch-zero projection).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test receipt_signing --lib`
+  — PASS (`7 passed`; includes raw signer capability rejection when no owned
+  self-signed authority or hosted lease exists).
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R78 for authority clock fail-closed projection and R79 for invocation signer
+  custody authority.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  negative fixtures for epoch-zero authority clock fallback and
+  `strict_identity(caller_ura).ok()` signer authority construction.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo check --lib --bins`
+  — PASS.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query
+  REASON_AUTHORITY_CLOCK_UNAVAILABLE --limit 20` — PASS; reports the explicit
+  authority clock state.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query
+  invocation_signing_requires_owned_authority_not_just_a_signer_key --limit 20`
+  — PASS; reports the regression test proving raw signer capabilities no
+  longer imply invocation authority.
 - `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
 
 ## 2026-07-20 Runtime caller signer custody fallback removal

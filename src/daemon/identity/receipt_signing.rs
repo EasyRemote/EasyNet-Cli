@@ -392,9 +392,9 @@ impl InvocationSigningAuthorityProvider for KeyServiceReceiptAuthorityProvider {
         let caller = self
             .self_signed
             .get(caller_ura)
-            .map(|authority| authority.callee_identity().clone())
-            .or_else(|| strict_identity(caller_ura).ok())
-            .ok_or_else(|| AxonError::permission_denied("daemon_invocation_caller_not_owned"))?;
+            .ok_or_else(|| AxonError::permission_denied("daemon_invocation_caller_not_owned"))?
+            .callee_identity()
+            .clone();
         let verifying_key = signer
             .signing_public_key()
             .map_err(receipt_identity_error)?;
@@ -643,6 +643,25 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn invocation_signing_requires_owned_authority_not_just_a_signer_key() {
+        let owner = "easynet:///r/acme/device/edge-01";
+        let signer: Arc<dyn CanonicalSigner> =
+            Arc::new(TestCanonicalSigner::new(owner, [0x44; 32]));
+        let provider = KeyServiceReceiptAuthorityProvider {
+            self_signed: HashMap::new(),
+            signer_capabilities: HashMap::from([(owner.to_string(), signer)]),
+            hosted_agent_device: None,
+            hosted_agent_inventory: None,
+        };
+
+        let error = match InvocationSigningAuthorityProvider::resolve(&provider, owner).await {
+            Ok(_) => panic!("a raw signer capability must not imply invocation authority"),
+            Err(error) => error,
+        };
+        assert_eq!(error.reason, "daemon_invocation_caller_not_owned");
     }
 
     #[tokio::test]

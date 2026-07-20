@@ -27,6 +27,7 @@ pub(crate) const DELEGATION_METADATA_KEY: &str = "x-easynet-delegation";
 pub(crate) const SESSION_AUTHORITY_METADATA_KEY: &str = "x-easynet-session-authority";
 pub(crate) const REASON_AUTHORITY_FORMAT_INVALID: &str = "AUTHORITY_FORMAT_INVALID";
 pub(crate) const REASON_AUTHORITY_EXPIRED: &str = "AUTHORITY_EXPIRED";
+pub(crate) const REASON_AUTHORITY_CLOCK_UNAVAILABLE: &str = "AUTHORITY_CLOCK_UNAVAILABLE";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AuthorityMetadataError {
@@ -125,10 +126,7 @@ pub(crate) fn project_admitted_session_authority(
             "admitted session authority signature is empty",
         ));
     }
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
+    let now_ms = current_unix_epoch_millis()?;
     validate_session_authority_payload_shape(&wire.payload, Some(now_ms))?;
     Ok(Some(wire.payload))
 }
@@ -319,9 +317,29 @@ fn validate_expiry(
     Ok(())
 }
 
+fn current_unix_epoch_millis() -> Result<i64, AuthorityMetadataError> {
+    unix_epoch_millis(SystemTime::now())
+}
+
+fn unix_epoch_millis(now: SystemTime) -> Result<i64, AuthorityMetadataError> {
+    let duration = now.duration_since(UNIX_EPOCH).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_CLOCK_UNAVAILABLE,
+            format!("authority clock is before the Unix epoch: {err}"),
+        )
+    })?;
+    i64::try_from(duration.as_millis()).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_CLOCK_UNAVAILABLE,
+            format!("authority clock value exceeds i64 milliseconds: {err}"),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn session_payload() -> SessionAuthorityPayload {
         let now_ms = SystemTime::now()
@@ -380,6 +398,12 @@ mod tests {
             .unwrap()
             .expect("session authority must be projected");
         assert_eq!(projected, expected);
+    }
+
+    #[test]
+    fn authority_clock_failure_is_not_projected_to_epoch_zero() {
+        let err = unix_epoch_millis(UNIX_EPOCH - Duration::from_millis(1)).unwrap_err();
+        assert_eq!(err.reason(), REASON_AUTHORITY_CLOCK_UNAVAILABLE);
     }
 
     #[test]

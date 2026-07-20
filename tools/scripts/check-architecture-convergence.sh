@@ -7341,6 +7341,62 @@ if pages_serve.exists():
                 add("R74_PAGES_SERVE_FETCH_PROJECTION_SCHEMA", pages_serve, line_number(text, offset), detail)
 
 
+# Rule 78: Authority metadata projection must fail closed when the runtime
+# clock cannot be represented as Unix epoch milliseconds. It must not convert
+# clock failure to epoch zero before session-authority expiry validation.
+authority_metadata = cli_root / "src/daemon/invocation/admission/authority_metadata.rs"
+if authority_metadata.exists():
+    text = source(authority_metadata)
+    if re.search(r"duration_since\s*\(\s*UNIX_EPOCH\s*\)\s*\.unwrap_or_default\s*\(", text, re.S):
+        add(
+            "R78_AUTHORITY_METADATA_CLOCK_FAIL_CLOSED",
+            authority_metadata,
+            1,
+            "authority metadata projection must not default clock failure to epoch zero",
+        )
+    for token, detail in (
+        (
+            "REASON_AUTHORITY_CLOCK_UNAVAILABLE",
+            "authority metadata must expose a named clock-unavailable state",
+        ),
+        (
+            "fn current_unix_epoch_millis() -> Result<i64, AuthorityMetadataError>",
+            "authority metadata must use a fallible current clock helper",
+        ),
+        (
+            "fn unix_epoch_millis(now: SystemTime) -> Result<i64, AuthorityMetadataError>",
+            "authority metadata must keep Unix epoch conversion fallible and testable",
+        ),
+    ):
+        if token not in text:
+            add("R78_AUTHORITY_METADATA_CLOCK_FAIL_CLOSED", authority_metadata, 1, detail)
+
+
+# Rule 79: Invocation signing custody must be ownership/lease backed. A raw
+# key-service signer capability must not imply descriptor-bound invocation
+# authority by constructing a caller identity from the URA string.
+receipt_signing = cli_root / "src/daemon/identity/receipt_signing.rs"
+if receipt_signing.exists():
+    text = source(receipt_signing)
+    for match in re.finditer(r"strict_identity\s*\(\s*caller_ura\s*\)\s*\.ok\s*\(", text):
+        add(
+            "R79_INVOCATION_SIGNER_CUSTODY_AUTHORITY",
+            receipt_signing,
+            line_number(text, match.start()),
+            "invocation signing must not construct authority from strict_identity(caller_ura).ok()",
+        )
+    resolve_body = rust_method_body(text, "resolve")
+    if resolve_body is not None:
+        offset, body = resolve_body
+        if "self_signed" in body and ".callee_identity()" not in body:
+            add(
+                "R79_INVOCATION_SIGNER_CUSTODY_AUTHORITY",
+                receipt_signing,
+                line_number(text, offset),
+                "self-signed invocation signing must project caller identity from owned receipt authority",
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(

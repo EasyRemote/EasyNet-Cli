@@ -147,3 +147,11 @@
   `index.d.ts` without importing removed product symbols, and they must build
   generic runtime drafts with typed authority metadata rather than opaque
   compatibility placeholders.
+- Authority metadata projection must not synthesize time. If the runtime clock
+  cannot produce a Unix epoch millisecond value, session-authority projection is
+  unavailable and must fail with an explicit authority error instead of
+  defaulting to epoch zero.
+- Invocation signing custody must be owner-authority backed. A raw key-service
+  signer capability is not sufficient to issue descriptor-bound invocation
+  signatures unless it is attached to a self-signed owner authority or a valid
+  hosted-agent signing lease.

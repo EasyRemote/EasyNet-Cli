@@ -218,6 +218,16 @@ Decisions will be appended as root-fork choices are made.
   republish instead of synthesizing `generation = 1` / `active` lifecycle.
 - Treat retired LocalDevice resource subjects as unsupported local state, not
   migration input. Device-local media resources are device-stream subjects from
+  the current schema only; stale rows must be cleaned by the operator/rebuild
+  path rather than rewritten by resource persistence.
+- Treat authority clock availability as part of session authority projection
+  state. A clock that cannot be represented as Unix epoch milliseconds is not a
+  valid input to authority expiry validation and must surface as
+  `AUTHORITY_CLOCK_UNAVAILABLE`, not epoch zero.
+- Treat invocation signer custody as authority-backed, not key-backed. Raw
+  key-service signer capabilities remain signing mechanisms, but descriptor-
+  bound invocation authority is projected only from self-signed owner authority
+  or a hosted-agent signing lease.
   creation; if `resources.json` still contains generic/pre-join local-device
   rows, the daemon must fail closed and require local state republish rather
   than rewriting subject authority during upsert.
