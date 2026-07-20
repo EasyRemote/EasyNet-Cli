@@ -1083,3 +1083,23 @@ Evidence will be appended after indexing and focused impact queries.
   exactly 32 decoded bytes before producing the canonical response. `None`
   remains reserved for “not in trust set”; invalid key material is a typed
   resolver error that the dispatcher maps to `FailedPrecondition`.
+
+## 2026-07-20 Plugin sidecar stderr diagnostic fallback audit
+
+- `codegraph query sidecar --limit 50` identified
+  `src/daemon/plugins/sidecar/io.rs::collect_stderr` as the common diagnostic
+  capture path for unary, stream, and bidi sidecar execution.
+- `rg` found the active fallback in `spawn_stderr_reader` and
+  `collect_stderr`: stderr was read through UTF-8-only `read_to_string`, the
+  read result was ignored, and join failure was collapsed through
+  `unwrap_or_default()`.
+- The root abstraction problem was treating plugin stderr as best-effort debug
+  output. In the product plugin loop, stderr is failure evidence for process
+  exits, timeouts, and protocol failures. Binary stderr, read errors, and
+  reader panics must remain operator-visible diagnostics instead of becoming an
+  empty string.
+- After the change, `capture_stderr_diagnostics(...)` captures bytes, preserves
+  binary data with `String::from_utf8_lossy`, appends explicit read-failure
+  diagnostics, and `collect_stderr(...)` reports reader panic explicitly. Rule
+  `R72_PLUGIN_SIDECAR_STDERR_DIAGNOSTICS` now rejects the old empty diagnostic
+  fallback.

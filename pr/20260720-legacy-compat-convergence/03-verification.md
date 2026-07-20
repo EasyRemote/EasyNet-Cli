@@ -1025,3 +1025,26 @@ Commands and outcomes will be appended after implementation.
 - `tools/scripts/check-architecture-convergence.sh` — PASS.
 - `tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
 - `git diff --check` — PASS.
+
+## 2026-07-20 Plugin sidecar stderr diagnostic gate
+
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo test -q
+  sidecar_stderr --lib` — PASS (`3 passed`); covers binary stderr
+  preservation, read failure diagnostics, and reader panic diagnostics.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo test -q sidecar --lib`
+  — PASS (`17 passed`); confirms unary, stream, and bidi sidecar contracts
+  still hold after the shared diagnostic capture refactor.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo fmt --check` —
+  PASS.
+- `tools/scripts/check-architecture-convergence.sh` — PASS.
+- `tests/scripts/test_check_architecture_convergence.sh` — PASS; includes the
+  `R72_PLUGIN_SIDECAR_STDERR_DIAGNOSTICS` negative fixture for the previous
+  `read_to_string` / `unwrap_or_default()` fallback.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo check --lib --bins`
+  — PASS.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query
+  capture_stderr_diagnostics --limit 30` — PASS; reports the single sidecar
+  stderr diagnostic helper.

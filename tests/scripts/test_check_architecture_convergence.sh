@@ -5023,6 +5023,31 @@ expect_fail \
   "R71_NODE_PRODUCT_NEUTRAL_TYPES_TEST"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/plugins/sidecar"
+cat >"$CLI/src/daemon/plugins/sidecar/io.rs" <<'EOF'
+use std::io::{BufReader, Read};
+use std::process::ChildStderr;
+
+pub(super) fn spawn_stderr_reader(stderr: ChildStderr) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut stderr = String::new();
+        let _ = reader.read_to_string(&mut stderr);
+        stderr
+    })
+}
+
+pub(super) fn collect_stderr(handle: Option<std::thread::JoinHandle<String>>) -> String {
+    handle
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
+}
+EOF
+expect_fail \
+  "plugin sidecar stderr diagnostic fallback" \
+  "R72_PLUGIN_SIDECAR_STDERR_DIAGNOSTICS"
+
+make_good_fixture
 expect_pass "fixture restored after all negative cases"
 
 printf 'test_check_architecture_convergence.sh: all cases passed\n'

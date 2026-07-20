@@ -5,11 +5,13 @@
 // Description: Contract tests for sidecar frames, process RPC, stream, and bidi.
 
 use std::fs;
+use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
 
+use super::io::{capture_stderr_diagnostics, collect_stderr};
 use super::{
     SidecarCommand, SidecarExecutionModel, SidecarInvocationEnvelope, SidecarRequestFrame,
     SidecarRuntimeHost, SidecarRuntimeLimits,
@@ -154,6 +156,55 @@ exit 42
         .expect_err("sidecar non-zero exit must be typed host error");
 
     assert!(format!("{err}").contains("operator-visible failure"));
+}
+
+#[test]
+fn sidecar_stderr_capture_preserves_binary_diagnostics() {
+    let stderr = capture_stderr_diagnostics(io::Cursor::new([b'o', 0xff, b'k']));
+
+    assert!(
+        stderr.contains("o") && stderr.contains('\u{fffd}') && stderr.contains("k"),
+        "binary stderr must be preserved lossily, got {stderr:?}"
+    );
+}
+
+#[test]
+fn sidecar_stderr_capture_reports_reader_failure() {
+    struct FailingReader {
+        emitted: bool,
+    }
+
+    impl Read for FailingReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.emitted {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "synthetic stderr failure",
+                ));
+            }
+            self.emitted = true;
+            let bytes = b"partial diagnostic";
+            buf[..bytes.len()].copy_from_slice(bytes);
+            Ok(bytes.len())
+        }
+    }
+
+    let stderr = capture_stderr_diagnostics(FailingReader { emitted: false });
+
+    assert!(stderr.contains("partial diagnostic"));
+    assert!(stderr.contains("sidecar stderr capture failed"));
+    assert!(stderr.contains("synthetic stderr failure"));
+}
+
+#[test]
+fn sidecar_stderr_collection_reports_reader_panic() {
+    let handle = std::thread::spawn(|| -> String {
+        panic!("synthetic stderr reader panic");
+    });
+
+    let stderr = collect_stderr(Some(handle));
+
+    assert_eq!(stderr, "sidecar stderr reader panicked");
 }
 
 #[test]

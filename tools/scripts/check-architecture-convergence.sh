@@ -6881,6 +6881,77 @@ if node_types_test.exists():
             add("R71_NODE_PRODUCT_NEUTRAL_TYPES_TEST", node_types_test, 1, detail)
 
 
+# Rule 72: Sidecar stderr is plugin failure evidence. The host must preserve
+# binary stderr lossily and capture reader failures explicitly; it must not
+# collapse read errors, UTF-8 errors, or reader panics into an empty diagnostic.
+sidecar_io = cli_root / "src/daemon/plugins/sidecar/io.rs"
+if sidecar_io.exists():
+    text = source(sidecar_io)
+    required_tokens = (
+        (
+            "fn capture_stderr_diagnostics",
+            "sidecar stderr capture must have one diagnostic-preserving helper",
+        ),
+        (
+            "String::from_utf8_lossy(&bytes)",
+            "sidecar stderr capture must preserve binary stderr lossily",
+        ),
+        (
+            "sidecar stderr capture failed",
+            "sidecar stderr read failures must be surfaced in diagnostics",
+        ),
+        (
+            "sidecar stderr reader panicked",
+            "sidecar stderr reader panics must be surfaced in diagnostics",
+        ),
+    )
+    for token, detail in required_tokens:
+        if token not in text:
+            add("R72_PLUGIN_SIDECAR_STDERR_DIAGNOSTICS", sidecar_io, 1, detail)
+    collect_body = rust_method_body(text, "collect_stderr")
+    if collect_body is not None:
+        offset, body = collect_body
+        body_start = text.find("{", offset) + 1
+        for token, detail in (
+            (
+                "unwrap_or_default()",
+                "sidecar stderr collection must not default reader failure to empty diagnostics",
+            ),
+            (
+                ".join().ok()",
+                "sidecar stderr collection must not hide reader panics behind Option",
+            ),
+        ):
+            if token in body:
+                add(
+                    "R72_PLUGIN_SIDECAR_STDERR_DIAGNOSTICS",
+                    sidecar_io,
+                    line_number(text, body_start + body.find(token)),
+                    detail,
+                )
+    spawn_body = rust_method_body(text, "spawn_stderr_reader")
+    if spawn_body is not None:
+        offset, body = spawn_body
+        body_start = text.find("{", offset) + 1
+        for token, detail in (
+            (
+                "read_to_string",
+                "sidecar stderr capture must not use UTF-8-only read_to_string",
+            ),
+            (
+                "let _ = reader.read",
+                "sidecar stderr capture must not ignore reader failures",
+            ),
+        ):
+            if token in body:
+                add(
+                    "R72_PLUGIN_SIDECAR_STDERR_DIAGNOSTICS",
+                    sidecar_io,
+                    line_number(text, body_start + body.find(token)),
+                    detail,
+                )
+
+
 if violations:
     for violation in sorted(violations):
         print(

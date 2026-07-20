@@ -38,19 +38,38 @@ pub(super) fn write_sidecar_frame(
 
 /// Read stderr concurrently so a blocked stderr pipe cannot stall the sidecar.
 pub(super) fn spawn_stderr_reader(stderr: ChildStderr) -> std::thread::JoinHandle<String> {
-    std::thread::spawn(move || {
-        let mut reader = BufReader::new(stderr);
-        let mut stderr = String::new();
-        let _ = reader.read_to_string(&mut stderr);
-        stderr
-    })
+    std::thread::spawn(move || capture_stderr_diagnostics(stderr))
 }
 
-/// Join an optional stderr reader and return best-effort captured diagnostics.
+/// Capture stderr as operator diagnostics.
+///
+/// Stderr is failure evidence, not protocol state. It may contain binary bytes
+/// or be interrupted while the daemon tears down a misbehaving sidecar. Preserve
+/// all bytes captured before a read failure and append the capture failure
+/// itself, so plugin failures never collapse into an empty diagnostic string.
+pub(super) fn capture_stderr_diagnostics(mut stderr: impl Read) -> String {
+    let mut bytes = Vec::new();
+    match stderr.read_to_end(&mut bytes) {
+        Ok(_) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(error) => {
+            let mut diagnostic = String::from_utf8_lossy(&bytes).into_owned();
+            if !diagnostic.is_empty() && !diagnostic.ends_with('\n') {
+                diagnostic.push('\n');
+            }
+            diagnostic.push_str(&format!("sidecar stderr capture failed: {error}"));
+            diagnostic
+        }
+    }
+}
+
+/// Join an optional stderr reader and return captured diagnostics.
 pub(super) fn collect_stderr(handle: Option<std::thread::JoinHandle<String>>) -> String {
-    handle
-        .and_then(|handle| handle.join().ok())
-        .unwrap_or_default()
+    match handle {
+        Some(handle) => handle
+            .join()
+            .unwrap_or_else(|_| "sidecar stderr reader panicked".to_string()),
+        None => String::new(),
+    }
 }
 
 /// Read every stdout line into typed sidecar response frames.

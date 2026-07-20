@@ -342,3 +342,8 @@ Decisions will be appended as root-fork choices are made.
   an existing entry with invalid base64 or non-Ed25519 key length is corrupt
   authority state and must surface as `FailedPrecondition`; it must never be
   projected as `public_key_hex: ""`.
+- Treat plugin sidecar stderr as product failure evidence, not disposable debug
+  text. The host may keep returning captured stderr as a diagnostic string, but
+  binary data, read failures, and reader panics must remain visible; they must
+  not be normalized to empty stderr on process failure, timeout, stream, or
+  bidi terminal paths.
