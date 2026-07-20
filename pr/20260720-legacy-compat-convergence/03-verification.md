@@ -1877,3 +1877,33 @@ Commands and outcomes will be appended after implementation.
 - `/Users/macbook.silan.tech/.local/bin/codegraph query
   "validate_namespace_proxy_resolve_request"` — PASS; indexed proxy ingress
   validator.
+
+## 2026-07-21 Federation peer trust projection
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "federation_peers realm trust trusted_agent role unwrap_or schema-B
+  trusted_hubs"` — PASS; reports `RealmTrustAnchor` as the daemon-owned trust
+  aggregate and identifies the federation peer CLI trust projection seam.
+- `rg -n
+  "role\\\"\\).*unwrap_or|trusted_agent.*unwrap_or|parse_trusted_hubs_from|trusted_hubs_from_anchor|RealmTrustAnchor::load_or_empty"
+  src/cli/commands/federation_peers.rs src/cli src/daemon -S` — PASS for the
+  selected seam; `federation_peers.rs` now contains
+  `RealmTrustAnchor::load_or_empty` and `trusted_hubs_from_anchor`, and no
+  `parse_trusted_hubs_from` or `trusted_agent` role defaulting remains. The
+  remaining `openai_compat.rs` `role.unwrap_or("")` occurrence is an OpenAI
+  chat-message role projection, not realm trust.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q federation_peers --lib`
+  — PASS (`10 passed`); includes missing-file empty state, malformed
+  daemon-config rejection, missing trust role rejection, malformed hub URA
+  rejection, missing hub `agent_ura` rejection, and schema-incomplete hub-row
+  rejection before `trusted_hubs` output.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; indexed the
+  updated federation peer projection.

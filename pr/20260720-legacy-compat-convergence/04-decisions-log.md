@@ -597,3 +597,13 @@ Decisions will be appended as root-fork choices are made.
   reject missing, empty, unspecified, numeric, or shorthand qtype values before
   route selection or peer fanout; products must submit the canonical
   `ResolveType` enum string that describes the operation they intend.
+- Treat `realm-trust.toml` as daemon-owned trust aggregate state for operator
+  federation peer inspection. The CLI no longer owns a loose `toml_edit`
+  parser that defaults missing trust roles or accepts non-canonical hub
+  identities; it consumes `RealmTrustAnchor` and projects only validated trust
+  entries.
+- Treat a hub-role trust row without complete schema-B dial facts as
+  unavailable federation peer state, not as a trusted hub. `trusted_hubs`
+  output now means the same thing the cross-hub dialer requires: canonical
+  peer hub URA plus non-empty `origin_realm`, `hub_endpoint`, and
+  `tls_ca_pem_path`.

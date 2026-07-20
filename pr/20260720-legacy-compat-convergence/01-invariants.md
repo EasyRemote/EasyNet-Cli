@@ -62,6 +62,12 @@
   empty local configuration, but an existing unreadable or malformed
   daemon-config/realm-trust file is unavailable state. It must not be projected
   as "no peers" or "no trusted hubs".
+- Operator federation peer inspection must consume the daemon-owned
+  `RealmTrustAnchor` aggregate for `realm-trust.toml` schema validation.
+  Hub-role trust rows are selectable cross-hub peer evidence only when they
+  carry complete dial-eligible schema-B facts: canonical peer hub URA,
+  non-empty `origin_realm`, non-empty `hub_endpoint`, and non-empty
+  `tls_ca_pem_path`.
 - Product doctor agent inspection must distinguish an empty daemon-owned agent
   registry from an unavailable daemon-owned agent registry. `agent.list`
   failures and invalid daemon projection rows are runtime facts, not permission

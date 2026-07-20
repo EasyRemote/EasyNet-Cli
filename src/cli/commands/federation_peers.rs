@@ -68,6 +68,7 @@ use anyhow::Context;
 use clap::Args;
 use serde::Serialize;
 
+use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 use crate::support::platform::output;
 
 /// Default daemon-config.toml location, mirrors
@@ -121,12 +122,9 @@ struct PeersOutput {
 #[derive(Debug, Serialize)]
 struct TrustedHubEntry {
     agent_ura: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    origin_realm: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    hub_endpoint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tls_ca_pem_path: Option<String>,
+    origin_realm: String,
+    hub_endpoint: String,
+    tls_ca_pem_path: String,
 }
 
 pub fn run(args: PeersArgs) -> anyhow::Result<()> {
@@ -169,15 +167,9 @@ fn print_plain(federated_peers: &BTreeMap<String, String>, trusted_hubs: &[Trust
     } else {
         for hub in trusted_hubs {
             output::detail("agent_ura", &hub.agent_ura);
-            if let Some(t) = &hub.origin_realm {
-                output::detail("  origin_realm", t);
-            }
-            if let Some(u) = &hub.hub_endpoint {
-                output::detail("  hub_endpoint", u);
-            }
-            if let Some(p) = &hub.tls_ca_pem_path {
-                output::detail("  tls_ca_pem_path", p);
-            }
+            output::detail("  origin_realm", &hub.origin_realm);
+            output::detail("  hub_endpoint", &hub.hub_endpoint);
+            output::detail("  tls_ca_pem_path", &hub.tls_ca_pem_path);
         }
     }
     eprintln!();
@@ -246,58 +238,55 @@ fn read_trusted_hubs() -> anyhow::Result<Vec<TrustedHubEntry>> {
 }
 
 fn read_trusted_hubs_from_path(path: &Path) -> anyhow::Result<Vec<TrustedHubEntry>> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("could not read realm trust config {}", path.display()))?;
-    parse_trusted_hubs_from(&raw)
+    let anchor = RealmTrustAnchor::load_or_empty(path)
+        .with_context(|| format!("invalid realm trust config {}", path.display()))?;
+    trusted_hubs_from_anchor(anchor)
         .with_context(|| format!("invalid realm trust config {}", path.display()))
 }
 
-fn parse_trusted_hubs_from(raw: &str) -> anyhow::Result<Vec<TrustedHubEntry>> {
-    use toml_edit::DocumentMut;
+fn trusted_hubs_from_anchor(anchor: RealmTrustAnchor) -> anyhow::Result<Vec<TrustedHubEntry>> {
+    anchor
+        .entries_sorted()
+        .into_iter()
+        .filter(|entry| entry.role == TrustedAgentRole::Hub)
+        .map(trusted_hub_entry)
+        .collect()
+}
 
-    let doc: DocumentMut = raw.parse()?;
-    let mut out = Vec::new();
-    if let Some(agents) = doc
-        .get("trusted_agent")
-        .and_then(|i| i.as_array_of_tables())
-    {
-        for table in agents.iter() {
-            let role = table.get("role").and_then(|i| i.as_str()).unwrap_or("");
-            if role != "hub" {
-                continue;
-            }
-            let Some(agent_ura) = table
-                .get("agent_ura")
-                .and_then(|i| i.as_str())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            else {
-                anyhow::bail!("hub trusted_agent entry requires a non-empty agent_ura");
-            };
-            let entry = TrustedHubEntry {
-                agent_ura: agent_ura.to_string(),
-                origin_realm: table
-                    .get("origin_realm")
-                    .and_then(|i| i.as_str())
-                    .map(str::to_string),
-                hub_endpoint: table
-                    .get("hub_endpoint")
-                    .and_then(|i| i.as_str())
-                    .map(str::to_string),
-                tls_ca_pem_path: table
-                    .get("tls_ca_pem_path")
-                    .and_then(|i| i.as_str())
-                    .map(str::to_string),
-            };
-            out.push(entry);
-        }
-    } else if doc.get("trusted_agent").is_some() {
-        anyhow::bail!("[[trusted_agent]] must be an array of tables");
-    }
-    Ok(out)
+fn trusted_hub_entry(entry: TrustedAgent) -> anyhow::Result<TrustedHubEntry> {
+    let origin_realm = required_hub_field(&entry.agent_ura, "origin_realm", entry.origin_realm)?;
+    let hub_endpoint = required_hub_field(&entry.agent_ura, "hub_endpoint", entry.hub_endpoint)?;
+    let tls_ca_pem_path = entry
+        .tls_ca_pem_path
+        .map(|path| path.display().to_string())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "hub trusted_agent entry {} requires non-empty tls_ca_pem_path",
+                entry.agent_ura
+            )
+        })?;
+
+    Ok(TrustedHubEntry {
+        agent_ura: entry.agent_ura,
+        origin_realm,
+        hub_endpoint,
+        tls_ca_pem_path,
+    })
+}
+
+fn required_hub_field(
+    agent_ura: &str,
+    field: &'static str,
+    value: Option<String>,
+) -> anyhow::Result<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("hub trusted_agent entry {agent_ura} requires non-empty {field}")
+        })
 }
 
 #[cfg(test)]
@@ -366,18 +355,13 @@ hub_endpoint = "https://peer-hub.example:50443"
 tls_ca_pem_path = "/etc/easynet/peer-ca.pem"
 "#
         );
-        let hubs = parse_trusted_hubs_from(&raw).expect("valid realm trust config");
+        let hubs =
+            read_trusted_hubs_from_path(&write_temp_trust(&raw)).expect("valid realm trust config");
         assert_eq!(hubs.len(), 1);
         assert_eq!(hubs[0].agent_ura, peer_hub);
-        assert_eq!(hubs[0].origin_realm.as_deref(), Some("peer-realm"));
-        assert_eq!(
-            hubs[0].hub_endpoint.as_deref(),
-            Some("https://peer-hub.example:50443")
-        );
-        assert_eq!(
-            hubs[0].tls_ca_pem_path.as_deref(),
-            Some("/etc/easynet/peer-ca.pem")
-        );
+        assert_eq!(hubs[0].origin_realm, "peer-realm");
+        assert_eq!(hubs[0].hub_endpoint, "https://peer-hub.example:50443");
+        assert_eq!(hubs[0].tls_ca_pem_path, "/etc/easynet/peer-ca.pem");
     }
 
     #[test]
@@ -392,17 +376,13 @@ role = "backend"
 added_at_unix_ms = 1700000000000
 "#
         );
-        let hubs = parse_trusted_hubs_from(&raw).expect("valid realm trust config");
+        let hubs =
+            read_trusted_hubs_from_path(&write_temp_trust(&raw)).expect("valid realm trust config");
         assert!(hubs.is_empty());
     }
 
     #[test]
-    fn realm_trust_hub_entry_missing_schema_b_fields_is_listed() {
-        // Minimal hub entries lacking
-        // origin_realm / hub_endpoint / tls_ca_pem_path. The
-        // listing surface still includes them so the operator
-        // sees the trust set as-is and can decide to fill in
-        // the missing fields (or remove the entry).
+    fn realm_trust_hub_entry_missing_schema_b_fields_fails_closed() {
         let peer_hub = crate::core::ura::hub_ura("peer-realm");
         let raw = format!(
             r#"
@@ -413,11 +393,9 @@ role = "hub"
 added_at_unix_ms = 1700000000002
 "#
         );
-        let hubs = parse_trusted_hubs_from(&raw).expect("valid realm trust config");
-        assert_eq!(hubs.len(), 1);
-        assert_eq!(hubs[0].origin_realm, None);
-        assert_eq!(hubs[0].hub_endpoint, None);
-        assert_eq!(hubs[0].tls_ca_pem_path, None);
+        let err = read_trusted_hubs_from_path(&write_temp_trust(&raw))
+            .expect_err("schema-incomplete hub trust row must fail");
+        assert!(format!("{err:#}").contains("requires non-empty origin_realm"));
     }
 
     #[test]
@@ -454,18 +432,63 @@ mode = "hub"
 
     #[test]
     fn malformed_realm_trust_hub_entry_fails_closed() {
-        let err = parse_trusted_hubs_from(
+        let err = read_trusted_hubs_from_path(&write_temp_trust(
             r#"
 [[trusted_agent]]
 role = "hub"
 public_key_b64 = "CCCC"
 added_at_unix_ms = 1700000000002
 "#,
-        )
+        ))
         .expect_err("hub entry without agent_ura must fail");
 
-        assert!(err
-            .to_string()
-            .contains("hub trusted_agent entry requires a non-empty agent_ura"));
+        assert!(format!("{err:#}").contains("missing field `agent_ura`"));
+    }
+
+    #[test]
+    fn malformed_realm_trust_missing_role_fails_closed() {
+        let err = read_trusted_hubs_from_path(&write_temp_trust(
+            r#"
+[[trusted_agent]]
+agent_ura = "easynet:///r/peer-realm/authority"
+public_key_b64 = "CCCC"
+added_at_unix_ms = 1700000000002
+origin_realm = "peer-realm"
+hub_endpoint = "https://peer-hub.example:50443"
+tls_ca_pem_path = "/etc/easynet/peer-ca.pem"
+"#,
+        ))
+        .expect_err("trusted_agent without role must fail");
+
+        assert!(format!("{err:#}").contains("missing field `role`"));
+    }
+
+    #[test]
+    fn malformed_realm_trust_hub_agent_ura_fails_closed() {
+        let err = read_trusted_hubs_from_path(&write_temp_trust(
+            r#"
+[[trusted_agent]]
+agent_ura = "not-a-ura"
+public_key_b64 = "CCCC"
+role = "hub"
+added_at_unix_ms = 1700000000002
+origin_realm = "peer-realm"
+hub_endpoint = "https://peer-hub.example:50443"
+tls_ca_pem_path = "/etc/easynet/peer-ca.pem"
+"#,
+        ))
+        .expect_err("hub entry with non-canonical agent_ura must fail");
+
+        let err = format!("{err:#}");
+        assert!(err.contains("expected the peer hub URA"));
+        assert!(err.contains("parse failed"));
+    }
+
+    fn write_temp_trust(raw: &str) -> PathBuf {
+        let file = tempfile::NamedTempFile::new().expect("temp trust file");
+        std::fs::write(file.path(), raw).expect("write trust file");
+        file.into_temp_path()
+            .keep()
+            .expect("persist temp trust path")
     }
 }

@@ -1831,3 +1831,28 @@ Evidence will be appended after indexing and focused impact queries.
   shorthand qtype values fail closed with typed refused errors; the lower
   resolver object remains a pure route/directory engine once it receives
   schema-bound input.
+
+## 2026-07-21 Federation peer trust projection audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "federation_peers realm trust trusted_agent role unwrap_or schema-B
+  trusted_hubs"` plus targeted `rg` identified
+  `src/cli/commands/federation_peers.rs` as the operator-facing seam where
+  `realm-trust.toml` becomes the `trusted_hubs` read model shown to products
+  and operators.
+- Targeted source inspection found a duplicated loose trust parser in the CLI:
+  `parse_trusted_hubs_from` read TOML with `toml_edit`, defaulted missing or
+  non-string `role` to `""`, skipped non-hub rows, and accepted hub
+  `agent_ura` as any non-empty string. Schema-incomplete hub rows were listed
+  as trusted hubs even though the cross-hub dialer would not treat them as
+  dial-eligible federation peers.
+- The root abstraction problem was a second trust read-model authority. The
+  daemon already owns `RealmTrustAnchor`, canonical role validation, URA-role
+  validation, duplicate-principal checks, and unknown-field rejection. The CLI
+  operator view must consume that aggregate instead of reinterpreting the
+  security-sensitive trust file.
+- After the change, `easynet federation peers` loads `realm-trust.toml`
+  through `RealmTrustAnchor::load_or_empty`, preserving only the documented
+  missing-file empty state. Hub rows are projected only after daemon trust
+  schema validation and after explicit schema-B completeness checks for
+  `origin_realm`, `hub_endpoint`, and `tls_ca_pem_path`.
