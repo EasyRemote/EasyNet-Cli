@@ -3111,7 +3111,8 @@ fn seed_real_invoke_display_resource(hardware_id: &str) -> String {
             display_name: "Real Invoke Display",
             metadata: json!({}),
         },
-    );
+    )
+    .expect("seed real-invoke display resource");
     crate::daemon::persistence::resources::save(&file).expect("save real-invoke display resource");
     ura
 }

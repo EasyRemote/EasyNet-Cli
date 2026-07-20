@@ -102,6 +102,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn seed_display(
             metadata: json!({}),
         },
     )
+    .expect("seed remote desktop display")
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn seed_xcap_display(
@@ -120,6 +121,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn seed_xcap_display(
             metadata: json!({"backend": "xcap"}),
         },
     )
+    .expect("seed remote desktop xcap display")
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -139,4 +141,5 @@ pub(in crate::daemon::plugins::remote_desktop) fn seed_window(
             metadata: json!({}),
         },
     )
+    .expect("seed remote desktop window")
 }

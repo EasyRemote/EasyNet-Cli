@@ -1282,6 +1282,7 @@ mod tests {
                 metadata: json!({}),
             },
         )
+        .expect("seed camera resource")
     }
 
     /// Test register helper. Tests use SyntheticBackend so the
@@ -1683,7 +1684,8 @@ mod tests {
                 display_name: "Not A Camera",
                 metadata: json!({}),
             },
-        );
+        )
+        .expect("seed wrong-type mic resource");
         resources::save(&file).unwrap();
 
         let mut reg = executable_catalog();

@@ -915,6 +915,7 @@ mod tests {
                 metadata: json!({}),
             },
         )
+        .expect("seed display resource")
     }
 
     fn register_with_synthetic(reg: &mut AxonAbilityCatalog) {
@@ -1078,7 +1079,8 @@ mod tests {
                 display_name: "Not A Screen",
                 metadata: json!({}),
             },
-        );
+        )
+        .expect("seed wrong-type camera resource");
         resources::save(&file).unwrap();
         let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);

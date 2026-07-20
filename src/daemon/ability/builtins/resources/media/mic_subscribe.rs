@@ -516,6 +516,7 @@ mod tests {
                 metadata: json!({}),
             },
         )
+        .expect("seed mic resource")
     }
 
     fn register_synthetic(reg: &mut AxonAbilityCatalog) {
@@ -621,7 +622,8 @@ mod tests {
                 display_name: "Not A Mic",
                 metadata: json!({}),
             },
-        );
+        )
+        .expect("seed wrong-type camera resource");
         resources::save(&file).unwrap();
         let mut reg = AxonAbilityCatalog::new_with_runtime(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(

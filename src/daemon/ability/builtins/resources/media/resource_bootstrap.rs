@@ -46,7 +46,7 @@ pub fn seed_default_device_resources(realm: &str, owner_agent: &str) -> anyhow::
         prune_stale_auto_screen_targets(&mut file, realm, owner_agent, &discovered.resources);
     }
     for resource in discovered.resources {
-        apply_discovered_resource(&mut file, realm, owner_agent, resource);
+        apply_discovered_resource(&mut file, realm, owner_agent, resource)?;
     }
     resources::save(&file)?;
     Ok(file.resources.len())
@@ -74,23 +74,12 @@ fn prune_stale_auto_screen_targets(
             .get("discovery_source")
             .and_then(Value::as_str)
             == Some("auto_bootstrap");
-        let legacy_bootstrap_screen_target = resource
-            .metadata
-            .get("capture_target")
-            .and_then(Value::as_str)
-            .is_some_and(|target| matches!(target, "window" | "application"))
-            && resource
-                .metadata
-                .get("backend")
-                .and_then(Value::as_str)
-                .is_some_and(|backend| matches!(backend, "xcap" | "macos_core_graphics"));
         let auto_prunable_screen_target =
             matches!(
                 resource.kind,
                 ResourceType::Display | ResourceType::Application | ResourceType::Window
             ) && (resource.metadata.get("auto_prune").and_then(Value::as_bool) == Some(true)
-                || auto_bootstrap_screen_target
-                || legacy_bootstrap_screen_target);
+                || auto_bootstrap_screen_target);
         let owned_by_this_daemon =
             resource.owner_agent == owner_agent && resource_ura_belongs_to_realm(resource, realm);
         !auto_prunable_screen_target
@@ -113,7 +102,7 @@ fn apply_discovered_resource(
     realm: &str,
     owner_agent: &str,
     resource: DiscoveredResource,
-) {
+) -> anyhow::Result<()> {
     upsert_resource(
         file,
         ResourceUpsert {
@@ -125,7 +114,8 @@ fn apply_discovered_resource(
             display_name: &resource.display_name,
             metadata: resource.metadata,
         },
-    );
+    )?;
+    Ok(())
 }
 
 fn discover_default_resources() -> DiscoveredResources {
@@ -852,7 +842,8 @@ mod tests {
                 display_name: "Default camera".into(),
                 metadata: json!({"camera_index": 0}),
             },
-        );
+        )
+        .expect("seed default camera");
         let first = file.resources[0].resource_ura.clone();
         apply_discovered_resource(
             &mut file,
@@ -864,7 +855,8 @@ mod tests {
                 display_name: "Renamed camera".into(),
                 metadata: json!({"camera_index": 0}),
             },
-        );
+        )
+        .expect("update default camera");
 
         assert_eq!(file.resources.len(), 1);
         assert_eq!(file.resources[0].resource_ura, first);
@@ -907,7 +899,8 @@ mod tests {
                 display_name: "Live".into(),
                 metadata: json!({"backend": "xcap", "auto_prune": true}),
             },
-        );
+        )
+        .expect("seed live window");
         apply_discovered_resource(
             &mut file,
             "acme",
@@ -918,7 +911,8 @@ mod tests {
                 display_name: "Closed".into(),
                 metadata: json!({"backend": "xcap", "auto_prune": true}),
             },
-        );
+        )
+        .expect("seed closed window");
         prune_stale_auto_screen_targets(
             &mut file,
             "acme",
@@ -953,7 +947,8 @@ mod tests {
                         "auto_prune": true
                     }),
                 },
-            );
+            )
+            .expect("seed display");
         }
 
         prune_stale_auto_screen_targets(
@@ -985,7 +980,8 @@ mod tests {
                 display_name: "Operator-managed target".into(),
                 metadata: json!({"backend": "xcap"}),
             },
-        );
+        )
+        .expect("seed operator-managed target");
 
         prune_stale_auto_screen_targets(&mut file, "acme", "easynet:///r/acme/device/node-1", &[]);
 
@@ -1006,7 +1002,8 @@ mod tests {
                 display_name: "Closed local".into(),
                 metadata: json!({"backend": "xcap", "auto_prune": true}),
             },
-        );
+        )
+        .expect("seed local window");
         apply_discovered_resource(
             &mut file,
             "acme",
@@ -1017,7 +1014,8 @@ mod tests {
                 display_name: "Other owner".into(),
                 metadata: json!({"backend": "xcap", "auto_prune": true}),
             },
-        );
+        )
+        .expect("seed other owner window");
         apply_discovered_resource(
             &mut file,
             "other",
@@ -1028,7 +1026,8 @@ mod tests {
                 display_name: "Other realm".into(),
                 metadata: json!({"backend": "xcap"}),
             },
-        );
+        )
+        .expect("seed other realm application");
 
         prune_stale_auto_screen_targets(&mut file, "acme", "easynet:///r/acme/device/node-1", &[]);
 
@@ -1056,7 +1055,8 @@ mod tests {
                 display_name: "Previously Seen".into(),
                 metadata: json!({"backend": "xcap"}),
             },
-        );
+        )
+        .expect("seed previous window");
         let discovered = DiscoveredResources {
             resources: Vec::new(),
             screen_targets_scanned: false,
