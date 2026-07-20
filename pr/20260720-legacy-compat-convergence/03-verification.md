@@ -2,6 +2,37 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-21 Ability discovery candidate projection
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q
+  cli::commands::discover::tests --lib` — PASS (`25 passed`); includes
+  malformed minted `qualified_name` failure, missing `candidates[]` failure,
+  zero-score valid row ranking miss, unminted identity non-callable projection,
+  and JSON contract removal of `skipped_unparseable`.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q discover --lib` —
+  observed unrelated failure in
+  `daemon::ability::catalog::assembly_tests::discovery_hints_read_only_tracks_ability_layer`
+  (`hot hosted-Agent registrar is not ready: pending_runtime`). The focused
+  CLI discover module above isolates this slice's changed projection boundary.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "discover project_rows Candidate from_ladder_row skipped_unparseable
+  malformed qualified_name candidates array"` — PASS; reports the fallible
+  `DiscoverExecutionState::extend_candidates -> project_rows ->
+  Candidate::from_ladder_row` path and no `skipped_unparseable` field in
+  `DiscoverReport`.
+- `rg -n "skipped_unparseable|candidate\\(s\\) dropped|&mut skipped|let mut
+  skipped|filter_map\\(\\|row\\|" src/cli/commands/discover.rs` — PASS; no
+  legacy partial-success/drop counter path remains in the discover surface.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+
 ## 2026-07-21 Ability recording resource read-model projection
 
 - `/Users/macbook.silan.tech/.cargo/bin/cargo test -q ability_record --lib`

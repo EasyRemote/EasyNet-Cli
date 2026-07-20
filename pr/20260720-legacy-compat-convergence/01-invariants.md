@@ -193,3 +193,8 @@
   output as schema-bound read-model state. A matching resource row with
   missing, blank, wrong-kind, or non-canonical `resource_ura` is corrupt
   resource inventory, not proof that no mic/camera resource exists.
+- Product ability discovery must not report partial success after receiving
+  corrupt minted candidate rows. Zero-score rows may be ranking misses and
+  unminted identity rows may project as explicit non-callable candidates, but
+  missing `candidates[]` or non-canonical minted `qualified_name` is corrupt
+  discovery read-model state and must fail closed.

@@ -2,6 +2,27 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-21 Ability discovery candidate projection fallback audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "discover skipped_unparseable filter_map ability URA parse dropping rows"`
+  identified `Candidate::from_ladder_row`, `project_rows`, and
+  `DiscoverExecutionState::extend_candidates` as the product-facing seam where
+  runtime ladder rows become `easynet discover` output.
+- Targeted source inspection found the compatibility path:
+  `project_rows` used `filter_map`, incremented `skipped_unparseable`, and
+  still returned a successful report after a minted row carried a malformed
+  `qualified_name`. Missing `candidates` arrays also projected as an empty
+  candidate list.
+- The root abstraction problem was partial-success catalogue projection.
+  Discovery ranking may drop valid zero-score rows, but it must not repair a
+  corrupt runtime read model into a smaller successful product answer.
+- After the change, `Candidate::from_ladder_row` returns a fallible projection
+  error for non-canonical minted `qualified_name` and missing minted
+  `qualified_name`; `project_rows` requires a `candidates[]` array and
+  attaches row index context. `DiscoverReport` no longer exposes the
+  `skipped_unparseable` compatibility field.
+
 ## 2026-07-21 Ability recording resource read-model projection audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph explore

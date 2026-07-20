@@ -182,30 +182,48 @@ pub struct Candidate {
 
 impl Candidate {
     /// Project one runtime ladder row, scoring it against the intent
-    /// tokens. Returns `None` for zero-score rows and for rows whose
-    /// `qualified_name` does not round-trip the Axon URA parser —
-    /// the caller counts those separately so dropped rows are never
-    /// silent (spec §0.1-8).
-    fn from_ladder_row(row: &Value, tokens: &[String]) -> Result<Option<Self>, ()> {
+    /// tokens. Returns `None` only for zero-score rows. Schema and
+    /// canonical-address defects are corrupt discovery read-model
+    /// state and fail closed before ranking.
+    fn from_ladder_row(row: &Value, tokens: &[String]) -> anyhow::Result<Option<Self>> {
         let ura = row
             .get("qualified_name")
             .and_then(Value::as_str)
+            .map(str::trim)
             .unwrap_or_default();
         let identity_state = row
             .get("identity_state")
             .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
             .unwrap_or("minted");
-        let owner = row.get("owner").and_then(Value::as_str).unwrap_or_default();
+        let owner = row
+            .get("owner")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
         let selector = if ura.is_empty() {
             None
         } else {
-            Some(AbilitySelector::parse(ura).map_err(|_| ())?)
+            Some(AbilitySelector::parse(ura).map_err(|error| {
+                anyhow::anyhow!(
+                    "discover candidate row has non-canonical qualified_name {ura:?}: {error}"
+                )
+            })?)
         };
+        if selector.is_none() && identity_state == "minted" {
+            anyhow::bail!("discover minted candidate row missing canonical qualified_name");
+        }
         let ability = row
             .get("ability")
             .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
             .or_else(|| selector.as_ref().map(AbilitySelector::public_name))
-            .unwrap_or_default();
+            .ok_or_else(|| anyhow::anyhow!("discover candidate row missing non-empty ability"))?;
+        if selector.is_none() && owner.is_empty() {
+            anyhow::bail!("discover unminted candidate row missing owner");
+        }
         let description = row
             .get("description")
             .and_then(Value::as_str)
@@ -247,7 +265,7 @@ impl Candidate {
             None if identity_state != "minted" => {
                 ("agent", format!("unminted-agent:{owner}"), false)
             }
-            None => return Err(()),
+            None => unreachable!("minted candidates without selector fail before scoring"),
         };
         Ok(Some(Candidate {
             score,
@@ -322,13 +340,7 @@ pub struct DiscoverReport {
     pub invocations: Vec<Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<DiscoverDiagnostic>,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub skipped_unparseable: usize,
     pub candidates: Vec<Candidate>,
-}
-
-fn is_zero(n: &usize) -> bool {
-    *n == 0
 }
 
 impl DiscoverReport {
@@ -344,16 +356,6 @@ impl DiscoverReport {
                 style(format!(
                     "note: federated tier skipped ({}): {}",
                     fed.status, fed.message
-                ))
-                .dim()
-            );
-        }
-        if self.skipped_unparseable > 0 {
-            eprintln!(
-                "{}",
-                style(format!(
-                    "note: {} candidate(s) dropped — non-canonical URA from a peer",
-                    self.skipped_unparseable
                 ))
                 .dim()
             );
@@ -600,7 +602,6 @@ impl SourceWindowMode {
 /// phase boundaries.
 #[derive(Debug, Default)]
 struct DiscoverExecutionState {
-    skipped: usize,
     invocations: Vec<Value>,
     diagnostics: Vec<DiscoverDiagnostic>,
     candidates: Vec<Candidate>,
@@ -624,13 +625,10 @@ impl DiscoverExecutionState {
         value: &Value,
         tokens: &[String],
         self_projection: LocalSelfProjection,
-    ) {
-        self.candidates.extend(project_rows(
-            value,
-            tokens,
-            &mut self.skipped,
-            self_projection,
-        ));
+    ) -> anyhow::Result<()> {
+        self.candidates
+            .extend(project_rows(value, tokens, self_projection)?);
+        Ok(())
     }
 
     fn record_source_diagnostic(&mut self, value: &Value) {
@@ -681,7 +679,6 @@ impl DiscoverExecutionState {
             federation: self.federation,
             invocations: self.invocations,
             diagnostics: self.diagnostics,
-            skipped_unparseable: self.skipped,
             candidates: self.candidates,
         }
     }
@@ -715,7 +712,7 @@ impl DiscoverRuntimeService {
         self.state.record_invocation(invocation_meta);
         self.state.record_source_diagnostic(&local_value);
         self.state
-            .extend_candidates(&local_value, &self.plan.tokens, self.plan.self_projection);
+            .extend_candidates(&local_value, &self.plan.tokens, self.plan.self_projection)?;
         self.state.record_completed_tier("device");
         Ok(())
     }
@@ -750,7 +747,7 @@ impl DiscoverRuntimeService {
                     &realm_value,
                     &self.plan.tokens,
                     LocalSelfProjection::Preserve,
-                );
+                )?;
                 self.state.record_completed_tier(scope);
             }
         }
@@ -944,32 +941,31 @@ fn resolve_ladder_target(as_agent: Option<&str>) -> anyhow::Result<DiscoverLadde
     DiscoverLadderTarget::hosted_agent(agent_ura)
 }
 
-/// Project every ladder row into a scored candidate; count rows whose
-/// URA does not parse instead of dropping them silently.
+/// Project every ladder row into a scored candidate. A missing
+/// candidates array or malformed candidate row is corrupt discovery
+/// read-model state and fails closed; only zero-score rows are
+/// ranking misses.
 fn project_rows(
     value: &Value,
     tokens: &[String],
-    skipped: &mut usize,
     self_projection: LocalSelfProjection,
-) -> Vec<Candidate> {
-    value
+) -> anyhow::Result<Vec<Candidate>> {
+    let rows = value
         .get("candidates")
         .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|row| {
-                    let row = normalize_self_projection(row, self_projection)?;
-                    match Candidate::from_ladder_row(&row, tokens) {
-                        Ok(candidate) => candidate,
-                        Err(()) => {
-                            *skipped += 1;
-                            None
-                        }
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+        .ok_or_else(|| anyhow::anyhow!("discover response missing candidates array"))?;
+    let mut candidates = Vec::new();
+    for (idx, row) in rows.iter().enumerate() {
+        let Some(row) = normalize_self_projection(row, self_projection) else {
+            continue;
+        };
+        if let Some(candidate) = Candidate::from_ladder_row(&row, tokens)
+            .with_context(|| format!("project discover candidates[{idx}]"))?
+        {
+            candidates.push(candidate);
+        }
+    }
+    Ok(candidates)
 }
 
 fn normalize_self_projection(row: &Value, projection: LocalSelfProjection) -> Option<Value> {
@@ -1132,7 +1128,7 @@ mod tests {
     }
 
     #[test]
-    fn ladder_row_with_non_canonical_ura_is_counted_not_silent() {
+    fn ladder_row_with_non_canonical_ura_fails_closed() {
         let toks = vec!["read".to_string()];
         let row = json!({
             "qualified_name": "not-a-ura",
@@ -1140,35 +1136,52 @@ mod tests {
         });
         assert!(Candidate::from_ladder_row(&row, &toks).is_err());
 
-        let mut skipped = 0;
-        let out = project_rows(
+        let err = project_rows(
             &json!({ "candidates": [row] }),
             &toks,
-            &mut skipped,
             LocalSelfProjection::Preserve,
+        )
+        .expect_err("malformed minted row must fail the discovery projection");
+        assert!(
+            err.to_string().contains("project discover candidates[0]"),
+            "row index should stay visible: {err:#}"
         );
-        assert!(out.is_empty());
-        assert_eq!(skipped, 1);
+        assert!(
+            format!("{err:#}").contains("non-canonical qualified_name"),
+            "canonical URA failure should stay visible: {err:#}"
+        );
     }
 
     #[test]
-    fn zero_score_ladder_rows_drop_without_counting_as_unparseable() {
+    fn zero_score_ladder_rows_drop_after_schema_projection() {
         let toks = vec!["weather".to_string()];
-        let mut skipped = 0;
         let out = project_rows(
             &json!({ "candidates": [device_row("acme")] }),
             &toks,
-            &mut skipped,
             LocalSelfProjection::Preserve,
-        );
+        )
+        .expect("valid row with zero score");
         assert!(out.is_empty());
-        assert_eq!(skipped, 0);
     }
 
     #[test]
-    fn unminted_identity_rows_are_not_counted_as_unparseable() {
+    fn discovery_response_missing_candidates_array_fails_closed() {
         let toks = vec!["weather".to_string()];
-        let mut skipped = 0;
+        let err = project_rows(
+            &json!({ "scope": "device" }),
+            &toks,
+            LocalSelfProjection::Preserve,
+        )
+        .expect_err("missing candidates array is corrupt discovery state");
+        assert!(
+            err.to_string().contains("missing candidates array"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn unminted_identity_rows_project_as_non_callable_candidates() {
+        let toks = vec!["weather".to_string()];
         let out = project_rows(
             &json!({
                 "candidates": [{
@@ -1183,10 +1196,9 @@ mod tests {
                 }]
             }),
             &toks,
-            &mut skipped,
             LocalSelfProjection::Preserve,
-        );
-        assert_eq!(skipped, 0);
+        )
+        .expect("unminted rows are explicit non-callable candidates");
         assert_eq!(out.len(), 1);
         assert!(!out[0].callable);
         assert_eq!(out[0].identity_state, "identity_not_minted");
@@ -1394,17 +1406,15 @@ mod tests {
             "visibility": "self",
         });
 
-        let mut skipped = 0;
         let out = project_rows(
             &json!({ "candidates": [public_self, private_self] }),
             &toks,
-            &mut skipped,
             LocalSelfProjection::DeviceAggregate,
-        );
+        )
+        .expect("device aggregate projection");
 
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].scope, "device");
-        assert_eq!(skipped, 0);
     }
 
     // ── Federation degradation envelope ────────────────────────────────
@@ -1456,13 +1466,12 @@ mod tests {
         use std::collections::BTreeSet;
 
         let toks = vec!["chat".to_string()];
-        let mut skipped = 0;
         let candidates = project_rows(
             &json!({ "candidates": [agent_row("acme")] }),
             &toks,
-            &mut skipped,
             LocalSelfProjection::Preserve,
-        );
+        )
+        .expect("valid candidate rows");
         let report = DiscoverReport {
             query: "chat".into(),
             tiers_searched: vec!["device"],
@@ -1472,7 +1481,6 @@ mod tests {
             }),
             invocations: Vec::new(),
             diagnostics: Vec::new(),
-            skipped_unparseable: 0,
             candidates,
         };
         let v = serde_json::to_value(&report).expect("serializes");
@@ -1511,20 +1519,18 @@ mod tests {
     #[test]
     fn tree_groups_by_owner_and_preserves_score_order_within_groups() {
         let toks = vec!["read".to_string(), "chat".to_string()];
-        let mut skipped = 0;
         let candidates = project_rows(
             &json!({ "candidates": [agent_row("acme"), device_row("acme")] }),
             &toks,
-            &mut skipped,
             LocalSelfProjection::Preserve,
-        );
+        )
+        .expect("valid candidate rows");
         let report = DiscoverReport {
             query: "read chat".into(),
             tiers_searched: vec!["device"],
             federation: None,
             invocations: Vec::new(),
             diagnostics: Vec::new(),
-            skipped_unparseable: 0,
             candidates,
         };
         let groups = report.group_by_owner();

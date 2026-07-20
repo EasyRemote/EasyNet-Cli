@@ -2,6 +2,20 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-21 ability discovery candidate projection
+
+- Treat minted discovery candidates as schema-bound runtime read-model rows.
+  A minted row must carry a canonical Ability URA in `qualified_name`; malformed
+  values fail the discovery command instead of being counted and dropped.
+- Treat missing `candidates[]` as unavailable/corrupt discovery output, not as
+  an empty search result. Empty arrays remain the valid no-candidate state.
+- Preserve the separate unminted identity state. Rows with
+  `identity_state != "minted"` and no `qualified_name` still project as
+  explicit non-callable candidates with diagnostics, because that is a real
+  lifecycle state rather than corrupt minted catalogue data.
+- Remove the `skipped_unparseable` report field instead of keeping a
+  compatibility placeholder that suggests partial success is acceptable.
+
 ## 2026-07-21 ability recording resource inventory projection
 
 - Treat `meta.list_resources` as the resource inventory read-model authority
