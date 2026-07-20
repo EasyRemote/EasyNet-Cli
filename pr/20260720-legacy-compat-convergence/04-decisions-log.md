@@ -431,3 +431,8 @@ Decisions will be appended as root-fork choices are made.
   state failures and companion DTO projection failures must be emitted as
   `desktop_companion_errors` / `companion_error`. A broken companion projection
   is not equivalent to an absent companion package.
+- Treat mission.think's curator owner catalog as authoring authority, not a
+  best-effort prompt hint. Missing owner rows can remain a first-run empty
+  catalog, but unreadable/corrupt Agent registry projection must stop the
+  curator at `stage = "catalog"` instead of letting it author against false
+  empty route visibility.

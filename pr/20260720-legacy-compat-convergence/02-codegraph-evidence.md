@@ -1320,3 +1320,26 @@ Evidence will be appended after indexing and focused impact queries.
   `desktop_companion_errors`, `PluginPackageSurfaceRecord` exposes
   `companion_error`, and `DesktopCompanionManager::status_json` preserves the
   concrete serialization/projection error source.
+
+## 2026-07-20 Curator owner catalog registry projection fallback audit
+
+- `codegraph query "collect_owner_catalog validate_curated_manifest
+  CatalogEntry curator no catalog available" --limit 100` identified
+  `src/daemon/ability/builtins/automation/think.rs::collect_owner_catalog`
+  as the single owner-catalog acquisition path for the mission.think curator
+  prompt and authored ability validation.
+- Targeted `rg` found the active compatibility behavior documented in the
+  function header: registry projection load failure returned `Vec::new()`, so
+  unreadable/corrupt Agent registry state looked identical to a fresh owner
+  with no published abilities.
+- The root abstraction problem was treating the owner ability catalog as a
+  best-effort prompt hint. For team-scope curation, this catalog is authoring
+  authority: it constrains the curator's EAL references and validates the
+  authored manifest before publish. A corrupt registry projection is
+  unavailable catalog state, not an empty catalog.
+- After the change, `collect_owner_catalog` returns
+  `Result<Vec<CatalogEntry>, String>`. Missing owner rows still produce an
+  empty first-run catalog, but registry projection failures become
+  `owner ability catalog unavailable` and mission.think records
+  `curator.stage = "catalog"` without asking the curator to author against a
+  false empty catalog.

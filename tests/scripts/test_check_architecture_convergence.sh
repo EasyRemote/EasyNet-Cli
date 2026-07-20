@@ -2434,9 +2434,29 @@ fn build_plan_from_registry() -> anyhow::Result<()> {
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/automation/think.rs" <<'EOF'
-fn collect_owner_catalog() -> anyhow::Result<()> {
-    AgentAggregateRepository::load_registered_agent_registry_projection()?;
-    Ok(())
+pub(crate) struct CatalogEntry;
+
+fn run_think() -> serde_json::Value {
+    match collect_owner_catalog("alice") {
+        Ok(catalog) => serde_json::json!({"catalog_len": catalog.len()}),
+        Err(error) => serde_json::json!({
+            "curator": {
+                "attempted": true,
+                "ok": false,
+                "stage": "catalog",
+                "error": error,
+            }
+        }),
+    }
+}
+
+pub(crate) fn collect_owner_catalog(owner: &str) -> Result<Vec<CatalogEntry>, String> {
+    let registry = AgentAggregateRepository::load_registered_agent_registry_projection()
+        .map_err(|error| format!("owner ability catalog unavailable: {error}"))?;
+    let Some(_entry) = registry.agents.get(owner) else {
+        return Ok(Vec::new());
+    };
+    Ok(Vec::new())
 }
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/invocation_wire.rs" <<'EOF'
@@ -5319,6 +5339,40 @@ EOF
 expect_fail \
   "desktop companion status projection silent drop" \
   "R82_DESKTOP_COMPANION_STATUS_PROJECTION_ERRORS"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/automation"
+cat >"$CLI/src/daemon/ability/builtins/automation/think.rs" <<'EOF'
+pub(crate) struct CatalogEntry;
+
+fn run_think() -> serde_json::Value {
+    let catalog = collect_owner_catalog("alice");
+    serde_json::json!({
+        "curator": {
+            "attempted": true,
+            "ok": true,
+            "catalog_len": catalog.len(),
+        }
+    })
+}
+
+/// Catalog gathering is best-effort: an unreadable agent dir returns an empty
+/// list, and validation downstream emits a clear "no catalog available".
+pub(crate) fn collect_owner_catalog(owner: &str) -> Vec<CatalogEntry> {
+    let registry = match crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_registered_agent_registry_projection() {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    let entry = match registry.agents.get(owner) {
+        Some(e) => e.clone(),
+        None => return Vec::new(),
+    };
+    Vec::new()
+}
+EOF
+expect_fail \
+  "curator catalog registry projection fallback" \
+  "R83_CURATOR_CATALOG_FAIL_CLOSED"
 
 make_good_fixture
 mkdir -p "$CLI/src/daemon/plugins" "$CLI/src/daemon/boot/invocation" "$CLI/src/daemon/ability/wire"

@@ -326,19 +326,25 @@ pub(crate) fn think_with_gateway(
     // `<agent>.fictional_verb(...)` references); validation also
     // uses it to refuse a manifest whose [exec] kind="eal" source
     // calls a verb that does not exist.
-    let catalog = collect_owner_catalog(&owner);
-
     let curator_outcome = match last_parsed_verdict.as_ref() {
-        Some(v) if should_curate(v) => Some(run_curator_turn(CuratorTurnRequest {
-            invocation_gateway,
-            owner: &owner,
-            curator_agent: &judge,
-            initial_prompt: &prompt,
-            verdict: v,
-            transcript: &transcript,
-            catalog: &catalog,
-            dry_run,
-        })),
+        Some(v) if should_curate(v) => match collect_owner_catalog(&owner) {
+            Ok(catalog) => Some(run_curator_turn(CuratorTurnRequest {
+                invocation_gateway,
+                owner: &owner,
+                curator_agent: &judge,
+                initial_prompt: &prompt,
+                verdict: v,
+                transcript: &transcript,
+                catalog: &catalog,
+                dry_run,
+            })),
+            Err(error) => Some(json!({
+                "attempted": true,
+                "ok": false,
+                "stage": "catalog",
+                "error": error,
+            })),
+        },
         _ => None,
     };
 
@@ -397,6 +403,7 @@ fn should_curate(verdict: &Value) -> bool {
 /// only what the curator needs to write a working reference: the
 /// fully-qualified verb (`<agent>.<verb>`) plus a short description
 /// so the LLM can pick the right one.
+#[derive(Debug)]
 pub(crate) struct CatalogEntry {
     pub qualified: String,
     pub description: String,
@@ -423,27 +430,26 @@ struct CuratorTurnRequest<'a> {
 ///      point at one of these verbs, else the resulting ability is
 ///      dead on arrival.
 ///
-/// Catalog gathering is best-effort: an unreadable agent dir
-/// returns an empty list, and validation downstream emits a clear
-/// "no catalog available" rather than refusing to publish.
-pub(crate) fn collect_owner_catalog(owner: &str) -> Vec<CatalogEntry> {
-    let registry = match crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_registered_agent_registry_projection() {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
-    };
+/// A missing owner row means the owner currently publishes no catalog-backed
+/// abilities. An unreadable/corrupt Agent registry projection is unavailable
+/// catalogue state and must be surfaced before curator authoring; otherwise the
+/// curator can publish against a false empty catalog.
+pub(crate) fn collect_owner_catalog(owner: &str) -> Result<Vec<CatalogEntry>, String> {
+    let registry = crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_registered_agent_registry_projection()
+        .map_err(|error| format!("owner ability catalog unavailable: {error}"))?;
     let entry = match registry.agents.get(owner) {
         Some(e) => e.clone(),
-        None => return Vec::new(),
+        None => return Ok(Vec::new()),
     };
     let manifests =
         crate::daemon::execution::mission::agent_ability_specs::manifests_for(owner, &entry);
-    manifests
+    Ok(manifests
         .into_iter()
         .map(|m| CatalogEntry {
             qualified: format!("{owner}.{}", m.name()),
             description: m.description().to_string(),
         })
-        .collect()
+        .collect())
 }
 
 /// Validate the curator's authored ability body before publish.
@@ -1668,6 +1674,37 @@ allowed-tools: [Read]\n\
         });
         let p = render_curator_prompt("ability", "do thing", &verdict, &[], &[]);
         assert!(p.contains("no abilities currently published"));
+    }
+
+    #[test]
+    fn collect_owner_catalog_keeps_missing_registry_as_empty_catalog() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+
+        let catalog = collect_owner_catalog("alice").expect("missing registry is first-run empty");
+
+        assert!(
+            catalog.is_empty(),
+            "first-run owner with no registry row publishes no catalog-backed abilities"
+        );
+    }
+
+    #[test]
+    fn collect_owner_catalog_rejects_corrupt_registry_projection() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let state_dir = crate::daemon::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("state dir");
+        std::fs::write(state_dir.join("agents.json"), "{not-json").expect("corrupt registry");
+
+        let err = collect_owner_catalog("alice").expect_err("corrupt registry must fail closed");
+
+        assert!(
+            err.contains("owner ability catalog unavailable"),
+            "error identifies catalog projection: {err}"
+        );
+        assert!(
+            err.contains("load Agent registry projection"),
+            "error preserves registry source: {err}"
+        );
     }
 
     #[test]

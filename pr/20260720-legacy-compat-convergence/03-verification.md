@@ -1277,3 +1277,28 @@ Commands and outcomes will be appended after implementation.
   status_json" --limit 80` — PASS; reports the companion manager projector and
   runtime JSON surface.
 - `git diff --check` — PASS.
+
+## 2026-07-20 Curator owner catalog fail-closed acquisition
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q
+  collect_owner_catalog --lib` — PASS (`2 passed`); covers first-run missing
+  registry as empty catalog and corrupt `agents.json` as unavailable owner
+  catalog state.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q
+  curator_attempts_publish_when_verdict_qualifies --lib` — PASS (`1 passed`);
+  proves the curator/publish loop still runs with a valid isolated registry.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --locked --lib --bins` —
+  PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R83 for curator catalog fail-closed semantics.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for the previous best-effort `Err(_) => return
+  Vec::new()` collector and missing `stage = "catalog"` curator outcome.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query
+  "collect_owner_catalog owner ability catalog unavailable curator catalog"
+  --limit 80` — PASS; reports `collect_owner_catalog(owner: &str) ->
+  Result<Vec<CatalogEntry>, String>` and the new regression tests.
+- `git diff --check` — PASS.

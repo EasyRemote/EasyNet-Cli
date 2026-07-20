@@ -7639,6 +7639,71 @@ if companion_manager.exists():
             )
 
 
+# Rule 83: mission.think curator catalog is authoring authority, not a
+# best-effort prompt hint. Corrupt/unreadable Agent registry projection must
+# fail the curator catalog stage instead of becoming an empty catalog that lets
+# the curator author against false route visibility.
+automation_think = cli_root / "src/daemon/ability/builtins/automation/think.rs"
+if automation_think.exists():
+    text = source(automation_think)
+    body = rust_method_body(text, "collect_owner_catalog")
+    if body is None:
+        add(
+            "R83_CURATOR_CATALOG_FAIL_CLOSED",
+            automation_think,
+            1,
+            "mission.think must keep collect_owner_catalog as the curator catalog authority",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if "Result<Vec<CatalogEntry>, String>" not in signature:
+            add(
+                "R83_CURATOR_CATALOG_FAIL_CLOSED",
+                automation_think,
+                line_number(text, offset),
+                "collect_owner_catalog must return Result so registry projection failure cannot become an empty catalog",
+            )
+        for token, detail in (
+            (
+                "Err(_) => return Vec::new()",
+                "collect_owner_catalog must not hide registry projection failures behind an empty catalog",
+            ),
+            (
+                "Err(error) => return Vec::new()",
+                "collect_owner_catalog must not hide registry projection failures behind an empty catalog",
+            ),
+            (
+                "Catalog gathering is best-effort",
+                "curator catalog comments must not preserve best-effort catalog semantics",
+            ),
+        ):
+            if token in fn_body or token in text[max(0, offset - 600):offset]:
+                add(
+                    "R83_CURATOR_CATALOG_FAIL_CLOSED",
+                    automation_think,
+                    line_number(text, body_start + fn_body.find(token))
+                    if token in fn_body
+                    else line_number(text, max(0, offset - 600) + text[max(0, offset - 600):offset].find(token)),
+                    detail,
+                )
+    if '"stage": "catalog"' not in text:
+        add(
+            "R83_CURATOR_CATALOG_FAIL_CLOSED",
+            automation_think,
+            1,
+            "mission.think curator outcome must expose catalog acquisition failures as stage=catalog",
+        )
+    if "owner ability catalog unavailable" not in text:
+        add(
+            "R83_CURATOR_CATALOG_FAIL_CLOSED",
+            automation_think,
+            1,
+            "collect_owner_catalog must preserve an operator-facing owner catalog unavailable diagnostic",
+        )
+
+
 if violations:
     for violation in sorted(violations):
         print(
