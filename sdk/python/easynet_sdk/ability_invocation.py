@@ -188,35 +188,34 @@ class AbilityInvocationClient:
 
         self._require_open()
         selector = self._target_selector(request)
+        explicit_subject_ura = _required_string(request.subject_ura, "subject_ura")
         version = _required_string(request.descriptor_version, "descriptor_version")
         if selector == "descriptor_ref":
-            projection = self.addressing.project_descriptor_ref(
+            descriptor_projection = self.addressing.project_descriptor_ref(
                 _required_string(request.descriptor_ref, "descriptor_ref")
             )
-            descriptor_ref = projection.descriptor_ref
-            ability_ura = projection.ability_ura
-            version = projection.descriptor_version
+            descriptor_ref = descriptor_projection.descriptor_ref
+            ability_ura = descriptor_projection.ability_ura
+            version = descriptor_projection.descriptor_version
+            ability_projection = self.addressing.project_ability_ura(ability_ura)
         elif selector == "ability_ura":
             ability_ura = _required_string(request.ability_ura, "ability_ura")
-            projection = self.addressing.project_ability_ura(ability_ura)
-            ability_ura = projection.ura
-            subject_ura = request.subject_ura or projection.ura
+            ability_projection = self.addressing.project_ability_ura(ability_ura)
+            ability_ura = ability_projection.ura
             descriptor_ref = self.runtime.resolve_descriptor_ref(
-                callee_ura=projection.owner_ura,
+                callee_ura=ability_projection.owner_ura,
                 ability=ability_ura,
                 call_mode=_call_mode(request.call_mode),
                 caller_ura=request.caller_ura,
-                subject_ura=subject_ura,
+                subject_ura=explicit_subject_ura,
             )
         else:
             raise _invalid_ability_invocation("unknown ability target selector")
-        projection = self.addressing.project_ability_ura(ability_ura)
-        subject_ura = request.subject_ura or projection.ura
         return ResolvedAbilityTarget(
             ability_ura=ability_ura,
             descriptor_ref=descriptor_ref,
-            callee_ura=projection.owner_ura,
-            subject_ura=_required_string(subject_ura, "subject_ura"),
+            callee_ura=ability_projection.owner_ura,
+            subject_ura=explicit_subject_ura,
             descriptor_version=version,
         )
 
@@ -764,7 +763,9 @@ def _provider_descriptor_ref(
 def _call_mode(value: object) -> str:
     if not isinstance(value, str):
         raise _invalid_ability_invocation("call_mode must be a string")
-    mode = value.strip() or "rpc"
+    mode = value.strip()
+    if not mode:
+        raise _invalid_ability_invocation("call_mode is required")
     if mode not in {"rpc", "stream", "bidi"}:
         raise _invalid_ability_invocation(f"unsupported call_mode {mode!r}")
     return mode

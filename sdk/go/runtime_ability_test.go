@@ -29,6 +29,34 @@ func TestRuntimeClientResolveDescriptorRefRequiresCallMode(t *testing.T) {
 	}
 }
 
+func TestRuntimeAbilityClientBuildRequiresExplicitCallMode(t *testing.T) {
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(context.Context, []byte) ([]byte, error) {
+			t.Fatal("descriptor resolver transport must not be called for missing call_mode")
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+
+	_, err = client.buildWithCallMode(
+		context.Background(),
+		runtimeAbilityTestContext(),
+		"namespace.resolve",
+		map[string]any{"name": "alice"},
+		"",
+	)
+	var sdkErr *SDKError
+	if !errors.As(err, &sdkErr) || sdkErr.Code != ErrInvalidArgument || !strings.Contains(err.Error(), "call_mode is required") {
+		t.Fatalf("buildWithCallMode error = %v, want explicit call_mode invalid argument", err)
+	}
+}
+
 func TestRuntimeAbilityClientBuildsCompleteCanonicalDraft(t *testing.T) {
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
 		ResolveDescriptorRefFunc: testResolveDescriptorRef(t),

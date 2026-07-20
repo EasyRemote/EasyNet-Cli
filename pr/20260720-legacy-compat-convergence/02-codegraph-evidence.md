@@ -2,6 +2,29 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-20 Ability target tuple default fallback audit
+
+- `codegraph query AbilityTargetRequest` identified the Python public
+  target-invocation facade as the owner of descriptor-ref and ability-URA
+  selectors: `resolve_target()`, `build_target_invocation()`,
+  `prepare_target()`, and target stream/bidi helpers all route through the same
+  `AbilityTargetRequest` model.
+- `codegraph query buildWithCallMode` identified the matching Go private
+  builder seam in `sdk/go/runtime_ability.go`.
+- Targeted `rg` found two compatibility defaults at the provider boundary:
+  Python derived `subject_ura` from the selected ability projection when the
+  request omitted it, while Go converted a blank target `call_mode` into
+  `"rpc"`.
+- The root abstraction problem was mixed selector authority: ability
+  selector/projection facts were being reused as invocation-subject facts, and
+  missing lifecycle state was being normalized at the provider seam instead of
+  rejected as incomplete tuple input.
+- After the change, Python requires explicit `AbilityTargetRequest.subject_ura`
+  before resolving descriptor refs or building drafts, projects the selected
+  ability once, and passes that explicit subject through descriptor resolution
+  and draft construction. Go rejects blank `call_mode` before descriptor
+  resolution rather than defaulting it to RPC.
+
 ## 2026-07-20 Doctor agent projection fallback audit
 
 - `codegraph query check_agents` identified the product health-check owner in

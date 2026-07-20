@@ -152,7 +152,7 @@ func (c *RuntimeAbilityClient) buildWithCallMode(ctx context.Context, call Runti
 	}
 	mode := strings.TrimSpace(callMode)
 	if mode == "" {
-		mode = "rpc"
+		return InvocationDraft{}, invalidRuntimePayload("call_mode is required", nil)
 	}
 	subjectURA, err := descriptorBoundSubjectURA(ctx, c.addressing, call.SubjectURA, abilityName)
 	if err != nil {

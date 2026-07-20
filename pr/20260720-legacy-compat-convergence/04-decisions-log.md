@@ -2,6 +2,16 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-20 ability target tuple ingress
+
+- Treat `AbilityTargetRequest.subject_ura` as explicit invocation tuple input,
+  not a value derived from ability URA or descriptor-ref selector projection.
+  Ability projection may identify the route owner and descriptor binding, but
+  it must not become the envelope subject.
+- Treat blank target `call_mode` as invalid SDK/provider input. RPC remains a
+  valid high-level operation choice only when the caller/facade selects it
+  explicitly before crossing the provider seam.
+
 ## 2026-07-20
 
 - Treat Go `RuntimeIdentityProjection.DeviceID` as a product-named canonical

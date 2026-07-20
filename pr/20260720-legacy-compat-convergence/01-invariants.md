@@ -111,3 +111,8 @@
   public projection has been registered into runtime trust. Missing paired User
   identity is invalid boot state, not permission to defer repair until a
   remote descriptor invocation fails.
+- Ability-target ingress must carry a complete invocation tuple before it
+  reaches the generic runtime/provider seam. `subject_ura` is caller intent,
+  not a fact that may be derived from an ability selector or descriptor
+  projection, and `call_mode` absence is invalid provider input rather than
+  permission to infer RPC.

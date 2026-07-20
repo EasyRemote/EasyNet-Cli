@@ -2,6 +2,20 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-20 Ability target tuple default fallback removal
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query AbilityTargetRequest --limit 30` — PASS; confirmed the Python target facade routes through one `AbilityTargetRequest` model.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query buildWithCallMode --limit 30` — PASS; confirmed the Go target builder seam.
+- `source sdk/conformance/python_toolchain.sh && resolve_sdk_python_toolchain "$PWD" pytest && cd sdk/python && "$SDK_CONFORMANCE_PYTHON" -m pytest -q tests/test_ability_invocation.py` — PASS (`18 passed, 4 subtests passed`).
+- `source sdk/conformance/toolchain_path.sh && resolve_sdk_toolchain_path "$PWD" && gofmt -w sdk/go/runtime_ability.go sdk/go/runtime_ability_test.go && cd sdk/go && go test -run 'TestRuntimeAbilityClientBuildRequiresExplicitCallMode|TestRuntimeClientResolveDescriptorRefRequiresCallMode|TestRuntimeAbilityClientBuildsCompleteCanonicalDraft' -count=1` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — initially failed with `sdk_concepts: provider_implementation_mismatch:go:ability_invocation_facade`, proving the Go/Python SDK source attestation detected the changed provider implementation.
+- `source sdk/conformance/toolchain_path.sh && resolve_sdk_toolchain_path "$PWD" && source sdk/conformance/python_toolchain.sh && resolve_sdk_python_toolchain "$PWD" pytest && "$SDK_CONFORMANCE_PYTHON" sdk/conformance/rebuild_public_api_model.py --write` — PASS; refreshed `sdk/conformance/canonical-public-api.json` and `sdk/conformance/sdk-parity-matrix.json` for the ability invocation facade hash changes.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS after attestation refresh.
+
 ## 2026-07-20 Doctor agent projection fallback removal
 
 - `/Users/macbook.silan.tech/.cargo/bin/cargo test -q agent_ --lib` — PASS

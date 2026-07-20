@@ -17195,7 +17195,7 @@
           "identity": "ability_invocation_facade",
           "owner_path": "sdk/go/",
           "path": "sdk/go/runtime_ability.go",
-          "sha256": "aa85253bc1f4ef77238b323d439f24322dea75f87a2bd20c4c048f97248f8533",
+          "sha256": "a245a7fcea394b6a34d3447dd34a615a37ed3b4e35a224be4ffa4841606685e2",
           "interface": "RuntimeAbilityClient",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -17322,7 +17322,7 @@
           "identity": "ability_invocation_facade",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/ability_invocation.py",
-          "sha256": "5f2eb54a684a6790a3197c46e36bc8cddb011e53bc1a250ec34bb217df29b4ad",
+          "sha256": "9b69d5620895335bf8318045f05381e97cc3a425d2e7f58f7c8982860a23c96f",
           "interface": "AbilityInvocationClient",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -20529,7 +20529,7 @@
       "AbilityDescriptorRef.ability_ura": "806f5961440fe858381c9a0720eb0b39b6fb2f79d37b137bdce0671df653bfdd",
       "AbilityDescriptorRef.raw": "f575b575d8f4875502c1f79820ccb96cbacc838e2c4c7ede57cea69a0c47b428",
       "AbilityDescriptorRef.version": "5e6df7a0b7e0469f5ce1cf5cef7a691a203348de3d6fb02287ae361f9294620d",
-      "AbilityInvocationClient": "37cf3e0432047ed8a9953c573ea87ba113f70d45d297f808a423161d75162242",
+      "AbilityInvocationClient": "a7e74b2c73252fdb8a6324d642e5069b9e8ec22372cec8ce064f207cd875227e",
       "AbilityInvocationClient.addressing": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c",
       "AbilityInvocationClient.await_result": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab",
       "AbilityInvocationClient.bidi": "f66ea52e5a80ddaf0aa90ed28b7be9af285132d481f9938f4f7fc6452c2d8440",
@@ -20547,7 +20547,7 @@
       "AbilityInvocationClient.prepare_and_sign": "be06c9ec8b96739458bfd3ba7dc5c8f455b68fd56758a50b39590d789fdf9bf7",
       "AbilityInvocationClient.prepare_and_sign_target": "78c9becae8c3f9fe249c54014001b7f5068d9ce3be9767fb99e17d51cea666e5",
       "AbilityInvocationClient.prepare_target": "ebdef3dfca5b93fc07baa58f0c4b309d0fec19973e514a9936fb4756afd65313",
-      "AbilityInvocationClient.resolve_target": "0edc4de892009f89bdd34f30070ce99ade3c896281d6c04f910cc83503215faf",
+      "AbilityInvocationClient.resolve_target": "5bb25ef9f4b21f787a40be2cb1ac4830eeb1799daf1375255b36e2d5237f9bff",
       "AbilityInvocationClient.runtime": "ec1cc1eb6aa18d32f00d37f5b201a1adfde5c1d5c0d9852208eab16b30ab8a1a",
       "AbilityInvocationClient.stream": "3a0b7b07ef4b7b76df7f992e92b26a686cb8d35de7926e85229204bf0423f5be",
       "AbilityInvocationClient.stream_target": "9c87d46a31d209fb9166a36ff2053e9c02e9e34a742ac668cd7d500bd8dee5b0",
@@ -24715,10 +24715,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/runtime_ability.go",
-      "sha256": "aa85253bc1f4ef77238b323d439f24322dea75f87a2bd20c4c048f97248f8533",
+      "sha256": "a245a7fcea394b6a34d3447dd34a615a37ed3b4e35a224be4ffa4841606685e2",
       "interface": "RuntimeAbilityClient",
       "interface_path": "sdk/go/runtime_ability.go",
-      "interface_sha256": "aa85253bc1f4ef77238b323d439f24322dea75f87a2bd20c4c048f97248f8533",
+      "interface_sha256": "a245a7fcea394b6a34d3447dd34a615a37ed3b4e35a224be4ffa4841606685e2",
       "capability_ids": [
         "ability_invocation_facade"
       ],
@@ -24730,10 +24730,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/ability_invocation.py",
-      "sha256": "5f2eb54a684a6790a3197c46e36bc8cddb011e53bc1a250ec34bb217df29b4ad",
+      "sha256": "9b69d5620895335bf8318045f05381e97cc3a425d2e7f58f7c8982860a23c96f",
       "interface": "AbilityInvocationClient",
       "interface_path": "sdk/python/easynet_sdk/ability_invocation.py",
-      "interface_sha256": "5f2eb54a684a6790a3197c46e36bc8cddb011e53bc1a250ec34bb217df29b4ad",
+      "interface_sha256": "9b69d5620895335bf8318045f05381e97cc3a425d2e7f58f7c8982860a23c96f",
       "capability_ids": [
         "ability_invocation_facade"
       ],

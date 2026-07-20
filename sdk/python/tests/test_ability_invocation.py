@@ -253,7 +253,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
             ),
         )
 
-    def test_target_invocation_from_ability_ura_derives_tuple_facts(self) -> None:
+    def test_target_invocation_from_ability_ura_requires_explicit_subject(self) -> None:
         identity = _identity_transport()
         runtime = MemoryRuntimeTransport()
         client = AbilityInvocationClient(
@@ -271,7 +271,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
         self.assertEqual(
             runtime.seen_draft["subject_ura"],
-            ABILITY_URA,
+            "easynet:///r/example/device/dev-a",
         )
         self.assertEqual(
             runtime.seen_draft["descriptor_ref"],
@@ -281,10 +281,12 @@ class AbilityInvocationClientTests(unittest.TestCase):
             identity.seen_requests,
             [
                 {"ura": ABILITY_URA},
-                {"ura": ABILITY_URA},
             ],
         )
-        self.assertEqual(runtime.seen_descriptor_request, _descriptor_request())
+        self.assertEqual(
+            runtime.seen_descriptor_request,
+            _descriptor_request(subject_ura="easynet:///r/example/device/dev-a"),
+        )
 
     def test_target_invocation_from_descriptor_ref_uses_projection_once(self) -> None:
         identity = _identity_transport()
@@ -300,7 +302,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         self.assertEqual(draft.callee_ura, "easynet:///r/example/device/dev-a")
         self.assertEqual(
             draft.subject_ura,
-            "easynet:///r/example/ability/device.dev-a.observe.health",
+            "easynet:///r/example/device/dev-a",
         )
         self.assertEqual(
             identity.seen_requests,
@@ -383,7 +385,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
         self.assertEqual(
             runtime.seen_draft["subject_ura"],
-            ABILITY_URA,
+            "easynet:///r/example/device/dev-a",
         )
 
         handle = client.submit_signed(signed)
@@ -408,10 +410,12 @@ class AbilityInvocationClientTests(unittest.TestCase):
             identity.seen_requests,
             [
                 {"ura": ABILITY_URA},
-                {"ura": ABILITY_URA},
             ],
         )
-        self.assertEqual(runtime.seen_descriptor_request, _descriptor_request())
+        self.assertEqual(
+            runtime.seen_descriptor_request,
+            _descriptor_request(subject_ura="easynet:///r/example/device/dev-a"),
+        )
 
     def test_target_invocation_rejects_ambiguous_or_incomplete_selectors(self) -> None:
         runtime = MemoryRuntimeTransport()
@@ -422,6 +426,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
 
         for request in (
             _target_request(),
+            _target_request(ability_ura=ABILITY_URA, subject_ura=""),
             _target_request(
                 ability_ura=(
                     " easynet:///r/example/ability/device.dev-a.observe.health"
@@ -687,6 +692,7 @@ def _target_request(
     *,
     descriptor_ref: str = "",
     ability_ura: str = "",
+    subject_ura: str = "easynet:///r/example/device/dev-a",
 ) -> AbilityTargetRequest:
     return AbilityTargetRequest(
         caller_ura="easynet:///r/example/agent/alice.sdk",
@@ -694,6 +700,7 @@ def _target_request(
         causal_context={"form": "none"},
         descriptor_ref=descriptor_ref,
         ability_ura=ability_ura,
+        subject_ura=subject_ura,
         args={"ready": True},
     )
 
