@@ -504,3 +504,8 @@ Decisions will be appended as root-fork choices are made.
   descriptor resolution; malformed rows must fail closed as provider payload
   errors instead of being skipped and reclassified as invisible routes,
   `descriptor_ref not found`, or `No browser.open_session route is visible`.
+- Treat remote descriptor probes as signed runtime invocations, not local
+  descriptor conveniences. Once descriptor resolution has to call remote
+  `meta.list_abilities`, `caller_ura` is authority material and must be
+  supplied by the SDK tuple; the resolver must not synthesize it from
+  `runtime_owner_ura` or any ambient local runtime state.

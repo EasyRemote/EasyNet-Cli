@@ -1969,19 +1969,7 @@ fn runtime_resolve_descriptor_ref_json(
         }
     }
 
-    let caller_ura = object
-        .get("caller_ura")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .map(Ok)
-        .unwrap_or_else(|| {
-            runtime_owner_ura
-                .clone()
-                .ok_or_else(|| "runtime owner URA is unavailable".to_string())
-                .map_err(anyhow::Error::msg)
-        })?;
+    let caller_ura = descriptor_ref_request_required_string(object, "caller_ura")?.to_string();
     let target_call = RemoteAbilityInvocationTarget::for_target_owned_selector(
         callee_ura,
         "meta.list_abilities",
@@ -2021,6 +2009,19 @@ fn runtime_resolve_descriptor_ref_json(
     anyhow::bail!(
         "descriptor_ref not found for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
     )
+}
+
+#[cfg(feature = "axon-pb")]
+fn descriptor_ref_request_required_string<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    field: &'static str,
+) -> anyhow::Result<&'a str> {
+    object
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("descriptor_ref request missing {field}"))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -9152,6 +9153,70 @@ mod tests {
                 "descriptor catalog row 4 from test_provider_catalog missing admission_action"
             ),
             "unexpected descriptor catalog ingestion error: {error}"
+        );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_descriptor_remote_probe_requires_explicit_caller_ura() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path = dir.path().join("control.json");
+        let local_node_id = "local-runtime-node";
+        let remote_node_id = "remote-runtime-node";
+        let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
+        let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        crate::daemon::control::discovery::write(
+            &control_path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(dir.path().join("control.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("offline-daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: Some(local_node_id.to_string()),
+                }),
+                pid: 1,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write control discovery");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            control_path.display().to_string(),
+            Some(dir.path().join("offline-daemon.sock").display().to_string()),
+        );
+
+        let error = runtime_resolve_descriptor_ref_json(
+            &session,
+            &serde_json::json!({
+                "callee_ura": remote_device_ura,
+                "subject_ura": remote_device_ura,
+                "ability": format!(
+                    "easynet:///r/localhost/ability/device.{remote_node_id}.custom.not.system"
+                ),
+                "call_mode": "rpc",
+            })
+            .to_string(),
+        )
+        .expect_err("remote descriptor probes must not synthesize caller_ura from runtime owner");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("descriptor_ref request missing caller_ura"),
+            "unexpected descriptor resolver error: {message}"
+        );
+        assert!(
+            !message.contains(&local_device_ura),
+            "resolver must not synthesize the runtime owner as caller_ura: {message}"
+        );
+        assert!(
+            !message.contains("offline-daemon.sock"),
+            "missing caller_ura must fail before remote daemon IO: {message}"
         );
     }
 

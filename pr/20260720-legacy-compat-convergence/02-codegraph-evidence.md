@@ -1626,3 +1626,27 @@ Evidence will be appended after indexing and focused impact queries.
   both provider and system rows, preserves explicit error detail for missing
   fields, non-canonical descriptor hashes, and invalid descriptor refs, and
   R94 prevents reintroducing skip-on-error catalog ingestion.
+
+## 2026-07-21 FFI descriptor remote probe caller tuple audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "runtime_resolve_descriptor_ref_json caller_ura subject_ura unwrap_or_else
+  runtime_owner_ura invocation.history.list authorized runtime session
+  descriptor resolve tuple default"` identified
+  `runtime_resolve_descriptor_ref_json` as the descriptor-resolution ingress
+  where SDK tuple fields are converted into a remote `meta.list_abilities`
+  invocation.
+- Targeted source inspection found the compatibility seam: after local/system
+  catalog checks missed, the remote descriptor probe read optional
+  `caller_ura` and fell back to `runtime_owner_ura`. An incomplete SDK tuple
+  could therefore become a signed remote probe under the local runtime owner
+  instead of failing as malformed input.
+- The root abstraction problem was treating descriptor resolution as a local
+  convenience lookup after it had crossed into remote invocation. Remote
+  `meta.list_abilities` is a signed runtime call; its caller is authority
+  material and must come from the canonical tuple, not from ambient runtime
+  state.
+- After the change, remote descriptor probes require explicit `caller_ura`
+  before signer lookup or daemon IO, while local owner catalog and system
+  descriptor catalog resolution remain available without a remote probe. R95
+  prevents reintroducing runtime-owner caller synthesis.

@@ -5456,6 +5456,33 @@ expect_fail \
   "R94_FFI_DESCRIPTOR_CATALOG_FAIL_CLOSED"
 
 make_good_fixture
+mkdir -p "$CLI/src/ffi/invocation"
+cat >"$CLI/src/ffi/invocation/mod.rs" <<'EOF'
+fn runtime_resolve_descriptor_ref_json(session: &ClientSession, request_json: &str) -> anyhow::Result<Value> {
+    let object = serde_json::from_str::<Value>(request_json)?;
+    let runtime_owner_ura = runtime_owner_ura_from_session(session).ok();
+    let caller_ura = object
+        .get("caller_ura")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .map(Ok)
+        .unwrap_or_else(|| {
+            runtime_owner_ura
+                .clone()
+                .ok_or_else(|| "runtime owner URA is unavailable".to_string())
+                .map_err(anyhow::Error::msg)
+        })?;
+    RemoteSystemInvocationIssuer::root_plan(&target, caller_ura, subject, args, timeout)?;
+    Ok(Value::Null)
+}
+EOF
+expect_fail \
+  "FFI descriptor remote probe caller_ura defaulted from runtime owner" \
+  "R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/invocation/dispatch" "$CLI/src/daemon/boot/invocation"
 cat >"$CLI/src/daemon/invocation/dispatch/attempt_audit.rs" <<'EOF'
 struct InvocationAttemptLedger;

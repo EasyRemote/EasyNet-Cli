@@ -7642,6 +7642,49 @@ if ffi_invocation.exists():
                 )
 
 
+# Rule 95: Remote descriptor probes are signed runtime invocations and must
+# have an explicit caller from the SDK tuple. Falling back to the local
+# runtime owner turns an incomplete descriptor-resolution request into a
+# misleading signer/owner-offline/route-not-visible failure.
+ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
+if ffi_invocation.exists():
+    text = source(ffi_invocation)
+    resolve_body = rust_method_body(text, "runtime_resolve_descriptor_ref_json")
+    if resolve_body is not None:
+        offset, body = resolve_body
+        for token, detail in (
+            (
+                "runtime owner URA is unavailable",
+                "descriptor resolver must not use runtime-owner fallback diagnostics for missing caller_ura",
+            ),
+            (
+                ".unwrap_or_else(||",
+                "descriptor resolver must not synthesize caller_ura from runtime_owner_ura",
+            ),
+        ):
+            if token in body:
+                add(
+                    "R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER",
+                    ffi_invocation,
+                    line_number(text, offset + body.find(token)),
+                    detail,
+                )
+        if 'descriptor_ref_request_required_string(object, "caller_ura")' not in body:
+            add(
+                "R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER",
+                ffi_invocation,
+                line_number(text, offset),
+                "remote descriptor probe must require explicit caller_ura from the SDK tuple",
+            )
+    elif "runtime_resolve_descriptor_ref_json" in text:
+        add(
+            "R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER",
+            ffi_invocation,
+            1,
+            "runtime_resolve_descriptor_ref_json must remain inspectable",
+        )
+
+
 # Rule 92: Invocation attempt audit is the product-visible pre-runtime
 # failure ledger. It must fail closed when unavailable or corrupt; otherwise
 # descriptor/admission/route failures disappear from invocation.history.list

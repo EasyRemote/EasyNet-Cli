@@ -1638,3 +1638,31 @@ Commands and outcomes will be appended after implementation.
   (`canonical-runtime-convergence-v2: OK`).
 - `PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check` — PASS.
 - `git diff --check` — PASS.
+
+## 2026-07-21 FFI descriptor remote probe explicit caller tuple
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "runtime_resolve_descriptor_ref_json caller_ura subject_ura unwrap_or_else
+  runtime_owner_ura invocation.history.list authorized runtime session
+  descriptor resolve tuple default"` — PASS; reports the FFI descriptor
+  resolver, SDK runtime tuple fields, and the prior runtime-owner fallback
+  site.
+- `PATH="$HOME/.cargo/bin:$PATH" cargo test -q
+  runtime_descriptor_remote_probe_requires_explicit_caller_ura --lib` — PASS
+  (`1 passed`); verifies remote descriptor probes fail before daemon IO when
+  `caller_ura` is missing.
+- `PATH="$HOME/.cargo/bin:$PATH" cargo test -q runtime_descriptor_resolver
+  --lib` — PASS (`4 passed`); confirms local and system descriptor resolution
+  behavior is preserved.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R95 for explicit remote descriptor probe caller binding.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture where `caller_ura` is synthesized from
+  `runtime_owner_ura` through `unwrap_or_else`.
+- `PATH="$HOME/.cargo/bin:$PATH" cargo check --lib` — PASS.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
