@@ -3,8 +3,8 @@
 
 use console::style;
 
+use crate::cli::commands::agent_cli_probe::LocalAgentCliProbe;
 use crate::cli::daemon_client::agent_view::AgentRuntimeKind;
-use crate::daemon::execution::mission::drivers::{claude_code, codex};
 
 use super::*;
 
@@ -39,11 +39,15 @@ pub(super) fn run_doctor(args: DoctorArgs) -> anyhow::Result<()> {
     eprintln!();
 
     for (name, agent_type) in &agents_to_check {
-        let result = if agent_type.is_claude_code() {
-            claude_code::doctor()
-        } else {
-            codex::doctor()
+        let Some(probe) = LocalAgentCliProbe::for_runtime(*agent_type) else {
+            eprintln!(
+                "  {:<14} {}",
+                style(name).white().bold(),
+                style(format!("{agent_type} runtime has no local CLI probe")).dim(),
+            );
+            continue;
         };
+        let result = probe.run();
         match result {
             Ok(version) => {
                 eprintln!(

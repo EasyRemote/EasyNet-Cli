@@ -7,6 +7,7 @@ pub(crate) mod ability_record;
 pub(crate) mod ability_scaffold;
 pub(crate) mod ability_stream;
 pub(crate) mod agent;
+pub(crate) mod agent_cli_probe;
 pub(crate) mod agent_new_ability;
 pub(crate) mod agent_sessions;
 pub(crate) mod api_key_cli;

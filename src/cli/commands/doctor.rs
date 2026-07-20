@@ -21,8 +21,9 @@
 use clap::Args;
 use console::style;
 
+use crate::cli::commands::agent_cli_probe::LocalAgentCliProbe;
+use crate::cli::daemon_client::agent_view::{self, AgentRuntimeKind, DaemonAgentRow};
 use crate::daemon::boot::join_connection_state;
-use crate::daemon::execution::mission::drivers::{claude_code, codex};
 use crate::daemon::persistence::config;
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
@@ -356,66 +357,99 @@ fn federation_check_impl() -> Check {
 }
 
 fn check_agents() -> Vec<Check> {
-    let mut out = Vec::new();
-    let daemon_rows = match crate::cli::daemon_client::agent_view::list_agents() {
+    let daemon_rows = match agent_view::list_agents() {
         Ok(rows) => rows,
-        Err(err) => {
-            out.push(Check {
-                name: "agents".to_string(),
-                status: CheckStatus::Warn,
-                detail: format!("agent.list unavailable: {err}"),
-                hint: Some("Start the daemon before checking registered agent rows."),
-            });
-            Vec::new()
-        }
-    };
-    let to_check: Vec<(
-        String,
-        crate::cli::daemon_client::agent_view::AgentRuntimeKind,
-    )> = if daemon_rows.is_empty() {
-        vec![
-            (
-                "claude-code".to_string(),
-                crate::cli::daemon_client::agent_view::AgentRuntimeKind::ClaudeCode,
-            ),
-            (
-                "codex".to_string(),
-                crate::cli::daemon_client::agent_view::AgentRuntimeKind::Codex,
-            ),
-        ]
-    } else {
-        daemon_rows
-            .iter()
-            .filter_map(|row| {
-                crate::cli::daemon_client::agent_view::agent_kind(row)
-                    .ok()
-                    .map(|kind| (row.name.clone(), kind))
-            })
-            .collect()
+        Err(err) => return vec![agent_list_unavailable_check(&err)],
     };
 
-    for (name, ty) in to_check {
-        let probe = if ty.is_claude_code() {
-            claude_code::doctor()
-        } else {
-            codex::doctor()
-        };
-        out.push(match probe {
-            Ok(version) => Check {
-                name: format!("agent:{name}"),
+    match agent_doctor_targets_from_daemon_rows(&daemon_rows) {
+        Ok(targets) => check_agent_targets(targets),
+        Err(err) => vec![agent_projection_invalid_check(&err)],
+    }
+}
+
+fn agent_list_unavailable_check(err: &anyhow::Error) -> Check {
+    Check {
+        name: "agents".to_string(),
+        status: CheckStatus::Warn,
+        detail: format!("agent.list unavailable: {err}"),
+        hint: Some("Start the daemon before checking registered agent rows."),
+    }
+}
+
+fn agent_projection_invalid_check(err: &anyhow::Error) -> Check {
+    Check {
+        name: "agents".to_string(),
+        status: CheckStatus::Fail,
+        detail: format!("agent.list returned invalid daemon projection: {err}"),
+        hint: Some("Restart the daemon after repairing the agent registry projection."),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentDoctorTarget {
+    name: String,
+    runtime: AgentRuntimeKind,
+    probe: Option<LocalAgentCliProbe>,
+}
+
+fn agent_doctor_targets_from_daemon_rows(
+    daemon_rows: &[DaemonAgentRow],
+) -> anyhow::Result<Vec<AgentDoctorTarget>> {
+    if daemon_rows.is_empty() {
+        return Ok(vec![
+            AgentDoctorTarget {
+                name: "claude-code".to_string(),
+                runtime: AgentRuntimeKind::ClaudeCode,
+                probe: Some(LocalAgentCliProbe::ClaudeCode),
+            },
+            AgentDoctorTarget {
+                name: "codex".to_string(),
+                runtime: AgentRuntimeKind::Codex,
+                probe: Some(LocalAgentCliProbe::Codex),
+            },
+        ]);
+    }
+
+    daemon_rows
+        .iter()
+        .map(|row| {
+            let runtime = agent_view::agent_kind(row)?;
+            Ok(AgentDoctorTarget {
+                name: row.name.clone(),
+                runtime,
+                probe: LocalAgentCliProbe::for_runtime(runtime),
+            })
+        })
+        .collect()
+}
+
+fn check_agent_targets(targets: Vec<AgentDoctorTarget>) -> Vec<Check> {
+    targets
+        .into_iter()
+        .map(|target| match target.probe {
+            Some(probe) => match probe.run() {
+                Ok(version) => Check {
+                    name: format!("agent:{}", target.name),
+                    status: CheckStatus::Ok,
+                    detail: version,
+                    hint: None,
+                },
+                Err(e) => Check {
+                    name: format!("agent:{}", target.name),
+                    status: CheckStatus::Fail,
+                    detail: format!("{e}"),
+                    hint: Some("Install or repair the underlying CLI."),
+                },
+            },
+            None => Check {
+                name: format!("agent:{}", target.name),
                 status: CheckStatus::Ok,
-                detail: version,
+                detail: format!("{} runtime has no local CLI probe", target.runtime),
                 hint: None,
             },
-            Err(e) => Check {
-                name: format!("agent:{name}"),
-                status: CheckStatus::Fail,
-                detail: format!("{e}"),
-                hint: Some("Install or repair the underlying CLI."),
-            },
-        });
-    }
-    out
+        })
+        .collect()
 }
 
 fn check_mcp_clients() -> Check {
@@ -449,5 +483,89 @@ fn check_mcp_clients() -> Check {
             detail: format!("{} client(s) configured", installed.len()),
             hint: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn daemon_row(name: &str, runtime: &str) -> DaemonAgentRow {
+        DaemonAgentRow {
+            name: name.to_string(),
+            runtime: runtime.to_string(),
+            model: None,
+            root_path: None,
+            timeout_secs: None,
+            root_exists: None,
+        }
+    }
+
+    #[test]
+    fn agent_list_unavailable_is_not_projected_as_default_agent_targets() {
+        let error = anyhow::anyhow!("daemon offline");
+        let check = agent_list_unavailable_check(&error);
+
+        assert_eq!(check.name, "agents");
+        assert_eq!(check.status, CheckStatus::Warn);
+        assert!(check.detail.contains("agent.list unavailable"));
+        assert!(check.detail.contains("daemon offline"));
+    }
+
+    #[test]
+    fn empty_agent_registry_is_the_only_default_cli_probe_case() {
+        let targets = agent_doctor_targets_from_daemon_rows(&[])
+            .expect("empty registry should select default local CLI probes");
+
+        assert_eq!(
+            targets,
+            vec![
+                AgentDoctorTarget {
+                    name: "claude-code".to_string(),
+                    runtime: AgentRuntimeKind::ClaudeCode,
+                    probe: Some(LocalAgentCliProbe::ClaudeCode),
+                },
+                AgentDoctorTarget {
+                    name: "codex".to_string(),
+                    runtime: AgentRuntimeKind::Codex,
+                    probe: Some(LocalAgentCliProbe::Codex),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn registered_agent_runtime_controls_cli_probe() {
+        let rows = vec![
+            daemon_row("remote-codex", "codex-app-server"),
+            daemon_row("external-worker", "external"),
+        ];
+        let targets = agent_doctor_targets_from_daemon_rows(&rows)
+            .expect("declared runtime kinds should build doctor targets");
+
+        assert_eq!(
+            targets,
+            vec![
+                AgentDoctorTarget {
+                    name: "remote-codex".to_string(),
+                    runtime: AgentRuntimeKind::CodexAppServer,
+                    probe: Some(LocalAgentCliProbe::Codex),
+                },
+                AgentDoctorTarget {
+                    name: "external-worker".to_string(),
+                    runtime: AgentRuntimeKind::External,
+                    probe: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn invalid_daemon_runtime_projection_fails_instead_of_disappearing() {
+        let rows = vec![daemon_row("broken", "mystery-runtime")];
+        let error = agent_doctor_targets_from_daemon_rows(&rows)
+            .expect_err("invalid daemon runtime must not be filtered out");
+
+        assert!(error.to_string().contains("unknown agent runtime"));
     }
 }
