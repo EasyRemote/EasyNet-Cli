@@ -1441,3 +1441,24 @@ Evidence will be appended after indexing and focused impact queries.
   `anyhow::Result<Vec<DiscussRoom>>`, Kernel returns that result directly, and a
   poisoned registry fails explicitly instead of projecting false empty room
   state.
+
+## 2026-07-20 Loop cache silent empty/unknown fallback audit
+
+- `codegraph query "LoopService list lock poisoned Vec::new loop_status
+  list_loops Kernel loop list" --limit 140` identified
+  `src/daemon/execution/loop_instance/mod.rs` as the loop lifecycle cache
+  authority and `Kernel::loop_status` / `loop.status` / `loop.subscribe` as
+  product-facing consumers.
+- Targeted source inspection found two compatibility projections:
+  `LoopService::status` erased cache lock poisoning through `.read().ok()` and
+  returned `None`, while `LoopService::list` mapped lock poisoning to
+  `Vec::new()`.
+- The root abstraction problem was conflating unknown loop id with unavailable
+  loop cache state. Unknown loop can remain a not-found error for stale ids;
+  poisoned cache means the lifecycle state is unavailable and must not be
+  classified as absent loop state.
+- After the change, `LoopService::status` returns
+  `anyhow::Result<Option<LoopInstance>>`, `LoopService::list` returns
+  `anyhow::Result<Vec<LoopInstance>>`, resume/subscribe/status callers
+  propagate cache failures, and Debug no longer projects unreadable cache state
+  as zero loops.

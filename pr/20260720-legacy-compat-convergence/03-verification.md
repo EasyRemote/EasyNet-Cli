@@ -1416,3 +1416,29 @@ Commands and outcomes will be appended after implementation.
   `DiscussService::list(...) -> anyhow::Result<Vec<DiscussRoom>>`,
   `Kernel::list_discuss_rooms`, and the new poison regression.
 - `git diff --check` — PASS.
+
+## 2026-07-20 Loop cache fail-closed read model
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q loop --lib` — PASS
+  (`50 passed`); includes poisoned-cache regressions for `status`, `list`,
+  `subscribe`, `loop.status`, and `loop.subscribe`.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R87 for loop-cache fail-closed semantics.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for `LoopService::status() -> Option<_>`,
+  `.read().ok()` lookup erasure, `LoopService::list() -> Vec<_>`,
+  `Err(_) => Vec::new()`, Kernel `Ok(self.loop_svc.status(id))`, and
+  `loop.status` failure erasure.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --locked --lib --bins` —
+  PASS.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "LoopService status
+  list cache lock poisoned loop_status status_handler subscribe" --limit 100`
+  — PASS; reports `LoopService::status(...) ->
+  anyhow::Result<Option<LoopInstance>>`, `LoopService::list(...) ->
+  anyhow::Result<Vec<LoopInstance>>`, `Kernel::loop_status`, and the new poison
+  regressions.
+- `git diff --check` — PASS.

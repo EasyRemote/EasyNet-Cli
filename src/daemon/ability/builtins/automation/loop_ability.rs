@@ -92,7 +92,7 @@ fn status_handler(svc: &Arc<LoopService>, args: Value) -> anyhow::Result<Value> 
         .get("loop_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("loop.status: `loop_id` required"))?;
-    match svc.status(&LoopId::new(id)) {
+    match svc.status(&LoopId::new(id))? {
         Some(inst) => Ok(serde_json::to_value(inst)?),
         None => anyhow::bail!("loop.status: loop {id} not found"),
     }
@@ -221,5 +221,27 @@ mod tests {
         let svc = fresh();
         let err = subscribe_handler(&svc, json!({"loop_id": "ghost"})).unwrap_err();
         assert!(format!("{err}").contains("not found"));
+    }
+
+    #[test]
+    fn status_propagates_poisoned_loop_cache() {
+        let svc = fresh();
+        svc.poison_cache_for_test();
+        let err = status_handler(&svc, json!({"loop_id": "ghost"})).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("LoopService cache lock poisoned"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn subscribe_propagates_poisoned_loop_cache() {
+        let svc = fresh();
+        svc.poison_cache_for_test();
+        let err = subscribe_handler(&svc, json!({"loop_id": "ghost"})).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("LoopService cache lock poisoned"),
+            "{err:#}"
+        );
     }
 }

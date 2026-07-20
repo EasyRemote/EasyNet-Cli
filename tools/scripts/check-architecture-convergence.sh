@@ -8207,6 +8207,202 @@ if kernel_mod.exists():
             )
 
 
+# Rule 87: loop cache is lifecycle state, not a best-effort status cache.
+# A poisoned loop cache must surface as unavailable loop state; it must not
+# become unknown-loop, empty-loop-list, empty resume work, or a zero-loop
+# debug projection.
+loop_mod = cli_root / "src/daemon/execution/loop_instance/mod.rs"
+loop_ability = cli_root / "src/daemon/ability/builtins/automation/loop_ability.rs"
+kernel_mod = cli_root / "src/daemon/boot/kernel/mod.rs"
+if loop_mod.exists():
+    text = source(loop_mod)
+    body = rust_method_body(text, "status")
+    if body is None:
+        add(
+            "R87_LOOP_CACHE_FAIL_CLOSED",
+            loop_mod,
+            1,
+            "LoopService must keep status as the loop lookup authority",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if "Result<Option<LoopInstance>>" not in signature:
+            add(
+                "R87_LOOP_CACHE_FAIL_CLOSED",
+                loop_mod,
+                line_number(text, offset),
+                "LoopService::status must return Result so poisoned cache state cannot become unknown-loop",
+            )
+        for token, detail in (
+            (
+                ".read().ok()",
+                "LoopService::status must not erase poisoned cache errors with .ok()",
+            ),
+            (
+                "and_then(|g| g.get(id)",
+                "LoopService::status must not collapse unavailable cache state into None",
+            ),
+        ):
+            if token in fn_body:
+                add(
+                    "R87_LOOP_CACHE_FAIL_CLOSED",
+                    loop_mod,
+                    line_number(text, body_start + fn_body.find(token)),
+                    detail,
+                )
+        if "LoopService cache lock poisoned" not in fn_body:
+            add(
+                "R87_LOOP_CACHE_FAIL_CLOSED",
+                loop_mod,
+                line_number(text, offset),
+                "LoopService::status must preserve poisoned cache as explicit unavailable state",
+            )
+
+    body = rust_method_body(text, "list")
+    if body is None:
+        add(
+            "R87_LOOP_CACHE_FAIL_CLOSED",
+            loop_mod,
+            1,
+            "LoopService must keep list as the loop cache snapshot authority",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        signature = text[offset:body_start]
+        if "Result<Vec<LoopInstance>>" not in signature:
+            add(
+                "R87_LOOP_CACHE_FAIL_CLOSED",
+                loop_mod,
+                line_number(text, offset),
+                "LoopService::list must return Result so poisoned cache state cannot become an empty loop list",
+            )
+        for token, detail in (
+            (
+                "Err(_) => Vec::new()",
+                "LoopService::list must not hide a poisoned cache behind an empty loop list",
+            ),
+            (
+                "Err(_) => return Vec::new()",
+                "LoopService::list must not hide a poisoned cache behind an empty loop list",
+            ),
+        ):
+            if token in fn_body:
+                add(
+                    "R87_LOOP_CACHE_FAIL_CLOSED",
+                    loop_mod,
+                    line_number(text, body_start + fn_body.find(token)),
+                    detail,
+                )
+        if "LoopService cache lock poisoned" not in fn_body:
+            add(
+                "R87_LOOP_CACHE_FAIL_CLOSED",
+                loop_mod,
+                line_number(text, offset),
+                "LoopService::list must preserve poisoned cache as explicit unavailable state",
+            )
+
+    body = rust_method_body(text, "resume_inflight")
+    if body is None:
+        add(
+            "R87_LOOP_CACHE_FAIL_CLOSED",
+            loop_mod,
+            1,
+            "LoopService::resume_inflight must preserve loop cache snapshot failures",
+        )
+    else:
+        offset, fn_body = body
+        if ".list()?" not in fn_body:
+            add(
+                "R87_LOOP_CACHE_FAIL_CLOSED",
+                loop_mod,
+                line_number(text, offset),
+                "LoopService::resume_inflight must propagate LoopService::list failures",
+            )
+
+    body = rust_method_body(text, "subscribe")
+    if body is None:
+        add(
+            "R87_LOOP_CACHE_FAIL_CLOSED",
+            loop_mod,
+            1,
+            "LoopService::subscribe must preserve loop cache lookup failures",
+        )
+    else:
+        offset, fn_body = body
+        if ".status(id)?" not in fn_body:
+            add(
+                "R87_LOOP_CACHE_FAIL_CLOSED",
+                loop_mod,
+                line_number(text, offset),
+                "LoopService::subscribe must propagate LoopService::status failures before deciding loop-not-found",
+            )
+
+    body = rust_method_body(text, "fmt")
+    if body is not None:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        for token, detail in (
+            (
+                ".read().ok()",
+                "LoopService Debug must not erase poisoned cache state with .ok()",
+            ),
+            (
+                "unwrap_or(0)",
+                "LoopService Debug must not project unavailable cache state as zero loops",
+            ),
+        ):
+            if token in fn_body:
+                add(
+                    "R87_LOOP_CACHE_FAIL_CLOSED",
+                    loop_mod,
+                    line_number(text, body_start + fn_body.find(token)),
+                    detail,
+                )
+
+if loop_ability.exists():
+    text = source(loop_ability)
+    body = rust_method_body(text, "status_handler")
+    if body is None:
+        add(
+            "R87_LOOP_CACHE_FAIL_CLOSED",
+            loop_ability,
+            1,
+            "loop.status ability must preserve LoopService::status failures",
+        )
+    else:
+        offset, fn_body = body
+        if "svc.status(&LoopId::new(id))?" not in fn_body:
+            add(
+                "R87_LOOP_CACHE_FAIL_CLOSED",
+                loop_ability,
+                line_number(text, offset),
+                "loop.status ability must propagate LoopService::status errors before reporting not found",
+            )
+
+if kernel_mod.exists():
+    text = source(kernel_mod)
+    body = rust_method_body(text, "loop_status")
+    if body is None:
+        add(
+            "R87_LOOP_CACHE_FAIL_CLOSED",
+            kernel_mod,
+            1,
+            "Kernel::loop_status must preserve LoopService::status failures",
+        )
+    else:
+        offset, fn_body = body
+        if "self.loop_svc.status(id)" not in fn_body or "Ok(self.loop_svc.status(id))" in fn_body:
+            add(
+                "R87_LOOP_CACHE_FAIL_CLOSED",
+                kernel_mod,
+                line_number(text, offset),
+                "Kernel::loop_status must return LoopService::status directly and propagate cache failures",
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(

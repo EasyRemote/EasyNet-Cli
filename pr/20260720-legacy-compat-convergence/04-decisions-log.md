@@ -456,3 +456,8 @@ Decisions will be appended as root-fork choices are made.
   best-effort discovery detail. No rooms is a valid empty list only after the
   registry is readable; a poisoned/unavailable registry must fail Kernel room
   listing explicitly.
+- Treat loop cache availability as lifecycle state. A stale loop id may remain
+  a not-found result, but a poisoned/unavailable loop cache must fail
+  `loop.status`, `loop.subscribe`, resume, Kernel loop status, and debug
+  projection explicitly instead of becoming unknown-loop, empty-loop-list, or
+  zero-loop state.

@@ -593,7 +593,7 @@ impl KernelApi for Kernel {
     }
 
     fn loop_status(&self, id: &LoopId) -> anyhow::Result<Option<LoopInstance>> {
-        Ok(self.loop_svc.status(id))
+        self.loop_svc.status(id)
     }
 
     fn cancel_loop(&self, id: &LoopId) -> anyhow::Result<()> {

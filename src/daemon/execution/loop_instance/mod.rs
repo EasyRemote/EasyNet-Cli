@@ -247,7 +247,7 @@ impl LoopService {
 
     pub fn resume_inflight(self: &Arc<Self>) -> anyhow::Result<()> {
         let ids: Vec<LoopId> = self
-            .list()
+            .list()?
             .into_iter()
             .filter(|inst| matches!(inst.state, LoopState::Pending | LoopState::Running))
             .map(|inst| inst.id)
@@ -266,15 +266,29 @@ impl LoopService {
         Ok(())
     }
 
-    pub fn status(&self, id: &LoopId) -> Option<LoopInstance> {
-        self.cache.read().ok().and_then(|g| g.get(id).cloned())
+    pub fn status(&self, id: &LoopId) -> anyhow::Result<Option<LoopInstance>> {
+        Ok(self
+            .cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("LoopService cache lock poisoned"))?
+            .get(id)
+            .cloned())
     }
 
-    pub fn list(&self) -> Vec<LoopInstance> {
-        match self.cache.read() {
-            Ok(g) => g.values().cloned().collect(),
-            Err(_) => Vec::new(),
-        }
+    pub fn list(&self) -> anyhow::Result<Vec<LoopInstance>> {
+        let cache = self
+            .cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("LoopService cache lock poisoned"))?;
+        Ok(cache.values().cloned().collect())
+    }
+
+    #[cfg(test)]
+    pub fn poison_cache_for_test(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.cache.write().unwrap();
+            panic!("poison loop cache");
+        }));
     }
 
     pub fn subscribe(
@@ -282,7 +296,7 @@ impl LoopService {
         id: &LoopId,
     ) -> anyhow::Result<(Vec<Value>, Option<broadcast::Receiver<Value>>)> {
         let inst = self
-            .status(id)
+            .status(id)?
             .ok_or_else(|| anyhow::anyhow!("loop {id} not found"))?;
         self.ensure_stream_entry(id)?;
         let (history, rx) = {
@@ -352,10 +366,9 @@ impl LoopService {
         let Some(driver) = self.driver()? else {
             return Ok(());
         };
-        let inst = match self.status(id) {
-            Some(inst) => inst,
-            None => anyhow::bail!("loop {id} not found"),
-        };
+        let inst = self
+            .status(id)?
+            .ok_or_else(|| anyhow::anyhow!("loop {id} not found"))?;
         if is_terminal(&inst.state) {
             return Ok(());
         }
@@ -376,25 +389,24 @@ impl LoopService {
                 let runner = Arc::clone(&svc);
                 if let Err(e) = runner.drive_loop(loop_id.clone(), driver).await {
                     let detail = format!("{e:#}");
-                    let already_terminal = svc
-                        .status(&loop_id)
-                        .map(|inst| is_terminal(&inst.state))
-                        .unwrap_or(true);
-                    if !already_terminal {
-                        let _ = svc.mutate(&loop_id, |inst| {
-                            inst.state = LoopState::VerifyMalformed;
-                            inst.last_verify_output = Some(detail.clone());
-                        });
-                        let _ = svc.record_frame(
-                            &loop_id,
-                            json!({
-                                "kind": "verify_chunk",
-                                "loop_id": loop_id.as_str(),
-                                "iter": svc.status(&loop_id).map(|i| i.current_iter).unwrap_or(0),
-                                "text": detail,
-                            }),
-                        );
-                        let _ = svc.record_terminal(&loop_id, LoopState::VerifyMalformed);
+                    if let Ok(Some(inst)) = svc.status(&loop_id) {
+                        if !is_terminal(&inst.state) {
+                            let iter = inst.current_iter;
+                            let _ = svc.mutate(&loop_id, |inst| {
+                                inst.state = LoopState::VerifyMalformed;
+                                inst.last_verify_output = Some(detail.clone());
+                            });
+                            let _ = svc.record_frame(
+                                &loop_id,
+                                json!({
+                                    "kind": "verify_chunk",
+                                    "loop_id": loop_id.as_str(),
+                                    "iter": iter,
+                                    "text": detail,
+                                }),
+                            );
+                            let _ = svc.record_terminal(&loop_id, LoopState::VerifyMalformed);
+                        }
                     }
                 }
                 if let Ok(mut running) = svc.running.lock() {
@@ -411,7 +423,7 @@ impl LoopService {
     ) -> anyhow::Result<()> {
         loop {
             let inst = self
-                .status(&id)
+                .status(&id)?
                 .ok_or_else(|| anyhow::anyhow!("loop {id} vanished"))?;
             if is_terminal(&inst.state) {
                 return Ok(());
@@ -652,8 +664,8 @@ impl LoopService {
 
     fn is_cancelled(&self, id: &LoopId) -> anyhow::Result<bool> {
         Ok(matches!(
-            self.status(id).map(|inst| inst.state),
-            Some(LoopState::Cancelled)
+            self.status(id)?,
+            Some(inst) if inst.state == LoopState::Cancelled
         ))
     }
 }
@@ -745,8 +757,10 @@ async fn invoke_blocking(
 
 impl std::fmt::Debug for LoopService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let n = self.cache.read().ok().map(|g| g.len()).unwrap_or(0);
-        write!(f, "LoopService {{ loops: {n} }}")
+        match self.cache.read() {
+            Ok(cache) => write!(f, "LoopService {{ loops: {} }}", cache.len()),
+            Err(_) => write!(f, "LoopService {{ loops: unavailable }}"),
+        }
     }
 }
 
@@ -797,7 +811,7 @@ mod tests {
 
     async fn wait_for_terminal(svc: &LoopService, id: &LoopId) -> LoopInstance {
         for _ in 0..100 {
-            if let Some(inst) = svc.status(id) {
+            if let Some(inst) = svc.status(id).expect("read loop status") {
                 if is_terminal(&inst.state) {
                     return inst;
                 }
@@ -929,7 +943,12 @@ mod tests {
                 },
             );
         }
-        let ids: Vec<_> = svc.list().into_iter().map(|i| i.id).collect();
+        let ids: Vec<_> = svc
+            .list()
+            .expect("list loops")
+            .into_iter()
+            .map(|i| i.id)
+            .collect();
         assert_eq!(
             ids,
             vec![
@@ -937,6 +956,43 @@ mod tests {
                 LoopId::new("loop-b"),
                 LoopId::new("loop-c"),
             ]
+        );
+    }
+
+    #[test]
+    fn status_rejects_poisoned_cache_instead_of_unknown_loop() {
+        let svc = LoopService::new();
+        svc.poison_cache_for_test();
+        let err = svc
+            .status(&LoopId::new("ghost"))
+            .expect_err("poisoned cache must fail status");
+        assert!(
+            format!("{err:#}").contains("LoopService cache lock poisoned"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn list_rejects_poisoned_cache_instead_of_empty_loops() {
+        let svc = LoopService::new();
+        svc.poison_cache_for_test();
+        let err = svc.list().expect_err("poisoned cache must fail list");
+        assert!(
+            format!("{err:#}").contains("LoopService cache lock poisoned"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn subscribe_rejects_poisoned_cache_before_unknown_loop_projection() {
+        let svc = LoopService::new();
+        svc.poison_cache_for_test();
+        let err = svc
+            .subscribe(&LoopId::new("ghost"))
+            .expect_err("poisoned cache must fail subscribe");
+        assert!(
+            format!("{err:#}").contains("LoopService cache lock poisoned"),
+            "{err:#}"
         );
     }
 }

@@ -5648,6 +5648,73 @@ expect_fail \
   "R86_DISCUSS_ROOM_REGISTRY_FAIL_CLOSED"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/execution/loop_instance" "$CLI/src/daemon/ability/builtins/automation" "$CLI/src/daemon/boot/kernel"
+cat >"$CLI/src/daemon/execution/loop_instance/mod.rs" <<'EOF'
+pub struct LoopId;
+pub struct LoopInstance {
+    state: LoopState,
+}
+pub enum LoopState {
+    Running,
+    Cancelled,
+}
+pub struct LoopService {
+    cache: Lock,
+}
+
+impl LoopService {
+    pub fn status(&self, id: &LoopId) -> Option<LoopInstance> {
+        self.cache.read().ok().and_then(|g| g.get(id).cloned())
+    }
+
+    pub fn list(&self) -> Vec<LoopInstance> {
+        match self.cache.read() {
+            Ok(g) => g.values().cloned().collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn resume_inflight(&self) -> anyhow::Result<()> {
+        for inst in self.list() {
+            start(inst);
+        }
+        Ok(())
+    }
+
+    pub fn subscribe(&self, id: &LoopId) -> anyhow::Result<StreamSource> {
+        let _inst = self
+            .status(id)
+            .ok_or_else(|| anyhow::anyhow!("loop not found"))?;
+        Ok(StreamSource::Snapshot(Vec::new()))
+    }
+}
+
+impl std::fmt::Debug for LoopService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let n = self.cache.read().ok().map(|g| g.len()).unwrap_or(0);
+        write!(f, "LoopService {{ loops: {n} }}")
+    }
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/automation/loop_ability.rs" <<'EOF'
+fn status_handler(svc: &LoopService, args: Value) -> anyhow::Result<Value> {
+    let id = "loop-1";
+    match svc.status(&LoopId::new(id)) {
+        Some(inst) => Ok(serde_json::to_value(inst)?),
+        None => anyhow::bail!("loop.status: loop {id} not found"),
+    }
+}
+EOF
+cat >"$CLI/src/daemon/boot/kernel/mod.rs" <<'EOF'
+fn loop_status(&self, id: &LoopId) -> anyhow::Result<Option<LoopInstance>> {
+    Ok(self.loop_svc.status(id))
+}
+EOF
+expect_fail \
+  "loop cache silent empty unknown fallback" \
+  "R87_LOOP_CACHE_FAIL_CLOSED"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/plugins" "$CLI/src/daemon/boot/invocation" "$CLI/src/daemon/ability/wire"
 cat >"$CLI/src/daemon/plugins/runtime_manager.rs" <<'EOF'
 use crate::daemon::ability::wire::AbilityWireRegistry;
