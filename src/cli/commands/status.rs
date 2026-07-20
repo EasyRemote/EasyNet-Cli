@@ -190,7 +190,7 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
     // with a `status` field (`active` / `stale` / `draining`); we
     // count `active` as online so the summary line matches what
     // `easynet device list` shows.
-    let entries = fetch_directory_entries();
+    let entries = fetch_directory_entries()?;
     let total = entries.len();
     let online = entries
         .iter()
@@ -257,28 +257,64 @@ fn run_json() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Pull the federated directory snapshot from the local daemon.
-/// Best-effort: a transport / parse failure surfaces an empty list
-/// + an info line so the rest of the status output still renders
-/// (the operator already saw "daemon up" via `observe.health`
-/// above; whether any peers are advertised is a softer signal).
+/// Pull the federated directory snapshot from the local daemon. Directory
+/// failure is not an empty fleet: hidden signer, admission, or namespace
+/// failures would otherwise be rendered as a valid zero-node state.
 #[cfg(feature = "axon-pb")]
-fn fetch_directory_entries() -> Vec<Value> {
-    match crate::daemon::federation::directory_reader::read_federated_directory_for_current_user(
-        None,
-    ) {
-        Ok(entries) => entries,
-        Err(e) => {
-            output::info(&format!(
-                "Fleet: cannot query user-scoped federation.discover ('{e}')"
-            ));
-            Vec::new()
-        }
-    }
+fn fetch_directory_entries() -> anyhow::Result<Vec<Value>> {
+    require_fleet_directory_entries(
+        crate::daemon::federation::directory_reader::read_federated_directory_for_current_user(
+            None,
+        ),
+    )
 }
 
 #[cfg(not(feature = "axon-pb"))]
-fn fetch_directory_entries() -> Vec<Value> {
-    output::info("Fleet: federation.discover requires the 'axon-pb' feature");
-    Vec::new()
+fn fetch_directory_entries() -> anyhow::Result<Vec<Value>> {
+    anyhow::bail!("Fleet: federation.discover requires the 'axon-pb' feature")
+}
+
+fn require_fleet_directory_entries(
+    result: anyhow::Result<Vec<Value>>,
+) -> anyhow::Result<Vec<Value>> {
+    result.map_err(|error| {
+        anyhow::anyhow!(
+            "Fleet: cannot query user-scoped federation.discover; status refuses to project this as an empty fleet: {error}"
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fleet_directory_failure_is_not_projected_as_empty_nodes() {
+        let error =
+            require_fleet_directory_entries(Err(anyhow::anyhow!("CALLER_SIGNER_UNAVAILABLE")))
+                .expect_err("directory failure must fail closed");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("cannot query user-scoped federation.discover"),
+            "wrong error: {message}"
+        );
+        assert!(
+            message.contains("refuses to project this as an empty fleet"),
+            "wrong error: {message}"
+        );
+    }
+
+    #[test]
+    fn fleet_directory_success_returns_authoritative_entries() {
+        let entries = vec![json!({
+            "agent_ura": "easynet:///r/localhost/device/dev-1",
+            "status": "active",
+        })];
+
+        assert_eq!(
+            require_fleet_directory_entries(Ok(entries.clone())).expect("entries"),
+            entries
+        );
+    }
 }
