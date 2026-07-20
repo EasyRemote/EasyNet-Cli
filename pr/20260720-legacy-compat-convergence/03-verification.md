@@ -1577,3 +1577,34 @@ Commands and outcomes will be appended after implementation.
   (`canonical-runtime-convergence-v2: OK`).
 - `PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check` — PASS.
 - `git diff --check` — PASS.
+
+## 2026-07-21 Session prelude resolve_key schema and paired user key pinning
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  sync_paired_user_trust_prelude paired_user_resolve_key_args
+  publish_paired_user_keys_prelude resolved_public_keys federation.resolve_key
+  presented_pubkey_b64` — PASS; reports the paired-user trust prelude,
+  resolve-key request builder, key publication prelude, and the two
+  `resolved_public_keys` consumers.
+- `PATH="$HOME/.cargo/bin:$PATH" cargo test -q
+  session_initiator::prelude --lib` — PASS (`6 passed`); covers canonical
+  `public_keys_b64[]`, legacy single-key rejection, malformed-row rejection,
+  and paired-user resolve arguments carrying `presented_pubkey_b64`.
+- `PATH="$HOME/.cargo/bin:$PATH" cargo test -q
+  paired_user_trust_resolve_pins_presented_pubkey --lib` — PASS (`1 passed`);
+  verifies session open invokes `federation.resolve_key` with the locally
+  published public key after paired-user key publication.
+- `PATH="$HOME/.cargo/bin:$PATH" cargo check --lib` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after adding
+  R93 for session prelude resolve-key schema binding and paired-user proof
+  pinning.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture where `resolved_public_keys` repairs legacy
+  `public_key_b64`, skips malformed rows, defaults invalid JSON to an empty
+  key set, and paired-user resolve omits `presented_pubkey_b64`.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `PATH="$HOME/.cargo/bin:$PATH" cargo fmt --check` — PASS.
+- `git diff --check` — PASS.

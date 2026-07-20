@@ -1339,7 +1339,15 @@ mod tests {
                     request.target.as_ref(),
                 )?
                 .to_string();
+            let is_resolve_key = function_name == "federation.resolve_key";
             self.invokes.lock().await.push((function_name, body));
+            if is_resolve_key {
+                return Ok(Response::new(InvokeResponse {
+                    result: br#"{"public_keys_b64":[]}"#.to_vec(),
+                    result_content_type: "application/json".to_string(),
+                    ..InvokeResponse::default()
+                }));
+            }
             Ok(Response::new(InvokeResponse::default()))
         }
 
@@ -2113,6 +2121,96 @@ mod tests {
                     && body.get("agent_ura").and_then(Value::as_str)
                         == Some("easynet:///r/realm/user/user-dev")),
             "prelude must explicitly resolve paired user key before session.open: {calls:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn paired_user_trust_resolve_pins_presented_pubkey() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let dispatcher = Arc::new(RecordingDispatcher::default());
+        let (addr, invokes, _server) = spawn_recording_prelude_hub().await;
+        let device_ura = "easynet:///r/realm/device/n1";
+        let user_ura = "easynet:///r/realm/user/user-dev";
+        let user_pubkey_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "n1".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: format!("http://{addr}"),
+                realm: "realm".to_string(),
+                deploy_signature: String::new(),
+                hub_api_base: None,
+                username: Some("dev".to_string()),
+                user_id: Some("user-dev".to_string()),
+                hub_pubkey_b64: None,
+                hub_tls_ca_pem_b64: None,
+                join_receipt_hash: None,
+            },
+        )
+        .expect("save test credentials");
+        let trust_dir = tempfile::tempdir().expect("trust tempdir");
+        let user_anchor = crate::daemon::trust::anchor::RealmTrustAnchor::from_entries(vec![
+            crate::daemon::trust::anchor::TrustedAgent {
+                agent_ura: user_ura.to_string(),
+                public_key_b64: user_pubkey_b64.to_string(),
+                role: crate::daemon::trust::anchor::TrustedAgentRole::User,
+                added_at_unix_ms: 1_700_000_000_000,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            },
+        ])
+        .expect("user trust anchor");
+        let user_trust_sync = UserTrustSync {
+            daemon_realm: "realm".to_string(),
+            trust_anchor_path: trust_dir.path().join("realm-trust.toml"),
+            cell: crate::daemon::trust::cell::SharedTrustAnchor::new(Arc::new(user_anchor)),
+        };
+
+        let result = dial_and_run_session_with_idle_timeout(
+            SessionDialAttempt {
+                hub_endpoint: format!("http://{addr}"),
+                signer: TestSessionSigner::random(device_ura),
+                hub_ca_pem_path: None,
+                dispatcher,
+                escalation_outbox: None,
+                preludes: SessionPreludeInputs::new(&[], hub_store()),
+                idle_timeout: Duration::from_millis(80),
+                initial_admission: None,
+                user_trust_sync: Some(&user_trust_sync),
+                connection_state_sink: isolated_connection_state_sink(),
+            },
+            &mut SessionPhaseTracker::new(),
+        )
+        .await;
+
+        assert!(
+            matches!(
+                result,
+                Err(SessionError::UserTrustBootstrapFailed {
+                    source: UserTrustBootstrapError::MissingAtHub { .. },
+                    ..
+                })
+            ),
+            "recording hub returns an empty resolve_key response, got {result:?}"
+        );
+        let calls = invokes.lock().await.clone();
+        assert!(
+            calls
+                .iter()
+                .any(|(name, body)| name == "identity.register_pubkey"
+                    && body.get("agent_ura").and_then(Value::as_str) == Some(user_ura)
+                    && body.get("public_key_b64").and_then(Value::as_str) == Some(user_pubkey_b64)),
+            "prelude must publish the paired user key before resolving it: {calls:#?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|(name, body)| name == "federation.resolve_key"
+                    && body.get("agent_ura").and_then(Value::as_str) == Some(user_ura)
+                    && body.get("presented_pubkey_b64").and_then(Value::as_str)
+                        == Some(user_pubkey_b64)),
+            "paired user resolve_key must pin the presented public key: {calls:#?}"
         );
     }
 

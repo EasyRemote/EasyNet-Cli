@@ -492,3 +492,10 @@ Decisions will be appended as root-fork choices are made.
   invocation id. The daemon must either record that attempt or fail closed; it
   must not continue with a disabled handle, skip corrupt rows, or report an
   empty product history when the attempt ledger is unavailable.
+- Treat session prelude `federation.resolve_key` output as schema-bound trust
+  evidence, not backward-compatible discovery output. Only canonical
+  `public_keys_b64[]` is accepted; legacy `public_key_b64`, malformed JSON,
+  non-string keys, and empty keys fail instead of being repaired or skipped.
+  Paired-user trust sync must pin resolve with the locally published
+  `presented_pubkey_b64` so key import is bound to the key material the local
+  runtime actually holds.

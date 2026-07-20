@@ -7269,6 +7269,101 @@ if device_trust_sync.exists():
                 add("R73_DEVICE_TRUST_SYNC_RESOLVE_KEY_SCHEMA", device_trust_sync, line_number(text, offset), detail)
 
 
+# Rule 93: Session prelude trust sync consumes the same hub
+# federation.resolve_key evidence as admission. It must not repair legacy
+# single-key responses or skip malformed public_keys_b64 rows while importing
+# hub/user trust before session.open.
+session_prelude = cli_root / "src/daemon/invocation/bidi/session_initiator/prelude.rs"
+if session_prelude.exists():
+    text = source(session_prelude)
+    if "resolved_public_keys" in text or "sync_paired_user_trust_prelude" in text:
+        parser_body = rust_method_body(text, "resolved_public_keys")
+        if parser_body is None:
+            add(
+                "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                session_prelude,
+                1,
+                "session prelude trust sync must own a schema-bound resolve_key response parser",
+            )
+        else:
+            offset, body = parser_body
+            body_start = text.find("{", offset) + 1
+            for token, detail in (
+                (
+                    '.get("public_key_b64")',
+                    "session prelude must not repair resolve_key responses from legacy public_key_b64",
+                ),
+                (
+                    "filter_map",
+                    "session prelude must not skip malformed public_keys_b64 rows",
+                ),
+                (
+                    "unwrap_or_default()",
+                    "session prelude must not default missing public_keys_b64 to an empty key set",
+                ),
+                (
+                    "serde_json::from_slice::<serde_json::Value>(result).ok()",
+                    "session prelude must not ignore malformed resolve_key JSON",
+                ),
+            ):
+                if token in body:
+                    add(
+                        "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                        session_prelude,
+                        line_number(text, body_start + body.find(token)),
+                        detail,
+                    )
+            if "fn resolved_public_keys(result: &[u8]) -> anyhow::Result<Vec<String>>" not in text:
+                add(
+                    "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                    session_prelude,
+                    line_number(text, offset),
+                    "session prelude resolve_key parser must be fallible",
+                )
+            for token, detail in (
+                (
+                    "resolve_key_response_missing_public_keys_b64",
+                    "missing public_keys_b64 must be a typed prelude parse error",
+                ),
+                (
+                    "resolve_key_response_public_keys_b64_not_array",
+                    "non-array public_keys_b64 must be a typed prelude parse error",
+                ),
+                (
+                    "_not_string",
+                    "non-string public_keys_b64 rows must be typed prelude parse errors",
+                ),
+                (
+                    "_empty",
+                    "empty public_keys_b64 rows must be typed prelude parse errors",
+                ),
+            ):
+                if token not in body:
+                    add(
+                        "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                        session_prelude,
+                        line_number(text, offset),
+                        detail,
+                    )
+        sync_body = rust_method_body(text, "sync_paired_user_trust_prelude")
+        if sync_body is not None:
+            offset, body = sync_body
+            if "paired_user_resolve_key_args(&user_ura, presented_pubkey_b64)" not in body:
+                add(
+                    "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                    session_prelude,
+                    line_number(text, offset),
+                    "paired user trust sync must pin resolve_key with the presented local user pubkey",
+                )
+            if "resolved_public_keys(&response.result).map_err" not in body:
+                add(
+                    "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                    session_prelude,
+                    line_number(text, offset),
+                    "paired user trust sync must propagate resolve_key response schema failures",
+                )
+
+
 # Rule 74: Pages serve adapter must consume page.fetch output as
 # schema-bound resource evidence. Invalid/missing bytes or metadata must not
 # be projected into a 200 response with empty bytes/default MIME/default sha.

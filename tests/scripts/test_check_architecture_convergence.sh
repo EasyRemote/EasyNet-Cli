@@ -786,6 +786,41 @@ fn send_prepared_advertise_abilities_prelude(
     plan: &HostedAgentPreludePublicationPlan,
 ) {
 }
+
+fn resolved_public_keys(result: &[u8]) -> anyhow::Result<Vec<String>> {
+    let response: serde_json::Value = serde_json::from_slice(result)
+        .map_err(|err| anyhow::anyhow!("resolve_key_response_json_invalid: {err}"))?;
+    let keys = response
+        .get("public_keys_b64")
+        .ok_or_else(|| anyhow::anyhow!("resolve_key_response_missing_public_keys_b64"))?
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("resolve_key_response_public_keys_b64_not_array"))?;
+    let mut out = Vec::new();
+    for (index, value) in keys.iter().enumerate() {
+        let key = value.as_str().ok_or_else(|| {
+            anyhow::anyhow!("resolve_key_response_public_keys_b64[{index}]_not_string")
+        })?;
+        let key = key.trim();
+        if key.is_empty() {
+            anyhow::bail!("resolve_key_response_public_keys_b64[{index}]_empty");
+        }
+        out.push(key.to_string());
+    }
+    Ok(out)
+}
+
+fn paired_user_resolve_key_args(user_ura: &str, presented_pubkey_b64: Option<&str>) -> anyhow::Result<Vec<u8>> {
+    Ok(Vec::new())
+}
+
+async fn sync_paired_user_trust_prelude() -> anyhow::Result<()> {
+    for presented_pubkey_b64 in local_public_keys {
+        let args = paired_user_resolve_key_args(&user_ura, presented_pubkey_b64)?;
+        let response = invoke_prelude_unary(args).await?;
+        let pubkeys = resolved_public_keys(&response.result).map_err(|err| anyhow::anyhow!("{err}"))?;
+    }
+    Ok(())
+}
 EOF
 	  cat >"$CLI/src/daemon/ability/builtins/resources/skills/list.rs" <<'EOF'
 use crate::daemon::persistence::agent_aggregate::{
@@ -5166,6 +5201,47 @@ EOF
 expect_fail \
   "device trust sync resolve_key legacy response repair" \
   "R73_DEVICE_TRUST_SYNC_RESOLVE_KEY_SCHEMA"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/bidi/session_initiator"
+cat >"$CLI/src/daemon/invocation/bidi/session_initiator/prelude.rs" <<'EOF'
+fn resolved_public_keys(result: &[u8]) -> Vec<String> {
+    let parsed = serde_json::from_slice::<serde_json::Value>(result).ok();
+    let mut pubkeys: Vec<String> = parsed
+        .as_ref()
+        .and_then(|v| v.get("public_keys_b64"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|k| {
+                    let key = k.as_str()?.trim();
+                    (!key.is_empty()).then(|| key.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if pubkeys.is_empty() {
+        if let Some(pk) = parsed
+            .as_ref()
+            .and_then(|v| v.get("public_key_b64"))
+            .and_then(|pk| pk.as_str())
+        {
+            pubkeys.push(pk.to_string());
+        }
+    }
+    pubkeys
+}
+
+async fn sync_paired_user_trust_prelude() -> anyhow::Result<()> {
+    let args = serde_json::to_vec(&serde_json::json!({ "agent_ura": user_ura }))?;
+    let response = invoke_prelude_unary(args).await?;
+    let pubkeys = resolved_public_keys(&response.result);
+    Ok(())
+}
+EOF
+expect_fail \
+  "session prelude resolve_key legacy response repair" \
+  "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA"
 
 make_good_fixture
 mkdir -p "$CLI/src/daemon/resources/pages"

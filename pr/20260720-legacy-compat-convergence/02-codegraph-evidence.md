@@ -1573,3 +1573,30 @@ Evidence will be appended after indexing and focused impact queries.
   dependency, transport entry begins fail closed when audit is not wired or
   cannot append, and corrupt attempt ledger rows make the history read model
   fail instead of producing a false partial list.
+
+## 2026-07-21 Session prelude resolve_key schema and paired user key pinning audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  sync_paired_user_trust_prelude paired_user_resolve_key_args
+  publish_paired_user_keys_prelude resolved_public_keys federation.resolve_key
+  presented_pubkey_b64` identified the session prelude trust-sync boundary.
+  The concrete blast radius was intentionally small: `resolved_public_keys`
+  feeds only the realm hub trust import and paired user trust import paths in
+  `session_initiator/prelude.rs`.
+- Targeted source inspection found the compatibility seam: the prelude parser
+  still repaired legacy `public_key_b64`, skipped malformed rows with
+  `filter_map`, collapsed malformed JSON through `.ok()` and
+  `unwrap_or_default()`, and the paired-user resolve request could be sent with
+  only `agent_ura` after publishing local key material.
+- The root abstraction problem was treating `federation.resolve_key` as a
+  tolerant discovery payload. In the session prelude it is trust evidence used
+  before `session.open`; accepting legacy or malformed key payloads silently
+  weakens signer custody and makes product-visible route/admission failures
+  look like ordinary discovery misses.
+- After the change, `resolved_public_keys` is a fallible schema-bound parser
+  for canonical `public_keys_b64[]` only, rejects malformed JSON,
+  non-array/non-string/empty key rows, and no longer repairs
+  `public_key_b64`. Paired user trust sync now resolves with the locally
+  published `presented_pubkey_b64`, propagates resolve schema failures as
+  bootstrap failures, and R93 guards this boundary against legacy response
+  repair.

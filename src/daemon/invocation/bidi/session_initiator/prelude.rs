@@ -816,7 +816,18 @@ async fn sync_realm_hub_trust_prelude(
         }
     };
 
-    let pubkeys = resolved_public_keys(&response.result);
+    let pubkeys = match resolved_public_keys(&response.result) {
+        Ok(pubkeys) => pubkeys,
+        Err(error) => {
+            crate::op_event!(
+                component = session,
+                kind = hub_trust_sync_resolve_schema_invalid,
+                error = error.to_string(),
+                hub_ura = hub_ura,
+            );
+            return;
+        }
+    };
     if pubkeys.is_empty() {
         crate::op_event!(
             component = session,
@@ -891,47 +902,62 @@ async fn sync_paired_user_trust_prelude(
         publish_paired_user_keys_prelude(client, signer, &user_ura, &local_public_keys).await?;
     }
 
-    let args = match serde_json::to_vec(&serde_json::json!({ "agent_ura": user_ura })) {
-        Ok(value) => value,
-        Err(err) => {
-            return Err(UserTrustBootstrapError::ResolveFailed {
-                user_ura,
-                status: tonic::Status::internal(format!(
-                    "federation.resolve_key user args encode failed: {err}"
+    let mut resolve_inputs: Vec<Option<&str>> = local_public_keys
+        .iter()
+        .map(|public_key| Some(public_key.as_str()))
+        .collect();
+    if resolve_inputs.is_empty() {
+        resolve_inputs.push(None);
+    }
+    let mut pubkeys = Vec::new();
+    for presented_pubkey_b64 in resolve_inputs {
+        let args =
+            paired_user_resolve_key_args(&user_ura, presented_pubkey_b64).map_err(|err| {
+                UserTrustBootstrapError::ResolveFailed {
+                    user_ura: user_ura.clone(),
+                    status: tonic::Status::internal(format!(
+                        "federation.resolve_key user args encode failed: {err}"
+                    )),
+                }
+            })?;
+        let request = match signed_prelude_request(
+            signer,
+            &user_ura,
+            crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
+            args,
+        )
+        .await
+        {
+            Ok(req) => req,
+            Err(status) => {
+                return Err(UserTrustBootstrapError::ResolveFailed { user_ura, status });
+            }
+        };
+        let response = match invoke_prelude_unary(client, request, "federation.resolve_key").await {
+            Ok(resp) => resp,
+            Err(status) => {
+                let code = status.code();
+                let msg = status.message();
+                crate::op_event!(
+                    component = session,
+                    kind = user_trust_sync_resolve_failed,
+                    code = code,
+                    error = msg,
+                    user_ura = user_ura,
+                );
+                return Err(UserTrustBootstrapError::ResolveFailed { user_ura, status });
+            }
+        };
+        let resolved = resolved_public_keys(&response.result).map_err(|error| {
+            UserTrustBootstrapError::ResolveFailed {
+                user_ura: user_ura.clone(),
+                status: tonic::Status::failed_precondition(format!(
+                    "federation.resolve_key user response schema invalid: {error}"
                 )),
-            });
-        }
-    };
-    let request = match signed_prelude_request(
-        signer,
-        &user_ura,
-        crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY,
-        args,
-    )
-    .await
-    {
-        Ok(req) => req,
-        Err(status) => {
-            return Err(UserTrustBootstrapError::ResolveFailed { user_ura, status });
-        }
-    };
-    let response = match invoke_prelude_unary(client, request, "federation.resolve_key").await {
-        Ok(resp) => resp,
-        Err(status) => {
-            let code = status.code();
-            let msg = status.message();
-            crate::op_event!(
-                component = session,
-                kind = user_trust_sync_resolve_failed,
-                code = code,
-                error = msg,
-                user_ura = user_ura,
-            );
-            return Err(UserTrustBootstrapError::ResolveFailed { user_ura, status });
-        }
-    };
-
-    let pubkeys = resolved_public_keys(&response.result);
+            }
+        })?;
+        pubkeys.extend(resolved);
+    }
     if pubkeys.is_empty() {
         crate::op_event!(
             component = session,
@@ -1005,33 +1031,47 @@ async fn sync_paired_user_trust_prelude(
     })
 }
 
-fn resolved_public_keys(result: &[u8]) -> Vec<String> {
-    let parsed = serde_json::from_slice::<serde_json::Value>(result).ok();
-    let mut pubkeys: Vec<String> = parsed
-        .as_ref()
-        .and_then(|v| v.get("public_keys_b64"))
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|k| {
-                    let key = k.as_str()?.trim();
-                    (!key.is_empty()).then(|| key.to_string())
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    if pubkeys.is_empty() {
-        if let Some(pk) = parsed
-            .as_ref()
-            .and_then(|v| v.get("public_key_b64"))
-            .and_then(|pk| pk.as_str())
-            .map(str::trim)
-            .filter(|pk| !pk.is_empty())
-        {
-            pubkeys.push(pk.to_string());
+fn resolved_public_keys(result: &[u8]) -> anyhow::Result<Vec<String>> {
+    let parsed = serde_json::from_slice::<serde_json::Value>(result)
+        .map_err(|err| anyhow::anyhow!("resolve_key_response_json_invalid: {err}"))?;
+    let public_keys = parsed
+        .get("public_keys_b64")
+        .ok_or_else(|| anyhow::anyhow!("resolve_key_response_missing_public_keys_b64"))?
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("resolve_key_response_public_keys_b64_not_array"))?;
+    let mut out = Vec::with_capacity(public_keys.len());
+    for (index, value) in public_keys.iter().enumerate() {
+        let key = value.as_str().ok_or_else(|| {
+            anyhow::anyhow!("resolve_key_response_public_keys_b64[{index}]_not_string")
+        })?;
+        let key = key.trim();
+        if key.is_empty() {
+            anyhow::bail!("resolve_key_response_public_keys_b64[{index}]_empty");
         }
+        out.push(key.to_string());
     }
-    pubkeys
+    Ok(out)
+}
+
+fn paired_user_resolve_key_args(
+    user_ura: &str,
+    presented_pubkey_b64: Option<&str>,
+) -> serde_json::Result<Vec<u8>> {
+    let mut args = serde_json::Map::new();
+    args.insert(
+        "agent_ura".to_string(),
+        serde_json::Value::String(user_ura.to_string()),
+    );
+    if let Some(public_key) = presented_pubkey_b64
+        .map(str::trim)
+        .filter(|public_key| !public_key.is_empty())
+    {
+        args.insert(
+            "presented_pubkey_b64".to_string(),
+            serde_json::Value::String(public_key.to_string()),
+        );
+    }
+    serde_json::to_vec(&serde_json::Value::Object(args))
 }
 
 fn paired_user_trust_present(sync: &UserTrustSync, user_ura: &str) -> bool {
@@ -1145,8 +1185,8 @@ pub(super) fn committed_owner_ability_descriptors(
 #[cfg(test)]
 mod tests {
     use super::{
-        paired_user_trust_present, resolved_public_keys, HostedAgentPreludePublicationPlan,
-        UserTrustSync,
+        paired_user_resolve_key_args, paired_user_trust_present, resolved_public_keys,
+        HostedAgentPreludePublicationPlan, UserTrustSync,
     };
     use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
@@ -1157,27 +1197,57 @@ mod tests {
     fn resolved_public_keys_prefers_array_response() {
         let body = br#"{
             "public_key_b64": "fallback",
-            "public_keys_b64": [" key-a ", "", 7, "key-b"]
+            "public_keys_b64": [" key-a ", "key-b"]
         }"#;
 
         assert_eq!(
-            resolved_public_keys(body),
+            resolved_public_keys(body).expect("schema-bound public keys"),
             vec!["key-a".to_string(), "key-b".to_string()]
         );
     }
 
     #[test]
-    fn resolved_public_keys_falls_back_to_single_key() {
+    fn resolved_public_keys_rejects_legacy_single_key_response() {
         let body = br#"{ "public_key_b64": " single-key " }"#;
 
-        assert_eq!(resolved_public_keys(body), vec!["single-key".to_string()]);
+        let err = resolved_public_keys(body)
+            .expect_err("legacy single-key resolve_key response must not be repaired");
+        assert!(
+            err.to_string()
+                .contains("resolve_key_response_missing_public_keys_b64"),
+            "{err:#}"
+        );
     }
 
     #[test]
-    fn resolved_public_keys_ignores_malformed_or_empty_payloads() {
-        assert!(resolved_public_keys(br#"{"public_keys_b64":[]}"#).is_empty());
-        assert!(resolved_public_keys(br#"not-json"#).is_empty());
-        assert!(resolved_public_keys(br#"{ "public_key_b64": " " }"#).is_empty());
+    fn resolved_public_keys_rejects_malformed_rows() {
+        assert!(resolved_public_keys(br#"{"public_keys_b64":[]}"#)
+            .expect("empty canonical key array is a hub miss")
+            .is_empty());
+        let json_err = resolved_public_keys(br#"not-json"#)
+            .expect_err("malformed JSON must be a schema error");
+        assert!(
+            json_err
+                .to_string()
+                .contains("resolve_key_response_json_invalid"),
+            "{json_err:#}"
+        );
+        let row_err = resolved_public_keys(br#"{"public_keys_b64":["ok",7]}"#)
+            .expect_err("malformed public_keys_b64 rows must fail closed");
+        assert!(
+            row_err
+                .to_string()
+                .contains("resolve_key_response_public_keys_b64[1]_not_string"),
+            "{row_err:#}"
+        );
+        let empty_err = resolved_public_keys(br#"{"public_keys_b64":[" "]}"#)
+            .expect_err("empty public_keys_b64 rows must fail closed");
+        assert!(
+            empty_err
+                .to_string()
+                .contains("resolve_key_response_public_keys_b64[0]_empty"),
+            "{empty_err:#}"
+        );
     }
 
     fn user_trust_sync_with_key(user_ura: &str) -> UserTrustSync {
@@ -1209,6 +1279,22 @@ mod tests {
             &sync,
             "easynet:///r/realm/user/other"
         ));
+    }
+
+    #[test]
+    fn paired_user_resolve_key_args_carries_presented_pubkey() {
+        let body = paired_user_resolve_key_args(
+            "easynet:///r/realm/user/user-dev",
+            Some(" AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= "),
+        )
+        .expect("encode paired user resolve args");
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
+
+        assert_eq!(parsed["agent_ura"], "easynet:///r/realm/user/user-dev");
+        assert_eq!(
+            parsed["presented_pubkey_b64"],
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        );
     }
 
     #[test]
