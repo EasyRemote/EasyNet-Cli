@@ -658,3 +658,15 @@ Decisions will be appended as root-fork choices are made.
   resilient daemon boot. Bad package directories can still produce row-level
   operator diagnostics, but blank identities, duplicate active package rows, or
   multiple active versions make the active set itself untrustworthy.
+- Treat Context store projections as one read-model authority. `config.json`,
+  `folders.json`, `favorites.json`, and `captures.jsonl` now share the same
+  missing-file versus corrupt-existing-file semantics as clipboard history:
+  missing means documented first-run empty/default, corrupt existing state
+  means unavailable Context state.
+- Keep display hints distinct from authority facts. Empty `preview` values
+  remain valid because catalog rendering already has explicit display
+  fallbacks; non-empty validation applies to identity, path, ability,
+  reference, and timestamp facts that determine lookup and routing behavior.
+- Treat the clipboard tracker as a consumer of Context config authority. If
+  `config.json` is corrupt, the tracker does not capture and does not rewrite
+  the file; it reports the unavailable config and retries later.

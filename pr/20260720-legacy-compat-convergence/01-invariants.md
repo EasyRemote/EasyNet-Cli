@@ -249,3 +249,10 @@
   duplicate package identity or multiple active versions for one package id.
   Index loaders must reuse this state parser instead of owning a second TOML
   interpretation path.
+- Context store files are product read-model authority, not UI caches. Missing
+  `context/config.json`, `folders.json`, `favorites.json`, or
+  `captures.jsonl` may project the documented first-run default, but existing
+  files must parse through one fail-closed store parser. Malformed JSON,
+  unknown fields, blank authority fields, unsafe capture file paths, and
+  malformed JSONL rows must not become disabled tracking, empty folders,
+  empty favorites, skipped captures, or "capture not found".

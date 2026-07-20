@@ -2037,3 +2037,28 @@ Evidence will be appended after indexing and focused impact queries.
   `id`/`version`/`hash`, and reject duplicate `id@version` rows or multiple
   active versions for one package id. Missing state files remain the only valid
   fresh empty install state.
+
+## 2026-07-21 Context store read-model authority audit
+
+- `.codegraph/` remains absent in the checkout; codegraph 1.4.1 is installed
+  at `/Users/macbook.silan.tech/.local/bin/codegraph`, but no agent-owned
+  indexing was performed. Targeted `rg` searches were used for this seam.
+- `rg -n "read_to_string|serde_json::from_str|unwrap_or_default|filter_map"
+  src/daemon/persistence/context_store.rs` identified remaining compatibility
+  projections after the earlier clipboard-history fix: `load_config()` parsed
+  `config.json` with `.ok().and_then(...).unwrap_or_default()`,
+  `list_folders()` and `list_favorites()` parsed their JSON files with the
+  same repair-to-empty pattern, and `list_captures()` /
+  `list_capture_abilities()` used JSONL `filter_map` to skip malformed capture
+  rows.
+- The root abstraction problem was split state semantics inside one Context
+  read model. Clipboard history had already become fail-closed, but tracking
+  config, folder mappings, favorites, and media captures still treated corrupt
+  existing files as first-run empty/default state.
+- After the change, Context state has shared read/parse helpers and
+  per-projection validators. Existing config/folder/favorite files deny
+  unknown fields and fail on malformed JSON; folders/favorites require
+  non-empty identity/path/reference facts; capture JSONL parsing fails on the
+  first malformed row and validates non-empty id/timestamp/device/ability/file
+  facts plus safe capture path segments. CLI, ability handlers, and capture
+  lookup now propagate store errors instead of projecting empty product state.

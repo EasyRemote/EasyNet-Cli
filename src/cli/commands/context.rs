@@ -96,7 +96,7 @@ fn run_clipboard(args: ClipboardArgs) -> anyhow::Result<()> {
             println!("{} clipboard tracking disabled", style("✓").green());
         }
         ClipboardAction::Status => {
-            let tracking = context_store::clipboard_tracking();
+            let tracking = context_store::clipboard_tracking()?;
             let clips = context_store::list_clips(200)?;
             println!(
                 "tracking: {}   stored clips: {}{}",
@@ -137,7 +137,7 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
 }
 
 fn run_list() -> anyhow::Result<()> {
-    let tracking = context_store::clipboard_tracking();
+    let tracking = context_store::clipboard_tracking()?;
     println!(
         "clipboard tracking: {}",
         if tracking {
@@ -146,7 +146,7 @@ fn run_list() -> anyhow::Result<()> {
             style("off").dim().to_string()
         }
     );
-    let folders = context_store::list_folders();
+    let folders = context_store::list_folders()?;
     if folders.is_empty() {
         println!("no mapped folders — add one with `easynet context add <path>`");
         return Ok(());

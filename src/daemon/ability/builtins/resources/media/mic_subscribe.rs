@@ -742,7 +742,8 @@ mod tests {
             let captures = crate::daemon::persistence::context_store::list_captures(
                 Some(ABILITY_MIC_SUBSCRIBE),
                 10,
-            );
+            )
+            .unwrap();
             if let Some(capture) = captures.first() {
                 assert_eq!(capture.content_type, "audio/wav");
                 assert_eq!(capture.duration_ms, Some(10));

@@ -82,7 +82,14 @@ pub fn spawn() {
 fn run_loop(device_ura: &str) {
     let mut last_hash: Option<[u8; 32]> = None;
     loop {
-        if !context_store::clipboard_tracking() {
+        let tracking_enabled = match context_store::clipboard_tracking() {
+            Ok(enabled) => enabled,
+            Err(error) => {
+                eprintln!("[clipboard-tracker] tracking config unavailable: {error:#}");
+                false
+            }
+        };
+        if !tracking_enabled {
             std::thread::sleep(IDLE_TICK);
             continue;
         }

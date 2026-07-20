@@ -2130,3 +2130,28 @@ Commands and outcomes will be appended after implementation.
   SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
   tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
   (`canonical-runtime-convergence-v2: OK`).
+
+## 2026-07-21 Context store read-model schema
+
+- `rg -n
+  "read_to_string|serde_json::from_str|unwrap_or_default|filter_map"
+  src/daemon/persistence/context_store.rs -S` — PASS for seam identification;
+  found config/folders/favorites repair-to-default paths and capture JSONL row
+  skipping.
+- `cargo test -q daemon::persistence::context_store --lib` — PASS
+  (`12 passed`); includes malformed config rejection, malformed folder state
+  rejection, malformed favorite state rejection, malformed capture JSONL
+  rejection, and existing clipboard corrupt-row fail-closed coverage.
+- `cargo test -q resources::context --lib` — PASS (`28 passed`); verifies the
+  context ability surface still returns the same public JSON shapes while
+  propagating store errors.
+- `cargo check --lib --bins` — PASS after migrating CLI, ability handlers,
+  clipboard tracker, and media tests to the fallible Context store readers.
+- `cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS
+  (`architecture-convergence: OK`).
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).

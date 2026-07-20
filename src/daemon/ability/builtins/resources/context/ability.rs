@@ -138,12 +138,12 @@ fn captures_list_handler(args: Value) -> anyhow::Result<Value> {
         .unwrap_or(100)
         .max(1) as usize;
     let ability = args.get("ability").and_then(Value::as_str);
-    let entries: Vec<Value> = context_store::list_captures(ability, limit)
+    let entries: Vec<Value> = context_store::list_captures(ability, limit)?
         .iter()
         .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
         .collect();
     Ok(json!({
-        "abilities": context_store::list_capture_abilities(),
+        "abilities": context_store::list_capture_abilities()?,
         "entries": entries,
     }))
 }
@@ -152,7 +152,7 @@ fn captures_list_handler(args: Value) -> anyhow::Result<Value> {
 /// clipboard.get shape so the frontend's lazy-loader pattern reuses.
 fn captures_get_handler(args: Value) -> anyhow::Result<Value> {
     let id = require_str(&args, "id", "context.captures.get")?;
-    let (path, entry) = context_store::capture_abs_path(&id)
+    let (path, entry) = context_store::capture_abs_path(&id)?
         .ok_or_else(|| anyhow::anyhow!("context.captures.get: no capture {id}"))?;
     let bytes = std::fs::read(path)?;
     let mut out = serde_json::to_value(&entry)?;
@@ -171,7 +171,7 @@ fn clipboard_list_handler(args: Value) -> anyhow::Result<Value> {
         .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
         .collect();
     Ok(json!({
-        "tracking": context_store::clipboard_tracking(),
+        "tracking": context_store::clipboard_tracking()?,
         "entries": entries,
     }))
 }
@@ -216,7 +216,7 @@ fn catalog_handler(args: Value) -> anyhow::Result<Value> {
         .clamp(1, 200) as usize;
     let mut items = Vec::new();
 
-    for favorite in context_store::list_favorites() {
+    for favorite in context_store::list_favorites()? {
         items.push(json!({
             "id": format!("favorite:{}", favorite.id),
             "kind": "favorite",
@@ -252,7 +252,7 @@ fn catalog_handler(args: Value) -> anyhow::Result<Value> {
             },
         }));
     }
-    for capture in context_store::list_captures(None, limit) {
+    for capture in context_store::list_captures(None, limit)? {
         items.push(json!({
             "id": format!("capture:{}", capture.id),
             "kind": "capture",
@@ -275,7 +275,7 @@ fn catalog_handler(args: Value) -> anyhow::Result<Value> {
             },
         }));
     }
-    for folder in context_store::list_folders() {
+    for folder in context_store::list_folders()? {
         let exists = std::path::Path::new(&folder.path).is_dir();
         items.push(json!({
             "id": format!("folder:{}", folder.name),
@@ -304,7 +304,7 @@ fn catalog_handler(args: Value) -> anyhow::Result<Value> {
 }
 
 fn folders_list_handler(_args: Value) -> anyhow::Result<Value> {
-    let folders: Vec<Value> = context_store::list_folders()
+    let folders: Vec<Value> = context_store::list_folders()?
         .iter()
         .map(|f| {
             json!({
@@ -329,7 +329,7 @@ fn fs_list_handler(args: Value) -> anyhow::Result<Value> {
 }
 
 fn favorites_list_handler(_args: Value) -> anyhow::Result<Value> {
-    let favorites: Vec<Value> = context_store::list_favorites()
+    let favorites: Vec<Value> = context_store::list_favorites()?
         .iter()
         .map(|f| serde_json::to_value(f).unwrap_or(Value::Null))
         .collect();
