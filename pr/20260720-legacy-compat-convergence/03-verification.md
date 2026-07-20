@@ -1963,3 +1963,31 @@ Commands and outcomes will be appended after implementation.
   (`canonical-runtime-convergence-v2: OK`).
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; index was
   already up to date after the invocation-history filter-schema refactor.
+
+## 2026-07-21 Remote desktop create-session ingress schema
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "remote_desktop parse_video_constraints codec_preferences scale_mode
+  hardware_acceleration_required input_policy video schema invalid default"`
+  — PASS; reports `parse_video_constraints`, `parse_input_policy`, session
+  profile consumers, and schema/registration relationships.
+- `cargo fmt --check` — PASS after formatting the parser/schema imports.
+- `cargo test -q remote_desktop::request --lib --features remote-desktop` —
+  PASS (`5 passed`); includes present malformed `video`, malformed scalar
+  defaults, malformed TTL/session id, and malformed/mutually-exclusive input
+  policy rejection.
+- `cargo test -q remote_desktop::handlers::create_session --lib --features
+  remote-desktop` — PASS (`3 passed`); preserves subject/consent create-session
+  lifecycle while using the fallible parser.
+- `cargo test -q remote_desktop::registration --lib --features
+  remote-desktop` — PASS (`3 passed`); verifies the plugin registration path
+  accepts the expanded nested create-session schema.
+- `cargo check --lib --bins --features remote-desktop` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; indexed
+  the updated remote-desktop request parser/schema contract.

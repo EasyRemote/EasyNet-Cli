@@ -1908,3 +1908,30 @@ Evidence will be appended after indexing and focused impact queries.
   records and attempt audit records. Missing optional fields remain no filter;
   present malformed strings, malformed arrays, empty scoped arrays, and
   invalid subject array members fail before any history rows are projected.
+
+## 2026-07-21 Remote desktop create-session ingress schema audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "remote_desktop parse_video_constraints codec_preferences scale_mode
+  hardware_acceleration_required input_policy video schema invalid default"`
+  identified `plugins/remote-desktop/src/request.rs` as the product ingress
+  seam where `remote_desktop.create_session` arguments become immutable
+  session profile, lease, media policy, and input policy state.
+- Targeted source inspection found best-effort schema repair:
+  non-object `video` was projected as an empty object, malformed numeric and
+  boolean fields fell back to defaults, `codec_preferences` used
+  `filter_map` and silently dropped bad rows or unsupported codecs,
+  non-object `input_policy`/`input` became no input, malformed booleans became
+  `false`, non-string `mode` became `view_only`, bad TTL fields fell back to
+  defaults, and malformed `session_id` was replaced by a freshly minted id.
+- The root abstraction problem was split ownership between a permissive
+  product parser and a vague descriptor schema. Session creation is the point
+  where consent, subject resource, transport preference, media policy, and
+  input policy become durable session facts; once a caller supplies a field,
+  it is descriptor-bound input and must be validated before any state is
+  minted.
+- After the change, absent optional fields still select documented defaults,
+  but present malformed fields fail closed. The dynamic registration schema
+  and static ability TOML now advertise the same nested video/input policy
+  fields that the parser accepts, so descriptor evidence and runtime ingress
+  cannot drift into two contracts.

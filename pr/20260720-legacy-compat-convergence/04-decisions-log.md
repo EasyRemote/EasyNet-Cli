@@ -621,3 +621,11 @@ Decisions will be appended as root-fork choices are made.
   exist specifically to explain signer/admission/route failures before Axon
   minted an invocation id; they must not use looser scope semantics than the
   receipt ledger they augment.
+- Treat remote-desktop create-session preferences as durable session facts.
+  Defaults are selected only when fields are absent; present malformed fields
+  fail before session id minting, consent capture, lease creation, or transport
+  negotiation state.
+- Keep remote-desktop parser and ability descriptor schema in one contract.
+  Nested `video` and `input_policy` / `input` fields are advertised by dynamic
+  registration and static plugin TOML instead of being hidden parser-only
+  behavior.

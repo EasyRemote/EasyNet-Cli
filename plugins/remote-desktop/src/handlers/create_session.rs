@@ -11,7 +11,7 @@ use crate::daemon::plugins::remote_desktop::constants::{
 };
 use crate::daemon::plugins::remote_desktop::request::{
     mint_session_id, mint_session_token, parse_input_policy, parse_lease_ttl_ms, parse_mode,
-    parse_transport_preferences, parse_video_constraints, validate_session_id,
+    parse_optional_session_id, parse_transport_preferences, parse_video_constraints,
 };
 use crate::daemon::plugins::remote_desktop::resource::resolve_screen_resource_from_envelope;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
@@ -35,14 +35,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
     let lease_ttl_ms = parse_lease_ttl_ms(&args)?;
     let transport_preferences = parse_transport_preferences(&args)?;
     let video = parse_video_constraints(&args)?;
-    let input_policy = parse_input_policy(&args, &mode);
-    let session_id = args
-        .get("session_id")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(mint_session_id);
-    validate_session_id(&session_id)?;
+    let input_policy = parse_input_policy(&args, &mode)?;
+    let session_id = parse_optional_session_id(&args)?.unwrap_or_else(mint_session_id);
     let session_token = mint_session_token();
     let consent = RemoteDesktopConsentGrant::required_from_envelope(
         ABILITY_CREATE_SESSION,

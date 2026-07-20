@@ -12,8 +12,9 @@
 use serde_json::{json, Value};
 
 use super::constants::{
-    ATTACH_ENCODING_ANNEXB_H264, ATTACH_ENCODING_JPEG_BINARY, MAX_ATTACH_FPS, MAX_LEASE_TTL_MS,
-    MIN_ATTACH_FPS,
+    ATTACH_ENCODING_ANNEXB_H264, ATTACH_ENCODING_JPEG_BINARY, MAX_ATTACH_FPS,
+    MAX_FRAME_QUEUE_DEPTH, MAX_LEASE_TTL_MS, MAX_VIDEO_DIMENSION, MIN_ATTACH_FPS,
+    NATIVE_MAX_BITRATE_KBPS,
 };
 
 /// Human-readable contract for `remote_desktop.create_session`.
@@ -39,9 +40,50 @@ pub fn create_session_input_schema() -> Value {
                 "type": "array",
                 "items": { "type": "string", "enum": ["webrtc", "invoke_bidi", "preview_stream"] }
             },
-            "video": { "type": "object" },
-            "input": { "type": "object" },
-            "input_policy": { "type": "object" }
+            "video": remote_desktop_video_schema(),
+            "input": remote_desktop_input_policy_schema(),
+            "input_policy": remote_desktop_input_policy_schema()
+        }
+    })
+}
+
+fn remote_desktop_video_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "max_width": { "type": "integer", "minimum": 1, "maximum": MAX_VIDEO_DIMENSION },
+            "max_height": { "type": "integer", "minimum": 1, "maximum": MAX_VIDEO_DIMENSION },
+            "max_fps": { "type": "integer", "minimum": MIN_ATTACH_FPS, "maximum": MAX_ATTACH_FPS },
+            "max_bitrate_kbps": { "type": "integer", "minimum": 1, "maximum": NATIVE_MAX_BITRATE_KBPS },
+            "scale_mode": { "type": "string" },
+            "region": { "type": "string" },
+            "codec_preferences": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "enum": ["h264", "hevc", "av1", "vp9", "vp8"] }
+            },
+            "target_latency_ms": { "type": "integer", "minimum": 1, "maximum": 1000 },
+            "hardware_acceleration_required": { "type": "boolean" },
+            "max_frame_queue_depth": { "type": "integer", "minimum": 1, "maximum": MAX_FRAME_QUEUE_DEPTH },
+            "drop_stale_frames": { "type": "boolean" }
+        }
+    })
+}
+
+fn remote_desktop_input_policy_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "keyboard_enabled": { "type": "boolean" },
+            "keyboard": { "type": "boolean" },
+            "pointer_enabled": { "type": "boolean" },
+            "pointer": { "type": "boolean" },
+            "clipboard_enabled": { "type": "boolean" },
+            "clipboard": { "type": "boolean" },
+            "file_drop_enabled": { "type": "boolean" },
+            "file_drop": { "type": "boolean" }
         }
     })
 }

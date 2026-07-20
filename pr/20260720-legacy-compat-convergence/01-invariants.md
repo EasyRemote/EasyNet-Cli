@@ -217,3 +217,10 @@
   before either canonical ledger records or pre-runtime attempt records are
   read/projected. Malformed filter scope must not widen to "all history" or
   collapse into an empty/no-match result.
+- Remote-desktop session creation arguments are descriptor-bound product
+  ingress, not best-effort UI preferences. Absent optional fields may select
+  documented defaults, but present `mode`, TTL, `session_id`, `video`, and
+  `input_policy` / `input` fields must satisfy the same schema advertised by
+  the ability descriptor before a session id, consent grant, lease, media
+  policy, or input policy is minted. Malformed preference fields must not be
+  repaired into default media/input policy.

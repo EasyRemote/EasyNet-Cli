@@ -5,7 +5,7 @@
 // Description: Input argument parsing for remote desktop abilities.
 
 use rand::RngCore as _;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
     ScreenCaptureOptions, VideoResolution,
@@ -159,10 +159,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn mint_session_token() -> String
 }
 
 pub(crate) fn parse_mode(args: &Value) -> anyhow::Result<String> {
-    let mode = args
-        .get("mode")
-        .and_then(Value::as_str)
-        .unwrap_or("view_only");
+    let mode = match args.get("mode") {
+        Some(value) => non_empty_string_field(value, "mode", ABILITY_CREATE_SESSION)?,
+        None => "view_only",
+    };
     match mode {
         "view_only" | "interactive" => Ok(mode.to_string()),
         _ => anyhow::bail!(
@@ -172,11 +172,9 @@ pub(crate) fn parse_mode(args: &Value) -> anyhow::Result<String> {
 }
 
 pub(crate) fn parse_lease_ttl_ms(args: &Value) -> anyhow::Result<u64> {
-    let ttl = match args.get("lease_ttl_ms").and_then(Value::as_u64) {
+    let ttl = match optional_u64_field(args, "lease_ttl_ms", "remote_desktop")? {
         Some(ttl) => ttl,
-        None => args
-            .get("requested_ttl_seconds")
-            .and_then(Value::as_u64)
+        None => optional_u64_field(args, "requested_ttl_seconds", "remote_desktop")?
             .map(|seconds| seconds.saturating_mul(1000))
             .unwrap_or(DEFAULT_LEASE_TTL_MS),
     };
@@ -230,11 +228,10 @@ pub(crate) fn parse_transport_preferences(args: &Value) -> anyhow::Result<Vec<St
 pub(crate) fn parse_video_constraints(
     args: &Value,
 ) -> anyhow::Result<RemoteDesktopVideoConstraints> {
-    let raw = args
-        .get("video")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
+    let raw = optional_object_field(args, "video", ABILITY_CREATE_SESSION)?;
+    let empty = Map::new();
+    let raw = raw.unwrap_or(&empty);
+    validate_video_keys(raw)?;
     let max_width = parse_video_u32(&raw, "max_width", 1920, 1, MAX_VIDEO_DIMENSION)?;
     let max_height = parse_video_u32(&raw, "max_height", 1080, 1, MAX_VIDEO_DIMENSION)?;
     let max_fps = parse_video_u32(
@@ -265,56 +262,49 @@ pub(crate) fn parse_video_constraints(
         1,
         MAX_FRAME_QUEUE_DEPTH as u64,
     )?;
-    let codec_preferences = raw
-        .get("codec_preferences")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .filter(|codec| matches!(*codec, "h264" | "hevc" | "av1" | "vp9" | "vp8"))
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .filter(|items| !items.is_empty())
-        .unwrap_or_else(|| vec!["h264".into(), "hevc".into(), "av1".into(), "vp9".into()]);
-    let scale_mode = raw
-        .get("scale_mode")
-        .and_then(Value::as_str)
-        .unwrap_or("native");
-    let region = raw.get("region").and_then(Value::as_str).unwrap_or("");
+    let codec_preferences = parse_codec_preferences(raw)?;
+    let scale_mode = optional_string_field(raw, "scale_mode", ABILITY_CREATE_SESSION)?
+        .unwrap_or("native")
+        .to_string();
+    let region = optional_string_field(raw, "region", ABILITY_CREATE_SESSION)?
+        .unwrap_or("")
+        .to_string();
     Ok(RemoteDesktopVideoConstraints {
         max_width,
         max_height,
         max_fps,
         max_bitrate_kbps,
-        scale_mode: scale_mode.to_string(),
-        region: region.to_string(),
+        scale_mode,
+        region,
         codec_preferences,
         target_latency_ms,
-        hardware_acceleration_required: raw
-            .get("hardware_acceleration_required")
-            .and_then(Value::as_bool)
-            .unwrap_or(true),
+        hardware_acceleration_required: optional_bool_field(
+            raw,
+            "hardware_acceleration_required",
+            ABILITY_CREATE_SESSION,
+        )?
+        .unwrap_or(true),
         max_frame_queue_depth,
-        drop_stale_frames: raw
-            .get("drop_stale_frames")
-            .and_then(Value::as_bool)
+        drop_stale_frames: optional_bool_field(raw, "drop_stale_frames", ABILITY_CREATE_SESSION)?
             .unwrap_or(true),
     })
 }
 
 fn parse_video_u32(
-    raw: &serde_json::Map<String, Value>,
+    raw: &Map<String, Value>,
     key: &'static str,
     default: u32,
     min: u64,
     max: u64,
 ) -> anyhow::Result<u32> {
-    let value = raw
-        .get(key)
-        .and_then(Value::as_u64)
-        .unwrap_or(default as u64);
+    let value = match raw.get(key) {
+        Some(value) => value.as_u64().ok_or_else(|| {
+            anyhow::anyhow!(
+                "{ABILITY_CREATE_SESSION}: video.{key} must be an integer; reason={REASON_INVALID_ARGUMENT}"
+            )
+        })?,
+        None => default as u64,
+    };
     if value < min || value > max {
         anyhow::bail!(
             "{ABILITY_CREATE_SESSION}: video.{key} must be in {min}..={max}; reason={REASON_INVALID_ARGUMENT}"
@@ -333,28 +323,196 @@ pub(crate) fn frame_queue_depth_from_video_constraints(
     video.frame_queue_depth()
 }
 
-pub(crate) fn parse_input_policy(args: &Value, mode: &str) -> RemoteDesktopInputPolicy {
-    let raw = args
-        .get("input_policy")
-        .or_else(|| args.get("input"))
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let requested = raw.as_object();
+pub(crate) fn parse_input_policy(
+    args: &Value,
+    mode: &str,
+) -> anyhow::Result<RemoteDesktopInputPolicy> {
+    let requested = optional_input_policy(args)?;
+    let empty = Map::new();
+    let requested = requested.unwrap_or(&empty);
+    validate_input_policy_keys(requested)?;
     let interactive = mode == "interactive";
-    let read_bool = |key: &str| {
-        requested
-            .and_then(|map| map.get(key))
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
+    let read_bool = |key: &'static str| -> anyhow::Result<bool> {
+        Ok(optional_bool_field(requested, key, ABILITY_CREATE_SESSION)?.unwrap_or(false))
     };
-    RemoteDesktopInputPolicy {
-        keyboard_enabled: interactive && (read_bool("keyboard_enabled") || read_bool("keyboard")),
-        pointer_enabled: interactive && (read_bool("pointer_enabled") || read_bool("pointer")),
+    Ok(RemoteDesktopInputPolicy {
+        keyboard_enabled: interactive && (read_bool("keyboard_enabled")? || read_bool("keyboard")?),
+        pointer_enabled: interactive && (read_bool("pointer_enabled")? || read_bool("pointer")?),
         clipboard_enabled: interactive
-            && (read_bool("clipboard_enabled") || read_bool("clipboard")),
+            && (read_bool("clipboard_enabled")? || read_bool("clipboard")?),
         file_drop_enabled: interactive
-            && (read_bool("file_drop_enabled") || read_bool("file_drop")),
+            && (read_bool("file_drop_enabled")? || read_bool("file_drop")?),
+    })
+}
+
+pub(crate) fn parse_optional_session_id(args: &Value) -> anyhow::Result<Option<String>> {
+    let Some(value) = args.get("session_id") else {
+        return Ok(None);
+    };
+    let session_id = non_empty_string_field(value, "session_id", ABILITY_CREATE_SESSION)?;
+    validate_session_id(session_id)?;
+    Ok(Some(session_id.to_string()))
+}
+
+fn optional_object_field<'a>(
+    args: &'a Value,
+    key: &'static str,
+    ability: &str,
+) -> anyhow::Result<Option<&'a Map<String, Value>>> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+    value.as_object().map(Some).ok_or_else(|| {
+        anyhow::anyhow!("{ability}: `{key}` must be an object; reason={REASON_INVALID_ARGUMENT}")
+    })
+}
+
+fn optional_input_policy(args: &Value) -> anyhow::Result<Option<&Map<String, Value>>> {
+    let input_policy = optional_object_field(args, "input_policy", ABILITY_CREATE_SESSION)?;
+    let input = optional_object_field(args, "input", ABILITY_CREATE_SESSION)?;
+    match (input_policy, input) {
+        (Some(_), Some(_)) => anyhow::bail!(
+            "{ABILITY_CREATE_SESSION}: input_policy and input are mutually exclusive; reason={REASON_INVALID_ARGUMENT}"
+        ),
+        (Some(input_policy), None) => Ok(Some(input_policy)),
+        (None, Some(input)) => Ok(Some(input)),
+        (None, None) => Ok(None),
     }
+}
+
+fn optional_u64_field(
+    args: &Value,
+    key: &'static str,
+    ability: &str,
+) -> anyhow::Result<Option<u64>> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+    value.as_u64().map(Some).ok_or_else(|| {
+        anyhow::anyhow!("{ability}: `{key}` must be an integer; reason={REASON_INVALID_ARGUMENT}")
+    })
+}
+
+fn optional_string_field<'a>(
+    raw: &'a Map<String, Value>,
+    key: &'static str,
+    ability: &str,
+) -> anyhow::Result<Option<&'a str>> {
+    let Some(value) = raw.get(key) else {
+        return Ok(None);
+    };
+    value.as_str().map(Some).ok_or_else(|| {
+        anyhow::anyhow!("{ability}: `{key}` must be a string; reason={REASON_INVALID_ARGUMENT}")
+    })
+}
+
+fn non_empty_string_field<'a>(
+    value: &'a Value,
+    key: &'static str,
+    ability: &str,
+) -> anyhow::Result<&'a str> {
+    let raw = value.as_str().ok_or_else(|| {
+        anyhow::anyhow!("{ability}: `{key}` must be a string; reason={REASON_INVALID_ARGUMENT}")
+    })?;
+    if raw.trim().is_empty() {
+        anyhow::bail!(
+            "{ability}: `{key}` must be a non-empty string; reason={REASON_INVALID_ARGUMENT}"
+        );
+    }
+    Ok(raw)
+}
+
+fn optional_bool_field(
+    raw: &Map<String, Value>,
+    key: &'static str,
+    ability: &str,
+) -> anyhow::Result<Option<bool>> {
+    let Some(value) = raw.get(key) else {
+        return Ok(None);
+    };
+    value.as_bool().map(Some).ok_or_else(|| {
+        anyhow::anyhow!("{ability}: `{key}` must be a boolean; reason={REASON_INVALID_ARGUMENT}")
+    })
+}
+
+fn validate_video_keys(raw: &Map<String, Value>) -> anyhow::Result<()> {
+    const ALLOWED: &[&str] = &[
+        "max_width",
+        "max_height",
+        "max_fps",
+        "max_bitrate_kbps",
+        "scale_mode",
+        "region",
+        "codec_preferences",
+        "target_latency_ms",
+        "hardware_acceleration_required",
+        "max_frame_queue_depth",
+        "drop_stale_frames",
+    ];
+    validate_keys(raw, "video", ALLOWED)
+}
+
+fn validate_input_policy_keys(raw: &Map<String, Value>) -> anyhow::Result<()> {
+    const ALLOWED: &[&str] = &[
+        "keyboard_enabled",
+        "keyboard",
+        "pointer_enabled",
+        "pointer",
+        "clipboard_enabled",
+        "clipboard",
+        "file_drop_enabled",
+        "file_drop",
+    ];
+    validate_keys(raw, "input_policy", ALLOWED)
+}
+
+fn validate_keys(raw: &Map<String, Value>, object: &str, allowed: &[&str]) -> anyhow::Result<()> {
+    if let Some(key) = raw.keys().find(|key| !allowed.contains(&key.as_str())) {
+        anyhow::bail!(
+            "{ABILITY_CREATE_SESSION}: {object}.{key} is not supported; reason={REASON_INVALID_ARGUMENT}"
+        );
+    }
+    Ok(())
+}
+
+fn parse_codec_preferences(raw: &Map<String, Value>) -> anyhow::Result<Vec<String>> {
+    let Some(value) = raw.get("codec_preferences") else {
+        return Ok(vec![
+            "h264".into(),
+            "hevc".into(),
+            "av1".into(),
+            "vp9".into(),
+        ]);
+    };
+    let items = value.as_array().ok_or_else(|| {
+        anyhow::anyhow!(
+            "{ABILITY_CREATE_SESSION}: video.codec_preferences must be an array; reason={REASON_INVALID_ARGUMENT}"
+        )
+    })?;
+    if items.is_empty() {
+        anyhow::bail!(
+            "{ABILITY_CREATE_SESSION}: video.codec_preferences must not be empty; reason={REASON_INVALID_ARGUMENT}"
+        );
+    }
+    let mut parsed = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let codec = item.as_str().ok_or_else(|| {
+            anyhow::anyhow!(
+                "{ABILITY_CREATE_SESSION}: video.codec_preferences[{index}] must be a string; reason={REASON_INVALID_ARGUMENT}"
+            )
+        })?;
+        match codec {
+            "h264" | "hevc" | "av1" | "vp9" | "vp8" => {
+                if !parsed.iter().any(|existing| existing == codec) {
+                    parsed.push(codec.to_string());
+                }
+            }
+            _ => anyhow::bail!(
+                "{ABILITY_CREATE_SESSION}: unsupported video codec {codec:?}; reason={REASON_INVALID_ARGUMENT}"
+            ),
+        }
+    }
+    Ok(parsed)
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn parse_attach_capture_options(
@@ -501,5 +659,113 @@ mod tests {
             frame_queue_depth_from_video_constraints(&video),
             MAX_FRAME_QUEUE_DEPTH as usize
         );
+    }
+
+    #[test]
+    fn video_constraints_reject_present_malformed_fields() {
+        for (args, expected) in [
+            (json!({"video": "native"}), "`video` must be an object"),
+            (
+                json!({"video": {"max_width": "1920"}}),
+                "video.max_width must be an integer",
+            ),
+            (
+                json!({"video": {"codec_preferences": ["h264", 7]}}),
+                "video.codec_preferences[1] must be a string",
+            ),
+            (
+                json!({"video": {"codec_preferences": ["h264", "cinepak"]}}),
+                "unsupported video codec",
+            ),
+            (
+                json!({"video": {"hardware_acceleration_required": "true"}}),
+                "`hardware_acceleration_required` must be a boolean",
+            ),
+            (
+                json!({"video": {"legacy_quality": "auto"}}),
+                "video.legacy_quality is not supported",
+            ),
+        ] {
+            let err = parse_video_constraints(&args)
+                .expect_err("present malformed video schema must fail closed")
+                .to_string();
+            assert!(err.contains(expected), "expected {expected:?}; got {err}");
+            assert!(
+                err.contains(REASON_INVALID_ARGUMENT),
+                "error must carry invalid_argument reason; got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn create_session_scalar_defaults_apply_only_when_absent() {
+        assert_eq!(parse_mode(&json!({})).unwrap(), "view_only");
+        assert_eq!(
+            parse_lease_ttl_ms(&json!({})).unwrap(),
+            DEFAULT_LEASE_TTL_MS
+        );
+        assert!(parse_optional_session_id(&json!({})).unwrap().is_none());
+
+        for (args, expected) in [
+            (json!({"mode": 42}), "`mode` must be a string"),
+            (
+                json!({"lease_ttl_ms": "30000"}),
+                "`lease_ttl_ms` must be an integer",
+            ),
+            (
+                json!({"requested_ttl_seconds": "30"}),
+                "`requested_ttl_seconds` must be an integer",
+            ),
+            (
+                json!({"session_id": ""}),
+                "`session_id` must be a non-empty string",
+            ),
+            (
+                json!({"session_id": ["rdp"]}),
+                "`session_id` must be a string",
+            ),
+        ] {
+            let err = match expected {
+                e if e.contains("mode") => parse_mode(&args).unwrap_err().to_string(),
+                e if e.contains("ttl") => parse_lease_ttl_ms(&args).unwrap_err().to_string(),
+                _ => parse_optional_session_id(&args).unwrap_err().to_string(),
+            };
+            assert!(err.contains(expected), "expected {expected:?}; got {err}");
+            assert!(
+                err.contains(REASON_INVALID_ARGUMENT),
+                "error must carry invalid_argument reason; got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn input_policy_rejects_malformed_policy_scope() {
+        for (args, expected) in [
+            (
+                json!({"input_policy": "interactive"}),
+                "`input_policy` must be an object",
+            ),
+            (
+                json!({"input": {}, "input_policy": {}}),
+                "input_policy and input are mutually exclusive",
+            ),
+            (
+                json!({"input_policy": {"keyboard_enabled": "true"}}),
+                "`keyboard_enabled` must be a boolean",
+            ),
+            (
+                json!({"input_policy": {"legacy_pointer": true}}),
+                "input_policy.legacy_pointer is not supported",
+            ),
+        ] {
+            let err = parse_input_policy(&args, "interactive")
+                .expect_err("present malformed input policy must fail closed")
+                .to_string();
+            assert!(err.contains(expected), "expected {expected:?}; got {err}");
+            assert!(
+                err.contains(REASON_INVALID_ARGUMENT),
+                "error must carry invalid_argument reason; got: {err}"
+            );
+        }
     }
 }
