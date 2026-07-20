@@ -207,7 +207,7 @@ impl LocalDaemonLoopbackCalleePolicy {
 
     fn resolve(&self) -> anyhow::Result<String> {
         match self {
-            Self::LocalDaemon => Ok(local_daemon_default_callee_ura()),
+            Self::LocalDaemon => local_daemon_default_callee_ura(),
             Self::Explicit(callee_ura) => normalized_local_daemon_ura(callee_ura, "callee_ura"),
         }
     }
@@ -1940,7 +1940,7 @@ fn local_daemon_loopback_caller_ura() -> anyhow::Result<String> {
 }
 
 #[cfg(feature = "axon-pb")]
-fn local_daemon_default_callee_ura() -> String {
+fn local_daemon_default_callee_ura() -> anyhow::Result<String> {
     crate::daemon::identity::local_invocation::local_daemon_ura()
 }
 

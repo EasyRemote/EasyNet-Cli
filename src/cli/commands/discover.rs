@@ -532,7 +532,7 @@ struct DiscoverLadderTarget {
 
 impl DiscoverLadderTarget {
     fn device_aggregate() -> anyhow::Result<Self> {
-        let owner = crate::daemon::identity::local_invocation::local_daemon_ura();
+        let owner = crate::daemon::identity::local_invocation::local_daemon_ura()?;
         let ability = crate::daemon::ability::builtins::agents::discover::DEVICE_DISCOVER_ABILITY;
         let subject = discover_subject_for_owner(&owner, ability)?;
         Ok(Self {

@@ -150,15 +150,17 @@ pub(crate) fn local_device_ura() -> String {
 
 /// Product URA owned by the local daemon process advertised in control.json.
 ///
-/// Hub mode has no device credentials, so `local_device_ura()` intentionally
-/// falls back to `r/default/device/local`. CLI loopback calls that target the
-/// running daemon itself must not use that fallback: a Hub daemon owns
-/// `easynet:///r/<realm>/authority`, while a Device/Both daemon owns its device URA.
-pub(crate) fn local_daemon_ura() -> String {
-    if let Some(ura) = control_discovery_daemon_ura() {
-        return ura;
-    }
-    local_device_ura()
+/// CLI loopback calls that target the running daemon itself must be bound to
+/// that daemon's published identity. Falling back to `local_device_ura()` would
+/// let absent or stale control discovery synthesize a device/default owner and
+/// reintroduce a second daemon-identity authority outside daemon boot.
+pub(crate) fn local_daemon_ura() -> anyhow::Result<String> {
+    control_discovery_daemon_ura().ok_or_else(|| {
+        anyhow::anyhow!(
+            "local daemon identity unavailable: control discovery does not publish a daemon \
+             identity; start or restart the daemon before constructing daemon-local invocation"
+        )
+    })
 }
 
 fn persisted_local_device_ura() -> Option<String> {
@@ -421,15 +423,31 @@ mod tests {
     }
 
     #[test]
-    fn local_daemon_ura_uses_control_discovery_identity_before_device_fallback() {
+    fn local_daemon_ura_uses_control_discovery_identity() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         write_discovery_identity("hub", "hub-realm", None);
-        assert_eq!(local_daemon_ura(), crate::core::ura::hub_ura("hub-realm"));
+        assert_eq!(
+            local_daemon_ura().unwrap(),
+            crate::core::ura::hub_ura("hub-realm")
+        );
 
         write_discovery_identity("device", "device-realm", Some("node-a"));
         assert_eq!(
-            local_daemon_ura(),
+            local_daemon_ura().unwrap(),
             crate::core::ura::device_ura("device-realm", "node-a")
+        );
+    }
+
+    #[test]
+    fn local_daemon_ura_rejects_missing_control_discovery_identity() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+
+        let error = local_daemon_ura().expect_err("missing daemon identity must fail closed");
+
+        let message = format!("{error}");
+        assert!(
+            message.contains("control discovery does not publish a daemon identity"),
+            "unexpected error: {message}"
         );
     }
 

@@ -1119,7 +1119,7 @@ pub fn invoke_federation_discover_filtered(
     }
     let arg_bytes = serde_json::to_vec(&req_args).context("encode discover args")?;
 
-    let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura();
+    let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
     let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
         &local_daemon_ura,
         "federation.discover",
@@ -1234,7 +1234,7 @@ pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result
     });
     let arg_bytes = serde_json::to_vec(&req_args).context("encode revoke args")?;
 
-    let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura();
+    let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
     let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
         &local_daemon_ura,
         "federation.revoke",
