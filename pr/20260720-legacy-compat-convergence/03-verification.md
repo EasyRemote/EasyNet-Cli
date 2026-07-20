@@ -1349,3 +1349,26 @@ Commands and outcomes will be appended after implementation.
   PASS; reports `ScheduleService::list(...) ->
   anyhow::Result<Vec<ScheduleEntry>>`, `list_handler`, and
   `list_rejects_poisoned_cache_instead_of_empty_schedule_read_model`.
+
+## 2026-07-20 Schedule context next-fire fail-closed projection
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q schedule --lib` — PASS
+  (`33 passed`); includes
+  `loader_rejects_corrupt_schedule_instead_of_empty_context`.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS after
+  extending R84 to `ScheduleLoader::load` and shared schedule-entry cron
+  validation.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture for `next_fire_after(&entry.id, now)` plus
+  `Ok(None) | Err(_) => continue` in the context loader.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --locked --lib --bins` —
+  PASS.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "ScheduleLoader
+  next_fire_for_entry corrupt schedule invalid cron empty context" --limit 80`
+  — PASS; reports `ScheduleLoader`,
+  `ScheduleService::next_fire_for_entry`, `parse_entry_cron`, and the new
+  loader regression.

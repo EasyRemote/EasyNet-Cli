@@ -1383,3 +1383,23 @@ Evidence will be appended after indexing and focused impact queries.
   `anyhow::Result<Vec<ScheduleEntry>>`; Kernel, `schedule.list`, context
   loader, and tick runner propagate or log snapshot failure; and `schedule.list`
   no longer serializes failed rows as `null`.
+
+## 2026-07-20 Schedule context next-fire fallback audit
+
+- `codegraph query "ScheduleLoader next_fire_after Err continue schedule
+  context corrupt cron" --limit 100` identified the remaining context-loader
+  fallback: `ScheduleLoader::load` called `next_fire_after(&entry.id, now)` for
+  entries already obtained from a coherent snapshot and collapsed
+  `Ok(None) | Err(_)` into `continue`.
+- Targeted source inspection showed this preserved a second interpretation path
+  for schedule lifecycle state: `schedule.list` and `due` were fail-closed, but
+  chat context could still hide corrupt cron/read-model errors as no upcoming
+  schedule context.
+- The root abstraction problem was re-querying mutable schedule state after
+  obtaining a snapshot entry. That forced the loader to classify lookup races
+  and corrupt cron through one `anyhow::Error` channel and encouraged an
+  `Err(_) => continue` fallback.
+- After the change, schedule core exposes
+  `ScheduleService::next_fire_for_entry`, backed by shared `parse_entry_cron`.
+  `ScheduleLoader` computes next fires from the snapshot entry and propagates
+  corrupt cron errors instead of emitting empty context.

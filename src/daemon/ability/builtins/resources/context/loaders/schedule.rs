@@ -96,14 +96,8 @@ impl ContextLoader for ScheduleLoader {
             if entry.target_agent.as_str() != agent_name {
                 continue;
             }
-            // next_fire_after returns Result<Option<DateTime>>; the
-            // outer Err path is "schedule not found / unknown id" —
-            // race against a remove(); skip silently. The inner None
-            // means "cron has no future fire" (e.g. `@once` already
-            // past); skip too.
-            let next = match self.svc.next_fire_after(&entry.id, now) {
-                Ok(Some(t)) => t,
-                Ok(None) | Err(_) => continue,
+            let Some(next) = ScheduleService::next_fire_for_entry(&entry, now)? else {
+                continue;
             };
             if next > horizon_end {
                 continue;
@@ -209,6 +203,20 @@ mod tests {
         let text = out.expect("upcoming hourly schedule must render");
         assert!(text.contains("## Upcoming scheduled work"));
         assert!(text.contains("0 * * * *"));
+    }
+
+    #[test]
+    fn loader_rejects_corrupt_schedule_instead_of_empty_context() {
+        let svc = Arc::new(ScheduleService::new());
+        svc.insert_cached_for_test(make_entry("s1", "alice", "not a cron", true));
+        let loader = ScheduleLoader::new(svc);
+
+        let err = loader
+            .load("alice", "s-1")
+            .expect_err("corrupt schedule must fail context loading");
+        let message = format!("{err:#}");
+        assert!(message.contains("s1"));
+        assert!(message.contains("invalid cron"));
     }
 
     #[test]

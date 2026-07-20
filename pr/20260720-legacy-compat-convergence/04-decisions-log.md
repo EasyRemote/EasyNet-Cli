@@ -444,3 +444,7 @@ Decisions will be appended as root-fork choices are made.
   due selection. The public `schedule.list` ability, Kernel schedule snapshot,
   context loader, and tick runner must observe unreadable schedule state as
   failure, not as an empty catalog or `null` schedule row.
+- Treat schedule context next-fire projection as snapshot-derived state.
+  Context loaders that already hold a `ScheduleEntry` must compute from that
+  entry through schedule core validation; they must not re-query by id and
+  collapse next-fire errors into absent context.

@@ -7712,6 +7712,7 @@ if automation_think.exists():
 schedule_mod = cli_root / "src/daemon/execution/schedule/mod.rs"
 daemon_bin = cli_root / "src/bin/easynet-daemon.rs"
 automation_schedule = cli_root / "src/daemon/ability/builtins/automation/schedule.rs"
+schedule_loader = cli_root / "src/daemon/ability/builtins/resources/context/loaders/schedule.rs"
 if schedule_mod.exists():
     text = source(schedule_mod)
     body = rust_method_body(text, "list")
@@ -7756,6 +7757,41 @@ if schedule_mod.exists():
                 schedule_mod,
                 line_number(text, offset),
                 "ScheduleService::list must preserve poisoned cache as explicit unavailable state",
+            )
+
+    body = rust_method_body(text, "next_fire_for_entry")
+    if body is None:
+        add(
+            "R84_SCHEDULE_DUE_FAIL_CLOSED",
+            schedule_mod,
+            1,
+            "ScheduleService must expose next_fire_for_entry so snapshot readers do not re-query and hide cron corruption",
+        )
+    else:
+        offset, fn_body = body
+        if "parse_entry_cron(entry)?" not in fn_body:
+            add(
+                "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                schedule_mod,
+                line_number(text, offset),
+                "next_fire_for_entry must use the schedule-entry cron validator",
+            )
+    body = rust_method_body(text, "parse_entry_cron")
+    if body is None:
+        add(
+            "R84_SCHEDULE_DUE_FAIL_CLOSED",
+            schedule_mod,
+            1,
+            "schedule core must keep parse_entry_cron as the shared corrupt-cron diagnostic boundary",
+        )
+    else:
+        offset, fn_body = body
+        if "has invalid cron" not in fn_body:
+            add(
+                "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                schedule_mod,
+                line_number(text, offset),
+                "parse_entry_cron must preserve corrupt enabled cron rows as explicit unavailable state",
             )
 
     body = rust_method_body(text, "due")
@@ -7805,12 +7841,12 @@ if schedule_mod.exists():
                 line_number(text, offset),
                 "ScheduleService::due must preserve poisoned cache as explicit unavailable state",
             )
-        if "has invalid cron" not in fn_body:
+        if "parse_entry_cron(entry)?" not in fn_body:
             add(
                 "R84_SCHEDULE_DUE_FAIL_CLOSED",
                 schedule_mod,
                 line_number(text, offset),
-                "ScheduleService::due must preserve corrupt enabled cron rows as explicit unavailable state",
+                "ScheduleService::due must use the shared schedule-entry cron validator",
             )
 
 if daemon_bin.exists():
@@ -7874,6 +7910,44 @@ if automation_schedule.exists():
                 line_number(text, body_start + fn_body.find("unwrap_or(Value::Null)")),
                 "schedule.list handler must not project schedule serialization failure as null rows",
             )
+
+if schedule_loader.exists():
+    text = source(schedule_loader)
+    body = rust_method_body(text, "load")
+    if body is None:
+        add(
+            "R84_SCHEDULE_DUE_FAIL_CLOSED",
+            schedule_loader,
+            1,
+            "ScheduleLoader::load must preserve schedule context projection failures",
+        )
+    else:
+        offset, fn_body = body
+        body_start = text.find("{", offset) + 1
+        if "ScheduleService::next_fire_for_entry(&entry, now)?" not in fn_body:
+            add(
+                "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                schedule_loader,
+                line_number(text, offset),
+                "ScheduleLoader must compute next fires from the coherent snapshot entry and propagate corrupt cron errors",
+            )
+        for token, detail in (
+            (
+                "Ok(None) | Err(_) => continue",
+                "ScheduleLoader must not hide next-fire errors as absent schedule context",
+            ),
+            (
+                "next_fire_after(&entry.id",
+                "ScheduleLoader must not re-query schedule state after obtaining the snapshot entry",
+            ),
+        ):
+            if token in fn_body:
+                add(
+                    "R84_SCHEDULE_DUE_FAIL_CLOSED",
+                    schedule_loader,
+                    line_number(text, body_start + fn_body.find(token)),
+                    detail,
+                )
 
 
 if violations:

@@ -62,6 +62,14 @@ impl ScheduleService {
         Self::default()
     }
 
+    #[cfg(test)]
+    pub fn insert_cached_for_test(&self, entry: ScheduleEntry) {
+        self.cache
+            .write()
+            .expect("schedule cache")
+            .insert(entry.id.clone(), entry);
+    }
+
     /// Bind the service to a tenant-scoped disk store. Loads any
     /// existing schedules into the in-memory cache. Daemon bin
     /// calls this at boot.
@@ -187,7 +195,18 @@ impl ScheduleService {
         let entry = cache
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("schedule {id} not found"))?;
-        let cron = parse_cron(&entry.cron_expr)?;
+        Self::next_fire_for_entry(entry, now)
+    }
+
+    /// Compute the next fire instant from a coherent schedule snapshot entry.
+    /// Context/read-model callers that already hold a `ScheduleEntry` should
+    /// use this helper instead of re-querying by id and collapsing lookup or
+    /// cron errors into "no upcoming schedule".
+    pub fn next_fire_for_entry(
+        entry: &ScheduleEntry,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<Option<DateTime<Utc>>> {
+        let cron = parse_entry_cron(entry)?;
         Ok(cron.after(&now).next())
     }
 
@@ -212,9 +231,7 @@ impl ScheduleService {
             .map_err(|_| anyhow::anyhow!("schedule due cache lock poisoned"))?;
         let mut out = Vec::new();
         for entry in cache.values().filter(|e| e.enabled) {
-            let cron = parse_cron(&entry.cron_expr).map_err(|err| {
-                anyhow::anyhow!("schedule {} has invalid cron: {err:#}", entry.id)
-            })?;
+            let cron = parse_entry_cron(entry)?;
             let last_fire = last_fire_unix_ms_for(&entry.id)
                 .and_then(|ms| Utc.timestamp_millis_opt(ms).single());
             let anchor = last_fire
@@ -291,6 +308,11 @@ fn catch_up_seconds_for(entry: &ScheduleEntry) -> i64 {
 /// never firing.
 fn validate_cron(expr: &str) -> anyhow::Result<()> {
     parse_cron(expr).map(|_| ())
+}
+
+fn parse_entry_cron(entry: &ScheduleEntry) -> anyhow::Result<CronSchedule> {
+    parse_cron(&entry.cron_expr)
+        .map_err(|err| anyhow::anyhow!("schedule {} has invalid cron: {err:#}", entry.id))
 }
 
 /// Parse a cron expression. v1 uses the `cron` crate's 6-field

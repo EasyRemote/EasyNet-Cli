@@ -5475,6 +5475,97 @@ expect_fail \
   "R84_SCHEDULE_DUE_FAIL_CLOSED"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/execution/schedule" "$CLI/src/bin" "$CLI/src/daemon/ability/builtins/automation" "$CLI/src/daemon/ability/builtins/resources/context/loaders"
+cat >"$CLI/src/daemon/execution/schedule/mod.rs" <<'EOF'
+pub struct DueFire;
+pub struct ScheduleEntry;
+pub struct ScheduleId;
+pub struct ScheduleService {
+    cache: Cache,
+}
+
+impl ScheduleService {
+    pub fn list(&self) -> Result<Vec<ScheduleEntry>> {
+        let cache = self
+            .cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("schedule list cache lock poisoned"))?;
+        Ok(cache.values().cloned().collect())
+    }
+
+    pub fn next_fire_after(&self, id: &ScheduleId, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>> {
+        Ok(None)
+    }
+
+    pub fn next_fire_for_entry(entry: &ScheduleEntry, now: DateTime<Utc>) -> Result<Option<DateTime<Utc>>> {
+        let cron = parse_entry_cron(entry)?;
+        Ok(cron.after(&now).next())
+    }
+
+    pub fn due(&self) -> Result<Vec<DueFire>> {
+        let cache = self
+            .cache
+            .read()
+            .map_err(|_| anyhow::anyhow!("schedule due cache lock poisoned"))?;
+        for entry in cache.values() {
+            let _cron = parse_entry_cron(entry)?;
+        }
+        Ok(Vec::new())
+    }
+}
+
+fn parse_entry_cron(entry: &ScheduleEntry) -> Result<CronSchedule> {
+    parse_cron(&entry.cron_expr)
+        .map_err(|err| anyhow::anyhow!("schedule {} has invalid cron: {err:#}", entry.id))
+}
+EOF
+cat >"$CLI/src/bin/easynet-daemon.rs" <<'EOF'
+fn spawn_schedule_tick(schedule: ScheduleService) {
+    let due = match schedule.due() {
+        Ok(due) => due,
+        Err(err) => {
+            eprintln!("due selection failed: {err:#}");
+            return;
+        }
+    };
+    let schedules = match schedule.list() {
+        Ok(schedules) => schedules,
+        Err(err) => {
+            eprintln!("schedule snapshot failed: {err:#}");
+            return;
+        }
+    };
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/automation/schedule.rs" <<'EOF'
+fn list_handler(svc: &ScheduleService, _args: Value) -> anyhow::Result<Value> {
+    let entries = svc.list()?;
+    let arr: Vec<Value> = entries
+        .into_iter()
+        .map(serde_json::to_value)
+        .collect::<Result<_, _>>()?;
+    Ok(json!({ "schedules": arr }))
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/resources/context/loaders/schedule.rs" <<'EOF'
+impl ContextLoader for ScheduleLoader {
+    fn load(&self, agent_name: &str, _session_id: &str) -> anyhow::Result<Option<String>> {
+        let now = Utc::now();
+        for entry in self.svc.list()? {
+            let next = match self.svc.next_fire_after(&entry.id, now) {
+                Ok(Some(t)) => t,
+                Ok(None) | Err(_) => continue,
+            };
+        }
+        Ok(None)
+    }
+}
+EOF
+expect_fail \
+  "schedule context loader next-fire fallback" \
+  "R84_SCHEDULE_DUE_FAIL_CLOSED"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/plugins" "$CLI/src/daemon/boot/invocation" "$CLI/src/daemon/ability/wire"
 cat >"$CLI/src/daemon/plugins/runtime_manager.rs" <<'EOF'
 use crate::daemon::ability::wire::AbilityWireRegistry;
