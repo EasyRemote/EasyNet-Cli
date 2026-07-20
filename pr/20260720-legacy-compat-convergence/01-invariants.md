@@ -169,3 +169,8 @@
   require an explicit canonical `ResolveType` enum string; missing, empty,
   unspecified, numeric, or shorthand qtype values must fail closed instead of
   being inferred from `query_name` / `ability_name`.
+- Product user-device directory projection must be schema-bound at both local
+  presence and peer merge boundaries. A selected peer scope is not optional
+  discovery: missing federation transport, untrusted peers, malformed peer
+  rows, and fanout failures are runtime unavailable/configuration facts and
+  must not become an empty or partial successful device list.

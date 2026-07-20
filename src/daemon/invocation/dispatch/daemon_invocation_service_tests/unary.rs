@@ -1061,6 +1061,38 @@ async fn invoke_dispatches_federation_list_user_devices_admits_loopback_caller()
 }
 
 #[tokio::test]
+async fn invoke_federation_list_user_devices_rejects_malformed_device_presence() {
+    let svc = make_service();
+    svc.directory.presence.insert(
+        "easynet:///r/realm-x/device/".to_string(),
+        tokio::sync::mpsc::channel(8).0,
+    );
+
+    let body = svc
+        .invoke(invoke_request(
+            ABILITY_FEDERATION_LIST_USER_DEVICES,
+            r#"{"realm":"realm-x"}"#,
+        ))
+        .await
+        .expect("runtime state failures are returned in-band")
+        .into_inner();
+
+    assert_eq!(
+        body.state,
+        axon_sdk::invocation::InvocationState::Failed.to_wire_i32(),
+        "malformed presence must not return a successful empty or malformed device list"
+    );
+    let error = body.error.expect("failed invocation must carry error");
+    assert!(
+        error.message.contains("federation.list_user_devices")
+            && (error.message.contains("matches realm device prefix")
+                || error.message.contains("missing canonical device id")),
+        "failure must expose list_user_devices presence corruption; got: {}",
+        error.message
+    );
+}
+
+#[tokio::test]
 async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller() {
     // PR-N3 N3-5: caller URA is in trust set but as Device
     // role → admission filter rejects. PermissionDenied is
@@ -1732,6 +1764,113 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_fans_out_and_stamp
     let peer_args: federation_wrappers::ListUserDevicesRequest =
         serde_json::from_slice(&calls[0].1.arguments).expect("peer args decode");
     assert_eq!(peer_args.realm, "user-realm");
+}
+
+#[tokio::test]
+async fn invoke_federation_proxy_list_user_devices_rejects_selected_peers_without_client() {
+    let svc = make_service();
+
+    let resp = svc
+        .invoke(invoke_request(
+            ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
+            r#"{
+                "realm":"user-realm",
+                "peer_hub_urls":["https://peer-hub.example:50443"]
+            }"#,
+        ))
+        .await
+        .expect("proxy failure is projected in-band")
+        .into_inner();
+    assert_eq!(
+        resp.state,
+        axon_sdk::invocation::InvocationState::Failed.to_wire_i32(),
+        "selected peer scope must not become an empty successful device list"
+    );
+    let error = resp
+        .error
+        .expect("canonical failed proxy response carries typed error");
+    assert!(
+        error
+            .message
+            .contains("federation client is required when peer_hub_urls are selected"),
+        "failure must name the missing peer runtime; got: {}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn invoke_federation_proxy_list_user_devices_rejects_malformed_peer_directory_response() {
+    use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
+
+    let peer_hub_url = "https://peer-hub.example:50443";
+    let peer_hub_ura = crate::core::ura::hub_ura("peer-realm");
+    let anchor = Arc::new(test_trust_anchor_with_entries(vec![TrustedAgent {
+        agent_ura: peer_hub_ura,
+        public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+        role: TrustedAgentRole::Hub,
+        added_at_unix_ms: 1_700_000_000_000,
+        origin_realm: Some("peer-realm".to_string()),
+        hub_endpoint: Some(peer_hub_url.to_string()),
+        tls_ca_pem_path: None,
+    }]));
+    let runtime_cell = SharedTrustAnchor::new(anchor.clone());
+    let admission = AdmissionFacade::new(anchor, Some(TEST_DAEMON_URA.to_string()));
+    let canned = InvokeResponse {
+        result: br#"{
+            "devices":[{
+                "agent_ura":"easynet:///r/user-realm/device/dev-peer",
+                "node_id":"wrong-node",
+                "status":"active"
+            }]
+        }"#
+        .to_vec(),
+        result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+        state: axon_sdk::invocation::InvocationState::Completed.to_wire_i32(),
+        ..InvokeResponse::default()
+    };
+    let recorder = Arc::new(RecordingFederationClient::new(canned));
+    let svc = register_test_daemon_routes(
+        DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
+            .with_hub_signer(test_hub_signer("local-realm"))
+            .with_session_realm("local-realm")
+            .with_federation_client(recorder.clone() as Arc<dyn FederationClient>)
+            .with_test_daemon_runtime(runtime_cell),
+        TEST_DAEMON_URA,
+    );
+
+    let resp = svc
+        .invoke(invoke_request(
+            ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
+            r#"{
+                "realm":"user-realm",
+                "peer_hub_urls":["https://peer-hub.example:50443"]
+            }"#,
+        ))
+        .await
+        .expect("proxy failure is projected in-band")
+        .into_inner();
+    assert_eq!(
+        resp.state,
+        axon_sdk::invocation::InvocationState::Failed.to_wire_i32(),
+        "malformed peer device rows must not be dropped into an empty success"
+    );
+    let error = resp
+        .error
+        .expect("canonical failed proxy response carries typed error");
+    assert!(
+        error
+            .message
+            .contains("node_id \"wrong-node\" does not match Device URA id \"dev-peer\""),
+        "failure must surface the schema mismatch; got: {}",
+        error.message
+    );
+
+    let calls = recorder.calls();
+    assert_eq!(
+        calls.len(),
+        1,
+        "malformed response still came from one peer"
+    );
 }
 
 #[tokio::test]

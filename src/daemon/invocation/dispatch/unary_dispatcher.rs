@@ -1148,7 +1148,7 @@ impl UnaryDispatcher {
             }
         };
         let response =
-            self.merge_local_presence_into_discover_response(&request, federated_response);
+            self.merge_local_presence_into_discover_response(&request, federated_response)?;
         encode_json_payload(&response)
     }
 
@@ -1156,7 +1156,7 @@ impl UnaryDispatcher {
         &self,
         request: &federation_wrappers::DiscoverRequest,
         federated_response: federation_wrappers::DiscoverResponse,
-    ) -> federation_wrappers::DiscoverResponse {
+    ) -> Result<federation_wrappers::DiscoverResponse, Status> {
         let mut by_agent_ura = BTreeMap::new();
         if let Some(realm) = self
             .identity
@@ -1169,7 +1169,8 @@ impl UnaryDispatcher {
                     realm: realm.to_string(),
                 },
                 &self.directory.presence,
-            );
+            )
+            .map_err(Status::failed_precondition)?;
             for entry in local.devices {
                 if request
                     .agent_ura
@@ -1184,9 +1185,9 @@ impl UnaryDispatcher {
         for entry in federated_response.entries {
             by_agent_ura.entry(entry.agent_ura.clone()).or_insert(entry);
         }
-        federation_wrappers::DiscoverResponse {
+        Ok(federation_wrappers::DiscoverResponse {
             entries: by_agent_ura.into_values().collect(),
-        }
+        })
     }
 
     /// **PR-N3 commit N3-5**. Hub-side projection of local
@@ -1237,7 +1238,8 @@ impl UnaryDispatcher {
 
         let request: federation_wrappers::ListUserDevicesRequest = parse_json_args(arguments)?;
         let response =
-            federation_wrappers::handle_list_user_devices(&request, &self.directory.presence);
+            federation_wrappers::handle_list_user_devices(&request, &self.directory.presence)
+                .map_err(Status::failed_precondition)?;
         encode_json_payload(&response)
     }
 
@@ -1315,25 +1317,20 @@ impl UnaryDispatcher {
             ));
         }
 
-        let Some(client) = self.federation.client.as_ref() else {
-            return encode_json_payload(&federation_wrappers::ProxyListUserDevicesResponse {
-                devices: Vec::new(),
-            });
-        };
-
-        let peer_hub_urls: Vec<String> = request
-            .peer_hub_urls
-            .into_iter()
-            .map(|url| url.trim().to_string())
-            .filter(|url| !url.is_empty())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
+        let peer_hub_urls = sorted_non_empty_urls(request.peer_hub_urls);
         if peer_hub_urls.is_empty() {
             return encode_json_payload(&federation_wrappers::ProxyListUserDevicesResponse {
                 devices: Vec::new(),
             });
         }
+        let Some(client) = self.federation.client.as_ref() else {
+            return Err(Status::failed_precondition(
+                "federation.proxy_list_user_devices: federation client is required when peer_hub_urls are selected",
+            ));
+        };
+        let caller_envelope = caller_envelope.ok_or_else(|| {
+            Status::invalid_argument("federation.proxy_list_user_devices: missing caller envelope")
+        })?;
 
         let inner_arguments = serde_json::to_vec(&federation_wrappers::ListUserDevicesRequest {
             realm: realm.to_string(),
@@ -1348,27 +1345,37 @@ impl UnaryDispatcher {
         let local_realm = self.identity.session_realm.as_deref();
         let mut fanout = FuturesUnordered::new();
         for peer_hub_url in peer_hub_urls {
-            let Some(peer_entry) = trust_anchor.lookup_peer_hub(&peer_hub_url).cloned() else {
-                crate::op_event!(
-                    component = daemon_invocation,
-                    kind = proxy_list_user_devices_skip_untrusted_peer,
-                    peer_hub_url = peer_hub_url,
-                );
-                continue;
+            let peer_entry = match trust_anchor.lookup_peer_hub(&peer_hub_url).cloned() {
+                Some(peer_entry) => peer_entry,
+                None => {
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = proxy_list_user_devices_untrusted_peer,
+                        peer_hub_url = peer_hub_url,
+                    );
+                    return Err(Status::failed_precondition(format!(
+                        "federation.proxy_list_user_devices: selected peer hub `{peer_hub_url}` is not trusted"
+                    )));
+                }
             };
-            let Some(peer_realm) = peer_entry.origin_realm.clone() else {
-                crate::op_event!(
-                    component = daemon_invocation,
-                    kind = proxy_list_user_devices_skip_peer_missing_origin_tenant,
-                    peer_hub_url = peer_hub_url,
-                );
-                continue;
+            let peer_realm = match peer_entry
+                .origin_realm
+                .clone()
+                .map(|realm| realm.trim().to_string())
+                .filter(|realm| !realm.is_empty())
+            {
+                Some(peer_realm) => peer_realm,
+                None => {
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = proxy_list_user_devices_peer_missing_origin_realm,
+                        peer_hub_url = peer_hub_url,
+                    );
+                    return Err(Status::failed_precondition(format!(
+                        "federation.proxy_list_user_devices: selected peer hub `{peer_hub_url}` has no origin_realm"
+                    )));
+                }
             };
-            let caller_envelope = caller_envelope.ok_or_else(|| {
-                Status::invalid_argument(
-                    "federation.proxy_list_user_devices: missing caller envelope",
-                )
-            })?;
             let client = Arc::clone(client);
             let peer_request = PeerInvokeRequest::new(
                 PeerInvocationSubject::ForwardedCaller(caller_envelope),
@@ -1389,6 +1396,10 @@ impl UnaryDispatcher {
                                     "decode peer {peer_hub_url} list_user_devices response: {err}"
                                 )
                             })?;
+                        federation_wrappers::validate_list_user_devices_response(
+                            &body,
+                            &format!("peer {peer_hub_url} list_user_devices response"),
+                        )?;
                         for device in &mut body.devices {
                             device.origin_realm = Some(peer_realm.clone());
                             device.hub_endpoint = Some(peer_hub_url.clone());
@@ -1403,18 +1414,26 @@ impl UnaryDispatcher {
         }
 
         let mut devices = Vec::new();
+        let mut fanout_errors = Vec::new();
         while let Some(result) = fanout.next().await {
             match result {
                 Ok(mut entries) => devices.append(&mut entries),
                 Err(err) => {
-                    let err_msg = err.to_string();
                     crate::op_event!(
                         component = daemon_invocation,
                         kind = proxy_list_user_devices_fanout_error,
-                        error = err_msg,
+                        error = err,
                     );
+                    fanout_errors.push(err);
                 }
             }
+        }
+        if !fanout_errors.is_empty() {
+            fanout_errors.sort();
+            return Err(Status::unavailable(format!(
+                "federation.proxy_list_user_devices: peer fanout failed: {}",
+                fanout_errors.join("; ")
+            )));
         }
         devices.sort_by(|a, b| {
             a.hub_endpoint

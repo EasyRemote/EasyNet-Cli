@@ -2,6 +2,28 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-21 User-device directory projection fallback audit
+
+- `codegraph explore "unwrap_or_default fallback empty route signer authority receipt history device list user devices parse_ura ok"`
+  identified `federation_wrappers::handle_list_user_devices` as an active
+  product-visible fallback. The handler filtered presence rows by string
+  prefix, then projected parse failures or missing device ids into
+  `DirectoryEntry { node_id: "", status: "active" }`.
+- The same audit found `dispatch_federation_proxy_list_user_devices` accepting
+  decoded peer `ListUserDevicesResponse` rows without validating
+  `agent_ura`/`node_id` binding, and swallowing fanout errors into logged
+  events before returning an empty or partial successful device list.
+- The root abstraction problem was false directory authority. Presence rows
+  and peer directory responses are runtime projections, not product hints that
+  can be repaired locally. Same-realm malformed Device URAs, untrusted selected
+  peers, malformed peer rows, and peer fanout failures must remain visible
+  runtime facts.
+- After the change, `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "dispatch_federation_proxy_list_user_devices selected peer_hub_urls empty success fanout error validate_list_user_devices_response"`
+  reports the proxy path using `sorted_non_empty_urls`, explicit selected-peer
+  preconditions, `validate_list_user_devices_response`, and a fail-closed
+  `peer fanout failed` status before any response merge.
+
 ## 2026-07-20 InvokeBidi receipt payload projection fallback audit
 
 - `rg` found identical down-frame projection logic in

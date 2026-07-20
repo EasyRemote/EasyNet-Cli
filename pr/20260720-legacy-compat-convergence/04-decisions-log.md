@@ -2,6 +2,21 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-21 user-device directory projection
+
+- Treat `PresenceRegistry` as the local runtime presence authority, not as a
+  product hint source. Same-realm rows that look like Device URAs but are not
+  canonical Device URAs are corrupt runtime state and now fail
+  `federation.list_user_devices` instead of producing empty `node_id` rows.
+- Treat peer `ListUserDevicesResponse` as schema-bound input. The merge
+  boundary validates canonical Device URA, non-empty matching `node_id`, and
+  non-empty status before stamping `origin_realm`/`hub_endpoint`.
+- Treat product-selected `peer_hub_urls` as exact fanout scope. Empty scope is
+  a valid empty answer; selected peers require a configured federation client,
+  trusted hub entry, origin realm, successful dial, and valid response. Any
+  selected-peer failure is returned as failed/unavailable state, not hidden as
+  an empty or partial device list.
+
 ## 2026-07-20 InvokeBidi receipt payload projection
 
 - Treat `LocalBidiFrame` as the support-layer owner for projecting

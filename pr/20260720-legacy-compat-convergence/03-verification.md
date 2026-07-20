@@ -2,6 +2,28 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-21 User-device directory projection fallback removal
+
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q list_user_devices --lib`
+  — PASS (`15 passed`; covers local malformed presence rejection, peer
+  response `node_id`/Device URA binding rejection, selected peer without
+  federation client failure, and malformed peer directory response failure).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q invoke_federation_proxy_list_user_devices --lib`
+  — PASS (`2 passed`; selected peer scope cannot become an empty successful
+  list when federation transport or peer schema is invalid).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo test -q invoke_federation_list_user_devices_rejects_malformed_device_presence --lib`
+  — PASS (`1 passed`; same-realm malformed Device presence fails in-band).
+- `/Users/macbook.silan.tech/.cargo/bin/cargo fmt --check` — PASS.
+- `/Users/macbook.silan.tech/.cargo/bin/cargo check --lib --bins` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore "dispatch_federation_proxy_list_user_devices selected peer_hub_urls empty success fanout error validate_list_user_devices_response"`
+  — PASS; confirms the current proxy path validates peer rows and converts
+  selected-peer fanout errors into explicit failure before response merge.
+
 ## 2026-07-20 InvokeBidi receipt payload projection fallback removal
 
 - `/Users/macbook.silan.tech/.cargo/bin/cargo test -q local_invoke --lib --features axon-pb`

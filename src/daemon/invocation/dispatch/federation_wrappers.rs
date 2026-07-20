@@ -1130,33 +1130,111 @@ pub struct NamespaceProxyResolveRequest {
 pub fn handle_list_user_devices(
     request: &ListUserDevicesRequest,
     registry: &PresenceRegistry,
-) -> ListUserDevicesResponse {
-    let realm_device_prefix = crate::core::ura::realm_device_prefix(&request.realm);
+) -> Result<ListUserDevicesResponse, String> {
+    let realm = request.realm.trim();
+    if realm.is_empty() {
+        return Err("federation.list_user_devices: realm is required".to_string());
+    }
     let snapshot = registry.snapshot();
-    let devices = snapshot
-        .into_iter()
-        .filter(|ura| ura.starts_with(&realm_device_prefix))
-        .map(|ura| {
-            // Canonical v4.1.4 device URAs are the only input
-            // that should survive the prefix filter above.
-            let node_id = match crate::core::ura::parse_ura(&ura) {
-                Ok(parsed) if parsed.kind == crate::core::ura::URAKind::Device => {
-                    parsed.device_id().map(str::to_string).unwrap_or_default()
-                }
-                _ => String::new(),
-            };
-            crate::daemon::federation::directory::DirectoryEntry {
-                agent_ura: ura,
-                node_id,
-                display_name: None,
-                status: "active".to_string(),
-                origin_realm: None,
-                hub_endpoint: None,
-                last_seen_unix_ms: None,
+    let mut devices = Vec::new();
+    for ura in snapshot {
+        if let Some(entry) = list_user_devices_presence_entry(&ura, realm)? {
+            devices.push(entry);
+        }
+    }
+    Ok(ListUserDevicesResponse { devices })
+}
+
+pub(crate) fn validate_list_user_devices_response(
+    response: &ListUserDevicesResponse,
+    source: &str,
+) -> Result<(), String> {
+    for (index, device) in response.devices.iter().enumerate() {
+        let parsed = crate::core::ura::parse_ura(&device.agent_ura).map_err(|error| {
+            format!(
+                "{source}: devices[{index}].agent_ura {:?} is not canonical: {error}",
+                device.agent_ura
+            )
+        })?;
+        if parsed.kind != crate::core::ura::URAKind::Device {
+            return Err(format!(
+                "{source}: devices[{index}].agent_ura {:?} is not a Device URA",
+                device.agent_ura
+            ));
+        }
+        let node_id = parsed
+            .device_id()
+            .map(str::trim)
+            .filter(|node_id| !node_id.is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "{source}: devices[{index}].agent_ura {:?} is missing canonical device id",
+                    device.agent_ura
+                )
+            })?;
+        let canonical_ura = crate::core::ura::device_ura(&parsed.realm, node_id);
+        if canonical_ura != device.agent_ura {
+            return Err(format!(
+                "{source}: devices[{index}].agent_ura {:?} is not canonical; expected {:?}",
+                device.agent_ura, canonical_ura
+            ));
+        }
+        if device.node_id.trim() != node_id {
+            return Err(format!(
+                "{source}: devices[{index}].node_id {:?} does not match Device URA id {:?}",
+                device.node_id, node_id
+            ));
+        }
+        if device.status.trim().is_empty() {
+            return Err(format!("{source}: devices[{index}].status is empty"));
+        }
+    }
+    Ok(())
+}
+
+fn list_user_devices_presence_entry(
+    ura: &str,
+    requested_realm: &str,
+) -> Result<Option<crate::daemon::federation::directory::DirectoryEntry>, String> {
+    let parsed = match crate::core::ura::parse_ura(ura) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            let realm_device_prefix = crate::core::ura::realm_device_prefix(requested_realm);
+            if ura.starts_with(&realm_device_prefix) {
+                return Err(format!(
+                    "federation.list_user_devices: presence row {ura:?} matches realm device prefix but is not a canonical Device URA: {error}"
+                ));
             }
-        })
-        .collect();
-    ListUserDevicesResponse { devices }
+            return Ok(None);
+        }
+    };
+    if parsed.realm != requested_realm || parsed.kind != crate::core::ura::URAKind::Device {
+        return Ok(None);
+    }
+    let node_id = parsed
+        .device_id()
+        .map(str::trim)
+        .filter(|node_id| !node_id.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "federation.list_user_devices: presence row {ura:?} is missing canonical device id"
+            )
+        })?;
+    let canonical_ura = crate::core::ura::device_ura(&parsed.realm, node_id);
+    if canonical_ura != ura {
+        return Err(format!(
+            "federation.list_user_devices: presence row {ura:?} is not canonical; expected {canonical_ura:?}"
+        ));
+    }
+    Ok(Some(crate::daemon::federation::directory::DirectoryEntry {
+        agent_ura: ura.to_string(),
+        node_id: node_id.to_string(),
+        display_name: None,
+        status: "active".to_string(),
+        origin_realm: None,
+        hub_endpoint: None,
+        last_seen_unix_ms: None,
+    }))
 }
 
 // ─── federation.revoke ─────────────────────────────────────────────
@@ -2649,7 +2727,8 @@ mod tests {
                 realm: "realm-a".to_string(),
             },
             &registry,
-        );
+        )
+        .expect("realm-a devices project");
         assert_eq!(resp.devices.len(), 2);
         let expected_prefix = crate::core::ura::realm_device_prefix("realm-a");
         for entry in &resp.devices {
@@ -2672,7 +2751,8 @@ mod tests {
                 realm: "realm-a".to_string(),
             },
             &registry,
-        );
+        )
+        .expect("device URA projects");
         assert_eq!(resp.devices.len(), 1);
         assert_eq!(resp.devices[0].node_id, "node-xyz");
     }
@@ -2694,7 +2774,8 @@ mod tests {
                 realm: "realm-a".to_string(),
             },
             &registry,
-        );
+        )
+        .expect("legacy agent shapes are ignored");
         assert!(
             resp.devices.is_empty(),
             "legacy and hosted agent URAs must be ignored"
@@ -2714,8 +2795,55 @@ mod tests {
                 realm: "realm-missing".to_string(),
             },
             &registry,
-        );
+        )
+        .expect("unmatched realm is empty");
         assert!(resp.devices.is_empty());
+    }
+
+    #[test]
+    fn handle_list_user_devices_rejects_prefix_matched_malformed_device_presence() {
+        let registry = PresenceRegistry::new();
+        registry.insert(
+            "easynet:///r/realm-a/device/".to_string(),
+            make_dispatch_sender(),
+        );
+
+        let error = handle_list_user_devices(
+            &ListUserDevicesRequest {
+                realm: "realm-a".to_string(),
+            },
+            &registry,
+        )
+        .expect_err("malformed device presence must fail closed");
+
+        assert!(
+            error.contains("matches realm device prefix")
+                || error.contains("missing canonical device id"),
+            "unexpected list_user_devices error: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_list_user_devices_response_rejects_node_id_mismatch() {
+        let response = ListUserDevicesResponse {
+            devices: vec![crate::daemon::federation::directory::DirectoryEntry {
+                agent_ura: "easynet:///r/realm-a/device/dev-1".to_string(),
+                node_id: "other".to_string(),
+                display_name: None,
+                status: "active".to_string(),
+                origin_realm: None,
+                hub_endpoint: None,
+                last_seen_unix_ms: None,
+            }],
+        };
+
+        let error = validate_list_user_devices_response(&response, "test peer")
+            .expect_err("peer device row must bind node_id to Device URA");
+
+        assert!(
+            error.contains("node_id") && error.contains("does not match"),
+            "unexpected peer response validation error: {error}"
+        );
     }
 
     #[test]
