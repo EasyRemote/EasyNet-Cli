@@ -104,11 +104,7 @@ impl PluginPackageIndex {
                 path: lock_path.clone(),
                 source,
             })?;
-        let state: PluginStateToml =
-            toml::from_str(&body).map_err(|source| PluginHostError::ManifestParseFailed {
-                path: lock_path,
-                source,
-            })?;
+        let state = PluginStateToml::parse_active_projection(&body, &lock_path)?;
         for record in state.plugins {
             let package_dir = root
                 .join(INSTALLED_DIR)
@@ -149,20 +145,16 @@ impl PluginPackageIndex {
                 });
             }
         };
-        let state: PluginStateToml = match toml::from_str(&body) {
+        let state = match PluginStateToml::parse_active_projection(&body, &lock_path) {
             Ok(state) => state,
-            Err(source) => {
+            Err(err) => {
                 return Ok(PluginPackageIndexLoadReport {
                     index: Self::default(),
                     installed_errors: vec![PluginPackageIndexError {
                         id: "plugin-lock".to_string(),
                         version: String::new(),
                         package_dir: lock_path.clone(),
-                        reason: PluginHostError::ManifestParseFailed {
-                            path: lock_path,
-                            source,
-                        }
-                        .to_string(),
+                        reason: err.to_string(),
                     }],
                 });
             }
@@ -468,6 +460,32 @@ mod tests {
         assert!(report.installed_errors()[0]
             .reason
             .contains("read plugin package path"));
+    }
+
+    #[test]
+    fn plugin_index_resilient_reports_invalid_active_state_as_lock_error() {
+        let root = tempfile::tempdir().expect("root");
+        let state_dir = root.path().join(STATE_DIR);
+        std::fs::create_dir_all(&state_dir).expect("state dir");
+        std::fs::write(
+            state_dir.join(PLUGIN_LOCK_FILE),
+            r#"
+[[plugins]]
+id = ""
+version = "0.1.0"
+hash = "abc123"
+"#,
+        )
+        .expect("write malformed lock");
+
+        let report = PluginPackageIndex::installed_resilient(root.path()).expect("report");
+
+        assert!(report.index().packages().is_empty());
+        assert_eq!(report.installed_errors().len(), 1);
+        assert_eq!(report.installed_errors()[0].id, "plugin-lock");
+        assert!(report.installed_errors()[0]
+            .reason
+            .contains("plugin active state"));
     }
 
     #[test]

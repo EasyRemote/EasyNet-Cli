@@ -2096,3 +2096,37 @@ Commands and outcomes will be appended after implementation.
   (`canonical-runtime-convergence-v2: OK`).
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; indexed
   the companion desired-state store parser and validation boundary.
+
+## 2026-07-21 Installed plugin active-state schema
+
+- `/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override/codegraph
+  --version` — FAIL; override path was absent in the current environment.
+- `/Users/macbook.silan.tech/.local/bin/codegraph --version` — PASS
+  (`1.4.1`).
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore "plugin install
+  state PluginStateToml serde default plugins malformed blank duplicate
+  lockfile installed package state"` — UNAVAILABLE; checkout had no
+  `.codegraph/` index and the tool instructed agents not to initialize one.
+- `rg -n
+  "PluginStateToml|InstalledPluginRecord|plugin-lock|plugins.toml|serde\\(default\\)|state_path\\(|PluginStateStore"
+  src/daemon/plugins -S` — PASS for seam identification; found the state
+  store parser, index lockfile parser, and old `plugins` default.
+- `cargo test -q daemon::plugins::install::state --lib` — PASS (`6 passed`);
+  covers missing-file fresh empty state, existing file without `plugins`,
+  unknown fields, blank identity, duplicate active row, and multiple active
+  versions.
+- `cargo test -q daemon::plugins::install --lib` — PASS (`22 passed`);
+  verifies install/update/remove and companion transaction paths still use the
+  strict state parser.
+- `cargo test -q daemon::plugins::index --lib` — PASS (`7 passed`);
+  includes resilient lockfile reporting for malformed active state without
+  projecting a successful installed package index.
+- `cargo fmt --check` — PASS.
+- `cargo check --lib --bins` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS
+  (`architecture-convergence: OK`).
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).

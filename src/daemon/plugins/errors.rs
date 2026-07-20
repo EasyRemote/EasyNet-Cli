@@ -101,6 +101,8 @@ pub enum PluginHostError {
         ability: String,
         reason: String,
     },
+    #[error("plugin active state {path} is invalid: {reason}")]
+    InvalidPluginState { path: PathBuf, reason: String },
     #[error(
         "plugin manifest entrypoint {declared:?} does not match compiled binding {expected:?}"
     )]
@@ -338,6 +340,16 @@ impl PartialEq for PluginHostError {
                     reason: br,
                 },
             ) => ap == bp && aa == ba && ar == br,
+            (
+                InvalidPluginState {
+                    path: ap,
+                    reason: ar,
+                },
+                InvalidPluginState {
+                    path: bp,
+                    reason: br,
+                },
+            ) => ap == bp && ar == br,
             (
                 EntrypointMismatch {
                     declared: ad,

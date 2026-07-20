@@ -647,3 +647,14 @@ Decisions will be appended as root-fork choices are made.
 - Reject duplicate companion desired-state rows. Reconciliation and status
   projection must not depend on first-match TOML order for the same
   `(id, version)` lifecycle identity.
+- Treat installed plugin active state as package authority, not a loose cache.
+  Missing state files remain valid fresh-install empty state, but an existing
+  `plugins.toml` or `plugin-lock.toml` must be schema-complete and uniquely
+  identify active packages.
+- Keep active-state shape validation in `PluginStateToml`, not in
+  `PluginPackageIndex`. The index consumes active package authority and loads
+  packages; it must not define a second TOML interpretation path.
+- Treat malformed active-state shape as lockfile-level unavailability in
+  resilient daemon boot. Bad package directories can still produce row-level
+  operator diagnostics, but blank identities, duplicate active package rows, or
+  multiple active versions make the active set itself untrustworthy.

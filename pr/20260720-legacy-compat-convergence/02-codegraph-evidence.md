@@ -2010,3 +2010,30 @@ Evidence will be appended after indexing and focused impact queries.
   explicit `desired_state`, and validate non-empty identity plus unique
   `(id, version)` keys after parsing. Optional action/error telemetry remains
   optional because it is not the lifecycle decision fact.
+
+## 2026-07-21 Installed plugin active-state store audit
+
+- `/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override/codegraph`
+  was not present in the current execution environment, and
+  `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "plugin install state PluginStateToml serde default plugins malformed blank
+  duplicate lockfile installed package state"` reported that this checkout has
+  no `.codegraph/` index. Per the tool guidance, no agent-owned `codegraph
+  init` was run.
+- Targeted source inspection with `rg` found two active-state parser owners:
+  `PluginStateStore::read` parsed `plugins.toml` directly, and
+  `PluginPackageIndex::{installed,installed_resilient}` parsed
+  `plugin-lock.toml` directly. `PluginStateToml.plugins` used
+  `#[serde(default)]`, so an existing empty or schema-incomplete file could be
+  repaired into an empty active package set.
+- The root abstraction problem was treating active installed package state as a
+  loose DTO instead of durable package authority. Package directories are not
+  live unless the active state names them, so the state parser must be the
+  single owner of row shape, identity completeness, and active-version
+  uniqueness.
+- After the change, `PluginStateToml::parse_active_projection` is the shared
+  parser for both `plugins.toml` and `plugin-lock.toml`. Existing state files
+  deny unknown fields, require explicit `plugins`, require non-empty
+  `id`/`version`/`hash`, and reject duplicate `id@version` rows or multiple
+  active versions for one package id. Missing state files remain the only valid
+  fresh empty install state.

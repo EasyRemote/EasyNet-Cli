@@ -242,3 +242,10 @@
   or duplicate `(id, version)` is corrupt lifecycle state and must fail closed
   before daemon-ready reconciliation, status projection, or self-uninstall
   cleanup.
+- Installed plugin active-state rows are package authority, not cache hints. A
+  missing `plugins.toml` / `plugin-lock.toml` is the only fresh-install empty
+  state; once a state file exists it must explicitly declare `plugins`, reject
+  unknown fields, require non-empty `id`, `version`, and `hash`, and reject
+  duplicate package identity or multiple active versions for one package id.
+  Index loaders must reuse this state parser instead of owning a second TOML
+  interpretation path.
