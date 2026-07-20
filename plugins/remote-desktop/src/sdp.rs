@@ -69,8 +69,31 @@ pub(in crate::daemon::plugins::remote_desktop) fn remote_ice_candidate_inits(
     if candidate.is_null() {
         return Ok(Vec::new());
     }
+    ice_candidate_text(candidate)?;
     let candidate_init: RTCIceCandidateInit = serde_json::from_value(candidate.clone())?;
     Ok(vec![candidate_init])
+}
+
+/// Return the explicit ICE candidate string from a schema-bound candidate row.
+///
+/// Empty candidate strings are valid end-of-candidates markers. Missing,
+/// non-object, or non-string `candidate` fields are malformed signaling state.
+pub(in crate::daemon::plugins::remote_desktop) fn ice_candidate_text(
+    candidate: &Value,
+) -> anyhow::Result<&str> {
+    let object = require_ice_candidate_object(candidate)?;
+    object
+        .get("candidate")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("ICE candidate row must include string `candidate`"))
+}
+
+fn require_ice_candidate_object(
+    candidate: &Value,
+) -> anyhow::Result<&serde_json::Map<String, Value>> {
+    candidate
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("ICE candidate row must be an object or null end marker"))
 }
 
 #[cfg(test)]
@@ -116,5 +139,28 @@ mod tests {
             kept[0].candidate,
             srflx["candidate"].as_str().expect("candidate string")
         );
+    }
+
+    #[test]
+    fn ice_candidate_rows_reject_schema_incomplete_values() {
+        for (candidate, expected) in [
+            (json!("candidate:1"), "must be an object or null"),
+            (json!({}), "must include string `candidate`"),
+            (json!({"candidate": 7}), "must include string `candidate`"),
+        ] {
+            let err = remote_ice_candidate_inits(&candidate)
+                .expect_err("schema-incomplete candidate must fail closed")
+                .to_string();
+            assert!(err.contains(expected), "expected {expected:?}; got {err}");
+        }
+    }
+
+    #[test]
+    fn null_and_empty_candidate_are_explicit_end_markers() {
+        assert!(remote_ice_candidate_inits(&Value::Null).unwrap().is_empty());
+        let empty = json!({"candidate": "", "sdpMid": "0", "sdpMLineIndex": 0});
+        let decoded = remote_ice_candidate_inits(&empty).unwrap();
+        assert_eq!(decoded[0].candidate, "");
+        assert_eq!(ice_candidate_text(&empty).unwrap(), "");
     }
 }

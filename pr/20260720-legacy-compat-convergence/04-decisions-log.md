@@ -635,3 +635,9 @@ Decisions will be appended as root-fork choices are made.
 - Split malformed control frames from unsupported frame types. Missing,
   non-string, or blank diagnostic Bidi `type` is `invalid_frame`; only
   schema-valid but unsupported frame names are `unknown_frame`.
+- Treat remote-desktop ICE candidate rows as signaling facts. Malformed local
+  candidate rows no longer mean end-of-candidates, and malformed remote
+  candidates fail before session storage.
+- Keep explicit end-of-candidates distinct from malformed candidate rows.
+  `null` and empty-string `candidate` remain valid end markers; missing or
+  non-string `candidate` is invalid signaling schema.

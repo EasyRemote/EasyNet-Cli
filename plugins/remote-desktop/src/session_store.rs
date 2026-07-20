@@ -10,6 +10,7 @@ use std::sync::{Mutex, MutexGuard};
 use serde_json::Value;
 
 use crate::daemon::plugins::remote_desktop::constants::DIRECT_WEBRTC_ENDPOINT_PREFIX;
+use crate::daemon::plugins::remote_desktop::sdp::ice_candidate_text;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
 
 /// Runtime-owned synchronized map of remote desktop sessions.
@@ -89,21 +90,16 @@ impl RemoteDesktopSessionStore {
         &self,
         session_id: &str,
         candidate: Value,
-    ) {
-        if candidate
-            .get("candidate")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default()
-            .is_empty()
-        {
-            return;
+    ) -> anyhow::Result<()> {
+        if ice_candidate_text(&candidate)?.trim().is_empty() {
+            return Ok(());
         }
         let mut sessions = self.lock();
         let Some(session) = sessions.get_mut(session_id) else {
-            return;
+            return Ok(());
         };
         session.record_local_ice_candidate(candidate);
+        Ok(())
     }
 
     /// Record a WebRTC diagnostic event projected into session-state terms.
@@ -162,5 +158,86 @@ impl RemoteDesktopSessionStore {
             return;
         };
         let _ = session.mark_preview_transport_failed(reason, message);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    use crate::daemon::plugins::remote_desktop::constants::TRANSPORT_WEBRTC;
+    use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
+
+    fn insert_test_session(store: &RemoteDesktopSessionStore, session_id: &str) {
+        store.with_sessions(|sessions| {
+            sessions.insert(
+                session_id.to_string(),
+                RemoteDesktopSession::new(test_session_init(
+                    session_id,
+                    "easynet:///r/acme/resource/display.01",
+                    vec![TRANSPORT_WEBRTC.to_string()],
+                )),
+            );
+        });
+    }
+
+    #[test]
+    fn local_webrtc_candidate_rejects_schema_incomplete_rows() {
+        let store = RemoteDesktopSessionStore::new();
+        insert_test_session(&store, "rd-local-candidate-schema");
+
+        for (candidate, expected) in [
+            (json!("candidate:1"), "must be an object or null"),
+            (json!({}), "must include string `candidate`"),
+            (json!({"candidate": 7}), "must include string `candidate`"),
+        ] {
+            let err = store
+                .record_local_webrtc_candidate("rd-local-candidate-schema", candidate)
+                .expect_err("malformed local ICE candidate must fail closed")
+                .to_string();
+            assert!(err.contains(expected), "expected {expected:?}; got {err}");
+        }
+
+        store.with_sessions(|sessions| {
+            let session = sessions.get("rd-local-candidate-schema").unwrap();
+            assert!(
+                session.local_ice_candidates().is_empty(),
+                "malformed local candidates must not enter session signaling"
+            );
+        });
+    }
+
+    #[test]
+    fn local_webrtc_candidate_records_only_non_empty_candidates() {
+        let store = RemoteDesktopSessionStore::new();
+        insert_test_session(&store, "rd-local-candidate-ok");
+
+        store
+            .record_local_webrtc_candidate(
+                "rd-local-candidate-ok",
+                json!({"candidate": "", "sdpMid": "0", "sdpMLineIndex": 0}),
+            )
+            .expect("explicit end marker is accepted");
+        store
+            .record_local_webrtc_candidate(
+                "rd-local-candidate-ok",
+                json!({
+                    "candidate": "candidate:1 1 UDP 2122252543 abc.local 54400 typ host",
+                    "sdpMid": "0",
+                    "sdpMLineIndex": 0
+                }),
+            )
+            .expect("candidate records");
+
+        store.with_sessions(|sessions| {
+            let session = sessions.get("rd-local-candidate-ok").unwrap();
+            let candidates = session.local_ice_candidates();
+            assert_eq!(candidates.len(), 1);
+            assert_eq!(
+                candidates[0]["candidate"],
+                json!("candidate:1 1 UDP 2122252543 abc.local 54400 typ host")
+            );
+        });
     }
 }

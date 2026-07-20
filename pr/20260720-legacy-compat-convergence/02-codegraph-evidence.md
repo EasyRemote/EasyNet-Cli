@@ -1964,3 +1964,26 @@ Evidence will be appended after indexing and focused impact queries.
   and diagnostic Bidi control frame type parsing returns `invalid_frame` for
   missing/non-string/blank type. `unknown_frame` is now reserved for
   schema-valid but unsupported frame types.
+
+## 2026-07-21 Remote desktop ICE candidate signaling audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "remote_desktop session_store unwrap_or_default malformed store json default
+  empty corrupt session state"` identified `RemoteDesktopSessionStore` as the
+  store-level projection boundary for device-local WebRTC candidate facts.
+- Targeted source inspection found that local WebRTC candidate projection used
+  `candidate.get("candidate").and_then(Value::as_str).unwrap_or_default()`.
+  Non-object candidate rows, missing `candidate`, and non-string `candidate`
+  therefore collapsed into an empty string and were silently treated as
+  end-of-candidates. The public `add_ice_candidate` handler also stored the
+  remote candidate before the transport parser proved the candidate shape.
+- The root abstraction problem was treating ICE candidates as optional display
+  hints. They are signaling facts in the session read model: remote candidates
+  are product-submitted control input and local candidates are device-generated
+  transport evidence. Bad shape must fail before storage or be recorded as a
+  transport diagnostic, not disappear as "no candidate".
+- After the change, `sdp::ice_candidate_text` is the shared candidate fact
+  parser. Remote add-ICE validates through `remote_ice_candidate_inits` before
+  appending to the session. Local candidates validate through
+  `ice_candidate_text` before session projection; serialization/projection
+  failures become `ICE_CANDIDATE_SCHEMA_INVALID` diagnostics.

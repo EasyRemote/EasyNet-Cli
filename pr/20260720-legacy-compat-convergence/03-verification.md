@@ -2027,3 +2027,42 @@ Commands and outcomes will be appended after implementation.
   (`canonical-runtime-convergence-v2: OK`).
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; indexed
   the updated remote-desktop input-frame and diagnostic Bidi control parser.
+
+## 2026-07-21 Remote desktop ICE candidate signaling schema
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "remote_desktop session_store unwrap_or_default malformed store json default
+  empty corrupt session state"` — PASS; identified local WebRTC candidate
+  projection and session store mutation helpers.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "remote_desktop ICE candidate record_local_webrtc_candidate
+  remote_ice_candidate_inits malformed candidate unwrap_or_default
+  add_ice_candidate"` — PASS; reports `remote_ice_candidate_inits`,
+  `record_local_webrtc_candidate`, `add_ice_candidate`, and live WebRTC
+  callback relationships.
+- `rg -n
+  "record_local_webrtc_candidate|remote_ice_candidate_inits|ice_candidate_text|unwrap_or_default\\(\\)|candidate.*and_then\\(Value::as_str\\)"
+  plugins/remote-desktop/src/session_store.rs
+  plugins/remote-desktop/src/sdp.rs
+  plugins/remote-desktop/src/handlers/add_ice_candidate.rs
+  plugins/remote-desktop/src/transport/webrtc.rs -S` — PASS for the selected
+  seam; local candidate projection no longer uses `unwrap_or_default`, and
+  remote/local candidate ingress share the SDP/ICE parser.
+- `cargo test -q remote_desktop::sdp --lib --features remote-desktop` —
+  PASS (`4 passed`); includes schema-incomplete candidate rejection and
+  explicit null/empty end-marker handling.
+- `cargo test -q remote_desktop::session_store --lib --features
+  remote-desktop` — PASS (`2 passed`); includes malformed local candidate
+  rejection before session signaling projection.
+- `cargo test -q remote_desktop::handlers::add_ice_candidate --lib
+  --features remote-desktop` — PASS (`1 passed`); proves malformed remote
+  candidates fail before being stored on the session.
+- `cargo check --lib --bins --features remote-desktop` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `PATH="/Users/macbook.silan.tech/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+  SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; indexed
+  the updated ICE candidate parser and session projection boundary.

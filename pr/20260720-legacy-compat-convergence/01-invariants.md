@@ -230,3 +230,9 @@
   payloads must be rejected at input-frame parsing before policy checks or
   platform input injection. Unsupported but schema-valid frame types remain
   distinct `unknown_frame` diagnostics.
+- Remote-desktop ICE candidates are signaling facts, not optional UI hints.
+  Remote candidate rows must be schema-bound before they are stored on a
+  session, and local candidate rows must be schema-bound before they are
+  projected into the session read model. Only explicit `null` or empty-string
+  `candidate` end markers may be omitted; malformed rows must surface as
+  invalid input or WebRTC diagnostic state, not as "no candidate".

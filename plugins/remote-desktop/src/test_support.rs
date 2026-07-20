@@ -16,7 +16,12 @@ use crate::daemon::persistence::resources::{
     upsert_resource, ResourceBinding, ResourceType, ResourceUpsert, ResourcesFile,
 };
 use crate::daemon::plugins::remote_desktop::constants::DEFAULT_FRAME_QUEUE_DEPTH;
+use crate::daemon::plugins::remote_desktop::request::{
+    RemoteDesktopInputPolicy, RemoteDesktopVideoConstraints,
+};
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
+use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSessionInit;
+use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::stop_session_transports;
 use crate::daemon::plugins::PluginRuntimeLimits;
 
@@ -84,6 +89,28 @@ pub(in crate::daemon::plugins::remote_desktop) fn test_consent_causal_context() 
         receipt_ura: "easynet:///r/acme/resource/alice.invocations/test-local-consent".to_string(),
         receipt_hash: [0x42; 32],
     })
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn test_session_init(
+    session_id: &str,
+    subject: &str,
+    transport_preferences: Vec<String>,
+) -> RemoteDesktopSessionInit {
+    let env = env_for(subject);
+    RemoteDesktopSessionInit {
+        session_id: session_id.to_string(),
+        session_token: "token".to_string(),
+        creator_caller_ura: Some(env.caller().to_string()),
+        consent: RemoteDesktopConsentGrant::from_envelope_for_test(&env),
+        subject_ura: subject.to_string(),
+        subject_type: ResourceType::Display,
+        subject_display_name: "Test Display".to_string(),
+        mode: "view_only".to_string(),
+        lease_ttl_ms: 5_000,
+        transport_preferences,
+        video: RemoteDesktopVideoConstraints::default(),
+        input_policy: RemoteDesktopInputPolicy::default(),
+    }
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn seed_display(

@@ -66,9 +66,28 @@ impl PeerConnectionEventHandler for DirectWebRtcHandler {
                 "[remote-desktop-webrtc] local_candidate={}",
                 candidate.candidate
             );
-            if let Ok(candidate) = serde_json::to_value(candidate) {
-                self.sessions
-                    .record_local_webrtc_candidate(&self.session_id, candidate);
+            match serde_json::to_value(candidate) {
+                Ok(candidate) => {
+                    if let Err(err) = self
+                        .sessions
+                        .record_local_webrtc_candidate(&self.session_id, candidate)
+                    {
+                        self.sessions.record_webrtc_diagnostic(
+                            &self.session_id,
+                            "ICE_CANDIDATE_SCHEMA_INVALID",
+                            Some(err.to_string()),
+                            json!({ "stage": "local_candidate_projection" }),
+                        );
+                    }
+                }
+                Err(err) => {
+                    self.sessions.record_webrtc_diagnostic(
+                        &self.session_id,
+                        "ICE_CANDIDATE_SCHEMA_INVALID",
+                        Some(err.to_string()),
+                        json!({ "stage": "local_candidate_serialization" }),
+                    );
+                }
             }
         }
     }
