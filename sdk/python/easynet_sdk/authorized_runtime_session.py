@@ -9,7 +9,13 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Mapping, Protocol
 
-from .authority import DelegationProof, SessionAuthority
+from .authority import (
+    DELEGATION_METADATA_KEY,
+    SESSION_AUTHORITY_METADATA_KEY,
+    DelegationProof,
+    SessionAuthority,
+    validate_authority_metadata,
+)
 from .bidi import BidiSession, BidiStreamDescriptor
 from .errors import ErrorCode, RetryHint, SDKError
 from ._identity_guards import contains_all_zero_principal
@@ -32,6 +38,7 @@ from .runtime import (
     RuntimeReceipt,
     StreamHandle,
 )
+from .runtime_ability import RuntimeCallContext, RuntimeInvocationAuthority
 from .signing import PreparedInvocation, SignedInvocation, Signer, SigningMaterial
 
 
@@ -521,6 +528,7 @@ class SessionHistoryOperations:
         self._session = session
 
     def list(self, request: ReceiptListRequest) -> ReceiptHistoryPage:
+        _validate_session_history_call(request.call)
         return self._session._receipts.list(request)
 
 
@@ -690,6 +698,153 @@ def _descriptor_request_from_intent(
         idempotency_key=intent.idempotency_key,
         causal_context=dict(intent.causal_context),
     )
+
+
+def _validate_session_history_call(call: RuntimeCallContext) -> None:
+    if not isinstance(call, RuntimeCallContext):
+        raise _session_error(
+            ErrorCode.INVALID_INVOCATION,
+            "history",
+            "runtime call context is required",
+        )
+    _validate_runtime_call_required(call.caller_ura, "caller_ura")
+    _validate_runtime_call_required(call.callee_ura, "callee_ura")
+    _validate_runtime_call_required(call.subject_ura, "subject_ura")
+    _validate_runtime_call_required(call.nonce_base64, "nonce_base64")
+    if not isinstance(call.causal_context, Mapping):
+        raise _session_error(
+            ErrorCode.INVALID_INVOCATION,
+            "history",
+            "causal_context is required",
+            _runtime_call_details(call),
+        )
+    authority = _runtime_call_authority(call)
+    if authority is None:
+        raise _session_error(
+            ErrorCode.AUTHORITY_DENIED,
+            "history",
+            "session history requires runtime authority bound to the receipt query tuple",
+            _runtime_call_details(call),
+        )
+    _validate_session_history_authority_binding(authority, call)
+
+
+def _runtime_call_authority(
+    call: RuntimeCallContext,
+) -> RuntimeInvocationAuthority | None:
+    metadata = dict(call.metadata)
+    validate_authority_metadata(metadata)
+    raw_present = bool(
+        metadata.get(DELEGATION_METADATA_KEY)
+        or metadata.get(SESSION_AUTHORITY_METADATA_KEY)
+    )
+    if call.authority is not None:
+        if raw_present:
+            raise _session_error(
+                ErrorCode.INVALID_INVOCATION,
+                "history",
+                "runtime call authority must be supplied once as a typed authority or metadata, not both",
+                _runtime_call_details(call),
+            )
+        return call.authority
+    if metadata.get(DELEGATION_METADATA_KEY):
+        return DelegationProof.from_metadata(str(metadata[DELEGATION_METADATA_KEY]))
+    if metadata.get(SESSION_AUTHORITY_METADATA_KEY):
+        return SessionAuthority.from_metadata(str(metadata[SESSION_AUTHORITY_METADATA_KEY]))
+    return None
+
+
+def _validate_session_history_authority_binding(
+    authority: RuntimeInvocationAuthority,
+    call: RuntimeCallContext,
+) -> None:
+    caller_ura = call.caller_ura.strip()
+    callee_ura = call.callee_ura.strip()
+    subject_ura = call.subject_ura.strip()
+    details = _runtime_call_details(call)
+    if isinstance(authority, DelegationProof):
+        if authority.caller_ura.strip() != caller_ura:
+            raise _session_error(
+                ErrorCode.AUTHORITY_DENIED,
+                "history",
+                "delegation authority caller does not match receipt query caller_ura",
+                details,
+            )
+        if authority.subject_ura.strip() != subject_ura:
+            raise _session_error(
+                ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
+                "history",
+                "delegation authority subject does not match receipt query subject_ura",
+                details,
+            )
+        if not authority.matches_audience(callee_ura):
+            raise _session_error(
+                ErrorCode.AUTHORITY_DENIED,
+                "history",
+                "delegation authority audience does not admit receipt query callee_ura",
+                details,
+            )
+        if not authority.matches_scope("invocation.history.list"):
+            raise _session_error(
+                ErrorCode.AUTHORITY_DENIED,
+                "history",
+                "delegation authority scopes do not admit invocation.history.list",
+                details,
+            )
+        return
+    details["authority_session_subject"] = authority.subject_ura
+    if authority.issuer_ura.strip() != caller_ura:
+        raise _session_error(
+            ErrorCode.AUTHORITY_DENIED,
+            "history",
+            "session authority issuer does not match receipt query caller_ura",
+            details,
+        )
+    if authority.callee_ura.strip() != callee_ura:
+        raise _session_error(
+            ErrorCode.AUTHORITY_DENIED,
+            "history",
+            "session authority callee does not match receipt query callee_ura",
+            details,
+        )
+    if not authority.matches_audience(callee_ura):
+        raise _session_error(
+            ErrorCode.AUTHORITY_DENIED,
+            "history",
+            "session authority audience does not admit receipt query callee_ura",
+            details,
+        )
+    if not _session_authority_admits_subject(authority, subject_ura):
+        raise _session_error(
+            ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
+            "history",
+            "session authority subject does not admit receipt query subject_ura",
+            details,
+        )
+    if not authority.matches_scope("invocation.history.list"):
+        raise _session_error(
+            ErrorCode.AUTHORITY_DENIED,
+            "history",
+            "session authority scopes do not admit invocation.history.list",
+            details,
+        )
+
+
+def _validate_runtime_call_required(value: str, field_name: str) -> None:
+    if not value.strip():
+        raise _session_error(
+            ErrorCode.INVALID_INVOCATION,
+            "history",
+            f"{field_name} is required",
+        )
+
+
+def _runtime_call_details(call: RuntimeCallContext) -> dict[str, object]:
+    return {
+        "caller_ura": call.caller_ura,
+        "callee_ura": call.callee_ura,
+        "subject_ura": call.subject_ura,
+    }
 
 
 def _runtime_session_intent_metadata(

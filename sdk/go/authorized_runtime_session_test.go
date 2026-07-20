@@ -68,6 +68,35 @@ func TestAuthorizedRuntimeSessionRejectsMissingCallerSignerBeforeSubmit(t *testi
 	}
 }
 
+func TestAuthorizedRuntimeSessionHistoryRejectsAuthoritySubjectMismatchBeforeReceiptProvider(t *testing.T) {
+	session := newAuthorizedRuntimeSessionFixture(t)
+	request := ReceiptListRequest{
+		Call: RuntimeCallContext{
+			CallerURA:     "easynet:///r/example/agent/backend",
+			CalleeURA:     "easynet:///r/example/device/dev-a",
+			SubjectURA:    "easynet:///r/example/device/dev-a",
+			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
+			CausalContext: map[string]any{"form": "none"},
+			Authority: sessionAuthorityFixture(t, map[string]any{
+				"scopes":                     []string{"invocation.history.list"},
+				"allowed_followup_abilities": []string{"invocation.history.list"},
+			}),
+		},
+		Limit: 10,
+	}
+
+	_, err := session.sdk.History().List(context.Background(), request)
+	if err == nil {
+		t.Fatalf("expected authority subject mismatch")
+	}
+	if !IsCode(err, ErrAuthoritySubjectMismatch) {
+		t.Fatalf("error = %v", err)
+	}
+	if session.receipts.listCalls != 0 {
+		t.Fatalf("receipt provider called after mismatch: %d", session.receipts.listCalls)
+	}
+}
+
 func TestRuntimeClientSessionRuntimeProviderRejectsUnsignedStreamDowngrade(t *testing.T) {
 	provider := NewRuntimeClientSessionRuntimeProvider(&RuntimeClient{})
 
@@ -86,6 +115,7 @@ type authorizedRuntimeSessionFixture struct {
 	authorization *sessionAuthorizationProviderFixture
 	signer        *sessionSignerProviderFixture
 	identity      *sessionIdentityProviderFixture
+	receipts      *sessionReceiptProviderFixture
 }
 
 func newAuthorizedRuntimeSessionFixture(t *testing.T) authorizedRuntimeSessionFixture {
@@ -99,6 +129,7 @@ func newAuthorizedRuntimeSessionFixture(t *testing.T) authorizedRuntimeSessionFi
 		}),
 	}
 	signer := &sessionSignerProviderFixture{}
+	receipts := &sessionReceiptProviderFixture{}
 	identity := &sessionIdentityProviderFixture{
 		caller: CallerIdentityRef{Principal: PrincipalRef{URA: "easynet:///r/example/agent/backend"}},
 	}
@@ -107,7 +138,7 @@ func newAuthorizedRuntimeSessionFixture(t *testing.T) authorizedRuntimeSessionFi
 		Descriptor:    descriptor,
 		Authorization: authorization,
 		Signer:        signer,
-		Receipts:      sessionReceiptProviderFixture{},
+		Receipts:      receipts,
 		Identity:      identity,
 		Clock:         sessionClockFixture{},
 	})
@@ -121,6 +152,7 @@ func newAuthorizedRuntimeSessionFixture(t *testing.T) authorizedRuntimeSessionFi
 		authorization: authorization,
 		signer:        signer,
 		identity:      identity,
+		receipts:      receipts,
 	}
 }
 
@@ -276,16 +308,19 @@ func (sessionClockFixture) NewNonceBase64() (string, error) {
 	return "AQIDBAUGBwgJCgsMDQ4PEA==", nil
 }
 
-type sessionReceiptProviderFixture struct{}
+type sessionReceiptProviderFixture struct {
+	listCalls int
+}
 
-func (sessionReceiptProviderFixture) List(context.Context, ReceiptListRequest) (ReceiptHistoryPage, error) {
+func (p *sessionReceiptProviderFixture) List(context.Context, ReceiptListRequest) (ReceiptHistoryPage, error) {
+	p.listCalls++
 	return ReceiptHistoryPage{}, nil
 }
 
-func (sessionReceiptProviderFixture) Get(context.Context, ReceiptGetRequest) (ReceiptGetResult, error) {
+func (*sessionReceiptProviderFixture) Get(context.Context, ReceiptGetRequest) (ReceiptGetResult, error) {
 	return ReceiptGetResult{}, nil
 }
 
-func (sessionReceiptProviderFixture) Trace(context.Context, ReceiptTraceRequest) (ReceiptTraceResult, error) {
+func (*sessionReceiptProviderFixture) Trace(context.Context, ReceiptTraceRequest) (ReceiptTraceResult, error) {
 	return ReceiptTraceResult{}, nil
 }

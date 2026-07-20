@@ -14,7 +14,9 @@ from easynet_sdk import (
     InvocationIntent,
     PrepareOptions,
     PreparedInvocation,
+    ReceiptListRequest,
     PrincipalRef,
+    RuntimeCallContext,
     RuntimeTargetRef,
     RuntimeClientSessionRuntimeProvider,
     RetryHint,
@@ -71,6 +73,26 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         self.assertEqual(fixture.runtime.prepare_calls, 1)
         self.assertEqual(fixture.runtime.submit_calls, 0)
 
+    def test_history_rejects_authority_subject_mismatch_before_receipt_provider(self) -> None:
+        fixture = _SessionFixture()
+        request = ReceiptListRequest(
+            call=RuntimeCallContext(
+                caller_ura="easynet:///r/example/agent/backend",
+                callee_ura="easynet:///r/example/device/dev-a",
+                subject_ura="easynet:///r/example/device/dev-a",
+                nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                causal_context={"form": "none"},
+                authority=_session_authority(),
+            ),
+            limit=10,
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            fixture.session.history.list(request)
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.AUTHORITY_SUBJECT_MISMATCH))
+        self.assertEqual(fixture.receipts.list_calls, 0)
+
     def test_runtime_client_provider_rejects_unsigned_stream_downgrade(self) -> None:
         provider = RuntimeClientSessionRuntimeProvider(object())
 
@@ -92,12 +114,13 @@ class _SessionFixture:
         self.identity = identity or StaticCallerIdentityProvider(
             CallerIdentityRef(PrincipalRef("easynet:///r/example/agent/backend"))
         )
+        self.receipts = _ReceiptProvider()
         self.session = AuthorizedRuntimeSession(
             runtime=self.runtime,
             descriptor=self.descriptor,
             authorization=self.authorization,
             signer=self.signer,
-            receipts=_ReceiptProvider(),
+            receipts=self.receipts,
             identity=self.identity,
             clock=_Clock(),
         )
@@ -193,7 +216,11 @@ class _SignerProvider:
 
 
 class _ReceiptProvider:
+    def __init__(self) -> None:
+        self.list_calls = 0
+
     def list(self, request):
+        self.list_calls += 1
         return None
 
     def get(self, request):

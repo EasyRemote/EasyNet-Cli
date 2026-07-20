@@ -1028,3 +1028,39 @@ Evidence will be appended after indexing and focused impact queries.
   `import { AdminClient }` failed during ESM loading before the neutrality
   assertion could run, and the opaque authority value depended on retired
   shape-only authority semantics.
+
+## 2026-07-20 Authorized history subject-binding bypass audit
+
+- `codegraph query invocation.history.list --limit 40` identified
+  `SessionHistoryOperations` in the Go and Python SDKs as the product-facing
+  high-level history entrypoint over the generic receipt provider.
+- `rg` confirmed `SessionHistoryOperations.List/list` previously delegated a
+  caller-supplied `ReceiptListRequest` directly to the receipt provider,
+  leaving products free to supply a Device subject with a User session
+  authority. That made deterministic `AUTHORITY_SUBJECT_MISMATCH` surface only
+  at daemon admission or product UI error handling.
+- The root abstraction problem was a state-machine bypass inside
+  `AuthorizedRuntimeSession`: the `history` operation group existed, but it
+  did not enforce the same caller/callee/subject/authority binding invariant
+  that `invoke` enforces before dispatch.
+- After the change, `codegraph query validateSessionHistoryRuntimeCall --limit
+  20` reports the Go SDK preflight gate and `codegraph query
+  _validate_session_history_call --limit 20` reports the matching Python SDK
+  gate. Both validate complete `RuntimeCallContext` input, require typed or
+  canonical metadata authority, and reject delegation/session subject mismatch
+  before the receipt provider is called.
+
+## 2026-07-20 Descriptor resolver signer-missing error downgrade audit
+
+- `rg` found the C ABI descriptor resolver projecting
+  `requires a caller signer` as canonical JSON code
+  `CALLER_SIGNER_UNAVAILABLE` while still returning numeric `ERR_NOT_FOUND`.
+  C callers or wrappers that fell back to numeric ABI classification could
+  display the signer/key-service failure as `ABILITY_NOT_FOUND`.
+- The root abstraction problem was mixing route absence and caller identity
+  custody absence under one ABI miss code. A missing caller signer is an
+  identity/authority precondition failure, not a descriptor or ability miss.
+- After the change, the resolver returns `ERR_PERMISSION_DENIED` with the same
+  precise canonical projection (`CALLER_SIGNER_UNAVAILABLE`,
+  `stage=caller_identity`, `retry=never`), so older ABI classification no
+  longer preserves the false ability-not-found story.

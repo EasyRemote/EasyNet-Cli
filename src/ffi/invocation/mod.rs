@@ -447,7 +447,7 @@ fn descriptor_resolution_error_projection(message: &str) -> (i32, ErrorProjectio
     }
     if lowered.contains("requires a caller signer") {
         return (
-            ERR_NOT_FOUND,
+            ERR_PERMISSION_DENIED,
             ErrorProjection {
                 code: "CALLER_SIGNER_UNAVAILABLE",
                 stage: "caller_identity",
@@ -9091,7 +9091,7 @@ mod tests {
         let (abi_code, projection) = descriptor_resolution_error_projection(
             "easynet_runtime_resolve_descriptor_ref: remote invocation requires a caller signer for `easynet:///r/cli/device/local`",
         );
-        assert_eq!(abi_code, ERR_NOT_FOUND);
+        assert_eq!(abi_code, ERR_PERMISSION_DENIED);
         assert_eq!(projection.code, "CALLER_SIGNER_UNAVAILABLE");
         assert_eq!(projection.stage, "caller_identity");
 

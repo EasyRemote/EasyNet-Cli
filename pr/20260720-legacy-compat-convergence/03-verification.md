@@ -973,3 +973,32 @@ Commands and outcomes will be appended after implementation.
   — PASS; reports the generic Node `RuntimeTransport` seam.
 - `rg -n "import \\{[^\\n]*(AdminClient|CompanionClient|CompatibilityClient|DirectoryClient|MissionClient|ReceiptClient|SurfaceClient)|void (AdminClient|CompanionClient|CompatibilityClient|DirectoryClient|MissionClient|ReceiptClient|SurfaceClient)|opaque-authority" sdk/node/test/types.test.ts sdk/node/index.js sdk/node/index.d.ts`
   — PASS; no product runtime import or opaque authority placeholder remains.
+
+## 2026-07-20 Authorized history subject-binding gate
+
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo fmt --check` —
+  PASS.
+- `PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH" cargo test -q
+  descriptor_resolution_errors_project_canonical_runtime_codes --features
+  axon-pb` — PASS; includes signer-missing descriptor resolution now returning
+  `ERR_PERMISSION_DENIED` with canonical `CALLER_SIGNER_UNAVAILABLE`.
+- `PATH="/opt/homebrew/bin:$PATH" go test . -run
+  'TestAuthorizedRuntimeSessionHistoryRejectsAuthoritySubjectMismatchBeforeReceiptProvider|TestAuthorizedRuntimeSessionRejectsAuthoritySubjectMismatchBeforeDispatch'`
+  from `sdk/go` — PASS; proves Go history subject mismatch is rejected before
+  the receipt provider is called.
+- `./.venv/bin/python -m unittest tests/test_authorized_runtime_session.py`
+  from `sdk/python` — PASS (`5 tests`); proves Python history subject
+  mismatch is rejected before the receipt provider is called.
+- `./sdk/python/.venv/bin/python -m compileall -q
+  sdk/python/easynet_sdk/authorized_runtime_session.py
+  sdk/python/tests/test_authorized_runtime_session.py` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; `codegraph
+  status .` reports the index is up to date.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query
+  validateSessionHistoryRuntimeCall --limit 20` — PASS; reports the Go SDK
+  gate.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query
+  _validate_session_history_call --limit 20` — PASS; reports the Python SDK
+  gate.
+- `tools/scripts/check-architecture-convergence.sh` — PASS.
+- `tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.

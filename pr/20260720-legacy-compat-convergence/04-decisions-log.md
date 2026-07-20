@@ -324,3 +324,16 @@ Decisions will be appended as root-fork choices are made.
   relying on a type-error annotation. Generic runtime tests must use typed
   authority metadata so the test suite cannot preserve opaque authority
   placeholders after the SDK moves to tuple-bound preflight.
+- Treat `AuthorizedRuntimeSession.history` as part of the same canonical
+  invocation state machine as `invoke`, not as a raw receipt-provider bypass.
+  A history list request must carry complete runtime tuple facts and an
+  authority artifact that admits the caller, callee, subject, and
+  `invocation.history.list` scope before any provider dispatch. This keeps
+  product UI/device history paths from submitting a Device subject under a User
+  session authority and discovering the mismatch only after daemon admission.
+- Treat descriptor resolver caller-signer absence as an identity/authority
+  failure, not a route miss. The C ABI numeric result now uses
+  `ERR_PERMISSION_DENIED` while preserving canonical
+  `CALLER_SIGNER_UNAVAILABLE` projection, so wrappers that only understand
+  numeric ABI classes no longer convert key-service absence into
+  `ABILITY_NOT_FOUND`.

@@ -504,6 +504,9 @@ type SessionHistoryOperations struct {
 }
 
 func (o *SessionHistoryOperations) List(ctx context.Context, request ReceiptListRequest) (ReceiptHistoryPage, error) {
+	if err := validateSessionHistoryRuntimeCall(request.Call); err != nil {
+		return ReceiptHistoryPage{}, err
+	}
 	return o.session.receipts.List(ctx, request)
 }
 
@@ -784,6 +787,128 @@ func descriptorRequestFromIntent(intent InvocationIntent) DescriptorResolutionRe
 		DeadlineUnixMS:  intent.DeadlineUnixMS,
 		IdempotencyKey:  intent.IdempotencyKey,
 		CausalContext:   copyMap(intent.CausalContext),
+	}
+}
+
+func validateSessionHistoryRuntimeCall(call RuntimeCallContext) error {
+	if err := validateRuntimeCallContext(call); err != nil {
+		return err
+	}
+	authority, err := runtimeCallAuthority(call)
+	if err != nil {
+		return err
+	}
+	if authority == nil {
+		return v3SessionError(
+			ErrAuthorityDenied,
+			"history",
+			"session history requires runtime authority bound to the receipt query tuple",
+			runtimeCallDetails(call),
+			nil,
+		)
+	}
+	return validateSessionHistoryAuthorityBinding(authority, call)
+}
+
+func runtimeCallAuthority(call RuntimeCallContext) (RuntimeInvocationAuthority, error) {
+	metadata := cloneAbilityMetadata(call.Metadata)
+	if err := validateAuthorityMetadata(metadata); err != nil {
+		return nil, err
+	}
+	rawPresent := rawRuntimeAuthorityPresent(metadata)
+	if call.Authority != nil {
+		if rawPresent {
+			return nil, invalidRuntimePayload(
+				"runtime call authority must be supplied once as a typed authority or metadata, not both",
+				nil,
+			)
+		}
+		return call.Authority, nil
+	}
+	return runtimeAuthorityFromMetadata(metadata)
+}
+
+func validateSessionHistoryAuthorityBinding(
+	authority RuntimeInvocationAuthority,
+	call RuntimeCallContext,
+) error {
+	callerURA := strings.TrimSpace(call.CallerURA)
+	calleeURA := strings.TrimSpace(call.CalleeURA)
+	subjectURA := strings.TrimSpace(call.SubjectURA)
+	details := runtimeCallDetails(call)
+	switch typed := authority.(type) {
+	case DelegationProof:
+		return validateSessionHistoryDelegationBinding(&typed, callerURA, calleeURA, subjectURA, details)
+	case *DelegationProof:
+		return validateSessionHistoryDelegationBinding(typed, callerURA, calleeURA, subjectURA, details)
+	case SessionAuthority:
+		return validateSessionHistorySessionBinding(&typed, callerURA, calleeURA, subjectURA, details)
+	case *SessionAuthority:
+		return validateSessionHistorySessionBinding(typed, callerURA, calleeURA, subjectURA, details)
+	default:
+		return invalidRuntimePayload("runtime call authority has an unsupported canonical type", nil)
+	}
+}
+
+func validateSessionHistoryDelegationBinding(
+	proof *DelegationProof,
+	callerURA string,
+	calleeURA string,
+	subjectURA string,
+	details map[string]any,
+) error {
+	if proof == nil {
+		return v3SessionError(ErrAuthorityDenied, "history", "delegation authority is required", details, nil)
+	}
+	if strings.TrimSpace(proof.CallerURA) != callerURA {
+		return v3SessionError(ErrAuthorityDenied, "history", "delegation authority caller does not match receipt query caller_ura", details, nil)
+	}
+	if strings.TrimSpace(proof.SubjectURA) != subjectURA {
+		return v3SessionError(ErrAuthoritySubjectMismatch, "history", "delegation authority subject does not match receipt query subject_ura", details, nil)
+	}
+	if !proof.MatchesAudience(calleeURA) {
+		return v3SessionError(ErrAuthorityDenied, "history", "delegation authority audience does not admit receipt query callee_ura", details, nil)
+	}
+	if !proof.MatchesScope(receiptHistoryListAbility) {
+		return v3SessionError(ErrAuthorityDenied, "history", "delegation authority scopes do not admit invocation.history.list", details, nil)
+	}
+	return nil
+}
+
+func validateSessionHistorySessionBinding(
+	authority *SessionAuthority,
+	callerURA string,
+	calleeURA string,
+	subjectURA string,
+	details map[string]any,
+) error {
+	if authority == nil {
+		return v3SessionError(ErrAuthorityDenied, "history", "session authority is required", details, nil)
+	}
+	details["authority_session_subject"] = authority.SubjectURA
+	if strings.TrimSpace(authority.IssuerURA) != callerURA {
+		return v3SessionError(ErrAuthorityDenied, "history", "session authority issuer does not match receipt query caller_ura", details, nil)
+	}
+	if strings.TrimSpace(authority.CalleeURA) != calleeURA {
+		return v3SessionError(ErrAuthorityDenied, "history", "session authority callee does not match receipt query callee_ura", details, nil)
+	}
+	if !authority.MatchesAudience(calleeURA) {
+		return v3SessionError(ErrAuthorityDenied, "history", "session authority audience does not admit receipt query callee_ura", details, nil)
+	}
+	if !runtimeSessionAuthorityAdmitsSubject(authority, subjectURA) {
+		return v3SessionError(ErrAuthoritySubjectMismatch, "history", "session authority subject does not admit receipt query subject_ura", details, nil)
+	}
+	if !authority.MatchesScope(receiptHistoryListAbility) {
+		return v3SessionError(ErrAuthorityDenied, "history", "session authority scopes do not admit invocation.history.list", details, nil)
+	}
+	return nil
+}
+
+func runtimeCallDetails(call RuntimeCallContext) map[string]any {
+	return map[string]any{
+		"caller_ura":  call.CallerURA,
+		"callee_ura":  call.CalleeURA,
+		"subject_ura": call.SubjectURA,
 	}
 }
 
