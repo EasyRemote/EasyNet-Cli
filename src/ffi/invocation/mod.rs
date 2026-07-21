@@ -1947,16 +1947,6 @@ fn runtime_resolve_descriptor_ref_json(
             "descriptor_ref not found in local runtime catalog for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
         );
     }
-    if let Ok(entries) = runtime_system_descriptor_catalog_entries(callee_ura) {
-        if let Some(resolution) = descriptor_catalog_resolution_from_entries(
-            &entries,
-            &ability_ura,
-            call_mode,
-            "runtime_system_descriptor_catalog",
-        )? {
-            return Ok(resolution);
-        }
-    }
     if let Some(owner_ura) = runtime_owner_ura.as_deref() {
         let catalog = runtime_descriptor_catalog_entries(session, owner_ura);
         if let Some(resolution) = descriptor_catalog_resolution_from_entries(
@@ -9254,7 +9244,7 @@ mod tests {
 
     #[cfg(feature = "axon-pb")]
     #[test]
-    fn runtime_descriptor_resolver_synthesizes_remote_system_ability_without_presence_probe() {
+    fn runtime_descriptor_resolver_does_not_synthesize_remote_system_ability() {
         let dir = tempfile::tempdir().expect("tempdir");
         let control_path = dir.path().join("control.json");
         let local_node_id = "local-runtime-node";
@@ -9291,7 +9281,7 @@ mod tests {
             Some(dir.path().join("offline-daemon.sock").display().to_string()),
         );
 
-        let resolved = runtime_resolve_descriptor_ref_json(
+        let error = runtime_resolve_descriptor_ref_json(
             &session,
             &serde_json::json!({
                 "callee_ura": remote_device_ura,
@@ -9302,22 +9292,24 @@ mod tests {
             })
             .to_string(),
         )
-        .expect("remote runtime system descriptor resolves without owner presence");
+        .expect_err("remote system descriptors must not be synthesized from static catalog shape");
 
-        assert_eq!(resolved["ability_ura"], ability_ura);
-        assert_eq!(resolved["owner_ura"], remote_device_ura);
-        assert_eq!(
-            resolved["name"],
-            crate::daemon::ability::builtins::governance::invocation_history::ABILITY_HISTORY_LIST
+        let message = error.to_string();
+        assert!(
+            message.contains("requires a caller signer")
+                || message.contains("daemon rejected canonical remote invocation")
+                || message.contains("connect to local daemon gRPC endpoint")
+                || message.contains("daemon not running"),
+            "remote descriptor resolution must fail through caller/route authority, got: {message}"
         );
-        assert_eq!(resolved["call_mode"], "rpc");
-        assert_eq!(resolved["source"], "runtime_system_descriptor_catalog");
-        assert!(resolved["descriptor_ref"]
-            .as_str()
-            .is_some_and(
-                |descriptor_ref| descriptor_ref.starts_with(&format!("{ability_ura}@"))
-                    && descriptor_ref.ends_with("!read")
-            ));
+        assert!(
+            !message.contains("runtime_system_descriptor_catalog"),
+            "remote descriptor resolution must not report static system-catalog success: {message}"
+        );
+        assert!(
+            !message.contains(&ability_ura) || message.contains("meta.list_abilities"),
+            "remote descriptor resolution must not synthesize the target ability descriptor: {message}"
+        );
     }
 
     #[cfg(feature = "axon-pb")]

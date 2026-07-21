@@ -107,3 +107,7 @@
   publication, not as an optional read-model convenience. Production dispatch
   already owns the ability catalog, so a missing catalog is a daemon
   construction defect rather than a successful no-op acknowledgement.
+- Treat the runtime system descriptor catalog as local-owner construction
+  evidence only. Remote descriptor resolution must not rebind static daemon
+  catalog rows for an arbitrary target owner because that bypasses owner
+  liveness, caller signer custody, and route/read-model authority.

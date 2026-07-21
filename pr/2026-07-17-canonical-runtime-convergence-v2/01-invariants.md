@@ -47,6 +47,10 @@
   transition. `federation.advertise_abilities` must require the daemon-owned
   ability catalog sink and must not acknowledge success when the projection
   read model is unavailable.
+- FFI descriptor resolution may use the daemon-local system descriptor catalog
+  only for the local runtime owner. Remote descriptor resolution must consult
+  the owner route/read model through descriptor-bound runtime calls and must
+  not synthesize target-owned system descriptors from static catalog shape.
 - SDK packages expose canonical runtime concepts only. Product feature
   families belong to downstream providers or daemon plugins.
 - Directory capability in the canonical SDK is a generic runtime projection:

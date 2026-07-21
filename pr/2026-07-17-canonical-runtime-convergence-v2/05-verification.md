@@ -314,3 +314,20 @@ gate, architecture gate, and codegraph freshness checks passed. The
 `AbilityCatalogStore` and only returns `ack=true` after the owner projection
 read model accepts the publication. The missing-catalog false-success branch
 was removed instead of kept as a compatibility fallback.
+
+## FFI Remote Descriptor Static Catalog Removal Evidence
+
+- `cargo fmt --check`
+- `cargo test --lib runtime_descriptor_resolver --features axon-pb`
+- `rg -n "runtime_system_descriptor_catalog_entries\\(callee_ura\\)|runtime_system_descriptor_catalog\\\"" src/ffi/invocation/mod.rs tools/scripts/check-canonical-runtime-convergence-v2.sh tools/scripts/check-architecture-convergence.sh`
+- `git diff --check`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-architecture-convergence.sh`
+- `/Users/macbook.silan.tech/.local/bin/codegraph status .`
+
+Result: focused descriptor resolver tests passed. Remote descriptor resolution
+no longer rebinding static daemon system catalog rows for arbitrary remote
+owners; the only remaining `runtime_system_descriptor_catalog` source string
+is in the negative resolver test that rejects the old behavior. Remote owner
+descriptor resolution now fails through caller signer, route, or owner
+read-model authority instead of returning a synthetic descriptor success.
