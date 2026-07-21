@@ -1221,6 +1221,13 @@ impl AdmissionFacade {
             self.daemon_ura.as_deref(),
         ) {
             BootstrapAuthorityDecision::Verified { authority_id } => Some(authority_id),
+            BootstrapAuthorityDecision::Unavailable { message } => {
+                return Err(self.authority_denied_status(
+                    envelope,
+                    ability,
+                    Status::failed_precondition(message),
+                ));
+            }
             BootstrapAuthorityDecision::NotApplicable => None,
         };
         let hosted_agent_publication_authority_id = self
@@ -1529,7 +1536,7 @@ impl AdmissionFacade {
         let callee_ura = callee_ura_required(envelope)?;
         let subject_ura = subject_ura_required(envelope)?;
         let ability_ura = ability_ura_for(callee_ura, ability)?;
-        let principal = principal_for(trusted_role, caller_ura, trust_anchor);
+        let principal = principal_for(trusted_role, caller_ura, trust_anchor)?;
         let canonical_hash = format!(
             "sha256:{}",
             hex::encode(sha2::Sha256::digest(descriptor_bound_canonical_bytes(

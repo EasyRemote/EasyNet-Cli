@@ -2558,3 +2558,24 @@ Commands and outcomes will be appended after implementation.
   tools/scripts/check-architecture-convergence.sh` — PASS.
 - `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
 - `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+
+## 2026-07-22 Shared local device owner projection
+
+- `cargo test -q local_device_owner_fact --lib --features axon-pb` — PASS
+  (`3 passed`); covers missing credentials, valid credentials, and malformed
+  credentials at the shared projector.
+- `cargo test -q device_principal_projection_rejects_malformed_local_credentials
+  --lib --features axon-pb` — PASS (`1 passed`).
+- `cargo test -q malformed_local_credentials_make_bootstrap_owner_unavailable
+  --lib --features axon-pb` — PASS (`1 passed`).
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative fixture for the retired `Option` projector,
+  non-fallible device principal, and bootstrap `NotApplicable` fallback.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.

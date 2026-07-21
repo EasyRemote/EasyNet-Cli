@@ -809,3 +809,15 @@ Decisions will be appended as root-fork choices are made.
   hiding corrupt identity state.
 - Make `resolve_owner` fallible so admission policy can distinguish malformed
   URA/credential state from ordinary no-match owner projection.
+
+## 2026-07-22 Shared local device owner projection
+
+- Move fail-closed credential classification into
+  `owner_resolution::local_device_owner_fact` so bootstrap authority and device
+  principal construction consume the same state model.
+- Add an explicit bootstrap-authority unavailable state. A corrupt local
+  identity source is no longer projected as `NotApplicable`, because that would
+  continue admission as if no bootstrap authority existed.
+- Make device principal construction fallible for malformed local credentials
+  while preserving trust-anchor owner facts and missing-credentials first-run
+  behavior.

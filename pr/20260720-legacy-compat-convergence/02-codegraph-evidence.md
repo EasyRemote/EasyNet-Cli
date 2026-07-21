@@ -2291,3 +2291,16 @@ Evidence will be appended after indexing and focused impact queries.
 - Boundary decision: `resolve_owner` is now fallible and local device owner
   projection uses `load_credentials_optional()` so missing credentials and
   corrupt credentials remain distinct states.
+
+## 2026-07-22 Shared local device owner projection audit
+
+- `rg -n "local_device_owner_fact\\(" src/daemon/invocation/admission
+  src/daemon -S` showed only two production consumers of the shared local
+  owner projection: bootstrap authority and device principal construction.
+- The root abstraction problem was that the shared projector returned
+  `Option<OwnerFact>`, forcing both consumers to treat corrupt credentials and
+  "no local owner fact" as the same state.
+- Boundary decision: `local_device_owner_fact` is now the single fail-closed
+  credential classifier for device-owner projection; bootstrap authority has
+  an explicit `Unavailable` state and policy principal construction returns
+  `Result<PrincipalProjection, Status>`.

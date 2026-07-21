@@ -27,6 +27,7 @@ use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BootstrapAuthorityDecision {
     Verified { authority_id: String },
+    Unavailable { message: String },
     NotApplicable,
 }
 
@@ -95,10 +96,20 @@ impl BootstrapAuthorityVerifier {
             }
         }
 
-        let owner = trust_anchor
-            .lookup_principal_owner(caller_ura)
-            .map(|owner| OwnerFact::user(owner.owner_user_id.clone(), owner.owner_ura.clone()))
-            .or_else(|| local_device_owner_fact(caller_ura));
+        let owner = match trust_anchor.lookup_principal_owner(caller_ura) {
+            Some(owner) => Some(OwnerFact::user(
+                owner.owner_user_id.clone(),
+                owner.owner_ura.clone(),
+            )),
+            None => match local_device_owner_fact(caller_ura) {
+                Ok(owner) => owner,
+                Err(error) => {
+                    return BootstrapAuthorityDecision::Unavailable {
+                        message: format!("LOCAL_BOOTSTRAP_OWNER_UNAVAILABLE: {error:#}"),
+                    };
+                }
+            },
+        };
         let Some(owner) = owner else {
             return BootstrapAuthorityDecision::NotApplicable;
         };
@@ -383,6 +394,8 @@ fn device_hub_key_bootstrap_authority_id(caller_ura: &str, hub_ura: &str, abilit
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
+    use crate::daemon::persistence::config::state_dir;
     use crate::daemon::trust::anchor::TrustedPrincipalOwner;
     use axon_sdk::pb::axon::v1::{AgentIdentity, SubjectIdentity};
 
@@ -589,6 +602,46 @@ mod tests {
         );
 
         assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
+    }
+
+    #[test]
+    fn malformed_local_credentials_make_bootstrap_owner_unavailable() {
+        let _home = HomeGuard::new();
+        std::fs::create_dir_all(state_dir()).expect("create isolated state dir");
+        std::fs::write(state_dir().join("credentials.json"), b"{")
+            .expect("write malformed credentials");
+        let args = serde_json::to_vec(&serde_json::json!({
+            "membership_ura": "easynet:///r/test/device/dev-1",
+            "agent_ura": "easynet:///r/test/device/dev-1",
+            "public_key_hex": "00",
+            "realm": "test",
+        }))
+        .expect("args");
+
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/device/dev-1",
+            ),
+            ABILITY_FEDERATION_JOIN,
+            AccessAction::Manage,
+            &args,
+            &RealmTrustAnchor::default(),
+            TrustedAgentRole::Device,
+            Some("easynet:///r/test/authority"),
+        );
+
+        match got {
+            BootstrapAuthorityDecision::Unavailable { message } => {
+                assert!(
+                    message.contains("LOCAL_BOOTSTRAP_OWNER_UNAVAILABLE")
+                        && message.contains("parse credentials"),
+                    "unexpected message: {message}"
+                );
+            }
+            other => panic!("expected unavailable bootstrap owner, got {other:?}"),
+        }
     }
 
     #[test]

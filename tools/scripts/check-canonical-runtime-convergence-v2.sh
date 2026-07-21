@@ -668,6 +668,84 @@ for test in (
 PY
 }
 
+check_shared_local_device_owner_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local owner="$cli_root/src/daemon/invocation/admission/owner_resolution.rs"
+  local policy="$cli_root/src/daemon/invocation/admission/policy_gate.rs"
+  local bootstrap="$cli_root/src/daemon/invocation/admission/bootstrap_authority.rs"
+  local facade="$cli_root/src/daemon/invocation/admission/admission_facade.rs"
+  [[ -f "$owner" ]] || return 0
+
+  "$PYTHON_BIN" - "$owner" "$policy" "$bootstrap" "$facade" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+owner = Path(sys.argv[1]).read_text()
+policy = Path(sys.argv[2]).read_text() if Path(sys.argv[2]).exists() else ""
+bootstrap = Path(sys.argv[3]).read_text() if Path(sys.argv[3]).exists() else ""
+facade = Path(sys.argv[4]).read_text() if Path(sys.argv[4]).exists() else ""
+
+fn = re.search(
+    r"pub\(crate\) fn local_device_owner_fact\((?P<sig>.*?)\) -> (?P<ret>[^{]+)\{(?P<body>.*?)\n\}",
+    owner,
+    re.DOTALL,
+)
+if fn is None:
+    raise SystemExit("shared_local_device_owner_fact_missing")
+if "anyhow::Result<Option<OwnerFact>>" not in fn.group("ret"):
+    raise SystemExit("shared_local_device_owner_fact_not_fallible")
+body = fn.group("body")
+for retired in (
+    "parse_ura(ura).ok()",
+    "load_credentials().ok()",
+    "load_credentials().ok()?",
+    "credentials.user_id().ok()",
+):
+    if retired in body:
+        raise SystemExit(f"shared_local_device_owner_retired_fallback:{retired}")
+for required in (
+    "load_credentials_optional()?",
+    "return Ok(None)",
+    "local device owner URA invalid",
+    "credentials.user_id()?",
+):
+    if required not in body:
+        raise SystemExit(f"shared_local_device_owner_missing_fail_closed_path:{required}")
+for test in (
+    "local_device_owner_fact_returns_none_when_credentials_missing",
+    "local_device_owner_fact_projects_saved_credentials",
+    "local_device_owner_fact_rejects_malformed_credentials",
+):
+    if test not in owner:
+        raise SystemExit(f"missing_shared_local_device_owner_test:{test}")
+
+if policy:
+    if "pub(crate) fn principal_for(" not in policy or "-> Result<PrincipalProjection, Status>" not in policy:
+        raise SystemExit("device_principal_projection_not_fallible")
+    for required in (
+        "LOCAL_DEVICE_PRINCIPAL_OWNER_UNAVAILABLE",
+        "principal_for(context.trusted_role, &caller_ura, context.trust_anchor)?",
+        "device_principal_projection_rejects_malformed_local_credentials",
+    ):
+        if required not in policy:
+            raise SystemExit(f"device_principal_projection_missing:{required}")
+
+if bootstrap:
+    if "Unavailable { message: String }" not in bootstrap:
+        raise SystemExit("bootstrap_authority_unavailable_state_missing")
+    for required in (
+        "LOCAL_BOOTSTRAP_OWNER_UNAVAILABLE",
+        "malformed_local_credentials_make_bootstrap_owner_unavailable",
+    ):
+        if required not in bootstrap:
+            raise SystemExit(f"bootstrap_owner_projection_missing:{required}")
+
+if facade and "BootstrapAuthorityDecision::Unavailable { message }" not in facade:
+    raise SystemExit("admission_facade_not_mapping_bootstrap_unavailable")
+PY
+}
+
 check_device_settings_loader_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local config="$cli_root/src/daemon/persistence/config.rs"
@@ -2845,6 +2923,37 @@ EOF
   if ( check_admission_owner_credentials_contract "$tmp/admission-owner-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected admission owner credential fallback gate to fail"
   fi
+  mkdir -p "$tmp/shared-local-owner-legacy/src/daemon/invocation/admission"
+  printf '%s\n' \
+    'pub(crate) fn local_device_owner_fact(ura: &str) -> Option<OwnerFact> {' \
+    '  let parsed = parse_ura(ura).ok()?;' \
+    '  if parsed.kind != URAKind::Device { return None; }' \
+    '  let credentials = config::load_credentials().ok()?;' \
+    '  let owner_user_id = credentials.user_id().ok()?.to_string();' \
+    '  Some(OwnerFact::user(owner_user_id.clone(), user_ura(&credentials.realm, &owner_user_id)))' \
+    '}' \
+    > "$tmp/shared-local-owner-legacy/src/daemon/invocation/admission/owner_resolution.rs"
+  printf '%s\n' \
+    'pub(crate) fn principal_for(role: TrustedAgentRole, caller_ura: &str, trust_anchor: &RealmTrustAnchor) -> PrincipalProjection {' \
+    '  let owner_user_id = trust_anchor.lookup_principal_owner(caller_ura).map(|owner| OwnerFact::user(owner.owner_user_id.clone(), owner.owner_ura.clone())).or_else(|| local_device_owner_fact(caller_ura)).and_then(|owner| owner.owner_user_id);' \
+    '  PrincipalProjection { caller_user_id: owner_user_id }' \
+    '}' \
+    > "$tmp/shared-local-owner-legacy/src/daemon/invocation/admission/policy_gate.rs"
+  printf '%s\n' \
+    'pub(crate) enum BootstrapAuthorityDecision { Verified { authority_id: String }, NotApplicable }' \
+    'fn verify() -> BootstrapAuthorityDecision {' \
+    '  let owner = trust_anchor.lookup_principal_owner(caller_ura).map(|owner| OwnerFact::user(owner.owner_user_id.clone(), owner.owner_ura.clone())).or_else(|| local_device_owner_fact(caller_ura));' \
+    '  BootstrapAuthorityDecision::NotApplicable' \
+    '}' \
+    > "$tmp/shared-local-owner-legacy/src/daemon/invocation/admission/bootstrap_authority.rs"
+  printf '%s\n' \
+    'fn map(decision: BootstrapAuthorityDecision) -> Option<String> {' \
+    '  match decision { BootstrapAuthorityDecision::Verified { authority_id } => Some(authority_id), BootstrapAuthorityDecision::NotApplicable => None }' \
+    '}' \
+    > "$tmp/shared-local-owner-legacy/src/daemon/invocation/admission/admission_facade.rs"
+  if ( check_shared_local_device_owner_projection_contract "$tmp/shared-local-owner-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected shared local device owner fallback gate to fail"
+  fi
   mkdir -p "$tmp/device-settings-legacy/src/daemon/persistence" \
     "$tmp/device-settings-legacy/src/cli/commands"
   printf '%s\n' \
@@ -2894,6 +3003,7 @@ EOF
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
   check_admission_owner_credentials_contract
+  check_shared_local_device_owner_projection_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_edge_adapter_policy_contract
@@ -2937,6 +3047,7 @@ check_pages_identity_credentials_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_admission_owner_credentials_contract
+check_shared_local_device_owner_projection_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_edge_adapter_policy_contract

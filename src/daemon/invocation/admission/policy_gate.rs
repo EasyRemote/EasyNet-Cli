@@ -52,7 +52,7 @@ impl AdmissionPolicyGate {
             context.daemon_ura,
             context.trust_anchor,
         )?;
-        let principal = principal_for(context.trusted_role, &caller_ura, context.trust_anchor);
+        let principal = principal_for(context.trusted_role, &caller_ura, context.trust_anchor)?;
         let authority_self_read = authority_self_read_scope(
             &caller_ura,
             &callee_ura,
@@ -154,46 +154,53 @@ pub(crate) fn principal_for(
     role: TrustedAgentRole,
     caller_ura: &str,
     trust_anchor: &RealmTrustAnchor,
-) -> PrincipalProjection {
+) -> Result<PrincipalProjection, Status> {
     match role {
         TrustedAgentRole::User => {
             let user_id = user_id_from_ura(caller_ura).unwrap_or_else(|| caller_ura.to_string());
-            PrincipalProjection {
+            Ok(PrincipalProjection {
                 kind: PrincipalKind::User,
                 id: user_id.clone(),
                 token_id: None,
                 token_class: None,
                 caller_user_id: Some(user_id),
-            }
+            })
         }
-        TrustedAgentRole::Hub => PrincipalProjection {
+        TrustedAgentRole::Hub => Ok(PrincipalProjection {
             kind: PrincipalKind::Token,
             id: caller_ura.to_string(),
             token_id: Some(caller_ura.to_string()),
             token_class: Some(TokenClass::HubLink),
             caller_user_id: None,
-        },
+        }),
         TrustedAgentRole::Device => {
-            let owner_user_id = trust_anchor
-                .lookup_principal_owner(caller_ura)
-                .map(|owner| OwnerFact::user(owner.owner_user_id.clone(), owner.owner_ura.clone()))
-                .or_else(|| local_device_owner_fact(caller_ura))
-                .and_then(|owner| owner.owner_user_id);
-            PrincipalProjection {
+            let owner_fact = match trust_anchor.lookup_principal_owner(caller_ura) {
+                Some(owner) => Some(OwnerFact::user(
+                    owner.owner_user_id.clone(),
+                    owner.owner_ura.clone(),
+                )),
+                None => local_device_owner_fact(caller_ura).map_err(|error| {
+                    Status::failed_precondition(format!(
+                        "LOCAL_DEVICE_PRINCIPAL_OWNER_UNAVAILABLE: {error:#}"
+                    ))
+                })?,
+            };
+            let owner_user_id = owner_fact.and_then(|owner| owner.owner_user_id);
+            Ok(PrincipalProjection {
                 kind: PrincipalKind::Device,
                 id: caller_ura.to_string(),
                 token_id: Some(caller_ura.to_string()),
                 token_class: Some(TokenClass::DevicePairing),
                 caller_user_id: owner_user_id,
-            }
+            })
         }
-        TrustedAgentRole::Backend => PrincipalProjection {
+        TrustedAgentRole::Backend => Ok(PrincipalProjection {
             kind: PrincipalKind::Service,
             id: caller_ura.to_string(),
             token_id: None,
             token_class: None,
             caller_user_id: None,
-        },
+        }),
     }
 }
 
@@ -562,6 +569,29 @@ mod tests {
         assert_eq!(
             owner.owner_ura.as_deref(),
             Some("easynet:///r/test/user/alice")
+        );
+    }
+
+    #[test]
+    fn device_principal_projection_rejects_malformed_local_credentials() {
+        let _home = HomeGuard::new();
+        let state_dir = crate::daemon::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("create isolated state dir");
+        std::fs::write(state_dir.join("credentials.json"), b"{")
+            .expect("write malformed credentials");
+
+        let error = principal_for(
+            TrustedAgentRole::Device,
+            "easynet:///r/test/device/dev-1",
+            &empty_anchor(),
+        )
+        .expect_err("malformed credentials must fail principal projection");
+
+        let message = error.message();
+        assert!(
+            message.contains("LOCAL_DEVICE_PRINCIPAL_OWNER_UNAVAILABLE")
+                && message.contains("parse credentials"),
+            "unexpected error: {message}"
         );
     }
 

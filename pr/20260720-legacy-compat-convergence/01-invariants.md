@@ -326,3 +326,7 @@
   owner fact exists; an existing unreadable, malformed, or schema-invalid
   credentials file is unavailable identity state and must not be projected as
   unresolved owner.
+- Local device owner projection is a shared admission authority seam. Callers
+  may treat absent credentials as no local owner fact, but malformed existing
+  credentials must propagate as unavailable identity state through both
+  bootstrap authority and policy principal construction.
