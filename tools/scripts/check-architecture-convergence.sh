@@ -7779,6 +7779,41 @@ if mcp_cmd.exists():
         )
 
 
+# Rule 99: The top-level help banner is a product navigation surface. It cannot
+# return Result, so corrupt runtime projection must render as explicit
+# unavailable metadata rather than being collapsed into a stopped runtime.
+banner_mod = cli_root / "src/cli/presentation/banner.rs"
+if banner_mod.exists():
+    text = source(banner_mod)
+    for token, detail in (
+        (
+            "RuntimeLifecycleService::new().status()",
+            "banner runtime status must consume lifecycle status",
+        ),
+        (
+            "struct BannerDaemonObservation",
+            "banner runtime status must centralize lifecycle-to-display projection",
+        ),
+        (
+            "metadata unavailable",
+            "banner must render lifecycle projection load failure explicitly",
+        ),
+        (
+            "fn from_lifecycle_status(",
+            "banner must render lifecycle state machine states through one mapper",
+        ),
+    ):
+        if token not in text:
+            add("R99_BANNER_RUNTIME_PROJECTION_FAIL_CLOSED", banner_mod, 1, detail)
+    if "config::load().ok()" in text:
+        add(
+            "R99_BANNER_RUNTIME_PROJECTION_FAIL_CLOSED",
+            banner_mod,
+            line_number(text, text.find("config::load().ok()")),
+            "banner must not swallow runtime projection load failures",
+        )
+
+
 # Rule 91: C ABI diagnostics descriptor fallback must keep descriptor
 # resolution semantics. A catalog miss is DESCRIPTOR_NOT_FOUND, not generic
 # NOT_FOUND/ABILITY_NOT_FOUND; otherwise products cannot distinguish absent

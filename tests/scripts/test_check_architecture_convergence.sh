@@ -52,6 +52,7 @@ make_good_fixture() {
   mkdir -p \
     "$CLI/src/cli/commands" \
     "$CLI/src/cli/commands/groups" \
+    "$CLI/src/cli/presentation" \
     "$CLI/src/eal/interpreter" \
     "$CLI/src/daemon/ability/builtins/automation" \
     "$CLI/src/daemon/ability/builtins/agents" \
@@ -163,6 +164,34 @@ fn render_lifecycle_details(report: &RuntimeStatusReport) {
         return;
     }
     if let Some(_discovery) = report.daemon().control_discovery() {}
+}
+EOF
+  cat >"$CLI/src/cli/presentation/banner.rs" <<'EOF'
+use crate::daemon::lifecycle::{RuntimeLifecycleError, RuntimeLifecycleService, RuntimeLifecycleStatus, RuntimeStatusReport};
+
+fn write_runtime_status() {
+    let lifecycle = RuntimeLifecycleService::new().status();
+    let _observation = BannerDaemonObservation::from_lifecycle_result(&lifecycle);
+}
+
+struct BannerDaemonObservation;
+
+impl BannerDaemonObservation {
+    fn from_lifecycle_result(
+        lifecycle: &Result<RuntimeStatusReport, RuntimeLifecycleError>,
+    ) -> Self {
+        match lifecycle {
+            Ok(report) => Self::from_lifecycle_status(report.status()),
+            Err(error) => {
+                let _message = format!("metadata unavailable  ·  {error}");
+                Self
+            }
+        }
+    }
+
+    fn from_lifecycle_status(_status: RuntimeLifecycleStatus) -> Self {
+        Self
+    }
 }
 EOF
   cat >"$CLI/src/cli/commands/groups/device.rs" <<'EOF'
@@ -6580,6 +6609,19 @@ EOF
 expect_fail \
   "MCP status runtime projection fallback" \
   "R98_MCP_STATUS_RUNTIME_PROJECTION_FAIL_CLOSED"
+
+make_good_fixture
+cat >"$CLI/src/cli/presentation/banner.rs" <<'EOF'
+fn write_runtime_status() {
+    let runtime_state = crate::daemon::persistence::config::load().ok();
+    if runtime_state.is_none() {
+        let _message = "not running";
+    }
+}
+EOF
+expect_fail \
+  "banner runtime projection fallback" \
+  "R99_BANNER_RUNTIME_PROJECTION_FAIL_CLOSED"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

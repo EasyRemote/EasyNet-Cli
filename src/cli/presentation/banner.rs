@@ -10,8 +10,8 @@
 //
 // Design constraints
 // ------------------
-// 1. Side-effect-free: only local file reads (`config::load*`) and a
-//    `kill -0` PID liveness check. No network I/O — `--help` must
+// 1. Side-effect-free: only local lifecycle/config file reads and process
+//    probes through `RuntimeLifecycleService`. No network I/O — `--help` must
 //    stay fast even on an offline laptop.
 // 2. Restrained palette. Three roles only — `accent` (cyan, used by
 //    clap too so the whole `--help` reads as one document), `dim`
@@ -31,8 +31,10 @@
 use std::io::IsTerminal;
 
 use crate::core::ura;
+use crate::daemon::lifecycle::{
+    RuntimeLifecycleError, RuntimeLifecycleService, RuntimeLifecycleStatus, RuntimeStatusReport,
+};
 use crate::daemon::persistence::config;
-use crate::support::platform::net;
 
 /// Width of the status-block label column ("Daemon:", "Hub:",
 /// "Current device:"). Picked so the longest label fits with one
@@ -198,42 +200,21 @@ fn write_tagline(buf: &mut String, style: ColourMode) {
 /// federation peers are configured. Two-column layout — labels are
 /// padded to `LABEL_WIDTH`, values follow. ≤ 3 lines.
 fn write_runtime_status(buf: &mut String, style: ColourMode) {
-    let runtime_state = config::load().ok();
+    let lifecycle = RuntimeLifecycleService::new().status();
     let creds = config::load_credentials().ok();
-    let daemon_alive = runtime_state
-        .as_ref()
-        .and_then(|s| s.pid)
-        .is_some_and(net::is_pid_alive);
 
     // Row 1 — daemon liveness.
-    let (dot_sgr, dot, daemon_text) = if daemon_alive {
-        (sgr::OK, "●", "running")
-    } else if runtime_state.is_some() {
-        (
-            sgr::WARN,
-            "●",
-            "metadata present but process not responding",
-        )
-    } else {
-        // No daemon, no metadata — render as plain dim text rather
-        // than a coloured warning. Not-paired is the default state
-        // for a fresh install, not an error.
-        (
-            sgr::DIM,
-            "○",
-            "not running  ·  start with 'easynet runtime start'",
-        )
-    };
+    let daemon_observation = BannerDaemonObservation::from_lifecycle_result(&lifecycle);
     write_row(
         buf,
         style,
         "Daemon:",
         &format!(
             "{} {}",
-            style.paint(dot_sgr, dot),
+            style.paint(daemon_observation.dot_sgr, daemon_observation.dot),
             style.paint(
-                if daemon_alive { sgr::ACCENT } else { sgr::DIM },
-                daemon_text
+                daemon_observation.text_sgr,
+                daemon_observation.message.as_str()
             ),
         ),
     );
@@ -307,6 +288,82 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
             style.paint(sgr::DIM, "(see `easynet federation peers`)"),
         );
         write_row(buf, style, "Peers:", &body);
+    }
+}
+
+struct BannerDaemonObservation {
+    dot_sgr: &'static str,
+    text_sgr: &'static str,
+    dot: &'static str,
+    message: String,
+}
+
+impl BannerDaemonObservation {
+    fn from_lifecycle_result(
+        lifecycle: &Result<RuntimeStatusReport, RuntimeLifecycleError>,
+    ) -> Self {
+        match lifecycle {
+            Ok(report) => Self::from_lifecycle_status(report.status()),
+            Err(error) => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: format!("metadata unavailable  ·  {error}"),
+            },
+        }
+    }
+
+    fn from_lifecycle_status(status: RuntimeLifecycleStatus) -> Self {
+        match status {
+            RuntimeLifecycleStatus::Running => Self {
+                dot_sgr: sgr::OK,
+                text_sgr: sgr::ACCENT,
+                dot: "●",
+                message: "running".to_string(),
+            },
+            RuntimeLifecycleStatus::Stopped => Self {
+                dot_sgr: sgr::DIM,
+                text_sgr: sgr::DIM,
+                dot: "○",
+                message: "not running  ·  start with 'easynet runtime start'".to_string(),
+            },
+            RuntimeLifecycleStatus::ProjectionPresentProcessMissing => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: "metadata present but process not responding".to_string(),
+            },
+            RuntimeLifecycleStatus::ProjectionMissingProcessRunning => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: "daemon facts present but runtime metadata missing".to_string(),
+            },
+            RuntimeLifecycleStatus::ControlOnlyInvocationDown => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: "control endpoint up but invocation down".to_string(),
+            },
+            RuntimeLifecycleStatus::IdentityMismatch => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: "daemon identity mismatch".to_string(),
+            },
+            RuntimeLifecycleStatus::StartProjectionCommitFailed => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: "runtime projection commit failed".to_string(),
+            },
+            RuntimeLifecycleStatus::StopTimedOut => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: "runtime stop timed out".to_string(),
+            },
+        }
     }
 }
 
@@ -388,10 +445,16 @@ fn daemon_config_path() -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
 
     /// Force colour off and render. Used by every test so the
     /// asserted output is plain ASCII-with-newlines.
     fn render_plain() -> String {
+        let _home = HomeGuard::new();
+        render_plain_with_current_home()
+    }
+
+    fn render_plain_with_current_home() -> String {
         unsafe {
             std::env::set_var("NO_COLOR", "1");
         }
@@ -456,5 +519,23 @@ mod tests {
     fn no_color_strips_ansi() {
         let out = render_plain();
         assert!(!out.contains('\x1b'), "ANSI escape leaked despite NO_COLOR");
+    }
+
+    #[test]
+    fn malformed_runtime_projection_renders_unavailable_not_stopped() {
+        let _home = HomeGuard::new();
+        std::fs::create_dir_all(config::state_dir()).expect("state dir");
+        std::fs::write(config::runtime_state_path(), "{ not json").expect("runtime projection");
+
+        let out = render_plain_with_current_home();
+
+        assert!(
+            out.contains("metadata unavailable"),
+            "banner must expose corrupt runtime projection: {out}"
+        );
+        assert!(
+            !out.contains("not running  ·  start with 'easynet runtime start'"),
+            "corrupt runtime projection must not render as stopped: {out}"
+        );
     }
 }

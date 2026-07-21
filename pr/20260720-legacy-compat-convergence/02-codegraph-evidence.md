@@ -2,6 +2,28 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-22 Banner runtime projection fallback audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` reports the checkout
+  is not initialized for CodeGraph, so this iteration used targeted `rg` and
+  source inspection instead of creating a new index inside the working tree.
+- `rg -n
+  "config::load\\(\\)\\.ok\\(\\)|render_top_level_banner|write_runtime_status|RuntimeLifecycleService|runtime projection"
+  src/cli/presentation src/cli ...` identified
+  `src/cli/presentation/banner.rs::write_runtime_status` as the last
+  production CLI path directly defaulting runtime projection load failures.
+- Source inspection found `let runtime_state = config::load().ok()` driving
+  the top-level help banner's daemon row. A malformed `runtime.json` therefore
+  rendered as the fresh stopped state instead of unavailable metadata.
+- The root abstraction problem was product navigation owning a second runtime
+  state machine. The banner cannot return `Result`, but it can still consume
+  lifecycle status and render projection-load failure as explicit unavailable
+  metadata.
+- After the change, the banner maps `RuntimeLifecycleStatus` through
+  `BannerDaemonObservation`, renders `metadata unavailable` for lifecycle
+  observation errors, and no production `src/` path contains
+  `config::load().ok()`.
+
 ## 2026-07-22 MCP status runtime projection fallback audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` reports the checkout

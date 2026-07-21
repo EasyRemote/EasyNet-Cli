@@ -718,3 +718,9 @@ Decisions will be appended as root-fork choices are made.
 - Preserve daemon facts when projection is missing. MCP status now reports
   lifecycle daemon evidence separately from `runtime.json`, so a live daemon
   with missing projection does not collapse into the fresh-install message.
+- Treat the top-level help banner as a lifecycle report renderer, not a
+  runtime projection reader. The banner's public API remains a pure `String`,
+  but corrupt lifecycle metadata is still visible as `metadata unavailable`.
+- Keep lifecycle-to-banner projection in one value object. `BannerDaemonObservation`
+  owns the display mapping from lifecycle state-machine values so future
+  banner copy changes do not reintroduce ad hoc runtime state checks.

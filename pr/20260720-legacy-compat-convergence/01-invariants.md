@@ -287,3 +287,7 @@
   unavailable MCP runtime observation, not "runtime not running"; missing
   projection with daemon facts must render as degraded daemon evidence rather
   than empty local state.
+- Top-level help banner must consume lifecycle status instead of opening
+  `runtime.json` directly. Because the banner cannot return `Result`, corrupt
+  runtime projection must render as explicit unavailable metadata rather than
+  being projected as stopped or silently swallowed.

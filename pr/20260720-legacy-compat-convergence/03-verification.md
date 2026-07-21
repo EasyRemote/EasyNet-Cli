@@ -2321,3 +2321,29 @@ Commands and outcomes will be appended after implementation.
   (`architecture-convergence: OK`).
 - `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
   (`canonical-runtime-convergence-v2: OK`).
+
+## 2026-07-22 Banner runtime projection fallback
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — NOT
+  INITIALIZED; no `.codegraph/` index was created for this checkout.
+- `rg -n
+  "config::load\\(\\)\\.ok\\(\\)|render_top_level_banner|write_runtime_status|RuntimeLifecycleService|runtime projection"
+  src/cli/presentation src/cli ...` — PASS for seam identification; found
+  the top-level help banner reading `runtime.json` directly.
+- `env RUSTC_WRAPPER= cargo test -q cli::presentation::banner --lib` — PASS
+  (`5 passed`); covers clean banner rendering and malformed `runtime.json`
+  rendering `metadata unavailable` instead of stopped.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  R99 negative fixture for `config::load().ok()` in banner runtime status.
+- `rg -n "config::load\\(\\)\\.ok\\(\\)"
+  src/cli src/daemon src/support sdk tests tools/scripts/check-architecture-convergence.sh
+  tests/scripts/test_check_architecture_convergence.sh` — PASS; only
+  architecture gate patterns and negative fixtures remain, no production
+  `src/` path remains.
+- `env RUSTC_WRAPPER= cargo check --lib --bins` — PASS.
+- `cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS
+  (`architecture-convergence: OK`).
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
