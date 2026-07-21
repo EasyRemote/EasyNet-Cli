@@ -67,7 +67,7 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
     }
 
     let lifecycle = RuntimeLifecycleService::new();
-    let report = lifecycle.status();
+    let report = lifecycle.status()?;
     if report.status() == RuntimeLifecycleStatus::Stopped {
         output::info("Runtime: not running");
         output::info("Run 'easynet runtime start' to start.");
@@ -251,7 +251,7 @@ fn render_connection_state() {
 fn run_json() -> anyhow::Result<()> {
     let connection = join_connection_state::latest_snapshot();
     let payload = RuntimeLifecycleService::new()
-        .status()
+        .status()?
         .to_json(json!(connection));
     println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())

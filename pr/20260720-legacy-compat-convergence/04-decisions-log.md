@@ -697,3 +697,10 @@ Decisions will be appended as root-fork choices are made.
 - Keep Pages API body parsing centralized in the listener boundary. Downstream
   API handlers should receive already-decided invocation args and must not own
   a second "repair malformed body" interpretation path.
+- Treat runtime projection loading as a three-state observation: absent,
+  present, or unavailable. `Option<RuntimeSessionProjection>` is valid only
+  after filesystem and JSON parsing have succeeded; it is not the right type
+  for the loader boundary.
+- Preserve corrupt `runtime.json` as operator evidence. Start preflight must
+  not remove or overwrite a malformed projection as stale state, and stop
+  planning must not decide cleanup from a projection read that failed.

@@ -7642,6 +7642,67 @@ if pages_listener.exists():
             )
 
 
+# Rule 96: Runtime lifecycle projection loading must distinguish missing
+# runtime.json from corrupt/unavailable runtime.json. Missing projection is a
+# lifecycle state; corrupt existing projection is unavailable lifecycle input.
+lifecycle_projection = cli_root / "src/daemon/boot/lifecycle/projection.rs"
+lifecycle_service = cli_root / "src/daemon/boot/lifecycle/service.rs"
+if lifecycle_projection.exists():
+    text = source(lifecycle_projection)
+    for token, detail in (
+        (
+            "pub fn load(&self) -> anyhow::Result<Option<RuntimeSessionProjection>>",
+            "RuntimeProjectionStore::load must return Result<Option<_>> so projection load failures propagate",
+        ),
+        (
+            "pub fn load_current() -> anyhow::Result<Option<Self>>",
+            "RuntimeSessionProjection::load_current must return Result<Option<_>> so malformed runtime.json is not absence",
+        ),
+        (
+            "config::load_optional_runtime_state()?",
+            "RuntimeSessionProjection must use the optional runtime-state loader that distinguishes missing from corrupt",
+        ),
+    ):
+        if token not in text:
+            add("R96_RUNTIME_PROJECTION_LOAD_FAIL_CLOSED", lifecycle_projection, 1, detail)
+    for pattern, detail in (
+        (
+            "config::load().ok()",
+            "runtime lifecycle projection must not swallow config::load failures",
+        ),
+        (
+            ".ok().map(Self::from_state)",
+            "runtime lifecycle projection must not project load failure as missing projection",
+        ),
+    ):
+        if pattern in text:
+            add(
+                "R96_RUNTIME_PROJECTION_LOAD_FAIL_CLOSED",
+                lifecycle_projection,
+                line_number(text, text.find(pattern)),
+                detail,
+            )
+
+if lifecycle_service.exists():
+    text = source(lifecycle_service)
+    for token, detail in (
+        (
+            "pub fn status(&self) -> Result<RuntimeStatusReport, RuntimeLifecycleError>",
+            "RuntimeLifecycleService::status must propagate projection load failures",
+        ),
+        (
+            "RuntimeLifecycleError::ProjectionLoadFailed",
+            "RuntimeLifecycleService must classify projection load failure as lifecycle boundary error",
+        ),
+        (
+            "pub fn stop_plan(&self) -> Result<RuntimeStopPlan, RuntimeLifecycleError>",
+            "RuntimeLifecycleService::stop_plan must propagate projection load failures before planning cleanup",
+        ),
+    ):
+        if token not in text:
+            add("R96_RUNTIME_PROJECTION_LOAD_FAIL_CLOSED", lifecycle_service, 1, detail)
+
+
 # Rule 91: C ABI diagnostics descriptor fallback must keep descriptor
 # resolution semantics. A catalog miss is DESCRIPTOR_NOT_FOUND, not generic
 # NOT_FOUND/ABILITY_NOT_FOUND; otherwise products cannot distinguish absent

@@ -271,3 +271,9 @@
   request body. Empty body may project to JSON null for APIs that intentionally
   accept no payload; non-empty malformed JSON is invalid product input and must
   fail before dispatch instead of being repaired into null invocation args.
+- Runtime lifecycle projection observation must distinguish absent projection
+  from corrupt or unreadable projection. Missing `runtime.json` may classify
+  as stopped or projection-missing depending on daemon facts; an existing
+  malformed/unreadable `runtime.json` is unavailable lifecycle state and must
+  fail status/start/stop planning instead of being projected as no runtime
+  projection.

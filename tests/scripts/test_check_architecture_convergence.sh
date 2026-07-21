@@ -67,6 +67,7 @@ make_good_fixture() {
     "$CLI/src/daemon/ability/catalog/profiles" \
     "$CLI/src/daemon/axon_bridge" \
     "$CLI/src/daemon/boot/invocation" \
+    "$CLI/src/daemon/boot/lifecycle" \
     "$CLI/src/daemon/identity" \
     "$CLI/src/daemon/invocation/admission" \
     "$CLI/src/daemon/invocation/bidi/session_initiator" \
@@ -176,6 +177,48 @@ fn parse_pages_api_body(body_bytes: &[u8]) -> Result<serde_json::Value, serde_js
         Ok(serde_json::Value::Null)
     } else {
         serde_json::from_slice(body_bytes)
+    }
+}
+EOF
+  cat >"$CLI/src/daemon/boot/lifecycle/projection.rs" <<'EOF'
+use crate::daemon::persistence::config;
+
+pub struct RuntimeProjectionStore;
+pub struct RuntimeSessionProjection;
+
+impl RuntimeProjectionStore {
+    pub fn load(&self) -> anyhow::Result<Option<RuntimeSessionProjection>> {
+        RuntimeSessionProjection::load_current()
+    }
+}
+
+impl RuntimeSessionProjection {
+    pub fn from_state(_state: config::RuntimeState) -> Self {
+        Self
+    }
+
+    pub fn load_current() -> anyhow::Result<Option<Self>> {
+        Ok(config::load_optional_runtime_state()?.map(Self::from_state))
+    }
+}
+EOF
+  cat >"$CLI/src/daemon/boot/lifecycle/service.rs" <<'EOF'
+pub struct RuntimeLifecycleService {
+    projection_store: RuntimeProjectionStore,
+}
+
+impl RuntimeLifecycleService {
+    pub fn status(&self) -> Result<RuntimeStatusReport, RuntimeLifecycleError> {
+        let projection = self.projection_store.load().map_err(|source| {
+            RuntimeLifecycleError::ProjectionLoadFailed {
+                message: source.to_string(),
+            }
+        })?;
+        Ok(RuntimeStatusReport::from_parts(projection))
+    }
+
+    pub fn stop_plan(&self) -> Result<RuntimeStopPlan, RuntimeLifecycleError> {
+        Ok(RuntimeStopPlan::from_report(&self.status()?))
     }
 }
 EOF
@@ -6426,6 +6469,33 @@ EOF
 expect_fail \
   "Pages API malformed JSON null fallback" \
   "R95_PAGES_API_BODY_FAIL_CLOSED"
+
+make_good_fixture
+cat >"$CLI/src/daemon/boot/lifecycle/projection.rs" <<'EOF'
+use crate::daemon::persistence::config;
+
+pub struct RuntimeProjectionStore;
+pub struct RuntimeSessionProjection;
+
+impl RuntimeProjectionStore {
+    pub fn load(&self) -> Option<RuntimeSessionProjection> {
+        RuntimeSessionProjection::load_current()
+    }
+}
+
+impl RuntimeSessionProjection {
+    pub fn from_state(_state: config::RuntimeState) -> Self {
+        Self
+    }
+
+    pub fn load_current() -> Option<Self> {
+        config::load().ok().map(Self::from_state)
+    }
+}
+EOF
+expect_fail \
+  "runtime projection load failure hidden as missing projection" \
+  "R96_RUNTIME_PROJECTION_LOAD_FAIL_CLOSED"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

@@ -63,7 +63,7 @@ pub(crate) struct StopOptions {
 }
 
 pub(crate) fn run_with_options(_args: StopArgs, options: StopOptions) -> anyhow::Result<()> {
-    let plan = StopPlan::from_runtime_plan(RuntimeLifecycleService::new().stop_plan(), options);
+    let plan = StopPlan::from_runtime_plan(RuntimeLifecycleService::new().stop_plan()?, options);
     plan.execute()
 }
 
@@ -103,7 +103,7 @@ impl StopPlan {
         self.renderer.finish();
         discovery_cleanup?;
         cleanup?;
-        let post = RuntimeLifecycleService::new().status();
+        let post = RuntimeLifecycleService::new().status()?;
         if self.stop_timed_out && post.daemon().has_daemon_fact() {
             anyhow::bail!(
                 "runtime stop timed out; daemon facts remain visible (status={})",
@@ -263,7 +263,7 @@ impl StopPlan {
                 .stage_skipped("cleanup-discovery", "(no control.json)");
             return Ok(());
         }
-        let report = RuntimeLifecycleService::new().status();
+        let report = RuntimeLifecycleService::new().status()?;
         if report.daemon().has_daemon_fact() {
             self.renderer
                 .stage_skipped("cleanup-discovery", "(daemon still appears live)");
@@ -295,7 +295,7 @@ impl StopPlan {
                 .stage_skipped("cleanup-state", "(stop timed out)");
             return Ok(());
         }
-        let report = RuntimeLifecycleService::new().status();
+        let report = RuntimeLifecycleService::new().status()?;
         if report.daemon().has_daemon_fact() {
             self.renderer
                 .stage_skipped("cleanup-state", "(daemon still appears live)");

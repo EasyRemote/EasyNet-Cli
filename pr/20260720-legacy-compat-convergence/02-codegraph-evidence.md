@@ -2,6 +2,30 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-22 Runtime lifecycle projection load fallback audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` reports the checkout
+  is not initialized for CodeGraph, so this iteration used targeted `rg` and
+  source inspection instead of creating a new index inside the working tree.
+- `rg -n
+  "RuntimeProjectionStore|\\.load\\(\\).*projection|projection_store|load_current\\(\\)|RuntimeStatusReport::capture|from_parts\\("
+  src/daemon/boot/lifecycle src/cli src/ffi tests` identified
+  `RuntimeSessionProjection::load_current` and `RuntimeLifecycleService` as
+  the lifecycle authority path for `runtime.json`.
+- Source inspection found `config::load().ok().map(Self::from_state)`, which
+  made missing `runtime.json`, malformed JSON, unreadable files, and any
+  other projection load failure indistinguishable from no runtime projection.
+- The root abstraction problem was an optional projection modeled as
+  `Option<RuntimeSessionProjection>` before the read-model state had been
+  classified. Missing projection is a valid lifecycle observation; corrupt or
+  unreadable projection is unavailable lifecycle input and must block
+  status/start/stop planning.
+- After the change, `config::load_optional_runtime_state` owns the
+  missing-versus-corrupt split, `RuntimeProjectionStore::load` returns
+  `Result<Option<RuntimeSessionProjection>>`, and `RuntimeLifecycleService`
+  propagates `ProjectionLoadFailed` through status, start preflight, and stop
+  planning.
+
 ## 2026-07-22 Pages API body ingress fallback audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` reports the checkout

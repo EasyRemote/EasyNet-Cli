@@ -2251,3 +2251,29 @@ Commands and outcomes will be appended after implementation.
   (`architecture-convergence: OK`).
 - `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
   (`canonical-runtime-convergence-v2: OK`).
+
+## 2026-07-22 Runtime lifecycle projection load fallback
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — NOT
+  INITIALIZED; no `.codegraph/` index was created for this checkout.
+- `rg -n
+  "RuntimeProjectionStore|\\.load\\(\\).*projection|projection_store|load_current\\(\\)|RuntimeStatusReport::capture|from_parts\\("
+  src/daemon/boot/lifecycle src/cli src/ffi tests` — PASS for seam
+  identification; found `RuntimeSessionProjection::load_current` swallowing
+  `config::load` errors through `Option`.
+- `cargo test -q daemon::persistence::config --lib` — PASS (`21 passed`);
+  includes missing `runtime.json` returning `None` and malformed existing
+  `runtime.json` returning a parse error.
+- `cargo test -q daemon::boot::lifecycle --lib` — PASS (`22 passed`);
+  includes malformed projection rejection at `RuntimeSessionProjection` and
+  `RuntimeLifecycleService::preflight_start` without removing the corrupt
+  projection as stale state.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  R96 negative fixture for `config::load().ok().map(Self::from_state)`.
+- `cargo check --lib --bins` — PASS.
+- `cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS
+  (`architecture-convergence: OK`).
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).

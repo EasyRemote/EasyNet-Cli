@@ -319,6 +319,11 @@ fn state_path() -> PathBuf {
     state_dir().join("runtime.json")
 }
 
+#[cfg(test)]
+pub(crate) fn runtime_state_path() -> PathBuf {
+    state_path()
+}
+
 pub fn save(state: &RuntimeState) -> anyhow::Result<()> {
     let dir = state_dir();
     fs::create_dir_all(&dir)?;
@@ -333,6 +338,23 @@ pub fn load() -> anyhow::Result<RuntimeState> {
         .map_err(|_| anyhow::anyhow!("no running runtime — run `easynet start` first"))?;
     let state: RuntimeState = serde_json::from_str(&data)?;
     Ok(state)
+}
+
+pub(crate) fn load_optional_runtime_state() -> anyhow::Result<Option<RuntimeState>> {
+    let path = state_path();
+    let data = match fs::read_to_string(&path) {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "read runtime projection {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let state: RuntimeState = serde_json::from_str(&data)
+        .map_err(|error| anyhow::anyhow!("parse runtime projection {}: {error}", path.display()))?;
+    Ok(Some(state))
 }
 
 pub fn remove() -> anyhow::Result<()> {
@@ -1073,6 +1095,33 @@ mod tests {
         assert!(
             err.to_string().contains("tenant_id"),
             "error should name the retired field: {err}"
+        );
+    }
+
+    #[test]
+    fn load_optional_runtime_state_returns_none_when_projection_missing() {
+        let _g = HomeGuard::new();
+
+        assert!(
+            load_optional_runtime_state()
+                .expect("missing projection")
+                .is_none(),
+            "missing runtime.json is a valid absent projection state"
+        );
+    }
+
+    #[test]
+    fn load_optional_runtime_state_rejects_malformed_existing_projection() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(runtime_state_path(), "{ not json").expect("write malformed runtime projection");
+
+        let error = load_optional_runtime_state()
+            .expect_err("malformed existing runtime.json must fail closed");
+
+        assert!(
+            error.to_string().contains("parse runtime projection"),
+            "wrong error: {error:#}"
         );
     }
 

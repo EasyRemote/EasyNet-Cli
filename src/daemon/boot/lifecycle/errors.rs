@@ -55,6 +55,10 @@ pub enum RuntimeLifecycleError {
     #[error("remove stale runtime projection failed: {message}")]
     ProjectionRemoveFailed { message: String },
 
+    /// Reading `runtime.json` failed before lifecycle classification.
+    #[error("load runtime projection failed: {message}")]
+    ProjectionLoadFailed { message: String },
+
     /// Persisting `runtime.json` failed while attaching to an existing
     /// daemon; no rollback was attempted because this process does not
     /// own that daemon.
@@ -90,6 +94,7 @@ impl RuntimeLifecycleError {
             | Self::ProjectionPersistRollbackFailed { .. } => {
                 Some(RuntimeLifecycleStatus::StartProjectionCommitFailed)
             }
+            Self::ProjectionLoadFailed { .. } => None,
             _ => None,
         }
     }
