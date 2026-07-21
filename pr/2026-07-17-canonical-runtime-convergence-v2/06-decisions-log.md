@@ -77,3 +77,20 @@
   deadline owner. The ability facade must not grow an independent timeout field
   or language-specific deadline state machine; it closes `deadline` only when
   the selector proves provider timeout projection and retry after cleanup.
+
+## 2026-07-22
+
+- Treat Directory as a canonical runtime projection, not an EasyNet Hub
+  directory schema. The SDK may expose generic resolver records, cursor state,
+  raw runtime event facts, and subscription lifecycle, but product DTOs such as
+  `DirectoryEntry`, `DirectoryAgentSummary`, and `DirectorySigningAuthority`
+  belong downstream of the SDK.
+- Keep `DirectoryEvent` as a generic `{type, raw}` runtime event so consumers
+  can observe provider facts without the SDK validating or owning product event
+  variants.
+- Strengthen `check-sdk-product-neutrality.sh` to reject future product-owned
+  Directory wire DTOs/files in production SDK sources. The rule intentionally
+  ignores Python build caches so local mypy/pycache artifacts cannot become
+  false architecture failures.
+- Update the released edge-adapter frozen surface digest after intentional
+  removal of product DTO members from Go/Python non-canonical inventory.

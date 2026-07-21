@@ -38,6 +38,11 @@
   locality.
 - SDK packages expose canonical runtime concepts only. Product feature
   families belong to downstream providers or daemon plugins.
+- Directory capability in the canonical SDK is a generic runtime projection:
+  records, resolver answers, cursor state, and raw event facts. Product Hub
+  directory DTOs such as agent summaries, node rows, host endpoints, and
+  signing-authority variants must not be SDK public API or private SDK wire
+  models.
 
 ## Terminology and Schema
 

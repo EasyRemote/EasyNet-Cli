@@ -1,19 +1,10 @@
-"""EasyNet Directory facade and product-owned wire projections."""
+"""Canonical runtime Directory facade and generic event projection."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Mapping, Protocol
-
-from ._directory_wire import (
-    DirectoryAgentSummary,
-    DirectoryEntry,
-    DirectoryEvent,
-    DirectorySigningAuthority,
-    parse_directory_entry,
-    parse_directory_event,
-)
 
 from .errors import ErrorCode, RetryHint, SDKError
 from .core.directory import DirectoryResolveKind
@@ -23,10 +14,8 @@ from .stream import StreamHandle
 __all__ = [
     "DEFAULT_DIRECTORY_PAGE_LIMIT",
     "MAX_DIRECTORY_PAGE_LIMIT",
-    "DirectoryAgentSummary",
     "DirectoryClient",
     "DirectoryCursor",
-    "DirectoryEntry",
     "DirectoryEvent",
     "DirectoryEventEnvelope",
     "DirectoryListRequest",
@@ -36,11 +25,9 @@ __all__ = [
     "DirectoryResolution",
     "DirectoryResolveKind",
     "DirectoryResolveRequest",
-    "DirectorySigningAuthority",
     "DirectorySubscribeRequest",
     "DirectorySubscription",
     "DirectorySubscriptionState",
-    "parse_directory_entry",
     "parse_directory_event",
 ]
 
@@ -113,6 +100,12 @@ class DirectoryCursor:
         if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 0:
             raise _invalid("Directory cursor sequence must be non-negative")
         return cls(sequence=sequence, token=f"directory:{sequence}")
+
+
+@dataclass(frozen=True)
+class DirectoryEvent:
+    type: str
+    raw: Mapping[str, object] = field(default_factory=dict)
 
 
 class DirectorySubscriptionState(StrEnum):
@@ -257,6 +250,16 @@ def _project_record(value: object) -> DirectoryRecord:
     )
 
 
+def parse_directory_event(raw: object) -> DirectoryEvent:
+    value = _mapping(raw)
+    if not value:
+        raise _invalid("Directory event must be an object")
+    event_type = _mapping_text(value, "type")
+    if not event_type:
+        raise _invalid("Directory event type is required")
+    return DirectoryEvent(type=event_type, raw=value)
+
+
 def _directory_limit(limit: int) -> int:
     if not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
         raise _invalid("Directory limit must be non-negative")
@@ -295,6 +298,22 @@ def _mapping_text(value: Mapping[str, object], *keys: str) -> str:
 
 
 def _mapping(value: object) -> Mapping[str, object]:
+    if isinstance(value, bytes):
+        try:
+            import json
+
+            decoded = json.loads(value)
+        except (UnicodeDecodeError, ValueError) as error:
+            raise _invalid(f"Directory JSON decode failed: {error}", error)
+        return dict(decoded) if isinstance(decoded, Mapping) else {}
+    if isinstance(value, str):
+        try:
+            import json
+
+            decoded = json.loads(value)
+        except ValueError as error:
+            raise _invalid(f"Directory JSON decode failed: {error}", error)
+        return dict(decoded) if isinstance(decoded, Mapping) else {}
     return dict(value) if isinstance(value, Mapping) else {}
 
 

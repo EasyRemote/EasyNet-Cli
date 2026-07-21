@@ -72,7 +72,11 @@
 
 - [x] Gate product SDK feature families in canonical packages.
 - [x] Gate daemon-owned Mission/EAL execution boundaries.
-- [ ] Re-run product neutrality and Mission/EAL boundary gates.
+- [x] Remove Go/Python product-owned Directory wire DTOs from canonical SDK
+      source and public API inventory.
+- [x] Gate product-owned Directory wire DTO/file reintroduction in SDK
+      product-neutrality.
+- [ ] Re-run Mission/EAL boundary gates.
 
 ## RF-9
 

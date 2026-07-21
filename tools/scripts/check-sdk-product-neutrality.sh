@@ -228,6 +228,19 @@ if receipt_storage_violations \
   fail "receipt ledger storage path leaked into the canonical SDK receipt model"
 fi
 
+product_directory_pattern='\b(DirectoryAgentSummary|DirectorySigningAuthority|ParseDirectoryEntry|parse_directory_entry)\b'
+if rg -n "$product_directory_pattern" "${production_sources[@]}"; then
+  fail "product-owned Directory wire DTO leaked into canonical runtime SDK source"
+fi
+if find sdk/go sdk/python/easynet_sdk sdk/node \
+  \( -path '*/__pycache__/*' -o -path '*/.mypy_cache/*' \) -prune -o \
+  -path '*directory_wire*' -type f -print -quit | grep -q .; then
+  find sdk/go sdk/python/easynet_sdk sdk/node \
+    \( -path '*/__pycache__/*' -o -path '*/.mypy_cache/*' \) -prune -o \
+    -path '*directory_wire*' -type f -print >&2
+  fail "product-owned Directory wire projection file remains in canonical runtime SDK"
+fi
+
 forbidden_type_pattern='\b(Mission(Client|Transport|Status|Run|Event|Plan)?|Admin(Client|Transport|Carrier|Gateway|Agent|Session)?|Gateway(Status|Client|Transport|Lifecycle)?|IdentityClient|Publication(Client|Transport|Catalog|Resource)?|HostBinding(Client|Transport|Lifecycle)?|Surface(Client|Transport|Page|Manifest|Health)?|Compatibility(Client|Transport|Carrier|Model|Chat|File)?|Wrapper(Client|Transport|Carrier|File|Terminal|Browser|Media|RemoteDesktop)?|Companion(Client|Transport|Desired|Observed|Projected|Supervisor|Boot|Stop)?|AccessControlCarrier|EventClient|EventsCarrierBase|RuntimeProfileBundle|DaemonProfileBridge|DaemonHandleProfiles)\b'
 
 if rg -n "$forbidden_type_pattern" "${production_sources[@]}"; then

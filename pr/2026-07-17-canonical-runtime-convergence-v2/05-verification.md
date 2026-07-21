@@ -241,3 +241,30 @@ passed. Go and Python `ability_invocation_facade` now carry `start` lifecycle
 evidence by borrowing the generic ability facade from the Native Runtime
 provider graph. The cells remain `provider-backed`, not `cutover-ready`,
 because `restart_recover` remains open.
+
+## SDK Directory Product DTO Removal Evidence
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph init .`
+- `/Users/macbook.silan.tech/.local/bin/codegraph node session_authority_admits_subject --path .`
+- `/Users/macbook.silan.tech/.local/bin/codegraph node src/daemon/federation/resolver.rs --path .`
+- `PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python:/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python PYTHONDONTWRITEBYTECODE=1 /opt/anaconda3/bin/python -m pytest sdk/python/tests/test_directory.py -q`
+- `cd sdk/go && GOCACHE=/tmp/easynet-go-build-cache go test . -run 'Directory' -count=1`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-sdk-product-neutrality.sh`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `cargo fmt --check`
+- `git diff --check`
+- `rg -n "DirectoryAgentSummary|DirectorySigningAuthority|ParseDirectoryEntry|parse_directory_entry|_directory_wire|directory_wire" sdk/go sdk/python/easynet_sdk sdk/node sdk/conformance/canonical-public-api.json sdk/conformance/sdk-parity-matrix.json -g '!**/__pycache__/**' -g '!**/.mypy_cache/**' -g '!**/node_modules/**' -g '!**/.venv/**'`
+
+Result: focused Go/Python directory tests passed; SDK product-neutrality and
+canonical-runtime-convergence-v2 passed. The final `rg` found no production SDK
+or conformance manifest references to the removed product-owned Directory wire
+DTOs. Full `cd sdk/go && go test ./...` remains blocked in this sandbox by
+Unix socket bind denial in managed-signing tests; the affected Directory tests
+were run directly and passed.
+
+Generation note: `sdk/conformance/rebuild_public_api_model.py --write`
+repeatedly failed because `xcrun swift-symbolgraph-extract` segfaulted while
+rebuilding unchanged Swift inventory. Go/Python inventories were regenerated
+directly, existing Swift inventory cache was reused, and the canonical public
+API/matrix model was generated from that cache. The committed SPEC v2 gate then
+validated the resulting manifests.

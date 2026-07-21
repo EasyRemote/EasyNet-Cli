@@ -6,7 +6,6 @@ import pytest
 
 import easynet_sdk.directory as directory_module
 from easynet_sdk.directory import (
-    DirectoryEntry,
     DirectoryClient,
     DirectoryCursor,
     DirectoryListRequest,
@@ -17,7 +16,6 @@ from easynet_sdk.directory import (
     DirectorySubscribeRequest,
     DirectorySubscription,
     DirectorySubscriptionState,
-    parse_directory_entry,
     parse_directory_event,
 )
 from easynet_sdk.errors import SDKError
@@ -158,10 +156,12 @@ def test_directory_subscription_requires_snapshot_then_live_deltas() -> None:
     )
     first = subscription.next()
     assert first.event is not None and first.event.type == "snapshot"
+    assert first.event.raw["snapshot_unix_ms"] == 1
     assert first.cursor == DirectoryCursor.at(1)
     assert subscription.state == DirectorySubscriptionState.LIVE
     second = subscription.next()
     assert second.event is not None and second.event.type == "heartbeat"
+    assert second.event.raw["unix_ms"] == 2
     assert second.cursor.sequence == 2
 
 
@@ -174,29 +174,7 @@ def test_directory_subscription_fails_on_delta_before_snapshot() -> None:
     assert subscription.state == DirectorySubscriptionState.FAILED
 
 
-def test_directory_entry_projection_has_deterministic_canonical_json() -> None:
-    entry = parse_directory_entry(
-        {
-            "agent_ura": "easynet:///r/example/agent/alpha",
-            "node_id": "node-1",
-            "status": "online",
-            "display_name": "Alpha",
-            "last_seen_unix_ms": 42,
-        }
-    )
-
-    assert entry == DirectoryEntry(
-        agent_ura="easynet:///r/example/agent/alpha",
-        node_id="node-1",
-        status="online",
-        display_name="Alpha",
-        last_seen_unix_ms=42,
-    )
-    assert json.loads(entry.canonical_json()) == entry.to_dict()
-    assert entry.canonical_json() == entry.canonical_json()
-
-
-def test_directory_event_projection_validates_product_wire_shape() -> None:
+def test_directory_event_projection_is_runtime_generic() -> None:
     event = parse_directory_event(
         {
             "type": "snapshot",
@@ -216,20 +194,21 @@ def test_directory_event_projection_validates_product_wire_shape() -> None:
     )
 
     assert event.type == "snapshot"
-    assert event.agents is not None
-    assert event.agents[0].ability_count == 3
-    assert json.loads(event.canonical_json()) == event.to_dict()
+    assert event.raw["agents"] == [
+        {
+            "agent_ura": "easynet:///r/example/agent/alpha",
+            "signing_authority": {
+                "kind": "hosted_by",
+                "host_ura": "easynet:///r/example/device/node-1",
+            },
+            "status": "online",
+            "ability_count": 3,
+        }
+    ]
 
-    with pytest.raises(ValueError, match="host_ura"):
+    with pytest.raises(SDKError, match="type is required"):
         parse_directory_event(
             {
-                "type": "agent_advertised",
                 "agent_ura": "easynet:///r/example/agent/alpha",
-                "signing_authority": {
-                    "kind": "self_signed",
-                    "host_ura": "easynet:///r/example/device/node-1",
-                },
-                "replaced_prior": False,
-                "unix_ms": 43,
             }
         )

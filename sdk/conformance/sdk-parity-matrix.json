@@ -120096,10 +120096,6 @@
       "unproven_requirement_ids": [],
       "shape_evidence": [
         {
-          "item": "DirectoryAgentSummary",
-          "sha256": "2ff071d88df057ff1d5d31d230ec4e43773c5a48be72a0709c8d4cf837ea0809"
-        },
-        {
           "item": "DirectoryClient",
           "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
         },
@@ -120108,12 +120104,8 @@
           "sha256": "d2415bfee98e092be200075e39857e311ae7ae2feec1b22918aee90e1ba0c8b4"
         },
         {
-          "item": "DirectoryEntry",
-          "sha256": "2852b572c50bbb0a9db1c949f13b11753a7bf955aeb9575a03b5928f8b7d429d"
-        },
-        {
           "item": "DirectoryEvent",
-          "sha256": "0528932a0765a8d85d4f738c59b168e9b4c05ba4514d1f22c3dbac802dd23d81"
+          "sha256": "55f6d297758a77426ed7474ec9f1dc18d3e664839b7425abdf74a18e2ce9dee8"
         },
         {
           "item": "DirectoryEventEnvelope",
@@ -120164,10 +120156,6 @@
           "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
         },
         {
-          "item": "DirectorySigningAuthority",
-          "sha256": "b2f60ec43b856bbda6aa7f1e337ae8d4ef161be3b9ef76f0b936dddce9309ccf"
-        },
-        {
           "item": "DirectorySubscribeRequest",
           "sha256": "36a196789e7cdea6545d924c9c87a3b48b0bc5c749278c83417d158172dc1a95"
         },
@@ -120204,10 +120192,6 @@
           "sha256": "7b8a37cd41d02e031b11cb6e80a2959dcf1ca8e45256dbd01731e61106acd094"
         },
         {
-          "item": "ParseDirectoryEntry",
-          "sha256": "096fb3f73878da52c00d3d09ec95853b0b4c26bd10c78a8c1dae85d6228fb947"
-        },
-        {
           "item": "ParseDirectoryEvent",
           "sha256": "ef5c283c775fc321d38ed7482902539ecffd28f71e4c148157edcb7ce7c336c4"
         },
@@ -120226,26 +120210,6 @@
         {
           "item": "RuntimeHostDiscoverRequest",
           "sha256": "b690fb35d0477c1480a22d08a622736ee9a9197cb3a7809d4cce14641ef6a9cc"
-        },
-        {
-          "item": "DirectoryAgentSummary.AbilityCount",
-          "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-        },
-        {
-          "item": "DirectoryAgentSummary.AgentURA",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
-          "item": "DirectoryAgentSummary.SigningAuthority",
-          "sha256": "9006ced70d9204802fb1cdba742e18b3497f906c7e2be6cd0a8405e8e3ef38fa"
-        },
-        {
-          "item": "DirectoryAgentSummary.Status",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
-          "item": "DirectoryAgentSummary.Validate",
-          "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
         },
         {
           "item": "DirectoryClient.List",
@@ -120268,112 +120232,12 @@
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
-          "item": "DirectoryEntry.AgentURA",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
-          "item": "DirectoryEntry.CanonicalJSON",
-          "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-        },
-        {
-          "item": "DirectoryEntry.DisplayName",
-          "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-        },
-        {
-          "item": "DirectoryEntry.LastSeenUnixMS",
-          "sha256": "d42b8bd1d172ca63da480f91e90546bda63a680e22eac8e43b3869dad37a5612"
-        },
-        {
-          "item": "DirectoryEntry.NodeID",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
-          "item": "DirectoryEntry.OriginRealm",
-          "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-        },
-        {
-          "item": "DirectoryEntry.Status",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
-          "item": "DirectoryEntry.Validate",
-          "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-        },
-        {
-          "item": "DirectoryEvent.AbilityCount",
-          "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-        },
-        {
-          "item": "DirectoryEvent.AgentURA",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
-          "item": "DirectoryEvent.Agents",
-          "sha256": "4b639dd6195e0ec90def78ae8ce6bd6aff1f1ffbba6292b374fc95e2285002a8"
-        },
-        {
-          "item": "DirectoryEvent.CanonicalJSON",
-          "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-        },
-        {
-          "item": "DirectoryEvent.HostDeviceURA",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
-          "item": "DirectoryEvent.LeaseExpiresUnixMS",
-          "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-        },
-        {
-          "item": "DirectoryEvent.OwnerURA",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
-          "item": "DirectoryEvent.ProjectionDigest",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
-          "item": "DirectoryEvent.ProjectionRevision",
-          "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-        },
-        {
-          "item": "DirectoryEvent.Reason",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
-          "item": "DirectoryEvent.RemovedCount",
-          "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-        },
-        {
-          "item": "DirectoryEvent.ReplacedPrior",
-          "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
-        },
-        {
-          "item": "DirectoryEvent.SigningAuthority",
-          "sha256": "29541342bcc3ce5cb838eaf21b1e47cea76271f482cf9b69dc04c5d735842edc"
-        },
-        {
-          "item": "DirectoryEvent.SnapshotUnixMS",
-          "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-        },
-        {
-          "item": "DirectoryEvent.StaleCount",
-          "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
+          "item": "DirectoryEvent.Raw",
+          "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
         },
         {
           "item": "DirectoryEvent.Type",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
-          "item": "DirectoryEvent.UnixMS",
-          "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-        },
-        {
-          "item": "DirectoryEvent.Validate",
-          "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-        },
-        {
-          "item": "DirectoryEvent.WasActive",
-          "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
         },
         {
           "item": "DirectoryEventEnvelope.Cursor",
@@ -120536,18 +120400,6 @@
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
-          "item": "DirectorySigningAuthority.HostURA",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
-          "item": "DirectorySigningAuthority.Kind",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
-          "item": "DirectorySigningAuthority.Validate",
-          "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-        },
-        {
           "item": "DirectorySubscribeRequest.Call",
           "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
         },
@@ -120583,10 +120435,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "2ff071d88df057ff1d5d31d230ec4e43773c5a48be72a0709c8d4cf837ea0809"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -120595,12 +120443,8 @@
               "sha256": "d2415bfee98e092be200075e39857e311ae7ae2feec1b22918aee90e1ba0c8b4"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "2852b572c50bbb0a9db1c949f13b11753a7bf955aeb9575a03b5928f8b7d429d"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "0528932a0765a8d85d4f738c59b168e9b4c05ba4514d1f22c3dbac802dd23d81"
+              "sha256": "55f6d297758a77426ed7474ec9f1dc18d3e664839b7425abdf74a18e2ce9dee8"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -120651,10 +120495,6 @@
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "b2f60ec43b856bbda6aa7f1e337ae8d4ef161be3b9ef76f0b936dddce9309ccf"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "36a196789e7cdea6545d924c9c87a3b48b0bc5c749278c83417d158172dc1a95"
             },
@@ -120691,10 +120531,6 @@
               "sha256": "7b8a37cd41d02e031b11cb6e80a2959dcf1ca8e45256dbd01731e61106acd094"
             },
             {
-              "item": "ParseDirectoryEntry",
-              "sha256": "096fb3f73878da52c00d3d09ec95853b0b4c26bd10c78a8c1dae85d6228fb947"
-            },
-            {
               "item": "ParseDirectoryEvent",
               "sha256": "ef5c283c775fc321d38ed7482902539ecffd28f71e4c148157edcb7ce7c336c4"
             },
@@ -120713,26 +120549,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "b690fb35d0477c1480a22d08a622736ee9a9197cb3a7809d4cce14641ef6a9cc"
-            },
-            {
-              "item": "DirectoryAgentSummary.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryAgentSummary.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.SigningAuthority",
-              "sha256": "9006ced70d9204802fb1cdba742e18b3497f906c7e2be6cd0a8405e8e3ef38fa"
-            },
-            {
-              "item": "DirectoryAgentSummary.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectoryClient.List",
@@ -120755,112 +120571,12 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
-              "item": "DirectoryEntry.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEntry.DisplayName",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.LastSeenUnixMS",
-              "sha256": "d42b8bd1d172ca63da480f91e90546bda63a680e22eac8e43b3869dad37a5612"
-            },
-            {
-              "item": "DirectoryEntry.NodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.OriginRealm",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.Agents",
-              "sha256": "4b639dd6195e0ec90def78ae8ce6bd6aff1f1ffbba6292b374fc95e2285002a8"
-            },
-            {
-              "item": "DirectoryEvent.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEvent.HostDeviceURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.LeaseExpiresUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.OwnerURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionDigest",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionRevision",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.RemovedCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.ReplacedPrior",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
-            },
-            {
-              "item": "DirectoryEvent.SigningAuthority",
-              "sha256": "29541342bcc3ce5cb838eaf21b1e47cea76271f482cf9b69dc04c5d735842edc"
-            },
-            {
-              "item": "DirectoryEvent.SnapshotUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.StaleCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
+              "item": "DirectoryEvent.Raw",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
             },
             {
               "item": "DirectoryEvent.Type",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.UnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.WasActive",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
             {
               "item": "DirectoryEventEnvelope.Cursor",
@@ -121021,18 +120737,6 @@
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.HostURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Kind",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -121070,10 +120774,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "2ff071d88df057ff1d5d31d230ec4e43773c5a48be72a0709c8d4cf837ea0809"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -121082,12 +120782,8 @@
               "sha256": "d2415bfee98e092be200075e39857e311ae7ae2feec1b22918aee90e1ba0c8b4"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "2852b572c50bbb0a9db1c949f13b11753a7bf955aeb9575a03b5928f8b7d429d"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "0528932a0765a8d85d4f738c59b168e9b4c05ba4514d1f22c3dbac802dd23d81"
+              "sha256": "55f6d297758a77426ed7474ec9f1dc18d3e664839b7425abdf74a18e2ce9dee8"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -121138,10 +120834,6 @@
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "b2f60ec43b856bbda6aa7f1e337ae8d4ef161be3b9ef76f0b936dddce9309ccf"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "36a196789e7cdea6545d924c9c87a3b48b0bc5c749278c83417d158172dc1a95"
             },
@@ -121178,10 +120870,6 @@
               "sha256": "7b8a37cd41d02e031b11cb6e80a2959dcf1ca8e45256dbd01731e61106acd094"
             },
             {
-              "item": "ParseDirectoryEntry",
-              "sha256": "096fb3f73878da52c00d3d09ec95853b0b4c26bd10c78a8c1dae85d6228fb947"
-            },
-            {
               "item": "ParseDirectoryEvent",
               "sha256": "ef5c283c775fc321d38ed7482902539ecffd28f71e4c148157edcb7ce7c336c4"
             },
@@ -121200,26 +120888,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "b690fb35d0477c1480a22d08a622736ee9a9197cb3a7809d4cce14641ef6a9cc"
-            },
-            {
-              "item": "DirectoryAgentSummary.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryAgentSummary.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.SigningAuthority",
-              "sha256": "9006ced70d9204802fb1cdba742e18b3497f906c7e2be6cd0a8405e8e3ef38fa"
-            },
-            {
-              "item": "DirectoryAgentSummary.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectoryClient.List",
@@ -121242,112 +120910,12 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
-              "item": "DirectoryEntry.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEntry.DisplayName",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.LastSeenUnixMS",
-              "sha256": "d42b8bd1d172ca63da480f91e90546bda63a680e22eac8e43b3869dad37a5612"
-            },
-            {
-              "item": "DirectoryEntry.NodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.OriginRealm",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.Agents",
-              "sha256": "4b639dd6195e0ec90def78ae8ce6bd6aff1f1ffbba6292b374fc95e2285002a8"
-            },
-            {
-              "item": "DirectoryEvent.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEvent.HostDeviceURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.LeaseExpiresUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.OwnerURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionDigest",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionRevision",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.RemovedCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.ReplacedPrior",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
-            },
-            {
-              "item": "DirectoryEvent.SigningAuthority",
-              "sha256": "29541342bcc3ce5cb838eaf21b1e47cea76271f482cf9b69dc04c5d735842edc"
-            },
-            {
-              "item": "DirectoryEvent.SnapshotUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.StaleCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
+              "item": "DirectoryEvent.Raw",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
             },
             {
               "item": "DirectoryEvent.Type",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.UnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.WasActive",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
             {
               "item": "DirectoryEventEnvelope.Cursor",
@@ -121508,18 +121076,6 @@
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.HostURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Kind",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -121557,10 +121113,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "2ff071d88df057ff1d5d31d230ec4e43773c5a48be72a0709c8d4cf837ea0809"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -121569,12 +121121,8 @@
               "sha256": "d2415bfee98e092be200075e39857e311ae7ae2feec1b22918aee90e1ba0c8b4"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "2852b572c50bbb0a9db1c949f13b11753a7bf955aeb9575a03b5928f8b7d429d"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "0528932a0765a8d85d4f738c59b168e9b4c05ba4514d1f22c3dbac802dd23d81"
+              "sha256": "55f6d297758a77426ed7474ec9f1dc18d3e664839b7425abdf74a18e2ce9dee8"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -121625,10 +121173,6 @@
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "b2f60ec43b856bbda6aa7f1e337ae8d4ef161be3b9ef76f0b936dddce9309ccf"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "36a196789e7cdea6545d924c9c87a3b48b0bc5c749278c83417d158172dc1a95"
             },
@@ -121665,10 +121209,6 @@
               "sha256": "7b8a37cd41d02e031b11cb6e80a2959dcf1ca8e45256dbd01731e61106acd094"
             },
             {
-              "item": "ParseDirectoryEntry",
-              "sha256": "096fb3f73878da52c00d3d09ec95853b0b4c26bd10c78a8c1dae85d6228fb947"
-            },
-            {
               "item": "ParseDirectoryEvent",
               "sha256": "ef5c283c775fc321d38ed7482902539ecffd28f71e4c148157edcb7ce7c336c4"
             },
@@ -121687,26 +121227,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "b690fb35d0477c1480a22d08a622736ee9a9197cb3a7809d4cce14641ef6a9cc"
-            },
-            {
-              "item": "DirectoryAgentSummary.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryAgentSummary.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.SigningAuthority",
-              "sha256": "9006ced70d9204802fb1cdba742e18b3497f906c7e2be6cd0a8405e8e3ef38fa"
-            },
-            {
-              "item": "DirectoryAgentSummary.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectoryClient.List",
@@ -121729,112 +121249,12 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
-              "item": "DirectoryEntry.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEntry.DisplayName",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.LastSeenUnixMS",
-              "sha256": "d42b8bd1d172ca63da480f91e90546bda63a680e22eac8e43b3869dad37a5612"
-            },
-            {
-              "item": "DirectoryEntry.NodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.OriginRealm",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.Agents",
-              "sha256": "4b639dd6195e0ec90def78ae8ce6bd6aff1f1ffbba6292b374fc95e2285002a8"
-            },
-            {
-              "item": "DirectoryEvent.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEvent.HostDeviceURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.LeaseExpiresUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.OwnerURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionDigest",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionRevision",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.RemovedCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.ReplacedPrior",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
-            },
-            {
-              "item": "DirectoryEvent.SigningAuthority",
-              "sha256": "29541342bcc3ce5cb838eaf21b1e47cea76271f482cf9b69dc04c5d735842edc"
-            },
-            {
-              "item": "DirectoryEvent.SnapshotUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.StaleCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
+              "item": "DirectoryEvent.Raw",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
             },
             {
               "item": "DirectoryEvent.Type",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.UnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.WasActive",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
             {
               "item": "DirectoryEventEnvelope.Cursor",
@@ -121995,18 +121415,6 @@
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.HostURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Kind",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -122044,10 +121452,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "2ff071d88df057ff1d5d31d230ec4e43773c5a48be72a0709c8d4cf837ea0809"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -122056,12 +121460,8 @@
               "sha256": "d2415bfee98e092be200075e39857e311ae7ae2feec1b22918aee90e1ba0c8b4"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "2852b572c50bbb0a9db1c949f13b11753a7bf955aeb9575a03b5928f8b7d429d"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "0528932a0765a8d85d4f738c59b168e9b4c05ba4514d1f22c3dbac802dd23d81"
+              "sha256": "55f6d297758a77426ed7474ec9f1dc18d3e664839b7425abdf74a18e2ce9dee8"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -122112,10 +121512,6 @@
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "b2f60ec43b856bbda6aa7f1e337ae8d4ef161be3b9ef76f0b936dddce9309ccf"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "36a196789e7cdea6545d924c9c87a3b48b0bc5c749278c83417d158172dc1a95"
             },
@@ -122152,10 +121548,6 @@
               "sha256": "7b8a37cd41d02e031b11cb6e80a2959dcf1ca8e45256dbd01731e61106acd094"
             },
             {
-              "item": "ParseDirectoryEntry",
-              "sha256": "096fb3f73878da52c00d3d09ec95853b0b4c26bd10c78a8c1dae85d6228fb947"
-            },
-            {
               "item": "ParseDirectoryEvent",
               "sha256": "ef5c283c775fc321d38ed7482902539ecffd28f71e4c148157edcb7ce7c336c4"
             },
@@ -122174,26 +121566,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "b690fb35d0477c1480a22d08a622736ee9a9197cb3a7809d4cce14641ef6a9cc"
-            },
-            {
-              "item": "DirectoryAgentSummary.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryAgentSummary.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.SigningAuthority",
-              "sha256": "9006ced70d9204802fb1cdba742e18b3497f906c7e2be6cd0a8405e8e3ef38fa"
-            },
-            {
-              "item": "DirectoryAgentSummary.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectoryClient.List",
@@ -122216,112 +121588,12 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
-              "item": "DirectoryEntry.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEntry.DisplayName",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.LastSeenUnixMS",
-              "sha256": "d42b8bd1d172ca63da480f91e90546bda63a680e22eac8e43b3869dad37a5612"
-            },
-            {
-              "item": "DirectoryEntry.NodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.OriginRealm",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.Agents",
-              "sha256": "4b639dd6195e0ec90def78ae8ce6bd6aff1f1ffbba6292b374fc95e2285002a8"
-            },
-            {
-              "item": "DirectoryEvent.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEvent.HostDeviceURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.LeaseExpiresUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.OwnerURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionDigest",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionRevision",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.RemovedCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.ReplacedPrior",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
-            },
-            {
-              "item": "DirectoryEvent.SigningAuthority",
-              "sha256": "29541342bcc3ce5cb838eaf21b1e47cea76271f482cf9b69dc04c5d735842edc"
-            },
-            {
-              "item": "DirectoryEvent.SnapshotUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.StaleCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
+              "item": "DirectoryEvent.Raw",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
             },
             {
               "item": "DirectoryEvent.Type",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.UnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.WasActive",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
             {
               "item": "DirectoryEventEnvelope.Cursor",
@@ -122482,18 +121754,6 @@
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.HostURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Kind",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -122531,10 +121791,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "2ff071d88df057ff1d5d31d230ec4e43773c5a48be72a0709c8d4cf837ea0809"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -122543,12 +121799,8 @@
               "sha256": "d2415bfee98e092be200075e39857e311ae7ae2feec1b22918aee90e1ba0c8b4"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "2852b572c50bbb0a9db1c949f13b11753a7bf955aeb9575a03b5928f8b7d429d"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "0528932a0765a8d85d4f738c59b168e9b4c05ba4514d1f22c3dbac802dd23d81"
+              "sha256": "55f6d297758a77426ed7474ec9f1dc18d3e664839b7425abdf74a18e2ce9dee8"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -122599,10 +121851,6 @@
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "b2f60ec43b856bbda6aa7f1e337ae8d4ef161be3b9ef76f0b936dddce9309ccf"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "36a196789e7cdea6545d924c9c87a3b48b0bc5c749278c83417d158172dc1a95"
             },
@@ -122639,10 +121887,6 @@
               "sha256": "7b8a37cd41d02e031b11cb6e80a2959dcf1ca8e45256dbd01731e61106acd094"
             },
             {
-              "item": "ParseDirectoryEntry",
-              "sha256": "096fb3f73878da52c00d3d09ec95853b0b4c26bd10c78a8c1dae85d6228fb947"
-            },
-            {
               "item": "ParseDirectoryEvent",
               "sha256": "ef5c283c775fc321d38ed7482902539ecffd28f71e4c148157edcb7ce7c336c4"
             },
@@ -122661,26 +121905,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "b690fb35d0477c1480a22d08a622736ee9a9197cb3a7809d4cce14641ef6a9cc"
-            },
-            {
-              "item": "DirectoryAgentSummary.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryAgentSummary.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.SigningAuthority",
-              "sha256": "9006ced70d9204802fb1cdba742e18b3497f906c7e2be6cd0a8405e8e3ef38fa"
-            },
-            {
-              "item": "DirectoryAgentSummary.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectoryClient.List",
@@ -122703,112 +121927,12 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
-              "item": "DirectoryEntry.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEntry.DisplayName",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.LastSeenUnixMS",
-              "sha256": "d42b8bd1d172ca63da480f91e90546bda63a680e22eac8e43b3869dad37a5612"
-            },
-            {
-              "item": "DirectoryEntry.NodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.OriginRealm",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.Agents",
-              "sha256": "4b639dd6195e0ec90def78ae8ce6bd6aff1f1ffbba6292b374fc95e2285002a8"
-            },
-            {
-              "item": "DirectoryEvent.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEvent.HostDeviceURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.LeaseExpiresUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.OwnerURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionDigest",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionRevision",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.RemovedCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.ReplacedPrior",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
-            },
-            {
-              "item": "DirectoryEvent.SigningAuthority",
-              "sha256": "29541342bcc3ce5cb838eaf21b1e47cea76271f482cf9b69dc04c5d735842edc"
-            },
-            {
-              "item": "DirectoryEvent.SnapshotUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.StaleCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
+              "item": "DirectoryEvent.Raw",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
             },
             {
               "item": "DirectoryEvent.Type",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.UnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.WasActive",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
             {
               "item": "DirectoryEventEnvelope.Cursor",
@@ -122969,18 +122093,6 @@
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.HostURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Kind",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -123018,10 +122130,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "2ff071d88df057ff1d5d31d230ec4e43773c5a48be72a0709c8d4cf837ea0809"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -123030,12 +122138,8 @@
               "sha256": "d2415bfee98e092be200075e39857e311ae7ae2feec1b22918aee90e1ba0c8b4"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "2852b572c50bbb0a9db1c949f13b11753a7bf955aeb9575a03b5928f8b7d429d"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "0528932a0765a8d85d4f738c59b168e9b4c05ba4514d1f22c3dbac802dd23d81"
+              "sha256": "55f6d297758a77426ed7474ec9f1dc18d3e664839b7425abdf74a18e2ce9dee8"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -123086,10 +122190,6 @@
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "b2f60ec43b856bbda6aa7f1e337ae8d4ef161be3b9ef76f0b936dddce9309ccf"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "36a196789e7cdea6545d924c9c87a3b48b0bc5c749278c83417d158172dc1a95"
             },
@@ -123126,10 +122226,6 @@
               "sha256": "7b8a37cd41d02e031b11cb6e80a2959dcf1ca8e45256dbd01731e61106acd094"
             },
             {
-              "item": "ParseDirectoryEntry",
-              "sha256": "096fb3f73878da52c00d3d09ec95853b0b4c26bd10c78a8c1dae85d6228fb947"
-            },
-            {
               "item": "ParseDirectoryEvent",
               "sha256": "ef5c283c775fc321d38ed7482902539ecffd28f71e4c148157edcb7ce7c336c4"
             },
@@ -123148,26 +122244,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "b690fb35d0477c1480a22d08a622736ee9a9197cb3a7809d4cce14641ef6a9cc"
-            },
-            {
-              "item": "DirectoryAgentSummary.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryAgentSummary.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.SigningAuthority",
-              "sha256": "9006ced70d9204802fb1cdba742e18b3497f906c7e2be6cd0a8405e8e3ef38fa"
-            },
-            {
-              "item": "DirectoryAgentSummary.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectoryClient.List",
@@ -123190,112 +122266,12 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
-              "item": "DirectoryEntry.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEntry.DisplayName",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.LastSeenUnixMS",
-              "sha256": "d42b8bd1d172ca63da480f91e90546bda63a680e22eac8e43b3869dad37a5612"
-            },
-            {
-              "item": "DirectoryEntry.NodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.OriginRealm",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.Agents",
-              "sha256": "4b639dd6195e0ec90def78ae8ce6bd6aff1f1ffbba6292b374fc95e2285002a8"
-            },
-            {
-              "item": "DirectoryEvent.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEvent.HostDeviceURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.LeaseExpiresUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.OwnerURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionDigest",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionRevision",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.RemovedCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.ReplacedPrior",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
-            },
-            {
-              "item": "DirectoryEvent.SigningAuthority",
-              "sha256": "29541342bcc3ce5cb838eaf21b1e47cea76271f482cf9b69dc04c5d735842edc"
-            },
-            {
-              "item": "DirectoryEvent.SnapshotUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.StaleCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
+              "item": "DirectoryEvent.Raw",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
             },
             {
               "item": "DirectoryEvent.Type",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.UnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.WasActive",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
             {
               "item": "DirectoryEventEnvelope.Cursor",
@@ -123456,18 +122432,6 @@
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.HostURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Kind",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -123505,10 +122469,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "2ff071d88df057ff1d5d31d230ec4e43773c5a48be72a0709c8d4cf837ea0809"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -123517,12 +122477,8 @@
               "sha256": "d2415bfee98e092be200075e39857e311ae7ae2feec1b22918aee90e1ba0c8b4"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "2852b572c50bbb0a9db1c949f13b11753a7bf955aeb9575a03b5928f8b7d429d"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "0528932a0765a8d85d4f738c59b168e9b4c05ba4514d1f22c3dbac802dd23d81"
+              "sha256": "55f6d297758a77426ed7474ec9f1dc18d3e664839b7425abdf74a18e2ce9dee8"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -123573,10 +122529,6 @@
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "b2f60ec43b856bbda6aa7f1e337ae8d4ef161be3b9ef76f0b936dddce9309ccf"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "36a196789e7cdea6545d924c9c87a3b48b0bc5c749278c83417d158172dc1a95"
             },
@@ -123613,10 +122565,6 @@
               "sha256": "7b8a37cd41d02e031b11cb6e80a2959dcf1ca8e45256dbd01731e61106acd094"
             },
             {
-              "item": "ParseDirectoryEntry",
-              "sha256": "096fb3f73878da52c00d3d09ec95853b0b4c26bd10c78a8c1dae85d6228fb947"
-            },
-            {
               "item": "ParseDirectoryEvent",
               "sha256": "ef5c283c775fc321d38ed7482902539ecffd28f71e4c148157edcb7ce7c336c4"
             },
@@ -123635,26 +122583,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "b690fb35d0477c1480a22d08a622736ee9a9197cb3a7809d4cce14641ef6a9cc"
-            },
-            {
-              "item": "DirectoryAgentSummary.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryAgentSummary.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.SigningAuthority",
-              "sha256": "9006ced70d9204802fb1cdba742e18b3497f906c7e2be6cd0a8405e8e3ef38fa"
-            },
-            {
-              "item": "DirectoryAgentSummary.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectoryClient.List",
@@ -123677,112 +122605,12 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
-              "item": "DirectoryEntry.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEntry.DisplayName",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.LastSeenUnixMS",
-              "sha256": "d42b8bd1d172ca63da480f91e90546bda63a680e22eac8e43b3869dad37a5612"
-            },
-            {
-              "item": "DirectoryEntry.NodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.OriginRealm",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.Agents",
-              "sha256": "4b639dd6195e0ec90def78ae8ce6bd6aff1f1ffbba6292b374fc95e2285002a8"
-            },
-            {
-              "item": "DirectoryEvent.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEvent.HostDeviceURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.LeaseExpiresUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.OwnerURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionDigest",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionRevision",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.RemovedCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.ReplacedPrior",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
-            },
-            {
-              "item": "DirectoryEvent.SigningAuthority",
-              "sha256": "29541342bcc3ce5cb838eaf21b1e47cea76271f482cf9b69dc04c5d735842edc"
-            },
-            {
-              "item": "DirectoryEvent.SnapshotUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.StaleCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
+              "item": "DirectoryEvent.Raw",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
             },
             {
               "item": "DirectoryEvent.Type",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.UnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.WasActive",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
             {
               "item": "DirectoryEventEnvelope.Cursor",
@@ -123943,18 +122771,6 @@
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.HostURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Kind",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -123992,10 +122808,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "2ff071d88df057ff1d5d31d230ec4e43773c5a48be72a0709c8d4cf837ea0809"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -124004,12 +122816,8 @@
               "sha256": "d2415bfee98e092be200075e39857e311ae7ae2feec1b22918aee90e1ba0c8b4"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "2852b572c50bbb0a9db1c949f13b11753a7bf955aeb9575a03b5928f8b7d429d"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "0528932a0765a8d85d4f738c59b168e9b4c05ba4514d1f22c3dbac802dd23d81"
+              "sha256": "55f6d297758a77426ed7474ec9f1dc18d3e664839b7425abdf74a18e2ce9dee8"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -124060,10 +122868,6 @@
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "b2f60ec43b856bbda6aa7f1e337ae8d4ef161be3b9ef76f0b936dddce9309ccf"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "36a196789e7cdea6545d924c9c87a3b48b0bc5c749278c83417d158172dc1a95"
             },
@@ -124100,10 +122904,6 @@
               "sha256": "7b8a37cd41d02e031b11cb6e80a2959dcf1ca8e45256dbd01731e61106acd094"
             },
             {
-              "item": "ParseDirectoryEntry",
-              "sha256": "096fb3f73878da52c00d3d09ec95853b0b4c26bd10c78a8c1dae85d6228fb947"
-            },
-            {
               "item": "ParseDirectoryEvent",
               "sha256": "ef5c283c775fc321d38ed7482902539ecffd28f71e4c148157edcb7ce7c336c4"
             },
@@ -124122,26 +122922,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "b690fb35d0477c1480a22d08a622736ee9a9197cb3a7809d4cce14641ef6a9cc"
-            },
-            {
-              "item": "DirectoryAgentSummary.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryAgentSummary.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.SigningAuthority",
-              "sha256": "9006ced70d9204802fb1cdba742e18b3497f906c7e2be6cd0a8405e8e3ef38fa"
-            },
-            {
-              "item": "DirectoryAgentSummary.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryAgentSummary.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectoryClient.List",
@@ -124164,112 +122944,12 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
-              "item": "DirectoryEntry.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEntry.DisplayName",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.LastSeenUnixMS",
-              "sha256": "d42b8bd1d172ca63da480f91e90546bda63a680e22eac8e43b3869dad37a5612"
-            },
-            {
-              "item": "DirectoryEntry.NodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.OriginRealm",
-              "sha256": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5"
-            },
-            {
-              "item": "DirectoryEntry.Status",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEntry.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.AbilityCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.AgentURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.Agents",
-              "sha256": "4b639dd6195e0ec90def78ae8ce6bd6aff1f1ffbba6292b374fc95e2285002a8"
-            },
-            {
-              "item": "DirectoryEvent.CanonicalJSON",
-              "sha256": "a710cfa97c9653fa4e02f2ba36ed128ea0fabab5784bd5abd9ad617bf4915200"
-            },
-            {
-              "item": "DirectoryEvent.HostDeviceURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.LeaseExpiresUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.OwnerURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionDigest",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.ProjectionRevision",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.Reason",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.RemovedCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
-            },
-            {
-              "item": "DirectoryEvent.ReplacedPrior",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
-            },
-            {
-              "item": "DirectoryEvent.SigningAuthority",
-              "sha256": "29541342bcc3ce5cb838eaf21b1e47cea76271f482cf9b69dc04c5d735842edc"
-            },
-            {
-              "item": "DirectoryEvent.SnapshotUnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.StaleCount",
-              "sha256": "24d23a7070f345728106164d52a7aadb2a728872083c4c617ebcd7eeef387ec9"
+              "item": "DirectoryEvent.Raw",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
             },
             {
               "item": "DirectoryEvent.Type",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectoryEvent.UnixMS",
-              "sha256": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57"
-            },
-            {
-              "item": "DirectoryEvent.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
-            },
-            {
-              "item": "DirectoryEvent.WasActive",
-              "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
             {
               "item": "DirectoryEventEnvelope.Cursor",
@@ -124430,18 +123110,6 @@
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.HostURA",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Kind",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-            },
-            {
-              "item": "DirectorySigningAuthority.Validate",
-              "sha256": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -124488,10 +123156,6 @@
       "unproven_requirement_ids": [],
       "shape_evidence": [
         {
-          "item": "DirectoryAgentSummary",
-          "sha256": "be88174d6b2812f14658b3d3fcc596064395bee553dfa148681ce919c76d42fd"
-        },
-        {
           "item": "DirectoryClient",
           "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
         },
@@ -124500,12 +123164,8 @@
           "sha256": "af0e9a9e2a4024c77c92234b55f9dd08d1d6fe993dce20f376410e8dc532385b"
         },
         {
-          "item": "DirectoryEntry",
-          "sha256": "c662adebd202d3db0844f4641a6b56f4ed7b5f55bfc2c89f7e3cc2c4970727e5"
-        },
-        {
           "item": "DirectoryEvent",
-          "sha256": "da6e8b4f6b5c149fe644d3b8375ac884ac9e1a2a11e475b082feb87f03cd78d9"
+          "sha256": "24cdbb74f5426ad5c89565cc6364a21ac669c4ea36a8fe9eba7c394c22e77409"
         },
         {
           "item": "DirectoryEventEnvelope",
@@ -124540,10 +123200,6 @@
           "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
         },
         {
-          "item": "DirectorySigningAuthority",
-          "sha256": "63ba9ac538245decdb8da61264016ee3cd43f7e962233e341802c4980119ff6c"
-        },
-        {
           "item": "DirectorySubscribeRequest",
           "sha256": "7105b441f1b5c98c7275fa04d4edd84c0ddeb8cd3bb0ea1c7dfe8a884e091818"
         },
@@ -124558,26 +123214,6 @@
         {
           "item": "RuntimeHostDiscoverRequest",
           "sha256": "28fb52b4c314b76098f8179d8a085aa9a3b7e8c41f95a8e19b8596c0d1002cbb"
-        },
-        {
-          "item": "DirectoryAgentSummary.ability_count",
-          "sha256": "c892fa226015ad792ee29f65a234b2d51f08a6e7f95dfb2e51a798a2d0f560ca"
-        },
-        {
-          "item": "DirectoryAgentSummary.agent_ura",
-          "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-        },
-        {
-          "item": "DirectoryAgentSummary.signing_authority",
-          "sha256": "dd8bf5ef973dead82cdaa94d9e7bf5d93a813f4348eaa2ba97a89fee7d933922"
-        },
-        {
-          "item": "DirectoryAgentSummary.status",
-          "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-        },
-        {
-          "item": "DirectoryAgentSummary.validate",
-          "sha256": "b491d4a1469d577f6c28aaa895d4ad58cddacb8fe26725fb69ec14aab85f6c4c"
         },
         {
           "item": "DirectoryClient.list",
@@ -124604,104 +123240,12 @@
           "sha256": "7e162699f0b80d5640c4ba0c952649199a0eeae4908a6e5c610fe046393319c2"
         },
         {
-          "item": "DirectoryEntry.agent_ura",
-          "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-        },
-        {
-          "item": "DirectoryEntry.display_name",
-          "sha256": "ab49a59b075501483262318ca0d52ed26b089ddcc2132256eaf06e5c6a3e2ae2"
-        },
-        {
-          "item": "DirectoryEntry.last_seen_unix_ms",
-          "sha256": "665627a6ebd53959e3233ab22a8ea8b899decce2f0cbcf504fe4660be208216e"
-        },
-        {
-          "item": "DirectoryEntry.node_id",
-          "sha256": "3193dd9afc52bd2b73bc5b63c8f6f735a5f35c03244c710d9e5b4ef9d49310a5"
-        },
-        {
-          "item": "DirectoryEntry.origin_realm",
-          "sha256": "8bd8e65816dfa694d36afdffc1a0986340848e384c152f874b4e47f8fd13d3da"
-        },
-        {
-          "item": "DirectoryEntry.status",
-          "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-        },
-        {
-          "item": "DirectoryEntry.validate",
-          "sha256": "f9481c3b2e3b9d4e26dfab1c8a09d0f0c8ed802df2301dec8bac827193acbc39"
-        },
-        {
-          "item": "DirectoryEvent.ability_count",
-          "sha256": "48cd7311fba7bbf6d7e8dbb62ad9d7c322242f2603c4b2676c5e7a2a0b515678"
-        },
-        {
-          "item": "DirectoryEvent.agent_ura",
-          "sha256": "09f43e6bad00bfa6bc08a2de950b25eca2e0c89c1a0d5e6ee466cf5290a1d3cc"
-        },
-        {
-          "item": "DirectoryEvent.agents",
-          "sha256": "f7dca3d74819e9be9abe9886d73845ca83344dec6b3f9bc575e27d91d0b150e7"
-        },
-        {
-          "item": "DirectoryEvent.host_device_ura",
-          "sha256": "74f78f6449dd37ddea163662d2636c88984ad08c1335ca726910a61532c78883"
-        },
-        {
-          "item": "DirectoryEvent.lease_expires_unix_ms",
-          "sha256": "d2a99ac0ba411b4ee5024634f795792ff39cc592e7902d4bc16e2e697a1281d2"
-        },
-        {
-          "item": "DirectoryEvent.owner_ura",
-          "sha256": "f2ab6cd14a8ac51fc36e0687dbe87e45c2b6149a187f0e6c4ac77367f20a69f2"
-        },
-        {
-          "item": "DirectoryEvent.projection_digest",
-          "sha256": "e5dc66758b1c86dd605f57aa4358534122ced563a5d6aac97e77952ceadd4762"
-        },
-        {
-          "item": "DirectoryEvent.projection_revision",
-          "sha256": "ebe8a1bc4e441afe7598097d3ffc56ecdc365eafe38274d926c5de58475810b8"
-        },
-        {
-          "item": "DirectoryEvent.reason",
-          "sha256": "0247068841a33b1deb638bb12a340d617ba8f4e868b4036ddd6356fbcd47ebfa"
-        },
-        {
-          "item": "DirectoryEvent.removed_count",
-          "sha256": "e99960ebc2aeee11477db657998ac394bc2d9900afaa22608a3d8a74bf28c3c3"
-        },
-        {
-          "item": "DirectoryEvent.replaced_prior",
-          "sha256": "a9d14a2364b5a7e2d6fb93b4c46b1710cbef23e9461751a6e1e2ec28fc7705f5"
-        },
-        {
-          "item": "DirectoryEvent.signing_authority",
-          "sha256": "52d2860a0c08942365b56ef1903fd29ebf0228dd7cf91cec9c6ad4f5132a4b99"
-        },
-        {
-          "item": "DirectoryEvent.snapshot_unix_ms",
-          "sha256": "125fe371d00a2f8a4be6a15e2489509be47cde0c603970ed57907fb5efa29a55"
-        },
-        {
-          "item": "DirectoryEvent.stale_count",
-          "sha256": "457eff078d0175cc1190ef45952bb6bb2c55c63380605d1c00e6360fa39c7fb5"
+          "item": "DirectoryEvent.raw",
+          "sha256": "b1274a87e018df673f5c16da2f48cdc111d8eb3ab33c99e7fbdd7d007cbf7830"
         },
         {
           "item": "DirectoryEvent.type",
           "sha256": "28d71e7aaa478c796fdd52808e1124b42662c068d33f4ceb98b3d695d41dba8e"
-        },
-        {
-          "item": "DirectoryEvent.unix_ms",
-          "sha256": "b00d4e09dba55c8ce162054332b38914b382621ecd11a450687807e98960194c"
-        },
-        {
-          "item": "DirectoryEvent.validate",
-          "sha256": "7b4668277a635d4265b503bfe6f82b15f3bbdba647f100576b75d40a8eaf5401"
-        },
-        {
-          "item": "DirectoryEvent.was_active",
-          "sha256": "ce651a113c2d55ea852b504c25a3e303b03d834e331c22171b3e6f28cc137889"
         },
         {
           "item": "DirectoryEventEnvelope.cursor",
@@ -124880,18 +123424,6 @@
           "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
         },
         {
-          "item": "DirectorySigningAuthority.host_ura",
-          "sha256": "c2e404f31208705a279f340430064f25be3875779141c98476edb01d2e84547f"
-        },
-        {
-          "item": "DirectorySigningAuthority.kind",
-          "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
-        },
-        {
-          "item": "DirectorySigningAuthority.validate",
-          "sha256": "800dc7d99dfd5b6e299381fe5d37ea76e3295387c001bdc6342a1f4a1062c182"
-        },
-        {
           "item": "DirectorySubscribeRequest.call",
           "sha256": "59fdb6f46ebc6a27fcc21407b38ed16820cdfe06fe94c74dc75357f128ffd767"
         },
@@ -124943,10 +123475,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "be88174d6b2812f14658b3d3fcc596064395bee553dfa148681ce919c76d42fd"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
             },
@@ -124955,12 +123483,8 @@
               "sha256": "af0e9a9e2a4024c77c92234b55f9dd08d1d6fe993dce20f376410e8dc532385b"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "c662adebd202d3db0844f4641a6b56f4ed7b5f55bfc2c89f7e3cc2c4970727e5"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "da6e8b4f6b5c149fe644d3b8375ac884ac9e1a2a11e475b082feb87f03cd78d9"
+              "sha256": "24cdbb74f5426ad5c89565cc6364a21ac669c4ea36a8fe9eba7c394c22e77409"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -124995,10 +123519,6 @@
               "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "63ba9ac538245decdb8da61264016ee3cd43f7e962233e341802c4980119ff6c"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "7105b441f1b5c98c7275fa04d4edd84c0ddeb8cd3bb0ea1c7dfe8a884e091818"
             },
@@ -125013,26 +123533,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "28fb52b4c314b76098f8179d8a085aa9a3b7e8c41f95a8e19b8596c0d1002cbb"
-            },
-            {
-              "item": "DirectoryAgentSummary.ability_count",
-              "sha256": "c892fa226015ad792ee29f65a234b2d51f08a6e7f95dfb2e51a798a2d0f560ca"
-            },
-            {
-              "item": "DirectoryAgentSummary.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryAgentSummary.signing_authority",
-              "sha256": "dd8bf5ef973dead82cdaa94d9e7bf5d93a813f4348eaa2ba97a89fee7d933922"
-            },
-            {
-              "item": "DirectoryAgentSummary.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryAgentSummary.validate",
-              "sha256": "b491d4a1469d577f6c28aaa895d4ad58cddacb8fe26725fb69ec14aab85f6c4c"
             },
             {
               "item": "DirectoryClient.list",
@@ -125059,104 +123559,12 @@
               "sha256": "7e162699f0b80d5640c4ba0c952649199a0eeae4908a6e5c610fe046393319c2"
             },
             {
-              "item": "DirectoryEntry.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryEntry.display_name",
-              "sha256": "ab49a59b075501483262318ca0d52ed26b089ddcc2132256eaf06e5c6a3e2ae2"
-            },
-            {
-              "item": "DirectoryEntry.last_seen_unix_ms",
-              "sha256": "665627a6ebd53959e3233ab22a8ea8b899decce2f0cbcf504fe4660be208216e"
-            },
-            {
-              "item": "DirectoryEntry.node_id",
-              "sha256": "3193dd9afc52bd2b73bc5b63c8f6f735a5f35c03244c710d9e5b4ef9d49310a5"
-            },
-            {
-              "item": "DirectoryEntry.origin_realm",
-              "sha256": "8bd8e65816dfa694d36afdffc1a0986340848e384c152f874b4e47f8fd13d3da"
-            },
-            {
-              "item": "DirectoryEntry.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryEntry.validate",
-              "sha256": "f9481c3b2e3b9d4e26dfab1c8a09d0f0c8ed802df2301dec8bac827193acbc39"
-            },
-            {
-              "item": "DirectoryEvent.ability_count",
-              "sha256": "48cd7311fba7bbf6d7e8dbb62ad9d7c322242f2603c4b2676c5e7a2a0b515678"
-            },
-            {
-              "item": "DirectoryEvent.agent_ura",
-              "sha256": "09f43e6bad00bfa6bc08a2de950b25eca2e0c89c1a0d5e6ee466cf5290a1d3cc"
-            },
-            {
-              "item": "DirectoryEvent.agents",
-              "sha256": "f7dca3d74819e9be9abe9886d73845ca83344dec6b3f9bc575e27d91d0b150e7"
-            },
-            {
-              "item": "DirectoryEvent.host_device_ura",
-              "sha256": "74f78f6449dd37ddea163662d2636c88984ad08c1335ca726910a61532c78883"
-            },
-            {
-              "item": "DirectoryEvent.lease_expires_unix_ms",
-              "sha256": "d2a99ac0ba411b4ee5024634f795792ff39cc592e7902d4bc16e2e697a1281d2"
-            },
-            {
-              "item": "DirectoryEvent.owner_ura",
-              "sha256": "f2ab6cd14a8ac51fc36e0687dbe87e45c2b6149a187f0e6c4ac77367f20a69f2"
-            },
-            {
-              "item": "DirectoryEvent.projection_digest",
-              "sha256": "e5dc66758b1c86dd605f57aa4358534122ced563a5d6aac97e77952ceadd4762"
-            },
-            {
-              "item": "DirectoryEvent.projection_revision",
-              "sha256": "ebe8a1bc4e441afe7598097d3ffc56ecdc365eafe38274d926c5de58475810b8"
-            },
-            {
-              "item": "DirectoryEvent.reason",
-              "sha256": "0247068841a33b1deb638bb12a340d617ba8f4e868b4036ddd6356fbcd47ebfa"
-            },
-            {
-              "item": "DirectoryEvent.removed_count",
-              "sha256": "e99960ebc2aeee11477db657998ac394bc2d9900afaa22608a3d8a74bf28c3c3"
-            },
-            {
-              "item": "DirectoryEvent.replaced_prior",
-              "sha256": "a9d14a2364b5a7e2d6fb93b4c46b1710cbef23e9461751a6e1e2ec28fc7705f5"
-            },
-            {
-              "item": "DirectoryEvent.signing_authority",
-              "sha256": "52d2860a0c08942365b56ef1903fd29ebf0228dd7cf91cec9c6ad4f5132a4b99"
-            },
-            {
-              "item": "DirectoryEvent.snapshot_unix_ms",
-              "sha256": "125fe371d00a2f8a4be6a15e2489509be47cde0c603970ed57907fb5efa29a55"
-            },
-            {
-              "item": "DirectoryEvent.stale_count",
-              "sha256": "457eff078d0175cc1190ef45952bb6bb2c55c63380605d1c00e6360fa39c7fb5"
+              "item": "DirectoryEvent.raw",
+              "sha256": "b1274a87e018df673f5c16da2f48cdc111d8eb3ab33c99e7fbdd7d007cbf7830"
             },
             {
               "item": "DirectoryEvent.type",
               "sha256": "28d71e7aaa478c796fdd52808e1124b42662c068d33f4ceb98b3d695d41dba8e"
-            },
-            {
-              "item": "DirectoryEvent.unix_ms",
-              "sha256": "b00d4e09dba55c8ce162054332b38914b382621ecd11a450687807e98960194c"
-            },
-            {
-              "item": "DirectoryEvent.validate",
-              "sha256": "7b4668277a635d4265b503bfe6f82b15f3bbdba647f100576b75d40a8eaf5401"
-            },
-            {
-              "item": "DirectoryEvent.was_active",
-              "sha256": "ce651a113c2d55ea852b504c25a3e303b03d834e331c22171b3e6f28cc137889"
             },
             {
               "item": "DirectoryEventEnvelope.cursor",
@@ -125333,18 +123741,6 @@
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
-            },
-            {
-              "item": "DirectorySigningAuthority.host_ura",
-              "sha256": "c2e404f31208705a279f340430064f25be3875779141c98476edb01d2e84547f"
-            },
-            {
-              "item": "DirectorySigningAuthority.kind",
-              "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
-            },
-            {
-              "item": "DirectorySigningAuthority.validate",
-              "sha256": "800dc7d99dfd5b6e299381fe5d37ea76e3295387c001bdc6342a1f4a1062c182"
             },
             {
               "item": "DirectorySubscribeRequest.call",
@@ -125398,10 +123794,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "be88174d6b2812f14658b3d3fcc596064395bee553dfa148681ce919c76d42fd"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
             },
@@ -125410,12 +123802,8 @@
               "sha256": "af0e9a9e2a4024c77c92234b55f9dd08d1d6fe993dce20f376410e8dc532385b"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "c662adebd202d3db0844f4641a6b56f4ed7b5f55bfc2c89f7e3cc2c4970727e5"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "da6e8b4f6b5c149fe644d3b8375ac884ac9e1a2a11e475b082feb87f03cd78d9"
+              "sha256": "24cdbb74f5426ad5c89565cc6364a21ac669c4ea36a8fe9eba7c394c22e77409"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -125450,10 +123838,6 @@
               "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "63ba9ac538245decdb8da61264016ee3cd43f7e962233e341802c4980119ff6c"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "7105b441f1b5c98c7275fa04d4edd84c0ddeb8cd3bb0ea1c7dfe8a884e091818"
             },
@@ -125468,26 +123852,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "28fb52b4c314b76098f8179d8a085aa9a3b7e8c41f95a8e19b8596c0d1002cbb"
-            },
-            {
-              "item": "DirectoryAgentSummary.ability_count",
-              "sha256": "c892fa226015ad792ee29f65a234b2d51f08a6e7f95dfb2e51a798a2d0f560ca"
-            },
-            {
-              "item": "DirectoryAgentSummary.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryAgentSummary.signing_authority",
-              "sha256": "dd8bf5ef973dead82cdaa94d9e7bf5d93a813f4348eaa2ba97a89fee7d933922"
-            },
-            {
-              "item": "DirectoryAgentSummary.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryAgentSummary.validate",
-              "sha256": "b491d4a1469d577f6c28aaa895d4ad58cddacb8fe26725fb69ec14aab85f6c4c"
             },
             {
               "item": "DirectoryClient.list",
@@ -125514,104 +123878,12 @@
               "sha256": "7e162699f0b80d5640c4ba0c952649199a0eeae4908a6e5c610fe046393319c2"
             },
             {
-              "item": "DirectoryEntry.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryEntry.display_name",
-              "sha256": "ab49a59b075501483262318ca0d52ed26b089ddcc2132256eaf06e5c6a3e2ae2"
-            },
-            {
-              "item": "DirectoryEntry.last_seen_unix_ms",
-              "sha256": "665627a6ebd53959e3233ab22a8ea8b899decce2f0cbcf504fe4660be208216e"
-            },
-            {
-              "item": "DirectoryEntry.node_id",
-              "sha256": "3193dd9afc52bd2b73bc5b63c8f6f735a5f35c03244c710d9e5b4ef9d49310a5"
-            },
-            {
-              "item": "DirectoryEntry.origin_realm",
-              "sha256": "8bd8e65816dfa694d36afdffc1a0986340848e384c152f874b4e47f8fd13d3da"
-            },
-            {
-              "item": "DirectoryEntry.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryEntry.validate",
-              "sha256": "f9481c3b2e3b9d4e26dfab1c8a09d0f0c8ed802df2301dec8bac827193acbc39"
-            },
-            {
-              "item": "DirectoryEvent.ability_count",
-              "sha256": "48cd7311fba7bbf6d7e8dbb62ad9d7c322242f2603c4b2676c5e7a2a0b515678"
-            },
-            {
-              "item": "DirectoryEvent.agent_ura",
-              "sha256": "09f43e6bad00bfa6bc08a2de950b25eca2e0c89c1a0d5e6ee466cf5290a1d3cc"
-            },
-            {
-              "item": "DirectoryEvent.agents",
-              "sha256": "f7dca3d74819e9be9abe9886d73845ca83344dec6b3f9bc575e27d91d0b150e7"
-            },
-            {
-              "item": "DirectoryEvent.host_device_ura",
-              "sha256": "74f78f6449dd37ddea163662d2636c88984ad08c1335ca726910a61532c78883"
-            },
-            {
-              "item": "DirectoryEvent.lease_expires_unix_ms",
-              "sha256": "d2a99ac0ba411b4ee5024634f795792ff39cc592e7902d4bc16e2e697a1281d2"
-            },
-            {
-              "item": "DirectoryEvent.owner_ura",
-              "sha256": "f2ab6cd14a8ac51fc36e0687dbe87e45c2b6149a187f0e6c4ac77367f20a69f2"
-            },
-            {
-              "item": "DirectoryEvent.projection_digest",
-              "sha256": "e5dc66758b1c86dd605f57aa4358534122ced563a5d6aac97e77952ceadd4762"
-            },
-            {
-              "item": "DirectoryEvent.projection_revision",
-              "sha256": "ebe8a1bc4e441afe7598097d3ffc56ecdc365eafe38274d926c5de58475810b8"
-            },
-            {
-              "item": "DirectoryEvent.reason",
-              "sha256": "0247068841a33b1deb638bb12a340d617ba8f4e868b4036ddd6356fbcd47ebfa"
-            },
-            {
-              "item": "DirectoryEvent.removed_count",
-              "sha256": "e99960ebc2aeee11477db657998ac394bc2d9900afaa22608a3d8a74bf28c3c3"
-            },
-            {
-              "item": "DirectoryEvent.replaced_prior",
-              "sha256": "a9d14a2364b5a7e2d6fb93b4c46b1710cbef23e9461751a6e1e2ec28fc7705f5"
-            },
-            {
-              "item": "DirectoryEvent.signing_authority",
-              "sha256": "52d2860a0c08942365b56ef1903fd29ebf0228dd7cf91cec9c6ad4f5132a4b99"
-            },
-            {
-              "item": "DirectoryEvent.snapshot_unix_ms",
-              "sha256": "125fe371d00a2f8a4be6a15e2489509be47cde0c603970ed57907fb5efa29a55"
-            },
-            {
-              "item": "DirectoryEvent.stale_count",
-              "sha256": "457eff078d0175cc1190ef45952bb6bb2c55c63380605d1c00e6360fa39c7fb5"
+              "item": "DirectoryEvent.raw",
+              "sha256": "b1274a87e018df673f5c16da2f48cdc111d8eb3ab33c99e7fbdd7d007cbf7830"
             },
             {
               "item": "DirectoryEvent.type",
               "sha256": "28d71e7aaa478c796fdd52808e1124b42662c068d33f4ceb98b3d695d41dba8e"
-            },
-            {
-              "item": "DirectoryEvent.unix_ms",
-              "sha256": "b00d4e09dba55c8ce162054332b38914b382621ecd11a450687807e98960194c"
-            },
-            {
-              "item": "DirectoryEvent.validate",
-              "sha256": "7b4668277a635d4265b503bfe6f82b15f3bbdba647f100576b75d40a8eaf5401"
-            },
-            {
-              "item": "DirectoryEvent.was_active",
-              "sha256": "ce651a113c2d55ea852b504c25a3e303b03d834e331c22171b3e6f28cc137889"
             },
             {
               "item": "DirectoryEventEnvelope.cursor",
@@ -125788,18 +124060,6 @@
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
-            },
-            {
-              "item": "DirectorySigningAuthority.host_ura",
-              "sha256": "c2e404f31208705a279f340430064f25be3875779141c98476edb01d2e84547f"
-            },
-            {
-              "item": "DirectorySigningAuthority.kind",
-              "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
-            },
-            {
-              "item": "DirectorySigningAuthority.validate",
-              "sha256": "800dc7d99dfd5b6e299381fe5d37ea76e3295387c001bdc6342a1f4a1062c182"
             },
             {
               "item": "DirectorySubscribeRequest.call",
@@ -125853,10 +124113,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "be88174d6b2812f14658b3d3fcc596064395bee553dfa148681ce919c76d42fd"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
             },
@@ -125865,12 +124121,8 @@
               "sha256": "af0e9a9e2a4024c77c92234b55f9dd08d1d6fe993dce20f376410e8dc532385b"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "c662adebd202d3db0844f4641a6b56f4ed7b5f55bfc2c89f7e3cc2c4970727e5"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "da6e8b4f6b5c149fe644d3b8375ac884ac9e1a2a11e475b082feb87f03cd78d9"
+              "sha256": "24cdbb74f5426ad5c89565cc6364a21ac669c4ea36a8fe9eba7c394c22e77409"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -125905,10 +124157,6 @@
               "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "63ba9ac538245decdb8da61264016ee3cd43f7e962233e341802c4980119ff6c"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "7105b441f1b5c98c7275fa04d4edd84c0ddeb8cd3bb0ea1c7dfe8a884e091818"
             },
@@ -125923,26 +124171,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "28fb52b4c314b76098f8179d8a085aa9a3b7e8c41f95a8e19b8596c0d1002cbb"
-            },
-            {
-              "item": "DirectoryAgentSummary.ability_count",
-              "sha256": "c892fa226015ad792ee29f65a234b2d51f08a6e7f95dfb2e51a798a2d0f560ca"
-            },
-            {
-              "item": "DirectoryAgentSummary.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryAgentSummary.signing_authority",
-              "sha256": "dd8bf5ef973dead82cdaa94d9e7bf5d93a813f4348eaa2ba97a89fee7d933922"
-            },
-            {
-              "item": "DirectoryAgentSummary.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryAgentSummary.validate",
-              "sha256": "b491d4a1469d577f6c28aaa895d4ad58cddacb8fe26725fb69ec14aab85f6c4c"
             },
             {
               "item": "DirectoryClient.list",
@@ -125969,104 +124197,12 @@
               "sha256": "7e162699f0b80d5640c4ba0c952649199a0eeae4908a6e5c610fe046393319c2"
             },
             {
-              "item": "DirectoryEntry.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryEntry.display_name",
-              "sha256": "ab49a59b075501483262318ca0d52ed26b089ddcc2132256eaf06e5c6a3e2ae2"
-            },
-            {
-              "item": "DirectoryEntry.last_seen_unix_ms",
-              "sha256": "665627a6ebd53959e3233ab22a8ea8b899decce2f0cbcf504fe4660be208216e"
-            },
-            {
-              "item": "DirectoryEntry.node_id",
-              "sha256": "3193dd9afc52bd2b73bc5b63c8f6f735a5f35c03244c710d9e5b4ef9d49310a5"
-            },
-            {
-              "item": "DirectoryEntry.origin_realm",
-              "sha256": "8bd8e65816dfa694d36afdffc1a0986340848e384c152f874b4e47f8fd13d3da"
-            },
-            {
-              "item": "DirectoryEntry.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryEntry.validate",
-              "sha256": "f9481c3b2e3b9d4e26dfab1c8a09d0f0c8ed802df2301dec8bac827193acbc39"
-            },
-            {
-              "item": "DirectoryEvent.ability_count",
-              "sha256": "48cd7311fba7bbf6d7e8dbb62ad9d7c322242f2603c4b2676c5e7a2a0b515678"
-            },
-            {
-              "item": "DirectoryEvent.agent_ura",
-              "sha256": "09f43e6bad00bfa6bc08a2de950b25eca2e0c89c1a0d5e6ee466cf5290a1d3cc"
-            },
-            {
-              "item": "DirectoryEvent.agents",
-              "sha256": "f7dca3d74819e9be9abe9886d73845ca83344dec6b3f9bc575e27d91d0b150e7"
-            },
-            {
-              "item": "DirectoryEvent.host_device_ura",
-              "sha256": "74f78f6449dd37ddea163662d2636c88984ad08c1335ca726910a61532c78883"
-            },
-            {
-              "item": "DirectoryEvent.lease_expires_unix_ms",
-              "sha256": "d2a99ac0ba411b4ee5024634f795792ff39cc592e7902d4bc16e2e697a1281d2"
-            },
-            {
-              "item": "DirectoryEvent.owner_ura",
-              "sha256": "f2ab6cd14a8ac51fc36e0687dbe87e45c2b6149a187f0e6c4ac77367f20a69f2"
-            },
-            {
-              "item": "DirectoryEvent.projection_digest",
-              "sha256": "e5dc66758b1c86dd605f57aa4358534122ced563a5d6aac97e77952ceadd4762"
-            },
-            {
-              "item": "DirectoryEvent.projection_revision",
-              "sha256": "ebe8a1bc4e441afe7598097d3ffc56ecdc365eafe38274d926c5de58475810b8"
-            },
-            {
-              "item": "DirectoryEvent.reason",
-              "sha256": "0247068841a33b1deb638bb12a340d617ba8f4e868b4036ddd6356fbcd47ebfa"
-            },
-            {
-              "item": "DirectoryEvent.removed_count",
-              "sha256": "e99960ebc2aeee11477db657998ac394bc2d9900afaa22608a3d8a74bf28c3c3"
-            },
-            {
-              "item": "DirectoryEvent.replaced_prior",
-              "sha256": "a9d14a2364b5a7e2d6fb93b4c46b1710cbef23e9461751a6e1e2ec28fc7705f5"
-            },
-            {
-              "item": "DirectoryEvent.signing_authority",
-              "sha256": "52d2860a0c08942365b56ef1903fd29ebf0228dd7cf91cec9c6ad4f5132a4b99"
-            },
-            {
-              "item": "DirectoryEvent.snapshot_unix_ms",
-              "sha256": "125fe371d00a2f8a4be6a15e2489509be47cde0c603970ed57907fb5efa29a55"
-            },
-            {
-              "item": "DirectoryEvent.stale_count",
-              "sha256": "457eff078d0175cc1190ef45952bb6bb2c55c63380605d1c00e6360fa39c7fb5"
+              "item": "DirectoryEvent.raw",
+              "sha256": "b1274a87e018df673f5c16da2f48cdc111d8eb3ab33c99e7fbdd7d007cbf7830"
             },
             {
               "item": "DirectoryEvent.type",
               "sha256": "28d71e7aaa478c796fdd52808e1124b42662c068d33f4ceb98b3d695d41dba8e"
-            },
-            {
-              "item": "DirectoryEvent.unix_ms",
-              "sha256": "b00d4e09dba55c8ce162054332b38914b382621ecd11a450687807e98960194c"
-            },
-            {
-              "item": "DirectoryEvent.validate",
-              "sha256": "7b4668277a635d4265b503bfe6f82b15f3bbdba647f100576b75d40a8eaf5401"
-            },
-            {
-              "item": "DirectoryEvent.was_active",
-              "sha256": "ce651a113c2d55ea852b504c25a3e303b03d834e331c22171b3e6f28cc137889"
             },
             {
               "item": "DirectoryEventEnvelope.cursor",
@@ -126243,18 +124379,6 @@
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
-            },
-            {
-              "item": "DirectorySigningAuthority.host_ura",
-              "sha256": "c2e404f31208705a279f340430064f25be3875779141c98476edb01d2e84547f"
-            },
-            {
-              "item": "DirectorySigningAuthority.kind",
-              "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
-            },
-            {
-              "item": "DirectorySigningAuthority.validate",
-              "sha256": "800dc7d99dfd5b6e299381fe5d37ea76e3295387c001bdc6342a1f4a1062c182"
             },
             {
               "item": "DirectorySubscribeRequest.call",
@@ -126308,10 +124432,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "be88174d6b2812f14658b3d3fcc596064395bee553dfa148681ce919c76d42fd"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
             },
@@ -126320,12 +124440,8 @@
               "sha256": "af0e9a9e2a4024c77c92234b55f9dd08d1d6fe993dce20f376410e8dc532385b"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "c662adebd202d3db0844f4641a6b56f4ed7b5f55bfc2c89f7e3cc2c4970727e5"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "da6e8b4f6b5c149fe644d3b8375ac884ac9e1a2a11e475b082feb87f03cd78d9"
+              "sha256": "24cdbb74f5426ad5c89565cc6364a21ac669c4ea36a8fe9eba7c394c22e77409"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -126360,10 +124476,6 @@
               "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "63ba9ac538245decdb8da61264016ee3cd43f7e962233e341802c4980119ff6c"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "7105b441f1b5c98c7275fa04d4edd84c0ddeb8cd3bb0ea1c7dfe8a884e091818"
             },
@@ -126378,26 +124490,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "28fb52b4c314b76098f8179d8a085aa9a3b7e8c41f95a8e19b8596c0d1002cbb"
-            },
-            {
-              "item": "DirectoryAgentSummary.ability_count",
-              "sha256": "c892fa226015ad792ee29f65a234b2d51f08a6e7f95dfb2e51a798a2d0f560ca"
-            },
-            {
-              "item": "DirectoryAgentSummary.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryAgentSummary.signing_authority",
-              "sha256": "dd8bf5ef973dead82cdaa94d9e7bf5d93a813f4348eaa2ba97a89fee7d933922"
-            },
-            {
-              "item": "DirectoryAgentSummary.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryAgentSummary.validate",
-              "sha256": "b491d4a1469d577f6c28aaa895d4ad58cddacb8fe26725fb69ec14aab85f6c4c"
             },
             {
               "item": "DirectoryClient.list",
@@ -126424,104 +124516,12 @@
               "sha256": "7e162699f0b80d5640c4ba0c952649199a0eeae4908a6e5c610fe046393319c2"
             },
             {
-              "item": "DirectoryEntry.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryEntry.display_name",
-              "sha256": "ab49a59b075501483262318ca0d52ed26b089ddcc2132256eaf06e5c6a3e2ae2"
-            },
-            {
-              "item": "DirectoryEntry.last_seen_unix_ms",
-              "sha256": "665627a6ebd53959e3233ab22a8ea8b899decce2f0cbcf504fe4660be208216e"
-            },
-            {
-              "item": "DirectoryEntry.node_id",
-              "sha256": "3193dd9afc52bd2b73bc5b63c8f6f735a5f35c03244c710d9e5b4ef9d49310a5"
-            },
-            {
-              "item": "DirectoryEntry.origin_realm",
-              "sha256": "8bd8e65816dfa694d36afdffc1a0986340848e384c152f874b4e47f8fd13d3da"
-            },
-            {
-              "item": "DirectoryEntry.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryEntry.validate",
-              "sha256": "f9481c3b2e3b9d4e26dfab1c8a09d0f0c8ed802df2301dec8bac827193acbc39"
-            },
-            {
-              "item": "DirectoryEvent.ability_count",
-              "sha256": "48cd7311fba7bbf6d7e8dbb62ad9d7c322242f2603c4b2676c5e7a2a0b515678"
-            },
-            {
-              "item": "DirectoryEvent.agent_ura",
-              "sha256": "09f43e6bad00bfa6bc08a2de950b25eca2e0c89c1a0d5e6ee466cf5290a1d3cc"
-            },
-            {
-              "item": "DirectoryEvent.agents",
-              "sha256": "f7dca3d74819e9be9abe9886d73845ca83344dec6b3f9bc575e27d91d0b150e7"
-            },
-            {
-              "item": "DirectoryEvent.host_device_ura",
-              "sha256": "74f78f6449dd37ddea163662d2636c88984ad08c1335ca726910a61532c78883"
-            },
-            {
-              "item": "DirectoryEvent.lease_expires_unix_ms",
-              "sha256": "d2a99ac0ba411b4ee5024634f795792ff39cc592e7902d4bc16e2e697a1281d2"
-            },
-            {
-              "item": "DirectoryEvent.owner_ura",
-              "sha256": "f2ab6cd14a8ac51fc36e0687dbe87e45c2b6149a187f0e6c4ac77367f20a69f2"
-            },
-            {
-              "item": "DirectoryEvent.projection_digest",
-              "sha256": "e5dc66758b1c86dd605f57aa4358534122ced563a5d6aac97e77952ceadd4762"
-            },
-            {
-              "item": "DirectoryEvent.projection_revision",
-              "sha256": "ebe8a1bc4e441afe7598097d3ffc56ecdc365eafe38274d926c5de58475810b8"
-            },
-            {
-              "item": "DirectoryEvent.reason",
-              "sha256": "0247068841a33b1deb638bb12a340d617ba8f4e868b4036ddd6356fbcd47ebfa"
-            },
-            {
-              "item": "DirectoryEvent.removed_count",
-              "sha256": "e99960ebc2aeee11477db657998ac394bc2d9900afaa22608a3d8a74bf28c3c3"
-            },
-            {
-              "item": "DirectoryEvent.replaced_prior",
-              "sha256": "a9d14a2364b5a7e2d6fb93b4c46b1710cbef23e9461751a6e1e2ec28fc7705f5"
-            },
-            {
-              "item": "DirectoryEvent.signing_authority",
-              "sha256": "52d2860a0c08942365b56ef1903fd29ebf0228dd7cf91cec9c6ad4f5132a4b99"
-            },
-            {
-              "item": "DirectoryEvent.snapshot_unix_ms",
-              "sha256": "125fe371d00a2f8a4be6a15e2489509be47cde0c603970ed57907fb5efa29a55"
-            },
-            {
-              "item": "DirectoryEvent.stale_count",
-              "sha256": "457eff078d0175cc1190ef45952bb6bb2c55c63380605d1c00e6360fa39c7fb5"
+              "item": "DirectoryEvent.raw",
+              "sha256": "b1274a87e018df673f5c16da2f48cdc111d8eb3ab33c99e7fbdd7d007cbf7830"
             },
             {
               "item": "DirectoryEvent.type",
               "sha256": "28d71e7aaa478c796fdd52808e1124b42662c068d33f4ceb98b3d695d41dba8e"
-            },
-            {
-              "item": "DirectoryEvent.unix_ms",
-              "sha256": "b00d4e09dba55c8ce162054332b38914b382621ecd11a450687807e98960194c"
-            },
-            {
-              "item": "DirectoryEvent.validate",
-              "sha256": "7b4668277a635d4265b503bfe6f82b15f3bbdba647f100576b75d40a8eaf5401"
-            },
-            {
-              "item": "DirectoryEvent.was_active",
-              "sha256": "ce651a113c2d55ea852b504c25a3e303b03d834e331c22171b3e6f28cc137889"
             },
             {
               "item": "DirectoryEventEnvelope.cursor",
@@ -126698,18 +124698,6 @@
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
-            },
-            {
-              "item": "DirectorySigningAuthority.host_ura",
-              "sha256": "c2e404f31208705a279f340430064f25be3875779141c98476edb01d2e84547f"
-            },
-            {
-              "item": "DirectorySigningAuthority.kind",
-              "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
-            },
-            {
-              "item": "DirectorySigningAuthority.validate",
-              "sha256": "800dc7d99dfd5b6e299381fe5d37ea76e3295387c001bdc6342a1f4a1062c182"
             },
             {
               "item": "DirectorySubscribeRequest.call",
@@ -126763,10 +124751,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "be88174d6b2812f14658b3d3fcc596064395bee553dfa148681ce919c76d42fd"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
             },
@@ -126775,12 +124759,8 @@
               "sha256": "af0e9a9e2a4024c77c92234b55f9dd08d1d6fe993dce20f376410e8dc532385b"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "c662adebd202d3db0844f4641a6b56f4ed7b5f55bfc2c89f7e3cc2c4970727e5"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "da6e8b4f6b5c149fe644d3b8375ac884ac9e1a2a11e475b082feb87f03cd78d9"
+              "sha256": "24cdbb74f5426ad5c89565cc6364a21ac669c4ea36a8fe9eba7c394c22e77409"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -126815,10 +124795,6 @@
               "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "63ba9ac538245decdb8da61264016ee3cd43f7e962233e341802c4980119ff6c"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "7105b441f1b5c98c7275fa04d4edd84c0ddeb8cd3bb0ea1c7dfe8a884e091818"
             },
@@ -126833,26 +124809,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "28fb52b4c314b76098f8179d8a085aa9a3b7e8c41f95a8e19b8596c0d1002cbb"
-            },
-            {
-              "item": "DirectoryAgentSummary.ability_count",
-              "sha256": "c892fa226015ad792ee29f65a234b2d51f08a6e7f95dfb2e51a798a2d0f560ca"
-            },
-            {
-              "item": "DirectoryAgentSummary.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryAgentSummary.signing_authority",
-              "sha256": "dd8bf5ef973dead82cdaa94d9e7bf5d93a813f4348eaa2ba97a89fee7d933922"
-            },
-            {
-              "item": "DirectoryAgentSummary.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryAgentSummary.validate",
-              "sha256": "b491d4a1469d577f6c28aaa895d4ad58cddacb8fe26725fb69ec14aab85f6c4c"
             },
             {
               "item": "DirectoryClient.list",
@@ -126879,104 +124835,12 @@
               "sha256": "7e162699f0b80d5640c4ba0c952649199a0eeae4908a6e5c610fe046393319c2"
             },
             {
-              "item": "DirectoryEntry.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryEntry.display_name",
-              "sha256": "ab49a59b075501483262318ca0d52ed26b089ddcc2132256eaf06e5c6a3e2ae2"
-            },
-            {
-              "item": "DirectoryEntry.last_seen_unix_ms",
-              "sha256": "665627a6ebd53959e3233ab22a8ea8b899decce2f0cbcf504fe4660be208216e"
-            },
-            {
-              "item": "DirectoryEntry.node_id",
-              "sha256": "3193dd9afc52bd2b73bc5b63c8f6f735a5f35c03244c710d9e5b4ef9d49310a5"
-            },
-            {
-              "item": "DirectoryEntry.origin_realm",
-              "sha256": "8bd8e65816dfa694d36afdffc1a0986340848e384c152f874b4e47f8fd13d3da"
-            },
-            {
-              "item": "DirectoryEntry.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryEntry.validate",
-              "sha256": "f9481c3b2e3b9d4e26dfab1c8a09d0f0c8ed802df2301dec8bac827193acbc39"
-            },
-            {
-              "item": "DirectoryEvent.ability_count",
-              "sha256": "48cd7311fba7bbf6d7e8dbb62ad9d7c322242f2603c4b2676c5e7a2a0b515678"
-            },
-            {
-              "item": "DirectoryEvent.agent_ura",
-              "sha256": "09f43e6bad00bfa6bc08a2de950b25eca2e0c89c1a0d5e6ee466cf5290a1d3cc"
-            },
-            {
-              "item": "DirectoryEvent.agents",
-              "sha256": "f7dca3d74819e9be9abe9886d73845ca83344dec6b3f9bc575e27d91d0b150e7"
-            },
-            {
-              "item": "DirectoryEvent.host_device_ura",
-              "sha256": "74f78f6449dd37ddea163662d2636c88984ad08c1335ca726910a61532c78883"
-            },
-            {
-              "item": "DirectoryEvent.lease_expires_unix_ms",
-              "sha256": "d2a99ac0ba411b4ee5024634f795792ff39cc592e7902d4bc16e2e697a1281d2"
-            },
-            {
-              "item": "DirectoryEvent.owner_ura",
-              "sha256": "f2ab6cd14a8ac51fc36e0687dbe87e45c2b6149a187f0e6c4ac77367f20a69f2"
-            },
-            {
-              "item": "DirectoryEvent.projection_digest",
-              "sha256": "e5dc66758b1c86dd605f57aa4358534122ced563a5d6aac97e77952ceadd4762"
-            },
-            {
-              "item": "DirectoryEvent.projection_revision",
-              "sha256": "ebe8a1bc4e441afe7598097d3ffc56ecdc365eafe38274d926c5de58475810b8"
-            },
-            {
-              "item": "DirectoryEvent.reason",
-              "sha256": "0247068841a33b1deb638bb12a340d617ba8f4e868b4036ddd6356fbcd47ebfa"
-            },
-            {
-              "item": "DirectoryEvent.removed_count",
-              "sha256": "e99960ebc2aeee11477db657998ac394bc2d9900afaa22608a3d8a74bf28c3c3"
-            },
-            {
-              "item": "DirectoryEvent.replaced_prior",
-              "sha256": "a9d14a2364b5a7e2d6fb93b4c46b1710cbef23e9461751a6e1e2ec28fc7705f5"
-            },
-            {
-              "item": "DirectoryEvent.signing_authority",
-              "sha256": "52d2860a0c08942365b56ef1903fd29ebf0228dd7cf91cec9c6ad4f5132a4b99"
-            },
-            {
-              "item": "DirectoryEvent.snapshot_unix_ms",
-              "sha256": "125fe371d00a2f8a4be6a15e2489509be47cde0c603970ed57907fb5efa29a55"
-            },
-            {
-              "item": "DirectoryEvent.stale_count",
-              "sha256": "457eff078d0175cc1190ef45952bb6bb2c55c63380605d1c00e6360fa39c7fb5"
+              "item": "DirectoryEvent.raw",
+              "sha256": "b1274a87e018df673f5c16da2f48cdc111d8eb3ab33c99e7fbdd7d007cbf7830"
             },
             {
               "item": "DirectoryEvent.type",
               "sha256": "28d71e7aaa478c796fdd52808e1124b42662c068d33f4ceb98b3d695d41dba8e"
-            },
-            {
-              "item": "DirectoryEvent.unix_ms",
-              "sha256": "b00d4e09dba55c8ce162054332b38914b382621ecd11a450687807e98960194c"
-            },
-            {
-              "item": "DirectoryEvent.validate",
-              "sha256": "7b4668277a635d4265b503bfe6f82b15f3bbdba647f100576b75d40a8eaf5401"
-            },
-            {
-              "item": "DirectoryEvent.was_active",
-              "sha256": "ce651a113c2d55ea852b504c25a3e303b03d834e331c22171b3e6f28cc137889"
             },
             {
               "item": "DirectoryEventEnvelope.cursor",
@@ -127153,18 +125017,6 @@
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
-            },
-            {
-              "item": "DirectorySigningAuthority.host_ura",
-              "sha256": "c2e404f31208705a279f340430064f25be3875779141c98476edb01d2e84547f"
-            },
-            {
-              "item": "DirectorySigningAuthority.kind",
-              "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
-            },
-            {
-              "item": "DirectorySigningAuthority.validate",
-              "sha256": "800dc7d99dfd5b6e299381fe5d37ea76e3295387c001bdc6342a1f4a1062c182"
             },
             {
               "item": "DirectorySubscribeRequest.call",
@@ -127218,10 +125070,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "be88174d6b2812f14658b3d3fcc596064395bee553dfa148681ce919c76d42fd"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
             },
@@ -127230,12 +125078,8 @@
               "sha256": "af0e9a9e2a4024c77c92234b55f9dd08d1d6fe993dce20f376410e8dc532385b"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "c662adebd202d3db0844f4641a6b56f4ed7b5f55bfc2c89f7e3cc2c4970727e5"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "da6e8b4f6b5c149fe644d3b8375ac884ac9e1a2a11e475b082feb87f03cd78d9"
+              "sha256": "24cdbb74f5426ad5c89565cc6364a21ac669c4ea36a8fe9eba7c394c22e77409"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -127270,10 +125114,6 @@
               "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "63ba9ac538245decdb8da61264016ee3cd43f7e962233e341802c4980119ff6c"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "7105b441f1b5c98c7275fa04d4edd84c0ddeb8cd3bb0ea1c7dfe8a884e091818"
             },
@@ -127288,26 +125128,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "28fb52b4c314b76098f8179d8a085aa9a3b7e8c41f95a8e19b8596c0d1002cbb"
-            },
-            {
-              "item": "DirectoryAgentSummary.ability_count",
-              "sha256": "c892fa226015ad792ee29f65a234b2d51f08a6e7f95dfb2e51a798a2d0f560ca"
-            },
-            {
-              "item": "DirectoryAgentSummary.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryAgentSummary.signing_authority",
-              "sha256": "dd8bf5ef973dead82cdaa94d9e7bf5d93a813f4348eaa2ba97a89fee7d933922"
-            },
-            {
-              "item": "DirectoryAgentSummary.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryAgentSummary.validate",
-              "sha256": "b491d4a1469d577f6c28aaa895d4ad58cddacb8fe26725fb69ec14aab85f6c4c"
             },
             {
               "item": "DirectoryClient.list",
@@ -127334,104 +125154,12 @@
               "sha256": "7e162699f0b80d5640c4ba0c952649199a0eeae4908a6e5c610fe046393319c2"
             },
             {
-              "item": "DirectoryEntry.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryEntry.display_name",
-              "sha256": "ab49a59b075501483262318ca0d52ed26b089ddcc2132256eaf06e5c6a3e2ae2"
-            },
-            {
-              "item": "DirectoryEntry.last_seen_unix_ms",
-              "sha256": "665627a6ebd53959e3233ab22a8ea8b899decce2f0cbcf504fe4660be208216e"
-            },
-            {
-              "item": "DirectoryEntry.node_id",
-              "sha256": "3193dd9afc52bd2b73bc5b63c8f6f735a5f35c03244c710d9e5b4ef9d49310a5"
-            },
-            {
-              "item": "DirectoryEntry.origin_realm",
-              "sha256": "8bd8e65816dfa694d36afdffc1a0986340848e384c152f874b4e47f8fd13d3da"
-            },
-            {
-              "item": "DirectoryEntry.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryEntry.validate",
-              "sha256": "f9481c3b2e3b9d4e26dfab1c8a09d0f0c8ed802df2301dec8bac827193acbc39"
-            },
-            {
-              "item": "DirectoryEvent.ability_count",
-              "sha256": "48cd7311fba7bbf6d7e8dbb62ad9d7c322242f2603c4b2676c5e7a2a0b515678"
-            },
-            {
-              "item": "DirectoryEvent.agent_ura",
-              "sha256": "09f43e6bad00bfa6bc08a2de950b25eca2e0c89c1a0d5e6ee466cf5290a1d3cc"
-            },
-            {
-              "item": "DirectoryEvent.agents",
-              "sha256": "f7dca3d74819e9be9abe9886d73845ca83344dec6b3f9bc575e27d91d0b150e7"
-            },
-            {
-              "item": "DirectoryEvent.host_device_ura",
-              "sha256": "74f78f6449dd37ddea163662d2636c88984ad08c1335ca726910a61532c78883"
-            },
-            {
-              "item": "DirectoryEvent.lease_expires_unix_ms",
-              "sha256": "d2a99ac0ba411b4ee5024634f795792ff39cc592e7902d4bc16e2e697a1281d2"
-            },
-            {
-              "item": "DirectoryEvent.owner_ura",
-              "sha256": "f2ab6cd14a8ac51fc36e0687dbe87e45c2b6149a187f0e6c4ac77367f20a69f2"
-            },
-            {
-              "item": "DirectoryEvent.projection_digest",
-              "sha256": "e5dc66758b1c86dd605f57aa4358534122ced563a5d6aac97e77952ceadd4762"
-            },
-            {
-              "item": "DirectoryEvent.projection_revision",
-              "sha256": "ebe8a1bc4e441afe7598097d3ffc56ecdc365eafe38274d926c5de58475810b8"
-            },
-            {
-              "item": "DirectoryEvent.reason",
-              "sha256": "0247068841a33b1deb638bb12a340d617ba8f4e868b4036ddd6356fbcd47ebfa"
-            },
-            {
-              "item": "DirectoryEvent.removed_count",
-              "sha256": "e99960ebc2aeee11477db657998ac394bc2d9900afaa22608a3d8a74bf28c3c3"
-            },
-            {
-              "item": "DirectoryEvent.replaced_prior",
-              "sha256": "a9d14a2364b5a7e2d6fb93b4c46b1710cbef23e9461751a6e1e2ec28fc7705f5"
-            },
-            {
-              "item": "DirectoryEvent.signing_authority",
-              "sha256": "52d2860a0c08942365b56ef1903fd29ebf0228dd7cf91cec9c6ad4f5132a4b99"
-            },
-            {
-              "item": "DirectoryEvent.snapshot_unix_ms",
-              "sha256": "125fe371d00a2f8a4be6a15e2489509be47cde0c603970ed57907fb5efa29a55"
-            },
-            {
-              "item": "DirectoryEvent.stale_count",
-              "sha256": "457eff078d0175cc1190ef45952bb6bb2c55c63380605d1c00e6360fa39c7fb5"
+              "item": "DirectoryEvent.raw",
+              "sha256": "b1274a87e018df673f5c16da2f48cdc111d8eb3ab33c99e7fbdd7d007cbf7830"
             },
             {
               "item": "DirectoryEvent.type",
               "sha256": "28d71e7aaa478c796fdd52808e1124b42662c068d33f4ceb98b3d695d41dba8e"
-            },
-            {
-              "item": "DirectoryEvent.unix_ms",
-              "sha256": "b00d4e09dba55c8ce162054332b38914b382621ecd11a450687807e98960194c"
-            },
-            {
-              "item": "DirectoryEvent.validate",
-              "sha256": "7b4668277a635d4265b503bfe6f82b15f3bbdba647f100576b75d40a8eaf5401"
-            },
-            {
-              "item": "DirectoryEvent.was_active",
-              "sha256": "ce651a113c2d55ea852b504c25a3e303b03d834e331c22171b3e6f28cc137889"
             },
             {
               "item": "DirectoryEventEnvelope.cursor",
@@ -127608,18 +125336,6 @@
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
-            },
-            {
-              "item": "DirectorySigningAuthority.host_ura",
-              "sha256": "c2e404f31208705a279f340430064f25be3875779141c98476edb01d2e84547f"
-            },
-            {
-              "item": "DirectorySigningAuthority.kind",
-              "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
-            },
-            {
-              "item": "DirectorySigningAuthority.validate",
-              "sha256": "800dc7d99dfd5b6e299381fe5d37ea76e3295387c001bdc6342a1f4a1062c182"
             },
             {
               "item": "DirectorySubscribeRequest.call",
@@ -127673,10 +125389,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "be88174d6b2812f14658b3d3fcc596064395bee553dfa148681ce919c76d42fd"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
             },
@@ -127685,12 +125397,8 @@
               "sha256": "af0e9a9e2a4024c77c92234b55f9dd08d1d6fe993dce20f376410e8dc532385b"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "c662adebd202d3db0844f4641a6b56f4ed7b5f55bfc2c89f7e3cc2c4970727e5"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "da6e8b4f6b5c149fe644d3b8375ac884ac9e1a2a11e475b082feb87f03cd78d9"
+              "sha256": "24cdbb74f5426ad5c89565cc6364a21ac669c4ea36a8fe9eba7c394c22e77409"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -127725,10 +125433,6 @@
               "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "63ba9ac538245decdb8da61264016ee3cd43f7e962233e341802c4980119ff6c"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "7105b441f1b5c98c7275fa04d4edd84c0ddeb8cd3bb0ea1c7dfe8a884e091818"
             },
@@ -127743,26 +125447,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "28fb52b4c314b76098f8179d8a085aa9a3b7e8c41f95a8e19b8596c0d1002cbb"
-            },
-            {
-              "item": "DirectoryAgentSummary.ability_count",
-              "sha256": "c892fa226015ad792ee29f65a234b2d51f08a6e7f95dfb2e51a798a2d0f560ca"
-            },
-            {
-              "item": "DirectoryAgentSummary.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryAgentSummary.signing_authority",
-              "sha256": "dd8bf5ef973dead82cdaa94d9e7bf5d93a813f4348eaa2ba97a89fee7d933922"
-            },
-            {
-              "item": "DirectoryAgentSummary.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryAgentSummary.validate",
-              "sha256": "b491d4a1469d577f6c28aaa895d4ad58cddacb8fe26725fb69ec14aab85f6c4c"
             },
             {
               "item": "DirectoryClient.list",
@@ -127789,104 +125473,12 @@
               "sha256": "7e162699f0b80d5640c4ba0c952649199a0eeae4908a6e5c610fe046393319c2"
             },
             {
-              "item": "DirectoryEntry.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryEntry.display_name",
-              "sha256": "ab49a59b075501483262318ca0d52ed26b089ddcc2132256eaf06e5c6a3e2ae2"
-            },
-            {
-              "item": "DirectoryEntry.last_seen_unix_ms",
-              "sha256": "665627a6ebd53959e3233ab22a8ea8b899decce2f0cbcf504fe4660be208216e"
-            },
-            {
-              "item": "DirectoryEntry.node_id",
-              "sha256": "3193dd9afc52bd2b73bc5b63c8f6f735a5f35c03244c710d9e5b4ef9d49310a5"
-            },
-            {
-              "item": "DirectoryEntry.origin_realm",
-              "sha256": "8bd8e65816dfa694d36afdffc1a0986340848e384c152f874b4e47f8fd13d3da"
-            },
-            {
-              "item": "DirectoryEntry.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryEntry.validate",
-              "sha256": "f9481c3b2e3b9d4e26dfab1c8a09d0f0c8ed802df2301dec8bac827193acbc39"
-            },
-            {
-              "item": "DirectoryEvent.ability_count",
-              "sha256": "48cd7311fba7bbf6d7e8dbb62ad9d7c322242f2603c4b2676c5e7a2a0b515678"
-            },
-            {
-              "item": "DirectoryEvent.agent_ura",
-              "sha256": "09f43e6bad00bfa6bc08a2de950b25eca2e0c89c1a0d5e6ee466cf5290a1d3cc"
-            },
-            {
-              "item": "DirectoryEvent.agents",
-              "sha256": "f7dca3d74819e9be9abe9886d73845ca83344dec6b3f9bc575e27d91d0b150e7"
-            },
-            {
-              "item": "DirectoryEvent.host_device_ura",
-              "sha256": "74f78f6449dd37ddea163662d2636c88984ad08c1335ca726910a61532c78883"
-            },
-            {
-              "item": "DirectoryEvent.lease_expires_unix_ms",
-              "sha256": "d2a99ac0ba411b4ee5024634f795792ff39cc592e7902d4bc16e2e697a1281d2"
-            },
-            {
-              "item": "DirectoryEvent.owner_ura",
-              "sha256": "f2ab6cd14a8ac51fc36e0687dbe87e45c2b6149a187f0e6c4ac77367f20a69f2"
-            },
-            {
-              "item": "DirectoryEvent.projection_digest",
-              "sha256": "e5dc66758b1c86dd605f57aa4358534122ced563a5d6aac97e77952ceadd4762"
-            },
-            {
-              "item": "DirectoryEvent.projection_revision",
-              "sha256": "ebe8a1bc4e441afe7598097d3ffc56ecdc365eafe38274d926c5de58475810b8"
-            },
-            {
-              "item": "DirectoryEvent.reason",
-              "sha256": "0247068841a33b1deb638bb12a340d617ba8f4e868b4036ddd6356fbcd47ebfa"
-            },
-            {
-              "item": "DirectoryEvent.removed_count",
-              "sha256": "e99960ebc2aeee11477db657998ac394bc2d9900afaa22608a3d8a74bf28c3c3"
-            },
-            {
-              "item": "DirectoryEvent.replaced_prior",
-              "sha256": "a9d14a2364b5a7e2d6fb93b4c46b1710cbef23e9461751a6e1e2ec28fc7705f5"
-            },
-            {
-              "item": "DirectoryEvent.signing_authority",
-              "sha256": "52d2860a0c08942365b56ef1903fd29ebf0228dd7cf91cec9c6ad4f5132a4b99"
-            },
-            {
-              "item": "DirectoryEvent.snapshot_unix_ms",
-              "sha256": "125fe371d00a2f8a4be6a15e2489509be47cde0c603970ed57907fb5efa29a55"
-            },
-            {
-              "item": "DirectoryEvent.stale_count",
-              "sha256": "457eff078d0175cc1190ef45952bb6bb2c55c63380605d1c00e6360fa39c7fb5"
+              "item": "DirectoryEvent.raw",
+              "sha256": "b1274a87e018df673f5c16da2f48cdc111d8eb3ab33c99e7fbdd7d007cbf7830"
             },
             {
               "item": "DirectoryEvent.type",
               "sha256": "28d71e7aaa478c796fdd52808e1124b42662c068d33f4ceb98b3d695d41dba8e"
-            },
-            {
-              "item": "DirectoryEvent.unix_ms",
-              "sha256": "b00d4e09dba55c8ce162054332b38914b382621ecd11a450687807e98960194c"
-            },
-            {
-              "item": "DirectoryEvent.validate",
-              "sha256": "7b4668277a635d4265b503bfe6f82b15f3bbdba647f100576b75d40a8eaf5401"
-            },
-            {
-              "item": "DirectoryEvent.was_active",
-              "sha256": "ce651a113c2d55ea852b504c25a3e303b03d834e331c22171b3e6f28cc137889"
             },
             {
               "item": "DirectoryEventEnvelope.cursor",
@@ -128063,18 +125655,6 @@
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
-            },
-            {
-              "item": "DirectorySigningAuthority.host_ura",
-              "sha256": "c2e404f31208705a279f340430064f25be3875779141c98476edb01d2e84547f"
-            },
-            {
-              "item": "DirectorySigningAuthority.kind",
-              "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
-            },
-            {
-              "item": "DirectorySigningAuthority.validate",
-              "sha256": "800dc7d99dfd5b6e299381fe5d37ea76e3295387c001bdc6342a1f4a1062c182"
             },
             {
               "item": "DirectorySubscribeRequest.call",
@@ -128128,10 +125708,6 @@
           "execution_case_bound": true,
           "items": [
             {
-              "item": "DirectoryAgentSummary",
-              "sha256": "be88174d6b2812f14658b3d3fcc596064395bee553dfa148681ce919c76d42fd"
-            },
-            {
               "item": "DirectoryClient",
               "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
             },
@@ -128140,12 +125716,8 @@
               "sha256": "af0e9a9e2a4024c77c92234b55f9dd08d1d6fe993dce20f376410e8dc532385b"
             },
             {
-              "item": "DirectoryEntry",
-              "sha256": "c662adebd202d3db0844f4641a6b56f4ed7b5f55bfc2c89f7e3cc2c4970727e5"
-            },
-            {
               "item": "DirectoryEvent",
-              "sha256": "da6e8b4f6b5c149fe644d3b8375ac884ac9e1a2a11e475b082feb87f03cd78d9"
+              "sha256": "24cdbb74f5426ad5c89565cc6364a21ac669c4ea36a8fe9eba7c394c22e77409"
             },
             {
               "item": "DirectoryEventEnvelope",
@@ -128180,10 +125752,6 @@
               "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
             },
             {
-              "item": "DirectorySigningAuthority",
-              "sha256": "63ba9ac538245decdb8da61264016ee3cd43f7e962233e341802c4980119ff6c"
-            },
-            {
               "item": "DirectorySubscribeRequest",
               "sha256": "7105b441f1b5c98c7275fa04d4edd84c0ddeb8cd3bb0ea1c7dfe8a884e091818"
             },
@@ -128198,26 +125766,6 @@
             {
               "item": "RuntimeHostDiscoverRequest",
               "sha256": "28fb52b4c314b76098f8179d8a085aa9a3b7e8c41f95a8e19b8596c0d1002cbb"
-            },
-            {
-              "item": "DirectoryAgentSummary.ability_count",
-              "sha256": "c892fa226015ad792ee29f65a234b2d51f08a6e7f95dfb2e51a798a2d0f560ca"
-            },
-            {
-              "item": "DirectoryAgentSummary.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryAgentSummary.signing_authority",
-              "sha256": "dd8bf5ef973dead82cdaa94d9e7bf5d93a813f4348eaa2ba97a89fee7d933922"
-            },
-            {
-              "item": "DirectoryAgentSummary.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryAgentSummary.validate",
-              "sha256": "b491d4a1469d577f6c28aaa895d4ad58cddacb8fe26725fb69ec14aab85f6c4c"
             },
             {
               "item": "DirectoryClient.list",
@@ -128244,104 +125792,12 @@
               "sha256": "7e162699f0b80d5640c4ba0c952649199a0eeae4908a6e5c610fe046393319c2"
             },
             {
-              "item": "DirectoryEntry.agent_ura",
-              "sha256": "701eb1bc8b663ec2340f5e7e0a9782e9f7e6ae187a79ceb1ebf01e1cef5e656c"
-            },
-            {
-              "item": "DirectoryEntry.display_name",
-              "sha256": "ab49a59b075501483262318ca0d52ed26b089ddcc2132256eaf06e5c6a3e2ae2"
-            },
-            {
-              "item": "DirectoryEntry.last_seen_unix_ms",
-              "sha256": "665627a6ebd53959e3233ab22a8ea8b899decce2f0cbcf504fe4660be208216e"
-            },
-            {
-              "item": "DirectoryEntry.node_id",
-              "sha256": "3193dd9afc52bd2b73bc5b63c8f6f735a5f35c03244c710d9e5b4ef9d49310a5"
-            },
-            {
-              "item": "DirectoryEntry.origin_realm",
-              "sha256": "8bd8e65816dfa694d36afdffc1a0986340848e384c152f874b4e47f8fd13d3da"
-            },
-            {
-              "item": "DirectoryEntry.status",
-              "sha256": "026563b309dfc1cf22c2e4894cce2c17f0c8ff62a930fef932aed5f8d282407c"
-            },
-            {
-              "item": "DirectoryEntry.validate",
-              "sha256": "f9481c3b2e3b9d4e26dfab1c8a09d0f0c8ed802df2301dec8bac827193acbc39"
-            },
-            {
-              "item": "DirectoryEvent.ability_count",
-              "sha256": "48cd7311fba7bbf6d7e8dbb62ad9d7c322242f2603c4b2676c5e7a2a0b515678"
-            },
-            {
-              "item": "DirectoryEvent.agent_ura",
-              "sha256": "09f43e6bad00bfa6bc08a2de950b25eca2e0c89c1a0d5e6ee466cf5290a1d3cc"
-            },
-            {
-              "item": "DirectoryEvent.agents",
-              "sha256": "f7dca3d74819e9be9abe9886d73845ca83344dec6b3f9bc575e27d91d0b150e7"
-            },
-            {
-              "item": "DirectoryEvent.host_device_ura",
-              "sha256": "74f78f6449dd37ddea163662d2636c88984ad08c1335ca726910a61532c78883"
-            },
-            {
-              "item": "DirectoryEvent.lease_expires_unix_ms",
-              "sha256": "d2a99ac0ba411b4ee5024634f795792ff39cc592e7902d4bc16e2e697a1281d2"
-            },
-            {
-              "item": "DirectoryEvent.owner_ura",
-              "sha256": "f2ab6cd14a8ac51fc36e0687dbe87e45c2b6149a187f0e6c4ac77367f20a69f2"
-            },
-            {
-              "item": "DirectoryEvent.projection_digest",
-              "sha256": "e5dc66758b1c86dd605f57aa4358534122ced563a5d6aac97e77952ceadd4762"
-            },
-            {
-              "item": "DirectoryEvent.projection_revision",
-              "sha256": "ebe8a1bc4e441afe7598097d3ffc56ecdc365eafe38274d926c5de58475810b8"
-            },
-            {
-              "item": "DirectoryEvent.reason",
-              "sha256": "0247068841a33b1deb638bb12a340d617ba8f4e868b4036ddd6356fbcd47ebfa"
-            },
-            {
-              "item": "DirectoryEvent.removed_count",
-              "sha256": "e99960ebc2aeee11477db657998ac394bc2d9900afaa22608a3d8a74bf28c3c3"
-            },
-            {
-              "item": "DirectoryEvent.replaced_prior",
-              "sha256": "a9d14a2364b5a7e2d6fb93b4c46b1710cbef23e9461751a6e1e2ec28fc7705f5"
-            },
-            {
-              "item": "DirectoryEvent.signing_authority",
-              "sha256": "52d2860a0c08942365b56ef1903fd29ebf0228dd7cf91cec9c6ad4f5132a4b99"
-            },
-            {
-              "item": "DirectoryEvent.snapshot_unix_ms",
-              "sha256": "125fe371d00a2f8a4be6a15e2489509be47cde0c603970ed57907fb5efa29a55"
-            },
-            {
-              "item": "DirectoryEvent.stale_count",
-              "sha256": "457eff078d0175cc1190ef45952bb6bb2c55c63380605d1c00e6360fa39c7fb5"
+              "item": "DirectoryEvent.raw",
+              "sha256": "b1274a87e018df673f5c16da2f48cdc111d8eb3ab33c99e7fbdd7d007cbf7830"
             },
             {
               "item": "DirectoryEvent.type",
               "sha256": "28d71e7aaa478c796fdd52808e1124b42662c068d33f4ceb98b3d695d41dba8e"
-            },
-            {
-              "item": "DirectoryEvent.unix_ms",
-              "sha256": "b00d4e09dba55c8ce162054332b38914b382621ecd11a450687807e98960194c"
-            },
-            {
-              "item": "DirectoryEvent.validate",
-              "sha256": "7b4668277a635d4265b503bfe6f82b15f3bbdba647f100576b75d40a8eaf5401"
-            },
-            {
-              "item": "DirectoryEvent.was_active",
-              "sha256": "ce651a113c2d55ea852b504c25a3e303b03d834e331c22171b3e6f28cc137889"
             },
             {
               "item": "DirectoryEventEnvelope.cursor",
@@ -128518,18 +125974,6 @@
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
-            },
-            {
-              "item": "DirectorySigningAuthority.host_ura",
-              "sha256": "c2e404f31208705a279f340430064f25be3875779141c98476edb01d2e84547f"
-            },
-            {
-              "item": "DirectorySigningAuthority.kind",
-              "sha256": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba"
-            },
-            {
-              "item": "DirectorySigningAuthority.validate",
-              "sha256": "800dc7d99dfd5b6e299381fe5d37ea76e3295387c001bdc6342a1f4a1062c182"
             },
             {
               "item": "DirectorySubscribeRequest.call",

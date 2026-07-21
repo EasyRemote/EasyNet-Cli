@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -99,6 +100,11 @@ type DirectoryEventEnvelope struct {
 	Event    *DirectoryEvent `json:"event,omitempty"`
 	Cursor   DirectoryCursor `json:"cursor"`
 	Terminal bool            `json:"terminal"`
+}
+
+type DirectoryEvent struct {
+	Type string         `json:"type"`
+	Raw  map[string]any `json:"raw"`
 }
 
 // DirectoryProvider owns runtime transport and wire projection for the
@@ -223,6 +229,18 @@ func (s *DirectorySubscription) transition(event DirectoryEvent) error {
 		return invalidDirectory("Directory subscription state is terminal", nil)
 	}
 	return nil
+}
+
+func ParseDirectoryEvent(raw []byte) (DirectoryEvent, error) {
+	var event map[string]any
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return DirectoryEvent{}, fmt.Errorf("directory event: decode JSON: %w", err)
+	}
+	eventType := directoryString(event, "type")
+	if eventType == "" {
+		return DirectoryEvent{}, invalidDirectory("Directory event type is required", nil)
+	}
+	return DirectoryEvent{Type: eventType, Raw: directoryMap(event)}, nil
 }
 
 // ProjectDirectoryResolution projects a daemon namespace.resolve output object
