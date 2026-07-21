@@ -13,6 +13,8 @@
 - [x] Inventory unary, stream, bidi, loopback, exact-route, and remote dispatch
       paths.
 - [x] Gate complete tuple ingress and LocalRuntime-only ability routes.
+- [x] Remove CLI-side boot port compatibility reconstruction so daemon
+      `BootEvent::PortChosen` remains the only port-choice progress authority.
 - [ ] Delete any remaining direct ability response synthesis that is not boot,
       health, status, or diagnostics.
 - [ ] Re-run daemon migration gates against current worktree.

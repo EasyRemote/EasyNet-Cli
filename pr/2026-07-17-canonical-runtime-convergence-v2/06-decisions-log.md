@@ -94,3 +94,8 @@
   false architecture failures.
 - Update the released edge-adapter frozen surface digest after intentional
   removal of product DTO members from Go/Python non-canonical inventory.
+- Treat daemon boot progress as daemon-owned lifecycle state. `easynet start`
+  no longer parses `EASYNET_PAGES_PORT` to reconstruct a missing
+  `BootEvent::PortChosen.start`; if the daemon omits the start candidate, the
+  CLI renders only the declared chosen port instead of preserving old-daemon
+  compatibility semantics.

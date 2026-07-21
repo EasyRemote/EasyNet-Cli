@@ -261,15 +261,6 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     let label = args.label.clone().unwrap_or_else(|| creds.node_id.clone());
     let _ = (args.token.as_deref(), args.insecure);
     preflight_runtime_start(&RuntimeStartRequest::device(&tenant, &creds.node_id))?;
-    // EASYNET_PAGES_PORT is parsed by the daemon — it is the only
-    // process that needs to validate the value and decide a default.
-    // CLI just peeks at it for the progress UI's "fell back from N"
-    // hint, treating any parse failure as "no hint available".
-    let pages_start_hint = std::env::var("EASYNET_PAGES_PORT")
-        .ok()
-        .and_then(|raw| raw.parse::<u16>().ok())
-        .filter(|p| *p > 0);
-
     crate::daemon::persistence::daemon_config::ensure_minimal_device_config(&creds)
         .context("ensure daemon-config.toml for device mode")?;
     super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds)
@@ -322,9 +313,6 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     let boot = match super::start_boot_watcher::wait_for_daemon_boot(
         &control_socket,
         daemon_handle.child_mut(),
-        super::start_boot_watcher::BootContext {
-            pages_start_port: pages_start_hint,
-        },
     ) {
         Ok(boot) => boot,
         Err(err) => {
@@ -772,13 +760,7 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
     let mut daemon_handle = start_cfg.start().context("start hub easynet-daemon")?;
     let attached_existing_daemon = daemon_handle.child_mut().is_none();
     let control_socket = daemon_handle.control_endpoint().to_path_buf();
-    super::start_boot_watcher::wait_for_daemon_boot(
-        &control_socket,
-        daemon_handle.child_mut(),
-        super::start_boot_watcher::BootContext {
-            pages_start_port: None,
-        },
-    )?;
+    super::start_boot_watcher::wait_for_daemon_boot(&control_socket, daemon_handle.child_mut())?;
     let pid = daemon_handle.pid();
     let endpoint = daemon_handle.invocation_endpoint().display().to_string();
 

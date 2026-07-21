@@ -34,6 +34,22 @@
 
 Result: passed.
 
+## Boot Lifecycle Authority Iteration Evidence
+
+- `cargo fmt`
+- `cargo fmt --check`
+- `cargo test --lib start_boot_watcher --features axon-pb`
+- `cargo test --lib boot_events --features axon-pb`
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .`
+- `rg -n "BootContext|pages_start_hint|fallback for daemons too old to send|pre-date this field|CLI just peeks" src/cli/commands/start_boot_watcher.rs src/cli/commands/start.rs src/daemon/control/boot_events.rs`
+- `git diff --check`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-architecture-convergence.sh`
+
+Result: passed. The `start_boot_watcher` test selector compiled the library but
+matched no tests; the `boot_events` selector ran three tests and passed. The
+`rg` command intentionally returned no matches after deletion.
+
 ## Bidi Frame0 Provider-Backed Iteration Evidence
 
 - `cd sdk/go && go test -tags easynet_direct_runtime -run 'TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry|TestDirectRuntimeTransportBidiOverUnixSocket|TestDirectRuntimeBidiCancelProjectsNonTerminalRequest' .`

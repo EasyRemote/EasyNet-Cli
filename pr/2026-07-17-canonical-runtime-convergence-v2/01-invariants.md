@@ -27,6 +27,10 @@
   terminal receipt or terminal event.
 - Queueing, pending dispatch maps, and stream buffers have hard capacity
   bounds.
+- Daemon boot progress facts are owned by the daemon event stream and
+  `control.json`. The CLI may render those facts, but must not reconstruct
+  omitted lifecycle fields from environment variables or old-daemon
+  compatibility hints.
 
 ## Ownership
 

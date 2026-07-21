@@ -42,9 +42,8 @@ pub enum BootEvent {
         port: u16,
         /// First port the daemon attempted in the probe range. When
         /// `start != port`, the chosen port is a fallback because the
-        /// original was busy. `None` from daemons that pre-date this
-        /// field — CLIs treat that as "unknown start, no fallback to
-        /// surface".
+        /// original was busy. `None` means the daemon did not declare
+        /// the start candidate, so consumers must not reconstruct it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         start: Option<u16>,
     },
