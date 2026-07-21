@@ -87,6 +87,11 @@
   projected into list rows when explicitly requested, but an `attempt_id` is
   not a canonical history get key and must not route into a second ledger
   authority.
+- PrincipalLifecycle CLI routing is ability-schema aware. Mutation abilities
+  derive their Hub owner only from `request.principal_ura`; the read-only
+  `principal.lifecycle.get` ability derives its owner only from its explicit
+  top-level `principal_ura` schema. No PrincipalLifecycle route may use a
+  generic top-level fallback to repair a malformed mutation envelope.
 
 ## Terminology and Schema
 

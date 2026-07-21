@@ -839,7 +839,7 @@ fn run_revoke_grant(args: RevokeGrantArgs) -> anyhow::Result<()> {
 fn run_get(args: GetArgs) -> anyhow::Result<()> {
     let response = invoke_principal_ability(
         routes::PRINCIPAL_ABILITY_GET,
-        json!({ "principal_ura": args.principal_ura.trim() }),
+        principal_get_request(&args.principal_ura),
     )?;
     render_snapshot("Principal snapshot", response, args.json, None)
 }
@@ -856,7 +856,7 @@ fn invoke_principal_ability(ability: &str, args: Value) -> anyhow::Result<Value>
 }
 
 fn principal_ability_target(ability: &str, args: &Value) -> anyhow::Result<LocalAbilityTarget> {
-    let principal_ura = principal_ability_realm_source(args)?;
+    let principal_ura = principal_ability_realm_source(ability, args)?;
     let parsed = ura::parse_ura(principal_ura)
         .with_context(|| format!("parse PrincipalLifecycle principal URA {principal_ura:?}"))?;
     if parsed.kind != ura::URAKind::User {
@@ -869,9 +869,13 @@ fn principal_ability_target(ability: &str, args: &Value) -> anyhow::Result<Local
     Ok(LocalAbilityTarget::from_selector(&selector))
 }
 
-fn principal_ability_realm_source(args: &Value) -> anyhow::Result<&str> {
-    args.pointer("/request/principal_ura")
-        .or_else(|| args.get("principal_ura"))
+fn principal_ability_realm_source<'a>(ability: &str, args: &'a Value) -> anyhow::Result<&'a str> {
+    let principal_ura = if ability == routes::PRINCIPAL_ABILITY_GET {
+        args.get("principal_ura")
+    } else {
+        args.pointer("/request/principal_ura")
+    };
+    principal_ura
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -932,6 +936,10 @@ fn principal_create_request(principal_ura: &str, command: Value) -> Value {
             "principal_ura": principal_ura.trim(),
         }
     })
+}
+
+fn principal_get_request(principal_ura: &str) -> Value {
+    json!({ "principal_ura": principal_ura.trim() })
 }
 
 #[derive(Clone, Copy)]
@@ -1444,6 +1452,58 @@ mod tests {
         assert_eq!(
             target.default_subject_ura(),
             "easynet:///r/realm/ability/authority.principal.lifecycle.create"
+        );
+    }
+
+    #[test]
+    fn principal_get_target_uses_explicit_top_level_read_schema() {
+        let request = principal_get_request(" easynet:///r/realm/user/alice ");
+        let target =
+            principal_ability_target(routes::PRINCIPAL_ABILITY_GET, &request).expect("get target");
+
+        assert_eq!(request["principal_ura"], "easynet:///r/realm/user/alice");
+        assert_eq!(target.dispatch_name(), routes::PRINCIPAL_ABILITY_GET);
+        assert_eq!(target.callee_ura(), "easynet:///r/realm/authority");
+        assert_eq!(
+            target.default_subject_ura(),
+            "easynet:///r/realm/ability/authority.principal.lifecycle.get"
+        );
+    }
+
+    #[test]
+    fn principal_mutation_target_rejects_top_level_principal_ura_fallback() {
+        let err = principal_ability_target(
+            routes::PRINCIPAL_ABILITY_CREATE,
+            &json!({ "principal_ura": "easynet:///r/realm/user/alice" }),
+        )
+        .expect_err("mutation routing must require request.principal_ura");
+
+        assert!(
+            err.to_string()
+                .contains("principal.lifecycle request missing principal_ura"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn principal_get_target_rejects_mutation_request_envelope() {
+        let command = principal_command(
+            PrincipalCommandActor::subject_self("easynet:///r/realm/user/alice"),
+            "idem-1",
+            Some(1),
+            ProofKindArg::Bootstrap,
+            "proof-1",
+        );
+        let err = principal_ability_target(
+            routes::PRINCIPAL_ABILITY_GET,
+            &principal_create_request("easynet:///r/realm/user/alice", command),
+        )
+        .expect_err("get routing must require top-level principal_ura");
+
+        assert!(
+            err.to_string()
+                .contains("principal.lifecycle request missing principal_ura"),
+            "unexpected error: {err}"
         );
     }
 

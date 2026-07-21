@@ -144,3 +144,7 @@
   explicit `invocation.history.list include_attempts` projection, but
   `key.attempt_id` is not a canonical ledger key and must not select a second
   attempt ledger from the history get path.
+- Treat PrincipalLifecycle CLI routing as a schema dispatch, not a fallback
+  merge between top-level and `request` envelopes. Mutation abilities use the
+  canonical `request.principal_ura` envelope; only `principal.lifecycle.get`
+  uses its daemon-defined top-level `principal_ura` read schema.

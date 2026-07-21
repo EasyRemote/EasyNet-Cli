@@ -105,6 +105,8 @@
 - [x] Remove `invocation.history.get` attempt-ledger key compatibility so
       canonical point reads cannot return diagnostic attempts through the
       Axon ledger surface.
+- [x] Remove PrincipalLifecycle CLI top-level `principal_ura` fallback for
+      mutation routing while preserving the explicit get schema.
 - [ ] Re-run Mission/EAL boundary gates.
 
 ## RF-9

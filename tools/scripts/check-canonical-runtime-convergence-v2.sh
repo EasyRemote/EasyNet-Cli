@@ -319,6 +319,47 @@ for test in (
 PY
 }
 
+check_principal_lifecycle_cli_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local principal="$cli_root/src/cli/commands/groups/principal.rs"
+  [[ -f "$principal" ]] || return 0
+
+  "$PYTHON_BIN" - "$principal" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+if '.or_else(|| args.get("principal_ura"))' in text:
+    raise SystemExit("principal_lifecycle_route_uses_top_level_fallback")
+if "fn principal_get_request(principal_ura: &str) -> Value" not in text:
+    raise SystemExit("principal_lifecycle_get_request_helper_missing")
+extractor = re.search(
+    r"fn principal_ability_realm_source<'a>\(ability: &str, args: &'a Value\) -> anyhow::Result<&'a str> \{(?P<body>.*?)\n\}",
+    text,
+    re.DOTALL,
+)
+if extractor is None:
+    raise SystemExit("principal_lifecycle_schema_aware_extractor_missing")
+body = extractor.group("body")
+for required in (
+    "ability == routes::PRINCIPAL_ABILITY_GET",
+    'args.get("principal_ura")',
+    'args.pointer("/request/principal_ura")',
+):
+    if required not in body:
+        raise SystemExit(f"principal_lifecycle_extractor_missing:{required}")
+for test in (
+    "principal_get_target_uses_explicit_top_level_read_schema",
+    "principal_mutation_target_rejects_top_level_principal_ura_fallback",
+    "principal_get_target_rejects_mutation_request_envelope",
+):
+    if test not in text:
+        raise SystemExit(f"missing_principal_lifecycle_schema_test:{test}")
+PY
+}
+
 check_edge_adapter_policy_contract() {
   "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$MANIFEST" >/dev/null
 }
@@ -2272,11 +2313,24 @@ EOF
   if ( check_invocation_history_get_key_contract "$tmp/invocation-history-attempt-key" ) >/dev/null 2>&1; then
     fail "self-test expected invocation.history.get attempt_id key gate to fail"
   fi
+  mkdir -p "$tmp/principal-lifecycle-fallback/src/cli/commands/groups"
+  printf '%s\n' \
+    'fn principal_ability_realm_source(args: &Value) -> anyhow::Result<&str> {' \
+    '  args.pointer("/request/principal_ura")' \
+    '    .or_else(|| args.get("principal_ura"))' \
+    '    .and_then(Value::as_str)' \
+    '    .ok_or_else(|| anyhow!("missing"))' \
+    '}' \
+    > "$tmp/principal-lifecycle-fallback/src/cli/commands/groups/principal.rs"
+  if ( check_principal_lifecycle_cli_schema_contract "$tmp/principal-lifecycle-fallback" ) >/dev/null 2>&1; then
+    fail "self-test expected PrincipalLifecycle CLI top-level fallback gate to fail"
+  fi
   check_active_source_contract
   check_go_sdk_public_ura_alias_contract
   check_advertise_agent_ingress_contract
   check_agent_start_model_intent_contract
   check_invocation_history_get_key_contract
+  check_principal_lifecycle_cli_schema_contract
   check_edge_adapter_policy_contract
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
@@ -2312,6 +2366,7 @@ check_go_sdk_public_ura_alias_contract
 check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract
+check_principal_lifecycle_cli_schema_contract
 check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract

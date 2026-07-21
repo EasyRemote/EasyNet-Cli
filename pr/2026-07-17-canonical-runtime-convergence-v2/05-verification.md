@@ -78,6 +78,23 @@ keys (`ura`, `request_id`, `trace_id`). Pre-runtime attempt diagnostics remain
 available through `invocation.history.list include_attempts`, but
 `key.attempt_id` no longer routes point reads into the attempt ledger.
 
+## PrincipalLifecycle CLI Schema Dispatch Iteration Evidence
+
+- `cargo fmt --all -- --check`
+- `cargo test --lib principal --features axon-pb`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-architecture-convergence.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `git diff --check`
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`
+
+Result: passed. PrincipalLifecycle CLI routing now dispatches by ability
+schema: mutation abilities derive owner routing only from
+`request.principal_ura`, while `principal.lifecycle.get` uses its explicit
+top-level `principal_ura` read schema. The generic top-level repair fallback
+is gated out of SPEC v2.
+
 ## Bidi Frame0 Provider-Backed Iteration Evidence
 
 - `cd sdk/go && go test -tags easynet_direct_runtime -run 'TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry|TestDirectRuntimeTransportBidiOverUnixSocket|TestDirectRuntimeBidiCancelProjectsNonTerminalRequest' .`
