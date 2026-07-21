@@ -201,21 +201,6 @@ impl InvocationLedgerReader {
     }
 
     fn get_history(&self, args: Value) -> anyhow::Result<Value> {
-        if let Some(attempt_id) = args
-            .get("key")
-            .and_then(|key| key.get("attempt_id"))
-            .and_then(non_empty_str)
-        {
-            let path = attempt_ledger_path_from_config();
-            let attempt = InvocationAttemptLedger::open(&path)?.get(attempt_id)?;
-            return Ok(json!({
-                "ledger_ura": ledger_resource_ura(),
-                "ledger_path": ledger_path_from_config().display().to_string(),
-                "attempt_ledger_path": path.display().to_string(),
-                "record": Value::Null,
-                "diagnostic_record": attempt.map(|record| record.diagnostic_value()),
-            }));
-        }
         let query = query_from_args(&args)?.limit(1);
         if query.key.is_none() {
             anyhow::bail!("expected key.ura, key.request_id, or key.trace_id");
@@ -920,8 +905,7 @@ fn key_schema() -> Value {
         "properties": {
             "ura": { "type": "string", "description": "Invocation URA." },
             "request_id": { "type": "string" },
-            "trace_id": { "type": "string" },
-            "attempt_id": { "type": "string", "description": "Pre-runtime attempt audit id." }
+            "trace_id": { "type": "string" }
         },
         "additionalProperties": false,
         "minProperties": 1,
@@ -1074,6 +1058,39 @@ mod tests {
         assert_eq!(
             cursor.get("maxLength").and_then(Value::as_u64),
             Some(MAX_HISTORY_CURSOR_LEN as u64)
+        );
+    }
+
+    #[test]
+    fn history_key_schema_excludes_attempt_id() {
+        let schema = get_history_input_schema();
+        let key_properties = schema
+            .get("properties")
+            .and_then(|properties| properties.get("key"))
+            .and_then(|key| key.get("properties"))
+            .and_then(Value::as_object)
+            .expect("key properties");
+
+        assert!(key_properties.contains_key("ura"));
+        assert!(key_properties.contains_key("request_id"));
+        assert!(key_properties.contains_key("trace_id"));
+        assert!(
+            !key_properties.contains_key("attempt_id"),
+            "attempt diagnostics are list projections, not canonical history get keys"
+        );
+    }
+
+    #[test]
+    fn get_history_rejects_attempt_id_key() {
+        let reader = InvocationLedgerReader::new(None);
+        let err = reader
+            .get_history(json!({ "key": { "attempt_id": "att-retired" } }))
+            .expect_err("attempt_id must not route into the attempt ledger");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("key must include one of ura, request_id, or trace_id"),
+            "unexpected error: {message}"
         );
     }
 

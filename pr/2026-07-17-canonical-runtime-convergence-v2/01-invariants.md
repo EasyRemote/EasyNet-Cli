@@ -80,6 +80,13 @@
   directory DTOs such as agent summaries, node rows, host endpoints, and
   signing-authority variants must not be SDK public API or private SDK wire
   models.
+- Invocation history point reads are canonical Axon ledger reads. The
+  `invocation.history.get`, `invocation.record.get`, and
+  `invocation.trace.get` key schema contains only canonical ledger keys
+  (`ura`, `request_id`, `trace_id`). Pre-runtime attempt diagnostics may be
+  projected into list rows when explicitly requested, but an `attempt_id` is
+  not a canonical history get key and must not route into a second ledger
+  authority.
 
 ## Terminology and Schema
 

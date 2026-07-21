@@ -182,13 +182,6 @@ impl InvocationAttemptLedger {
         Ok(records)
     }
 
-    pub(crate) fn get(&self, attempt_id: &str) -> anyhow::Result<Option<InvocationAttemptRecord>> {
-        Ok(self
-            .list_recent(MAX_ATTEMPT_READ_LINES)?
-            .into_iter()
-            .find(|record| record.attempt_id == attempt_id))
-    }
-
     fn append(&self, record: &InvocationAttemptRecord) -> anyhow::Result<()> {
         let _guard = self
             .writer

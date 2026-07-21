@@ -139,3 +139,8 @@
   presence cache. A direct caller that supplies `model` without
   `model_present` is ambiguous for directory/spec mutation and must be rejected
   instead of repaired by inferring the flag from the model value.
+- Treat `invocation.history.get` as a canonical Axon ledger point-read
+  surface. Pre-runtime attempt diagnostics remain available through the
+  explicit `invocation.history.list include_attempts` projection, but
+  `key.attempt_id` is not a canonical ledger key and must not select a second
+  attempt ledger from the history get path.

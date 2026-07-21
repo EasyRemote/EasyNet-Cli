@@ -268,6 +268,57 @@ if "start_agent_rejects_model_without_explicit_model_present_intent" not in text
 PY
 }
 
+check_invocation_history_get_key_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local history="$cli_root/src/daemon/ability/builtins/governance/invocation_history.rs"
+  [[ -f "$history" ]] || return 0
+
+  "$PYTHON_BIN" - "$history" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+get_history = re.search(
+    r"fn get_history\(&self, args: Value\) -> anyhow::Result<Value> \{(?P<body>.*?)\n    \}\n\n    fn get_record",
+    text,
+    re.DOTALL,
+)
+if get_history is None:
+    raise SystemExit("invocation_history_get_not_found")
+get_history_body = get_history.group("body")
+for retired in (
+    'key.get("attempt_id")',
+    "InvocationAttemptLedger::open",
+    '"diagnostic_record"',
+):
+    if retired in get_history_body:
+        raise SystemExit(f"invocation_history_get_retired_attempt_path:{retired}")
+
+key_schema = re.search(
+    r"fn key_schema\(\) -> Value \{(?P<body>.*?)\n\}\n\nfn filter_schema",
+    text,
+    re.DOTALL,
+)
+if key_schema is None:
+    raise SystemExit("invocation_history_key_schema_not_found")
+key_schema_body = key_schema.group("body")
+if '"attempt_id"' in key_schema_body:
+    raise SystemExit("invocation_history_key_schema_exposes_attempt_id")
+for required in ('"ura"', '"request_id"', '"trace_id"'):
+    if required not in key_schema_body:
+        raise SystemExit(f"invocation_history_key_schema_missing:{required}")
+for test in (
+    "history_key_schema_excludes_attempt_id",
+    "get_history_rejects_attempt_id_key",
+):
+    if test not in text:
+        raise SystemExit(f"missing_invocation_history_get_negative_test:{test}")
+PY
+}
+
 check_edge_adapter_policy_contract() {
   "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$MANIFEST" >/dev/null
 }
@@ -2199,10 +2250,33 @@ EOF
   if ( check_agent_start_model_intent_contract "$tmp/agent-start-model-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected agent.start model_present inference gate to fail"
   fi
+  mkdir -p "$tmp/invocation-history-attempt-key/src/daemon/ability/builtins/governance"
+  printf '%s\n' \
+    'fn get_history(&self, args: Value) -> anyhow::Result<Value> {' \
+    '  if let Some(attempt_id) = args.get("key").and_then(|key| key.get("attempt_id")).and_then(non_empty_str) {' \
+    '    let path = attempt_ledger_path_from_config();' \
+    '    let attempt = InvocationAttemptLedger::open(&path)?.get(attempt_id)?;' \
+    '    return Ok(json!({"diagnostic_record": attempt}));' \
+    '  }' \
+    '  Ok(json!({}))' \
+    '}' \
+    '' \
+    'fn get_record(&self, args: Value) -> anyhow::Result<Value> { Ok(json!({})) }' \
+    '' \
+    'fn key_schema() -> Value {' \
+    '  json!({"properties":{"ura":{},"request_id":{},"trace_id":{},"attempt_id":{}}})' \
+    '}' \
+    '' \
+    'fn filter_schema() -> Value { json!({}) }' \
+    > "$tmp/invocation-history-attempt-key/src/daemon/ability/builtins/governance/invocation_history.rs"
+  if ( check_invocation_history_get_key_contract "$tmp/invocation-history-attempt-key" ) >/dev/null 2>&1; then
+    fail "self-test expected invocation.history.get attempt_id key gate to fail"
+  fi
   check_active_source_contract
   check_go_sdk_public_ura_alias_contract
   check_advertise_agent_ingress_contract
   check_agent_start_model_intent_contract
+  check_invocation_history_get_key_contract
   check_edge_adapter_policy_contract
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
@@ -2237,6 +2311,7 @@ check_active_source_contract
 check_go_sdk_public_ura_alias_contract
 check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract
+check_invocation_history_get_key_contract
 check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract

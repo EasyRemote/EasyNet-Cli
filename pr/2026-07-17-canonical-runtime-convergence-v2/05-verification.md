@@ -63,6 +63,21 @@ contain only `mcp serve --tenant [--agent]` and that retired no-op flags
 `--endpoint`, `--bound-node`, and `--allow-node-override` are rejected by the
 parser.
 
+## Invocation History Point-Read Contract Iteration Evidence
+
+- `cargo fmt --all -- --check`
+- `cargo test --lib invocation_history --features axon-pb`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-architecture-convergence.sh`
+- `git diff --check`
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`
+
+Result: passed. `invocation.history.get` now accepts only canonical Axon ledger
+keys (`ura`, `request_id`, `trace_id`). Pre-runtime attempt diagnostics remain
+available through `invocation.history.list include_attempts`, but
+`key.attempt_id` no longer routes point reads into the attempt ledger.
+
 ## Bidi Frame0 Provider-Backed Iteration Evidence
 
 - `cd sdk/go && go test -tags easynet_direct_runtime -run 'TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry|TestDirectRuntimeTransportBidiOverUnixSocket|TestDirectRuntimeBidiCancelProjectsNonTerminalRequest' .`

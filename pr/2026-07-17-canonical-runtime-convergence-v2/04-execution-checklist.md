@@ -102,6 +102,9 @@
       and gate the retired request field.
 - [x] Remove `agent.start` model_present inference from the `model` field and
       gate the explicit model-write intent.
+- [x] Remove `invocation.history.get` attempt-ledger key compatibility so
+      canonical point reads cannot return diagnostic attempts through the
+      Axon ledger surface.
 - [ ] Re-run Mission/EAL boundary gates.
 
 ## RF-9
