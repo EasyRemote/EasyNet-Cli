@@ -1007,7 +1007,6 @@
       "URAScheme",
       "UnmarshalRawDelegationProof",
       "UnmarshalRawSessionAuthority",
-      "Ura",
       "UserAgentPrefix",
       "UserURA",
       "Version"
@@ -10872,7 +10871,6 @@
           "URAKindUser",
           "URAProjectionRequest",
           "URAScheme",
-          "Ura",
           "UserAgentPrefix",
           "UserURA"
         ],
@@ -20241,7 +20239,6 @@
       "URAScheme": "c075ddaf137264f416a3f8355f724a5a70ebdf67662f080ebe2c497e0ee5c93d",
       "UnmarshalRawDelegationProof": "787618682cdd8236e742604277215932a3abb71feabc5fd950d43d7039661541",
       "UnmarshalRawSessionAuthority": "e66f8daa9860053b1363f24c1c988ac3b378f0fe40afbe8725c30b13ca06c38b",
-      "Ura": "2c6fe72f394aa2595ed0c9b586d50eb803d97b50d1f1cfe2561624b34661f0e9",
       "UserAgentPrefix": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
       "UserURA": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
       "Version": "fc59f78951359c3a96d7988de6013c0d00469cf36f04e3bc77e5105ac39a22a4",

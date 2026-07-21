@@ -128,3 +128,6 @@
   Fresh agent creation may materialize roots, but `load_agents()` must only
   read and validate current rows. Retired pre-v2 rows are rejected instead of
   being repaired into `agents_root()` from production read paths.
+- Treat Go SDK `Ura` as a retired source-compatibility alias. The canonical
+  runtime model has URA-only terminology, so Go exposes `URA` as the sole
+  public value type and conformance evidence must not preserve both spellings.

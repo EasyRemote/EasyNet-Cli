@@ -185,6 +185,26 @@ check_sdk_product_neutrality_contract() {
   bash "$ROOT/tools/scripts/check-sdk-product-neutrality.sh" >/dev/null
 }
 
+check_go_sdk_public_ura_alias_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_sdk="$cli_root/sdk/go"
+  [[ -d "$go_sdk" ]] || return 0
+
+  if rg -n '\btype\s+Ura\s*=' "$go_sdk" \
+    --glob '!internal/axonpb/**' \
+    --glob '!**/*_test.go'; then
+    fail "Go SDK preserves retired Ura compatibility alias; canonical public API must expose URA only"
+  fi
+  if [[ -f "$cli_root/sdk/conformance/canonical-public-api.json" ]] \
+    && rg -n '"Ura"' "$cli_root/sdk/conformance/canonical-public-api.json"; then
+    fail "canonical public API inventory preserves retired Go Ura alias"
+  fi
+  if [[ -f "$cli_root/sdk/conformance/sdk-parity-matrix.json" ]] \
+    && rg -n '"item": "Ura"' "$cli_root/sdk/conformance/sdk-parity-matrix.json"; then
+    fail "SDK parity matrix preserves retired Go Ura alias evidence"
+  fi
+}
+
 check_edge_adapter_policy_contract() {
   "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$MANIFEST" >/dev/null
 }
@@ -2084,7 +2104,18 @@ EOF
   AXON_ROOT="$tmp/axon"
   ( AXON_ROOT="$CANONICAL_LIFECYCLE_AXON_ROOT"; check_lifecycle_evidence_freshness_contract )
   ( AXON_ROOT="$CANONICAL_LIFECYCLE_AXON_ROOT"; check_manifest_contract )
+  mkdir -p "$tmp/go-sdk-ura-alias/sdk/go" "$tmp/go-sdk-ura-alias/sdk/conformance"
+  printf 'package easynet\ntype URA struct{}\ntype Ura = URA\n' \
+    > "$tmp/go-sdk-ura-alias/sdk/go/ura.go"
+  printf '{"languages":{"go":["URA","Ura"]}}\n' \
+    > "$tmp/go-sdk-ura-alias/sdk/conformance/canonical-public-api.json"
+  printf '{"cells":[{"shape_evidence":[{"item":"Ura"}]}]}\n' \
+    > "$tmp/go-sdk-ura-alias/sdk/conformance/sdk-parity-matrix.json"
+  if check_go_sdk_public_ura_alias_contract "$tmp/go-sdk-ura-alias" >/dev/null 2>&1; then
+    fail "self-test expected Go SDK Ura alias gate to fail"
+  fi
   check_active_source_contract
+  check_go_sdk_public_ura_alias_contract
   check_edge_adapter_policy_contract
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
@@ -2116,6 +2147,7 @@ fi
 check_lifecycle_evidence_freshness_contract
 check_manifest_contract
 check_active_source_contract
+check_go_sdk_public_ura_alias_contract
 check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract

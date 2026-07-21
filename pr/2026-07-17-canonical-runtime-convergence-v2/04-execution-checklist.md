@@ -104,4 +104,6 @@
 
 - [x] Gate active URA terminology and transport URI classification.
 - [x] Delegate schema-copy verification to the canonical Axon proto syncer.
+- [x] Remove Go SDK `Ura` compatibility alias from the canonical public API
+      surface and conformance evidence.
 - [ ] Re-run terminology and schema gates against current worktree.

@@ -79,5 +79,9 @@
 - URA is the only active routable identity/address vocabulary.
 - Transport-library `Uri`/`.uri()` usage is allowed only for HTTP/gRPC routing
   APIs, not semantic runtime identity.
+- Canonical SDK public API exposes one URA type spelling per language. In Go,
+  the canonical value type is `URA`; source-compatible aliases such as `Ura`
+  are legacy compatibility surfaces and must not appear in source, inventory,
+  or parity evidence.
 - Protocol schema has one editable source; local checked-in copies must be
   mechanically derived and verified.

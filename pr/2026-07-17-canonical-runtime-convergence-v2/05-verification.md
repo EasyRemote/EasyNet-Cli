@@ -401,3 +401,23 @@ creates agent roots, writes `.v1.bak`, or repairs missing `root_path`. Loaded
 registry rows must already carry the current schema stamp and canonical
 `root_path`; retired pre-v2 rows fail closed instead of becoming implicit
 runtime state mutations.
+
+## Go SDK URA Public Alias Removal Evidence
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status .`
+- `rg -n '\btype\s+Ura\s*=|"Ura"|"item": "Ura"' sdk/go sdk/conformance tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `cd sdk/go && go test ./...`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tools/scripts/check-architecture-convergence.sh`
+- `cargo fmt --check`
+- `git diff --check`
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .`
+- `/Users/macbook.silan.tech/.local/bin/codegraph status .`
+
+Result: Go SDK tests, SPEC v2 self-test/full gate, architecture gate,
+formatting, diff hygiene, and codegraph sync/status passed. The Go SDK no
+longer exports the retired source-compatible `Ura` alias; canonical public API
+inventory and SDK parity evidence now expose only `URA`. The V2 gate now
+rejects future production Go SDK `type Ura = ...` aliases and conformance
+evidence entries that preserve `"Ura"` as canonical API shape.

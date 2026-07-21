@@ -40,10 +40,6 @@ type URA struct {
 	raw string
 }
 
-// Ura is retained as a source-compatible alias for callers that imported the
-// pre-canonical Go casing. New canonical SDK inventories use URA.
-type Ura = URA
-
 type ParsedURA struct {
 	Raw               string
 	Realm             string
