@@ -170,12 +170,9 @@ pub const ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES: &str =
 
 /// `federation.advertise_abilities` — backend self-registration
 /// path. Backend on boot may publish product-facing ability descriptors
-/// so they show up in `federation.resolve(prefix=hub)`. PR-1 staging
-/// accepts the call as a no-op success — the directory is presence-driven
-/// via `session.open` membership, so the descriptors don't need separate
-/// persistence. Without the handler the backend's boot path errors
-/// `Unimplemented` and the realm directory is silently missing every
-/// backend-owned ability.
+/// so they show up in `federation.resolve(prefix=hub)`. The handler must
+/// write the owner projection read model; a missing catalog is a daemon
+/// construction error, not a successful no-op.
 pub const ABILITY_FEDERATION_ADVERTISE_ABILITIES: &str =
     conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES;
 
@@ -462,8 +459,8 @@ pub(crate) type AdvertiseAbilitiesRequest =
     crate::daemon::federation::read_model::owner_projection::OwnerProjectionPublication;
 
 /// Response payload for `federation.advertise_abilities`. Matches the
-/// daemon-backed wrapper contract (`ack` + `count`). PR-1 staging always
-/// returns `ack = true`; future PRs may surface partial-failure counts.
+/// daemon-backed wrapper contract (`ack` + `count`), where `ack` is true
+/// only when the owner projection read model accepted the publication.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AdvertiseAbilitiesResponse {
     pub ack: bool,
@@ -475,26 +472,22 @@ pub struct AdvertiseAbilitiesResponse {
 #[must_use]
 pub(crate) fn handle_advertise_abilities(
     request: &AdvertiseAbilitiesRequest,
-    catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
+    catalog: &crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore,
 ) -> AdvertiseAbilitiesResponse {
     let count = request.ability_summaries.len();
-    let stored = if let Some(store) = catalog {
-        store
-            .upsert_projection(
-                crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
-                    request.owner_ura.clone(),
-                    request.host_device_ura.clone(),
-                    request.generation,
-                    request.projection_revision,
-                    request.projection_digest.clone(),
-                    request.lease_expires_unix_ms,
-                    request.ability_summaries.clone(),
-                ),
-            )
-            .is_stored()
-    } else {
-        true
-    };
+    let stored = catalog
+        .upsert_projection(
+            crate::daemon::federation::read_model::ability_catalog::OwnerAbilityProjectionRow::new(
+                request.owner_ura.clone(),
+                request.host_device_ura.clone(),
+                request.generation,
+                request.projection_revision,
+                request.projection_digest.clone(),
+                request.lease_expires_unix_ms,
+                request.ability_summaries.clone(),
+            ),
+        )
+        .is_stored();
     AdvertiseAbilitiesResponse {
         ack: stored,
         count: if stored { count } else { 0 },
@@ -1723,7 +1716,7 @@ mod tests {
             )],
         };
 
-        let resp = handle_advertise_abilities(&req, Some(&catalog));
+        let resp = handle_advertise_abilities(&req, &catalog);
 
         assert!(resp.ack);
         assert_eq!(resp.count, 1);
@@ -1776,14 +1769,14 @@ mod tests {
         };
 
         assert_eq!(
-            handle_advertise_abilities(&newer, Some(&catalog)),
+            handle_advertise_abilities(&newer, &catalog),
             AdvertiseAbilitiesResponse {
                 ack: true,
                 count: 1
             }
         );
         assert_eq!(
-            handle_advertise_abilities(&stale, Some(&catalog)),
+            handle_advertise_abilities(&stale, &catalog),
             AdvertiseAbilitiesResponse {
                 ack: false,
                 count: 0

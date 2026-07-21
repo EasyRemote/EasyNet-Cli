@@ -297,3 +297,20 @@ rebuilding unchanged Swift inventory. Go/Python inventories were regenerated
 directly, existing Swift inventory cache was reused, and the canonical public
 API/matrix model was generated from that cache. The committed SPEC v2 gate then
 validated the resulting manifests.
+
+## Federation Advertise Abilities Catalog Authority Evidence
+
+- `cargo fmt --check`
+- `cargo test --lib daemon::invocation::dispatch::federation_wrappers --features axon-pb`
+- `cargo test --lib advertise_abilities --features axon-pb`
+- `git diff --check`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-architecture-convergence.sh`
+- `/Users/macbook.silan.tech/.local/bin/codegraph status .`
+
+Result: focused federation wrapper tests, formatting, diff hygiene, SPEC v2
+gate, architecture gate, and codegraph freshness checks passed. The
+`federation.advertise_abilities` handler now requires the daemon-owned
+`AbilityCatalogStore` and only returns `ack=true` after the owner projection
+read model accepts the publication. The missing-catalog false-success branch
+was removed instead of kept as a compatibility fallback.

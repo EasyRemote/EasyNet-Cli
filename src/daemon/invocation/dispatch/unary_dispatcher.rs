@@ -643,7 +643,7 @@ impl UnaryDispatcher {
         }
         let response = federation_wrappers::handle_advertise_abilities(
             request,
-            Some(self.directory.ability_catalog.as_ref()),
+            self.directory.ability_catalog.as_ref(),
         );
         encode_json_payload(&response)
     }

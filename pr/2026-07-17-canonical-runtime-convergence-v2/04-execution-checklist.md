@@ -17,6 +17,9 @@
       `BootEvent::PortChosen` remains the only port-choice progress authority.
 - [x] Remove MCP installer no-op compatibility flags so `mcp install` writes
       only the live `mcp serve --tenant [--agent]` contract.
+- [x] Remove the `federation.advertise_abilities` missing-catalog success path
+      so owner projection publication cannot return `ack=true` without writing
+      to the daemon-owned ability catalog read model.
 - [ ] Delete any remaining direct ability response synthesis that is not boot,
       health, status, or diagnostics.
 - [ ] Re-run daemon migration gates against current worktree.

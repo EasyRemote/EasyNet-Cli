@@ -103,3 +103,7 @@
   `easynet mcp serve` contract only. Retired `--endpoint`, `--bound-node`, and
   `--allow-node-override` inputs are removed rather than accepted and dropped,
   because silent no-op install options produce false product success.
+- Treat `federation.advertise_abilities` as a write-side owner projection
+  publication, not as an optional read-model convenience. Production dispatch
+  already owns the ability catalog, so a missing catalog is a daemon
+  construction defect rather than a successful no-op acknowledgement.

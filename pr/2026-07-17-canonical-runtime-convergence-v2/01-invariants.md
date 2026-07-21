@@ -43,6 +43,10 @@
 - Product front-door installers write only live downstream contracts. CLI
   install commands must not accept, print, or silently drop retired options
   whose semantics are not implemented by the spawned runtime surface.
+- Federation owner projection publication is a write-side runtime state
+  transition. `federation.advertise_abilities` must require the daemon-owned
+  ability catalog sink and must not acknowledge success when the projection
+  read model is unavailable.
 - SDK packages expose canonical runtime concepts only. Product feature
   families belong to downstream providers or daemon plugins.
 - Directory capability in the canonical SDK is a generic runtime projection:
