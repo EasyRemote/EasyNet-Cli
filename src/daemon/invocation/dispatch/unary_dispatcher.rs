@@ -1558,7 +1558,7 @@ impl UnaryDispatcher {
             &request,
             &self.directory.presence,
             Some(self.directory.advertised_agents.as_ref()),
-            Some(self.directory.ability_catalog.as_ref()),
+            self.directory.ability_catalog.as_ref(),
         )
         .map_err(|error| {
             Status::failed_precondition(format!(

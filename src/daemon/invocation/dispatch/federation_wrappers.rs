@@ -48,6 +48,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::daemon::ability::conformance;
+use crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore;
 use crate::daemon::federation::read_model::advertised_agents::{
     AdvertisedAgentRecord, AdvertisedAgentSigningAuthority, AdvertisedAgentStore,
 };
@@ -1285,9 +1286,7 @@ pub fn handle_revoke(
     request: &RevokeRequest,
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
-    ability_catalog: Option<
-        &crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore,
-    >,
+    ability_catalog: &AbilityCatalogStore,
 ) -> anyhow::Result<RevokeResponse> {
     let target_ura = request.effective_target_ura();
     let advertised_record = advertised_agents
@@ -1313,6 +1312,7 @@ pub fn handle_revoke(
         if let Some(store) = advertised_agents {
             let _removed = store.remove(target_ura);
         }
+        let _removed = ability_catalog.remove_owner(target_ura);
         return Ok(RevokeResponse {
             ack: true,
             was_active,
@@ -1363,9 +1363,7 @@ pub fn handle_revoke(
         if let Some(store) = advertised_agents {
             let _removed = store.remove_generation(target_ura, request.generation);
         }
-        if let Some(catalog) = ability_catalog {
-            let _removed = catalog.remove_generation(target_ura, request.generation);
-        }
+        let _removed = ability_catalog.remove_generation(target_ura, request.generation);
         if let Some(session_id) = outcome.presence_session_id {
             let _removed = registry.remove_if_session(
                 target_ura,
@@ -2860,6 +2858,7 @@ mod tests {
     #[test]
     fn handle_revoke_reports_was_active_correctly() {
         let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
         let ura = "easynet:///r/realm/device/n1".to_string();
         registry.insert(ura.clone(), make_dispatch_sender());
 
@@ -2876,7 +2875,7 @@ mod tests {
             },
             &registry,
             None,
-            None,
+            &catalog,
         )
         .unwrap();
         assert!(resp.ack);
@@ -2888,8 +2887,10 @@ mod tests {
     fn handle_revoke_removes_hosted_agent_rows_too() {
         let registry = PresenceRegistry::new();
         let advertised = AdvertisedAgentStore::new();
+        let catalog = AbilityCatalogStore::new();
+        let agent_ura = "easynet:///r/realm/agent/user.alice";
         advertised.upsert(AdvertisedAgentRecord {
-            agent_ura: "easynet:///r/realm/agent/user.alice".into(),
+            agent_ura: agent_ura.into(),
             generation: 1,
             public_key_hex: String::new(),
             host_node_id: Some("dev-1".into()),
@@ -2897,10 +2898,11 @@ mod tests {
                 host_ura: "easynet:///r/realm/device/dev-1".into(),
             },
         });
+        catalog.upsert_projection(projection_row_for(agent_ura, Vec::new()));
         let resp = handle_revoke(
             &RevokeRequest {
                 target_ura: String::new(),
-                agent_ura: "easynet:///r/realm/agent/user.alice".to_string(),
+                agent_ura: agent_ura.to_string(),
                 purge_transaction_id: None,
                 generation: 0,
                 reason: String::new(),
@@ -2910,16 +2912,18 @@ mod tests {
             },
             &registry,
             Some(&advertised),
-            None,
+            &catalog,
         )
         .unwrap();
         assert!(resp.ack);
         assert!(!resp.was_active);
         assert!(
-            advertised
-                .get("easynet:///r/realm/agent/user.alice")
-                .is_none(),
+            advertised.get(agent_ura).is_none(),
             "revoke must remove advertised hosted-agent rows"
+        );
+        assert!(
+            catalog.get(agent_ura).is_none(),
+            "revoke must remove owner projection rows"
         );
     }
 
@@ -2928,6 +2932,7 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let registry = PresenceRegistry::new();
         let advertised = AdvertisedAgentStore::new();
+        let catalog = AbilityCatalogStore::new();
         let host_ura = "easynet:///r/realm/device/dev-1";
         let agent_ura = "easynet:///r/realm/agent/user.crash-window";
         registry.insert(host_ura.to_string(), make_dispatch_sender());
@@ -2954,6 +2959,7 @@ mod tests {
             Some(&advertised),
         )
         .unwrap();
+        catalog.upsert_projection(projection_row_for(agent_ura, Vec::new()));
         let request = RevokeRequest {
             target_ura: String::new(),
             agent_ura: agent_ura.to_string(),
@@ -2966,20 +2972,26 @@ mod tests {
             delivery_fence: 1,
         };
 
-        let first = handle_revoke(&request, &registry, Some(&advertised), None).unwrap();
+        let first = handle_revoke(&request, &registry, Some(&advertised), &catalog).unwrap();
         assert!(first.was_active);
         assert!(!first.replayed);
         assert!(advertised.get(agent_ura).is_none());
+        assert!(catalog.get(agent_ura).is_none());
 
         registry.force_revoke(host_ura);
         advertised.upsert(record);
-        let replay = handle_revoke(&request, &registry, Some(&advertised), None).unwrap();
+        catalog.upsert_projection(projection_row_for(agent_ura, Vec::new()));
+        let replay = handle_revoke(&request, &registry, Some(&advertised), &catalog).unwrap();
         assert!(replay.replayed);
         assert_eq!(replay.was_active, first.was_active);
         assert_eq!(replay.purge_transaction_id, first.purge_transaction_id);
         assert!(
             advertised.get(agent_ura).is_none(),
             "replay after restart reapplies the committed removal"
+        );
+        assert!(
+            catalog.get(agent_ura).is_none(),
+            "replay after restart reapplies the committed owner projection removal"
         );
     }
 
@@ -3040,7 +3052,7 @@ mod tests {
         );
         registry.insert(agent_ura.to_string(), make_dispatch_sender());
 
-        let response = handle_revoke(&request, &registry, Some(&advertised), Some(&catalog))
+        let response = handle_revoke(&request, &registry, Some(&advertised), &catalog)
             .expect("old prepared revoke completes as superseded");
         assert_eq!(
             response.disposition,

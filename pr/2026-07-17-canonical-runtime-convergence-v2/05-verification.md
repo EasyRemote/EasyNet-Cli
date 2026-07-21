@@ -365,3 +365,21 @@ missing-catalog API surface for federation resolve, namespace resolve, owner
 projection value resolution, or `DaemonRouteResolver::new`. Tests that model
 "no published abilities" now pass an explicit empty `AbilityCatalogStore`,
 separating an empty read model from a missing read-model authority.
+
+## Federation Revoke Catalog Cleanup Authority Evidence
+
+- `cargo test --lib handle_revoke --features axon-pb`
+- `cargo test --lib daemon::invocation::dispatch::federation_wrappers --features axon-pb`
+- `cargo fmt --check`
+- `git diff --check`
+- `rg -n "handle_revoke\\([^\\n]*None|ability_catalog: Option|Some\\(&catalog\\)|, None,\\s*$" src/daemon/invocation/dispatch/federation_wrappers.rs src/daemon/invocation/dispatch/unary_dispatcher.rs src/daemon/federation/read_model/ability_catalog.rs`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-architecture-convergence.sh`
+
+Result: focused revoke tests, the full federation wrapper test module,
+formatting, diff hygiene, SPEC v2 gate, and architecture gate passed. The
+negative `rg` check found no remaining missing-catalog `handle_revoke` API
+surface. `federation.revoke` now requires the daemon-owned
+`AbilityCatalogStore`: unfenced revoke removes the current owner projection,
+and purge revoke removes only the matching generation so replay cannot leave a
+stale route projection behind.

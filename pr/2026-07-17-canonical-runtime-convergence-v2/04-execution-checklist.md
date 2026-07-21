@@ -29,6 +29,9 @@
 - [x] Remove FFI remote descriptor static-system-catalog synthesis so
       descriptor resolution cannot report a remote owner ability without route
       and signer authority evidence.
+- [x] Remove `federation.revoke` missing-catalog cleanup fallback so revocation
+      cannot acknowledge success without clearing the daemon-owned owner
+      projection read model.
 - [ ] Delete any remaining direct ability response synthesis that is not boot,
       health, status, or diagnostics.
 - [ ] Re-run daemon migration gates against current worktree.

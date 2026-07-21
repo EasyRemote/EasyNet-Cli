@@ -120,3 +120,7 @@
   evidence only. Remote descriptor resolution must not rebind static daemon
   catalog rows for an arbitrary target owner because that bypasses owner
   liveness, caller signer custody, and route/read-model authority.
+- Treat `federation.revoke` as a write-side removal transition over all runtime
+  liveness projections. Presence, advertised-agent rows, and owner projection
+  rows must converge under one handler; a missing ability catalog is a daemon
+  construction defect, not an acknowledged revoke with stale routes left behind.

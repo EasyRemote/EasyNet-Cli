@@ -250,6 +250,12 @@ impl AbilityCatalogStore {
             .is_some()
     }
 
+    /// Remove the current projection for an owner when the revoke command does
+    /// not carry an incarnation fence.
+    pub(crate) fn remove_owner(&self, owner_ura: &str) -> bool {
+        self.inner.remove(owner_ura).is_some()
+    }
+
     /// Return namespace-safe ability summaries for an owner, or `None`
     /// when no projection has landed yet for that owner URA.
     pub fn get(&self, owner_ura: &str) -> Option<Vec<Value>> {

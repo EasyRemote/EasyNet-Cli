@@ -54,6 +54,10 @@
   queries. They must require the daemon-owned ability catalog sink; an empty
   catalog is a valid negative fact, but a missing catalog must not be projected
   as an empty ability set or stable no-route answer.
+- Federation revoke is a removal state transition across presence, hosted-agent
+  advertisement rows, and owner projection read-model rows. `federation.revoke`
+  must require the daemon-owned ability catalog sink; a missing catalog must
+  not produce `ack=true` while leaving stale route projections visible.
 - FFI descriptor resolution may use the daemon-local system descriptor catalog
   only for the local runtime owner. Remote descriptor resolution must consult
   the owner route/read model through descriptor-bound runtime calls and must
