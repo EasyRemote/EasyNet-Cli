@@ -749,3 +749,15 @@ Decisions will be appended as root-fork choices are made.
 - Preserve the explicit env override semantics. `EASYNET_PAGES_USER`,
   `EASYNET_PAGES_REALM`, and `EASYNET_PAGES_PORT` still drive dev rigs, but
   they no longer mask corrupt persisted pairing authority.
+
+## 2026-07-22 Mission traditional agent target conflict naming
+
+- Treat `call ... on "<registered-agent>"` as an EAL target-kind conflict,
+  not as an implicit fallback path. The validator still rejects before run-dir
+  persistence, but its type/function/test names now describe the active
+  architecture rather than the retired behavior it prevents.
+- Keep the agent registry lookup at the single MissionRunner entry point.
+  The planner remains registry-free, and execution still receives already
+  validated IR target kinds.
+- Add a SPEC v2 guard so production Mission code cannot reintroduce
+  `ImplicitAgentFallback` or `find_implicit_agent_fallback` terminology.

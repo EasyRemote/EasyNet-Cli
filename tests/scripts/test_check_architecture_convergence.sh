@@ -1201,7 +1201,7 @@ fn write_mission_meta(path: &Path, meta: &MissionRunMeta) {
     fs::write(tmp_path, serde_json::to_string(meta).unwrap()).unwrap();
 }
 
-fn find_implicit_agent_fallback(ir: &MissionIr) -> anyhow::Result<Option<ImplicitAgentFallback>> {
+fn find_traditional_agent_target_conflict(ir: &MissionIr) -> anyhow::Result<Option<TraditionalAgentTargetConflict>> {
     let snapshot = AgentAggregateRepository::load_snapshot()?;
     let registered = snapshot.registered_agent_surface_names();
     Ok(None)
@@ -3962,7 +3962,7 @@ expect_fail \
 make_good_fixture
 mkdir -p "$CLI/src/daemon/execution/mission"
 cat >"$CLI/src/daemon/execution/mission/orchestration.rs" <<'EOF'
-fn find_implicit_agent_fallback(ir: &MissionIr) -> anyhow::Result<Option<ImplicitAgentFallback>> {
+fn find_traditional_agent_target_conflict(ir: &MissionIr) -> anyhow::Result<Option<TraditionalAgentTargetConflict>> {
     let registry = crate::daemon::persistence::agent_registry::load_agents()?;
     let registered: HashSet<String> = registry.agents.into_keys().collect();
     Ok(None)

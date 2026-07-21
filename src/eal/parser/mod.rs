@@ -23,7 +23,7 @@
 //
 //   member-call form (agent.ability) is the ONLY way to invoke an agent.
 //   traditional call form (call ... on ...) is STRICTLY device-only.
-//   No implicit agent fallback is allowed.
+//   Traditional agent-name collisions are rejected.
 //
 // The two surface productions intentionally lower to DIFFERENT IR
 // target variants:
@@ -39,8 +39,8 @@
 // If a user writes `call "chat" on "claude"` (traditional form, name
 // collides with a registered agent), the system rejects it at
 // MissionRunner execution with an error pointing at the correct
-// member-call form. See `cli/mission_runs.rs::find_implicit_agent_fallback`
-// and the `no_implicit_agent_fallback_*` test trio in the same file.
+// member-call form. See `cli/mission_runs.rs::find_traditional_agent_target_conflict`
+// and the `traditional_agent_target_conflict_*` test trio in the same file.
 //
 // Grammar ambiguity guard:
 //   `arg_value` only allows `IDENT.output` for var-refs, not the general

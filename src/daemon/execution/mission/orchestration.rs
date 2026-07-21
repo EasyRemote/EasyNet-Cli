@@ -736,11 +736,11 @@ pub struct MissionRunResult {
     pub ok: bool,
 }
 
-/// One match from `find_implicit_agent_fallback`. Carries the step id,
+/// One match from `find_traditional_agent_target_conflict`. Carries the step id,
 /// the colliding name, and the ability so the bail! message can suggest
 /// the exact member-call form the user should write instead.
 #[derive(Debug)]
-struct ImplicitAgentFallback {
+struct TraditionalAgentTargetConflict {
     step_id: String,
     colliding_name: String,
     ability: String,
@@ -752,21 +752,23 @@ struct ImplicitAgentFallback {
 /// if the daemon-owned registry can't be loaded.
 ///
 /// This implements the EAL surface invariant: traditional
-/// `call ... on ...` is strictly device-only. There is no implicit
-/// agent fallback. See `docs/AGENT_IDENTITY.md` and the EAL surface
-/// invariant comment in `src/eal/parser.rs`.
-fn find_implicit_agent_fallback(
+/// `call ... on ...` is strictly device-only. If the device-looking
+/// target collides with a registered Agent name, the source is ambiguous
+/// product input and must fail before persistence. See
+/// `docs/AGENT_IDENTITY.md` and the EAL surface invariant comment in
+/// `src/eal/parser.rs`.
+fn find_traditional_agent_target_conflict(
     ir: &crate::eal::runtime::ir::MissionIr,
-) -> anyhow::Result<Option<ImplicitAgentFallback>> {
+) -> anyhow::Result<Option<TraditionalAgentTargetConflict>> {
     use crate::eal::runtime::ir::IrTarget;
 
     let snapshot =
         crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()?;
     let registered = snapshot.registered_agent_surface_names();
 
-    // PR-10: the implicit-agent-fallback check only applies to flat
-    // `Call` steps. Block variants' targets are resolved inside the
-    // block's lowering; they never surface as `call ... on <name>`.
+    // PR-10: traditional target conflict detection only applies to flat
+    // `Call` steps. Block variants' targets are resolved inside the block's
+    // lowering; they never surface as `call ... on <name>`.
     let mut leaves: Vec<&crate::eal::runtime::ir::IrCall> = Vec::new();
     for s in &ir.steps {
         s.walk_calls(&mut leaves);
@@ -774,7 +776,7 @@ fn find_implicit_agent_fallback(
     for step in leaves {
         if let IrTarget::Device { node_id } = &step.target {
             if registered.contains(node_id) {
-                return Ok(Some(ImplicitAgentFallback {
+                return Ok(Some(TraditionalAgentTargetConflict {
                     step_id: step.step_id.clone(),
                     colliding_name: node_id.clone(),
                     ability: step.ability.as_str().to_string(),
@@ -810,13 +812,13 @@ impl MissionRunner {
         let program = crate::eal::parser::parse(source)?;
         let ir = crate::eal::runtime::planner::compile(&program)?;
 
-        // Reject "implicit agent fallback" — `call "x" on "<agent-name>"`
+        // Reject a traditional target conflict — `call "x" on "<agent-name>"`
         // in EAL traditional form, where `<agent-name>` collides with a
-        // registered agent. The traditional `call ... on ...` form is
-        // strictly device-only by language design (see parser.rs and
-        // ir.rs invariant comments). Without this check, the user's
-        // intent to call an agent silently becomes a phantom-device
-        // dispatch that fails with a confusing "node not found" error.
+        // registered agent. The traditional `call ... on ...` form is strictly
+        // device-only by language design (see parser.rs and ir.rs invariant
+        // comments). Without this check, the user's intent to call an agent
+        // silently becomes a phantom-device dispatch that fails with a
+        // confusing "node not found" error.
         //
         // The check happens here, in `MissionRunner::run`, because:
         //   - the planner is registry-free by design (Step 2 invariant 2:
@@ -829,7 +831,7 @@ impl MissionRunner {
         // The check is a one-pass walk over the IR before persistence,
         // so a rejection produces a hard error before any disk artifact
         // (run dir, trace, meta) is created.
-        if let Some(conflict) = find_implicit_agent_fallback(&ir)? {
+        if let Some(conflict) = find_traditional_agent_target_conflict(&ir)? {
             anyhow::bail!(
                 "step '{step_id}' uses traditional form `call ... on \"{name}\"` \
              but \"{name}\" is a registered agent. The traditional form is \
@@ -1429,7 +1431,7 @@ mod tests {
         }
     }
 
-    // ── EAL surface invariant: no implicit agent fallback ──────────────────
+    // ── EAL surface invariant: traditional agent target conflicts ───────
     //
     // The traditional EAL `call ... on ...` form is STRICTLY device-only.
     // Member-call form `agent.ability(...)` is the ONLY way to invoke an
@@ -1437,10 +1439,9 @@ mod tests {
     // with a registered agent is an error, not a fallback.
     //
     // These tests are the load-bearing anti-regression for that invariant.
-    // If a future contributor accidentally re-introduces implicit agent
-    // fallback (e.g. by making the dispatcher do `is_agent` lookups, or
-    // by deleting the `find_implicit_agent_fallback` check), one of these
-    // tests will fail. The test name encodes the invariant so it is
+    // If a future contributor makes the dispatcher do `is_agent` lookups or
+    // deletes the `find_traditional_agent_target_conflict` check, one of
+    // these tests will fail. The test name encodes the invariant so it is
     // searchable.
     //
     // See `docs/AGENT_IDENTITY.md` and the EAL surface invariant comment
@@ -1459,7 +1460,7 @@ mod tests {
     }
 
     #[test]
-    fn no_implicit_agent_fallback_traditional_form_with_agent_name_is_rejected() {
+    fn traditional_agent_target_conflict_traditional_form_with_agent_name_is_rejected() {
         let _g = HomeGuard::new();
         register_test_agent("claude");
 
@@ -1473,7 +1474,7 @@ mod tests {
         "#;
         let program = crate::eal::parser::parse(source).expect("parse");
         let ir = crate::eal::runtime::planner::compile(&program).expect("compile");
-        let err = find_implicit_agent_fallback(&ir)
+        let err = find_traditional_agent_target_conflict(&ir)
             .expect("registry lookup")
             .expect("traditional form on agent name must be rejected");
         let msg = format!(
@@ -1503,7 +1504,7 @@ mod tests {
     }
 
     #[test]
-    fn no_implicit_agent_fallback_member_call_form_is_accepted() {
+    fn traditional_agent_target_conflict_member_call_form_is_accepted() {
         let _g = HomeGuard::new();
         register_test_agent("claude");
 
@@ -1522,15 +1523,15 @@ mod tests {
         // path.
         let program = crate::eal::parser::parse(source).expect("parse");
         let ir = crate::eal::runtime::planner::compile(&program).expect("compile");
-        let conflict = find_implicit_agent_fallback(&ir).expect("registry load");
+        let conflict = find_traditional_agent_target_conflict(&ir).expect("registry load");
         assert!(
             conflict.is_none(),
-            "member-call form must NOT trigger the implicit-fallback check"
+            "member-call form must NOT trigger the traditional-target-conflict check"
         );
     }
 
     #[test]
-    fn no_implicit_agent_fallback_traditional_form_with_device_name_is_accepted() {
+    fn traditional_agent_target_conflict_traditional_form_with_device_name_is_accepted() {
         let _g = HomeGuard::new();
         register_test_agent("claude");
 
@@ -1544,7 +1545,7 @@ mod tests {
         "#;
         let program = crate::eal::parser::parse(source).expect("parse");
         let ir = crate::eal::runtime::planner::compile(&program).expect("compile");
-        let conflict = find_implicit_agent_fallback(&ir).expect("registry load");
+        let conflict = find_traditional_agent_target_conflict(&ir).expect("registry load");
         assert!(
             conflict.is_none(),
             "device-style name must not trigger the conflict check: got {conflict:?}"

@@ -2420,3 +2420,41 @@ Commands and outcomes will be appended after implementation.
 - `/Users/macbook.silan.tech/.local/bin/codegraph status
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; index is
   up to date after edits.
+
+## 2026-07-22 Mission traditional agent target conflict naming
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query -p
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli
+  "find_implicit_agent_fallback" --limit 20` — PASS for candidate
+  discovery; found the Mission validator still named after the retired
+  implicit fallback concept.
+- `rg -n
+  "find_implicit_agent_fallback|ImplicitAgentFallback|implicit agent
+  fallback|implicit-agent-fallback|no_implicit_agent_fallback|implicit-fallback"
+  src/daemon/execution/mission src/eal/parser src/eal/runtime
+  tests/scripts/test_check_architecture_convergence.sh` — PASS; no retired
+  Mission fallback concept remains in active Mission source or architecture
+  fixture.
+- `cargo test -q traditional_agent_target_conflict --lib --features axon-pb`
+  — PASS (`3 passed`); covers registered-agent traditional target rejection,
+  member-call acceptance, and device-name traditional target acceptance.
+- `cargo fmt --all -- --check` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS
+  (`all cases passed`).
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes the negative fixture for retired Mission fallback naming.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-architecture-convergence.sh` — PASS
+  (`architecture-convergence: OK`).
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS
+  (`test_check_canonical_runtime_convergence_v2 ok`).
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; synced
+  changed Rust/script nodes.
+- `/Users/macbook.silan.tech/.local/bin/codegraph status
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; index is
+  up to date after edits.

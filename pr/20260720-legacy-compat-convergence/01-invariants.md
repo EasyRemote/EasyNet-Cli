@@ -302,3 +302,8 @@
   malformed, or schema-invalid credentials file is unavailable boot identity
   state and must not be swallowed into env defaults, default realm, or
   unpaired registration.
+- EAL traditional target validation is a target-kind conflict check, not a
+  fallback subsystem. A traditional `call ... on "<name>"` target that collides
+  with a registered Agent is rejected as an explicit surface conflict; Mission
+  code, tests, and gates must not preserve `implicit agent fallback` concepts
+  or helper names.

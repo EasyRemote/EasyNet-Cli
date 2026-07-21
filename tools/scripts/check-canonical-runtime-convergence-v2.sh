@@ -471,6 +471,58 @@ for test in (
 PY
 }
 
+check_mission_traditional_target_conflict_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local orchestration="$cli_root/src/daemon/execution/mission/orchestration.rs"
+  [[ -f "$orchestration" ]] || return 0
+  local parser="$cli_root/src/eal/parser/mod.rs"
+  local ir="$cli_root/src/eal/runtime/ir.rs"
+
+  "$PYTHON_BIN" - "$orchestration" "$parser" "$ir" <<'PY'
+import sys
+from pathlib import Path
+
+orchestration = Path(sys.argv[1]).read_text()
+parser = Path(sys.argv[2]).read_text() if Path(sys.argv[2]).exists() else ""
+ir = Path(sys.argv[3]).read_text() if Path(sys.argv[3]).exists() else ""
+
+for retired in (
+    "ImplicitAgentFallback",
+    "find_implicit_agent_fallback",
+    "implicit agent fallback",
+    "implicit-agent-fallback",
+):
+    if retired in orchestration:
+        raise SystemExit(f"mission_retired_fallback_concept:{retired}")
+for required in (
+    "struct TraditionalAgentTargetConflict",
+    "fn find_traditional_agent_target_conflict(",
+    "AgentAggregateRepository::load_snapshot()?",
+    "registered_agent_surface_names()",
+):
+    if required not in orchestration:
+        raise SystemExit(f"mission_target_conflict_missing:{required}")
+for retired_test in (
+    "no_implicit_agent_fallback",
+    "implicit-fallback check",
+):
+    if retired_test in orchestration:
+        raise SystemExit(f"mission_retired_fallback_test_concept:{retired_test}")
+for test in (
+    "traditional_agent_target_conflict_traditional_form_with_agent_name_is_rejected",
+    "traditional_agent_target_conflict_member_call_form_is_accepted",
+    "traditional_agent_target_conflict_traditional_form_with_device_name_is_accepted",
+):
+    if test not in orchestration:
+        raise SystemExit(f"missing_mission_target_conflict_test:{test}")
+for doc_name, doc in (("parser", parser), ("ir", ir)):
+    if "find_implicit_agent_fallback" in doc or "No implicit agent fallback" in doc:
+        raise SystemExit(f"mission_retired_fallback_doc:{doc_name}")
+    if doc and "find_traditional_agent_target_conflict" not in doc:
+        raise SystemExit(f"mission_target_conflict_doc_missing:{doc_name}")
+PY
+}
+
 check_edge_adapter_policy_contract() {
   "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$MANIFEST" >/dev/null
 }
@@ -2465,6 +2517,23 @@ EOF
   if ( check_pages_identity_credentials_contract "$tmp/pages-identity-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected Pages identity credential fallback gate to fail"
   fi
+  mkdir -p "$tmp/mission-implicit-fallback/src/daemon/execution/mission" \
+    "$tmp/mission-implicit-fallback/src/eal/parser" \
+    "$tmp/mission-implicit-fallback/src/eal/runtime"
+  printf '%s\n' \
+    'struct ImplicitAgentFallback;' \
+    'fn find_implicit_agent_fallback(ir: &MissionIr) -> anyhow::Result<Option<ImplicitAgentFallback>> {' \
+    '  let snapshot = AgentAggregateRepository::load_snapshot()?;' \
+    '  Ok(None)' \
+    '}' \
+    > "$tmp/mission-implicit-fallback/src/daemon/execution/mission/orchestration.rs"
+  printf 'No implicit agent fallback is allowed.\n' \
+    > "$tmp/mission-implicit-fallback/src/eal/parser/mod.rs"
+  printf 'No implicit agent fallback is allowed.\n' \
+    > "$tmp/mission-implicit-fallback/src/eal/runtime/ir.rs"
+  if ( check_mission_traditional_target_conflict_contract "$tmp/mission-implicit-fallback" ) >/dev/null 2>&1; then
+    fail "self-test expected Mission implicit fallback naming gate to fail"
+  fi
   check_active_source_contract
   check_go_sdk_public_ura_alias_contract
   check_advertise_agent_ingress_contract
@@ -2473,6 +2542,7 @@ EOF
   check_principal_lifecycle_cli_schema_contract
   check_auth_agents_backend_shape_contract
   check_pages_identity_credentials_contract
+  check_mission_traditional_target_conflict_contract
   check_edge_adapter_policy_contract
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
@@ -2511,6 +2581,7 @@ check_invocation_history_get_key_contract
 check_principal_lifecycle_cli_schema_contract
 check_auth_agents_backend_shape_contract
 check_pages_identity_credentials_contract
+check_mission_traditional_target_conflict_contract
 check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract

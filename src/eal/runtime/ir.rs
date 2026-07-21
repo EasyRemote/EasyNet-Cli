@@ -36,7 +36,7 @@ use crate::core::agent::id::{AbilityName, AgentId};
 ///
 ///   member-call form (agent.ability) is the ONLY way to invoke an agent.
 ///   traditional call form (call ... on ...) is STRICTLY device-only.
-///   No implicit agent fallback is allowed.
+///   Traditional agent-name collisions are rejected.
 ///
 /// Lowering map (set by parser, executed by planner — never by runtime):
 ///
@@ -46,8 +46,8 @@ use crate::core::agent::id::{AbilityName, AgentId};
 ///                                            MissionRunner execution
 ///                                            with a clear error pointing
 ///                                            at member-call form. See
-///                                            `cli/mission_runs.rs::find_implicit_agent_fallback`
-///                                            and `no_implicit_agent_fallback_*` tests.
+///                                            `cli/mission_runs.rs::find_traditional_agent_target_conflict`
+///                                            and `traditional_agent_target_conflict_*` tests.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum IrTarget {
