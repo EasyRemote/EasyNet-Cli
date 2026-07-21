@@ -724,3 +724,15 @@ Decisions will be appended as root-fork choices are made.
 - Keep lifecycle-to-banner projection in one value object. `BannerDaemonObservation`
   owns the display mapping from lifecycle state-machine values so future
   banner copy changes do not reintroduce ad hoc runtime state checks.
+
+## 2026-07-22 Auth agents canonical backend row projection
+
+- Treat `/api/v1/agents` as a schema-bound backend read model for CLI table
+  rendering. The CLI projects the canonical row fields directly instead of
+  accepting retired `ura` / `name` aliases.
+- Keep JSON output raw. Operators who request JSON still receive the daemon
+  payload for diagnosis, while the human table refuses to turn legacy row
+  shapes into canonical identity display facts.
+- Add a SPEC v2 guard because this fallback is not observable through normal
+  product smoke tests: a legacy backend row can make the UI look functional
+  while preserving a second, undocumented agent inventory shape.

@@ -2347,3 +2347,35 @@ Commands and outcomes will be appended after implementation.
   (`architecture-convergence: OK`).
 - `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
   (`canonical-runtime-convergence-v2: OK`).
+
+## 2026-07-22 Auth agents canonical backend row projection
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; index was
+  up to date before edits.
+- `rg -n
+  'or_else\(\|\| a\.get\("(ura|name)"\)\)|a\.get\("(ura|name)"\)'
+  src/cli/commands/auth.rs` — PASS; no production `auth agents` row alias
+  fallback remains.
+- `cargo test -q auth_agents --lib --features axon-pb` — PASS (`2 passed`);
+  covers canonical backend fields and rejects retired `ura` / `name` row
+  aliases.
+- `cargo fmt --all -- --check` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes the negative fixture for retired `auth agents` row alias
+  fallback.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-architecture-convergence.sh` — PASS
+  (`architecture-convergence: OK`).
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS
+  (`test_check_canonical_runtime_convergence_v2 ok`).
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; synced
+  changed Rust nodes.
+- `/Users/macbook.silan.tech/.local/bin/codegraph status
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; index is
+  up to date after edits.

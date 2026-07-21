@@ -291,3 +291,8 @@
   `runtime.json` directly. Because the banner cannot return `Result`, corrupt
   runtime projection must render as explicit unavailable metadata rather than
   being projected as stopped or silently swallowed.
+- Auth agent inventory rendering must consume the canonical backend read-model
+  shape exactly. `/api/v1/agents` table projection reads `agent_id`,
+  `display_name`, `node_id`, and `skills` only; retired row aliases such as
+  `ura` and `name` are not compatibility inputs and must not be repaired into
+  visible identity facts.

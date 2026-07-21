@@ -360,6 +360,64 @@ for test in (
 PY
 }
 
+check_auth_agents_backend_shape_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local auth="$cli_root/src/cli/commands/auth.rs"
+  [[ -f "$auth" ]] || return 0
+
+  "$PYTHON_BIN" - "$auth" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+run_agents = re.search(
+    r"pub fn run_agents\(args: AgentsArgs\) -> anyhow::Result<\(\)> \{(?P<body>.*?)\n\}\n\n// ── device remove",
+    text,
+    re.DOTALL,
+)
+if run_agents is None:
+    raise SystemExit("auth_agents_run_not_found")
+body = run_agents.group("body")
+for retired in (
+    'a.get("ura")',
+    'a.get("name")',
+    '.or_else(|| a.get("ura"))',
+    '.or_else(|| a.get("name"))',
+):
+    if retired in body:
+        raise SystemExit(f"auth_agents_retired_row_alias:{retired}")
+if "AgentTableProjection::from_backend_row" not in body:
+    raise SystemExit("auth_agents_table_projection_not_used")
+projection = re.search(
+    r"impl AgentTableProjection \{(?P<body>.*?)\n\}",
+    text,
+    re.DOTALL,
+)
+if projection is None:
+    raise SystemExit("auth_agents_table_projection_missing")
+projection_body = projection.group("body")
+for required in (
+    '"agent_id"',
+    '"display_name"',
+    '"node_id"',
+    '"skills"',
+):
+    if required not in projection_body:
+        raise SystemExit(f"auth_agents_projection_missing:{required}")
+for retired in ('"ura"', '"name"'):
+    if retired in projection_body:
+        raise SystemExit(f"auth_agents_projection_uses_retired_alias:{retired}")
+for test in (
+    "auth_agents_table_uses_canonical_backend_fields",
+    "auth_agents_table_rejects_legacy_row_aliases",
+):
+    if test not in text:
+        raise SystemExit(f"missing_auth_agents_projection_test:{test}")
+PY
+}
+
 check_edge_adapter_policy_contract() {
   "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$MANIFEST" >/dev/null
 }
@@ -2325,12 +2383,28 @@ EOF
   if ( check_principal_lifecycle_cli_schema_contract "$tmp/principal-lifecycle-fallback" ) >/dev/null 2>&1; then
     fail "self-test expected PrincipalLifecycle CLI top-level fallback gate to fail"
   fi
+  mkdir -p "$tmp/auth-agents-legacy/src/cli/commands"
+  printf '%s\n' \
+    'pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {' \
+    '  for a in &resp.items {' \
+    '    let agent_id = a.get("agent_id").or_else(|| a.get("ura"));' \
+    '    let name = a.get("display_name").or_else(|| a.get("name"));' \
+    '  }' \
+    '  Ok(())' \
+    '}' \
+    '' \
+    '// ── device remove' \
+    > "$tmp/auth-agents-legacy/src/cli/commands/auth.rs"
+  if ( check_auth_agents_backend_shape_contract "$tmp/auth-agents-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected auth agents retired row alias gate to fail"
+  fi
   check_active_source_contract
   check_go_sdk_public_ura_alias_contract
   check_advertise_agent_ingress_contract
   check_agent_start_model_intent_contract
   check_invocation_history_get_key_contract
   check_principal_lifecycle_cli_schema_contract
+  check_auth_agents_backend_shape_contract
   check_edge_adapter_policy_contract
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
@@ -2367,6 +2441,7 @@ check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract
 check_principal_lifecycle_cli_schema_contract
+check_auth_agents_backend_shape_contract
 check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract

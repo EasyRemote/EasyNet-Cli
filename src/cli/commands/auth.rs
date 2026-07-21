@@ -825,6 +825,35 @@ struct AgentListResp {
     items: Vec<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentTableProjection {
+    agent_id: String,
+    display_name: String,
+    node_id: String,
+    skill_count: usize,
+}
+
+impl AgentTableProjection {
+    fn from_backend_row(row: &serde_json::Value) -> Self {
+        Self {
+            agent_id: canonical_agent_row_string(row, "agent_id").to_string(),
+            display_name: canonical_agent_row_string(row, "display_name").to_string(),
+            node_id: canonical_agent_row_string(row, "node_id").to_string(),
+            skill_count: row
+                .get("skills")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
+        }
+    }
+}
+
+fn canonical_agent_row_string<'a>(row: &'a serde_json::Value, field: &'static str) -> &'a str {
+    row.get(field)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("-")
+}
+
 pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {
     let resp: AgentListResp = auth_get_json("/api/v1/agents")?;
     if args.json {
@@ -840,38 +869,19 @@ pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {
         println!("(no agents — daemon may be offline, or no hosted agents joined)");
         return Ok(());
     }
-    // Backend's `/api/v1/agents` shape (listAgentsLogic.go) is
-    // {agent_id, display_name, node_id, tags, skills:[...]} — no
-    // top-level `ura` or `status` fields. The pre-fix renderer
-    // looked for `ura` / `status` and printed `-` for every row,
-    // which made every agent look offline / unidentified even when
-    // the response carried real data. Render the device that hosts
-    // each agent (NODE_ID) and the skill count so the operator
-    // sees both identity and "what can this agent do".
+    // Backend's `/api/v1/agents` shape (listAgentsLogic.go) is the
+    // canonical table contract: {agent_id, display_name, node_id, tags,
+    // skills:[...]}. The CLI table projects that shape directly and does not
+    // repair retired row aliases into identity facts.
     println!(
         "{:<60} {:<28} {:<38} {:>6}",
         "AGENT_ID", "DISPLAY_NAME", "NODE_ID", "SKILLS"
     );
     for a in &resp.items {
-        let agent_id = a
-            .get("agent_id")
-            .or_else(|| a.get("ura"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("-");
-        let name = a
-            .get("display_name")
-            .or_else(|| a.get("name"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("-");
-        let node_id = a.get("node_id").and_then(|v| v.as_str()).unwrap_or("-");
-        let skills = a
-            .get("skills")
-            .and_then(|v| v.as_array())
-            .map(|s| s.len())
-            .unwrap_or(0);
+        let row = AgentTableProjection::from_backend_row(a);
         println!(
             "{:<60} {:<28} {:<38} {:>6}",
-            agent_id, name, node_id, skills
+            row.agent_id, row.display_name, row.node_id, row.skill_count
         );
     }
     Ok(())
@@ -1088,5 +1098,43 @@ mod tests {
                 .contains("canonical advertised ability name"),
             "error should explain the canonical tool-name contract: {err}"
         );
+    }
+
+    #[test]
+    fn auth_agents_table_uses_canonical_backend_fields() {
+        let row = AgentTableProjection::from_backend_row(&serde_json::json!({
+            "agent_id": "agent-1",
+            "display_name": "Agent One",
+            "node_id": "device-1",
+            "skills": [
+                { "name": "shell.run" },
+                { "name": "browser.open_session" }
+            ]
+        }));
+
+        assert_eq!(
+            row,
+            AgentTableProjection {
+                agent_id: "agent-1".to_string(),
+                display_name: "Agent One".to_string(),
+                node_id: "device-1".to_string(),
+                skill_count: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn auth_agents_table_rejects_legacy_row_aliases() {
+        let row = AgentTableProjection::from_backend_row(&serde_json::json!({
+            "ura": "easynet:///r/test/agent/legacy",
+            "name": "Legacy Agent",
+            "node_id": "device-1",
+            "skills": []
+        }));
+
+        assert_eq!(row.agent_id, "-");
+        assert_eq!(row.display_name, "-");
+        assert_eq!(row.node_id, "device-1");
+        assert_eq!(row.skill_count, 0);
     }
 }
