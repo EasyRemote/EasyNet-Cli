@@ -32,6 +32,9 @@
 - [x] Remove `federation.revoke` missing-catalog cleanup fallback so revocation
       cannot acknowledge success without clearing the daemon-owned owner
       projection read model.
+- [x] Remove agent registry load-time v1 migration so runtime reads cannot
+      mutate agent roots, write `.v1.bak`, or infer canonical roots from
+      retired registry rows.
 - [ ] Delete any remaining direct ability response synthesis that is not boot,
       health, status, or diagnostics.
 - [ ] Re-run daemon migration gates against current worktree.

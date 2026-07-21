@@ -124,3 +124,7 @@
   liveness projections. Presence, advertised-agent rows, and owner projection
   rows must converge under one handler; a missing ability catalog is a daemon
   construction defect, not an acknowledged revoke with stale routes left behind.
+- Treat the agent registry as a canonical read model, not a migration engine.
+  Fresh agent creation may materialize roots, but `load_agents()` must only
+  read and validate current rows. Retired pre-v2 rows are rejected instead of
+  being repaired into `agents_root()` from production read paths.

@@ -383,3 +383,21 @@ surface. `federation.revoke` now requires the daemon-owned
 `AbilityCatalogStore`: unfenced revoke removes the current owner projection,
 and purge revoke removes only the matching generation so replay cannot leave a
 stale route projection behind.
+
+## Agent Registry Canonical Root Load Boundary Evidence
+
+- `cargo test --lib daemon::persistence::agent_registry --features axon-pb`
+- `cargo fmt --check`
+- `git diff --check`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-architecture-convergence.sh`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_workspace_agent_directory_boundary.sh`
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+
+Result: focused agent registry tests, formatting, diff hygiene, architecture
+gate, SPEC v2 gate, workspace boundary self-test, and architecture gate
+self-test passed. `load_agents()` no longer performs v1-to-v2 migration,
+creates agent roots, writes `.v1.bak`, or repairs missing `root_path`. Loaded
+registry rows must already carry the current schema stamp and canonical
+`root_path`; retired pre-v2 rows fail closed instead of becoming implicit
+runtime state mutations.

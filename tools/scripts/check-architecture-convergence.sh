@@ -1255,7 +1255,6 @@ for path in sorted(set(legacy_agent_root_operational_files)):
 # state readers must call AgentEntry::required_root_path and fail closed when a
 # row lacks `root_path`.
 agent_root_fallback_allowed = {
-    cli_root / "src/daemon/persistence/agent_registry.rs",
     cli_root / "src/daemon/ability/builtins/agents/lifecycle.rs",
 }
 agent_root_fallback_pattern = re.compile(

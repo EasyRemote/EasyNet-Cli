@@ -43,6 +43,10 @@
 - Product front-door installers write only live downstream contracts. CLI
   install commands must not accept, print, or silently drop retired options
   whose semantics are not implemented by the spawned runtime surface.
+- Agent registry load is a canonical read-model boundary. Loaded rows must
+  already carry the current schema stamp and canonical `root_path`; production
+  reads must not create agent directories, write migration backups, or infer
+  roots from historical workspace layout.
 - Federation owner projection publication is a write-side runtime state
   transition. `federation.advertise_abilities` must require the daemon-owned
   ability catalog sink and must not acknowledge success when the projection
