@@ -98,6 +98,8 @@
       source and public API inventory.
 - [x] Gate product-owned Directory wire DTO/file reintroduction in SDK
       product-neutrality.
+- [x] Remove `federation.advertise_agent` top-level `host_ura` ingress repair
+      and gate the retired request field.
 - [ ] Re-run Mission/EAL boundary gates.
 
 ## RF-9

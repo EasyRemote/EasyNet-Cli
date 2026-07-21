@@ -106,7 +106,7 @@ impl HostedAgentPublication {
                     "device-sponsored Agent URAs cannot enter the user-hosted publication path",
                 ))?;
 
-        if request.host_ura() != Some(caller_device_ura) {
+        if request.signing_host_ura() != Some(caller_device_ura) {
             return Err(HostedAgentPublicationError::HostMismatch);
         }
         if request
@@ -256,11 +256,10 @@ mod tests {
         AdvertiseAgentRequest {
             agent_ura: agent_ura.to_string(),
             generation: 1,
-            signing_authority: Some(AdvertiseSigningAuthorityRequest::HostedBy {
+            signing_authority: AdvertiseSigningAuthorityRequest::HostedBy {
                 host_ura: "easynet:///r/test/device/dev-1".to_string(),
-            }),
+            },
             public_key_hex: String::new(),
-            host_ura: None,
             host_node_id: Some("dev-1".to_string()),
         }
     }

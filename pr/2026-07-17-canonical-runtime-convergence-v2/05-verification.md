@@ -421,3 +421,28 @@ longer exports the retired source-compatible `Ura` alias; canonical public API
 inventory and SDK parity evidence now expose only `URA`. The V2 gate now
 rejects future production Go SDK `type Ura = ...` aliases and conformance
 evidence entries that preserve `"Ura"` as canonical API shape.
+
+## Federation Advertise Agent Ingress Boundary Evidence
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query AdvertiseAgentRequest`
+- `/Users/macbook.silan.tech/.local/bin/codegraph callers AdvertiseAgentRequest`
+- `rg -n "AdvertiseAgentRequest \\{|signing_authority:\\s*Some\\(|host_ura:\\s*None|pub\\s+host_ura|self\\.host_ura|host_ura:\\s*Option" src/daemon/invocation src/daemon/federation -S`
+- `cargo test --lib federation_wrappers --features axon-pb`
+- `cargo test --lib hosted_agent_publication --features axon-pb`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tools/scripts/check-architecture-convergence.sh`
+- `bash tools/scripts/check-daemon-latest-input-boundary.sh`
+- `cargo fmt --check`
+- `git diff --check`
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .`
+- `/Users/macbook.silan.tech/.local/bin/codegraph status .`
+
+Result: focused federation/admission tests, SPEC v2 self-test/full gate,
+architecture gate, daemon latest-input boundary, formatting, diff hygiene, and
+codegraph sync/status passed. `federation.advertise_agent` now requires the
+canonical tagged `signing_authority` enum, rejects retired top-level `host_ura`
+ingress via strict deserialization, and no longer repairs missing authority
+into a self-signed or hosted publication. The V2 gate now rejects future
+request DTO fallback fields and requires negative tests for retired
+`host_ura` and missing `signing_authority`.

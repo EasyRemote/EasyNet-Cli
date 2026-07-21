@@ -62,6 +62,10 @@
   advertisement rows, and owner projection read-model rows. `federation.revoke`
   must require the daemon-owned ability catalog sink; a missing catalog must
   not produce `ack=true` while leaving stale route projections visible.
+- Federation hosted-agent identity publication has one authority field:
+  `signing_authority`. `federation.advertise_agent` must reject retired
+  top-level `host_ura` ingress instead of repairing it into a hosted signing
+  authority.
 - FFI descriptor resolution may use the daemon-local system descriptor catalog
   only for the local runtime owner. Remote descriptor resolution must consult
   the owner route/read model through descriptor-bound runtime calls and must

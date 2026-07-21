@@ -336,19 +336,17 @@ pub fn derive_join_receipt_hash(caller_ura: &str, realm: &str) -> String {
 
 /// Request payload for `federation.advertise_agent`.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AdvertiseAgentRequest {
     /// URA of the agent being advertised.
     pub agent_ura: String,
     /// Durable owner-cursor generation for this Agent incarnation.
     pub generation: u64,
-    /// New wire shape used by the publisher. Legacy callers may still
-    /// send a top-level `host_ura`, so we accept both.
-    #[serde(default)]
-    pub signing_authority: Option<AdvertiseSigningAuthorityRequest>,
+    /// Canonical authority carrying hosted-agent signing custody.
+    pub signing_authority: AdvertiseSigningAuthorityRequest,
     #[serde(default)]
     pub public_key_hex: String,
-    #[serde(default)]
-    pub host_ura: Option<String>,
+    /// Runtime node hosting the agent's canonical invocation endpoint.
     #[serde(default)]
     pub host_node_id: Option<String>,
 }
@@ -362,31 +360,24 @@ pub enum AdvertiseSigningAuthorityRequest {
 
 impl AdvertiseAgentRequest {
     #[must_use]
-    pub(crate) fn host_ura(&self) -> Option<&str> {
+    pub(crate) fn signing_host_ura(&self) -> Option<&str> {
         match &self.signing_authority {
-            Some(AdvertiseSigningAuthorityRequest::HostedBy { host_ura }) => Some(host_ura),
-            Some(AdvertiseSigningAuthorityRequest::SelfSigned) => None,
-            None => self.host_ura.as_deref(),
+            AdvertiseSigningAuthorityRequest::HostedBy { host_ura } => Some(host_ura),
+            AdvertiseSigningAuthorityRequest::SelfSigned => None,
         }
     }
 
     #[must_use]
     fn to_record(&self) -> AdvertisedAgentRecord {
         let signing_authority = match &self.signing_authority {
-            Some(AdvertiseSigningAuthorityRequest::SelfSigned) => {
+            AdvertiseSigningAuthorityRequest::SelfSigned => {
                 AdvertisedAgentSigningAuthority::SelfSigned
             }
-            Some(AdvertiseSigningAuthorityRequest::HostedBy { host_ura }) => {
+            AdvertiseSigningAuthorityRequest::HostedBy { host_ura } => {
                 AdvertisedAgentSigningAuthority::HostedBy {
                     host_ura: host_ura.clone(),
                 }
             }
-            None => match &self.host_ura {
-                Some(host_ura) => AdvertisedAgentSigningAuthority::HostedBy {
-                    host_ura: host_ura.clone(),
-                },
-                None => AdvertisedAgentSigningAuthority::SelfSigned,
-            },
         };
         AdvertisedAgentRecord {
             agent_ura: self.agent_ura.clone(),
@@ -403,7 +394,7 @@ impl AdvertiseAgentRequest {
         use crate::daemon::persistence::federation_revoke::{
             DurableSigningAuthority, HostedAgentInventoryRecord, InventoryLifecycle,
         };
-        let signing_authority = match self.host_ura() {
+        let signing_authority = match self.signing_host_ura() {
             Some(host_ura) => DurableSigningAuthority::HostedBy {
                 host_ura: host_ura.to_string(),
             },
@@ -1667,11 +1658,10 @@ mod tests {
         let req = AdvertiseAgentRequest {
             agent_ura: "easynet:///r/realm/agent/user.n1".to_string(),
             generation: 1,
-            signing_authority: Some(AdvertiseSigningAuthorityRequest::HostedBy {
+            signing_authority: AdvertiseSigningAuthorityRequest::HostedBy {
                 host_ura: "easynet:///r/realm/device/dev-1".to_string(),
-            }),
+            },
             public_key_hex: String::new(),
-            host_ura: None,
             host_node_id: Some("dev-1".to_string()),
         };
         let resp = handle_advertise_agent(&req, Some(&store)).expect("advertise agent succeeds");
@@ -1681,6 +1671,41 @@ mod tests {
             .get("easynet:///r/realm/agent/user.n1")
             .expect("advertised agent must be stored");
         assert_eq!(stored.host_ura(), Some("easynet:///r/realm/device/dev-1"));
+    }
+
+    #[test]
+    fn advertise_agent_request_rejects_retired_top_level_host_ura() {
+        let legacy = serde_json::json!({
+            "agent_ura": "easynet:///r/realm/agent/user.n1",
+            "generation": 1,
+            "public_key_hex": "",
+            "host_ura": "easynet:///r/realm/device/dev-1",
+            "host_node_id": "dev-1"
+        });
+
+        let error = serde_json::from_value::<AdvertiseAgentRequest>(legacy)
+            .expect_err("retired top-level host_ura must not be repaired");
+        assert!(
+            error.to_string().contains("host_ura"),
+            "rejection must name retired host_ura field: {error}"
+        );
+    }
+
+    #[test]
+    fn advertise_agent_request_requires_signing_authority() {
+        let missing_authority = serde_json::json!({
+            "agent_ura": "easynet:///r/realm/agent/user.n1",
+            "generation": 1,
+            "public_key_hex": "",
+            "host_node_id": "dev-1"
+        });
+
+        let error = serde_json::from_value::<AdvertiseAgentRequest>(missing_authority)
+            .expect_err("advertise_agent must require signing_authority");
+        assert!(
+            error.to_string().contains("signing_authority"),
+            "rejection must name required signing_authority: {error}"
+        );
     }
 
     #[test]
@@ -2949,11 +2974,10 @@ mod tests {
             &AdvertiseAgentRequest {
                 agent_ura: agent_ura.to_string(),
                 generation: 1,
-                signing_authority: Some(AdvertiseSigningAuthorityRequest::HostedBy {
+                signing_authority: AdvertiseSigningAuthorityRequest::HostedBy {
                     host_ura: host_ura.to_string(),
-                }),
+                },
                 public_key_hex: String::new(),
-                host_ura: None,
                 host_node_id: Some("dev-1".into()),
             },
             Some(&advertised),
@@ -3007,11 +3031,10 @@ mod tests {
         let advertise = |generation| AdvertiseAgentRequest {
             agent_ura: agent_ura.to_string(),
             generation,
-            signing_authority: Some(AdvertiseSigningAuthorityRequest::HostedBy {
+            signing_authority: AdvertiseSigningAuthorityRequest::HostedBy {
                 host_ura: host_ura.to_string(),
-            }),
+            },
             public_key_hex: String::new(),
-            host_ura: None,
             host_node_id: Some("dev-1".into()),
         };
         handle_advertise_agent(&advertise(1), Some(&advertised)).unwrap();

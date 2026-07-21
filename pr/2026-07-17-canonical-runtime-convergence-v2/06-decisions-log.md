@@ -131,3 +131,7 @@
 - Treat Go SDK `Ura` as a retired source-compatibility alias. The canonical
   runtime model has URA-only terminology, so Go exposes `URA` as the sole
   public value type and conformance evidence must not preserve both spellings.
+- Treat `federation.advertise_agent.host_ura` as a retired request-shape
+  compatibility field. Hosted-agent publication authority is expressed only by
+  the tagged `signing_authority` enum; retired top-level host fields must fail
+  at request decoding rather than being repaired into authority state.

@@ -205,6 +205,43 @@ check_go_sdk_public_ura_alias_contract() {
   fi
 }
 
+check_advertise_agent_ingress_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  [[ -f "$wrappers" ]] || return 0
+
+  "$PYTHON_BIN" - "$wrappers" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+match = re.search(
+    r"#\[derive\([^\]]*Deserialize[^\]]*\)\]\s*"
+    r"#\[serde\(deny_unknown_fields\)\]\s*"
+    r"pub struct AdvertiseAgentRequest\s*\{(?P<body>.*?)\n\}",
+    text,
+    re.DOTALL,
+)
+if match is None:
+    raise SystemExit("advertise_agent_request_not_strict")
+body = match.group("body")
+if "pub signing_authority: AdvertiseSigningAuthorityRequest" not in body:
+    raise SystemExit("advertise_agent_signing_authority_not_required")
+if "host_ura: Option" in body or re.search(r"\bpub\s+host_ura\b", body):
+    raise SystemExit("advertise_agent_retired_host_ura_field")
+if "self.host_ura" in text:
+    raise SystemExit("advertise_agent_host_ura_fallback")
+for test in (
+    "advertise_agent_request_rejects_retired_top_level_host_ura",
+    "advertise_agent_request_requires_signing_authority",
+):
+    if test not in text:
+        raise SystemExit(f"missing_advertise_agent_negative_test:{test}")
+PY
+}
+
 check_edge_adapter_policy_contract() {
   "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$MANIFEST" >/dev/null
 }
@@ -2111,11 +2148,24 @@ EOF
     > "$tmp/go-sdk-ura-alias/sdk/conformance/canonical-public-api.json"
   printf '{"cells":[{"shape_evidence":[{"item":"Ura"}]}]}\n' \
     > "$tmp/go-sdk-ura-alias/sdk/conformance/sdk-parity-matrix.json"
-  if check_go_sdk_public_ura_alias_contract "$tmp/go-sdk-ura-alias" >/dev/null 2>&1; then
+  if ( check_go_sdk_public_ura_alias_contract "$tmp/go-sdk-ura-alias" ) >/dev/null 2>&1; then
     fail "self-test expected Go SDK Ura alias gate to fail"
+  fi
+  mkdir -p "$tmp/advertise-agent-legacy/src/daemon/invocation/dispatch"
+  printf '%s\n' \
+    '#[derive(Debug, Clone, Deserialize)]' \
+    'pub struct AdvertiseAgentRequest {' \
+    '  pub signing_authority: Option<AdvertiseSigningAuthorityRequest>,' \
+    '  pub host_ura: Option<String>,' \
+    '}' \
+    'impl AdvertiseAgentRequest { fn host_ura(&self) -> Option<&str> { self.host_ura.as_deref() } }' \
+    > "$tmp/advertise-agent-legacy/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  if ( check_advertise_agent_ingress_contract "$tmp/advertise-agent-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected advertise_agent retired host_ura ingress gate to fail"
   fi
   check_active_source_contract
   check_go_sdk_public_ura_alias_contract
+  check_advertise_agent_ingress_contract
   check_edge_adapter_policy_contract
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
@@ -2148,6 +2198,7 @@ check_lifecycle_evidence_freshness_contract
 check_manifest_contract
 check_active_source_contract
 check_go_sdk_public_ura_alias_contract
+check_advertise_agent_ingress_contract
 check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
