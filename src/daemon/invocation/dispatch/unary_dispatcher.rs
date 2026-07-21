@@ -656,7 +656,7 @@ impl UnaryDispatcher {
         let response = federation_wrappers::handle_heartbeat(
             &request,
             &self.directory.presence,
-            Some(self.directory.ability_catalog.as_ref()),
+            self.directory.ability_catalog.as_ref(),
             now_unix_ms(),
         );
         encode_json_payload(&response)

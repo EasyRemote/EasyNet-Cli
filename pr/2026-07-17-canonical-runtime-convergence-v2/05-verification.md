@@ -331,3 +331,21 @@ owners; the only remaining `runtime_system_descriptor_catalog` source string
 is in the negative resolver test that rejects the old behavior. Remote owner
 descriptor resolution now fails through caller signer, route, or owner
 read-model authority instead of returning a synthetic descriptor success.
+
+## Federation Heartbeat Catalog Authority Evidence
+
+- `cargo fmt --check`
+- `cargo test --lib handle_heartbeat --features axon-pb`
+- `cargo test --lib daemon::invocation::dispatch::federation_wrappers --features axon-pb`
+- `rg -n "heartbeat.*no-op|legacy callers see|handle_heartbeat\\([^\\n]*None|handle_heartbeat\\([^\\n]*Some" src/daemon/invocation/dispatch/federation_wrappers.rs src/daemon/invocation/dispatch/unary_dispatcher.rs`
+- `git diff --check`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-architecture-convergence.sh`
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .`
+
+Result: focused heartbeat tests and the full federation wrapper test module
+passed. The `federation.heartbeat` handler now requires the daemon-owned
+`AbilityCatalogStore` and cannot report an active lease-refresh response when
+the projection read-model sink is absent. Production dispatch already owns the
+catalog, so the obsolete missing-catalog compatibility path was deleted instead
+of preserved.

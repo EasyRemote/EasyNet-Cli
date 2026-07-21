@@ -107,6 +107,10 @@
   publication, not as an optional read-model convenience. Production dispatch
   already owns the ability catalog, so a missing catalog is a daemon
   construction defect rather than a successful no-op acknowledgement.
+- Treat `federation.heartbeat` as the lease-refresh half of owner projection
+  publication. Production dispatch owns the same ability catalog sink used by
+  advertise, so a missing catalog is a daemon construction defect rather than
+  an active membership acknowledgement with zero refreshed owners.
 - Treat the runtime system descriptor catalog as local-owner construction
   evidence only. Remote descriptor resolution must not rebind static daemon
   catalog rows for an arbitrary target owner because that bypasses owner

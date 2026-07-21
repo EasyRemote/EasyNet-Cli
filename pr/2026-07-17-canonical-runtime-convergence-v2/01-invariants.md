@@ -47,6 +47,9 @@
   transition. `federation.advertise_abilities` must require the daemon-owned
   ability catalog sink and must not acknowledge success when the projection
   read model is unavailable.
+- Federation owner projection heartbeat is a lease-refresh state transition.
+  `federation.heartbeat` must require the daemon-owned ability catalog sink and
+  must not report an active refreshed state from a missing projection authority.
 - FFI descriptor resolution may use the daemon-local system descriptor catalog
   only for the local runtime owner. Remote descriptor resolution must consult
   the owner route/read model through descriptor-bound runtime calls and must

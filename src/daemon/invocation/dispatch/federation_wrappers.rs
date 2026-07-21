@@ -76,9 +76,8 @@ pub const ABILITY_FEDERATION_JOIN: &str = conformance::ABILITY_FEDERATION_JOIN;
 pub const ABILITY_FEDERATION_ADVERTISE_AGENT: &str =
     conformance::ABILITY_FEDERATION_ADVERTISE_AGENT;
 
-/// `federation.heartbeat` — warns that liveness is now stream-derived
-/// and returns a typed no-op success so legacy callers see "active"
-/// without us re-implementing the unary heartbeat path.
+/// `federation.heartbeat` — renews owner projection leases while liveness
+/// remains stream-derived from the PresenceRegistry.
 pub const ABILITY_FEDERATION_HEARTBEAT: &str = conformance::ABILITY_FEDERATION_HEARTBEAT;
 
 /// `federation.resolve` — projects both live PresenceRegistry URAs
@@ -531,16 +530,14 @@ pub struct HeartbeatResponse {
 
 /// Handle a `federation.heartbeat` invocation.
 ///
-/// Logs a warning that the unary heartbeat is a no-op in the new
-/// architecture (PresenceRegistry membership is the liveness signal),
-/// then returns a typed success so legacy callers don't fail. The
-/// `realm_directory_size` field is read from the registry snapshot
-/// for transparency to operators reading audit logs.
+/// Renews owner projection leases while PresenceRegistry membership remains
+/// the liveness signal. The ability catalog is required because heartbeat is
+/// a read-model state transition, not an optional compatibility ping.
 #[must_use]
 pub(crate) fn handle_heartbeat(
     request: &HeartbeatRequest,
     registry: &PresenceRegistry,
-    catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
+    catalog: &crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore,
     now_unix_ms: i64,
 ) -> HeartbeatResponse {
     // RFC-005: heartbeat renews the owner projection lease only; it must
@@ -550,16 +547,12 @@ pub(crate) fn handle_heartbeat(
     // re-advertise cycles. Unknown owners are skipped (the device must
     // `advertise_abilities` before its first projection exists).
     let mut refreshed_owner_count = 0_usize;
-    if let Some(catalog) = catalog {
-        let new_expiry =
-            crate::daemon::federation::read_model::owner_projection::lease_expiry_from_now(
-                now_unix_ms,
-            );
-        for owner_ura in &request.refresh_owner_uras {
-            let owner_ura = owner_ura.trim();
-            if !owner_ura.is_empty() && catalog.refresh_lease(owner_ura, new_expiry) {
-                refreshed_owner_count += 1;
-            }
+    let new_expiry =
+        crate::daemon::federation::read_model::owner_projection::lease_expiry_from_now(now_unix_ms);
+    for owner_ura in &request.refresh_owner_uras {
+        let owner_ura = owner_ura.trim();
+        if !owner_ura.is_empty() && catalog.refresh_lease(owner_ura, new_expiry) {
+            refreshed_owner_count += 1;
         }
     }
     HeartbeatResponse {
@@ -1803,7 +1796,9 @@ mod tests {
             agent_ura: "easynet:///r/realm/device/a".to_string(),
             refresh_owner_uras: Vec::new(),
         };
-        let resp = handle_heartbeat(&req, &registry, None, 1_000);
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
+        let resp = handle_heartbeat(&req, &registry, &catalog, 1_000);
         assert_eq!(resp.membership_status, "active");
         assert_eq!(resp.realm_directory_size, 2);
         assert_eq!(resp.refreshed_owner_count, 0);
@@ -1864,7 +1859,7 @@ mod tests {
             agent_ura: owner_ura.to_string(),
             refresh_owner_uras: vec![owner_ura.to_string()],
         };
-        let resp = handle_heartbeat(&req, &registry, Some(&catalog), after_expiry);
+        let resp = handle_heartbeat(&req, &registry, &catalog, after_expiry);
         assert_eq!(resp.refreshed_owner_count, 1);
 
         // ...and the device-owned ability is resolvable again, with its
@@ -1888,7 +1883,7 @@ mod tests {
             agent_ura: "easynet:///r/realm/device/a".to_string(),
             refresh_owner_uras: vec!["easynet:///r/realm/device/never-published".to_string()],
         };
-        let resp = handle_heartbeat(&req, &registry, Some(&catalog), 5_000);
+        let resp = handle_heartbeat(&req, &registry, &catalog, 5_000);
         assert_eq!(resp.refreshed_owner_count, 0);
     }
 

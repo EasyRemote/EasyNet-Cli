@@ -20,6 +20,9 @@
 - [x] Remove the `federation.advertise_abilities` missing-catalog success path
       so owner projection publication cannot return `ack=true` without writing
       to the daemon-owned ability catalog read model.
+- [x] Remove the `federation.heartbeat` missing-catalog success path so owner
+      projection lease refresh cannot return `membership_status=active` without
+      a daemon-owned ability catalog read model.
 - [x] Remove FFI remote descriptor static-system-catalog synthesis so
       descriptor resolution cannot report a remote owner ability without route
       and signer authority evidence.
