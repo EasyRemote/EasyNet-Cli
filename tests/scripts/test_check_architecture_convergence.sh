@@ -119,6 +119,33 @@ fn local_agent_ura(agent: &str) -> anyhow::Result<String> {
     snapshot.hosted_llm_agent_ura(agent).map(str::to_string).ok_or_else(|| anyhow::anyhow!("missing"))
 }
 EOF
+  cat >"$CLI/src/cli/commands/reset.rs" <<'EOF'
+use crate::daemon::lifecycle::{RuntimeLifecycleService, RuntimeLifecycleStatus};
+
+fn run(args: ResetArgs) -> anyhow::Result<()> {
+    let lifecycle_report = RuntimeLifecycleService::new().status()?;
+    if !args.force && reset_runtime_is_active(lifecycle_report.status()) {
+        anyhow::bail!("runtime is currently running");
+    }
+    if matches!(
+        lifecycle_report.status(),
+        RuntimeLifecycleStatus::ProjectionPresentProcessMissing
+    ) {
+        crate::daemon::persistence::config::remove()?;
+    }
+    crate::daemon::persistence::config::delete_credentials()?;
+    Ok(())
+}
+
+fn reset_runtime_is_active(status: RuntimeLifecycleStatus) -> bool {
+    matches!(
+        status,
+        RuntimeLifecycleStatus::Running
+            | RuntimeLifecycleStatus::ProjectionMissingProcessRunning
+            | RuntimeLifecycleStatus::ControlOnlyInvocationDown
+    )
+}
+EOF
   cat >"$CLI/src/cli/commands/groups/device.rs" <<'EOF'
 struct DeviceLocalIdentity {
     realm: String,
@@ -6496,6 +6523,30 @@ EOF
 expect_fail \
   "runtime projection load failure hidden as missing projection" \
   "R96_RUNTIME_PROJECTION_LOAD_FAIL_CLOSED"
+
+make_good_fixture
+cat >"$CLI/src/cli/commands/reset.rs" <<'EOF'
+fn run(args: ResetArgs) -> anyhow::Result<()> {
+    let runtime_state = crate::daemon::persistence::config::load().ok();
+    if !args.force {
+        if let Some(ref state) = runtime_state {
+            if state.pid.is_some() {
+                anyhow::bail!("runtime is currently running");
+            }
+        }
+    }
+    if let Some(ref state) = runtime_state {
+        if state.pid.is_none() {
+            crate::daemon::persistence::config::remove().ok();
+        }
+    }
+    crate::daemon::persistence::config::delete_credentials()?;
+    Ok(())
+}
+EOF
+expect_fail \
+  "device reset runtime projection fallback" \
+  "R97_RESET_RUNTIME_PROJECTION_FAIL_CLOSED"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

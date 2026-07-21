@@ -2277,3 +2277,26 @@ Commands and outcomes will be appended after implementation.
   (`architecture-convergence: OK`).
 - `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
   (`canonical-runtime-convergence-v2: OK`).
+
+## 2026-07-22 Device reset runtime projection fallback
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — NOT
+  INITIALIZED; no `.codegraph/` index was created for this checkout.
+- `rg -n
+  "config::load\\(\\)\\.ok\\(\\)|RuntimeLifecycleService|runtime projection|runtime_state|runtime\\.json"
+  src/cli/presentation src/cli/commands src/daemon/boot/lifecycle ...` — PASS
+  for seam identification; found `reset` reading `runtime.json` directly.
+- `env RUSTC_WRAPPER= cargo test -q cli::commands::reset --lib` — PASS
+  (`2 passed`); covers malformed `runtime.json` aborting before credentials
+  deletion and stale parseable projection cleanup through the lifecycle
+  report.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  R97 negative fixture for `config::load().ok()` and `config::remove().ok()`
+  in `reset`.
+- `env RUSTC_WRAPPER= cargo check --lib --bins` — PASS.
+- `cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS
+  (`architecture-convergence: OK`).
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).

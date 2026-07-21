@@ -2,6 +2,28 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-22 Device reset runtime projection fallback audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` reports the checkout
+  is not initialized for CodeGraph, so this iteration used targeted `rg` and
+  source inspection instead of creating a new index inside the working tree.
+- `rg -n "config::load\\(\\)\\.ok\\(\\)|RuntimeLifecycleService|runtime projection|runtime_state|runtime\\.json"
+  src/cli/presentation src/cli/commands src/daemon/boot/lifecycle ...`
+  identified `src/cli/commands/reset.rs` as a destructive product lifecycle
+  boundary still reading `runtime.json` directly.
+- Source inspection found `let runtime_state = config::load().ok()` feeding
+  the active-runtime guard, best-effort revoke decision, and stale
+  `runtime.json` cleanup. A malformed projection therefore became "no runtime
+  state" and could allow credentials deletion.
+- The root abstraction problem was duplicated runtime projection authority.
+  `reset` is allowed to consume lifecycle status, but it must not own a
+  second optional interpretation of `runtime.json` after the lifecycle module
+  has modeled missing/corrupt projection as different states.
+- After the change, `reset` consumes `RuntimeLifecycleService::status()?`,
+  classifies active runtime states through `reset_runtime_is_active`, cleans
+  only `ProjectionPresentProcessMissing` stale projections, and propagates
+  cleanup errors.
+
 ## 2026-07-22 Runtime lifecycle projection load fallback audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` reports the checkout

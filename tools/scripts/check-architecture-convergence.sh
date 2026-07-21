@@ -7703,6 +7703,51 @@ if lifecycle_service.exists():
             add("R96_RUNTIME_PROJECTION_LOAD_FAIL_CLOSED", lifecycle_service, 1, detail)
 
 
+# Rule 97: Device reset is a destructive product lifecycle command. It must
+# consume the daemon lifecycle status report and must not reopen runtime.json
+# as an optional local hint before deleting credentials.
+reset_cmd = cli_root / "src/cli/commands/reset.rs"
+if reset_cmd.exists():
+    text = source(reset_cmd)
+    for token, detail in (
+        (
+            "RuntimeLifecycleService::new().status()?",
+            "device reset must consume lifecycle status and propagate projection load failures",
+        ),
+        (
+            "fn reset_runtime_is_active(",
+            "device reset must centralize active-runtime classification",
+        ),
+        (
+            "RuntimeLifecycleStatus::ProjectionPresentProcessMissing",
+            "device reset must clean only lifecycle-classified stale runtime projections",
+        ),
+        (
+            "config::remove()?",
+            "device reset must propagate stale runtime projection cleanup failures",
+        ),
+    ):
+        if token not in text:
+            add("R97_RESET_RUNTIME_PROJECTION_FAIL_CLOSED", reset_cmd, 1, detail)
+    for pattern, detail in (
+        (
+            "config::load().ok()",
+            "device reset must not swallow runtime projection load failures",
+        ),
+        (
+            "config::remove().ok()",
+            "device reset must not ignore stale runtime projection cleanup failures",
+        ),
+    ):
+        if pattern in text:
+            add(
+                "R97_RESET_RUNTIME_PROJECTION_FAIL_CLOSED",
+                reset_cmd,
+                line_number(text, text.find(pattern)),
+                detail,
+            )
+
+
 # Rule 91: C ABI diagnostics descriptor fallback must keep descriptor
 # resolution semantics. A catalog miss is DESCRIPTOR_NOT_FOUND, not generic
 # NOT_FOUND/ABILITY_NOT_FOUND; otherwise products cannot distinguish absent

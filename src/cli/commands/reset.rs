@@ -9,12 +9,13 @@
 // - Removes ~/.easynet/credentials.json (node_id, credential_token, deploy_signature).
 // - Does NOT notify the Hub — the device will appear as "offline" until the Hub's
 //   heartbeat timeout expires, then transition to REMOVED.
-// - Does NOT remove runtime.json or device_settings.json; those are orthogonal.
+// - Removes stale runtime.json only through the lifecycle status report.
 //
 // Safety:
-// - Refuses to run while a runtime is active (runtime.json exists AND process alive)
+// - Refuses to run while a runtime is active (daemon lifecycle facts visible)
 //   unless --force is given, because a running heartbeat daemon would fail repeatedly
-//   with missing credentials. Stale runtime.json (dead process) is cleaned up silently.
+//   with missing credentials. Corrupt runtime projection aborts before credentials
+//   are deleted.
 //
 // Usage Contract:
 // - Irreversible locally: re-pairing requires a new token from the Hub dashboard.
@@ -31,8 +32,9 @@
 
 use clap::Args;
 
+use crate::daemon::lifecycle::{RuntimeLifecycleService, RuntimeLifecycleStatus};
 use crate::daemon::persistence::config;
-use crate::support::platform::{net, output};
+use crate::support::platform::output;
 
 #[derive(Debug, Args)]
 pub struct ResetArgs {
@@ -53,16 +55,12 @@ pub struct ResetArgs {
 
 pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     // Guard 1: refuse if runtime is active (heartbeat would break).
-    // Also capture the runtime state for best-effort deregister before cleanup.
-    let runtime_state = config::load().ok();
-    if !args.force {
-        if let Some(ref state) = runtime_state {
-            if state.pid.is_some_and(net::is_pid_alive) {
-                anyhow::bail!(
-                    "runtime is currently running — run 'easynet runtime stop' first, or use 'easynet reset --force'"
-                );
-            }
-        }
+    // Also capture the lifecycle report for best-effort deregister before cleanup.
+    let lifecycle_report = RuntimeLifecycleService::new().status()?;
+    if !args.force && reset_runtime_is_active(lifecycle_report.status()) {
+        anyhow::bail!(
+            "runtime is currently running — run 'easynet runtime stop' first, or use 'easynet reset --force'"
+        );
     }
 
     // Guard 2: interactive confirmation before destroying credentials.
@@ -108,36 +106,38 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     // advertised-agent store immediately, so a downstream
     // `device list` from any peer hub shows the device gone the
     // instant `device reset --force` returns.
-    if let Ok(creds) = config::load_credentials() {
-        if let Some(ref state) = runtime_state {
-            if state.pid.is_some_and(net::is_pid_alive) {
-                let device_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
-                match invoke_federation_revoke_for_reset(&device_ura) {
-                    Ok(_) => output::info("Device deregistered with hub (federation.revoke)"),
-                    Err(e) => output::warn(&format!(
-                        "federation.revoke failed (continuing local reset): {e}"
-                    )),
-                }
-            } else {
-                // Daemon already torn down (typical normal-path reset
-                // post `easynet runtime stop`): the heartbeat sidecar already
-                // ran its SIGTERM `federation.revoke` hook, so this
-                // arm is a no-op by design.
-                let _ = state;
+    if lifecycle_report.daemon().has_daemon_fact() {
+        if let Ok(creds) = config::load_credentials() {
+            let device_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
+            match invoke_federation_revoke_for_reset(&device_ura) {
+                Ok(_) => output::info("Device deregistered with hub (federation.revoke)"),
+                Err(e) => output::warn(&format!(
+                    "federation.revoke failed (continuing local reset): {e}"
+                )),
             }
         }
     }
 
     // Clean up stale runtime.json (process dead) after deregister attempt.
-    if let Some(ref state) = runtime_state {
-        if !state.pid.is_some_and(net::is_pid_alive) {
-            config::remove().ok();
-        }
+    if matches!(
+        lifecycle_report.status(),
+        RuntimeLifecycleStatus::ProjectionPresentProcessMissing
+    ) {
+        config::remove()?;
     }
 
     config::delete_credentials()?;
     output::success("Device credentials removed");
     Ok(())
+}
+
+fn reset_runtime_is_active(status: RuntimeLifecycleStatus) -> bool {
+    matches!(
+        status,
+        RuntimeLifecycleStatus::Running
+            | RuntimeLifecycleStatus::ProjectionMissingProcessRunning
+            | RuntimeLifecycleStatus::ControlOnlyInvocationDown
+    )
 }
 
 #[cfg(feature = "axon-pb")]
@@ -155,4 +155,81 @@ fn invoke_federation_revoke_for_reset(_device_ura: &str) -> anyhow::Result<()> {
             "deregistering this device on reset",
         ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
+
+    fn paired_credentials() -> config::Credentials {
+        config::Credentials {
+            node_id: "node-reset-test".into(),
+            credential_token: "token-reset-test".into(),
+            hub_endpoint: "axon://hub.example:7700".into(),
+            realm: "tenant-reset-test".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        }
+    }
+
+    fn stale_runtime_state() -> config::RuntimeState {
+        config::RuntimeState {
+            endpoint: "/tmp/easynet-reset-stale.sock".to_string(),
+            runtime_kind: config::RuntimeKind::DaemonOnly,
+            pid: Some(999_999),
+            hub: None,
+            tenant: Some("tenant-reset-test".to_string()),
+            label: Some("node-reset-test".to_string()),
+            started_at: None,
+            credential_verified: None,
+        }
+    }
+
+    #[test]
+    fn reset_rejects_malformed_runtime_projection_before_deleting_credentials() {
+        let _home = HomeGuard::new();
+        config::save_credentials(&paired_credentials()).expect("credentials");
+        std::fs::create_dir_all(config::state_dir()).expect("state dir");
+        std::fs::write(config::runtime_state_path(), "{ not json").expect("runtime projection");
+
+        let error = run(ResetArgs {
+            force: true,
+            yes: true,
+        })
+        .expect_err("malformed runtime projection must block reset");
+
+        assert!(
+            error.to_string().contains("load runtime projection failed"),
+            "wrong error: {error:#}"
+        );
+        config::load_credentials().expect("credentials must remain after failed reset");
+    }
+
+    #[test]
+    fn reset_removes_stale_runtime_projection_through_lifecycle_report() {
+        let _home = HomeGuard::new();
+        config::save_credentials(&paired_credentials()).expect("credentials");
+        config::save(&stale_runtime_state()).expect("stale projection");
+
+        run(ResetArgs {
+            force: false,
+            yes: true,
+        })
+        .expect("stale projection reset");
+
+        assert!(
+            config::load().is_err(),
+            "stale runtime projection must be removed during reset"
+        );
+        assert!(
+            config::load_credentials().is_err(),
+            "credentials must be removed after successful reset"
+        );
+    }
 }

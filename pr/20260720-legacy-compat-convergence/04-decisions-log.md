@@ -704,3 +704,10 @@ Decisions will be appended as root-fork choices are made.
 - Preserve corrupt `runtime.json` as operator evidence. Start preflight must
   not remove or overwrite a malformed projection as stale state, and stop
   planning must not decide cleanup from a projection read that failed.
+- Treat device reset as a consumer of lifecycle status, not as a second
+  runtime projection reader. Deleting credentials is destructive; if the
+  runtime projection cannot be classified, reset must abort before mutating
+  pairing state.
+- Keep stale runtime projection cleanup explicit. `ProjectionPresentProcessMissing`
+  is the only reset path that removes `runtime.json`, and cleanup errors
+  return to the operator instead of being ignored.

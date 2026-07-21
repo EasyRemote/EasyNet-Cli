@@ -277,3 +277,8 @@
   malformed/unreadable `runtime.json` is unavailable lifecycle state and must
   fail status/start/stop planning instead of being projected as no runtime
   projection.
+- Device reset must consume the lifecycle status report instead of opening
+  `runtime.json` directly. Corrupt/unreadable runtime projection is unknown
+  reset safety state and must abort before credentials are deleted; stale
+  projection cleanup must be an explicit lifecycle side effect whose failure
+  is returned, not ignored.
