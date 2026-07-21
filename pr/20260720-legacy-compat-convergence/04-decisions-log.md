@@ -736,3 +736,16 @@ Decisions will be appended as root-fork choices are made.
 - Add a SPEC v2 guard because this fallback is not observable through normal
   product smoke tests: a legacy backend row can make the UI look functional
   while preserving a second, undocumented agent inventory shape.
+
+## 2026-07-22 Pages identity credential state classification
+
+- Split credential loading into mandatory and optional states at the
+  persistence boundary. `load_credentials_optional()` returns `None` only for
+  the absent-file unpaired state; corrupt existing credentials remain errors.
+- Make Pages identity resolution fallible. Device/Both daemon boot and the
+  real-user smoke registry builder now call `PagesIdentity::try_from_env()`
+  so a bad credentials file cannot silently remove user-rooted abilities or
+  stamp them into a default realm.
+- Preserve the explicit env override semantics. `EASYNET_PAGES_USER`,
+  `EASYNET_PAGES_REALM`, and `EASYNET_PAGES_PORT` still drive dev rigs, but
+  they no longer mask corrupt persisted pairing authority.

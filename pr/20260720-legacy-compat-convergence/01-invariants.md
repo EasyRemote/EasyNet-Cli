@@ -296,3 +296,9 @@
   `display_name`, `node_id`, and `skills` only; retired row aliases such as
   `ura` and `name` are not compatibility inputs and must not be repaired into
   visible identity facts.
+- Pages user-rooted identity resolution must classify credential state before
+  registry assembly. A missing `credentials.json` may project to an unpaired
+  daemon with no user-rooted Pages/API/File abilities; an existing unreadable,
+  malformed, or schema-invalid credentials file is unavailable boot identity
+  state and must not be swallowed into env defaults, default realm, or
+  unpaired registration.

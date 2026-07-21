@@ -619,12 +619,28 @@ pub fn save_credentials(creds: &Credentials) -> anyhow::Result<()> {
 }
 
 pub fn load_credentials() -> anyhow::Result<Credentials> {
+    load_credentials_optional()?
+        .ok_or_else(|| anyhow::anyhow!("no credentials found — run `easynet join <token>` first"))
+}
+
+pub fn load_credentials_optional() -> anyhow::Result<Option<Credentials>> {
     let path = credentials_path();
-    let data = fs::read_to_string(&path)
-        .map_err(|_| anyhow::anyhow!("no credentials found — run `easynet join <token>` first"))?;
-    let creds: Credentials = serde_json::from_str(&data)?;
-    creds.validate_complete()?;
-    Ok(creds)
+    let data = match fs::read_to_string(&path) {
+        Ok(data) => data,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(anyhow::anyhow!(
+                "read credentials from {}: {err}",
+                path.display()
+            ));
+        }
+    };
+    let creds: Credentials = serde_json::from_str(&data)
+        .map_err(|err| anyhow::anyhow!("parse credentials from {}: {err}", path.display()))?;
+    creds
+        .validate_complete()
+        .map_err(|err| anyhow::anyhow!("validate credentials from {}: {err}", path.display()))?;
+    Ok(Some(creds))
 }
 
 pub fn delete_credentials() -> anyhow::Result<()> {
@@ -1018,6 +1034,29 @@ mod tests {
         assert!(
             err.to_string().contains("missing username"),
             "error should name the missing username contract: {err}"
+        );
+    }
+
+    #[test]
+    fn load_credentials_optional_returns_none_for_missing_file() {
+        let _g = HomeGuard::new();
+
+        let creds = load_credentials_optional().expect("missing credentials is optional absence");
+
+        assert!(creds.is_none());
+    }
+
+    #[test]
+    fn load_credentials_optional_rejects_malformed_existing_file() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(credentials_path(), b"{").expect("write malformed credentials");
+
+        let err = load_credentials_optional().expect_err("malformed credentials must fail");
+
+        assert!(
+            err.to_string().contains("parse credentials"),
+            "error should name credential parse failure: {err}"
         );
     }
 

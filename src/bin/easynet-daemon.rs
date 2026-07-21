@@ -344,7 +344,8 @@ async fn main() -> anyhow::Result<()> {
     boot_bus.emit_started("ability-registry");
     let pages_identity = match daemon_config.mode() {
         DaemonMode::Device | DaemonMode::Both => {
-            easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::from_env()
+            easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::try_from_env()
+                .context("resolve Pages identity for ability registry")?
         }
         DaemonMode::Hub => {
             easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::default()

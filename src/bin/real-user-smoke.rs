@@ -205,7 +205,8 @@ impl RuntimeSmoke {
         let mut config = RegistryDaemonBuildConfig::new(RegistryBuildServices::fresh());
         config.loaders = loaders;
         config.pages_identity =
-            easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::from_env();
+            easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::try_from_env()
+                .expect("resolve Pages identity for real-user smoke registry");
         config.local_runtime = Some(Arc::clone(&runtime));
         let catalog = build_registry_for_daemon_result(config)
             .expect("build daemon registry for smoke")

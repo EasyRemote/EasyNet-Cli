@@ -418,6 +418,59 @@ for test in (
 PY
 }
 
+check_pages_identity_credentials_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local identity="$cli_root/src/daemon/ability/builtins/resources/pages/identity.rs"
+  [[ -f "$identity" ]] || return 0
+  local config="$cli_root/src/daemon/persistence/config.rs"
+  local daemon="$cli_root/src/bin/easynet-daemon.rs"
+  local smoke="$cli_root/src/bin/real-user-smoke.rs"
+
+  "$PYTHON_BIN" - "$identity" "$config" "$daemon" "$smoke" <<'PY'
+import sys
+from pathlib import Path
+
+identity = Path(sys.argv[1]).read_text()
+config = Path(sys.argv[2]).read_text() if Path(sys.argv[2]).exists() else ""
+daemon = Path(sys.argv[3]).read_text() if Path(sys.argv[3]).exists() else ""
+smoke = Path(sys.argv[4]).read_text() if Path(sys.argv[4]).exists() else ""
+
+if "pub fn from_env() -> Self" in identity:
+    raise SystemExit("pages_identity_retains_infallible_from_env")
+if "pub fn try_from_env() -> anyhow::Result<Self>" not in identity:
+    raise SystemExit("pages_identity_missing_fallible_env_resolver")
+for retired in (
+    "load_credentials()\n                    .ok()",
+    "load_credentials().ok()",
+    'parse::<u16>().ok()',
+    ".and_then(|s| s.parse::<u16>().ok())",
+):
+    if retired in identity:
+        raise SystemExit(f"pages_identity_retired_fallback:{retired}")
+for required in (
+    "load_credentials_optional()?",
+    "pages_listener_port_from_env()?",
+    "EASYNET_PAGES_PORT must be greater than 0",
+):
+    if required not in identity:
+        raise SystemExit(f"pages_identity_missing_fail_closed_path:{required}")
+if "pub fn load_credentials_optional() -> anyhow::Result<Option<Credentials>>" not in config:
+    raise SystemExit("credentials_optional_loader_missing")
+if "PagesIdentity::try_from_env()" not in daemon:
+    raise SystemExit("daemon_boot_not_using_fallible_pages_identity")
+if smoke and "PagesIdentity::try_from_env()" not in smoke:
+    raise SystemExit("real_user_smoke_not_using_fallible_pages_identity")
+for test in (
+    "pages_identity_missing_credentials_is_unpaired_state",
+    "pages_identity_rejects_malformed_credentials_instead_of_defaulting",
+    "pages_identity_rejects_invalid_port_instead_of_defaulting",
+    "load_credentials_optional_rejects_malformed_existing_file",
+):
+    if test not in identity and test not in config:
+        raise SystemExit(f"missing_pages_identity_credentials_test:{test}")
+PY
+}
+
 check_edge_adapter_policy_contract() {
   "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$MANIFEST" >/dev/null
 }
@@ -2398,6 +2451,20 @@ EOF
   if ( check_auth_agents_backend_shape_contract "$tmp/auth-agents-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected auth agents retired row alias gate to fail"
   fi
+  mkdir -p "$tmp/pages-identity-legacy/src/daemon/ability/builtins/resources/pages"
+  printf '%s\n' \
+    'pub struct PagesIdentity { pub user: Option<String>, pub realm: Option<String>, pub listener_port: Option<u16> }' \
+    'impl PagesIdentity {' \
+    '  pub fn from_env() -> Self {' \
+    '    let user = crate::daemon::persistence::config::load_credentials().ok().and_then(|c| c.username);' \
+    '    let listener_port = std::env::var("EASYNET_PAGES_PORT").ok().and_then(|s| s.parse::<u16>().ok());' \
+    '    Self { user, realm: None, listener_port }' \
+    '  }' \
+    '}' \
+    > "$tmp/pages-identity-legacy/src/daemon/ability/builtins/resources/pages/identity.rs"
+  if ( check_pages_identity_credentials_contract "$tmp/pages-identity-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected Pages identity credential fallback gate to fail"
+  fi
   check_active_source_contract
   check_go_sdk_public_ura_alias_contract
   check_advertise_agent_ingress_contract
@@ -2405,6 +2472,7 @@ EOF
   check_invocation_history_get_key_contract
   check_principal_lifecycle_cli_schema_contract
   check_auth_agents_backend_shape_contract
+  check_pages_identity_credentials_contract
   check_edge_adapter_policy_contract
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
@@ -2442,6 +2510,7 @@ check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract
 check_principal_lifecycle_cli_schema_contract
 check_auth_agents_backend_shape_contract
+check_pages_identity_credentials_contract
 check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract

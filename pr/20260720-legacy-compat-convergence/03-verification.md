@@ -2379,3 +2379,44 @@ Commands and outcomes will be appended after implementation.
 - `/Users/macbook.silan.tech/.local/bin/codegraph status
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; index is
   up to date after edits.
+
+## 2026-07-22 Pages identity credential state classification
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query -p
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli "fallback"
+  --limit 40` — PASS for candidate discovery; selected Pages identity because
+  `from_env()` swallowed credentials and port parse failures into default
+  product state.
+- `rg -n
+  "PagesIdentity::from_env|pub fn from_env\\(\\) -> Self|load_credentials\\(\\)\\s*\\.ok\\(\\)|EASYNET_PAGES_PORT.*parse::<u16>\\(\\)\\.ok\\(\\)"
+  src/daemon/ability/builtins/resources/pages src/bin/easynet-daemon.rs
+  src/bin/real-user-smoke.rs src/daemon/persistence/config.rs` — PASS; no
+  retired Pages identity credential/port fallback remains in the migrated
+  path.
+- `cargo test -q pages_identity --lib --features axon-pb` — PASS (`5
+  passed`); covers missing credentials as unpaired, present credentials,
+  malformed credentials failure, invalid port failure, and zero port failure.
+- `cargo test -q load_credentials_optional --lib --features axon-pb` — PASS
+  (`2 passed`); covers missing-file optional state and malformed-existing-file
+  failure.
+- `cargo check -q --bin easynet-daemon --bin real-user-smoke --features
+  axon-pb` — PASS.
+- `cargo fmt --all -- --check` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes the negative fixture for the retired infallible Pages
+  identity env resolver.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-architecture-convergence.sh` — PASS
+  (`architecture-convergence: OK`).
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS
+  (`test_check_canonical_runtime_convergence_v2 ok`).
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; synced
+  changed Rust nodes.
+- `/Users/macbook.silan.tech/.local/bin/codegraph status
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; index is
+  up to date after edits.
