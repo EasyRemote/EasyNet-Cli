@@ -99,3 +99,7 @@
   `BootEvent::PortChosen.start`; if the daemon omits the start candidate, the
   CLI renders only the declared chosen port instead of preserving old-daemon
   compatibility semantics.
+- Treat `easynet mcp install` as a host-local front-door writer for the live
+  `easynet mcp serve` contract only. Retired `--endpoint`, `--bound-node`, and
+  `--allow-node-override` inputs are removed rather than accepted and dropped,
+  because silent no-op install options produce false product success.

@@ -6,7 +6,7 @@
 //
 // Goals:
 // - One command to add an `mcpServers.<name>` entry pointing at `easynet mcp serve`.
-// - Support multiple installs (one per agent/device) by changing `--name` and `--bound-node`.
+// - Support multiple installs by changing `--name` and, when useful, `--agent`.
 // - Safe by default: refuses to overwrite existing entries unless `--force`.
 //
 // Notes:
@@ -50,30 +50,6 @@ pub struct McpInstallArgs {
     #[arg(long)]
     pub tenant: Option<String>,
 
-    /// Runtime endpoint passed to 'easynet mcp serve'
-    ///
-    /// If omitted, 'easynet mcp serve' auto-detects from '~/.easynet/runtime.json'.
-    #[arg(long)]
-    pub endpoint: Option<String>,
-
-    /// Pin node-scoped tools to this node_id. The MCP server will
-    /// substitute 'node_id' into every invocation that omits it, so the
-    /// hosting agent (Claude Code / Codex) talks to exactly one device
-    /// for the lifetime of the session.
-    ///
-    /// By default the binding is a *hard lock*: an explicit 'node_id'
-    /// that disagrees with '--bound-node' is rejected. Pass
-    /// '--allow-node-override' to demote the binding to a *default*
-    /// that callers may override on a per-call basis.
-    #[arg(long, value_name = "NODE_ID")]
-    pub bound_node: Option<String>,
-
-    /// Demote '--bound-node' from a hard lock to a per-call default:
-    /// calls that carry an explicit 'node_id' are routed to that node
-    /// instead of being rejected. Has no effect without '--bound-node'.
-    #[arg(long)]
-    pub allow_node_override: bool,
-
     /// Label the MCP server with an agent id (purely informational; passed to 'easynet mcp serve --agent').
     #[arg(long)]
     pub agent: Option<String>,
@@ -104,10 +80,9 @@ pub struct McpInstallArgs {
 
 pub fn run(args: McpInstallArgs) -> anyhow::Result<()> {
     let config_path = resolve_config_path(args.client, args.config_path.as_deref())?;
-    let (tenant, endpoint) =
-        resolve_runtime_defaults(args.tenant.as_deref(), args.endpoint.as_deref());
+    let tenant = resolve_runtime_tenant(args.tenant.as_deref());
 
-    let spec = build_install_spec(&tenant, endpoint.as_deref(), &args)?;
+    let spec = build_install_spec(&tenant, &args)?;
 
     match args.client {
         McpInstallClient::Claude => install_for_claude(&config_path, &spec, &args)?,
@@ -131,11 +106,7 @@ pub fn run(args: McpInstallArgs) -> anyhow::Result<()> {
         },
     );
     output::detail("tenant", &tenant);
-    if let Some(ep) = endpoint.as_deref() {
-        output::detail("endpoint", ep);
-    } else {
-        output::detail("endpoint", "(auto-detect via ~/.easynet/runtime.json)");
-    }
+    output::detail("endpoint", "(auto-detect via ~/.easynet/runtime.json)");
     if spec.env.contains_key("EASYNET_DENDRITE_BRIDGE_LIB") {
         output::detail("bridge_lib", "configured");
     } else {
@@ -143,42 +114,22 @@ pub fn run(args: McpInstallArgs) -> anyhow::Result<()> {
         output::step("If MCP tools fail to connect, re-run with:");
         output::step("  easynet mcp install ... --bridge-lib /abs/path/to/libaxon_dendrite_bridge.(dylib|so|dll)");
     }
-    if let Some(node) = args.bound_node.as_deref() {
-        output::detail("bound_node", node);
-        if !args.allow_node_override {
-            output::detail("node_override", "disabled");
-        }
-    }
     if let Some(agent) = args.agent.as_deref() {
         output::detail("agent", agent);
     }
     Ok(())
 }
 
-fn resolve_runtime_defaults(
-    tenant: Option<&str>,
-    endpoint: Option<&str>,
-) -> (String, Option<String>) {
+fn resolve_runtime_tenant(tenant: Option<&str>) -> String {
     let mut resolved_tenant = tenant.map(|s| s.to_string());
-    let mut resolved_endpoint = endpoint.map(|s| s.to_string());
-
-    if let (Some(t), Some(_)) = (&resolved_tenant, &resolved_endpoint) {
-        return (t.clone(), resolved_endpoint);
-    }
 
     if let Ok(state) = config::load() {
-        if resolved_endpoint.is_none() && !state.endpoint.trim().is_empty() {
-            resolved_endpoint = Some(state.endpoint);
-        }
         if resolved_tenant.is_none() {
             resolved_tenant = state.tenant.clone().or_else(|| Some("default".to_string()));
         }
     }
 
-    (
-        resolved_tenant.unwrap_or_else(|| "default".to_string()),
-        resolved_endpoint,
-    )
+    resolved_tenant.unwrap_or_else(|| "default".to_string())
 }
 
 fn resolve_config_path(
@@ -202,11 +153,7 @@ struct InstallSpec {
     env: BTreeMap<String, String>,
 }
 
-fn build_install_spec(
-    tenant: &str,
-    endpoint: Option<&str>,
-    args: &McpInstallArgs,
-) -> anyhow::Result<InstallSpec> {
+fn build_install_spec(tenant: &str, args: &McpInstallArgs) -> anyhow::Result<InstallSpec> {
     // `easynet mcp serve` is a two-token CLI path; pre-fix this
     // wrote `mcp-server` (hyphenated, single token) which the
     // CLI dispatcher doesn't recognise. See workspace.rs slice-27
@@ -214,24 +161,16 @@ fn build_install_spec(
     // path; this one is the operator-facing
     // `easynet mcp install` path that writes the same shape into
     // ~/.claude/settings.json or ~/.codex/config.toml.
-    // `easynet mcp serve` accepts only --tenant and --agent
-    // (see cli/mcp_server.rs::McpServerArgs). The flags
-    // we used to write — --endpoint, --bound-node,
-    // --allow-node-override — were dropped in the P4.9
-    // quarantine. Keep accepting them as `easynet mcp install`
-    // CLI inputs for backwards compatibility (the operator's
-    // muscle memory still uses them) but DON'T write them into
-    // the spawn args; doing so causes claude/codex to spawn the
-    // MCP subprocess with "unexpected argument" failures.
+    // `easynet mcp serve` accepts only --tenant and --agent. Install
+    // writes exactly that server contract; retired endpoint/node-binding
+    // inputs are not accepted here because accepting and dropping them
+    // creates a false installation success.
     let mut cmd_args: Vec<String> = vec![
         "mcp".to_string(),
         "serve".to_string(),
         "--tenant".to_string(),
         tenant.to_string(),
     ];
-    let _ = endpoint; // accepted for back-compat, not written
-    let _ = &args.bound_node;
-    let _ = args.allow_node_override;
     if let Some(agent) = args.agent.as_deref() {
         cmd_args.push("--agent".to_string());
         cmd_args.push(agent.to_string());
@@ -419,4 +358,65 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     fs::write(&tmp, bytes)?;
     fs::rename(&tmp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Debug, Parser)]
+    struct InstallCli {
+        #[command(flatten)]
+        args: McpInstallArgs,
+    }
+
+    fn args() -> McpInstallArgs {
+        McpInstallArgs {
+            client: McpInstallClient::Codex,
+            name: "easynet".to_string(),
+            tenant: Some("localhost".to_string()),
+            agent: Some("dev".to_string()),
+            config_path: None,
+            bridge_lib: None,
+            dry_run: false,
+            force: false,
+        }
+    }
+
+    #[test]
+    fn install_spec_writes_only_mcp_serve_contract() {
+        let spec = build_install_spec("localhost", &args()).expect("install spec");
+
+        assert_eq!(
+            spec.args,
+            ["mcp", "serve", "--tenant", "localhost", "--agent", "dev"]
+        );
+        assert!(!spec.args.iter().any(|arg| {
+            matches!(
+                arg.as_str(),
+                "--endpoint" | "--bound-node" | "--allow-node-override"
+            )
+        }));
+    }
+
+    #[test]
+    fn retired_noop_install_flags_are_rejected_by_parser() {
+        for flag in ["--endpoint", "--bound-node", "--allow-node-override"] {
+            let mut argv = vec!["install", "codex"];
+            match flag {
+                "--allow-node-override" => argv.push(flag),
+                _ => {
+                    argv.push(flag);
+                    argv.push("value");
+                }
+            }
+            let err = InstallCli::try_parse_from(argv)
+                .expect_err("retired no-op MCP install flag must be rejected");
+            assert!(
+                err.to_string().contains("unexpected argument"),
+                "unexpected parser error for {flag}: {err}"
+            );
+        }
+    }
 }

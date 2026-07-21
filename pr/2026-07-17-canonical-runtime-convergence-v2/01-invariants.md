@@ -40,6 +40,9 @@
 - EasyNet-Cli owns product/device policy: daemon lifecycle, key-service
   custody, plugins, MCP, EAL/Mission, pages, media, local resources, and route
   locality.
+- Product front-door installers write only live downstream contracts. CLI
+  install commands must not accept, print, or silently drop retired options
+  whose semantics are not implemented by the spawned runtime surface.
 - SDK packages expose canonical runtime concepts only. Product feature
   families belong to downstream providers or daemon plugins.
 - Directory capability in the canonical SDK is a generic runtime projection:

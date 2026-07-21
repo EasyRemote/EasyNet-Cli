@@ -50,6 +50,19 @@ Result: passed. The `start_boot_watcher` test selector compiled the library but
 matched no tests; the `boot_events` selector ran three tests and passed. The
 `rg` command intentionally returned no matches after deletion.
 
+## MCP Installer Contract Iteration Evidence
+
+- `cargo fmt --check`
+- `cargo test --lib mcp::install --features axon-pb`
+- `git diff --check`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `GOCACHE=/tmp/easynet-go-build-cache bash tools/scripts/check-architecture-convergence.sh`
+
+Result: passed. The focused Rust test proves that generated MCP install args
+contain only `mcp serve --tenant [--agent]` and that retired no-op flags
+`--endpoint`, `--bound-node`, and `--allow-node-override` are rejected by the
+parser.
+
 ## Bidi Frame0 Provider-Backed Iteration Evidence
 
 - `cd sdk/go && go test -tags easynet_direct_runtime -run 'TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry|TestDirectRuntimeTransportBidiOverUnixSocket|TestDirectRuntimeBidiCancelProjectsNonTerminalRequest' .`

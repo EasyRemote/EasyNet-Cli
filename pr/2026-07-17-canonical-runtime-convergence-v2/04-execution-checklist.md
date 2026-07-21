@@ -15,6 +15,8 @@
 - [x] Gate complete tuple ingress and LocalRuntime-only ability routes.
 - [x] Remove CLI-side boot port compatibility reconstruction so daemon
       `BootEvent::PortChosen` remains the only port-choice progress authority.
+- [x] Remove MCP installer no-op compatibility flags so `mcp install` writes
+      only the live `mcp serve --tenant [--agent]` contract.
 - [ ] Delete any remaining direct ability response synthesis that is not boot,
       health, status, or diagnostics.
 - [ ] Re-run daemon migration gates against current worktree.
