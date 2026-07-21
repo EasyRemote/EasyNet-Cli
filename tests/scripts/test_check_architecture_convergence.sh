@@ -75,6 +75,7 @@ make_good_fixture() {
     "$CLI/src/daemon/invocation/streams" \
     "$CLI/src/daemon/persistence" \
     "$CLI/src/daemon/resources/context" \
+    "$CLI/src/daemon/resources/pages" \
     "$CLI/src/daemon/resources/skills" \
     "$CLI/src/support/platform" \
     "$CLI/ability-descriptors/system/agents" \
@@ -167,6 +168,15 @@ fn classify_device_show_target(raw: &str, local_identity: &DeviceLocalIdentity) 
         return Ok(DeviceShowTarget::Local);
     }
     Ok(DeviceShowTarget::RemoteDevice(target.to_string()))
+}
+EOF
+  cat >"$CLI/src/daemon/resources/pages/pages_listener.rs" <<'EOF'
+fn parse_pages_api_body(body_bytes: &[u8]) -> Result<serde_json::Value, serde_json::Error> {
+    if body_bytes.is_empty() {
+        Ok(serde_json::Value::Null)
+    } else {
+        serde_json::from_slice(body_bytes)
+    }
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/agents/discover.rs" <<'EOF'
@@ -6402,6 +6412,20 @@ EOF
 expect_fail \
   "device product ingress local identity fallback" \
   "R94_DEVICE_PRODUCT_INGRESS_REQUIRES_LOCAL_IDENTITY"
+
+make_good_fixture
+cat >"$CLI/src/daemon/resources/pages/pages_listener.rs" <<'EOF'
+fn handle_api_body(body_bytes: bytes::Bytes) -> serde_json::Value {
+    if body_bytes.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null)
+    }
+}
+EOF
+expect_fail \
+  "Pages API malformed JSON null fallback" \
+  "R95_PAGES_API_BODY_FAIL_CLOSED"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

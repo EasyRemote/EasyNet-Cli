@@ -690,3 +690,10 @@ Decisions will be appended as root-fork choices are made.
   Invalid verb names are still skipped with an operator event because they are
   explicit non-ability artifacts; directory scan and file-type errors are not
   artifacts and must not hide routes.
+- Treat Pages API request bodies as product ingress schema, not convenience
+  payload hints. Empty body remains a valid no-payload state projected to JSON
+  null; malformed non-empty JSON is invalid input and must return HTTP 400
+  before ability dispatch.
+- Keep Pages API body parsing centralized in the listener boundary. Downstream
+  API handlers should receive already-decided invocation args and must not own
+  a second "repair malformed body" interpretation path.

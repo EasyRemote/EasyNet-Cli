@@ -2,6 +2,28 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-22 Pages API body ingress fallback audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` reports the checkout
+  is not initialized for CodeGraph, so this iteration used targeted `rg` and
+  source inspection instead of creating a new index inside the working tree.
+- `rg -n "unwrap_or\\(Value::Null\\)|unwrap_or_default\\(\\)|\\.ok\\(\\)\\?|\\.ok\\(\\)"
+  src/daemon/resources/pages ...` identified
+  `src/daemon/resources/pages/pages_listener.rs` as the product-facing HTTP
+  ingress where `/api/<verb>` request bodies are converted into invocation
+  args.
+- Source inspection found `serde_json::from_slice(&body_bytes).unwrap_or(
+  serde_json::Value::Null)`, which repaired malformed non-empty JSON into a
+  valid `null` body before dispatching to the Pages API handler.
+- The root abstraction problem was body-schema defaultization at product
+  ingress. Empty body is a declared no-payload state, but malformed body is an
+  invalid HTTP input fact and must not be projected as a canonical invocation
+  argument.
+- After the change, Pages API body parsing is centralized in
+  `parse_pages_api_body`: empty bytes return `Value::Null`, non-empty bytes
+  are parsed fallibly, and handler errors return HTTP 400 before API ability
+  dispatch.
+
 ## 2026-07-21 Ability discovery candidate projection fallback audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph explore

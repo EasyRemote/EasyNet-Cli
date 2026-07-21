@@ -267,3 +267,7 @@
   return no dynamic API abilities; an existing unreadable/non-directory API
   path, directory entry error, or file-type error must fail registration
   instead of making product routes disappear from the catalog.
+- Pages API HTTP ingress must distinguish absent request body from malformed
+  request body. Empty body may project to JSON null for APIs that intentionally
+  accept no payload; non-empty malformed JSON is invalid product input and must
+  fail before dispatch instead of being repaired into null invocation args.

@@ -7599,6 +7599,49 @@ if device_group.exists():
             )
 
 
+# Rule 95: Pages API HTTP ingress is descriptor-bound product input. Empty
+# bodies may project to JSON null, but malformed JSON is invalid HTTP input and
+# must not be repaired to null before ability dispatch.
+pages_listener = cli_root / "src/daemon/resources/pages/pages_listener.rs"
+if pages_listener.exists():
+    text = source(pages_listener)
+    for pattern, detail in (
+        (
+            r"serde_json::from_slice\s*\(\s*&?body_bytes\s*\)\s*\.unwrap_or\s*\(\s*serde_json::Value::Null\s*\)",
+            "Pages API body parsing must not repair malformed JSON to null",
+        ),
+        (
+            r"serde_json::from_slice\s*\(\s*&?body_bytes\s*\)\s*\.unwrap_or\s*\(\s*Value::Null\s*\)",
+            "Pages API body parsing must not repair malformed JSON to null",
+        ),
+    ):
+        match = re.search(pattern, text, re.S)
+        if match:
+            add(
+                "R95_PAGES_API_BODY_FAIL_CLOSED",
+                pages_listener,
+                line_number(text, match.start()),
+                detail,
+            )
+    if "fn parse_pages_api_body(" not in text:
+        add(
+            "R95_PAGES_API_BODY_FAIL_CLOSED",
+            pages_listener,
+            1,
+            "Pages API body parsing must stay centralized and testable",
+        )
+    body_info = brace_function_body(text, r"fn\s+parse_pages_api_body\b")
+    if body_info is not None:
+        offset, body = body_info
+        if "body_bytes.is_empty()" not in body or "serde_json::from_slice(body_bytes)" not in body:
+            add(
+                "R95_PAGES_API_BODY_FAIL_CLOSED",
+                pages_listener,
+                line_number(text, offset),
+                "parse_pages_api_body must treat only absent body as null and parse non-empty bytes fallibly",
+            )
+
+
 # Rule 91: C ABI diagnostics descriptor fallback must keep descriptor
 # resolution semantics. A catalog miss is DESCRIPTOR_NOT_FOUND, not generic
 # NOT_FOUND/ABILITY_NOT_FOUND; otherwise products cannot distinguish absent

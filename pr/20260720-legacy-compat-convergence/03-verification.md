@@ -2228,3 +2228,26 @@ Commands and outcomes will be appended after implementation.
   SDK_CONFORMANCE_PYTHON="$(pwd)/sdk/python/.venv/bin/python" bash
   tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
   (`canonical-runtime-convergence-v2: OK`).
+
+## 2026-07-22 Pages API body ingress fallback
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — NOT
+  INITIALIZED; no `.codegraph/` index was created for this checkout.
+- `rg -n
+  "unwrap_or\\(Value::Null\\)|unwrap_or_default\\(\\)|\\.ok\\(\\)\\?|\\.ok\\(\\)"
+  src/daemon/resources/pages ...` — PASS for seam identification; found the
+  Pages listener `/api/<verb>` malformed-body-to-null fallback.
+- `cargo test -q daemon::resources::pages::pages_listener --lib` — PASS
+  (`12 passed`); includes absent body projected to null, malformed body
+  rejected by the parser, and malformed `/api/<verb>` request returning HTTP
+  400 before dispatch.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  R95 negative fixture for `serde_json::from_slice(&body_bytes).unwrap_or(
+  serde_json::Value::Null)`.
+- `cargo check --lib --bins` — PASS.
+- `cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS
+  (`architecture-convergence: OK`).
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).

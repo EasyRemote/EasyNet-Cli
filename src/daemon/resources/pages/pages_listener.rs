@@ -213,10 +213,14 @@ async fn handle(req: Request<Body>) -> Response<Body> {
             Ok(b) => b,
             Err(_) => return text_response(StatusCode::BAD_REQUEST, "body too large\n"),
         };
-        let body_value: serde_json::Value = if body_bytes.is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null)
+        let body_value = match parse_pages_api_body(&body_bytes) {
+            Ok(value) => value,
+            Err(err) => {
+                return text_response(
+                    StatusCode::BAD_REQUEST,
+                    &format!("invalid JSON body: {err}\n"),
+                );
+            }
         };
 
         let user_owned = user.clone();
@@ -342,6 +346,14 @@ fn text_response(status: StatusCode, msg: &str) -> Response<Body> {
         )
         .body(Body::from(msg.to_owned()))
         .expect("text response build")
+}
+
+fn parse_pages_api_body(body_bytes: &[u8]) -> Result<serde_json::Value, serde_json::Error> {
+    if body_bytes.is_empty() {
+        Ok(serde_json::Value::Null)
+    } else {
+        serde_json::from_slice(body_bytes)
+    }
 }
 
 /// CORS preflight — the Hub allows cross-origin POST so a frontend
@@ -642,7 +654,7 @@ fn json_response_with_cors(status: StatusCode, value: serde_json::Value) -> Resp
 
 #[cfg(test)]
 mod tests {
-    use super::{handle, pages_health_response, parse_pages_host};
+    use super::{handle, pages_health_response, parse_pages_api_body, parse_pages_host};
     use axum::body::{to_bytes, Body};
     use axum::http::{header, Request, StatusCode};
     use serde_json::json;
@@ -791,6 +803,36 @@ mod tests {
         assert_eq!(payload["source"], "pages");
 
         PUBLISHED_PROJECTS.remove(&key);
+    }
+
+    #[test]
+    fn pages_api_body_treats_absent_body_as_null() {
+        assert_eq!(
+            parse_pages_api_body(b"").expect("empty body"),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn pages_api_body_rejects_malformed_json() {
+        assert!(parse_pages_api_body(br#"{"unterminated": true"#).is_err());
+    }
+
+    #[tokio::test]
+    async fn api_route_rejects_malformed_json_body_before_dispatch() {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/hello")
+            .header(header::HOST, "recipes.alice.pages.localhost:8787")
+            .body(Body::from(br#"{"unterminated": true"#.as_slice()))
+            .expect("request");
+
+        let resp = handle(req).await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(resp.into_body(), 1024).await.expect("body bytes");
+        let text = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(text.starts_with("invalid JSON body:"));
     }
 
     #[tokio::test]
