@@ -609,6 +609,65 @@ if dispatcher:
 PY
 }
 
+check_admission_owner_credentials_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local policy="$cli_root/src/daemon/invocation/admission/policy_gate.rs"
+  [[ -f "$policy" ]] || return 0
+
+  "$PYTHON_BIN" - "$policy" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+
+resolve = re.search(
+    r"pub\(crate\) fn resolve_owner\((?P<sig>.*?)\) -> (?P<ret>[^{]+)\{(?P<body>.*?)\n\}",
+    text,
+    re.DOTALL,
+)
+if resolve is None:
+    raise SystemExit("admission_owner_resolve_owner_missing")
+if "Result<OwnerResolution, Status>" not in resolve.group("ret"):
+    raise SystemExit("admission_owner_resolve_owner_not_fallible")
+if "let owner = resolve_owner(" not in text or ")?" not in text[text.find("let owner = resolve_owner("):text.find("let principal = principal_for")]:
+    raise SystemExit("admission_policy_gate_not_propagating_owner_resolution")
+
+local = re.search(
+    r"fn owner_fact_from_local_device\((?P<sig>.*?)\) -> (?P<ret>[^{]+)\{(?P<body>.*?)\n\}",
+    text,
+    re.DOTALL,
+)
+if local is None:
+    raise SystemExit("admission_local_device_owner_fact_missing")
+if "Result<Option<OwnerFact>, Status>" not in local.group("ret"):
+    raise SystemExit("admission_local_device_owner_fact_not_fallible")
+body = local.group("body")
+for retired in (
+    "load_credentials().ok()",
+    "load_credentials().ok()?",
+    "credentials.user_id().ok()",
+    "parse_ura(ura).ok()",
+):
+    if retired in body:
+        raise SystemExit(f"admission_local_owner_retired_fallback:{retired}")
+for required in (
+    "load_credentials_optional()",
+    "return Ok(None)",
+    "LOCAL_OWNER_CREDENTIALS_UNAVAILABLE",
+    "LOCAL_OWNER_URA_INVALID",
+):
+    if required not in body:
+        raise SystemExit(f"admission_local_owner_missing_fail_closed_path:{required}")
+for test in (
+    "local_device_owner_resolution_rejects_malformed_credentials",
+    "paired_device_subject_projects_credentials_owner",
+):
+    if test not in text:
+        raise SystemExit(f"missing_admission_owner_credentials_test:{test}")
+PY
+}
+
 check_device_settings_loader_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local config="$cli_root/src/daemon/persistence/config.rs"
@@ -2766,6 +2825,26 @@ EOF
   if ( check_runtime_trust_revoke_credentials_contract "$tmp/runtime-trust-revoke-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected runtime trust revoke credential fallback gate to fail"
   fi
+  mkdir -p "$tmp/admission-owner-legacy/src/daemon/invocation/admission"
+  printf '%s\n' \
+    'pub(crate) fn resolve_owner(subject_ura: &str, callee_ura: &str, daemon_ura: Option<&str>, trust_anchor: &RealmTrustAnchor) -> OwnerResolution {' \
+    '  OwnerResolver::resolve(&OwnerResolutionInput {' \
+    '    subject: owner_fact_from_ura(subject_ura, daemon_ura, trust_anchor),' \
+    '    callee: owner_fact_from_ura(callee_ura, daemon_ura, trust_anchor),' \
+    '    device: owner_fact_from_trust_anchor(callee_ura, trust_anchor).or_else(|| owner_fact_from_local_device(callee_ura, daemon_ura)),' \
+    '    session: None,' \
+    '  })' \
+    '}' \
+    'fn owner_fact_from_local_device(ura: &str, daemon_ura: Option<&str>) -> Option<OwnerFact> {' \
+    '  let parsed = parse_ura(ura).ok()?;' \
+    '  let credentials = crate::daemon::persistence::config::load_credentials().ok()?;' \
+    '  let user_id = credentials.user_id().ok()?.to_string();' \
+    '  Some(OwnerFact::user(user_id.clone(), crate::core::ura::user_ura(&credentials.realm, &user_id)))' \
+    '}' \
+    > "$tmp/admission-owner-legacy/src/daemon/invocation/admission/policy_gate.rs"
+  if ( check_admission_owner_credentials_contract "$tmp/admission-owner-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected admission owner credential fallback gate to fail"
+  fi
   mkdir -p "$tmp/device-settings-legacy/src/daemon/persistence" \
     "$tmp/device-settings-legacy/src/cli/commands"
   printf '%s\n' \
@@ -2814,6 +2893,7 @@ EOF
   check_pages_identity_credentials_contract
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
+  check_admission_owner_credentials_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_edge_adapter_policy_contract
@@ -2856,6 +2936,7 @@ check_auth_agents_backend_shape_contract
 check_pages_identity_credentials_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
+check_admission_owner_credentials_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_edge_adapter_policy_contract

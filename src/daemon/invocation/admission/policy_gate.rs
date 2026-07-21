@@ -51,7 +51,7 @@ impl AdmissionPolicyGate {
             &callee_ura,
             context.daemon_ura,
             context.trust_anchor,
-        );
+        )?;
         let principal = principal_for(context.trusted_role, &caller_ura, context.trust_anchor);
         let authority_self_read = authority_self_read_scope(
             &caller_ura,
@@ -202,34 +202,41 @@ pub(crate) fn resolve_owner(
     callee_ura: &str,
     daemon_ura: Option<&str>,
     trust_anchor: &RealmTrustAnchor,
-) -> OwnerResolution {
-    OwnerResolver::resolve(&OwnerResolutionInput {
-        subject: owner_fact_from_ura(subject_ura, daemon_ura, trust_anchor),
-        callee: owner_fact_from_ura(callee_ura, daemon_ura, trust_anchor),
-        device: owner_fact_from_trust_anchor(callee_ura, trust_anchor)
-            .or_else(|| owner_fact_from_local_device(callee_ura, daemon_ura)),
+) -> Result<OwnerResolution, Status> {
+    let subject = owner_fact_from_ura(subject_ura, daemon_ura, trust_anchor)?;
+    let callee = owner_fact_from_ura(callee_ura, daemon_ura, trust_anchor)?;
+    let device = match owner_fact_from_trust_anchor(callee_ura, trust_anchor) {
+        Some(owner) => Some(owner),
+        None => owner_fact_from_local_device(callee_ura, daemon_ura)?,
+    };
+    Ok(OwnerResolver::resolve(&OwnerResolutionInput {
+        subject,
+        callee,
+        device,
         session: None,
-    })
+    }))
 }
 
 fn owner_fact_from_ura(
     ura: &str,
     daemon_ura: Option<&str>,
     trust_anchor: &RealmTrustAnchor,
-) -> Option<OwnerFact> {
+) -> Result<Option<OwnerFact>, Status> {
     if let Some(owner) = owner_fact_from_trust_anchor(ura, trust_anchor) {
-        return Some(owner);
+        return Ok(Some(owner));
     }
-    let parsed = parse_ura(ura).ok()?;
-    match parsed.kind {
+    let parsed = parse_ura(ura).map_err(|error| {
+        Status::invalid_argument(format!("OWNER_FACT_URA_INVALID: {ura}: {error}"))
+    })?;
+    let owner = match parsed.kind {
         URAKind::User => parsed
             .user_id()
             .map(|user_id| OwnerFact::user(user_id, ura.to_string())),
         URAKind::Agent => parsed.agent_ids().map(|(user_id, _)| {
             OwnerFact::user(user_id, crate::core::ura::user_ura(&parsed.realm, user_id))
         }),
-        URAKind::Ability => parsed.ability().and_then(|ability| match ability.owner {
-            AbilityOwner::Agent { user_id, agent_id } => owner_fact_from_trust_anchor(
+        URAKind::Ability => match parsed.ability().map(|ability| ability.owner) {
+            Some(AbilityOwner::Agent { user_id, agent_id }) => owner_fact_from_trust_anchor(
                 &crate::core::ura::agent_ura(&parsed.realm, &user_id, &agent_id),
                 trust_anchor,
             )
@@ -239,27 +246,30 @@ fn owner_fact_from_ura(
                     crate::core::ura::user_ura(&parsed.realm, &user_id),
                 ))
             }),
-            AbilityOwner::Device { device_id } => owner_fact_from_trust_anchor(
-                &crate::core::ura::device_ura(&parsed.realm, &device_id),
-                trust_anchor,
-            )
-            .or_else(|| {
-                owner_fact_from_local_device(
-                    &crate::core::ura::device_ura(&parsed.realm, &device_id),
-                    daemon_ura,
-                )
-            }),
-            AbilityOwner::Authority => owner_fact_from_local_authority(
-                &crate::core::ura::hub_ura(&parsed.realm),
-                daemon_ura,
-            )
-            .or_else(|| {
-                owner_fact_from_local_device(&crate::core::ura::hub_ura(&parsed.realm), daemon_ura)
-            }),
-        }),
-        URAKind::Device | URAKind::Authority => owner_fact_from_trust_anchor(ura, trust_anchor)
-            .or_else(|| owner_fact_from_local_authority(ura, daemon_ura))
-            .or_else(|| owner_fact_from_local_device(ura, daemon_ura)),
+            Some(AbilityOwner::Device { device_id }) => {
+                let device_ura = crate::core::ura::device_ura(&parsed.realm, &device_id);
+                match owner_fact_from_trust_anchor(&device_ura, trust_anchor) {
+                    Some(owner) => Some(owner),
+                    None => owner_fact_from_local_device(&device_ura, daemon_ura)?,
+                }
+            }
+            Some(AbilityOwner::Authority) => {
+                let authority_ura = crate::core::ura::hub_ura(&parsed.realm);
+                match owner_fact_from_local_authority(&authority_ura, daemon_ura) {
+                    Some(owner) => Some(owner),
+                    None => owner_fact_from_local_device(&authority_ura, daemon_ura)?,
+                }
+            }
+            None => None,
+        },
+        URAKind::Device | URAKind::Authority => {
+            match owner_fact_from_trust_anchor(ura, trust_anchor)
+                .or_else(|| owner_fact_from_local_authority(ura, daemon_ura))
+            {
+                Some(owner) => Some(owner),
+                None => owner_fact_from_local_device(ura, daemon_ura)?,
+            }
+        }
         URAKind::Resource => resource_owner_user_id(&parsed).map(|user_id| {
             OwnerFact::user(
                 user_id.clone(),
@@ -267,7 +277,8 @@ fn owner_fact_from_ura(
             )
         }),
         _ => None,
-    }
+    };
+    Ok(owner)
 }
 
 fn owner_fact_from_trust_anchor(ura: &str, trust_anchor: &RealmTrustAnchor) -> Option<OwnerFact> {
@@ -293,9 +304,20 @@ fn owner_fact_from_local_authority(ura: &str, daemon_ura: Option<&str>) -> Optio
     })
 }
 
-fn owner_fact_from_local_device(ura: &str, daemon_ura: Option<&str>) -> Option<OwnerFact> {
-    let parsed = parse_ura(ura).ok()?;
-    let credentials = crate::daemon::persistence::config::load_credentials().ok()?;
+fn owner_fact_from_local_device(
+    ura: &str,
+    daemon_ura: Option<&str>,
+) -> Result<Option<OwnerFact>, Status> {
+    let parsed = parse_ura(ura).map_err(|error| {
+        Status::invalid_argument(format!("LOCAL_OWNER_URA_INVALID: {ura}: {error}"))
+    })?;
+    let Some(credentials) = crate::daemon::persistence::config::load_credentials_optional()
+        .map_err(|error| {
+            Status::failed_precondition(format!("LOCAL_OWNER_CREDENTIALS_UNAVAILABLE: {error:#}"))
+        })?
+    else {
+        return Ok(None);
+    };
     let is_local_identity = match parsed.kind {
         URAKind::Device => {
             parsed.realm == credentials.realm
@@ -307,13 +329,15 @@ fn owner_fact_from_local_device(ura: &str, daemon_ura: Option<&str>) -> Option<O
         _ => Some(ura) == daemon_ura,
     };
     if !is_local_identity {
-        return None;
+        return Ok(None);
     }
-    let user_id = credentials.user_id().ok()?.to_string();
-    Some(OwnerFact::user(
-        user_id.clone(),
+    let user_id = credentials.user_id().map_err(|error| {
+        Status::failed_precondition(format!("LOCAL_OWNER_CREDENTIALS_UNAVAILABLE: {error}"))
+    })?;
+    Ok(Some(OwnerFact::user(
+        user_id,
         crate::core::ura::user_ura(&credentials.realm, &user_id),
-    ))
+    )))
 }
 
 fn resource_owner_user_id(parsed: &crate::core::ura::ParsedURA) -> Option<String> {
@@ -511,7 +535,8 @@ mod tests {
             "easynet:///r/test/authority",
             Some("easynet:///r/test/authority"),
             &anchor,
-        );
+        )
+        .expect("anchor owner resolution");
 
         assert_eq!(owner.owner_user_id.as_deref(), Some("alice"));
         assert_eq!(
@@ -530,12 +555,38 @@ mod tests {
             "easynet:///r/test/authority",
             Some("easynet:///r/test/authority"),
             &anchor,
-        );
+        )
+        .expect("credential owner resolution");
 
         assert_eq!(owner.owner_user_id.as_deref(), Some("alice"));
         assert_eq!(
             owner.owner_ura.as_deref(),
             Some("easynet:///r/test/user/alice")
+        );
+    }
+
+    #[test]
+    fn local_device_owner_resolution_rejects_malformed_credentials() {
+        let _home = HomeGuard::new();
+        let state_dir = crate::daemon::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("create isolated state dir");
+        std::fs::write(state_dir.join("credentials.json"), b"{")
+            .expect("write malformed credentials");
+        let anchor = empty_anchor();
+
+        let error = resolve_owner(
+            "easynet:///r/test/device/dev-1",
+            "easynet:///r/test/authority",
+            Some("easynet:///r/test/authority"),
+            &anchor,
+        )
+        .expect_err("malformed credentials must fail local owner resolution");
+
+        let message = error.message();
+        assert!(
+            message.contains("LOCAL_OWNER_CREDENTIALS_UNAVAILABLE")
+                && message.contains("parse credentials"),
+            "unexpected error: {message}"
         );
     }
 
@@ -549,7 +600,8 @@ mod tests {
             "easynet:///r/test/authority",
             Some("easynet:///r/test/authority"),
             &anchor,
-        );
+        )
+        .expect("device ability owner resolution");
 
         assert_eq!(owner.owner_user_id.as_deref(), Some("alice"));
     }
@@ -563,7 +615,8 @@ mod tests {
             "easynet:///r/test/authority",
             Some("easynet:///r/test/authority"),
             &anchor,
-        );
+        )
+        .expect("authority owner resolution");
 
         assert!(owner.owner_user_id.is_none());
         assert_eq!(

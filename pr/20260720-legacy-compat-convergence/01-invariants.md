@@ -321,3 +321,8 @@
   connection-state projection is possible, but an existing unreadable,
   malformed, or schema-invalid credentials file is unavailable identity state
   and must fail before trust revoke commits.
+- Admission owner resolution must classify local credential state before
+  building owner facts. Missing `credentials.json` may mean no local device
+  owner fact exists; an existing unreadable, malformed, or schema-invalid
+  credentials file is unavailable identity state and must not be projected as
+  unresolved owner.

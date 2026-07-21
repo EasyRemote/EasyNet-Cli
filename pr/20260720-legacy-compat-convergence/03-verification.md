@@ -2535,3 +2535,26 @@ Commands and outcomes will be appended after implementation.
   tools/scripts/check-architecture-convergence.sh` — PASS.
 - `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
 - `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+
+## 2026-07-22 Admission owner credential projection
+
+- `cargo test -q local_device_owner_resolution_rejects_malformed_credentials
+  --lib --features axon-pb` — PASS (`1 passed`); covers malformed
+  credentials failing owner resolution instead of projecting unresolved owner.
+- `cargo test -q paired_device_subject_projects_credentials_owner --lib
+  --features axon-pb` — PASS (`1 passed`); preserves valid paired-device
+  owner projection.
+- `cargo test -q user_subject_projects_owner_policy_allow --lib --features
+  axon-pb` — PASS (`1 passed`); verifies the fallible owner-resolution path
+  still feeds policy allow for a user-owned subject.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative fixture for the retired
+  `load_credentials().ok()?` local owner fallback.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.

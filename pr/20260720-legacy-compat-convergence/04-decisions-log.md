@@ -798,3 +798,14 @@ Decisions will be appended as root-fork choices are made.
 - Keep the invalidator object pure over already-classified state. It receives
   `Option<RuntimeTrustConnectionStateProjector>` and never reads credentials
   during invalidation.
+
+## 2026-07-22 Admission owner credential projection
+
+- Treat local device owner facts as authority-bearing admission input, not a
+  best-effort hint. Malformed local credentials now fail owner resolution
+  instead of continuing policy evaluation with an unresolved owner.
+- Preserve first-run/unpaired behavior. Missing credentials produce no local
+  device owner fact, which keeps pre-join and hub-only paths explicit without
+  hiding corrupt identity state.
+- Make `resolve_owner` fallible so admission policy can distinguish malformed
+  URA/credential state from ordinary no-match owner projection.

@@ -2274,3 +2274,20 @@ Evidence will be appended after indexing and focused impact queries.
 - Boundary decision: projector construction is now a preflight that returns
   `Result<Option<_>>`; missing credentials means no local projection, corrupt
   credentials abort before trust mutation.
+
+## 2026-07-22 Admission owner credential projection audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query -p /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli
+  "owner_fact_from_local_device load_credentials ok admission policy owner resolution"
+  --limit 50` surfaced `policy_gate::owner_fact_from_local_device` as the
+  admission owner-resolution fallback point.
+- `rg -n "load_credentials\\(\\)\\.ok\\(\\)|user_ura\\(\\)\\.ok\\(\\)|parse_ura\\([^\\n]+\\)\\.ok\\(\\)"
+  src/daemon/invocation/admission src/daemon/invocation/dispatch -S
+  --glob '!**/*test*'` showed the local owner fact path collapsed malformed
+  credentials into `None`, allowing policy evaluation to continue with an
+  unresolved owner.
+- Root abstraction problem: owner resolution mixed "not this local identity"
+  with "local identity authority is corrupt" in an `Option<OwnerFact>`.
+- Boundary decision: `resolve_owner` is now fallible and local device owner
+  projection uses `load_credentials_optional()` so missing credentials and
+  corrupt credentials remain distinct states.
