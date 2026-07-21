@@ -2300,3 +2300,24 @@ Commands and outcomes will be appended after implementation.
   (`architecture-convergence: OK`).
 - `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
   (`canonical-runtime-convergence-v2: OK`).
+
+## 2026-07-22 MCP status runtime projection fallback
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — NOT
+  INITIALIZED; no `.codegraph/` index was created for this checkout.
+- `rg -n
+  "mcp status|run_status\\(|config::load\\(\\)\\.ok\\(\\)|RuntimeLifecycleService"
+  src/cli tests tools/scripts/check-architecture-convergence.sh ...` — PASS
+  for seam identification; found MCP status reading `runtime.json` directly.
+- `env RUSTC_WRAPPER= cargo test -q cli::commands::groups::mcp --lib` — PASS
+  (`1 passed`); covers malformed `runtime.json` aborting MCP status instead
+  of rendering "runtime not running".
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  R98 negative fixture for `config::load().ok()` in MCP status.
+- `env RUSTC_WRAPPER= cargo check --lib --bins` — PASS.
+- `cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS
+  (`architecture-convergence: OK`).
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).

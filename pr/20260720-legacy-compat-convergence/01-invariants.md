@@ -282,3 +282,8 @@
   reset safety state and must abort before credentials are deleted; stale
   projection cleanup must be an explicit lifecycle side effect whose failure
   is returned, not ignored.
+- MCP status must consume the lifecycle status report instead of opening
+  `runtime.json` directly. A corrupt/unreadable runtime projection is
+  unavailable MCP runtime observation, not "runtime not running"; missing
+  projection with daemon facts must render as degraded daemon evidence rather
+  than empty local state.

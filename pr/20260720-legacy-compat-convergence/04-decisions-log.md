@@ -711,3 +711,10 @@ Decisions will be appended as root-fork choices are made.
 - Keep stale runtime projection cleanup explicit. `ProjectionPresentProcessMissing`
   is the only reset path that removes `runtime.json`, and cleanup errors
   return to the operator instead of being ignored.
+- Treat MCP status as a consumer of lifecycle diagnostics, not as a second
+  runtime projection reader. It may combine lifecycle status with the MCP
+  health probe, but it must not decide whether malformed `runtime.json` means
+  stopped, stale, or running.
+- Preserve daemon facts when projection is missing. MCP status now reports
+  lifecycle daemon evidence separately from `runtime.json`, so a live daemon
+  with missing projection does not collapse into the fresh-install message.

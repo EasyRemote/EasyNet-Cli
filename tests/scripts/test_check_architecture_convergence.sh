@@ -146,6 +146,25 @@ fn reset_runtime_is_active(status: RuntimeLifecycleStatus) -> bool {
     )
 }
 EOF
+  cat >"$CLI/src/cli/commands/groups/mcp.rs" <<'EOF'
+use crate::daemon::lifecycle::{RuntimeLifecycleService, RuntimeStatusReport};
+
+fn run_status() -> anyhow::Result<()> {
+    let report = RuntimeLifecycleService::new().status()?;
+    if report.daemon().has_daemon_fact() {
+        render_lifecycle_details(&report);
+    }
+    Ok(())
+}
+
+fn render_lifecycle_details(report: &RuntimeStatusReport) {
+    if let Some(projection) = report.projection() {
+        let _state = projection.as_runtime_state();
+        return;
+    }
+    if let Some(_discovery) = report.daemon().control_discovery() {}
+}
+EOF
   cat >"$CLI/src/cli/commands/groups/device.rs" <<'EOF'
 struct DeviceLocalIdentity {
     realm: String,
@@ -6547,6 +6566,20 @@ EOF
 expect_fail \
   "device reset runtime projection fallback" \
   "R97_RESET_RUNTIME_PROJECTION_FAIL_CLOSED"
+
+make_good_fixture
+cat >"$CLI/src/cli/commands/groups/mcp.rs" <<'EOF'
+fn run_status() -> anyhow::Result<()> {
+    let state = crate::daemon::persistence::config::load().ok();
+    if state.is_none() {
+        output::warn("runtime not running");
+    }
+    Ok(())
+}
+EOF
+expect_fail \
+  "MCP status runtime projection fallback" \
+  "R98_MCP_STATUS_RUNTIME_PROJECTION_FAIL_CLOSED"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

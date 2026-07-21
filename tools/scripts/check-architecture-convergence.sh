@@ -7748,6 +7748,37 @@ if reset_cmd.exists():
             )
 
 
+# Rule 98: MCP status is a product diagnostics surface. It must consume the
+# lifecycle status report and must not collapse corrupt runtime.json into
+# "runtime not running".
+mcp_cmd = cli_root / "src/cli/commands/groups/mcp.rs"
+if mcp_cmd.exists():
+    text = source(mcp_cmd)
+    for token, detail in (
+        (
+            "RuntimeLifecycleService::new().status()?",
+            "MCP status must consume lifecycle status and propagate projection load failures",
+        ),
+        (
+            "fn render_lifecycle_details(",
+            "MCP status must centralize lifecycle detail rendering",
+        ),
+        (
+            "report.daemon().has_daemon_fact()",
+            "MCP status must distinguish missing projection with daemon facts from stopped runtime",
+        ),
+    ):
+        if token not in text:
+            add("R98_MCP_STATUS_RUNTIME_PROJECTION_FAIL_CLOSED", mcp_cmd, 1, detail)
+    if "config::load().ok()" in text:
+        add(
+            "R98_MCP_STATUS_RUNTIME_PROJECTION_FAIL_CLOSED",
+            mcp_cmd,
+            line_number(text, text.find("config::load().ok()")),
+            "MCP status must not swallow runtime projection load failures",
+        )
+
+
 # Rule 91: C ABI diagnostics descriptor fallback must keep descriptor
 # resolution semantics. A catalog miss is DESCRIPTOR_NOT_FOUND, not generic
 # NOT_FOUND/ABILITY_NOT_FOUND; otherwise products cannot distinguish absent

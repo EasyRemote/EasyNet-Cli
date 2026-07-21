@@ -2,6 +2,26 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-22 MCP status runtime projection fallback audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` reports the checkout
+  is not initialized for CodeGraph, so this iteration used targeted `rg` and
+  source inspection instead of creating a new index inside the working tree.
+- `rg -n "mcp status|run_status\\(|config::load\\(\\)\\.ok\\(\\)|RuntimeLifecycleService"
+  src/cli tests tools/scripts/check-architecture-convergence.sh ...`
+  identified `src/cli/commands/groups/mcp.rs::run_status` as the remaining
+  product diagnostics surface that interpreted `runtime.json` directly.
+- Source inspection found `let state = config::load().ok()` feeding both
+  reachable and unreachable MCP status rendering. A malformed runtime
+  projection therefore became "runtime not running", hiding the lifecycle
+  projection error from the operator.
+- The root abstraction problem was duplicated diagnostics authority. MCP
+  status should report whether the local MCP surface is usable, but lifecycle
+  projection classification belongs to `RuntimeLifecycleService`.
+- After the change, MCP status obtains `RuntimeLifecycleService::status()?`,
+  renders details through `render_lifecycle_details`, and distinguishes
+  "projection missing but daemon facts exist" from "runtime not running".
+
 ## 2026-07-22 Device reset runtime projection fallback audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` reports the checkout
