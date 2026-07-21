@@ -312,3 +312,7 @@
   existing unreadable, malformed, schema-invalid, or unknown-field settings
   file must fail closed before config display, config mutation, or stable
   install-id generation.
+- Local API key default-token cache is credential projection state. Missing
+  `api_keys.local.toml` may mean no operator default token exists; an existing
+  unreadable, malformed, schema-invalid, unknown-field, or blank-token cache is
+  unavailable credential state and must not be swallowed into "no default key".

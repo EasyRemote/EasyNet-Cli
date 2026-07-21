@@ -2498,3 +2498,19 @@ Commands and outcomes will be appended after implementation.
 - `/Users/macbook.silan.tech/.local/bin/codegraph status
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; index is
   up to date after edits.
+## 2026-07-22 Local API key default-token cache
+
+- `cargo test -q local_default_token_cache --lib --features axon-pb` — PASS
+  (`5 passed`); covers missing cache as no-default-token, written token read,
+  malformed TOML rejection, unknown-field rejection, and blank token rejection.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative fixture for the retired `Option + .ok()?`
+  local-token cache reader.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.

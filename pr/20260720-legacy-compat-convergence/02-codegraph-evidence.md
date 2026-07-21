@@ -2240,3 +2240,18 @@ Evidence will be appended after indexing and focused impact queries.
   local credentials are unavailable. `device show local` remains local-only,
   and canonical self Device URA is classified as local instead of routed
   remotely.
+## 2026-07-22 Local API key default-token cache audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query -p /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli
+  "legacy fallback compatibility unwrap_or_default production route descriptor authority signer"
+  --limit 40` surfaced credential and compatibility fallback candidates after
+  the MCP HTTP parse fallback proved test-only.
+- `rg -n "read_local_default_token\\(|api_keys\\.local\\.toml|default_token"
+  src/daemon src/cli tests tools -S` showed the local bearer cache has one
+  reader in `governance/api_key.rs` and one product consumer in `llm_api.rs`.
+- Root abstraction problem: `api_keys.local.toml` was treated as a best-effort
+  cache (`HOME`, file read, TOML parse, and missing field all collapsed through
+  `.ok()?`) even though it carries bearer credential projection state.
+- Boundary decision: only absent cache file means "no default token"; existing
+  corrupt/unreadable/schema-invalid/blank-token cache is unavailable credential
+  state and must stop bearer request construction.

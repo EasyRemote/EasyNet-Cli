@@ -773,3 +773,16 @@ Decisions will be appended as root-fork choices are made.
 - Add a SPEC v2 guard because this fallback can silently disable
   `session_bridge_exec_enabled` or rotate stable install identity when a
   settings file is corrupt.
+
+## 2026-07-22 Local API key default-token cache
+
+- Treat `api_keys.local.toml` as local credential projection state rather than
+  a best-effort convenience cache. Missing file remains the only valid
+  no-default-token state; existing malformed, unreadable, unknown-field, or
+  blank-token state now fails before `llm-api` constructs bearer auth.
+- Keep the credential boundary cohesive by sharing one path helper between
+  read and write. The reader no longer chains `.ok()?`, and the writer still
+  owns creation and 0600 permission tightening.
+- Add a SPEC v2 guard because product smoke tests can pass with explicit
+  `--key` while the default-token path still preserves silent credential
+  fallback.

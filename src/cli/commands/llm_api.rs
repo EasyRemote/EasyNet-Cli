@@ -50,13 +50,13 @@ pub struct LlmApiArgs {
     pub json: bool,
 }
 
-fn pick_token(arg: Option<String>) -> Option<String> {
+fn pick_token(arg: Option<String>) -> anyhow::Result<Option<String>> {
     if let Some(t) = arg {
-        return Some(t);
+        return Ok(Some(t));
     }
     if let Ok(t) = std::env::var("EASYNET_API_KEY") {
         if !t.is_empty() {
-            return Some(t);
+            return Ok(Some(t));
         }
     }
     api_key::read_local_default_token()
@@ -90,7 +90,7 @@ fn pick_model(arg: Option<String>) -> anyhow::Result<String> {
 
 pub fn run(args: LlmApiArgs) -> anyhow::Result<()> {
     let model = pick_model(args.model)?;
-    let token = pick_token(args.key);
+    let token = pick_token(args.key)?;
 
     // Build OpenAI-shape request.
     let mut messages: Vec<Value> = Vec::new();

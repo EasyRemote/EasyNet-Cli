@@ -471,6 +471,73 @@ for test in (
 PY
 }
 
+check_local_api_key_cache_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local api_key="$cli_root/src/daemon/ability/builtins/governance/api_key.rs"
+  [[ -f "$api_key" ]] || return 0
+  local llm_api="$cli_root/src/cli/commands/llm_api.rs"
+
+  "$PYTHON_BIN" - "$api_key" "$llm_api" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+api_key = Path(sys.argv[1]).read_text()
+llm_api = Path(sys.argv[2]).read_text() if Path(sys.argv[2]).exists() else ""
+
+fn = re.search(
+    r"pub fn read_local_default_token\(\) -> (?P<ret>[^{]+)\{(?P<body>.*?)\n\}",
+    api_key,
+    re.DOTALL,
+)
+if fn is None:
+    raise SystemExit("local_api_key_cache_reader_missing")
+if "anyhow::Result<Option<String>>" not in fn.group("ret"):
+    raise SystemExit("local_api_key_cache_reader_not_fallible")
+body = fn.group("body")
+for retired in (
+    "std::env::var(\"HOME\").ok()",
+    "fs::read_to_string(path).ok()",
+    "fs::read_to_string(&path).ok()",
+    "toml::from_str(&text).ok()",
+    "parsed.default_token",
+):
+    if retired in body and "Ok(Some(token.to_string()))" not in body:
+        raise SystemExit(f"local_api_key_cache_retired_fallback:{retired}")
+for required in (
+    "local_default_token_path()?",
+    "ErrorKind::NotFound",
+    "return Ok(None)",
+    "parse local API key cache",
+    "blank default_token",
+    "Ok(Some(token.to_string()))",
+):
+    if required not in body:
+        raise SystemExit(f"local_api_key_cache_missing_fail_closed_path:{required}")
+if "#[serde(deny_unknown_fields)]" not in api_key:
+    raise SystemExit("local_api_key_cache_missing_unknown_field_rejection")
+if "fn local_default_token_path() -> anyhow::Result<PathBuf>" not in api_key:
+    raise SystemExit("local_api_key_cache_path_helper_missing")
+if "pub fn write_local_default_token(token: &str) -> anyhow::Result<()>" not in api_key:
+    raise SystemExit("local_api_key_cache_writer_missing")
+if "let path = local_default_token_path()?" not in api_key:
+    raise SystemExit("local_api_key_cache_writer_not_using_shared_path")
+if llm_api:
+    if "fn pick_token(arg: Option<String>) -> anyhow::Result<Option<String>>" not in llm_api:
+        raise SystemExit("llm_api_pick_token_not_fallible")
+    if "let token = pick_token(args.key)?" not in llm_api:
+        raise SystemExit("llm_api_not_propagating_local_cache_error")
+for test in (
+    "missing_local_default_token_cache_is_no_default_token_state",
+    "local_default_token_cache_rejects_malformed_toml",
+    "local_default_token_cache_rejects_unknown_fields",
+    "local_default_token_cache_rejects_blank_token",
+):
+    if test not in api_key:
+        raise SystemExit(f"missing_local_api_key_cache_test:{test}")
+PY
+}
+
 check_device_settings_loader_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local config="$cli_root/src/daemon/persistence/config.rs"
@@ -2576,6 +2643,32 @@ EOF
   if ( check_pages_identity_credentials_contract "$tmp/pages-identity-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected Pages identity credential fallback gate to fail"
   fi
+  mkdir -p "$tmp/local-api-key-cache-legacy/src/daemon/ability/builtins/governance" \
+    "$tmp/local-api-key-cache-legacy/src/cli/commands"
+  printf '%s\n' \
+    'pub fn read_local_default_token() -> Option<String> {' \
+    '  let home = std::env::var("HOME").ok()?;' \
+    '  let path = PathBuf::from(home).join(".easynet").join("api_keys.local.toml");' \
+    '  let text = fs::read_to_string(path).ok()?;' \
+    '  #[derive(Deserialize)]' \
+    '  struct LocalTokens { #[serde(default)] default_token: Option<String> }' \
+    '  let parsed: LocalTokens = toml::from_str(&text).ok()?;' \
+    '  parsed.default_token' \
+    '}' \
+    'pub fn write_local_default_token(token: &str) -> anyhow::Result<()> { Ok(()) }' \
+    > "$tmp/local-api-key-cache-legacy/src/daemon/ability/builtins/governance/api_key.rs"
+  printf '%s\n' \
+    'fn pick_token(arg: Option<String>) -> Option<String> {' \
+    '  api_key::read_local_default_token()' \
+    '}' \
+    'fn run(args: LlmApiArgs) -> anyhow::Result<()> {' \
+    '  let token = pick_token(args.key);' \
+    '  Ok(())' \
+    '}' \
+    > "$tmp/local-api-key-cache-legacy/src/cli/commands/llm_api.rs"
+  if ( check_local_api_key_cache_contract "$tmp/local-api-key-cache-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected local API key cache fallback gate to fail"
+  fi
   mkdir -p "$tmp/device-settings-legacy/src/daemon/persistence" \
     "$tmp/device-settings-legacy/src/cli/commands"
   printf '%s\n' \
@@ -2622,6 +2715,7 @@ EOF
   check_principal_lifecycle_cli_schema_contract
   check_auth_agents_backend_shape_contract
   check_pages_identity_credentials_contract
+  check_local_api_key_cache_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_edge_adapter_policy_contract
@@ -2662,6 +2756,7 @@ check_invocation_history_get_key_contract
 check_principal_lifecycle_cli_schema_contract
 check_auth_agents_backend_shape_contract
 check_pages_identity_credentials_contract
+check_local_api_key_cache_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_edge_adapter_policy_contract

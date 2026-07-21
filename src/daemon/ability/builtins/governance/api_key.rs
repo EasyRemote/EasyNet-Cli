@@ -29,6 +29,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::fs;
+use std::io::ErrorKind;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -76,6 +77,13 @@ pub struct ApiKeyStore {
 fn store_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     PathBuf::from(home).join(".easynet").join("api_keys.toml")
+}
+
+fn local_default_token_path() -> anyhow::Result<PathBuf> {
+    let home = std::env::var("HOME").context("HOME unset for local API key cache")?;
+    Ok(PathBuf::from(home)
+        .join(".easynet")
+        .join("api_keys.local.toml"))
 }
 
 fn load_store() -> anyhow::Result<ApiKeyStore> {
@@ -262,29 +270,42 @@ pub fn resolve_token(token: &str) -> anyhow::Result<(String, String)> {
 /// (only its sha256 hash is). The local cache file is a separate
 /// operator convenience — `easynet api-key create` writes it
 /// once at mint time, mode 0600. Lose the file → mint a new key.
-pub fn read_local_default_token() -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
-    let path = PathBuf::from(home)
-        .join(".easynet")
-        .join("api_keys.local.toml");
-    let text = fs::read_to_string(path).ok()?;
+pub fn read_local_default_token() -> anyhow::Result<Option<String>> {
+    let path = local_default_token_path()?;
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read local API key cache {}", path.display()));
+        }
+    };
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct LocalTokens {
-        #[serde(default)]
-        default_token: Option<String>,
+        default_token: String,
     }
-    let parsed: LocalTokens = toml::from_str(&text).ok()?;
-    parsed.default_token
+    let parsed: LocalTokens = toml::from_str(&text)
+        .with_context(|| format!("parse local API key cache {}", path.display()))?;
+    let token = parsed.default_token.trim();
+    if token.is_empty() {
+        anyhow::bail!(
+            "local API key cache {} has blank default_token",
+            path.display()
+        );
+    }
+    Ok(Some(token.to_string()))
 }
 
 /// Write the raw token to the local cache file so subsequent
 /// CLI calls can find it without --key. Operator-side
 /// convenience; never sent over the wire.
 pub fn write_local_default_token(token: &str) -> anyhow::Result<()> {
-    let home = std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME unset"))?;
-    let dir = PathBuf::from(home).join(".easynet");
+    let path = local_default_token_path()?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("local API key cache path has no parent"))?;
     fs::create_dir_all(&dir)?;
-    let path = dir.join("api_keys.local.toml");
     let text = format!("default_token = \"{token}\"\n");
     fs::write(&path, text)?;
     // tighten perms — best effort
@@ -340,6 +361,13 @@ mod tests {
         std::fs::write(path, "keys = [").expect("write malformed api key store");
     }
 
+    fn write_local_default_cache(body: &str) {
+        let path = local_default_token_path().expect("local default token path");
+        std::fs::create_dir_all(path.parent().expect("local cache parent"))
+            .expect("create isolated local cache dir");
+        std::fs::write(path, body).expect("write local default token cache");
+    }
+
     fn assert_store_parse_failure(error: anyhow::Error) {
         let message = format!("{error:#}");
         assert!(
@@ -378,6 +406,69 @@ mod tests {
         assert_store_parse_failure(error);
         let body = std::fs::read_to_string(store_path()).expect("malformed store still present");
         assert_eq!(body, "keys = [");
+    }
+
+    #[test]
+    fn missing_local_default_token_cache_is_no_default_token_state() {
+        let _home = HomeGuard::new();
+
+        let token = read_local_default_token().expect("missing cache should be readable state");
+
+        assert_eq!(token, None);
+    }
+
+    #[test]
+    fn local_default_token_cache_reads_written_token() {
+        let _home = HomeGuard::new();
+
+        write_local_default_token("sk-test-token").expect("write local default token");
+
+        let token = read_local_default_token().expect("read local default token");
+        assert_eq!(token.as_deref(), Some("sk-test-token"));
+    }
+
+    #[test]
+    fn local_default_token_cache_rejects_malformed_toml() {
+        let _home = HomeGuard::new();
+        write_local_default_cache("default_token = ");
+
+        let error =
+            read_local_default_token().expect_err("malformed local default token must fail");
+
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("parse local API key cache"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn local_default_token_cache_rejects_unknown_fields() {
+        let _home = HomeGuard::new();
+        write_local_default_cache("default_token = \"sk-test-token\"\nlegacy = true\n");
+
+        let error =
+            read_local_default_token().expect_err("unknown local default token fields must fail");
+
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("parse local API key cache"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn local_default_token_cache_rejects_blank_token() {
+        let _home = HomeGuard::new();
+        write_local_default_cache("default_token = \"  \"\n");
+
+        let error = read_local_default_token().expect_err("blank local default token must fail");
+
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("blank default_token"),
+            "unexpected error: {message}"
+        );
     }
 
     #[test]
