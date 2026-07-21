@@ -786,3 +786,15 @@ Decisions will be appended as root-fork choices are made.
 - Add a SPEC v2 guard because product smoke tests can pass with explicit
   `--key` while the default-token path still preserves silent credential
   fallback.
+
+## 2026-07-22 Runtime trust revocation credential projection
+
+- Treat the local connection-state projector as part of the trust-revocation
+  preflight, not a best-effort post-commit side effect. If existing local
+  credentials are malformed, revoke fails before mutating the trust anchor.
+- Preserve the explicit no-local-credentials state. A daemon without paired
+  credentials can still perform trust revocation without recording local
+  connection-state, but corrupt credentials are unavailable identity state.
+- Keep the invalidator object pure over already-classified state. It receives
+  `Option<RuntimeTrustConnectionStateProjector>` and never reads credentials
+  during invalidation.

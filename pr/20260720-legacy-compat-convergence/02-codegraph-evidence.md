@@ -2255,3 +2255,22 @@ Evidence will be appended after indexing and focused impact queries.
 - Boundary decision: only absent cache file means "no default token"; existing
   corrupt/unreadable/schema-invalid/blank-token cache is unavailable credential
   state and must stop bearer request construction.
+
+## 2026-07-22 Runtime trust revoke credential projection audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query -p /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli
+  "caller signer keyring identity fallback ok unwrap_or default credential route descriptor"
+  --limit 50` surfaced identity/credential projection candidates in admission
+  and runtime trust code.
+- `rg -n "load_credentials\\(\\)\\.ok\\(\\)|credentials\\(\\)\\.ok\\(\\)|user_ura\\(\\)\\.ok\\(\\)"
+  src/daemon src/cli sdk/go sdk/python sdk/node -S --glob '!**/*test*'
+  --glob '!**/tests/**'` showed
+  `RuntimeTrustConnectionStateProjector::from_local_credentials` collapsed
+  credential load failure and missing credentials into the same `None`.
+- Root abstraction problem: trust revoke had a canonical trust-anchor mutation
+  followed by best-effort runtime projection. If local credentials were corrupt,
+  the trust mutation could commit while connection-state projection silently
+  disappeared.
+- Boundary decision: projector construction is now a preflight that returns
+  `Result<Option<_>>`; missing credentials means no local projection, corrupt
+  credentials abort before trust mutation.

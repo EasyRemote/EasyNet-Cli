@@ -538,6 +538,77 @@ for test in (
 PY
 }
 
+check_runtime_trust_revoke_credentials_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local invalidator="$cli_root/src/daemon/invocation/admission/runtime_trust_invalidator.rs"
+  local dispatcher="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  [[ -f "$invalidator" ]] || return 0
+
+  "$PYTHON_BIN" - "$invalidator" "$dispatcher" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+invalidator = Path(sys.argv[1]).read_text()
+dispatcher = Path(sys.argv[2]).read_text() if Path(sys.argv[2]).exists() else ""
+
+fn = re.search(
+    r"pub\(crate\) fn from_local_credentials\((?P<sig>.*?)\) -> (?P<ret>[^{]+)\{(?P<body>.*?)\n    \}",
+    invalidator,
+    re.DOTALL,
+)
+if fn is None:
+    raise SystemExit("runtime_trust_local_credentials_projector_missing")
+if "anyhow::Result<Option<Self>>" not in fn.group("ret"):
+    raise SystemExit("runtime_trust_local_credentials_projector_not_fallible")
+body = fn.group("body")
+for retired in (
+    "load_credentials().ok()",
+    "load_credentials().ok()?",
+    "credentials.user_ura().ok()",
+):
+    if retired in body:
+        raise SystemExit(f"runtime_trust_projector_retired_fallback:{retired}")
+for required in (
+    "load_credentials_optional()?",
+    "return Ok(None)",
+    "Self::from_credentials(credentials, source).map(Some)",
+):
+    if required not in body:
+        raise SystemExit(f"runtime_trust_projector_missing_fail_closed_path:{required}")
+if "pub(crate) fn from_credentials(" not in invalidator:
+    raise SystemExit("runtime_trust_projector_from_credentials_missing")
+if "-> anyhow::Result<Self>" not in invalidator:
+    raise SystemExit("runtime_trust_projector_from_credentials_not_fallible")
+if "let current_user_ura = credentials.user_ura()?;" not in invalidator:
+    raise SystemExit("runtime_trust_projector_user_ura_not_fail_closed")
+for test in (
+    "local_connection_state_projector_returns_none_when_credentials_missing",
+    "local_connection_state_projector_rejects_malformed_credentials",
+):
+    if test not in invalidator:
+        raise SystemExit(f"missing_runtime_trust_projector_test:{test}")
+
+if dispatcher:
+    preflight = dispatcher.find("let connection_state_projector =")
+    mutation = dispatcher.find("handle_revoke_user_pubkey_with_outcome(")
+    if preflight < 0:
+        raise SystemExit("runtime_trust_revoke_preflight_missing")
+    if mutation < 0:
+        raise SystemExit("runtime_trust_revoke_mutation_missing")
+    if preflight > mutation:
+        raise SystemExit("runtime_trust_revoke_preflight_after_mutation")
+    for required in (
+        "RuntimeTrustConnectionStateProjector::from_local_credentials(\"daemon.runtime_trust\")",
+        ".with_connection_state_projector(connection_state_projector)",
+    ):
+        if required not in dispatcher:
+            raise SystemExit(f"runtime_trust_revoke_dispatch_missing:{required}")
+    if "local credentials unavailable for runtime" not in dispatcher or "trust projection" not in dispatcher:
+        raise SystemExit("runtime_trust_revoke_dispatch_missing:credential_projection_error")
+PY
+}
+
 check_device_settings_loader_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local config="$cli_root/src/daemon/persistence/config.rs"
@@ -2669,6 +2740,32 @@ EOF
   if ( check_local_api_key_cache_contract "$tmp/local-api-key-cache-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected local API key cache fallback gate to fail"
   fi
+  mkdir -p "$tmp/runtime-trust-revoke-legacy/src/daemon/invocation/admission" \
+    "$tmp/runtime-trust-revoke-legacy/src/daemon/invocation/dispatch"
+  printf '%s\n' \
+    'pub(crate) struct RuntimeTrustConnectionStateProjector;' \
+    'impl RuntimeTrustConnectionStateProjector {' \
+    '  pub(crate) fn from_local_credentials(source: impl Into<String>) -> Option<Self> {' \
+    '    let credentials = crate::daemon::persistence::config::load_credentials().ok()?;' \
+    '    Self::from_credentials(credentials, source)' \
+    '  }' \
+    '  pub(crate) fn from_credentials(credentials: Credentials, source: impl Into<String>) -> Option<Self> {' \
+    '    let current_user_ura = credentials.user_ura().ok()?;' \
+    '    Some(Self)' \
+    '  }' \
+    '}' \
+    > "$tmp/runtime-trust-revoke-legacy/src/daemon/invocation/admission/runtime_trust_invalidator.rs"
+  printf '%s\n' \
+    'pub(crate) fn dispatch_revoke_user_pubkey(&self, arguments: &[u8]) -> Result<Vec<u8>, Status> {' \
+    '  let outcome = handle_revoke_user_pubkey_with_outcome(arguments, &ctx.daemon_realm, &ctx.trust_anchor_path, &ctx.cell)?;' \
+    '  RuntimeTrustInvalidator::new(self.directory.presence.clone(), self.directory.advertised_agents.clone())' \
+    '    .with_connection_state_projector(RuntimeTrustConnectionStateProjector::from_local_credentials("daemon.runtime_trust"));' \
+    '  Ok(outcome.body)' \
+    '}' \
+    > "$tmp/runtime-trust-revoke-legacy/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  if ( check_runtime_trust_revoke_credentials_contract "$tmp/runtime-trust-revoke-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected runtime trust revoke credential fallback gate to fail"
+  fi
   mkdir -p "$tmp/device-settings-legacy/src/daemon/persistence" \
     "$tmp/device-settings-legacy/src/cli/commands"
   printf '%s\n' \
@@ -2716,6 +2813,7 @@ EOF
   check_auth_agents_backend_shape_contract
   check_pages_identity_credentials_contract
   check_local_api_key_cache_contract
+  check_runtime_trust_revoke_credentials_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_edge_adapter_policy_contract
@@ -2757,6 +2855,7 @@ check_principal_lifecycle_cli_schema_contract
 check_auth_agents_backend_shape_contract
 check_pages_identity_credentials_contract
 check_local_api_key_cache_contract
+check_runtime_trust_revoke_credentials_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_edge_adapter_policy_contract

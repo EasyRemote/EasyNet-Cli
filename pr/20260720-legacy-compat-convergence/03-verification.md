@@ -2514,3 +2514,24 @@ Commands and outcomes will be appended after implementation.
   tools/scripts/check-architecture-convergence.sh` — PASS.
 - `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
 - `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+
+## 2026-07-22 Runtime trust revoke credential projection
+
+- `cargo test -q local_connection_state_projector --lib --features axon-pb`
+  — PASS (`2 passed`); covers missing credentials as no-projector state and
+  malformed credentials as fail-closed unavailable identity state.
+- `cargo test -q removed_local_user_revoke_records_disconnected_removed_snapshot
+  --lib --features axon-pb` — PASS (`1 passed`); verifies the migrated
+  projector path still records the local disconnected-removed lifecycle state
+  for a valid local user revoke.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative fixture for the retired
+  `load_credentials().ok()?` projector and post-mutation projector creation.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.

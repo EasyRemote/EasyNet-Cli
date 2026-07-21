@@ -63,7 +63,7 @@ impl RuntimeTrustInvalidation {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct RuntimeTrustConnectionStateProjector {
     current_user_ura: String,
     credentials: Credentials,
@@ -71,19 +71,22 @@ pub(crate) struct RuntimeTrustConnectionStateProjector {
 }
 
 impl RuntimeTrustConnectionStateProjector {
-    #[must_use]
-    pub(crate) fn from_local_credentials(source: impl Into<String>) -> Option<Self> {
-        let credentials = crate::daemon::persistence::config::load_credentials().ok()?;
-        Self::from_credentials(credentials, source)
+    pub(crate) fn from_local_credentials(
+        source: impl Into<String>,
+    ) -> anyhow::Result<Option<Self>> {
+        let Some(credentials) = crate::daemon::persistence::config::load_credentials_optional()?
+        else {
+            return Ok(None);
+        };
+        Self::from_credentials(credentials, source).map(Some)
     }
 
-    #[must_use]
     pub(crate) fn from_credentials(
         credentials: Credentials,
         source: impl Into<String>,
-    ) -> Option<Self> {
-        let current_user_ura = credentials.user_ura().ok()?;
-        Some(Self {
+    ) -> anyhow::Result<Self> {
+        let current_user_ura = credentials.user_ura()?;
+        Ok(Self {
             current_user_ura,
             credentials,
             source: source.into(),
@@ -217,6 +220,34 @@ mod tests {
             hub_tls_ca_pem_b64: None,
             join_receipt_hash: None,
         }
+    }
+
+    #[test]
+    fn local_connection_state_projector_returns_none_when_credentials_missing() {
+        let _home = HomeGuard::new();
+
+        let projector = RuntimeTrustConnectionStateProjector::from_local_credentials("test")
+            .expect("missing credentials should be classified");
+
+        assert!(projector.is_none());
+    }
+
+    #[test]
+    fn local_connection_state_projector_rejects_malformed_credentials() {
+        let _home = HomeGuard::new();
+        let state_dir = crate::daemon::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("create isolated state dir");
+        std::fs::write(state_dir.join("credentials.json"), b"{")
+            .expect("write malformed credentials");
+
+        let error = RuntimeTrustConnectionStateProjector::from_local_credentials("test")
+            .expect_err("malformed credentials must fail before trust revoke side effects");
+
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("parse credentials"),
+            "unexpected error: {message}"
+        );
     }
 
     #[test]

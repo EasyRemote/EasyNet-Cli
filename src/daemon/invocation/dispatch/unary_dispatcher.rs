@@ -944,6 +944,14 @@ impl UnaryDispatcher {
                 ctx.daemon_realm.clone(),
             );
         write_gate.authorize_revoke_user_pubkey(caller_envelope, &intent)?;
+        let connection_state_projector =
+            RuntimeTrustConnectionStateProjector::from_local_credentials("daemon.runtime_trust")
+                .map_err(|error| {
+                    Status::failed_precondition(format!(
+                        "identity.revoke_user_pubkey: local credentials unavailable for runtime \
+                         trust projection: {error:#}"
+                    ))
+                })?;
         let outcome = handle_revoke_user_pubkey_with_outcome(
             arguments,
             &ctx.daemon_realm,
@@ -954,9 +962,7 @@ impl UnaryDispatcher {
             self.directory.presence.clone(),
             self.directory.advertised_agents.clone(),
         )
-        .with_connection_state_projector(
-            RuntimeTrustConnectionStateProjector::from_local_credentials("daemon.runtime_trust"),
-        )
+        .with_connection_state_projector(connection_state_projector)
         .invalidate_revoked_subject(
             intent.agent_ura(),
             Some(intent.public_key_b64()),

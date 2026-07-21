@@ -316,3 +316,8 @@
   `api_keys.local.toml` may mean no operator default token exists; an existing
   unreadable, malformed, schema-invalid, unknown-field, or blank-token cache is
   unavailable credential state and must not be swallowed into "no default key".
+- Runtime trust revocation side effects must classify local credential state
+  before mutating trust. A missing `credentials.json` may mean no local
+  connection-state projection is possible, but an existing unreadable,
+  malformed, or schema-invalid credentials file is unavailable identity state
+  and must fail before trust revoke commits.
