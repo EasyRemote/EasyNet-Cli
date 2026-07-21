@@ -50,6 +50,10 @@
 - Federation owner projection heartbeat is a lease-refresh state transition.
   `federation.heartbeat` must require the daemon-owned ability catalog sink and
   must not report an active refreshed state from a missing projection authority.
+- Federation directory and namespace route resolution are read-model authority
+  queries. They must require the daemon-owned ability catalog sink; an empty
+  catalog is a valid negative fact, but a missing catalog must not be projected
+  as an empty ability set or stable no-route answer.
 - FFI descriptor resolution may use the daemon-local system descriptor catalog
   only for the local runtime owner. Remote descriptor resolution must consult
   the owner route/read model through descriptor-bound runtime calls and must

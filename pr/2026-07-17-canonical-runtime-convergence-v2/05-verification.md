@@ -349,3 +349,19 @@ passed. The `federation.heartbeat` handler now requires the daemon-owned
 the projection read-model sink is absent. Production dispatch already owns the
 catalog, so the obsolete missing-catalog compatibility path was deleted instead
 of preserved.
+
+## Federation Resolve Catalog Authority Evidence
+
+- `cargo check --lib --features axon-pb`
+- `cargo fmt --check`
+- `git diff --check`
+- `cargo test --lib daemon::invocation::dispatch::federation_wrappers --features axon-pb`
+- `cargo test --lib daemon::invocation::routing::route_resolver --features axon-pb`
+- `rg -n "catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>|catalog: Option<&'a AbilityCatalogStore>|resolved_owner_projection_values\\(\\s*catalog: Option|handle_resolve\\([^\\n]*None|handle_resolve_at\\([^\\n]*None|handle_namespace_resolve_at\\([^\\n]*None|DaemonRouteResolver::new\\([^\\n]*None\\)" src/daemon/invocation src/daemon/ability/builtins/agents/discover.rs -g '*.rs'`
+
+Result: Rust library check, formatting, diff hygiene, federation wrapper tests,
+and route resolver tests passed. The final `rg` found no remaining
+missing-catalog API surface for federation resolve, namespace resolve, owner
+projection value resolution, or `DaemonRouteResolver::new`. Tests that model
+"no published abilities" now pass an explicit empty `AbilityCatalogStore`,
+separating an empty read model from a missing read-model authority.

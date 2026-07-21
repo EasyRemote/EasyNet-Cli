@@ -111,6 +111,11 @@
   publication. Production dispatch owns the same ability catalog sink used by
   advertise, so a missing catalog is a daemon construction defect rather than
   an active membership acknowledgement with zero refreshed owners.
+- Treat federation directory and namespace route resolution as consumers of a
+  mandatory projection authority. Tests may use an explicit empty
+  `AbilityCatalogStore` to model no published abilities, but production code
+  and resolver constructors must not encode missing catalog as an empty
+  directory fact.
 - Treat the runtime system descriptor catalog as local-owner construction
   evidence only. Remote descriptor resolution must not rebind static daemon
   catalog rows for an arbitrary target owner because that bypasses owner

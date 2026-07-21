@@ -249,7 +249,7 @@ impl DiscoverFederationResolver for LocalDirectoryDiscoverFederationResolver {
             &request,
             &self.presence,
             Some(self.advertised_agents.as_ref()),
-            Some(self.ability_catalog.as_ref()),
+            self.ability_catalog.as_ref(),
             self.local_ability_catalog.get().map(Arc::as_ref),
         )
         .map_err(|error| {

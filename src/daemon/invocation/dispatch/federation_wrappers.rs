@@ -577,18 +577,17 @@ pub struct AgentSummary {
 
 /// Handle a `federation.resolve` invocation.
 ///
-/// `catalog` is the optional owner projection read model the daemon
+/// `catalog` is the mandatory owner projection read model the daemon
 /// constructs at boot. When `request.include_abilities` is true and
 /// the store has a row for an in-presence owner URA, the response
 /// carries namespace-safe projection summaries in the historical
-/// `abilities` output field. Hub-mode daemons in production always
-/// wire a catalog; build-without-catalog paths pass `None` and the
-/// abilities slot stays empty.
+/// `abilities` output field. An empty catalog is the canonical "no published
+/// abilities" fact; a missing catalog is a daemon construction error.
 pub fn handle_resolve(
     request: &ResolveRequest,
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
-    catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
+    catalog: &crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore,
     local_catalog: Option<&crate::daemon::ability::dispatch::AxonAbilityCatalog>,
 ) -> Result<ResolveResponse, String> {
     let local_publication = local_catalog.map(
@@ -611,7 +610,7 @@ pub(crate) fn handle_resolve_at(
     request: &ResolveRequest,
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
-    catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
+    catalog: &crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore,
     local_publication: Option<
         &crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot,
     >,
@@ -697,7 +696,7 @@ pub fn handle_namespace_resolve(
     query: &Value,
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
-    catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
+    catalog: &crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore,
 ) -> Value {
     handle_namespace_resolve_at(
         query,
@@ -713,7 +712,7 @@ pub(crate) fn handle_namespace_resolve_at(
     query: &Value,
     registry: &PresenceRegistry,
     advertised_agents: Option<&AdvertisedAgentStore>,
-    catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
+    catalog: &crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore,
     now_unix_ms: i64,
 ) -> Value {
     if let Err(error) = validate_namespace_resolve_query(query) {
@@ -790,7 +789,7 @@ fn namespace_resolve_input_failure(query: &Value, detail: &str) -> Value {
 /// from the lease-filtered owner projection store. The owner key controls the
 /// merge, so a local snapshot cannot fabricate rows for a remote device.
 fn resolved_owner_projection_values(
-    catalog: Option<&crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
+    catalog: &crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore,
     local_publication: Option<
         &crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot,
     >,
@@ -833,10 +832,8 @@ fn resolved_owner_projection_values(
             push(summary)?;
         }
     }
-    if let Some(catalog) = catalog {
-        for summary in catalog.get_at(owner_ura, now_unix_ms).unwrap_or_default() {
-            push(summary)?;
-        }
+    for summary in catalog.get_at(owner_ura, now_unix_ms).unwrap_or_default() {
+        push(summary)?;
     }
 
     Ok(order
@@ -1918,6 +1915,8 @@ mod tests {
             "easynet:///r/realm/device/b".to_string(),
             make_dispatch_sender(),
         );
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
 
         let resp = handle_resolve(
             &ResolveRequest {
@@ -1927,7 +1926,7 @@ mod tests {
             },
             &registry,
             None,
-            None,
+            &catalog,
             None,
         )
         .expect("resolve");
@@ -1956,6 +1955,8 @@ mod tests {
             "easynet:///r/realm-b/device/y".to_string(),
             make_dispatch_sender(),
         );
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
 
         let resp = handle_resolve(
             &ResolveRequest {
@@ -1965,7 +1966,7 @@ mod tests {
             },
             &registry,
             None,
-            None,
+            &catalog,
             None,
         )
         .expect("resolve");
@@ -1983,6 +1984,8 @@ mod tests {
             self_device_ura,
             &["agent.list", "skill.list", "plugin.dynamic"],
         );
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         let resp = handle_resolve_at(
             &ResolveRequest {
                 ura_prefix: Some("easynet:///r/realm/device/".to_string()),
@@ -1991,7 +1994,7 @@ mod tests {
             },
             &registry,
             None,
-            None,
+            &catalog,
             Some(&local_publication),
             1_000,
         )
@@ -2028,6 +2031,8 @@ mod tests {
         let registry = PresenceRegistry::new();
         let remote_device = "easynet:///r/realm/device/dev-remote";
         registry.insert(remote_device.to_string(), make_dispatch_sender());
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
 
         let resp = handle_resolve(
             &ResolveRequest {
@@ -2037,7 +2042,7 @@ mod tests {
             },
             &registry,
             None,
-            None,
+            &catalog,
             None,
         )
         .expect("resolve");
@@ -2087,7 +2092,7 @@ mod tests {
             },
             &registry,
             Some(&advertised),
-            Some(&catalog),
+            &catalog,
             None,
         )
         .expect("resolve");
@@ -2135,7 +2140,7 @@ mod tests {
             },
             &registry,
             None,
-            Some(&catalog),
+            &catalog,
             None,
             999,
         )
@@ -2151,7 +2156,7 @@ mod tests {
             },
             &registry,
             None,
-            Some(&catalog),
+            &catalog,
             None,
             1_000,
         )
@@ -2182,7 +2187,7 @@ mod tests {
             }),
             &registry,
             None,
-            Some(&catalog),
+            &catalog,
             1_714_493_100_000,
         );
 
@@ -2223,7 +2228,7 @@ mod tests {
             }),
             &registry,
             None,
-            Some(&catalog),
+            &catalog,
             1_714_493_100_000,
         );
 
@@ -2259,7 +2264,7 @@ mod tests {
             }),
             &registry,
             None,
-            Some(&catalog),
+            &catalog,
             1_714_493_100_000,
         );
 
@@ -2280,6 +2285,8 @@ mod tests {
     #[test]
     fn namespace_resolve_rejects_short_qtype_aliases_at_public_ingress() {
         let registry = PresenceRegistry::new();
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
         let answer = handle_namespace_resolve_at(
             &serde_json::json!({
                 "query_name": "easynet:///r/realm/device/dev-1",
@@ -2288,7 +2295,7 @@ mod tests {
             }),
             &registry,
             None,
-            None,
+            &catalog,
             1_714_493_100_000,
         );
 
@@ -2317,6 +2324,8 @@ mod tests {
                 host_ura: host_ura.to_string(),
             },
         });
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
 
         let answer = handle_namespace_resolve_at(
             &serde_json::json!({
@@ -2325,7 +2334,7 @@ mod tests {
             }),
             &registry,
             Some(&advertised),
-            None,
+            &catalog,
             1_714_493_100_000,
         );
 

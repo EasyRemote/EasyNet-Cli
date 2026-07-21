@@ -81,7 +81,7 @@ impl TargetGate {
         let mut resolver = DaemonRouteResolver::new(
             &self.directory.presence,
             Some(self.directory.advertised_agents.as_ref()),
-            Some(self.directory.ability_catalog.as_ref()),
+            self.directory.ability_catalog.as_ref(),
         );
         if let Some(local_realm) = self
             .identity

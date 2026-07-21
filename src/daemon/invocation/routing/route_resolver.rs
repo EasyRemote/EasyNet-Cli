@@ -478,7 +478,7 @@ impl ResolveRouteFailure {
 pub(crate) struct DaemonRouteResolver<'a> {
     registry: &'a PresenceRegistry,
     advertised_agents: Option<&'a AdvertisedAgentStore>,
-    catalog: Option<&'a AbilityCatalogStore>,
+    catalog: &'a AbilityCatalogStore,
     peer_delegation: Option<PeerDelegationSource<'a>>,
     device_local: Option<LocalNamespaceAuthoritySource>,
     now_unix_ms: i64,
@@ -621,7 +621,7 @@ impl<'a> DaemonRouteResolver<'a> {
     pub(crate) fn new(
         registry: &'a PresenceRegistry,
         advertised_agents: Option<&'a AdvertisedAgentStore>,
-        catalog: Option<&'a AbilityCatalogStore>,
+        catalog: &'a AbilityCatalogStore,
     ) -> Self {
         Self {
             registry,
@@ -1994,7 +1994,7 @@ mod tests {
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "agent.list")
@@ -2033,7 +2033,7 @@ mod tests {
         let ability_ura =
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
-        let resolver = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let resolver = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS);
 
@@ -2072,7 +2072,8 @@ mod tests {
         let owner_ura = crate::core::ura::device_ura("remote-realm", "remote-device");
         let ability_ura =
             crate::core::ura::owner_ability_ura(&owner_ura, "observe.health").expect("ability ura");
-        let resolver = DaemonRouteResolver::new(&registry, None, None)
+        let catalog = AbilityCatalogStore::new();
+        let resolver = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_peer_delegation("local-realm", &peers, &directory, false)
             .at(TEST_NOW_MS);
 
@@ -2104,7 +2105,8 @@ mod tests {
         let other_target = crate::core::ura::device_ura("test-realm", "owner-b");
         let ability_ura =
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
-        let resolver = DaemonRouteResolver::new(&registry, None, None).at(TEST_NOW_MS);
+        let catalog = AbilityCatalogStore::new();
+        let resolver = DaemonRouteResolver::new(&registry, None, &catalog).at(TEST_NOW_MS);
 
         let failures = [CallMode::Rpc, CallMode::Stream, CallMode::Bidi]
             .into_iter()
@@ -2130,7 +2132,7 @@ mod tests {
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.discover").expect("ability ura");
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.discover"]);
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "agent.discover")
@@ -2162,7 +2164,7 @@ mod tests {
                 &owner_ura,
                 &["plugin.companion_status", "plugin.companion_reconcile"],
             );
-            let err = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            let err = DaemonRouteResolver::new(&registry, None, &catalog)
                 .with_local_catalog_authority(owner_ura.clone(), authority)
                 .at(TEST_NOW_MS)
                 .resolve_route(&owner_ura, ability)
@@ -2188,7 +2190,7 @@ mod tests {
         let descriptor_ref = descriptor_ref_for_test(&ability_ura);
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, &descriptor_ref)
@@ -2215,7 +2217,7 @@ mod tests {
         let descriptor_ref = descriptor_ref_for_test(&ability_ura);
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&descriptor_ref, "")
@@ -2237,7 +2239,7 @@ mod tests {
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, &ability_ura)
@@ -2259,7 +2261,7 @@ mod tests {
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
         let old_short_descriptor_ref = format!("{ability_ura}@1.0.0");
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
-        let resolver = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let resolver = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS);
 
@@ -2290,7 +2292,7 @@ mod tests {
         let profile_keys = ["terminal.list", "meta.list_resources", "agent.start"];
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &profile_keys);
 
-        let resolver = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let resolver = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS);
         for ability in profile_keys {
@@ -2337,7 +2339,7 @@ mod tests {
         crate::daemon::ability::builtins::resources::skills::publish::register(&mut live_catalog);
         let authority = LocalAbilityPublicationSnapshot::capture(&live_catalog);
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&projection_store))
+        let route = DaemonRouteResolver::new(&registry, None, &projection_store)
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "skill.list")
@@ -2356,7 +2358,7 @@ mod tests {
         let owner_ura = device_owner_ura();
         // No presence entry, no advertised host record.
 
-        let failure = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let failure = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "agent.list")
             .expect_err("absent owner must resolve negative");
@@ -2383,7 +2385,7 @@ mod tests {
             },
         });
 
-        let failure = DaemonRouteResolver::new(&registry, Some(&advertised), Some(&catalog))
+        let failure = DaemonRouteResolver::new(&registry, Some(&advertised), &catalog)
             .at(TEST_NOW_MS)
             .resolve_route(&agent_ura, "agent.list")
             .expect_err("advertised-but-offline owner must resolve negative");
@@ -2401,7 +2403,7 @@ mod tests {
         // Owner publishes `agent.list` but the request asks for `fs.read`.
         publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
 
-        let failure = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let failure = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "fs.read")
             .expect_err("online owner missing the ability must resolve negative");
@@ -2424,7 +2426,7 @@ mod tests {
         mark_online(&registry, &owner_ura);
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.start"]);
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "agent.start")
@@ -2455,7 +2457,7 @@ mod tests {
         mark_online(&registry, &owner_ura);
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.start"]);
 
-        let failure = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let failure = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "fs.read")
@@ -2475,7 +2477,7 @@ mod tests {
         let owner_ura = device_owner_ura();
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.start"]);
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "agent.start")
@@ -2499,7 +2501,7 @@ mod tests {
         let agent_ura = crate::core::ura::agent_ura("test-realm", "alice", "assistant");
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["chat"]);
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(host_ura.clone(), authority)
             .with_local_hosted_agent_placements(LocalHostedAgentPlacements::single(
                 agent_ura.clone(),
@@ -2581,7 +2583,7 @@ mod tests {
         let agent_ura = crate::core::ura::agent_ura("test-realm", "dev", "pages");
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["project_list"]);
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(host_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&agent_ura, "project_list")
@@ -2605,7 +2607,7 @@ mod tests {
         let agent_ura = crate::core::ura::agent_ura("test-realm", "dev", "pages");
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["project_list"]);
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(host_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&agent_ura, "project_list")
@@ -2630,7 +2632,7 @@ mod tests {
         let authority =
             FakeLocalRuntimeAuthority::with_owner_keys(&host_ura, &["federation.status"]);
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(host_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&host_ura, "federation.status")
@@ -2660,7 +2662,7 @@ mod tests {
             &["runtime.bootstrap_self_identity"],
         );
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(device_ura, authority)
             .at(TEST_NOW_MS)
             .resolve_route(&hub_ura, "runtime.bootstrap_self_identity")
@@ -2688,7 +2690,7 @@ mod tests {
         let descriptor_ref = descriptor_ref_for_test(&ability_ura);
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["project_list"]);
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(host_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&agent_ura, &descriptor_ref)
@@ -2711,7 +2713,7 @@ mod tests {
         mark_online(&registry, &hub_ura);
         let ability_ura = publish_ability(&catalog, &hub_ura, &hub_ura, "federation", "status");
 
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
             .resolve_route(&hub_ura, "federation.status")
             .expect("hub-owned ability must resolve through the hub route kind");
@@ -2756,7 +2758,7 @@ mod tests {
 
         // No `.with_local_catalog_authority(...)`: this resolver is not the
         // owner's own daemon, but it is still authoritative for routing.
-        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "agent.list")
             .expect("projection route resolves");
@@ -2783,7 +2785,7 @@ mod tests {
             &catalog, &owner_ura, &owner_ura, "agent", "list", false,
         );
 
-        let failure = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let failure = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "agent.list")
             .expect_err("ability without executable route must not be dispatchable");
@@ -2792,7 +2794,7 @@ mod tests {
         assert_eq!(failure.query_name, format!("{owner_ura}#agent.list"));
         assert!(failure.detail.contains("route_summary_ref"));
 
-        let answer = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let answer = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
             .resolve_query_json(&json!({
                 "qtype": ResolveType::DirectoryListing.as_str_name(),
@@ -2823,7 +2825,7 @@ mod tests {
         mark_online(&registry, &agent_ura);
         publish_ability(&catalog, &agent_ura, &agent_ura, "chat", "complete");
 
-        let failure = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let failure = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
             .resolve_route(&agent_ura, "chat.complete")
             .expect_err("hosted agent route must require selected host placement");
@@ -2841,7 +2843,7 @@ mod tests {
         mark_online(&registry, &owner_ura);
         publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
 
-        let answer = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let answer = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
             .resolve_query_json(&json!({
                 "qtype": ResolveType::Route.as_str_name(),
@@ -2864,7 +2866,7 @@ mod tests {
         let catalog = AbilityCatalogStore::new();
 
         // Empty owner + empty ability is not a valid route selector.
-        let failure = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let failure = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
             .resolve_route("", "")
             .expect_err("empty selector must be refused");
@@ -2882,7 +2884,7 @@ mod tests {
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
 
-        let answer = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let answer = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "agent.list")
@@ -2919,7 +2921,8 @@ mod tests {
         let ability_ura = crate::core::ura::owner_ability_ura(&remote_owner, "observe.health")
             .expect("ability ura");
 
-        let delegation = DaemonRouteResolver::new(&registry, None, None)
+        let catalog = AbilityCatalogStore::new();
+        let delegation = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_peer_delegation("local-realm", &peers, &directory, false)
             .resolve_delegation(&ability_ura, "")
             .expect("delegation lookup succeeds")
@@ -2977,7 +2980,7 @@ mod tests {
         mark_online(&registry, &owner_ura);
         let ability_ura = publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
 
-        let resolver = DaemonRouteResolver::new(&registry, None, Some(&catalog)).at(TEST_NOW_MS);
+        let resolver = DaemonRouteResolver::new(&registry, None, &catalog).at(TEST_NOW_MS);
         let answer = resolver.resolve_query_json(&json!({
             "qtype": ResolveType::DirectoryListing.as_str_name(),
             "query_name": owner_ura,
@@ -3024,7 +3027,7 @@ mod tests {
         publish_ability(&catalog, &owner_a, &owner_a, "agent", "list");
         publish_ability(&catalog, owner_b, owner_b, "fs", "read");
 
-        let answer = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let answer = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
             .resolve_query_json(&json!({
                 "qtype": ResolveType::DirectoryListing.as_str_name(),
@@ -3059,7 +3062,7 @@ mod tests {
         publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
         publish_ability(&catalog, &owner_ura, &owner_ura, "fs", "read");
 
-        let resolver = DaemonRouteResolver::new(&registry, None, Some(&catalog)).at(TEST_NOW_MS);
+        let resolver = DaemonRouteResolver::new(&registry, None, &catalog).at(TEST_NOW_MS);
         let first = resolver.resolve_query_json(&json!({
             "qtype": ResolveType::DirectoryListing.as_str_name(),
             "query_name": owner_ura,
@@ -3097,7 +3100,7 @@ mod tests {
             "name": "easynet:///r/test-realm/resource/missing-route",
         }))
         .expect("cursor");
-        let answer = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+        let answer = DaemonRouteResolver::new(&registry, None, &catalog)
             .at(TEST_NOW_MS)
             .resolve_query_json(&json!({
                 "qtype": ResolveType::DirectoryListing.as_str_name(),

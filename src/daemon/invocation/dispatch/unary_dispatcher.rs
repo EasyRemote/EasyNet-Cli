@@ -1011,7 +1011,7 @@ impl UnaryDispatcher {
             &request,
             &self.directory.presence,
             Some(self.directory.advertised_agents.as_ref()),
-            Some(self.directory.ability_catalog.as_ref()),
+            self.directory.ability_catalog.as_ref(),
             self.directory.local_ability_catalog.as_deref(),
         )
         .map_err(|error| {

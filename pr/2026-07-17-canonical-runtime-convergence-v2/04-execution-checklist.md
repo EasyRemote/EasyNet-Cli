@@ -23,6 +23,9 @@
 - [x] Remove the `federation.heartbeat` missing-catalog success path so owner
       projection lease refresh cannot return `membership_status=active` without
       a daemon-owned ability catalog read model.
+- [x] Remove federation/namespace resolve missing-catalog read-path fallback
+      so route and directory answers cannot treat absent projection authority
+      as an empty ability set.
 - [x] Remove FFI remote descriptor static-system-catalog synthesis so
       descriptor resolution cannot report a remote owner ability without route
       and signer authority evidence.
