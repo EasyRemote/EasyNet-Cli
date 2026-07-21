@@ -100,6 +100,8 @@
       product-neutrality.
 - [x] Remove `federation.advertise_agent` top-level `host_ura` ingress repair
       and gate the retired request field.
+- [x] Remove `agent.start` model_present inference from the `model` field and
+      gate the explicit model-write intent.
 - [ ] Re-run Mission/EAL boundary gates.
 
 ## RF-9

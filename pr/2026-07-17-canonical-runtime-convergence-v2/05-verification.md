@@ -446,3 +446,23 @@ ingress via strict deserialization, and no longer repairs missing authority
 into a self-signed or hosted publication. The V2 gate now rejects future
 request DTO fallback fields and requires negative tests for retired
 `host_ura` and missing `signing_authority`.
+
+## Agent Start Explicit Model Intent Evidence
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query "source-compatible"`
+- `rg -n 'unwrap_or_else\(\|\| args\.get\("model"\)\.is_some\(\)\)|"model"\s*:\s*"[^"]+"' src/daemon/ability/builtins/agents/lifecycle.rs src/daemon/ability/builtins/real_invoke_tests.rs src/cli/commands/agent -S`
+- `cargo test --lib daemon::ability::builtins::agents::lifecycle --features axon-pb`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tools/scripts/check-architecture-convergence.sh`
+- `cargo fmt --check`
+- `git diff --check`
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .`
+- `/Users/macbook.silan.tech/.local/bin/codegraph status .`
+
+Result: focused lifecycle tests, SPEC v2 self-test/full gate, architecture
+gate, formatting, diff hygiene, and codegraph sync/status passed.
+`agent.start` no longer infers `model_present` from the presence of `model`;
+callers that provide `model` must explicitly declare model-write intent with
+`model_present`. The input schema now records the dependency and the V2 gate
+rejects future reintroduction of model-presence inference.

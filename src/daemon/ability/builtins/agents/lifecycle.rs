@@ -737,7 +737,7 @@ fn purge_reconciliation_handler(
 
 /// `agent.start` handler.
 ///
-/// Args: `{ "name": "claude", "agent_type": "claude-code", "model": "sonnet"? }`
+/// Args: `{ "name": "claude", "agent_type": "claude-code", "model": "sonnet"?, "model_present": true? }`
 /// or `{ "name": "claude", "entry": AgentEntry }`.
 /// Behaviour:
 ///   1. Validate `name` (non-empty) and resolve the requested
@@ -802,10 +802,6 @@ fn start_agent_locked(
         .get("model")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let model_present = args
-        .get("model_present")
-        .and_then(Value::as_bool)
-        .unwrap_or_else(|| args.get("model").is_some());
     let label = args
         .get("label")
         .and_then(Value::as_str)
@@ -832,6 +828,16 @@ fn start_agent_locked(
         .get("update_existing_spec")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let model_present = match args.get("model_present") {
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| anyhow::anyhow!("agent.start: `model_present` must be a boolean"))?,
+        None if args.get("model").is_some() => anyhow::bail!(
+            "agent.start: `model_present` is required when `model` is supplied; \
+             declare whether this invocation mutates the agent spec model"
+        ),
+        None => false,
+    };
     let project_workspace = args
         .get("project_workspace")
         .and_then(Value::as_bool)
@@ -3143,6 +3149,9 @@ pub fn start_agent_input_schema() -> Value {
     json!({
         "type": "object",
         "required": ["name"],
+        "dependentRequired": {
+            "model": ["model_present"]
+        },
         "anyOf": [
             { "required": ["agent_type"] },
             { "required": ["entry"] }
@@ -3808,6 +3817,7 @@ mod tests {
                     "name": "claude",
                     "agent_type": "claude-code",
                     "model": "sonnet",
+                    "model_present": true,
                 }),
                 &ready_hot_registrar(),
             )
@@ -3827,6 +3837,33 @@ mod tests {
     }
 
     #[test]
+    fn start_agent_rejects_model_without_explicit_model_present_intent() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let err = start_agent_handler(
+                json!({
+                    "name": "claude",
+                    "agent_type": "claude-code",
+                    "model": "sonnet",
+                }),
+                &ready_hot_registrar(),
+            )
+            .expect_err("model without explicit model_present must be rejected");
+            assert!(
+                err.to_string().contains("model_present"),
+                "error should name required explicit model_present intent: {err}"
+            );
+            assert!(
+                !agents::load_agents()
+                    .unwrap_or_default()
+                    .agents
+                    .contains_key("claude"),
+                "rejected ambiguous model write must not persist an agent row"
+            );
+        });
+    }
+
+    #[test]
     fn start_agent_materialize_syncs_hosted_ura_and_default_chat_manifest() {
         with_isolated_home(|| {
             seed_joined_credentials();
@@ -3836,6 +3873,7 @@ mod tests {
                     "name": "anthropic",
                     "agent_type": "claude-code",
                     "model": "sonnet",
+                    "model_present": true,
                     "materialize_directory": true,
                 }),
                 &ready_hot_registrar(),
@@ -4188,6 +4226,7 @@ mod tests {
                     "name": "claude",
                     "agent_type": "claude-code",
                     "model": "sonnet",
+                    "model_present": true,
                     "root_path": custom_root,
                     "materialize_directory": true,
                 }),

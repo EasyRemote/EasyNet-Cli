@@ -135,3 +135,7 @@
   compatibility field. Hosted-agent publication authority is expressed only by
   the tagged `signing_authority` enum; retired top-level host fields must fail
   at request decoding rather than being repaired into authority state.
+- Treat `agent.start.model_present` as explicit lifecycle intent, not a field
+  presence cache. A direct caller that supplies `model` without
+  `model_present` is ambiguous for directory/spec mutation and must be rejected
+  instead of repaired by inferring the flag from the model value.

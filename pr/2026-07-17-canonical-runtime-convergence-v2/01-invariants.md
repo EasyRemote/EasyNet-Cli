@@ -47,6 +47,9 @@
   already carry the current schema stamp and canonical `root_path`; production
   reads must not create agent directories, write migration backups, or infer
   roots from historical workspace layout.
+- Agent lifecycle model updates are explicit state transitions.
+  `agent.start` must read `model_present` as the caller's declared write
+  intent and must not infer that intent from the presence of a `model` value.
 - Federation owner projection publication is a write-side runtime state
   transition. `federation.advertise_abilities` must require the daemon-owned
   ability catalog sink and must not acknowledge success when the projection

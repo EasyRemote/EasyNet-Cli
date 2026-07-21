@@ -242,6 +242,32 @@ for test in (
 PY
 }
 
+check_agent_start_model_intent_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local lifecycle="$cli_root/src/daemon/ability/builtins/agents/lifecycle.rs"
+  [[ -f "$lifecycle" ]] || return 0
+
+  "$PYTHON_BIN" - "$lifecycle" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+for retired in (
+    'unwrap_or_else(|| args.get("model").is_some())',
+    'unwrap_or(args.get("model").is_some())',
+):
+    if retired in text:
+        raise SystemExit("agent_start_model_present_inferred_from_model")
+if '"dependentRequired"' not in text or '"model": ["model_present"]' not in text:
+    raise SystemExit("agent_start_schema_does_not_require_model_present_with_model")
+if "agent.start: `model_present` is required when `model` is supplied" not in text:
+    raise SystemExit("agent_start_missing_model_present_error_absent")
+if "start_agent_rejects_model_without_explicit_model_present_intent" not in text:
+    raise SystemExit("missing_agent_start_model_present_negative_test")
+PY
+}
+
 check_edge_adapter_policy_contract() {
   "$PYTHON_BIN" "$EDGE_ADAPTER_POLICY" --manifest "$MANIFEST" >/dev/null
 }
@@ -2163,9 +2189,20 @@ EOF
   if ( check_advertise_agent_ingress_contract "$tmp/advertise-agent-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected advertise_agent retired host_ura ingress gate to fail"
   fi
+  mkdir -p "$tmp/agent-start-model-legacy/src/daemon/ability/builtins/agents"
+  printf '%s\n' \
+    'fn start_agent_locked(args: Value) {' \
+    '  let model_present = args.get("model_present").and_then(Value::as_bool).unwrap_or_else(|| args.get("model").is_some());' \
+    '}' \
+    'pub fn start_agent_input_schema() -> Value { json!({"properties":{"model":{"type":"string"}}}) }' \
+    > "$tmp/agent-start-model-legacy/src/daemon/ability/builtins/agents/lifecycle.rs"
+  if ( check_agent_start_model_intent_contract "$tmp/agent-start-model-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected agent.start model_present inference gate to fail"
+  fi
   check_active_source_contract
   check_go_sdk_public_ura_alias_contract
   check_advertise_agent_ingress_contract
+  check_agent_start_model_intent_contract
   check_edge_adapter_policy_contract
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
@@ -2199,6 +2236,7 @@ check_manifest_contract
 check_active_source_contract
 check_go_sdk_public_ura_alias_contract
 check_advertise_agent_ingress_contract
+check_agent_start_model_intent_contract
 check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
