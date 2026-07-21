@@ -761,3 +761,15 @@ Decisions will be appended as root-fork choices are made.
   validated IR target kinds.
 - Add a SPEC v2 guard so production Mission code cannot reintroduce
   `ImplicitAgentFallback` or `find_implicit_agent_fallback` terminology.
+
+## 2026-07-22 Device settings fail-closed loader
+
+- Treat `device_settings.json` as user configuration authority. Missing file
+  remains first-run default, but existing unreadable, malformed, or
+  unknown-field state is unavailable configuration, not permission to project
+  defaults.
+- Make settings loading fallible and migrate config display/mutation plus
+  install-id generation to propagate loader errors before mutating state.
+- Add a SPEC v2 guard because this fallback can silently disable
+  `session_bridge_exec_enabled` or rotate stable install identity when a
+  settings file is corrupt.

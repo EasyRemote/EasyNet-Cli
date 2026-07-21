@@ -654,6 +654,7 @@ pub fn delete_credentials() -> anyhow::Result<()> {
 // ─── Device Settings ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct DeviceSettings {
     #[serde(default)]
     pub session_bridge_exec_enabled: bool,
@@ -676,7 +677,7 @@ fn device_settings_path() -> PathBuf {
 /// not `credentials.json`), so re-pairing the same host presents the same
 /// install id and the hub can reuse the prior `node_id`.
 pub fn load_or_create_install_id() -> anyhow::Result<String> {
-    let mut settings = load_device_settings();
+    let mut settings = load_device_settings()?;
     if let Some(id) = settings
         .install_id
         .as_deref()
@@ -691,12 +692,22 @@ pub fn load_or_create_install_id() -> anyhow::Result<String> {
     Ok(id)
 }
 
-pub fn load_device_settings() -> DeviceSettings {
+pub fn load_device_settings() -> anyhow::Result<DeviceSettings> {
     let path = device_settings_path();
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|data| serde_json::from_str(&data).ok())
-        .unwrap_or_default()
+    let data = match fs::read_to_string(&path) {
+        Ok(data) => data,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DeviceSettings::default());
+        }
+        Err(err) => {
+            return Err(anyhow::anyhow!(
+                "read device settings from {}: {err}",
+                path.display()
+            ));
+        }
+    };
+    serde_json::from_str(&data)
+        .map_err(|err| anyhow::anyhow!("parse device settings from {}: {err}", path.display()))
 }
 
 pub fn save_device_settings(settings: &DeviceSettings) -> anyhow::Result<()> {
@@ -1186,7 +1197,13 @@ mod tests {
         // First call generates and persists.
         let first = load_or_create_install_id().expect("first install id");
         assert!(!first.is_empty());
-        assert!(load_device_settings().install_id.as_deref() == Some(first.as_str()));
+        assert!(
+            load_device_settings()
+                .expect("load device settings")
+                .install_id
+                .as_deref()
+                == Some(first.as_str())
+        );
 
         // Second call returns the SAME id (idempotent), not a new uuid.
         let second = load_or_create_install_id().expect("second install id");
@@ -1199,6 +1216,67 @@ mod tests {
         assert_eq!(
             first, after_reset,
             "install id must survive reset (lives in device_settings.json)"
+        );
+    }
+
+    #[test]
+    fn load_device_settings_missing_file_returns_default() {
+        let _g = HomeGuard::new();
+
+        let settings = load_device_settings().expect("missing settings uses default");
+
+        assert!(!settings.session_bridge_exec_enabled);
+        assert_eq!(settings.install_id, None);
+    }
+
+    #[test]
+    fn load_device_settings_rejects_malformed_existing_file() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(device_settings_path(), b"{").expect("write malformed settings");
+
+        let err = load_device_settings().expect_err("malformed settings must fail");
+
+        assert!(
+            err.to_string().contains("parse device settings"),
+            "error should name parse failure: {err}"
+        );
+    }
+
+    #[test]
+    fn load_device_settings_rejects_unknown_fields() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(
+            device_settings_path(),
+            br#"{"session_bridge_exec_enabled":false,"legacy":true}"#,
+        )
+        .expect("write unknown settings field");
+
+        let err = load_device_settings().expect_err("unknown settings field must fail");
+
+        assert!(
+            err.to_string().contains("unknown field"),
+            "error should reject unknown fields: {err}"
+        );
+    }
+
+    #[test]
+    fn load_or_create_install_id_rejects_malformed_settings_without_rewriting() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(device_settings_path(), b"{").expect("write malformed settings");
+
+        let err = load_or_create_install_id().expect_err("malformed settings must fail");
+
+        assert!(
+            err.to_string().contains("parse device settings"),
+            "error should surface malformed settings: {err}"
+        );
+        assert_eq!(
+            fs::read(device_settings_path()).expect("settings preserved"),
+            b"{",
+            "malformed settings must not be rewritten as default state"
         );
     }
 }

@@ -471,6 +471,65 @@ for test in (
 PY
 }
 
+check_device_settings_loader_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local config="$cli_root/src/daemon/persistence/config.rs"
+  [[ -f "$config" ]] || return 0
+  local config_cmd="$cli_root/src/cli/commands/config_cmd.rs"
+
+  "$PYTHON_BIN" - "$config" "$config_cmd" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+config = Path(sys.argv[1]).read_text()
+config_cmd = Path(sys.argv[2]).read_text() if Path(sys.argv[2]).exists() else ""
+
+settings = re.search(
+    r"#\[derive\([^\n]*\)\]\n(?P<attrs>(?:#\[[^\n]+\]\n)*)pub struct DeviceSettings \{",
+    config,
+)
+if settings is None:
+    raise SystemExit("device_settings_struct_missing")
+if "#[serde(deny_unknown_fields)]" not in settings.group("attrs"):
+    raise SystemExit("device_settings_unknown_fields_not_denied")
+loader = re.search(
+    r"pub fn load_device_settings\(\) -> anyhow::Result<DeviceSettings> \{(?P<body>.*?)\n\}\n\npub fn save_device_settings",
+    config,
+    re.DOTALL,
+)
+if loader is None:
+    raise SystemExit("device_settings_fallible_loader_missing")
+body = loader.group("body")
+for retired in (
+    "fs::read_to_string(&path)\n        .ok()",
+    "serde_json::from_str(&data).ok()",
+    "unwrap_or_default()",
+):
+    if retired in body:
+        raise SystemExit(f"device_settings_retired_default_fallback:{retired}")
+for required in (
+    "ErrorKind::NotFound",
+    "Ok(DeviceSettings::default())",
+    "parse device settings",
+):
+    if required not in body:
+        raise SystemExit(f"device_settings_loader_missing:{required}")
+if "let mut settings = load_device_settings()?" not in config:
+    raise SystemExit("install_id_generation_does_not_propagate_settings_error")
+if config_cmd and "config::load_device_settings()?" not in config_cmd:
+    raise SystemExit("config_command_does_not_propagate_settings_error")
+for test in (
+    "load_device_settings_missing_file_returns_default",
+    "load_device_settings_rejects_malformed_existing_file",
+    "load_device_settings_rejects_unknown_fields",
+    "load_or_create_install_id_rejects_malformed_settings_without_rewriting",
+):
+    if test not in config:
+        raise SystemExit(f"missing_device_settings_loader_test:{test}")
+PY
+}
+
 check_mission_traditional_target_conflict_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local orchestration="$cli_root/src/daemon/execution/mission/orchestration.rs"
@@ -2517,6 +2576,27 @@ EOF
   if ( check_pages_identity_credentials_contract "$tmp/pages-identity-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected Pages identity credential fallback gate to fail"
   fi
+  mkdir -p "$tmp/device-settings-legacy/src/daemon/persistence" \
+    "$tmp/device-settings-legacy/src/cli/commands"
+  printf '%s\n' \
+    '#[derive(Debug, Clone, Serialize, Deserialize, Default)]' \
+    'pub struct DeviceSettings { pub session_bridge_exec_enabled: bool }' \
+    'pub fn load_or_create_install_id() -> anyhow::Result<String> {' \
+    '  let mut settings = load_device_settings();' \
+    '  Ok(String::new())' \
+    '}' \
+    'pub fn load_device_settings() -> DeviceSettings {' \
+    '  let path = device_settings_path();' \
+    '  fs::read_to_string(&path).ok().and_then(|data| serde_json::from_str(&data).ok()).unwrap_or_default()' \
+    '}' \
+    '' \
+    'pub fn save_device_settings(settings: &DeviceSettings) -> anyhow::Result<()> { Ok(()) }' \
+    > "$tmp/device-settings-legacy/src/daemon/persistence/config.rs"
+  printf 'fn run() { let settings = config::load_device_settings(); }\n' \
+    > "$tmp/device-settings-legacy/src/cli/commands/config_cmd.rs"
+  if ( check_device_settings_loader_contract "$tmp/device-settings-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected device settings default fallback gate to fail"
+  fi
   mkdir -p "$tmp/mission-implicit-fallback/src/daemon/execution/mission" \
     "$tmp/mission-implicit-fallback/src/eal/parser" \
     "$tmp/mission-implicit-fallback/src/eal/runtime"
@@ -2542,6 +2622,7 @@ EOF
   check_principal_lifecycle_cli_schema_contract
   check_auth_agents_backend_shape_contract
   check_pages_identity_credentials_contract
+  check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_edge_adapter_policy_contract
   check_sdk_product_neutrality_contract
@@ -2581,6 +2662,7 @@ check_invocation_history_get_key_contract
 check_principal_lifecycle_cli_schema_contract
 check_auth_agents_backend_shape_contract
 check_pages_identity_credentials_contract
+check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract

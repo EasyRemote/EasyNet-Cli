@@ -307,3 +307,8 @@
   with a registered Agent is rejected as an explicit surface conflict; Mission
   code, tests, and gates must not preserve `implicit agent fallback` concepts
   or helper names.
+- Device settings are user configuration authority, not a cache. Missing
+  `device_settings.json` may project the documented first-run defaults; an
+  existing unreadable, malformed, schema-invalid, or unknown-field settings
+  file must fail closed before config display, config mutation, or stable
+  install-id generation.

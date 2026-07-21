@@ -55,14 +55,14 @@ pub fn run(args: ConfigArgs) -> anyhow::Result<()> {
     let auto_confirm = args.yes;
     match args.action.unwrap_or(ConfigAction::Show) {
         ConfigAction::Show => {
-            let settings = config::load_device_settings();
+            let settings = config::load_device_settings()?;
             eprintln!(
                 "session_bridge_exec_enabled: {}",
                 settings.session_bridge_exec_enabled
             );
         }
         ConfigAction::Exec { value } => {
-            let mut settings = config::load_device_settings();
+            let mut settings = config::load_device_settings()?;
             match value.as_str() {
                 "on" | "true" | "1" | "enable" | "enabled" => {
                     if !settings.session_bridge_exec_enabled && !auto_confirm {
