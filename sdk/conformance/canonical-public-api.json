@@ -1079,8 +1079,6 @@
       "BidiTerminalFrame",
       "BidiTransport",
       "BindPrincipalKeyRequest",
-      "CONTROL_BOOT_STATUS_ABILITY",
-      "CONTROL_IPC_VERSION",
       "CallerIdentityRef",
       "CanonicalAuthorityTransport",
       "CanonicalSigner",
@@ -1149,11 +1147,9 @@
       "InvocationTraceEdge",
       "InvocationTraceGraph",
       "InvocationWireProjector",
-      "IpcVersionRange",
       "IssueEnrollmentRequest",
       "IssueGrantRequest",
       "MAX_BIDI_BUFFERED_FRAMES",
-      "MAX_CONTROL_FRAME_BYTES",
       "MAX_DIRECTORY_PAGE_LIMIT",
       "MAX_MANAGED_SIGNING_AUTO_ITEMS",
       "MAX_MANAGED_SIGNING_AUTO_PAGES",
@@ -1305,7 +1301,6 @@
       "canonical_failure_code",
       "canonical_terminal_state_code",
       "connect_runtime_local",
-      "default_control_path",
       "default_environment",
       "device_ability_ura",
       "device_agent_ura",
@@ -1326,7 +1321,6 @@
       "profile_source_ref",
       "project_ability_descriptor",
       "project_descriptor_ref",
-      "read_control_discovery",
       "read_runtime_identity_projection",
       "resource_ura",
       "retryable_for_hint",
@@ -4255,10 +4249,6 @@
       "InvocationWireProjector.build_invocation",
       "InvocationWireProjector.descriptor_version",
       "InvocationWireProjector.to_wire_dict",
-      "IpcVersionRange.from_mapping",
-      "IpcVersionRange.max",
-      "IpcVersionRange.min",
-      "IpcVersionRange.overlap",
       "IssueEnrollmentRequest.command",
       "IssueEnrollmentRequest.expires_unix_ms",
       "IssueEnrollmentRequest.principal_ura",
@@ -4885,7 +4875,6 @@
       "SdkEnvironment.client",
       "SdkEnvironment.close",
       "SdkEnvironment.connect_local",
-      "SdkEnvironment.control_ipc_client",
       "SdkEnvironment.control_path",
       "SdkEnvironment.feature_set",
       "SdkEnvironment.health_client",
@@ -6403,12 +6392,7 @@
         "easynet_string_free"
       ],
       "go": [],
-      "python": [
-        "ControlDiscovery",
-        "ControlDiscoveryRuntimeConnector",
-        "ControlFrame",
-        "ControlIpcClient"
-      ],
+      "python": [],
       "node": [],
       "java": [],
       "swift": []
@@ -6420,36 +6404,6 @@
         "PrepareOptions.LocalDaemonSigning"
       ],
       "python": [
-        "ControlDiscovery.capability_flags",
-        "ControlDiscovery.daemon_version",
-        "ControlDiscovery.from_json",
-        "ControlDiscovery.invocation_endpoint",
-        "ControlDiscovery.pages_port",
-        "ControlDiscovery.pid",
-        "ControlDiscovery.pipe_name",
-        "ControlDiscovery.socket_path",
-        "ControlDiscovery.supported_ipc_versions",
-        "ControlDiscoveryRuntimeConnector.close",
-        "ControlDiscoveryRuntimeConnector.control_path",
-        "ControlDiscoveryRuntimeConnector.discovery_reader",
-        "ControlDiscoveryRuntimeConnector.handshake",
-        "ControlDiscoveryRuntimeConnector.inner",
-        "ControlDiscoveryRuntimeConnector.resolve",
-        "ControlFrame.code",
-        "ControlFrame.frame",
-        "ControlFrame.frame_type",
-        "ControlFrame.from_json",
-        "ControlFrame.is_error",
-        "ControlFrame.message",
-        "ControlFrame.reason",
-        "ControlFrame.subscription_id",
-        "ControlIpcClient.cancel",
-        "ControlIpcClient.close",
-        "ControlIpcClient.connect",
-        "ControlIpcClient.recv",
-        "ControlIpcClient.round_trip",
-        "ControlIpcClient.send",
-        "ControlIpcClient.subscribe",
         "PrepareOptions.local_daemon_signing",
         "RuntimeEndpoint.daemon_version"
       ],
@@ -6984,40 +6938,7 @@
         }
       },
       "go": {},
-      "python": {
-        "ControlDiscovery": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscoveryRuntimeConnector": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlFrame": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlIpcClient": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        }
-      },
+      "python": {},
       "node": {},
       "java": {},
       "swift": {}
@@ -7036,246 +6957,6 @@
         }
       },
       "python": {
-        "ControlDiscovery.capability_flags": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.daemon_version": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.from_json": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.invocation_endpoint": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.pages_port": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.pid": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.pipe_name": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.socket_path": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.supported_ipc_versions": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscoveryRuntimeConnector.close": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscoveryRuntimeConnector.control_path": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscoveryRuntimeConnector.discovery_reader": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscoveryRuntimeConnector.handshake": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscoveryRuntimeConnector.inner": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscoveryRuntimeConnector.resolve": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlFrame.code": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlFrame.frame": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlFrame.frame_type": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlFrame.from_json": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlFrame.is_error": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlFrame.message": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlFrame.reason": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlFrame.subscription_id": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlIpcClient.cancel": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlIpcClient.close": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlIpcClient.connect": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlIpcClient.recv": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlIpcClient.round_trip": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlIpcClient.send": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlIpcClient.subscribe": {
-          "canonical_replacement": [
-            "capability_inventory.control_ipc"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
         "PrepareOptions.local_daemon_signing": {
           "canonical_replacement": [
             "capability_inventory.prepare_sign_submit"
@@ -7360,12 +7041,6 @@
         "invocation/builder_handle_state",
         "invocation/complete_tuple",
         "runtime/ability_lowering"
-      ]
-    },
-    "control_ipc": {
-      "profile": "runtime_core",
-      "case_ids": [
-        "runtime/control_only"
       ]
     },
     "directory_resolution": {
@@ -10304,39 +9979,6 @@
         ]
       }
     },
-    "control_ipc": {
-      "rust": {
-        "symbols": [],
-        "members": []
-      },
-      "c_abi": {
-        "symbols": [],
-        "members": []
-      },
-      "go": {
-        "symbols": [],
-        "members": []
-      },
-      "python": {
-        "symbols": [
-          "CONTROL_BOOT_STATUS_ABILITY",
-          "CONTROL_IPC_VERSION"
-        ],
-        "members": []
-      },
-      "node": {
-        "symbols": [],
-        "members": []
-      },
-      "java": {
-        "symbols": [],
-        "members": []
-      },
-      "swift": {
-        "symbols": [],
-        "members": []
-      }
-    },
     "directory_resolution": {
       "rust": {
         "symbols": [
@@ -12382,12 +12024,9 @@
         "symbols": [
           "ConnectOptions",
           "ConnectionState",
-          "IpcVersionRange",
           "RuntimeConnection",
           "RuntimeConnector",
-          "RuntimeEndpoint",
-          "default_control_path",
-          "read_control_discovery"
+          "RuntimeEndpoint"
         ],
         "members": [
           "ConnectOptions.control_path",
@@ -12406,10 +12045,6 @@
           "ConnectionState.READY",
           "ConnectionState.RECONNECTING",
           "ConnectionState.RESOLVING",
-          "IpcVersionRange.from_mapping",
-          "IpcVersionRange.max",
-          "IpcVersionRange.min",
-          "IpcVersionRange.overlap",
           "RuntimeConnection.close",
           "RuntimeConnection.connect",
           "RuntimeConnection.connector",
@@ -12484,7 +12119,6 @@
           "SdkEnvironment.client",
           "SdkEnvironment.close",
           "SdkEnvironment.connect_local",
-          "SdkEnvironment.control_ipc_client",
           "SdkEnvironment.control_path",
           "SdkEnvironment.feature_set",
           "SdkEnvironment.health_client",
@@ -14867,7 +14501,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "1dd8febcba386da1daf522eb0933e13b7177c6ea8f56dec94c0ce12fa1854d9d",
+          "sha256": "73c47faacf0b863c2514799614f214eae09406c3bc66ab55b0dec0df74d6daf3",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14963,7 +14597,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "1dd8febcba386da1daf522eb0933e13b7177c6ea8f56dec94c0ce12fa1854d9d",
+          "sha256": "73c47faacf0b863c2514799614f214eae09406c3bc66ab55b0dec0df74d6daf3",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15059,7 +14693,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "1dd8febcba386da1daf522eb0933e13b7177c6ea8f56dec94c0ce12fa1854d9d",
+          "sha256": "73c47faacf0b863c2514799614f214eae09406c3bc66ab55b0dec0df74d6daf3",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15190,7 +14824,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "1dd8febcba386da1daf522eb0933e13b7177c6ea8f56dec94c0ce12fa1854d9d",
+          "sha256": "73c47faacf0b863c2514799614f214eae09406c3bc66ab55b0dec0df74d6daf3",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15542,7 +15176,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "1dd8febcba386da1daf522eb0933e13b7177c6ea8f56dec94c0ce12fa1854d9d",
+          "sha256": "73c47faacf0b863c2514799614f214eae09406c3bc66ab55b0dec0df74d6daf3",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -16165,7 +15799,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "1dd8febcba386da1daf522eb0933e13b7177c6ea8f56dec94c0ce12fa1854d9d",
+          "sha256": "73c47faacf0b863c2514799614f214eae09406c3bc66ab55b0dec0df74d6daf3",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -19557,8 +19191,6 @@
       "BindPrincipalKeyRequest.key_id": "bfe2bd8cc749654f78fe3f5dd371903be53dbeef6bc69b3b54360c460c410b3f",
       "BindPrincipalKeyRequest.principal_ura": "4bb3bb8f0394d8fd3b826b391ab9cf57c98a4daed72f82a5bce1518a3593aff7",
       "BindPrincipalKeyRequest.public_key": "710c0109eceff0ca761e6946c9bc0d78981d1a12515c562affc3e8d31c5648ad",
-      "CONTROL_BOOT_STATUS_ABILITY": "7816027cec2027397b3992514cdf2bc5df14e6a8b71eaee3563c74ab3458a768",
-      "CONTROL_IPC_VERSION": "601817f19ba4021b85e99d86bd47ca483e10ff81ac33aec99aece07ddca6581a",
       "CallerIdentityRef": "43c2f5af1e9a144e2797b465814494dc7691b43c293bd981d06c15edaee09932",
       "CallerIdentityRef.principal": "e52689f7a36cece505ac3dee46b8f1c4f96a55e276e9b12752f9656974766620",
       "CanonicalAuthorityTransport": "cb40e40bd48cdf4e154e55d2c648234f3c656e4c5ca5333c444e5a98985f6d4e",
@@ -19604,40 +19236,6 @@
       "ConnectionState.READY": "a301e07736ef4d19212a1f5e343c7ff86fe3ca5f4c64cae42dd93a417a190119",
       "ConnectionState.RECONNECTING": "d2257a03d7f1646d62c338ab73a469171bb05deef155b314d49792cb341525ef",
       "ConnectionState.RESOLVING": "83c3fd86969666837feb7c466cf70f0d911a6e188bc305a7c7b685f9ee2ec697",
-      "ControlDiscovery": "2cff708dd7e15301e48e27cc45215bad10f1fc8dfe6a20a885e09a925e24259b",
-      "ControlDiscovery.capability_flags": "d8738c5d2b8110f4d7ea70bc077c99f0ad865660b67131f5c7937ed29e3d9109",
-      "ControlDiscovery.daemon_version": "b3cb2cc61758d65df9151014ba497217dd98995a9d9d09f18488fa84abd7dad0",
-      "ControlDiscovery.from_json": "88a7d40f1213188abdba1e8867c148483b9ccadaf2f576caaf542b15a16dfa59",
-      "ControlDiscovery.invocation_endpoint": "1f763c96fe70e7ef696ae38c064ed0c3800e4a509309234bc68289f345ecc864",
-      "ControlDiscovery.pages_port": "40d2dc846bfaba462bbdc3fc6c5fac3ab0636a019e7ecc5b28330e57d08d7c6c",
-      "ControlDiscovery.pid": "8e3fb1dc14c2c06b2a8a38d72b55d06debbc5bde3e2e5d1ed0f944060d48d3fd",
-      "ControlDiscovery.pipe_name": "3f382775650d03b1ea4609bc24ec1d2798070f16dd20d130868cc3c90c72d23c",
-      "ControlDiscovery.socket_path": "61a32083123cb9f7501c612321cc9c6198f2a3d01b423702f2d2586bcc9f1bc0",
-      "ControlDiscovery.supported_ipc_versions": "aeabf9465944401da7006d136d185bdeede1f0f9da8f95f884b37c09aac3914d",
-      "ControlDiscoveryRuntimeConnector": "f342a63e5f3c32abfe627048ac61f4a60c65dd19861355081a090239d879c5c7",
-      "ControlDiscoveryRuntimeConnector.close": "f7ac1df096be74f68e91c6e7f358a2fec54ca584bcf2e11ed745c8ea876b8dd2",
-      "ControlDiscoveryRuntimeConnector.control_path": "a8d3140bdabc6ed6cadf524fa80b7b5f399776465c825b9b3b9a2149aa270bd5",
-      "ControlDiscoveryRuntimeConnector.discovery_reader": "9426b6a1ef323c475b35062691a0cccf3c7709d159d74a6129bea351811e8aed",
-      "ControlDiscoveryRuntimeConnector.handshake": "95eb3e7532c46b9e8554efd30463368a272b8cf3d861f8284b6f2331b0afbdda",
-      "ControlDiscoveryRuntimeConnector.inner": "f5e48b2b0ee43a152505d62c90e264b32ed4fb3a23bb3f0f9120a3dfc4872d13",
-      "ControlDiscoveryRuntimeConnector.resolve": "c6a0e274863c699b932e47806036353f479bb521ffff6e6e9df7737a74e74951",
-      "ControlFrame": "acaa8cee9d775191ab3d8ba64a03bc9bede2eaf654b057d581da894d20bbd375",
-      "ControlFrame.code": "367be0f716c4e7c3ca5fdc698405beb181e3f7da965b3e2e1deec0ce023e6fe1",
-      "ControlFrame.frame": "17aa7dd15ad9cdaef3febfd299a7db189602ed04932edf1f45ddb9612ab50c67",
-      "ControlFrame.frame_type": "3e191b1f195a22b43cc3685c02136f4e4be40b1a263a8e640d523ce4fbfd8f55",
-      "ControlFrame.from_json": "eff0f104913190f05d3d702187295620d8930daba3a413c8f8da450685d2035e",
-      "ControlFrame.is_error": "7c40476d21c34c8eadeda9d731f9a2af6dd31156fe6a9a0f03995a6ce15e7ee3",
-      "ControlFrame.message": "1fe6e57806fb33114dd1ae73d2fd32ee3bfb84cebd311ebe3c913bfc16c23661",
-      "ControlFrame.reason": "0247068841a33b1deb638bb12a340d617ba8f4e868b4036ddd6356fbcd47ebfa",
-      "ControlFrame.subscription_id": "393358723a02bc8202f619433b87bba3ef00bfff65923fda64097bcaa890554c",
-      "ControlIpcClient": "bc296e38220c38bebd71f67b461b1bce50098431fe923a6c33c497ad0f7b4ab6",
-      "ControlIpcClient.cancel": "4db559a90fdee31d6b65e46105b3124de3b63c76d41ba08cb89c0982493920fd",
-      "ControlIpcClient.close": "c60a223be992214e2182c3dd3cb91b8c52234bc723663db5004cd90aca66819a",
-      "ControlIpcClient.connect": "ed668153cb9560a9bfae57faed175e0aa492e549544d46a01884142525beb051",
-      "ControlIpcClient.recv": "2daa73f5c6d703a6c6c8c4ff7316bcc3a09d6c8bdd4a17ba3c6f534a3ee9a6dd",
-      "ControlIpcClient.round_trip": "12471e54c60e614525baa4a2a886483338084f0fe540adde400a36e2bee4b0df",
-      "ControlIpcClient.send": "db6339302925b2f20287989a90b3c86ffc7b8c67097c971f92884e18fcb278da",
-      "ControlIpcClient.subscribe": "7e78d3f6634c8e3485c6024fb6d72c99a3293be0bc2631749b5d7916475dcde0",
       "CreatePrincipalRequest": "5f4a233ca8c0aadfe16cc32028b068938012cadab715a8f5d76e3eea9ffdc218",
       "CreatePrincipalRequest.command": "2a7eb00639ba9b5d88f0c748b5502d8db1c99dd2f18641baedfdee4d55974b1c",
       "CreatePrincipalRequest.principal_ura": "4bb3bb8f0394d8fd3b826b391ab9cf57c98a4daed72f82a5bce1518a3593aff7",
@@ -20091,11 +19689,6 @@
       "InvocationWireProjector.build_invocation": "6b3ac809198143abda3ea550f7052840f5d5d41a4a716d12fd71b1990d8f4755",
       "InvocationWireProjector.descriptor_version": "bb3bb8d753ad0a25576aae20615e28efacb3d7b937a74ed67009b7d54018bec0",
       "InvocationWireProjector.to_wire_dict": "6a3a5baf541cd43dc66697351f52851af200da5c312e92bbee543bf09460983f",
-      "IpcVersionRange": "c1f49848694bbf9e505333609d0fdbe7ada2f297c1d45e4bbe180509fb6bd743",
-      "IpcVersionRange.from_mapping": "fbe0d65942107cb3e09af58f902af9f44867665c9d55dc2b924b5f97b7cd9b95",
-      "IpcVersionRange.max": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4",
-      "IpcVersionRange.min": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917",
-      "IpcVersionRange.overlap": "bc85159b0aa82d0ed600b0c88f1d1f6c10672e5aaa35601704b28f33160410d2",
       "IssueEnrollmentRequest": "a2deafb99124d41ab4542e73236b3c9a96db7101dae77e0724826a5e2db05f44",
       "IssueEnrollmentRequest.command": "2a7eb00639ba9b5d88f0c748b5502d8db1c99dd2f18641baedfdee4d55974b1c",
       "IssueEnrollmentRequest.expires_unix_ms": "e9d63ea032f56dfde0cecf5b4af15665fe101db8f82482b2b2e636fbd48630ab",
@@ -20107,7 +19700,6 @@
       "IssueGrantRequest.expires_unix_ms": "e9d63ea032f56dfde0cecf5b4af15665fe101db8f82482b2b2e636fbd48630ab",
       "IssueGrantRequest.principal_ura": "4bb3bb8f0394d8fd3b826b391ab9cf57c98a4daed72f82a5bce1518a3593aff7",
       "MAX_BIDI_BUFFERED_FRAMES": "2a098da7e45d6beefb6d8368e6535768339b10aeb0b208c39f4dd1b565182d22",
-      "MAX_CONTROL_FRAME_BYTES": "1bab01478e3cf4569d3bb1fcb3b5b5882c0af9e90f805a7add64cf4918b882e5",
       "MAX_DIRECTORY_PAGE_LIMIT": "00b2d0e4e4ad2aea620e8a4b35abd1915344305aa3aedf2c3bd30fb6678941b7",
       "MAX_MANAGED_SIGNING_AUTO_ITEMS": "773ffc8dc1eaf771b63cf8f239ea05af570521cae3d8de7019e72fb836f19f94",
       "MAX_MANAGED_SIGNING_AUTO_PAGES": "5e6be01fb1885aac472061f2ad03d1d11c8c19f2a31ab53ebfd5f247e9744847",
@@ -20838,13 +20430,12 @@
       "SDKError.source_ref": "fa58a379b962fc590c976789c8fb8cbb968f0a1305b24f6623f16567984e9bd1",
       "SDKError.stage": "8de6c67a6a5fce1debb9a33593857a48da49a61b26d4a3e08b61d3d4f5621cd7",
       "SESSION_AUTHORITY_METADATA_KEY": "4ce3faa583613d281a069f8e9a73eb688a4c34fdb8eb8bae5e7f36bb2e893155",
-      "SdkEnvironment": "28fdd30c76e5a678bd808da2e4fed56db4b47d1a3983db8bb9e17a99a4574fe1",
+      "SdkEnvironment": "6c370b81d6fc4c7e3d0ce3d035992a3afd73402b891e80cf5e6da1f07c1e8ff7",
       "SdkEnvironment.ability_invocation_client": "f47b3671b4b8b8e41b688b74212a584bc462f52d9696c21e12fd3de3524a2afb",
       "SdkEnvironment.addressing_client": "a0c9cf052c5d9c91d2f52045681ae7e54e155492d263dd68fed3c585e2a5d046",
       "SdkEnvironment.client": "625e51e030b02d2cc553fd035f6c356e3d96917dddcded7d775fe2dfc28b19b3",
       "SdkEnvironment.close": "da32f3d972063fcec72769a8c8ad5db27d1055a3d797ea65a18d2d2af60ff214",
       "SdkEnvironment.connect_local": "f0295785e21c25fb333d99a6203a923bbb52a57d860f2b4aa9736ee9243cbd96",
-      "SdkEnvironment.control_ipc_client": "c820d9e5ba89e5fe57760677c41ae36241cc82f98371fb0f20bb7d713fa22a7d",
       "SdkEnvironment.control_path": "a8d3140bdabc6ed6cadf524fa80b7b5f399776465c825b9b3b9a2149aa270bd5",
       "SdkEnvironment.feature_set": "393b95cb31ed38ed2f2cc185930319bc7a2020e1124d4122f532dac5c1c5e26c",
       "SdkEnvironment.health_client": "f6b401b3f6bea7052fb84b1e0bc90680ab0b15a87de70003f8204a6014cb351c",
@@ -20852,10 +20443,10 @@
       "SdkEnvironment.invocation_transport_direct": "12bb8e7e2251b339607614ed3abca91c1a02591abbdce59f14d2d478b91105bc",
       "SdkEnvironment.library_path": "1a560110d65f07c5ff70c428d1bc68b0268046e632b77809001b6fcb070ac342",
       "SdkEnvironment.native_runtime": "63e5976f44c3c9cc8da6526609f3a0e8d28933612277ec34ca469061d4738f28",
-      "SdkEnvironment.resolved_control_path": "2b25d53ebea1e2abfabde4c1725c196cae2183aeb99791d1e9e4dccd5b9a7072",
+      "SdkEnvironment.resolved_control_path": "478fd8dfd7f90136169cfc1c56bbbe921ea6541965672ef5f6a44a7ea98eff9e",
       "SdkEnvironment.runtime_client": "5709ee3c5aea42588d89cfeedc553880d371eff5886c4c2424f803702ef84634",
       "SdkEnvironment.runtime_client_direct": "66b5fd1e973fd139654f85d5c5bfca71210d441fb9db76cfc04b4d51238b20e8",
-      "SdkEnvironment.runtime_connection": "32bd1c1d7ca528a1c54508b6eeb409e77958d05ea106f21649e0e455471d5bb4",
+      "SdkEnvironment.runtime_connection": "55203ac56668fed6fa8a7199f6d48254187dc91d66593433dbd7427ef79b1262",
       "SdkEnvironment.runtime_connection_direct": "74dcb4a8d29978f1f50645fab5d7d98cc38c1dfce300797c584211b43cb3f32a",
       "SdkEnvironment.runtime_credentials_path": "84a51a05852d370d6c6a398767bd9d231a65f3817094bef48de37dbfa67290d9",
       "SdkEnvironment.runtime_identity_projection": "b50598beccdc353f8cc04998ef8d3f6182041a1d0fdea715a8b6e158347422fd",
@@ -21052,7 +20643,6 @@
       "canonical_failure_code": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868",
       "canonical_terminal_state_code": "39877d5b08b70679af690249c6cd2919e37fddaff2f923c2e1fbb250a8224a49",
       "connect_runtime_local": "8743952092591cbbc3115cd6dec4b8563b80fce69dc6e5c8f995990fe3ea21fe",
-      "default_control_path": "fe12459c5cbafd9a7e3126f724affa4b7f1cb807a21255431e8e31feb463a353",
       "default_environment": "7aba5c300a4b369c79777d057e52a0f2a5de5d96a7de8e4b3ab0e8b5624d2740",
       "device_ability_ura": "12678b9119540fab65243e0f589444d4e478046588a36bc30a17aa312fb8a454",
       "device_agent_ura": "8d7be845e4e8f50960c85dac158554057de56782c87fa727d637ce47819119f4",
@@ -21073,13 +20663,12 @@
       "profile_source_ref": "da6b1b2f0f183291bfc844994a060602d341d7ebc468e9d0c8997cffd8f2936c",
       "project_ability_descriptor": "d663e1cba6e961bf61cf88e72c0233f672f56b381bef64e273764816a2f4e8cf",
       "project_descriptor_ref": "2049bd597bc2126054ec2d65688332af034698ea65643594c0e9fa8c7e996178",
-      "read_control_discovery": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17",
       "read_runtime_identity_projection": "2cb1ed29c80c0cc687a2aad79d30279cd4477cd4adcc7c9c5375662a3d74ba72",
       "resource_ura": "9023d498e3f1a8d68e3979df8aa1d496f1b70aadb8e75ae2cc1036bbbb004a0a",
       "retryable_for_hint": "a40a2da8049667e10c4c894f7520a59e71afbfce282f40eb308cb9968d49a6cd",
       "runtime_credentials_path": "6c1ae4611dddb961afae5da922282a2cd85bf764e353fc97e164267305969291",
       "runtime_identity_projection_from_json": "be857347b4ed0ba5c1cb7afcab41dd17c1fefc435e983f7aae465c9fca2bac7b",
-      "runtime_state_root": "fcc017794dcc7b28cde877fe3b063ab82fae1af0a5ba6d810714ed0b8ecfd327",
+      "runtime_state_root": "11d059c666917fdd1c911d85554303f9280be712e3daa81967c7965acf3648e0",
       "signer_handle_provenance_error": "aa5868ffdd58327eafaef435f268018806e1fe20599c19b1e3eb8b62a3f088e1",
       "start_runtime_host": "d7bbebf68c08ed7990346d08ddb5e71c4250c067e7c2ecc8991f26fd7b83a137",
       "user_ura": "61cf47948e6fff64d5800601a66b93d73bd1bb71b7b6bfc63157a59f1cb4ffa3",
@@ -22989,15 +22578,6 @@
     {
       "language": "python",
       "section": "symbols",
-      "item": "MAX_CONTROL_FRAME_BYTES",
-      "parent_capability": "control_ipc",
-      "role": "configuration_limit",
-      "shape_sha256": "1bab01478e3cf4569d3bb1fcb3b5b5882c0af9e90f805a7add64cf4918b882e5",
-      "shape_group": "configuration_limit:maxcontrolframebytes"
-    },
-    {
-      "language": "python",
-      "section": "symbols",
       "item": "MAX_DIRECTORY_PAGE_LIMIT",
       "parent_capability": "directory_resolution",
       "role": "configuration_limit",
@@ -23089,10 +22669,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/direct_runtime.py",
-      "sha256": "1dd8febcba386da1daf522eb0933e13b7177c6ea8f56dec94c0ce12fa1854d9d",
+      "sha256": "73c47faacf0b863c2514799614f214eae09406c3bc66ab55b0dec0df74d6daf3",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/python/easynet_sdk/connection.py",
-      "interface_sha256": "a398d78c51607f79260e73d3c7bb73f37243a67bbb18dd6b15d68cb3d5bb5f5a",
+      "interface_sha256": "c0de867cd88f1718cc8715c963d878a381b2eede19af9d200813e7e4c73c255b",
       "capability_ids": [
         "native_runtime",
         "runtime_environment",
@@ -23310,29 +22890,6 @@
       "missing_languages": [
         "rust",
         "c_abi",
-        "node",
-        "java",
-        "swift"
-      ]
-    },
-    "configuration_limit:maxcontrolframebytes": {
-      "parent_capability": "control_ipc",
-      "role": "configuration_limit",
-      "members": [
-        {
-          "language": "python",
-          "section": "symbols",
-          "item": "MAX_CONTROL_FRAME_BYTES",
-          "shape_sha256": "1bab01478e3cf4569d3bb1fcb3b5b5882c0af9e90f805a7add64cf4918b882e5"
-        }
-      ],
-      "present_languages": [
-        "python"
-      ],
-      "missing_languages": [
-        "rust",
-        "c_abi",
-        "go",
         "node",
         "java",
         "swift"

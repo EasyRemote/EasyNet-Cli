@@ -8,7 +8,7 @@ from ... import _cabi
 from ... import transport as canonical_transport
 from ...connection import (
     ConnectOptions,
-    ControlDiscoveryRuntimeConnector,
+    _ControlDiscoveryRuntimeConnector,
     RuntimeConnection,
 )
 from ...errors import ErrorCode, RetryHint, SDKError
@@ -24,7 +24,7 @@ def connect_invocation_transport(
 
     resolved_control_path = options.control_path or control_path
     connection = RuntimeConnection(
-        ControlDiscoveryRuntimeConnector(
+        _ControlDiscoveryRuntimeConnector(
             _cabi.open_cabi_runtime_connector(library_path=library_path),
             control_path=resolved_control_path,
         )

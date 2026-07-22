@@ -4,14 +4,13 @@ import unittest
 from easynet_sdk import (
     ConnectOptions,
     ConnectionState,
-    ControlDiscovery,
-    ControlDiscoveryRuntimeConnector,
     ErrorCode,
-    IpcVersionRange,
     RuntimeConnection,
     SDKError,
     is_code,
 )
+from easynet_sdk.connection import _ControlDiscoveryRuntimeConnector
+from easynet_sdk.control_ipc import _ControlDiscovery, _IpcVersionRange
 
 
 class MemoryRuntimeConnector:
@@ -108,10 +107,10 @@ class RuntimeConnectionTests(unittest.TestCase):
             connection.connect()
 
 
-class ControlDiscoveryRuntimeConnectorTests(unittest.TestCase):
+class _ControlDiscoveryRuntimeConnectorTests(unittest.TestCase):
     def test_resolve_uses_explicit_endpoint_without_reading_discovery(self) -> None:
         inner = MemoryRuntimeConnector()
-        connector = ControlDiscoveryRuntimeConnector(
+        connector = _ControlDiscoveryRuntimeConnector(
             inner,
             control_path="/tmp/default-control.json",
             discovery_reader=self._raising_reader,
@@ -130,7 +129,7 @@ class ControlDiscoveryRuntimeConnectorTests(unittest.TestCase):
 
     def test_resolve_reads_invocation_endpoint_from_control_discovery(self) -> None:
         inner = MemoryRuntimeConnector()
-        connector = ControlDiscoveryRuntimeConnector(
+        connector = _ControlDiscoveryRuntimeConnector(
             inner,
             control_path="/tmp/default-control.json",
             discovery_reader=self._ready_discovery,
@@ -146,7 +145,7 @@ class ControlDiscoveryRuntimeConnectorTests(unittest.TestCase):
         self.assertEqual(endpoint["capability_flags"], ["runtime"])
 
     def test_resolve_control_only_when_discovery_has_no_invocation_endpoint(self) -> None:
-        connector = ControlDiscoveryRuntimeConnector(
+        connector = _ControlDiscoveryRuntimeConnector(
             MemoryRuntimeConnector(),
             discovery_reader=self._control_only_discovery,
         )
@@ -163,7 +162,7 @@ class ControlDiscoveryRuntimeConnectorTests(unittest.TestCase):
     def test_connection_delegates_handshake_to_inner_connector(self) -> None:
         inner = MemoryRuntimeConnector()
         connection = RuntimeConnection(
-            ControlDiscoveryRuntimeConnector(
+            _ControlDiscoveryRuntimeConnector(
                 inner,
                 discovery_reader=self._ready_discovery,
             )
@@ -183,7 +182,7 @@ class ControlDiscoveryRuntimeConnectorTests(unittest.TestCase):
 
     def test_close_delegates_to_inner_connector_once(self) -> None:
         inner = MemoryRuntimeConnector()
-        connector = ControlDiscoveryRuntimeConnector(inner)
+        connector = _ControlDiscoveryRuntimeConnector(inner)
 
         connector.close()
         connector.close()
@@ -191,24 +190,24 @@ class ControlDiscoveryRuntimeConnectorTests(unittest.TestCase):
         self.assertTrue(inner.closed)
 
     @staticmethod
-    def _ready_discovery(control_path: str) -> ControlDiscovery:
-        return ControlDiscovery(
+    def _ready_discovery(control_path: str) -> _ControlDiscovery:
+        return _ControlDiscovery(
             socket_path="/tmp/control.sock",
             invocation_endpoint="unix:///tmp/invocation.sock",
             daemon_version="1.2.3",
-            supported_ipc_versions=IpcVersionRange(1, 1),
+            supported_ipc_versions=_IpcVersionRange(1, 1),
             capability_flags=("runtime",),
         )
 
     @staticmethod
-    def _control_only_discovery(control_path: str) -> ControlDiscovery:
-        return ControlDiscovery(
+    def _control_only_discovery(control_path: str) -> _ControlDiscovery:
+        return _ControlDiscovery(
             socket_path="/tmp/control.sock",
-            supported_ipc_versions=IpcVersionRange(1, 1),
+            supported_ipc_versions=_IpcVersionRange(1, 1),
         )
 
     @staticmethod
-    def _raising_reader(control_path: str) -> ControlDiscovery:
+    def _raising_reader(control_path: str) -> _ControlDiscovery:
         raise AssertionError("discovery must not be read for explicit endpoint")
 
 

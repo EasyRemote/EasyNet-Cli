@@ -46,7 +46,6 @@
     "bidi",
     "canonical_addressing",
     "complete_invocation_draft",
-    "control_ipc",
     "directory_resolution",
     "managed_signing",
     "native_runtime",
@@ -119584,138 +119583,6 @@
       "provider_proof_ref": null
     },
     {
-      "capability_id": "control_ipc",
-      "language": "rust",
-      "profile": "runtime_core",
-      "status": "seam",
-      "evidence_case_ids": [
-        "runtime/control_only"
-      ],
-      "unproven_requirement_ids": [],
-      "shape_evidence": [],
-      "step_shape_evidence": [],
-      "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/control_ipc",
-      "provider_proof_ref": null
-    },
-    {
-      "capability_id": "control_ipc",
-      "language": "c_abi",
-      "profile": "runtime_core",
-      "status": "seam",
-      "evidence_case_ids": [
-        "runtime/control_only"
-      ],
-      "unproven_requirement_ids": [],
-      "shape_evidence": [],
-      "step_shape_evidence": [],
-      "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/control_ipc",
-      "provider_proof_ref": null
-    },
-    {
-      "capability_id": "control_ipc",
-      "language": "go",
-      "profile": "runtime_core",
-      "status": "seam",
-      "evidence_case_ids": [
-        "runtime/control_only"
-      ],
-      "unproven_requirement_ids": [],
-      "shape_evidence": [],
-      "step_shape_evidence": [],
-      "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/control_ipc",
-      "provider_proof_ref": null
-    },
-    {
-      "capability_id": "control_ipc",
-      "language": "python",
-      "profile": "runtime_core",
-      "status": "seam",
-      "evidence_case_ids": [
-        "runtime/control_only"
-      ],
-      "unproven_requirement_ids": [],
-      "shape_evidence": [
-        {
-          "item": "CONTROL_BOOT_STATUS_ABILITY",
-          "sha256": "7816027cec2027397b3992514cdf2bc5df14e6a8b71eaee3563c74ab3458a768"
-        },
-        {
-          "item": "CONTROL_IPC_VERSION",
-          "sha256": "601817f19ba4021b85e99d86bd47ca483e10ff81ac33aec99aece07ddca6581a"
-        }
-      ],
-      "step_shape_evidence": [
-        {
-          "case_id": "runtime/control_only",
-          "action": "attach_runtime_host",
-          "execution_case_bound": true,
-          "items": [
-            {
-              "item": "CONTROL_BOOT_STATUS_ABILITY",
-              "sha256": "7816027cec2027397b3992514cdf2bc5df14e6a8b71eaee3563c74ab3458a768"
-            },
-            {
-              "item": "CONTROL_IPC_VERSION",
-              "sha256": "601817f19ba4021b85e99d86bd47ca483e10ff81ac33aec99aece07ddca6581a"
-            }
-          ]
-        },
-        {
-          "case_id": "runtime/control_only",
-          "action": "reject_control_socket_product_call",
-          "execution_case_bound": true,
-          "items": [
-            {
-              "item": "CONTROL_BOOT_STATUS_ABILITY",
-              "sha256": "7816027cec2027397b3992514cdf2bc5df14e6a8b71eaee3563c74ab3458a768"
-            },
-            {
-              "item": "CONTROL_IPC_VERSION",
-              "sha256": "601817f19ba4021b85e99d86bd47ca483e10ff81ac33aec99aece07ddca6581a"
-            }
-          ]
-        }
-      ],
-      "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/control_ipc",
-      "provider_proof_ref": null
-    },
-    {
-      "capability_id": "control_ipc",
-      "language": "node",
-      "profile": "runtime_core",
-      "status": "unsupported",
-      "evidence_case_ids": [],
-      "unproven_requirement_ids": [],
-      "shape_evidence": [],
-      "step_shape_evidence": [],
-      "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/control_ipc",
-      "provider_proof_ref": null
-    },
-    {
-      "capability_id": "control_ipc",
-      "language": "java",
-      "profile": "runtime_core",
-      "status": "unsupported",
-      "evidence_case_ids": [],
-      "unproven_requirement_ids": [],
-      "shape_evidence": [],
-      "step_shape_evidence": [],
-      "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/control_ipc",
-      "provider_proof_ref": null
-    },
-    {
-      "capability_id": "control_ipc",
-      "language": "swift",
-      "profile": "runtime_core",
-      "status": "unsupported",
-      "evidence_case_ids": [],
-      "unproven_requirement_ids": [],
-      "shape_evidence": [],
-      "step_shape_evidence": [],
-      "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/control_ipc",
-      "provider_proof_ref": null
-    },
-    {
       "capability_id": "directory_resolution",
       "language": "rust",
       "profile": "directory",
@@ -181841,10 +181708,6 @@
           "sha256": "f3e432687da38c915ea60ff85d02d6cbc5901687eb10c847124c862f5e7c1964"
         },
         {
-          "item": "IpcVersionRange",
-          "sha256": "c1f49848694bbf9e505333609d0fdbe7ada2f297c1d45e4bbe180509fb6bd743"
-        },
-        {
           "item": "RuntimeConnection",
           "sha256": "cee46717269741c3efd0db80625590c47676a25f948fa489c203d91a23fa4a39"
         },
@@ -181855,14 +181718,6 @@
         {
           "item": "RuntimeEndpoint",
           "sha256": "167acf7e512f42d8f5b13976c74f10502cf1c10a3e50c632c307f3196603538c"
-        },
-        {
-          "item": "default_control_path",
-          "sha256": "fe12459c5cbafd9a7e3126f724affa4b7f1cb807a21255431e8e31feb463a353"
-        },
-        {
-          "item": "read_control_discovery",
-          "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
         },
         {
           "item": "ConnectOptions.control_path",
@@ -181927,22 +181782,6 @@
         {
           "item": "ConnectionState.RESOLVING",
           "sha256": "83c3fd86969666837feb7c466cf70f0d911a6e188bc305a7c7b685f9ee2ec697"
-        },
-        {
-          "item": "IpcVersionRange.from_mapping",
-          "sha256": "fbe0d65942107cb3e09af58f902af9f44867665c9d55dc2b924b5f97b7cd9b95"
-        },
-        {
-          "item": "IpcVersionRange.max",
-          "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
-        },
-        {
-          "item": "IpcVersionRange.min",
-          "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
-        },
-        {
-          "item": "IpcVersionRange.overlap",
-          "sha256": "bc85159b0aa82d0ed600b0c88f1d1f6c10672e5aaa35601704b28f33160410d2"
         },
         {
           "item": "RuntimeConnection.close",
@@ -182028,10 +181867,6 @@
               "sha256": "f3e432687da38c915ea60ff85d02d6cbc5901687eb10c847124c862f5e7c1964"
             },
             {
-              "item": "IpcVersionRange",
-              "sha256": "c1f49848694bbf9e505333609d0fdbe7ada2f297c1d45e4bbe180509fb6bd743"
-            },
-            {
               "item": "RuntimeConnection",
               "sha256": "cee46717269741c3efd0db80625590c47676a25f948fa489c203d91a23fa4a39"
             },
@@ -182042,14 +181877,6 @@
             {
               "item": "RuntimeEndpoint",
               "sha256": "167acf7e512f42d8f5b13976c74f10502cf1c10a3e50c632c307f3196603538c"
-            },
-            {
-              "item": "default_control_path",
-              "sha256": "fe12459c5cbafd9a7e3126f724affa4b7f1cb807a21255431e8e31feb463a353"
-            },
-            {
-              "item": "read_control_discovery",
-              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -182114,22 +181941,6 @@
             {
               "item": "ConnectionState.RESOLVING",
               "sha256": "83c3fd86969666837feb7c466cf70f0d911a6e188bc305a7c7b685f9ee2ec697"
-            },
-            {
-              "item": "IpcVersionRange.from_mapping",
-              "sha256": "fbe0d65942107cb3e09af58f902af9f44867665c9d55dc2b924b5f97b7cd9b95"
-            },
-            {
-              "item": "IpcVersionRange.max",
-              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
-            },
-            {
-              "item": "IpcVersionRange.min",
-              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
-            },
-            {
-              "item": "IpcVersionRange.overlap",
-              "sha256": "bc85159b0aa82d0ed600b0c88f1d1f6c10672e5aaa35601704b28f33160410d2"
             },
             {
               "item": "RuntimeConnection.close",
@@ -182215,10 +182026,6 @@
               "sha256": "f3e432687da38c915ea60ff85d02d6cbc5901687eb10c847124c862f5e7c1964"
             },
             {
-              "item": "IpcVersionRange",
-              "sha256": "c1f49848694bbf9e505333609d0fdbe7ada2f297c1d45e4bbe180509fb6bd743"
-            },
-            {
               "item": "RuntimeConnection",
               "sha256": "cee46717269741c3efd0db80625590c47676a25f948fa489c203d91a23fa4a39"
             },
@@ -182229,14 +182036,6 @@
             {
               "item": "RuntimeEndpoint",
               "sha256": "167acf7e512f42d8f5b13976c74f10502cf1c10a3e50c632c307f3196603538c"
-            },
-            {
-              "item": "default_control_path",
-              "sha256": "fe12459c5cbafd9a7e3126f724affa4b7f1cb807a21255431e8e31feb463a353"
-            },
-            {
-              "item": "read_control_discovery",
-              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -182301,22 +182100,6 @@
             {
               "item": "ConnectionState.RESOLVING",
               "sha256": "83c3fd86969666837feb7c466cf70f0d911a6e188bc305a7c7b685f9ee2ec697"
-            },
-            {
-              "item": "IpcVersionRange.from_mapping",
-              "sha256": "fbe0d65942107cb3e09af58f902af9f44867665c9d55dc2b924b5f97b7cd9b95"
-            },
-            {
-              "item": "IpcVersionRange.max",
-              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
-            },
-            {
-              "item": "IpcVersionRange.min",
-              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
-            },
-            {
-              "item": "IpcVersionRange.overlap",
-              "sha256": "bc85159b0aa82d0ed600b0c88f1d1f6c10672e5aaa35601704b28f33160410d2"
             },
             {
               "item": "RuntimeConnection.close",
@@ -182402,10 +182185,6 @@
               "sha256": "f3e432687da38c915ea60ff85d02d6cbc5901687eb10c847124c862f5e7c1964"
             },
             {
-              "item": "IpcVersionRange",
-              "sha256": "c1f49848694bbf9e505333609d0fdbe7ada2f297c1d45e4bbe180509fb6bd743"
-            },
-            {
               "item": "RuntimeConnection",
               "sha256": "cee46717269741c3efd0db80625590c47676a25f948fa489c203d91a23fa4a39"
             },
@@ -182416,14 +182195,6 @@
             {
               "item": "RuntimeEndpoint",
               "sha256": "167acf7e512f42d8f5b13976c74f10502cf1c10a3e50c632c307f3196603538c"
-            },
-            {
-              "item": "default_control_path",
-              "sha256": "fe12459c5cbafd9a7e3126f724affa4b7f1cb807a21255431e8e31feb463a353"
-            },
-            {
-              "item": "read_control_discovery",
-              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -182488,22 +182259,6 @@
             {
               "item": "ConnectionState.RESOLVING",
               "sha256": "83c3fd86969666837feb7c466cf70f0d911a6e188bc305a7c7b685f9ee2ec697"
-            },
-            {
-              "item": "IpcVersionRange.from_mapping",
-              "sha256": "fbe0d65942107cb3e09af58f902af9f44867665c9d55dc2b924b5f97b7cd9b95"
-            },
-            {
-              "item": "IpcVersionRange.max",
-              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
-            },
-            {
-              "item": "IpcVersionRange.min",
-              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
-            },
-            {
-              "item": "IpcVersionRange.overlap",
-              "sha256": "bc85159b0aa82d0ed600b0c88f1d1f6c10672e5aaa35601704b28f33160410d2"
             },
             {
               "item": "RuntimeConnection.close",
@@ -182589,10 +182344,6 @@
               "sha256": "f3e432687da38c915ea60ff85d02d6cbc5901687eb10c847124c862f5e7c1964"
             },
             {
-              "item": "IpcVersionRange",
-              "sha256": "c1f49848694bbf9e505333609d0fdbe7ada2f297c1d45e4bbe180509fb6bd743"
-            },
-            {
               "item": "RuntimeConnection",
               "sha256": "cee46717269741c3efd0db80625590c47676a25f948fa489c203d91a23fa4a39"
             },
@@ -182603,14 +182354,6 @@
             {
               "item": "RuntimeEndpoint",
               "sha256": "167acf7e512f42d8f5b13976c74f10502cf1c10a3e50c632c307f3196603538c"
-            },
-            {
-              "item": "default_control_path",
-              "sha256": "fe12459c5cbafd9a7e3126f724affa4b7f1cb807a21255431e8e31feb463a353"
-            },
-            {
-              "item": "read_control_discovery",
-              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -182675,22 +182418,6 @@
             {
               "item": "ConnectionState.RESOLVING",
               "sha256": "83c3fd86969666837feb7c466cf70f0d911a6e188bc305a7c7b685f9ee2ec697"
-            },
-            {
-              "item": "IpcVersionRange.from_mapping",
-              "sha256": "fbe0d65942107cb3e09af58f902af9f44867665c9d55dc2b924b5f97b7cd9b95"
-            },
-            {
-              "item": "IpcVersionRange.max",
-              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
-            },
-            {
-              "item": "IpcVersionRange.min",
-              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
-            },
-            {
-              "item": "IpcVersionRange.overlap",
-              "sha256": "bc85159b0aa82d0ed600b0c88f1d1f6c10672e5aaa35601704b28f33160410d2"
             },
             {
               "item": "RuntimeConnection.close",
@@ -182776,10 +182503,6 @@
               "sha256": "f3e432687da38c915ea60ff85d02d6cbc5901687eb10c847124c862f5e7c1964"
             },
             {
-              "item": "IpcVersionRange",
-              "sha256": "c1f49848694bbf9e505333609d0fdbe7ada2f297c1d45e4bbe180509fb6bd743"
-            },
-            {
               "item": "RuntimeConnection",
               "sha256": "cee46717269741c3efd0db80625590c47676a25f948fa489c203d91a23fa4a39"
             },
@@ -182790,14 +182513,6 @@
             {
               "item": "RuntimeEndpoint",
               "sha256": "167acf7e512f42d8f5b13976c74f10502cf1c10a3e50c632c307f3196603538c"
-            },
-            {
-              "item": "default_control_path",
-              "sha256": "fe12459c5cbafd9a7e3126f724affa4b7f1cb807a21255431e8e31feb463a353"
-            },
-            {
-              "item": "read_control_discovery",
-              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -182862,22 +182577,6 @@
             {
               "item": "ConnectionState.RESOLVING",
               "sha256": "83c3fd86969666837feb7c466cf70f0d911a6e188bc305a7c7b685f9ee2ec697"
-            },
-            {
-              "item": "IpcVersionRange.from_mapping",
-              "sha256": "fbe0d65942107cb3e09af58f902af9f44867665c9d55dc2b924b5f97b7cd9b95"
-            },
-            {
-              "item": "IpcVersionRange.max",
-              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
-            },
-            {
-              "item": "IpcVersionRange.min",
-              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
-            },
-            {
-              "item": "IpcVersionRange.overlap",
-              "sha256": "bc85159b0aa82d0ed600b0c88f1d1f6c10672e5aaa35601704b28f33160410d2"
             },
             {
               "item": "RuntimeConnection.close",
@@ -182963,10 +182662,6 @@
               "sha256": "f3e432687da38c915ea60ff85d02d6cbc5901687eb10c847124c862f5e7c1964"
             },
             {
-              "item": "IpcVersionRange",
-              "sha256": "c1f49848694bbf9e505333609d0fdbe7ada2f297c1d45e4bbe180509fb6bd743"
-            },
-            {
               "item": "RuntimeConnection",
               "sha256": "cee46717269741c3efd0db80625590c47676a25f948fa489c203d91a23fa4a39"
             },
@@ -182977,14 +182672,6 @@
             {
               "item": "RuntimeEndpoint",
               "sha256": "167acf7e512f42d8f5b13976c74f10502cf1c10a3e50c632c307f3196603538c"
-            },
-            {
-              "item": "default_control_path",
-              "sha256": "fe12459c5cbafd9a7e3126f724affa4b7f1cb807a21255431e8e31feb463a353"
-            },
-            {
-              "item": "read_control_discovery",
-              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -183049,22 +182736,6 @@
             {
               "item": "ConnectionState.RESOLVING",
               "sha256": "83c3fd86969666837feb7c466cf70f0d911a6e188bc305a7c7b685f9ee2ec697"
-            },
-            {
-              "item": "IpcVersionRange.from_mapping",
-              "sha256": "fbe0d65942107cb3e09af58f902af9f44867665c9d55dc2b924b5f97b7cd9b95"
-            },
-            {
-              "item": "IpcVersionRange.max",
-              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
-            },
-            {
-              "item": "IpcVersionRange.min",
-              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
-            },
-            {
-              "item": "IpcVersionRange.overlap",
-              "sha256": "bc85159b0aa82d0ed600b0c88f1d1f6c10672e5aaa35601704b28f33160410d2"
             },
             {
               "item": "RuntimeConnection.close",
@@ -183150,10 +182821,6 @@
               "sha256": "f3e432687da38c915ea60ff85d02d6cbc5901687eb10c847124c862f5e7c1964"
             },
             {
-              "item": "IpcVersionRange",
-              "sha256": "c1f49848694bbf9e505333609d0fdbe7ada2f297c1d45e4bbe180509fb6bd743"
-            },
-            {
               "item": "RuntimeConnection",
               "sha256": "cee46717269741c3efd0db80625590c47676a25f948fa489c203d91a23fa4a39"
             },
@@ -183164,14 +182831,6 @@
             {
               "item": "RuntimeEndpoint",
               "sha256": "167acf7e512f42d8f5b13976c74f10502cf1c10a3e50c632c307f3196603538c"
-            },
-            {
-              "item": "default_control_path",
-              "sha256": "fe12459c5cbafd9a7e3126f724affa4b7f1cb807a21255431e8e31feb463a353"
-            },
-            {
-              "item": "read_control_discovery",
-              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -183236,22 +182895,6 @@
             {
               "item": "ConnectionState.RESOLVING",
               "sha256": "83c3fd86969666837feb7c466cf70f0d911a6e188bc305a7c7b685f9ee2ec697"
-            },
-            {
-              "item": "IpcVersionRange.from_mapping",
-              "sha256": "fbe0d65942107cb3e09af58f902af9f44867665c9d55dc2b924b5f97b7cd9b95"
-            },
-            {
-              "item": "IpcVersionRange.max",
-              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
-            },
-            {
-              "item": "IpcVersionRange.min",
-              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
-            },
-            {
-              "item": "IpcVersionRange.overlap",
-              "sha256": "bc85159b0aa82d0ed600b0c88f1d1f6c10672e5aaa35601704b28f33160410d2"
             },
             {
               "item": "RuntimeConnection.close",
@@ -183337,10 +182980,6 @@
               "sha256": "f3e432687da38c915ea60ff85d02d6cbc5901687eb10c847124c862f5e7c1964"
             },
             {
-              "item": "IpcVersionRange",
-              "sha256": "c1f49848694bbf9e505333609d0fdbe7ada2f297c1d45e4bbe180509fb6bd743"
-            },
-            {
               "item": "RuntimeConnection",
               "sha256": "cee46717269741c3efd0db80625590c47676a25f948fa489c203d91a23fa4a39"
             },
@@ -183351,14 +182990,6 @@
             {
               "item": "RuntimeEndpoint",
               "sha256": "167acf7e512f42d8f5b13976c74f10502cf1c10a3e50c632c307f3196603538c"
-            },
-            {
-              "item": "default_control_path",
-              "sha256": "fe12459c5cbafd9a7e3126f724affa4b7f1cb807a21255431e8e31feb463a353"
-            },
-            {
-              "item": "read_control_discovery",
-              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -183423,22 +183054,6 @@
             {
               "item": "ConnectionState.RESOLVING",
               "sha256": "83c3fd86969666837feb7c466cf70f0d911a6e188bc305a7c7b685f9ee2ec697"
-            },
-            {
-              "item": "IpcVersionRange.from_mapping",
-              "sha256": "fbe0d65942107cb3e09af58f902af9f44867665c9d55dc2b924b5f97b7cd9b95"
-            },
-            {
-              "item": "IpcVersionRange.max",
-              "sha256": "bb01326e8309aaac56d27a8eb7a37976bd495244a3254c01d0edb8e5c6948bf4"
-            },
-            {
-              "item": "IpcVersionRange.min",
-              "sha256": "5d54b6f8b844d6db792ae4fb36dc66bd3c8fff2e998ff8f4b7bd692142b88917"
-            },
-            {
-              "item": "IpcVersionRange.overlap",
-              "sha256": "bc85159b0aa82d0ed600b0c88f1d1f6c10672e5aaa35601704b28f33160410d2"
             },
             {
               "item": "RuntimeConnection.close",
@@ -184108,7 +183723,7 @@
       "shape_evidence": [
         {
           "item": "SdkEnvironment",
-          "sha256": "28fdd30c76e5a678bd808da2e4fed56db4b47d1a3983db8bb9e17a99a4574fe1"
+          "sha256": "6c370b81d6fc4c7e3d0ce3d035992a3afd73402b891e80cf5e6da1f07c1e8ff7"
         },
         {
           "item": "default_environment",
@@ -184133,10 +183748,6 @@
         {
           "item": "SdkEnvironment.connect_local",
           "sha256": "f0295785e21c25fb333d99a6203a923bbb52a57d860f2b4aa9736ee9243cbd96"
-        },
-        {
-          "item": "SdkEnvironment.control_ipc_client",
-          "sha256": "c820d9e5ba89e5fe57760677c41ae36241cc82f98371fb0f20bb7d713fa22a7d"
         },
         {
           "item": "SdkEnvironment.control_path",
@@ -184168,7 +183779,7 @@
         },
         {
           "item": "SdkEnvironment.resolved_control_path",
-          "sha256": "2b25d53ebea1e2abfabde4c1725c196cae2183aeb99791d1e9e4dccd5b9a7072"
+          "sha256": "478fd8dfd7f90136169cfc1c56bbbe921ea6541965672ef5f6a44a7ea98eff9e"
         },
         {
           "item": "SdkEnvironment.runtime_client",
@@ -184180,7 +183791,7 @@
         },
         {
           "item": "SdkEnvironment.runtime_connection",
-          "sha256": "32bd1c1d7ca528a1c54508b6eeb409e77958d05ea106f21649e0e455471d5bb4"
+          "sha256": "55203ac56668fed6fa8a7199f6d48254187dc91d66593433dbd7427ef79b1262"
         },
         {
           "item": "SdkEnvironment.runtime_connection_direct",
@@ -184207,7 +183818,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "28fdd30c76e5a678bd808da2e4fed56db4b47d1a3983db8bb9e17a99a4574fe1"
+              "sha256": "6c370b81d6fc4c7e3d0ce3d035992a3afd73402b891e80cf5e6da1f07c1e8ff7"
             },
             {
               "item": "default_environment",
@@ -184232,10 +183843,6 @@
             {
               "item": "SdkEnvironment.connect_local",
               "sha256": "f0295785e21c25fb333d99a6203a923bbb52a57d860f2b4aa9736ee9243cbd96"
-            },
-            {
-              "item": "SdkEnvironment.control_ipc_client",
-              "sha256": "c820d9e5ba89e5fe57760677c41ae36241cc82f98371fb0f20bb7d713fa22a7d"
             },
             {
               "item": "SdkEnvironment.control_path",
@@ -184267,7 +183874,7 @@
             },
             {
               "item": "SdkEnvironment.resolved_control_path",
-              "sha256": "2b25d53ebea1e2abfabde4c1725c196cae2183aeb99791d1e9e4dccd5b9a7072"
+              "sha256": "478fd8dfd7f90136169cfc1c56bbbe921ea6541965672ef5f6a44a7ea98eff9e"
             },
             {
               "item": "SdkEnvironment.runtime_client",
@@ -184279,7 +183886,7 @@
             },
             {
               "item": "SdkEnvironment.runtime_connection",
-              "sha256": "32bd1c1d7ca528a1c54508b6eeb409e77958d05ea106f21649e0e455471d5bb4"
+              "sha256": "55203ac56668fed6fa8a7199f6d48254187dc91d66593433dbd7427ef79b1262"
             },
             {
               "item": "SdkEnvironment.runtime_connection_direct",
@@ -184306,7 +183913,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "28fdd30c76e5a678bd808da2e4fed56db4b47d1a3983db8bb9e17a99a4574fe1"
+              "sha256": "6c370b81d6fc4c7e3d0ce3d035992a3afd73402b891e80cf5e6da1f07c1e8ff7"
             },
             {
               "item": "default_environment",
@@ -184331,10 +183938,6 @@
             {
               "item": "SdkEnvironment.connect_local",
               "sha256": "f0295785e21c25fb333d99a6203a923bbb52a57d860f2b4aa9736ee9243cbd96"
-            },
-            {
-              "item": "SdkEnvironment.control_ipc_client",
-              "sha256": "c820d9e5ba89e5fe57760677c41ae36241cc82f98371fb0f20bb7d713fa22a7d"
             },
             {
               "item": "SdkEnvironment.control_path",
@@ -184366,7 +183969,7 @@
             },
             {
               "item": "SdkEnvironment.resolved_control_path",
-              "sha256": "2b25d53ebea1e2abfabde4c1725c196cae2183aeb99791d1e9e4dccd5b9a7072"
+              "sha256": "478fd8dfd7f90136169cfc1c56bbbe921ea6541965672ef5f6a44a7ea98eff9e"
             },
             {
               "item": "SdkEnvironment.runtime_client",
@@ -184378,7 +183981,7 @@
             },
             {
               "item": "SdkEnvironment.runtime_connection",
-              "sha256": "32bd1c1d7ca528a1c54508b6eeb409e77958d05ea106f21649e0e455471d5bb4"
+              "sha256": "55203ac56668fed6fa8a7199f6d48254187dc91d66593433dbd7427ef79b1262"
             },
             {
               "item": "SdkEnvironment.runtime_connection_direct",
@@ -184405,7 +184008,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "28fdd30c76e5a678bd808da2e4fed56db4b47d1a3983db8bb9e17a99a4574fe1"
+              "sha256": "6c370b81d6fc4c7e3d0ce3d035992a3afd73402b891e80cf5e6da1f07c1e8ff7"
             },
             {
               "item": "default_environment",
@@ -184430,10 +184033,6 @@
             {
               "item": "SdkEnvironment.connect_local",
               "sha256": "f0295785e21c25fb333d99a6203a923bbb52a57d860f2b4aa9736ee9243cbd96"
-            },
-            {
-              "item": "SdkEnvironment.control_ipc_client",
-              "sha256": "c820d9e5ba89e5fe57760677c41ae36241cc82f98371fb0f20bb7d713fa22a7d"
             },
             {
               "item": "SdkEnvironment.control_path",
@@ -184465,7 +184064,7 @@
             },
             {
               "item": "SdkEnvironment.resolved_control_path",
-              "sha256": "2b25d53ebea1e2abfabde4c1725c196cae2183aeb99791d1e9e4dccd5b9a7072"
+              "sha256": "478fd8dfd7f90136169cfc1c56bbbe921ea6541965672ef5f6a44a7ea98eff9e"
             },
             {
               "item": "SdkEnvironment.runtime_client",
@@ -184477,7 +184076,7 @@
             },
             {
               "item": "SdkEnvironment.runtime_connection",
-              "sha256": "32bd1c1d7ca528a1c54508b6eeb409e77958d05ea106f21649e0e455471d5bb4"
+              "sha256": "55203ac56668fed6fa8a7199f6d48254187dc91d66593433dbd7427ef79b1262"
             },
             {
               "item": "SdkEnvironment.runtime_connection_direct",
@@ -184504,7 +184103,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "28fdd30c76e5a678bd808da2e4fed56db4b47d1a3983db8bb9e17a99a4574fe1"
+              "sha256": "6c370b81d6fc4c7e3d0ce3d035992a3afd73402b891e80cf5e6da1f07c1e8ff7"
             },
             {
               "item": "default_environment",
@@ -184529,10 +184128,6 @@
             {
               "item": "SdkEnvironment.connect_local",
               "sha256": "f0295785e21c25fb333d99a6203a923bbb52a57d860f2b4aa9736ee9243cbd96"
-            },
-            {
-              "item": "SdkEnvironment.control_ipc_client",
-              "sha256": "c820d9e5ba89e5fe57760677c41ae36241cc82f98371fb0f20bb7d713fa22a7d"
             },
             {
               "item": "SdkEnvironment.control_path",
@@ -184564,7 +184159,7 @@
             },
             {
               "item": "SdkEnvironment.resolved_control_path",
-              "sha256": "2b25d53ebea1e2abfabde4c1725c196cae2183aeb99791d1e9e4dccd5b9a7072"
+              "sha256": "478fd8dfd7f90136169cfc1c56bbbe921ea6541965672ef5f6a44a7ea98eff9e"
             },
             {
               "item": "SdkEnvironment.runtime_client",
@@ -184576,7 +184171,7 @@
             },
             {
               "item": "SdkEnvironment.runtime_connection",
-              "sha256": "32bd1c1d7ca528a1c54508b6eeb409e77958d05ea106f21649e0e455471d5bb4"
+              "sha256": "55203ac56668fed6fa8a7199f6d48254187dc91d66593433dbd7427ef79b1262"
             },
             {
               "item": "SdkEnvironment.runtime_connection_direct",
@@ -184603,7 +184198,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "28fdd30c76e5a678bd808da2e4fed56db4b47d1a3983db8bb9e17a99a4574fe1"
+              "sha256": "6c370b81d6fc4c7e3d0ce3d035992a3afd73402b891e80cf5e6da1f07c1e8ff7"
             },
             {
               "item": "default_environment",
@@ -184628,10 +184223,6 @@
             {
               "item": "SdkEnvironment.connect_local",
               "sha256": "f0295785e21c25fb333d99a6203a923bbb52a57d860f2b4aa9736ee9243cbd96"
-            },
-            {
-              "item": "SdkEnvironment.control_ipc_client",
-              "sha256": "c820d9e5ba89e5fe57760677c41ae36241cc82f98371fb0f20bb7d713fa22a7d"
             },
             {
               "item": "SdkEnvironment.control_path",
@@ -184663,7 +184254,7 @@
             },
             {
               "item": "SdkEnvironment.resolved_control_path",
-              "sha256": "2b25d53ebea1e2abfabde4c1725c196cae2183aeb99791d1e9e4dccd5b9a7072"
+              "sha256": "478fd8dfd7f90136169cfc1c56bbbe921ea6541965672ef5f6a44a7ea98eff9e"
             },
             {
               "item": "SdkEnvironment.runtime_client",
@@ -184675,7 +184266,7 @@
             },
             {
               "item": "SdkEnvironment.runtime_connection",
-              "sha256": "32bd1c1d7ca528a1c54508b6eeb409e77958d05ea106f21649e0e455471d5bb4"
+              "sha256": "55203ac56668fed6fa8a7199f6d48254187dc91d66593433dbd7427ef79b1262"
             },
             {
               "item": "SdkEnvironment.runtime_connection_direct",
@@ -184702,7 +184293,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "28fdd30c76e5a678bd808da2e4fed56db4b47d1a3983db8bb9e17a99a4574fe1"
+              "sha256": "6c370b81d6fc4c7e3d0ce3d035992a3afd73402b891e80cf5e6da1f07c1e8ff7"
             },
             {
               "item": "default_environment",
@@ -184727,10 +184318,6 @@
             {
               "item": "SdkEnvironment.connect_local",
               "sha256": "f0295785e21c25fb333d99a6203a923bbb52a57d860f2b4aa9736ee9243cbd96"
-            },
-            {
-              "item": "SdkEnvironment.control_ipc_client",
-              "sha256": "c820d9e5ba89e5fe57760677c41ae36241cc82f98371fb0f20bb7d713fa22a7d"
             },
             {
               "item": "SdkEnvironment.control_path",
@@ -184762,7 +184349,7 @@
             },
             {
               "item": "SdkEnvironment.resolved_control_path",
-              "sha256": "2b25d53ebea1e2abfabde4c1725c196cae2183aeb99791d1e9e4dccd5b9a7072"
+              "sha256": "478fd8dfd7f90136169cfc1c56bbbe921ea6541965672ef5f6a44a7ea98eff9e"
             },
             {
               "item": "SdkEnvironment.runtime_client",
@@ -184774,7 +184361,7 @@
             },
             {
               "item": "SdkEnvironment.runtime_connection",
-              "sha256": "32bd1c1d7ca528a1c54508b6eeb409e77958d05ea106f21649e0e455471d5bb4"
+              "sha256": "55203ac56668fed6fa8a7199f6d48254187dc91d66593433dbd7427ef79b1262"
             },
             {
               "item": "SdkEnvironment.runtime_connection_direct",
@@ -192066,7 +191653,7 @@
         },
         {
           "item": "runtime_state_root",
-          "sha256": "fcc017794dcc7b28cde877fe3b063ab82fae1af0a5ba6d810714ed0b8ecfd327"
+          "sha256": "11d059c666917fdd1c911d85554303f9280be712e3daa81967c7965acf3648e0"
         },
         {
           "item": "signer_handle_provenance_error",
@@ -192161,7 +191748,7 @@
             },
             {
               "item": "runtime_state_root",
-              "sha256": "fcc017794dcc7b28cde877fe3b063ab82fae1af0a5ba6d810714ed0b8ecfd327"
+              "sha256": "11d059c666917fdd1c911d85554303f9280be712e3daa81967c7965acf3648e0"
             },
             {
               "item": "signer_handle_provenance_error",
@@ -192256,7 +191843,7 @@
             },
             {
               "item": "runtime_state_root",
-              "sha256": "fcc017794dcc7b28cde877fe3b063ab82fae1af0a5ba6d810714ed0b8ecfd327"
+              "sha256": "11d059c666917fdd1c911d85554303f9280be712e3daa81967c7965acf3648e0"
             },
             {
               "item": "signer_handle_provenance_error",

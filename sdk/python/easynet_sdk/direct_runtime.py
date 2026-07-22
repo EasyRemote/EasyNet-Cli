@@ -37,7 +37,7 @@ from ._axon_pb.axon.v1 import (
     invoke_pb2_grpc as _invoke_pb2_grpc,
     types_pb2 as _types_pb2,
 )
-from .control_ipc import ControlDiscovery, read_control_discovery
+from .control_ipc import _ControlDiscovery, _read_control_discovery
 from .errors import (
     ErrorCode,
     RetryHint,
@@ -87,7 +87,7 @@ class DirectRuntimeConnector:
     """RuntimeConnector for direct Invocation gRPC over UDS."""
 
     control_path: str = ""
-    discovery_reader: Any = read_control_discovery
+    discovery_reader: Any = _read_control_discovery
     handle_transport: RuntimeTransport | None = None
     identity: DirectRuntimeIdentityProjector | None = None
     close_identity: bool = False
@@ -120,7 +120,7 @@ class DirectRuntimeConnector:
         if endpoint:
             return _json_bytes(facts)
 
-        discovery: ControlDiscovery = self.discovery_reader(control_path)
+        discovery: _ControlDiscovery = self.discovery_reader(control_path)
         if not discovery.invocation_endpoint:
             raise SDKError(
                 code=ErrorCode.CONTROL_ONLY,

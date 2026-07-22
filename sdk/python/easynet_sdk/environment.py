@@ -11,10 +11,10 @@ from .ability_invocation import AbilityInvocationClient
 from .client import Client, FeatureSet
 from .connection import (
     ConnectOptions,
-    ControlDiscoveryRuntimeConnector,
+    _ControlDiscoveryRuntimeConnector,
     RuntimeConnection,
 )
-from .control_ipc import ControlIpcClient, default_control_path
+from .control_ipc import _ControlIpcClient, _default_control_path
 from .runtime_lifecycle import RuntimeLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .health import HealthClient
@@ -179,12 +179,12 @@ class SdkEnvironment:
         self._track(transport)
         return RuntimeLifecycle(transport)
 
-    def control_ipc_client(self, *, timeout: float | None = None) -> ControlIpcClient:
+    def _control_ipc_client(self, *, timeout: float | None = None) -> _ControlIpcClient:
         """Open a direct boot/status control IPC client."""
 
         self._require_open()
         return self._track(
-            ControlIpcClient.connect(
+            _ControlIpcClient.connect(
                 self.resolved_control_path(),
                 timeout=timeout,
             )
@@ -207,7 +207,7 @@ class SdkEnvironment:
         from . import _cabi
 
         options = self._connect_options(options)
-        connector = ControlDiscoveryRuntimeConnector(
+        connector = _ControlDiscoveryRuntimeConnector(
             _cabi.open_cabi_runtime_connector(library_path=self.library_path),
             control_path=options.control_path,
         )
@@ -357,7 +357,7 @@ class SdkEnvironment:
         """Return the configured runtime control discovery path or SDK default."""
 
         self._require_open()
-        return self.control_path or str(default_control_path())
+        return self.control_path or str(_default_control_path())
 
     def runtime_state_root(self) -> Path:
         """Return the SDK-owned local runtime state directory."""

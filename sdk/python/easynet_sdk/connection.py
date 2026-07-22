@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Callable, Mapping, Protocol, runtime_checkable
 
-from .control_ipc import ControlDiscovery, read_control_discovery
+from .control_ipc import _ControlDiscovery, _read_control_discovery
 from .errors import ErrorCode, RetryHint, SDKError
 from .runtime import RuntimeClient, RuntimeTransport
 
@@ -120,7 +120,7 @@ class RuntimeConnector(Protocol):
 
 
 @dataclass
-class ControlDiscoveryRuntimeConnector:
+class _ControlDiscoveryRuntimeConnector:
     """Resolve Runtime Core endpoints from daemon control discovery.
 
     The connector owns only discovery-to-endpoint projection. Handshake,
@@ -130,7 +130,7 @@ class ControlDiscoveryRuntimeConnector:
 
     inner: RuntimeConnector
     control_path: str = ""
-    discovery_reader: Callable[[str], ControlDiscovery] = read_control_discovery
+    discovery_reader: Callable[[str], _ControlDiscovery] = _read_control_discovery
     _closed: bool = False
 
     def __post_init__(self) -> None:

@@ -16,21 +16,21 @@ from typing import Mapping, Optional
 from .errors import ErrorCode, RetryHint, SDKError
 
 
-CONTROL_IPC_VERSION = 1
-MAX_CONTROL_FRAME_BYTES = 8 * 1024 * 1024
-CONTROL_BOOT_STATUS_ABILITY = "system.watch_boot"
+_CONTROL_IPC_VERSION = 1
+_MAX_CONTROL_FRAME_BYTES = 8 * 1024 * 1024
+_CONTROL_BOOT_STATUS_ABILITY = "system.watch_boot"
 _CONTROL_FRAME_TYPES = {"subscribe", "cancel"}
 
 
 @dataclass(frozen=True)
-class IpcVersionRange:
+class _IpcVersionRange:
     """Inclusive control IPC version range."""
 
     min: int
     max: int
 
     @classmethod
-    def from_mapping(cls, value: object) -> "IpcVersionRange":
+    def from_mapping(cls, value: object) -> "_IpcVersionRange":
         if not isinstance(value, Mapping):
             raise _invalid_control("supported_ipc_versions must be an object")
         minimum = _required_non_negative_int(value, "min")
@@ -39,16 +39,16 @@ class IpcVersionRange:
             raise _invalid_control("supported_ipc_versions is invalid")
         return cls(min=minimum, max=maximum)
 
-    def overlap(self, other: "IpcVersionRange") -> Optional["IpcVersionRange"]:
+    def overlap(self, other: "_IpcVersionRange") -> Optional["_IpcVersionRange"]:
         minimum = max(self.min, other.min)
         maximum = min(self.max, other.max)
         if minimum > maximum:
             return None
-        return IpcVersionRange(min=minimum, max=maximum)
+        return _IpcVersionRange(min=minimum, max=maximum)
 
 
 @dataclass(frozen=True)
-class ControlDiscovery:
+class _ControlDiscovery:
     """Parsed control discovery file."""
 
     socket_path: str = ""
@@ -56,14 +56,14 @@ class ControlDiscovery:
     invocation_endpoint: str = ""
     pid: int = 0
     daemon_version: str = ""
-    supported_ipc_versions: IpcVersionRange = field(
-        default_factory=lambda: IpcVersionRange(CONTROL_IPC_VERSION, CONTROL_IPC_VERSION)
+    supported_ipc_versions: _IpcVersionRange = field(
+        default_factory=lambda: _IpcVersionRange(_CONTROL_IPC_VERSION, _CONTROL_IPC_VERSION)
     )
     capability_flags: tuple[str, ...] = ()
     pages_port: int = 0
 
     @classmethod
-    def from_json(cls, raw: bytes | str) -> "ControlDiscovery":
+    def from_json(cls, raw: bytes | str) -> "_ControlDiscovery":
         decoded = _json_object(raw, "control discovery")
         flags = decoded.get("capability_flags", [])
         if not isinstance(flags, list) or not all(isinstance(item, str) for item in flags):
@@ -78,7 +78,7 @@ class ControlDiscovery:
             pid=_optional_non_negative_int(decoded.get("pid"), "pid"),
             daemon_version=_optional_string(decoded.get("daemon_version"), "daemon_version")
             or "",
-            supported_ipc_versions=IpcVersionRange.from_mapping(
+            supported_ipc_versions=_IpcVersionRange.from_mapping(
                 decoded.get("supported_ipc_versions")
             ),
             capability_flags=tuple(flags),
@@ -87,7 +87,7 @@ class ControlDiscovery:
 
 
 @dataclass(frozen=True)
-class ControlFrame:
+class _ControlFrame:
     """One daemon control-plane response frame."""
 
     frame_type: str
@@ -98,7 +98,7 @@ class ControlFrame:
     message: str = ""
 
     @classmethod
-    def from_json(cls, raw: bytes | str) -> "ControlFrame":
+    def from_json(cls, raw: bytes | str) -> "_ControlFrame":
         decoded = _json_object(raw, "control frame")
         frame_type = _required_string(decoded, "type")
         if frame_type == "frame":
@@ -129,16 +129,16 @@ class ControlFrame:
         return self.frame_type == "error"
 
 
-class ControlIpcClient:
+class _ControlIpcClient:
     """Length-prefixed JSON client for daemon boot/status control frames."""
 
     def __init__(
         self,
         sock: socket.socket,
         *,
-        discovery: ControlDiscovery,
+        discovery: _ControlDiscovery,
         ipc_version: int,
-        max_frame_bytes: int = MAX_CONTROL_FRAME_BYTES,
+        max_frame_bytes: int = _MAX_CONTROL_FRAME_BYTES,
     ) -> None:
         if max_frame_bytes <= 0:
             raise _invalid_control("max_frame_bytes must be positive")
@@ -154,9 +154,9 @@ class ControlIpcClient:
         control_path: str | Path = "",
         *,
         timeout: float | None = None,
-        max_frame_bytes: int = MAX_CONTROL_FRAME_BYTES,
-    ) -> "ControlIpcClient":
-        discovery = read_control_discovery(control_path or default_control_path())
+        max_frame_bytes: int = _MAX_CONTROL_FRAME_BYTES,
+    ) -> "_ControlIpcClient":
+        discovery = _read_control_discovery(control_path or _default_control_path())
         chosen = _negotiate_ipc_version(discovery.supported_ipc_versions)
         if not discovery.socket_path:
             raise SDKError(
@@ -212,7 +212,7 @@ class ControlIpcClient:
             }
         )
 
-    def round_trip(self, frame: Mapping[str, object]) -> ControlFrame:
+    def round_trip(self, frame: Mapping[str, object]) -> _ControlFrame:
         self.send(frame)
         return self.recv()
 
@@ -234,13 +234,13 @@ class ControlIpcClient:
                 cause=exc,
             ) from exc
 
-    def recv(self) -> ControlFrame:
+    def recv(self) -> _ControlFrame:
         self._require_open()
         header = self._recv_exact(4)
         size = struct.unpack("<I", header)[0]
         if size <= 0 or size > self.max_frame_bytes:
             raise _invalid_control("control frame size is invalid")
-        return ControlFrame.from_json(self._recv_exact(size))
+        return _ControlFrame.from_json(self._recv_exact(size))
 
     def close(self) -> None:
         if self._closed:
@@ -248,7 +248,7 @@ class ControlIpcClient:
         self._closed = True
         self._sock.close()
 
-    def __enter__(self) -> "ControlIpcClient":
+    def __enter__(self) -> "_ControlIpcClient":
         self._require_open()
         return self
 
@@ -295,14 +295,14 @@ class ControlIpcClient:
             )
 
 
-def default_control_path() -> Path:
+def _default_control_path() -> Path:
     """Return the default daemon control discovery file path."""
 
     return Path.home() / ".easynet" / "control.json"
 
 
-def read_control_discovery(control_path: str | Path = "") -> ControlDiscovery:
-    path = Path(control_path or default_control_path())
+def _read_control_discovery(control_path: str | Path = "") -> _ControlDiscovery:
+    path = Path(control_path or _default_control_path())
     try:
         raw = path.read_bytes()
     except FileNotFoundError as exc:
@@ -323,11 +323,11 @@ def read_control_discovery(control_path: str | Path = "") -> ControlDiscovery:
             message=f"read control discovery file failed at {path}",
             cause=exc,
         ) from exc
-    return ControlDiscovery.from_json(raw)
+    return _ControlDiscovery.from_json(raw)
 
 
-def _negotiate_ipc_version(daemon_range: IpcVersionRange) -> int:
-    supported = IpcVersionRange(CONTROL_IPC_VERSION, CONTROL_IPC_VERSION)
+def _negotiate_ipc_version(daemon_range: _IpcVersionRange) -> int:
+    supported = _IpcVersionRange(_CONTROL_IPC_VERSION, _CONTROL_IPC_VERSION)
     overlap = supported.overlap(daemon_range)
     if overlap is None:
         raise SDKError(
@@ -361,7 +361,7 @@ def _validate_outgoing_control_frame(frame: Mapping[str, object]) -> dict[str, o
         }
 
     ability = _clean_string(frame.get("ability"), "ability")
-    if ability != CONTROL_BOOT_STATUS_ABILITY:
+    if ability != _CONTROL_BOOT_STATUS_ABILITY:
         raise _invalid_control(
             "control IPC subscriptions are limited to system.watch_boot"
         )

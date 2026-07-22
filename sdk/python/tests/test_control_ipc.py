@@ -7,15 +7,17 @@ import unittest
 from pathlib import Path
 
 from easynet_sdk import (
-    CONTROL_IPC_VERSION,
-    ControlDiscovery,
-    ControlIpcClient,
     ErrorCode,
-    IpcVersionRange,
     SDKError,
     SdkEnvironment,
     is_code,
-    read_control_discovery,
+)
+from easynet_sdk.control_ipc import (
+    _CONTROL_IPC_VERSION,
+    _ControlDiscovery,
+    _ControlIpcClient,
+    _IpcVersionRange,
+    _read_control_discovery,
 )
 
 
@@ -36,16 +38,16 @@ class ControlIpcTests(unittest.TestCase):
                 )
             )
 
-            discovery = read_control_discovery(path)
+            discovery = _read_control_discovery(path)
 
         self.assertEqual(discovery.socket_path, f"{tmp}/control.sock")
         self.assertEqual(discovery.invocation_endpoint, f"{tmp}/daemon.sock")
-        self.assertEqual(discovery.supported_ipc_versions, IpcVersionRange(1, 1))
+        self.assertEqual(discovery.supported_ipc_versions, _IpcVersionRange(1, 1))
         self.assertEqual(discovery.capability_flags, ("boot_status",))
 
     def test_missing_discovery_maps_to_runtime_offline(self) -> None:
         with self.assertRaises(SDKError) as caught:
-            read_control_discovery("/tmp/no-such-control-file-for-sdk-test.json")
+            _read_control_discovery("/tmp/no-such-control-file-for-sdk-test.json")
 
         self.assertTrue(is_code(caught.exception, ErrorCode.RUNTIME_OFFLINE))
 
@@ -64,7 +66,7 @@ class ControlIpcTests(unittest.TestCase):
             )
 
             with self.assertRaises(SDKError) as caught:
-                ControlIpcClient.connect(path)
+                _ControlIpcClient.connect(path)
 
         self.assertTrue(is_code(caught.exception, ErrorCode.VERSION_MISMATCH))
 
@@ -87,7 +89,7 @@ class ControlIpcTests(unittest.TestCase):
             server = _OneShotControlServer(sock_path)
             server.start()
             try:
-                client = ControlIpcClient.connect(control_path, timeout=1.0)
+                client = _ControlIpcClient.connect(control_path, timeout=1.0)
                 frame = client.round_trip(
                     {
                         "type": "subscribe",
@@ -100,7 +102,7 @@ class ControlIpcTests(unittest.TestCase):
             finally:
                 server.close()
 
-        self.assertEqual(client.ipc_version, CONTROL_IPC_VERSION)
+        self.assertEqual(client.ipc_version, _CONTROL_IPC_VERSION)
         self.assertEqual(frame.frame_type, "frame")
         self.assertEqual(frame.subscription_id, "boot-sub")
         self.assertEqual(frame.frame, {"type": "ready"})
@@ -117,11 +119,11 @@ class ControlIpcTests(unittest.TestCase):
     def test_rejects_product_ability_subscribe_before_socket_write(self) -> None:
         first, second = socket.socketpair()
         try:
-            discovery = ControlDiscovery(
+            discovery = _ControlDiscovery(
                 socket_path="/tmp/control.sock",
-                supported_ipc_versions=IpcVersionRange(1, 1),
+                supported_ipc_versions=_IpcVersionRange(1, 1),
             )
-            client = ControlIpcClient(first, discovery=discovery, ipc_version=1)
+            client = _ControlIpcClient(first, discovery=discovery, ipc_version=1)
 
             with self.assertRaises(SDKError) as caught:
                 client.subscribe("product-sub", "directory.subscribe")
@@ -138,11 +140,11 @@ class ControlIpcTests(unittest.TestCase):
     def test_generic_send_rejects_product_dispatch_frame(self) -> None:
         first, second = socket.socketpair()
         try:
-            discovery = ControlDiscovery(
+            discovery = _ControlDiscovery(
                 socket_path="/tmp/control.sock",
-                supported_ipc_versions=IpcVersionRange(1, 1),
+                supported_ipc_versions=_IpcVersionRange(1, 1),
             )
-            client = ControlIpcClient(first, discovery=discovery, ipc_version=1)
+            client = _ControlIpcClient(first, discovery=discovery, ipc_version=1)
 
             for frame in (
                 {"type": "invoke", "ability": "observe.health", "args": {}},
@@ -168,11 +170,11 @@ class ControlIpcTests(unittest.TestCase):
     def test_recv_rejects_oversized_frame_before_allocation(self) -> None:
         first, second = socket.socketpair()
         try:
-            discovery = ControlDiscovery(
+            discovery = _ControlDiscovery(
                 socket_path="/tmp/control.sock",
-                supported_ipc_versions=IpcVersionRange(1, 1),
+                supported_ipc_versions=_IpcVersionRange(1, 1),
             )
-            client = ControlIpcClient(
+            client = _ControlIpcClient(
                 first,
                 discovery=discovery,
                 ipc_version=1,
@@ -206,7 +208,7 @@ class ControlIpcTests(unittest.TestCase):
             server.start()
             try:
                 env = SdkEnvironment(control_path=str(control_path))
-                client = env.control_ipc_client(timeout=1.0)
+                client = env._control_ipc_client(timeout=1.0)
                 client.subscribe("boot-sub", "system.watch_boot")
                 frame = client.recv()
                 env.close()
@@ -223,11 +225,11 @@ class ControlIpcTests(unittest.TestCase):
     def test_use_after_close_is_cancelled(self) -> None:
         first, second = socket.socketpair()
         try:
-            discovery = ControlDiscovery(
+            discovery = _ControlDiscovery(
                 socket_path="/tmp/control.sock",
-                supported_ipc_versions=IpcVersionRange(1, 1),
+                supported_ipc_versions=_IpcVersionRange(1, 1),
             )
-            client = ControlIpcClient(first, discovery=discovery, ipc_version=1)
+            client = _ControlIpcClient(first, discovery=discovery, ipc_version=1)
             client.close()
 
             with self.assertRaises(SDKError) as caught:

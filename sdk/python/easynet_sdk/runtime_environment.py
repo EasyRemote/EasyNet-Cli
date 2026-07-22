@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from .control_ipc import default_control_path
+from .control_ipc import _default_control_path
 from .errors import ErrorCode, RetryHint, SDKError
 
 _CREDENTIALS_FILENAME = "credentials.json"
@@ -35,7 +35,7 @@ class RuntimeIdentityProjection:
 def runtime_state_root(control_path: str | Path = "") -> Path:
     """Resolve the SDK-owned local runtime state directory."""
 
-    path = Path(control_path) if control_path else default_control_path()
+    path = Path(control_path) if control_path else _default_control_path()
     return path.parent
 
 

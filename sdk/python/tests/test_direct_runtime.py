@@ -32,7 +32,7 @@ from easynet_sdk._axon_pb.axon.v1 import (
     invoke_pb2_grpc as _invoke_pb2_grpc,
     types_pb2 as _types_pb2,
 )
-from easynet_sdk.control_ipc import ControlDiscovery, IpcVersionRange
+from easynet_sdk.control_ipc import _ControlDiscovery, _IpcVersionRange
 from easynet_sdk.direct_runtime import (
     DirectRuntimeBidiTransport,
     DirectRuntimeConnector,
@@ -304,11 +304,11 @@ class DirectRuntimeTests(unittest.TestCase):
     def test_direct_connector_resolves_invocation_endpoint_from_discovery(self) -> None:
         connector = DirectRuntimeConnector(
             control_path="/tmp/control.json",
-            discovery_reader=lambda path: ControlDiscovery(
+            discovery_reader=lambda path: _ControlDiscovery(
                 socket_path="/tmp/control.sock",
                 invocation_endpoint="/tmp/invoke.sock",
                 daemon_version="1.2.3",
-                supported_ipc_versions=IpcVersionRange(1, 1),
+                supported_ipc_versions=_IpcVersionRange(1, 1),
                 capability_flags=("runtime.invoke", "direct.grpc"),
             ),
         )
@@ -335,9 +335,9 @@ class DirectRuntimeTests(unittest.TestCase):
         self,
     ) -> None:
         connector = DirectRuntimeConnector(
-            discovery_reader=lambda path: ControlDiscovery(
+            discovery_reader=lambda path: _ControlDiscovery(
                 socket_path="/tmp/control.sock",
-                supported_ipc_versions=IpcVersionRange(1, 1),
+                supported_ipc_versions=_IpcVersionRange(1, 1),
             )
         )
 

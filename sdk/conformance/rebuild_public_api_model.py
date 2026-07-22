@@ -139,7 +139,7 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
     (r"(sdkenvironment|processroot|environment)", "runtime_environment"),
     (r"(runtimehealth|healthclient|healthtransport|diagnostic)", "runtime_health"),
     (r"(runtimeadmin|administration)", "runtime_administration"),
-    (r"(controlipc|controlframe|controljson|controlendpoint)", "control_ipc"),
+    (r"(controlipc|controlframe|controljson|controlendpoint)", "runtime_connection"),
     (r"(nativeruntime|cabiruntime|dendritebridge|nativebridge)", "native_runtime"),
     (
         r"(feature|abiversion|sdkversion|requireabi|version$|versioninfo)",
@@ -249,7 +249,7 @@ def support_parent(item: str, classified: str) -> str:
         ("bidi", "bidi"),
         ("stream", "stream"),
         ("managedsigning", "managed_signing"),
-        ("controlframe", "control_ipc"),
+        ("controlframe", "runtime_connection"),
         ("runtimeidentity", "runtime_identity"),
     ):
         if token in key:
@@ -451,6 +451,15 @@ def main() -> int:
     args = parser.parse_args()
     args.cache.mkdir(parents=True, exist_ok=True)
     model = json.loads(MODEL.read_text(encoding="utf-8"))
+    control_ipc = model.get("capabilities", {}).pop("control_ipc", None)
+    if control_ipc is not None:
+        runtime_connection = model["capabilities"]["runtime_connection"]
+        runtime_cases = runtime_connection["case_ids"]
+        for case_id in control_ipc.get("case_ids", []):
+            if case_id not in runtime_cases:
+                runtime_cases.append(case_id)
+        runtime_cases.sort()
+        model.get("capability_inventory", {}).pop("control_ipc", None)
     exact, aliases = owner_maps(model)
     inventories = {language: inventory(language, args.cache) for language in LANGUAGES}
     axon_revision = inventories["rust"].get("source_revision")
