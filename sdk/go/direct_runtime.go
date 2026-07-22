@@ -69,7 +69,7 @@ func NewDirectRuntimeConnector(controlPath string, reader ControlDiscoveryReader
 func NewDirectRuntimeConnectorWithOptions(options DirectRuntimeConnectorOptions) *DirectRuntimeConnector {
 	reader := options.Reader
 	if reader == nil {
-		reader = FileControlDiscoveryReader{}
+		reader = fileControlDiscoveryReader{}
 	}
 	return &DirectRuntimeConnector{
 		controlPath:          options.ControlPath,

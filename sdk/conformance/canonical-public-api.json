@@ -6411,7 +6411,6 @@
         "DirectRuntimeConnectorOptions",
         "DirectRuntimeTransport",
         "ErrDaemonOffline",
-        "FileControlDiscoveryReader",
         "NewCABIClient",
         "NewCABIRuntimeHost",
         "NewControlDiscoveryRuntimeConnector",
@@ -6486,7 +6485,6 @@
         "DirectRuntimeTransport.OpenStream",
         "DirectRuntimeTransport.Prepare",
         "DirectRuntimeTransport.SubmitSigned",
-        "FileControlDiscoveryReader.ReadControlDiscovery",
         "PrepareOptions.LocalDaemonSigning"
       ],
       "python": [
@@ -7135,14 +7133,6 @@
           "removal_phase": "quarantined",
           "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
         },
-        "FileControlDiscoveryReader": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
         "NewCABIClient": {
           "canonical_replacement": [
             "capability_inventory.native_runtime"
@@ -7657,14 +7647,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Direct runtime exports are EasyNet daemon provider/source-compatibility surface, not canonical SDK capability evidence."
-        },
-        "FileControlDiscoveryReader.ReadControlDiscovery": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
         },
         "PrepareOptions.LocalDaemonSigning": {
           "canonical_replacement": [
@@ -15461,7 +15443,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "4a6c9d22ee1e83a4dba56fbacb934d035686cc0f70d29b6ec43a3ebca463dec2",
+          "sha256": "6275409fa01a94b40ae144f843d641d92342725fe53452d14329b386df703be7",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15567,7 +15549,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "4a6c9d22ee1e83a4dba56fbacb934d035686cc0f70d29b6ec43a3ebca463dec2",
+          "sha256": "6275409fa01a94b40ae144f843d641d92342725fe53452d14329b386df703be7",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15653,7 +15635,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "4a6c9d22ee1e83a4dba56fbacb934d035686cc0f70d29b6ec43a3ebca463dec2",
+          "sha256": "6275409fa01a94b40ae144f843d641d92342725fe53452d14329b386df703be7",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15759,7 +15741,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "4a6c9d22ee1e83a4dba56fbacb934d035686cc0f70d29b6ec43a3ebca463dec2",
+          "sha256": "6275409fa01a94b40ae144f843d641d92342725fe53452d14329b386df703be7",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -16111,7 +16093,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "4a6c9d22ee1e83a4dba56fbacb934d035686cc0f70d29b6ec43a3ebca463dec2",
+          "sha256": "6275409fa01a94b40ae144f843d641d92342725fe53452d14329b386df703be7",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -16769,7 +16751,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "4a6c9d22ee1e83a4dba56fbacb934d035686cc0f70d29b6ec43a3ebca463dec2",
+          "sha256": "6275409fa01a94b40ae144f843d641d92342725fe53452d14329b386df703be7",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -18383,8 +18365,6 @@
       "FeatureSet.SDKVersion": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "FeatureSet.Symbols": "049fe780a072d52d06e36b3dedd64ad7285c44b424bb209e70c62bc4dedcb200",
       "FeatureSet.Version": "7f45e8d4547049c35384df1ec564466136511b7ef4306d76d45da81f742900a3",
-      "FileControlDiscoveryReader": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
-      "FileControlDiscoveryReader.ReadControlDiscovery": "37c54e54052afd904d77897240b7c2a0f158c0bcdc6f810096c0e1749a94f0ae",
       "HealthClient": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "HealthClient.Diagnostics": "1d928c85c1ab22f14fe0ba8507b98980dbd084a97fb9bb1b5e5e0db5a322c923",
       "HealthClient.RuntimeHealth": "9d8685927efec3c2d0333f65403f4661d59508d3708d61c77fd9f53827b05932",
@@ -23785,7 +23765,7 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/direct_runtime.go",
-      "sha256": "4a6c9d22ee1e83a4dba56fbacb934d035686cc0f70d29b6ec43a3ebca463dec2",
+      "sha256": "6275409fa01a94b40ae144f843d641d92342725fe53452d14329b386df703be7",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/go/connection.go",
       "interface_sha256": "8a81c30b8f3d50915a70ff45ee9d81ee363ac4a4c0a34fec50040c56c6f15e8a",

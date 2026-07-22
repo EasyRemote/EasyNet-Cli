@@ -37,10 +37,9 @@ type ControlDiscoveryReader interface {
 	ReadControlDiscovery(ctx context.Context, controlPath string) (ControlDiscovery, error)
 }
 
-// FileControlDiscoveryReader reads daemon control.json from disk.
-type FileControlDiscoveryReader struct{}
+type fileControlDiscoveryReader struct{}
 
-func (FileControlDiscoveryReader) ReadControlDiscovery(ctx context.Context, controlPath string) (ControlDiscovery, error) {
+func (fileControlDiscoveryReader) ReadControlDiscovery(ctx context.Context, controlPath string) (ControlDiscovery, error) {
 	if ctx == nil {
 		return ControlDiscovery{}, invalidRuntimeClient("context is required")
 	}
@@ -113,7 +112,7 @@ func NewControlDiscoveryRuntimeConnector(inner RuntimeConnector, controlPath str
 		return nil, invalidRuntimeClient("inner runtime connector is required")
 	}
 	if reader == nil {
-		reader = FileControlDiscoveryReader{}
+		reader = fileControlDiscoveryReader{}
 	}
 	return &ControlDiscoveryRuntimeConnector{
 		inner:       inner,

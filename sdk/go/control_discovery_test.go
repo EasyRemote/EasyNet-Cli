@@ -136,7 +136,7 @@ func TestFileControlDiscoveryReaderReadsControlJSON(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	discovery, err := FileControlDiscoveryReader{}.ReadControlDiscovery(context.Background(), path)
+	discovery, err := fileControlDiscoveryReader{}.ReadControlDiscovery(context.Background(), path)
 	if err != nil {
 		t.Fatalf("ReadControlDiscovery: %v", err)
 	}
