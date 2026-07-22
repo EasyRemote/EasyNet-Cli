@@ -8422,6 +8422,54 @@ if receipt_signing.exists():
                 "self-signed invocation signing must project caller identity from owned receipt authority",
             )
 
+self_identity = cli_root / "src/daemon/identity/self_identity.rs"
+if self_identity.exists():
+    text = source(self_identity)
+    raw_text = self_identity.read_text(encoding="utf-8", errors="replace")
+    runtime_owner_guard = "fn validate_runtime_owner_signing_ura(owner_ura: &str)"
+    for token, detail, haystack in (
+        (
+            runtime_owner_guard,
+            "RuntimeSigningIdentity must classify runtime-owner URAs before key-service lookup",
+            text,
+        ),
+        (
+            "runtime-owner signing identity does not manage User URAs; use managed user signing custody",
+            "RuntimeSigningIdentity must fail closed for User URAs instead of probing runtime-owner keyring state",
+            text,
+        ),
+        (
+            "runtime_owner_signing_identity_rejects_user_before_keyring_lookup",
+            "self_identity tests must prove User URAs do not reach the runtime-owner provider",
+            raw_text,
+        ),
+    ):
+        if token not in haystack:
+            add("R79_INVOCATION_SIGNER_CUSTODY_AUTHORITY", self_identity, 1, detail)
+    load_match = re.search(
+        r"impl\s+RuntimeSigningIdentity\s*\{(?P<body>.*?)\n\}\n\n#\[async_trait::async_trait\]",
+        text,
+        re.DOTALL,
+    )
+    if load_match is None:
+        add(
+            "R79_INVOCATION_SIGNER_CUSTODY_AUTHORITY",
+            self_identity,
+            1,
+            "RuntimeSigningIdentity impl must remain inspectable",
+        )
+    else:
+        body = load_match.group("body")
+        guard_index = body.find("validate_runtime_owner_signing_ura(owner_ura)?")
+        lookup_index = body.find("provider.public_key(owner_ura)?")
+        if guard_index < 0 or lookup_index < 0 or guard_index > lookup_index:
+            add(
+                "R79_INVOCATION_SIGNER_CUSTODY_AUTHORITY",
+                self_identity,
+                line_number(text, load_match.start()),
+                "RuntimeSigningIdentity::load must validate runtime-owner custody before provider.public_key",
+            )
+
 
 # Rule 80: Ability catalogue assembly must receive a concrete authority
 # context. Optional authority state plus unwrap/default lets daemon boot and

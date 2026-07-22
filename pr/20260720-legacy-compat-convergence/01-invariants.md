@@ -222,6 +222,11 @@
   rule may remain valid for descriptor-bound invocation, but receipt history
   observation must not expand from one user-owned session/resource subject to
   another same-owner subject before the receipt provider is called.
+- Runtime-owner signing identity and managed-user signing identity are
+  disjoint custody states. `RuntimeSigningIdentity` may bind only Agent,
+  Device, or Authority owner URAs; User URAs must enter through the managed
+  user signer resolver and must fail before any runtime-owner key-service
+  lookup if misrouted.
 - Remote-desktop session creation arguments are descriptor-bound product
   ingress, not best-effort UI preferences. Absent optional fields may select
   documented defaults, but present `mode`, TTL, `session_id`, `video`, and

@@ -2,6 +2,27 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-22 Runtime-owner signer User custody guard
+
+- `cargo test -q runtime_owner_signing_identity_rejects_user_before_keyring_lookup --lib`
+  — PASS; proves User URAs fail before the `SelfIdentity` provider is queried.
+- `cargo test -q runtime_caller_signer_resolver_does_not_fall_back_from_user_to_owner_key --lib`
+  — PASS; preserves the managed-user resolver behavior that returns
+  `managed user signing key not found` rather than legacy runtime-owner keyring
+  lookup failures.
+- `cargo test -q daemon::identity::self_identity::tests --lib` — PASS (`10`
+  tests).
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; includes
+  a negative fixture where `RuntimeSigningIdentity::load` calls
+  `provider.public_key(owner_ura)` before custody classification.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative fixture for the same runtime-owner signer User
+  custody regression.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+
 ## 2026-07-22 SDK history authority subject exact binding
 
 - `go test . -run

@@ -2,6 +2,23 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-22 runtime-owner signer User custody
+
+- Treat runtime-owner signing and managed-user signing as separate explicit
+  custody states. Agent, Device, and Authority URAs may use
+  `RuntimeSigningIdentity`; User URAs must use the managed signing inventory
+  through `load_runtime_caller_signer`.
+- Reject User URAs before provider/key-service lookup inside
+  `RuntimeSigningIdentity::load`. This turns a misrouted user caller into a
+  deterministic local custody error rather than a legacy
+  `keyring entry not found` runtime-owner lookup.
+- Keep paired-user boot provisioning in `register_paired_user_runtime_signer`.
+  That path ensures/validates the managed user key before Invocation transport
+  assembly; the new guard prevents any remaining or future direct
+  `RuntimeSigningIdentity` path from bypassing that model.
+- Add architecture and SPEC v2 gates so the runtime-owner signer cannot regain
+  arbitrary-URA behavior.
+
 ## 2026-07-22 SDK history authority subject binding
 
 - Treat `invocation.history.list` as an authority-bearing observation

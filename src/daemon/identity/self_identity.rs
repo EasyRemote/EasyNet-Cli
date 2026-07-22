@@ -177,6 +177,7 @@ impl RuntimeSigningIdentity {
         if owner_ura.is_empty() {
             return Err(SelfIdentityError::InvalidOwner);
         }
+        validate_runtime_owner_signing_ura(owner_ura)?;
         let public_key = provider.public_key(owner_ura)?;
         Ok(Self::from_public_projection(
             owner_ura, public_key, provider,
@@ -223,6 +224,31 @@ impl CanonicalSigner for RuntimeSigningIdentity {
 
     fn signing_public_key(&self) -> Result<VerifyingKey, SelfIdentityError> {
         Ok(self.public_key)
+    }
+}
+
+fn validate_runtime_owner_signing_ura(owner_ura: &str) -> Result<(), SelfIdentityError> {
+    let parsed =
+        crate::core::ura::parse_ura(owner_ura).map_err(|error| SelfIdentityError::Rejected {
+            kind: "invalid_argument".into(),
+            message: format!("runtime-owner signing identity owner URA is invalid: {error}"),
+        })?;
+    match parsed.kind {
+        crate::core::ura::URAKind::Agent
+        | crate::core::ura::URAKind::Device
+        | crate::core::ura::URAKind::Authority => Ok(()),
+        crate::core::ura::URAKind::User => Err(SelfIdentityError::Rejected {
+            kind: "invalid_argument".into(),
+            message:
+                "runtime-owner signing identity does not manage User URAs; use managed user signing custody"
+                    .into(),
+        }),
+        other => Err(SelfIdentityError::Rejected {
+            kind: "invalid_argument".into(),
+            message: format!(
+                "runtime-owner signing identity requires Agent, Device, or Authority URA, got {other:?}"
+            ),
+        }),
     }
 }
 
@@ -1271,6 +1297,58 @@ mod tests {
         fn public_key(&self, _self_ura: &str) -> Result<VerifyingKey, SelfIdentityError> {
             Ok(self.signing_key.verifying_key())
         }
+    }
+
+    struct CountingIdentity {
+        public_key_calls: Arc<Mutex<usize>>,
+    }
+
+    impl SelfIdentity for CountingIdentity {
+        fn sign(
+            &self,
+            _self_ura: &str,
+            _canonical_bytes: &[u8],
+        ) -> Result<Signature, SelfIdentityError> {
+            panic!("runtime-owner URA validation must fail before signing")
+        }
+
+        fn public_key(&self, _self_ura: &str) -> Result<VerifyingKey, SelfIdentityError> {
+            *self
+                .public_key_calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
+            Err(SelfIdentityError::Rejected {
+                kind: "provider".into(),
+                message: "provider should not be reached".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn runtime_owner_signing_identity_rejects_user_before_keyring_lookup() {
+        let calls = Arc::new(Mutex::new(0));
+        let provider: Arc<dyn SelfIdentity> = Arc::new(CountingIdentity {
+            public_key_calls: Arc::clone(&calls),
+        });
+        let error = RuntimeSigningIdentity::load("easynet:///r/acme/user/alice", provider)
+            .expect_err("User URA must not enter runtime-owner signer lookup");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("does not manage User URAs"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains("managed user signing custody"),
+            "error must direct callers to the managed-user custody model: {message}"
+        );
+        assert_eq!(
+            *calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            0,
+            "runtime-owner validation must fail before key-service provider lookup"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

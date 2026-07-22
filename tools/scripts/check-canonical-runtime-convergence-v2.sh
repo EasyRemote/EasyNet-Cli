@@ -1480,6 +1480,40 @@ if "serveExecPlugin" not in text:
 PY
 }
 
+check_runtime_owner_signer_custody_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local self_identity="$cli_root/src/daemon/identity/self_identity.rs"
+  [[ -f "$self_identity" ]] || return 0
+
+  "$PYTHON_BIN" - "$self_identity" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+for token in (
+    "fn validate_runtime_owner_signing_ura(owner_ura: &str)",
+    "runtime-owner signing identity does not manage User URAs; use managed user signing custody",
+    "runtime_owner_signing_identity_rejects_user_before_keyring_lookup",
+):
+    if token not in text:
+        raise SystemExit(f"runtime_owner_signer_custody_missing:{token}")
+
+impl = re.search(
+    r"impl\s+RuntimeSigningIdentity\s*\{(?P<body>.*?)\n\}\n\n#\[async_trait::async_trait\]",
+    text,
+    re.DOTALL,
+)
+if impl is None:
+    raise SystemExit("runtime_owner_signer_impl_not_inspectable")
+body = impl.group("body")
+guard = body.find("validate_runtime_owner_signing_ura(owner_ura)?")
+lookup = body.find("provider.public_key(owner_ura)?")
+if guard < 0 or lookup < 0 or guard > lookup:
+    raise SystemExit("runtime_owner_signer_lookup_before_custody_classification")
+PY
+}
+
 check_key_custody_boundary_contract() {
   bash "$ROOT/tools/scripts/check-daemon-key-service-boundary.sh" >/dev/null
   bash "$ROOT/tools/scripts/check-product-key-custody-boundary.sh" >/dev/null
@@ -3137,6 +3171,24 @@ EOF
   if ( CLI_ROOT="$tmp/cli-sidecar-template"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
     fail "self-test expected naked sidecar frame template gate to fail"
   fi
+  mkdir -p "$tmp/runtime-owner-signer-legacy/src/daemon/identity"
+  printf '%s\n' \
+    'pub struct RuntimeSigningIdentity;' \
+    'impl RuntimeSigningIdentity {' \
+    '  pub fn load(owner_ura: impl Into<String>, provider: Arc<dyn SelfIdentity>) -> Result<Self, SelfIdentityError> {' \
+    '    let owner_ura = owner_ura.into();' \
+    '    let owner_ura = owner_ura.trim();' \
+    '    if owner_ura.is_empty() { return Err(SelfIdentityError::InvalidOwner); }' \
+    '    let public_key = provider.public_key(owner_ura)?;' \
+    '    Ok(Self::from_public_projection(owner_ura, public_key, provider))' \
+    '  }' \
+    '}' \
+    '#[async_trait::async_trait]' \
+    'impl CanonicalSigner for RuntimeSigningIdentity {}' \
+    > "$tmp/runtime-owner-signer-legacy/src/daemon/identity/self_identity.rs"
+  if ( CLI_ROOT="$tmp/runtime-owner-signer-legacy"; check_runtime_owner_signer_custody_contract ) >/dev/null 2>&1; then
+    fail "self-test expected runtime-owner signer User custody gate to fail"
+  fi
   run_ura_vocabulary_self_test "$tmp/ura-vocabulary"
   cp -R "$tmp/axon" "$tmp/axon-uri-vector"
   mkdir -p "$tmp/axon-uri-vector/packaging/protocol-pack/conformance-vectors"
@@ -3550,6 +3602,7 @@ EOF
   check_ffi_descriptor_runtime_owner_contract
   check_daemon_runtime_assembly_contract
   check_plugin_sidecar_helper_matrix_contract
+  check_runtime_owner_signer_custody_contract
   check_key_custody_boundary_contract
   check_daemon_mission_eal_boundary_contract
   check_ura_vocabulary_contract
@@ -3600,6 +3653,7 @@ check_route_resolver_descriptor_ref_selector_contract
 check_ffi_descriptor_runtime_owner_contract
 check_daemon_runtime_assembly_contract
 check_plugin_sidecar_helper_matrix_contract
+check_runtime_owner_signer_custody_contract
 check_key_custody_boundary_contract
 check_daemon_mission_eal_boundary_contract
 check_ura_vocabulary_contract

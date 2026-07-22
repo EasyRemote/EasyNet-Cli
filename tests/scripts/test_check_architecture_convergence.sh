@@ -5907,6 +5907,29 @@ expect_fail \
   "R79_INVOCATION_SIGNER_CUSTODY_AUTHORITY"
 
 make_good_fixture
+cat >"$CLI/src/daemon/identity/self_identity.rs" <<'EOF'
+pub struct RuntimeSigningIdentity;
+
+impl RuntimeSigningIdentity {
+    pub fn load(
+        owner_ura: impl Into<String>,
+        provider: Arc<dyn SelfIdentity>,
+    ) -> Result<Self, SelfIdentityError> {
+        let owner_ura = owner_ura.into();
+        let owner_ura = owner_ura.trim();
+        if owner_ura.is_empty() {
+            return Err(SelfIdentityError::InvalidOwner);
+        }
+        let public_key = provider.public_key(owner_ura)?;
+        Ok(Self::from_public_projection(owner_ura, public_key, provider))
+    }
+}
+EOF
+expect_fail \
+  "runtime owner signer accepts user ura fallback" \
+  "R79_INVOCATION_SIGNER_CUSTODY_AUTHORITY"
+
+make_good_fixture
 cat >"$CLI/src/daemon/ability/catalog/build.rs" <<'EOF'
 pub struct RegistryBuildConfig {
     pub authority_context: Option<AbilityAuthorityContext>,

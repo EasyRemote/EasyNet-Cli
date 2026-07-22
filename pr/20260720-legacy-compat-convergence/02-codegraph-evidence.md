@@ -2,6 +2,31 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-22 Runtime-owner signer User custody audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was
+  up to date for the current checkout before this slice.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  ensure_managed_signing_key ensure_paired_user_signing ensure_runtime_trust
+  sync_paired_user_trust_prelude RuntimeSigningIdentity load_default
+  KeyringClient inventory_list` identified `RuntimeSigningIdentity`,
+  `RuntimeCallerSignerResolver`, and managed inventory lookup as the signer
+  custody seam behind product-facing "requires a caller signer" failures.
+- Targeted source inspection showed `start_daemon_invocation_transport` already
+  calls `register_paired_user_runtime_signer` before Invocation transport
+  assembly, and `ensure_user_runtime_signing_identity` validates purpose,
+  `Active` status, exact `bound_subject`, non-empty key id, public key decode,
+  and purpose-aware signer policy.
+- The remaining root abstraction problem was that
+  `RuntimeSigningIdentity::load_default/load` still accepted arbitrary URA
+  strings. A misrouted User URA therefore reached the runtime-owner keyring
+  lookup and surfaced as `keyring entry not found: <user>`, instead of failing
+  in the canonical managed-user custody state.
+- After the change, `RuntimeSigningIdentity::load` validates the owner URA as
+  Agent, Device, or Authority before `provider.public_key(...)`. User URAs are
+  rejected with an explicit managed-user custody error and never touch the
+  runtime-owner key-service lookup.
+
 ## 2026-07-22 SDK history authority subject expansion audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index is up
