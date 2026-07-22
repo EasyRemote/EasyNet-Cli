@@ -2304,3 +2304,22 @@ Evidence will be appended after indexing and focused impact queries.
   credential classifier for device-owner projection; bootstrap authority has
   an explicit `Unavailable` state and policy principal construction returns
   `Result<PrincipalProjection, Status>`.
+
+## 2026-07-22 Node session authority subject-binding audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph callers mintSessionAuthority`
+  showed the session-authority minting seam lives in SDK authority clients and
+  tests, while daemon admission only verifies the resulting metadata.
+- `/Users/macbook.silan.tech/.local/bin/codegraph query SessionAuthorityPayload`
+  showed Rust admission owns strict subject-shape validation for
+  `SessionAuthorityPayload`.
+- `rg -n "sessionOwnerUserID|session_owner_user_id|subject_ura|SessionAuthority"
+  sdk/node sdk/go sdk/python src -S --glob '!sdk/node/node_modules/**'`
+  showed Go/Python already normalize session-owner user identity against
+  canonical user subjects, while Node still stopped at all-zero/string checks.
+- Root abstraction problem: Node treated typed session authority as shape-valid
+  metadata even when its subject could never pass daemon admission, pushing
+  deterministic authority failures into product runtime calls.
+- Boundary decision: Node now classifies session authority subject semantics at
+  the SDK facade boundary using the same canonical subject cases as daemon
+  admission: user subject or user-owned session resource.

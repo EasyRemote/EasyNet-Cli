@@ -821,3 +821,15 @@ Decisions will be appended as root-fork choices are made.
 - Make device principal construction fallible for malformed local credentials
   while preserving trust-anchor owner facts and missing-credentials first-run
   behavior.
+
+## 2026-07-22 Node session authority subject binding
+
+- Treat session authority subject binding as canonical SDK runtime validation,
+  not product-specific defensive code. Node now rejects metadata/request payloads
+  whose subject cannot be a daemon-admissible user subject or user-owned session
+  resource.
+- Preserve the public Node SDK API. The refactor adds internal semantic
+  validation only; callers still construct `SessionAuthority` and
+  `SessionAuthorityRequest` with the existing fields.
+- Add a SPEC v2 guard and focused Node test so the SDK cannot regress to
+  all-zero-only authority validation.

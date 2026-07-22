@@ -330,3 +330,7 @@
   may treat absent credentials as no local owner fact, but malformed existing
   credentials must propagate as unavailable identity state through both
   bootstrap authority and policy principal construction.
+- Session authority subject binding is part of the canonical SDK runtime model,
+  not a daemon-only admission concern. Each SDK must reject session authority
+  whose subject is not a canonical user subject or canonical user-owned session
+  resource bound to the same `session_owner_user_id` and `session_id`.

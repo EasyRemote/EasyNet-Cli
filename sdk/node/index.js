@@ -2216,6 +2216,11 @@ function validateSessionAuthority(authority) {
   if (authority.signature.length === 0) {
     throw invalidAuthority("session authority signature is required");
   }
+  validateSessionAuthoritySubjectBinding(
+    authority.subjectURA,
+    authority.sessionOwnerUserID,
+    authority.sessionID,
+  );
 }
 
 function validateDelegationRequest(request) {
@@ -2244,6 +2249,63 @@ function validateSessionAuthorityRequest(request) {
     throw invalidAuthority("session authority expires_at_ms must be greater than issued_at_ms");
   }
   rejectAuthorityPrivateKeyMetadata(request.metadata);
+  validateSessionAuthoritySubjectBinding(
+    request.subjectURA,
+    request.sessionOwnerUserID,
+    request.sessionID,
+  );
+}
+
+function validateSessionAuthoritySubjectBinding(subjectURA, sessionOwnerUserID, sessionID) {
+  const subject = canonicalAuthoritySubject(subjectURA);
+  if (!subject || (subject.kind !== "user" && subject.kind !== "session")) {
+    throw invalidAuthority("session authority subject_ura must be a canonical user or session subject");
+  }
+  const owner = String(sessionOwnerUserID ?? "").trim();
+  if (subject.ownerUserID !== owner) {
+    throw invalidAuthority("session authority user subject must match session_owner_user_id");
+  }
+  if (subject.kind === "session" && subject.sessionID !== String(sessionID ?? "").trim()) {
+    throw invalidAuthority(
+      "session authority subject_ura owner/session must match session_owner_user_id and session_id",
+    );
+  }
+}
+
+function canonicalAuthoritySubject(subjectURA) {
+  const raw = String(subjectURA ?? "").trim();
+  const realmPrefix = "easynet:///r/";
+  if (!raw.startsWith(realmPrefix)) {
+    return null;
+  }
+  const rest = raw.slice(realmPrefix.length);
+  const slash = rest.indexOf("/");
+  if (slash <= 0) {
+    return null;
+  }
+  const path = rest.slice(slash + 1);
+  if (path.startsWith("user/")) {
+    const ownerUserID = path.slice("user/".length).trim();
+    if (!ownerUserID || ownerUserID.includes("/")) {
+      return null;
+    }
+    return { kind: "user", ownerUserID };
+  }
+  if (!path.startsWith("resource/user.")) {
+    return null;
+  }
+  const resource = path.slice("resource/user.".length);
+  const sessionMarker = "/session/";
+  const sessionIndex = resource.indexOf(sessionMarker);
+  if (sessionIndex <= 0) {
+    return null;
+  }
+  const ownerUserID = resource.slice(0, sessionIndex).trim();
+  const sessionID = resource.slice(sessionIndex + sessionMarker.length).trim();
+  if (!ownerUserID || ownerUserID.includes("/") || !sessionID || sessionID.includes("/")) {
+    return null;
+  }
+  return { kind: "session", ownerUserID, sessionID };
 }
 
 function rejectAllZeroAuthorityFields(fields) {

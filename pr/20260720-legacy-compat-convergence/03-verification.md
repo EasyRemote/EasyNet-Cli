@@ -2579,3 +2579,23 @@ Commands and outcomes will be appended after implementation.
   tools/scripts/check-architecture-convergence.sh` — PASS.
 - `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
 - `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+
+## 2026-07-22 Node session authority subject binding
+
+- `node --test sdk/node/test/runtime-core.test.mjs` — PASS (`12 passed`);
+  covers valid typed authority metadata, all-zero owner rejection, mismatched
+  user subject rejection, mismatched user-session resource rejection, and
+  request-side rejection of device subjects.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative fixture for the retired all-zero-only Node
+  session authority validator.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; synced
+  Node SDK/test changes and left the index up to date.
+- `git diff --check` — PASS.

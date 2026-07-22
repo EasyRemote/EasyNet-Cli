@@ -746,6 +746,76 @@ if facade and "BootstrapAuthorityDecision::Unavailable { message }" not in facad
 PY
 }
 
+check_node_session_authority_subject_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local node="$cli_root/sdk/node/index.js"
+  local test="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  [[ -f "$node" ]] || return 0
+
+  "$PYTHON_BIN" - "$node" "$test" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+node = Path(sys.argv[1]).read_text()
+test = Path(sys.argv[2]).read_text() if Path(sys.argv[2]).exists() else ""
+
+for required in (
+    "function validateSessionAuthoritySubjectBinding(",
+    "function canonicalAuthoritySubject(",
+    "session authority subject_ura must be a canonical user or session subject",
+    "session authority user subject must match session_owner_user_id",
+    "session authority subject_ura owner/session must match session_owner_user_id and session_id",
+):
+    if required not in node:
+        raise SystemExit(f"node_session_authority_subject_contract_missing:{required}")
+
+def body_after(marker: str, next_marker: str) -> str:
+    start = node.find(marker)
+    if start < 0:
+        raise SystemExit(f"node_session_authority_subject_contract_missing:{marker}")
+    end = node.find(next_marker, start + len(marker))
+    return node[start : end if end >= 0 else len(node)]
+
+authority_body = body_after(
+    "function validateSessionAuthority(authority)",
+    "function validateDelegationRequest",
+)
+request_body = body_after(
+    "function validateSessionAuthorityRequest(request)",
+    "function validateSessionAuthoritySubjectBinding",
+)
+for name, body in (
+    ("authority", authority_body),
+    ("request", request_body),
+):
+    if "validateSessionAuthoritySubjectBinding(" not in body:
+        raise SystemExit(f"node_session_authority_{name}_does_not_validate_subject_binding")
+    if "rejectAllZeroAuthorityFields(" in body and "validateSessionAuthoritySubjectBinding(" not in body:
+        raise SystemExit(f"node_session_authority_{name}_stops_at_all_zero_guard")
+
+subject_body = body_after(
+    "function canonicalAuthoritySubject(subjectURA)",
+    "function rejectAllZeroAuthorityFields",
+)
+for token in (
+    '"user/"',
+    '"resource/user."',
+    '"/session/"',
+):
+    if token not in subject_body:
+        raise SystemExit(f"node_session_authority_subject_classifier_missing:{token}")
+
+for required_test in (
+    "authority metadata binds session subject to owner and session id",
+    "easynet:///r/example/user/bob",
+    "easynet:///r/example/resource/user.alice/session/session-2",
+):
+    if required_test not in test:
+        raise SystemExit(f"missing_node_session_authority_subject_test:{required_test}")
+PY
+}
+
 check_device_settings_loader_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local config="$cli_root/src/daemon/persistence/config.rs"
@@ -2954,6 +3024,24 @@ EOF
   if ( check_shared_local_device_owner_projection_contract "$tmp/shared-local-owner-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected shared local device owner fallback gate to fail"
   fi
+  mkdir -p "$tmp/node-session-authority-legacy/sdk/node/test"
+  printf '%s\n' \
+    'function validateSessionAuthority(authority) {' \
+    '  rejectAllZeroAuthorityFields({ session_owner_user_id: authority.sessionOwnerUserID, subject_ura: authority.subjectURA });' \
+    '  if (authority.signature.length === 0) throw invalidAuthority("session authority signature is required");' \
+    '}' \
+    'function validateSessionAuthorityRequest(request) {' \
+    '  rejectAllZeroAuthorityFields({ session_owner_user_id: request.sessionOwnerUserID, subject_ura: request.subjectURA });' \
+    '  rejectAuthorityPrivateKeyMetadata(request.metadata);' \
+    '}' \
+    'function sessionAuthorityAdmitsSubject(authority, subjectURA) { return authority.subjectURA.trim() === subjectURA.trim(); }' \
+    > "$tmp/node-session-authority-legacy/sdk/node/index.js"
+  printf '%s\n' \
+    'test("authority metadata rejects all-zero session owners", () => {});' \
+    > "$tmp/node-session-authority-legacy/sdk/node/test/runtime-core.test.mjs"
+  if ( check_node_session_authority_subject_contract "$tmp/node-session-authority-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected Node session authority subject-binding gate to fail"
+  fi
   mkdir -p "$tmp/device-settings-legacy/src/daemon/persistence" \
     "$tmp/device-settings-legacy/src/cli/commands"
   printf '%s\n' \
@@ -3004,6 +3092,7 @@ EOF
   check_runtime_trust_revoke_credentials_contract
   check_admission_owner_credentials_contract
   check_shared_local_device_owner_projection_contract
+  check_node_session_authority_subject_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_edge_adapter_policy_contract
@@ -3048,6 +3137,7 @@ check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_admission_owner_credentials_contract
 check_shared_local_device_owner_projection_contract
+check_node_session_authority_subject_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_edge_adapter_policy_contract

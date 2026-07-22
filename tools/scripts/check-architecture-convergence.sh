@@ -6837,6 +6837,14 @@ if node_sdk.exists():
             "Node SDK must mirror daemon session subject-admission semantics",
         ),
         (
+            "function validateSessionAuthoritySubjectBinding(",
+            "Node SDK must validate session authority subject ownership before metadata is accepted",
+        ),
+        (
+            "function canonicalAuthoritySubject(",
+            "Node SDK must classify canonical user/session subjects before transport",
+        ),
+        (
             "function authorityScopesAdmit(patterns, ability)",
             "Node SDK must validate authority scopes against ability view",
         ),
