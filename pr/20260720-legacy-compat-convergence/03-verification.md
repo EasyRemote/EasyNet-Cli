@@ -2724,6 +2724,22 @@ Commands and outcomes will be appended after implementation.
   codegraph `status` reports `Index is up to date` with 35,291 nodes and
   135,427 edges.
 
+## 2026-07-22 Daemon exact-route descriptor-ref projection
+
+- `cargo test -q -p easynet --lib route_table_ --features axon-pb` — PASS
+  (`3 passed`); covers descriptor-ref projection, malformed descriptor-ref
+  fail-closed behavior, and descriptor owner mismatch rejection.
+- `cargo test -q -p easynet --lib
+  malformed_descriptor_ref_does_not_fall_through_as_public_name --features
+  axon-pb` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative fixture for daemon exact-route descriptor
+  projection fallback.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
+  codegraph `status` reports `Index is up to date` with 35,295 nodes and
+  135,449 edges.
+
 ## 2026-07-22 Canonical ability catalog projection
 
 - `cargo test -q -p easynet --lib

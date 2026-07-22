@@ -358,31 +358,56 @@ pub(crate) const DAEMON_INVOCATION_BIDI_ROUTES: &[DaemonBidiRoute] = DaemonBidiR
 pub(crate) fn dispatch_function_name_for_route_table(
     function_name: &str,
     envelope: Option<&axon_sdk::pb::axon::v1::Envelope>,
-) -> String {
+) -> Result<String, Status> {
+    if !is_descriptor_ref_route_token(function_name) {
+        return Ok(function_name.to_string());
+    }
     descriptor_ref_public_name_for_callee(function_name, envelope)
-        .unwrap_or_else(|| function_name.to_string())
 }
 
 fn descriptor_ref_public_name_for_callee(
     function_name: &str,
     envelope: Option<&axon_sdk::pb::axon::v1::Envelope>,
-) -> Option<String> {
-    let callee_ura = envelope?
+) -> Result<String, Status> {
+    let callee_ura = envelope
+        .ok_or_else(|| {
+            Status::invalid_argument(
+                "daemon route descriptor_ref projection requires invocation envelope",
+            )
+        })?
         .callee
         .as_ref()
         .map(|callee| callee.ura.trim())
-        .filter(|callee| !callee.is_empty())?;
-    let descriptor_ref =
-        axon_sdk::invocation::canonical_ability_descriptor_ref(function_name).ok()?;
-    let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
-        &descriptor_ref,
-    )
-    .ok()?;
-    let selector = crate::core::ura::AbilitySelector::parse(&ability_ura).ok()?;
+        .filter(|callee| !callee.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument(
+                "daemon route descriptor_ref projection requires envelope callee_ura",
+            )
+        })?;
+    let selector =
+        crate::daemon::axon_bridge::descriptor_ref::ability_selector_from_descriptor_ref(
+            function_name,
+        )
+        .map_err(|error| {
+            Status::invalid_argument(format!(
+                "daemon route descriptor_ref selector projection failed: {error}"
+            ))
+        })?;
     if selector.owner_ura() != callee_ura {
-        return None;
+        return Err(Status::invalid_argument(format!(
+            "daemon route descriptor_ref owner `{}` does not match envelope callee `{callee_ura}`",
+            selector.owner_ura()
+        )));
     }
-    Some(selector.public_name().to_string())
+    Ok(selector.public_name().to_string())
+}
+
+fn is_descriptor_ref_route_token(function_name: &str) -> bool {
+    let function_name = function_name.trim();
+    function_name.starts_with("easynet:///")
+        || function_name.contains('@')
+        || function_name.contains('#')
+        || function_name.contains('!')
 }
 
 fn missing_invocation_attempt_ledger() -> Status {
@@ -1326,7 +1351,15 @@ impl Invocation for DaemonInvocationService {
             }
         };
         let route_function =
-            dispatch_function_name_for_route_table(function, inner.envelope.as_ref());
+            match dispatch_function_name_for_route_table(function, inner.envelope.as_ref()) {
+                Ok(route_function) => route_function,
+                Err(status) => {
+                    attempt
+                        .reject_status("descriptor_ref_route_projection", &status)
+                        .map_err(invocation_attempt_audit_status)?;
+                    return Err(status);
+                }
+            };
         let daemon_route = DaemonUnaryRoute::from_function(&route_function);
         let daemon_route_ingress = match daemon_route
             .map(|route| self.daemon_route_ingress(route, &inner))
@@ -1406,7 +1439,15 @@ impl Invocation for DaemonInvocationService {
             }
         };
         let route_function =
-            dispatch_function_name_for_route_table(function, inner.envelope.as_ref());
+            match dispatch_function_name_for_route_table(function, inner.envelope.as_ref()) {
+                Ok(route_function) => route_function,
+                Err(status) => {
+                    attempt
+                        .reject_status("descriptor_ref_route_projection", &status)
+                        .map_err(invocation_attempt_audit_status)?;
+                    return Err(status);
+                }
+            };
 
         let streams = self.stream_dispatcher();
         let result = match DaemonStreamRoute::from_function(&route_function) {

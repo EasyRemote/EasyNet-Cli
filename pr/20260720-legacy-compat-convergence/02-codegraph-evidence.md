@@ -2559,3 +2559,25 @@ Evidence will be appended after indexing and focused impact queries.
   `session_authority_admits_subject` helper. It accepts exact subject equality
   and user/agent resource ownership only from parsed URA `owner_id`, matching
   the Go SDK helper and rejecting path substring ownership.
+
+## 2026-07-22 Daemon exact-route descriptor-ref projection audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph callers
+  dispatch_function_name_for_route_table` showed the descriptor-ref projection
+  feeds unary and server-stream exact route selection in
+  `DaemonInvocationService`.
+- `rg -n "canonical_ability_descriptor_ref\\(function_name\\)\\.ok\\(\\)\\?|
+  AbilitySelector::parse\\(&ability_ura\\)\\.ok\\(\\)\\?"
+  src/daemon/invocation/dispatch/daemon_invocation_service.rs
+  src/daemon/invocation/routing/route_resolver.rs` showed the main route
+  resolver already rejects malformed descriptor selectors, while daemon exact
+  route dispatch still collapsed selector failures into `None`.
+- Root abstraction problem: descriptor-ref route selection existed in two
+  implementations. The main route resolver had a fallible selector state
+  machine; daemon exact-route dispatch had a best-effort public-name projection
+  that allowed malformed descriptor refs or owner mismatches to fall through as
+  plain route names.
+- Boundary decision: `daemon::axon_bridge::descriptor_ref` now owns the shared
+  `ability_selector_from_descriptor_ref` helper. Both route resolver and
+  daemon exact-route dispatch use this shared selector, and descriptor-like
+  route tokens fail with `InvalidArgument` before route-table fallback.

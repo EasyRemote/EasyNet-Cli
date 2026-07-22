@@ -58,6 +58,17 @@ pub(crate) fn ability_ura_from_descriptor_ref(descriptor_ref: &str) -> Result<St
     axon_ability_ura_from_descriptor_ref(&canonical).map(str::to_string)
 }
 
+pub(crate) fn ability_selector_from_descriptor_ref(
+    descriptor_ref: &str,
+) -> Result<crate::core::ura::AbilitySelector, AxonError> {
+    let ability_ura = ability_ura_from_descriptor_ref(descriptor_ref)?;
+    crate::core::ura::AbilitySelector::parse(&ability_ura).map_err(|error| {
+        AxonError::invalid_argument(format!(
+            "descriptor_ref ability selector parse failed: {error}"
+        ))
+    })
+}
+
 pub(crate) fn descriptor_version_from_descriptor_ref(
     descriptor_ref: &str,
 ) -> Result<String, AxonError> {

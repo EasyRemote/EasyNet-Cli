@@ -1445,25 +1445,12 @@ fn ability_selector_from_descriptor_ref(
     descriptor_ref: &str,
 ) -> Result<crate::core::ura::AbilitySelector, ResolveRouteFailure> {
     let query_name = descriptor_ref.trim().to_string();
-    let descriptor_ref = axon_sdk::invocation::canonical_ability_descriptor_ref(descriptor_ref)
+    crate::daemon::axon_bridge::descriptor_ref::ability_selector_from_descriptor_ref(descriptor_ref)
         .map_err(|error| ResolveRouteFailure {
-            query_name: query_name.clone(),
+            query_name,
             reason: NegativeReason::Refused,
-            detail: format!("descriptor_ref canonicalization failed: {error}"),
-        })?;
-    let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
-        &descriptor_ref,
-    )
-    .map_err(|error| ResolveRouteFailure {
-        query_name: query_name.clone(),
-        reason: NegativeReason::Refused,
-        detail: format!("descriptor_ref ability URA extraction failed: {error}"),
-    })?;
-    crate::core::ura::AbilitySelector::parse(&ability_ura).map_err(|error| ResolveRouteFailure {
-        query_name,
-        reason: NegativeReason::Refused,
-        detail: format!("descriptor_ref ability selector parse failed: {error}"),
-    })
+            detail: format!("descriptor_ref selector projection failed: {error}"),
+        })
 }
 
 fn selected_execution_for_owner(
@@ -2317,7 +2304,7 @@ mod tests {
             assert!(
                 failure
                     .detail
-                    .contains("descriptor_ref canonicalization failed"),
+                    .contains("descriptor_ref selector projection failed"),
                 "unexpected failure detail: {}",
                 failure.detail
             );

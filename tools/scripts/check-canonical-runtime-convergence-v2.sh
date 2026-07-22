@@ -1288,6 +1288,93 @@ for required_test in (
 PY
 }
 
+check_daemon_invocation_service_descriptor_ref_route_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local service="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
+  local tests="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"
+  local descriptor_ref="$cli_root/src/daemon/axon_bridge/descriptor_ref.rs"
+  [[ -f "$service" ]] || fail "daemon invocation service source is missing: $service"
+  [[ -f "$tests" ]] || fail "daemon invocation service tests are missing: $tests"
+  [[ -f "$descriptor_ref" ]] || fail "descriptor_ref bridge source is missing: $descriptor_ref"
+
+  "$PYTHON_BIN" - "$service" "$tests" "$descriptor_ref" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+service_path, tests_path, descriptor_ref_path = map(Path, sys.argv[1:])
+service = service_path.read_text(encoding="utf-8")
+tests = tests_path.read_text(encoding="utf-8")
+descriptor_ref = descriptor_ref_path.read_text(encoding="utf-8")
+production = service.split("\n#[cfg(test)]", 1)[0]
+
+def function_slice(text: str, name: str, next_name: str | None = None) -> tuple[str, str]:
+    marker = f"fn {name}"
+    start = text.find(marker)
+    if start < 0:
+        raise SystemExit(f"daemon_invocation_service_descriptor_projection:{name}:missing")
+    brace = text.find("{", start)
+    if brace < 0:
+        raise SystemExit(f"daemon_invocation_service_descriptor_projection:{name}:body_missing")
+    signature = text[start:brace]
+    if next_name is not None:
+        end = text.find(f"\nfn {next_name}", brace)
+        if end < 0:
+            end = len(text)
+    else:
+        end = len(text)
+    return signature, text[brace:end]
+
+dispatch_signature, dispatch_body = function_slice(
+    production,
+    "dispatch_function_name_for_route_table",
+    "descriptor_ref_public_name_for_callee",
+)
+projection_signature, projection_body = function_slice(
+    production,
+    "descriptor_ref_public_name_for_callee",
+    "is_descriptor_ref_route_token",
+)
+
+if "Result<String, Status>" not in dispatch_signature:
+    raise SystemExit("daemon_invocation_service_descriptor_projection:dispatch_not_fallible")
+if "is_descriptor_ref_route_token(function_name)" not in dispatch_body:
+    raise SystemExit("daemon_invocation_service_descriptor_projection:descriptor_token_gate_missing")
+if "Result<String, Status>" not in projection_signature:
+    raise SystemExit("daemon_invocation_service_descriptor_projection:projection_not_fallible")
+for required in (
+    "ability_selector_from_descriptor_ref(",
+    "descriptor_ref selector projection failed",
+    "does not match envelope callee",
+):
+    if required not in projection_body:
+        raise SystemExit(f"daemon_invocation_service_descriptor_projection:missing:{required}")
+compact_projection = re.sub(r"\s+", "", projection_body)
+for pattern, label in {
+    "canonical_ability_descriptor_ref(function_name).ok()?": "canonicalization_none",
+    "ability_ura_from_descriptor_ref(&descriptor_ref).ok()?": "ability_extraction_none",
+    "AbilitySelector::parse(&ability_ura).ok()?": "selector_parse_none",
+    ".ok()?": "option_question_fallback",
+}.items():
+    if re.sub(r"\s+", "", pattern) in compact_projection:
+        raise SystemExit(f"daemon_invocation_service_descriptor_projection:{label}")
+
+if "descriptor_ref_route_projection" not in service:
+    raise SystemExit("daemon_invocation_service_descriptor_projection:audit_stage_missing")
+if "return Err(status);" not in service:
+    raise SystemExit("daemon_invocation_service_descriptor_projection:callsite_return_missing")
+
+if "pub(crate) fn ability_selector_from_descriptor_ref(" not in descriptor_ref:
+    raise SystemExit("daemon_invocation_service_descriptor_projection:shared_helper_missing")
+for required_test in (
+    "route_table_rejects_malformed_descriptor_ref_before_name_fallback",
+    "route_table_rejects_descriptor_ref_owner_mismatch_before_name_fallback",
+):
+    if required_test not in tests:
+        raise SystemExit(f"daemon_invocation_service_descriptor_projection:missing_test:{required_test}")
+PY
+}
+
 check_ffi_descriptor_runtime_owner_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
@@ -3152,6 +3239,35 @@ EOF
   if ( CLI_ROOT="$tmp/cli-route-selector-legacy"; check_route_resolver_descriptor_ref_selector_contract ) >/dev/null 2>&1; then
     fail "self-test expected route descriptor-ref selector fallback gate to fail"
   fi
+  mkdir -p "$tmp/cli-daemon-route-projection-legacy/src/daemon/invocation/dispatch" \
+    "$tmp/cli-daemon-route-projection-legacy/src/daemon/axon_bridge"
+  cat >"$tmp/cli-daemon-route-projection-legacy/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'EOF'
+pub(crate) fn dispatch_function_name_for_route_table(function_name: &str, envelope: Option<&Envelope>) -> String {
+    descriptor_ref_public_name_for_callee(function_name, envelope).unwrap_or_else(|| function_name.to_string())
+}
+
+fn descriptor_ref_public_name_for_callee(function_name: &str, envelope: Option<&Envelope>) -> Option<String> {
+    let callee_ura = envelope?.callee.as_ref().map(|callee| callee.ura.trim()).filter(|callee| !callee.is_empty())?;
+    let descriptor_ref = axon_sdk::invocation::canonical_ability_descriptor_ref(function_name).ok()?;
+    let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(&descriptor_ref).ok()?;
+    let selector = crate::core::ura::AbilitySelector::parse(&ability_ura).ok()?;
+    if selector.owner_ura() != callee_ura {
+        return None;
+    }
+    Some(selector.public_name().to_string())
+}
+
+fn missing_invocation_attempt_ledger() {}
+EOF
+  printf '%s\n' \
+    'fn route_table_match_projects_descriptor_ref_to_public_name() {}' \
+    > "$tmp/cli-daemon-route-projection-legacy/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"
+  printf '%s\n' \
+    'pub(crate) fn ability_ura_from_descriptor_ref(descriptor_ref: &str) -> Result<String, AxonError> { Ok(String::new()) }' \
+    > "$tmp/cli-daemon-route-projection-legacy/src/daemon/axon_bridge/descriptor_ref.rs"
+  if ( CLI_ROOT="$tmp/cli-daemon-route-projection-legacy"; check_daemon_invocation_service_descriptor_ref_route_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected daemon invocation service descriptor projection fallback gate to fail"
+  fi
   mkdir -p "$tmp/cli-ffi-descriptor-owner-legacy/src/ffi/invocation"
   cat >"$tmp/cli-ffi-descriptor-owner-legacy/src/ffi/invocation/mod.rs" <<'EOF'
 fn descriptor_resolution_error_projection(message: &str) -> (i32, ErrorProjection) {
@@ -3837,6 +3953,7 @@ EOF
   check_daemon_tuple_route_contract
   check_daemon_runtime_route_inventory_contract
   check_route_resolver_descriptor_ref_selector_contract
+  check_daemon_invocation_service_descriptor_ref_route_projection_contract
   check_ffi_descriptor_runtime_owner_contract
   check_canonical_ability_catalog_projection_contract
   check_daemon_runtime_assembly_contract
@@ -3890,6 +4007,7 @@ check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
 check_daemon_runtime_route_inventory_contract
 check_route_resolver_descriptor_ref_selector_contract
+check_daemon_invocation_service_descriptor_ref_route_projection_contract
 check_ffi_descriptor_runtime_owner_contract
 check_canonical_ability_catalog_projection_contract
 check_daemon_runtime_assembly_contract

@@ -705,8 +705,45 @@ fn route_table_match_projects_descriptor_ref_to_public_name() {
     let envelope = test_envelope();
 
     assert_eq!(
-        dispatch_function_name_for_route_table(&descriptor_ref, Some(&envelope)),
+        dispatch_function_name_for_route_table(&descriptor_ref, Some(&envelope))
+            .expect("descriptor ref route table projection"),
         ability
+    );
+}
+
+#[test]
+fn route_table_rejects_malformed_descriptor_ref_before_name_fallback() {
+    let envelope = test_envelope();
+    let error = dispatch_function_name_for_route_table(
+        "easynet:///r/test-realm/ability/device.test-daemon.federation.resolve",
+        Some(&envelope),
+    )
+    .expect_err("malformed descriptor refs must not fall back to public-name lookup");
+
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert!(
+        error
+            .message()
+            .contains("descriptor_ref selector projection failed"),
+        "unexpected route-table descriptor error: {error}"
+    );
+}
+
+#[test]
+fn route_table_rejects_descriptor_ref_owner_mismatch_before_name_fallback() {
+    let ability =
+        crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_RESOLVE;
+    let other_owner = crate::core::ura::device_ura("test-realm", "other-daemon");
+    let descriptor_ref = test_descriptor_ref(&other_owner, ability);
+    let envelope = test_envelope();
+
+    let error = dispatch_function_name_for_route_table(&descriptor_ref, Some(&envelope))
+        .expect_err("descriptor owner mismatch must not fall back to selected-route lookup");
+
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert!(
+        error.message().contains("does not match envelope callee"),
+        "unexpected route-table owner mismatch error: {error}"
     );
 }
 

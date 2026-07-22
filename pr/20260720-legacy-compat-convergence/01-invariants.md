@@ -391,3 +391,7 @@
   admission may only inspect the parsed `owner_id` component; path substring
   matches such as nested `resource/user.<owner>/...` fragments are not
   authority facts and must fail before descriptor resolution or dispatch.
+- Daemon exact-route dispatch treats descriptor refs as a typed route selector,
+  not a function-name alias. Malformed descriptor refs, descriptor selector
+  projection failures, and descriptor-owner/envelope-callee mismatches must
+  fail before route table lookup or selected-route fallback.

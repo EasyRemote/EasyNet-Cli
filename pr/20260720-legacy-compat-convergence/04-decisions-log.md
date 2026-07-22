@@ -968,3 +968,14 @@ Decisions will be appended as root-fork choices are made.
   not make SDK-side authorization diverge from Go.
 - Add a shared internal Python helper so runtime ability calls and authorized
   runtime sessions use the same subject-admission rule.
+
+## 2026-07-22 Daemon exact-route descriptor-ref projection
+
+- Treat descriptor-like route tokens as typed descriptor refs. They must parse
+  into an `AbilitySelector` and match the envelope callee before exact route
+  lookup.
+- Preserve public function-name behavior for non-descriptor route tokens.
+  Existing plain ability names still route by exact public name.
+- Move descriptor-ref selector projection into
+  `daemon::axon_bridge::descriptor_ref` so daemon exact routes and the main
+  route resolver cannot drift into separate selector semantics.
