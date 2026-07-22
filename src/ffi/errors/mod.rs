@@ -107,7 +107,7 @@ thread_local! {
 
 struct LastErrorRecord {
     message: CString,
-    code: Option<i32>,
+    code: i32,
     projection: Option<ErrorProjection>,
 }
 
@@ -118,20 +118,12 @@ pub(crate) struct ErrorProjection {
     pub(crate) retry: &'static str,
 }
 
-/// Record an error message for later retrieval by
-/// `easynet_last_error_json`. Called internally from exported functions
-/// immediately before returning a non-zero code.
-#[cfg(test)]
-pub(crate) fn set_last_error(msg: impl Into<String>) {
-    set_last_error_record(None, None, msg);
-}
-
 /// Record an error code plus message for typed error projection.
 /// Existing C ABI callers still branch on the returned integer; this
 /// helper lets newer bindings also retrieve a schema-backed JSON DTO
 /// without parsing the human-readable last-error string.
 pub(crate) fn set_last_error_code(code: i32, msg: impl Into<String>) {
-    set_last_error_record(Some(code), None, msg);
+    set_last_error_record(code, None, msg);
 }
 
 /// Record an ABI code with a more precise canonical runtime error
@@ -146,14 +138,10 @@ pub(crate) fn set_last_error_projection(
     projection: ErrorProjection,
     msg: impl Into<String>,
 ) {
-    set_last_error_record(Some(code), Some(projection), msg);
+    set_last_error_record(code, Some(projection), msg);
 }
 
-fn set_last_error_record(
-    code: Option<i32>,
-    projection: Option<ErrorProjection>,
-    msg: impl Into<String>,
-) {
+fn set_last_error_record(code: i32, projection: Option<ErrorProjection>, msg: impl Into<String>) {
     let s = msg.into();
     // Strip any interior NULs so the CString construction cannot
     // fail on well-formed Rust strings that happen to contain a \0.
@@ -249,7 +237,7 @@ pub unsafe extern "C" fn easynet_error_json(
     let json = if code == EASYNET_OK {
         serde_json::Value::Null
     } else {
-        typed_error_json(Some(code), &message)
+        typed_error_json(code, &message)
     };
     write_json_output("easynet_error_json", out_error_json, json)
 }
@@ -287,16 +275,16 @@ fn alloc_output_cstring(s: impl Into<String>) -> *mut c_char {
     }
 }
 
-fn typed_error_json(code: Option<i32>, message: &str) -> serde_json::Value {
+fn typed_error_json(code: i32, message: &str) -> serde_json::Value {
     typed_error_json_with_projection(code, None, message)
 }
 
 fn typed_error_json_with_projection(
-    code: Option<i32>,
+    code: i32,
     projection: Option<ErrorProjection>,
     message: &str,
 ) -> serde_json::Value {
-    let metadata = error_metadata(code.unwrap_or(ERR_GENERIC));
+    let metadata = error_metadata(code);
     let canonical_code = projection.map(|value| value.code).unwrap_or(metadata.code);
     let stage = projection
         .map(|value| value.stage)
@@ -313,7 +301,7 @@ fn typed_error_json_with_projection(
         "invocation_id": null,
         "receipt_ura": null,
         "details": {
-            "abi_code": code.unwrap_or(ERR_GENERIC),
+            "abi_code": code,
             "abi_symbol": metadata.abi_symbol,
         },
     })
@@ -505,25 +493,6 @@ mod tests {
     }
 
     #[test]
-    fn last_error_json_projects_legacy_message_as_generic() {
-        std::thread::spawn(|| {
-            set_last_error("legacy text");
-            let mut out: *mut c_char = std::ptr::null_mut();
-            let code = unsafe { easynet_last_error_json(&mut out) };
-            assert_eq!(code, EASYNET_OK);
-            let value: serde_json::Value =
-                unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
-            unsafe { crate::ffi::strings::easynet_string_free(out) };
-            assert_eq!(value["code"], "GENERIC");
-            assert_eq!(value["message"], "legacy text");
-            assert_eq!(value["details"]["abi_code"], ERR_GENERIC);
-            assert_eq!(value["details"]["abi_symbol"], "ERR_GENERIC");
-        })
-        .join()
-        .unwrap();
-    }
-
-    #[test]
     fn error_json_maps_explicit_code_without_parsing_message() {
         let message = CString::new("deadline elapsed").unwrap();
         let mut out: *mut c_char = std::ptr::null_mut();
@@ -592,7 +561,7 @@ mod tests {
         // because losing an error message is worse than losing
         // a \0 inside it.
         std::thread::spawn(|| {
-            set_last_error("a\0b\0c");
+            set_last_error_code(ERR_GENERIC, "a\0b\0c");
             assert_eq!(last_error_message().as_deref(), Some("abc"));
         })
         .join()

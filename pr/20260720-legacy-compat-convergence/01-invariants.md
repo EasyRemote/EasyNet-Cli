@@ -21,6 +21,11 @@
 - Runtime lifecycle configuration must be a closed state machine: missing
   config may select a documented default, but malformed config must fail
   closed instead of being rewritten to a valid lifecycle state.
+- FFI last-error JSON must be typed TLS state, not a compatibility projection
+  from raw message text. Every recorded last error carries an explicit ABI
+  code before it can be projected into the canonical runtime error DTO;
+  message-only buffers remain text diagnostics and cannot synthesize
+  `ERR_GENERIC` proof.
 - Canonical resource write surfaces must not infer producer facts. If a blob
   needs a filename or content type in its public record, the producer must
   submit that fact explicitly before the runtime stores or projects it.

@@ -1945,6 +1945,51 @@ for required_test in (
 PY
 }
 
+check_ffi_last_error_typed_tls_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local ffi_errors="$cli_root/src/ffi/errors/mod.rs"
+  [[ -f "$ffi_errors" ]] || fail "FFI error source is missing: $ffi_errors"
+
+  "$PYTHON_BIN" - "$ffi_errors" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+record = re.search(r"struct LastErrorRecord \{(?P<body>.*?)\n\}", text, re.S)
+if record is None:
+    raise SystemExit("ffi_last_error_typed_tls:record_missing")
+record_body = record.group("body")
+if re.search(r"\bcode:\s*Option\s*<\s*i32\s*>", record_body):
+    raise SystemExit("ffi_last_error_typed_tls:optional_abi_code")
+if not re.search(r"\bcode:\s*i32\b", record_body):
+    raise SystemExit("ffi_last_error_typed_tls:mandatory_abi_code_missing")
+
+retired = {
+    "pub(crate) fn set_last_error(": "raw_text_setter",
+    "fn set_last_error(": "raw_text_setter",
+    "set_last_error_record(None": "untyped_record_write",
+    "typed_error_json(Some(": "optional_projection_api",
+    "typed_error_json_with_projection(Some(": "optional_projection_api",
+    "code.unwrap_or(ERR_GENERIC)": "generic_projection_fallback",
+    "last_error_json_projects_legacy_message_as_generic": "legacy_projection_test",
+}
+for pattern, label in retired.items():
+    if pattern in text:
+        raise SystemExit(f"ffi_last_error_typed_tls:{label}")
+
+for required in (
+    "set_last_error_code(ERR_INVALID_HANDLE, \"bad handle\")",
+    "set_last_error_code(ERR_GENERIC, \"a\\0b\\0c\")",
+    "fn typed_error_json(code: i32, message: &str)",
+    "fn typed_error_json_with_projection(",
+):
+    if required not in text:
+        raise SystemExit(f"ffi_last_error_typed_tls:missing_typed_path:{required}")
+PY
+}
+
 check_canonical_ability_catalog_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local descriptor="$cli_root/src/daemon/ability/descriptors/surface.rs"
@@ -3691,6 +3736,34 @@ EOF
   if ( CLI_ROOT="$tmp/cli-ffi-json-legacy"; check_ffi_invocation_json_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected FFI JSON projection downgrade gate to fail"
   fi
+  mkdir -p "$tmp/cli-ffi-last-error-legacy/src/ffi/errors"
+  cat >"$tmp/cli-ffi-last-error-legacy/src/ffi/errors/mod.rs" <<'EOF'
+struct LastErrorRecord {
+    message: std::ffi::CString,
+    code: Option<i32>,
+}
+
+pub(crate) fn set_last_error(msg: impl Into<String>) {
+    set_last_error_record(None, msg);
+}
+
+fn set_last_error_record(code: Option<i32>, msg: impl Into<String>) {
+    let _ = code.unwrap_or(ERR_GENERIC);
+    let _ = msg.into();
+}
+
+fn typed_error_json(code: Option<i32>, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "message": message,
+        "details": {"abi_code": code.unwrap_or(ERR_GENERIC)}
+    })
+}
+
+fn last_error_json_projects_legacy_message_as_generic() {}
+EOF
+  if ( CLI_ROOT="$tmp/cli-ffi-last-error-legacy"; check_ffi_last_error_typed_tls_contract ) >/dev/null 2>&1; then
+    fail "self-test expected FFI last-error typed TLS gate to fail"
+  fi
   mkdir -p "$tmp/cli-sdk-receipt-type-legacy/sdk/go" \
     "$tmp/cli-sdk-receipt-type-legacy/sdk/python/easynet_sdk" \
     "$tmp/cli-sdk-receipt-type-legacy/sdk/python/tests" \
@@ -4999,6 +5072,7 @@ EOF
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
   check_ffi_descriptor_runtime_owner_contract
   check_ffi_invocation_json_projection_contract
+  check_ffi_last_error_typed_tls_contract
   check_canonical_ability_catalog_projection_contract
   check_daemon_runtime_assembly_contract
   check_plugin_sidecar_helper_matrix_contract
@@ -5063,6 +5137,7 @@ check_namespace_resolver_authority_projection_contract
 check_daemon_invocation_service_descriptor_ref_route_projection_contract
 check_ffi_descriptor_runtime_owner_contract
 check_ffi_invocation_json_projection_contract
+check_ffi_last_error_typed_tls_contract
 check_canonical_ability_catalog_projection_contract
 check_daemon_runtime_assembly_contract
 check_plugin_sidecar_helper_matrix_contract

@@ -1,5 +1,27 @@
 # Verification
 
+## 2026-07-22 FFI last-error typed TLS
+
+- `cargo test -q -p easynet --lib ffi::errors --features axon-pb` — PASS
+  (`8 passed`); legacy raw-message JSON projection test was deleted and typed
+  ABI-code/projection tests remain green.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a new negative fixture where `LastErrorRecord` carries
+  `Option<i32>` and message-only `set_last_error` projects to generic JSON.
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `git diff --check` — PASS.
+- `cargo fmt --all -- --check` — PASS.
+- `cargo check -q -p easynet --lib --features axon-pb` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` —
+  PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; synced 1
+  changed Rust source file.
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index is up
+  to date.
+
 ## 2026-07-22 observe.health contract-only projection
 
 - `cargo fmt --all -- --check` — PASS.

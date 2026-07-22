@@ -2,6 +2,23 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-22 FFI last-error typed TLS audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was
+  up to date for the current checkout before this slice.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "active legacy compat fallback signer subject descriptor receipt SDK runtime"`
+  surfaced `src/ffi/errors/mod.rs::last_error_json_projects_legacy_message_as_generic`
+  as an active FFI boundary candidate: the C ABI JSON projection still allowed
+  a message-only TLS record to become a canonical runtime error DTO.
+- Targeted source inspection showed production exported functions already
+  record errors via `set_last_error_code` or `set_last_error_projection`; the
+  remaining root fork was the `LastErrorRecord { code: Option<i32> }` model
+  and its raw-text test helper.
+- After the change, `LastErrorRecord` stores mandatory `code: i32`,
+  `set_last_error` is removed, projection helpers take `i32` directly, and
+  the SPEC v2 gate rejects reintroducing raw-text last-error JSON fallback.
+
 ## 2026-07-22 Runtime-owner signer User custody audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was
