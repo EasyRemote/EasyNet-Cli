@@ -3005,3 +3005,27 @@ Evidence will be appended after indexing and focused impact queries.
   after deletion; `/Users/macbook.silan.tech/.local/bin/codegraph status`
   reports 1,018 indexed files, 35,338 nodes, 135,742 edges, and an up-to-date
   index.
+
+## 2026-07-22 SDK Directory provider-output fail-closed audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore --max-files 16
+  "legacy compat fallback deprecated alias default repair best-effort
+  product-specific SDK runtime receipt directory lifecycle admission"` surfaced
+  the Directory SDK projection path as active runtime-facing SDK code.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore --max-files 12
+  "sdk python directory _mapping _mapping_sequence DirectoryResolution
+  from_json DirectoryPage from_json provider output fail closed Go directory"`
+  traced the cross-language Directory projection ownership to
+  `sdk/python/easynet_sdk/directory.py` and `sdk/go/directory.go`.
+- Source inspection found Python `_mapping` returning `{}` for non-object
+  bytes/string/Mapping input and `_mapping_sequence` returning `()` for
+  non-list route candidates. Go `ProjectDirectoryResolution` similarly treated
+  malformed `records` as absent and skipped malformed route-candidate rows.
+- Root abstraction problem: SDK Directory projection was still acting as a
+  product read-model repair layer. Bad provider output could become an empty
+  directory fact, preserving the same class of product-visible false emptiness
+  as the previous route/read-model issues.
+- Boundary decision: make Go and Python Directory projection fail closed for
+  malformed present provider facts. Missing/null optional fields remain absent
+  evidence; present non-object/non-list facts and non-object route-candidate
+  rows are invalid provider output.

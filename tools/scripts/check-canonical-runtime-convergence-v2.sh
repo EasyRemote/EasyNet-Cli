@@ -2562,6 +2562,117 @@ check_retired_browser_mock_surface_contract() {
   done
 }
 
+check_sdk_directory_projection_fail_closed_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local go_directory="$cli_root/sdk/go/directory.go"
+  local py_directory="$cli_root/sdk/python/easynet_sdk/directory.py"
+  local go_test="$cli_root/sdk/go/directory_test.go"
+  local py_test="$cli_root/sdk/python/tests/test_directory.py"
+
+  for path in "$go_directory" "$py_directory" "$go_test" "$py_test"; do
+    [[ -f "$path" ]] || fail "SDK Directory projection contract source is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$go_directory" "$py_directory" "$go_test" "$py_test" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+go_directory = Path(sys.argv[1]).read_text(encoding="utf-8")
+py_directory = Path(sys.argv[2]).read_text(encoding="utf-8")
+go_test = Path(sys.argv[3]).read_text(encoding="utf-8")
+py_test = Path(sys.argv[4]).read_text(encoding="utf-8")
+
+project = re.search(
+    r"func ProjectDirectoryResolution\(.*?\n\}",
+    go_directory,
+    re.S,
+)
+if not project:
+    raise SystemExit("go_directory_projection_missing")
+project_body = project.group(0)
+for token, code in (
+    ('invalidDirectory("Directory records must be a list"', "records_type_gate_missing"),
+    ("optionalDirectoryMap(output, \"negative\")", "negative_gate_missing"),
+    ("optionalDirectoryMap(output, \"next_hop\")", "next_hop_gate_missing"),
+    ("optionalDirectoryMap(output, \"selected_route\")", "selected_route_gate_missing"),
+    ("optionalDirectoryMapSlice(output, \"route_candidates\")", "route_candidates_gate_missing"),
+    ("optionalDirectoryMap(output, \"authority\")", "authority_gate_missing"),
+    ("optionalDirectoryMap(output, \"cache_policy\")", "cache_policy_gate_missing"),
+):
+    if token not in project_body:
+        raise SystemExit("go_directory_projection:" + code)
+
+map_slice = re.search(
+    r"func optionalDirectoryMapSlice\(.*?\n\}",
+    go_directory,
+    re.S,
+)
+if not map_slice:
+    raise SystemExit("go_directory_map_slice_gate_missing")
+map_slice_body = map_slice.group(0)
+if "continue" in map_slice_body:
+    raise SystemExit("go_directory_route_candidate_item_skip")
+for token, code in (
+    ("must be a list", "list_type_error_missing"),
+    ("item must be an object", "item_type_error_missing"),
+):
+    if token not in map_slice_body:
+        raise SystemExit("go_directory_map_slice:" + code)
+
+optional_map = re.search(
+    r"func optionalDirectoryMap\(.*?\n\}",
+    go_directory,
+    re.S,
+)
+if not optional_map or "must be an object" not in optional_map.group(0):
+    raise SystemExit("go_directory_optional_map_gate_missing")
+
+py_optional = re.search(
+    r"def _optional_mapping\(.*?\n\n",
+    py_directory,
+    re.S,
+)
+if not py_optional:
+    raise SystemExit("python_directory_optional_mapping_missing")
+py_optional_body = py_optional.group(0)
+if "json.loads" in py_optional_body or "_required_mapping" in py_optional_body:
+    raise SystemExit("python_directory_optional_mapping_decodes_nested_json")
+if "must be an object" not in py_optional_body:
+    raise SystemExit("python_directory_optional_mapping_type_gate_missing")
+
+py_sequence = re.search(
+    r"def _optional_mapping_sequence\(.*?\n\n",
+    py_directory,
+    re.S,
+)
+if not py_sequence:
+    raise SystemExit("python_directory_optional_sequence_missing")
+py_sequence_body = py_sequence.group(0)
+for token, code in (
+    ("must be a list", "list_type_error_missing"),
+    ("item must be an object", "item_type_error_missing"),
+):
+    if token not in py_sequence_body:
+        raise SystemExit("python_directory_optional_sequence:" + code)
+
+for text, name in ((go_test, "go"), (py_test, "python")):
+    if "RejectsMalformedPresentFacts" not in text and "rejects_malformed_present_facts" not in text:
+        raise SystemExit(f"{name}_directory_malformed_present_facts_test_missing")
+    for field in (
+        "records",
+        "next_hop",
+        "selected_route",
+        "route_candidates",
+        "negative",
+        "authority",
+        "cache_policy",
+    ):
+        if field not in text:
+            raise SystemExit(f"{name}_directory_malformed_field_test_missing:{field}")
+PY
+}
+
 check_runtime_owner_signer_custody_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local self_identity="$cli_root/src/daemon/identity/self_identity.rs"
@@ -4763,6 +4874,22 @@ EOF
   if ( CLI_ROOT="$tmp/cli-browser-mock"; check_retired_browser_mock_surface_contract ) >/dev/null 2>&1; then
     fail "self-test expected retired browser placeholder ability gate to fail"
   fi
+  mkdir -p "$tmp/cli-directory-fallback/sdk/go" \
+    "$tmp/cli-directory-fallback/sdk/python/easynet_sdk" \
+    "$tmp/cli-directory-fallback/sdk/python/tests"
+  cp "$ROOT/sdk/go/directory.go" "$tmp/cli-directory-fallback/sdk/go/directory.go"
+  cp "$ROOT/sdk/go/directory_test.go" "$tmp/cli-directory-fallback/sdk/go/directory_test.go"
+  cp "$ROOT/sdk/python/easynet_sdk/directory.py" \
+    "$tmp/cli-directory-fallback/sdk/python/easynet_sdk/directory.py"
+  cp "$ROOT/sdk/python/tests/test_directory.py" \
+    "$tmp/cli-directory-fallback/sdk/python/tests/test_directory.py"
+  perl -0pi -e 's/return nil, invalidDirectory\("Directory "\+key\+" item must be an object", nil\)/continue/' \
+    "$tmp/cli-directory-fallback/sdk/go/directory.go"
+  perl -0pi -e 's/if not isinstance\(value, Mapping\):\n        raise _invalid\(f"Directory \{name\} must be an object"\)\n    return dict\(value\)/return _required_mapping(value, f"Directory {name}")/' \
+    "$tmp/cli-directory-fallback/sdk/python/easynet_sdk/directory.py"
+  if ( CLI_ROOT="$tmp/cli-directory-fallback"; check_sdk_directory_projection_fail_closed_contract ) >/dev/null 2>&1; then
+    fail "self-test expected SDK Directory provider-output fallback gate to fail"
+  fi
   mkdir -p "$tmp/runtime-owner-signer-legacy/src/daemon/identity"
   printf '%s\n' \
     'pub struct RuntimeSigningIdentity;' \
@@ -5450,6 +5577,7 @@ EOF
   check_daemon_runtime_assembly_contract
   check_plugin_sidecar_helper_matrix_contract
   check_retired_browser_mock_surface_contract
+  check_sdk_directory_projection_fail_closed_contract
   check_runtime_owner_signer_custody_contract
   check_key_custody_boundary_contract
   check_daemon_mission_eal_boundary_contract
@@ -5519,6 +5647,7 @@ check_canonical_ability_catalog_projection_contract
 check_daemon_runtime_assembly_contract
 check_plugin_sidecar_helper_matrix_contract
 check_retired_browser_mock_surface_contract
+check_sdk_directory_projection_fail_closed_contract
 check_runtime_owner_signer_custody_contract
 check_key_custody_boundary_contract
 check_daemon_mission_eal_boundary_contract

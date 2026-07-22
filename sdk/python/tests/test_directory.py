@@ -92,6 +92,32 @@ def test_project_directory_resolution_preserves_resolver_facts() -> None:
     assert len(resolution.records) == 1
 
 
+def test_project_directory_resolution_rejects_malformed_present_facts() -> None:
+    base = {
+        "answer_kind": "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+        "records": [],
+    }
+    cases = [
+        ("records", "not-a-list", "records must be a list"),
+        ("next_hop", "not-an-object", "next_hop must be an object"),
+        ("selected_route", "not-an-object", "selected_route must be an object"),
+        ("route_candidates", {"node_id": "node-1"}, "route_candidates must be a list"),
+        (
+            "route_candidates",
+            ["not-an-object"],
+            "route_candidates item must be an object",
+        ),
+        ("negative", "not-an-object", "negative must be an object"),
+        ("authority", "not-an-object", "authority must be an object"),
+        ("cache_policy", "not-an-object", "cache_policy must be an object"),
+    ]
+    for key, value, message in cases:
+        payload = dict(base)
+        payload[key] = value
+        with pytest.raises(SDKError, match=message):
+            directory_module._project_resolution(payload)
+
+
 def test_directory_helpers_reject_unbounded_cursor_and_surface_negative_detail() -> None:
     with pytest.raises(SDKError, match="cursor exceeds"):
         directory_module._directory_cursor("x" * 4097)
@@ -212,3 +238,6 @@ def test_directory_event_projection_is_runtime_generic() -> None:
                 "agent_ura": "easynet:///r/example/agent/alpha",
             }
         )
+
+    with pytest.raises(SDKError, match="event must be an object"):
+        parse_directory_event(["not", "an", "object"])

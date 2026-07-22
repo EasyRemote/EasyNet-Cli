@@ -72,6 +72,41 @@ func TestProjectDirectoryResolutionPreservesResolverFacts(t *testing.T) {
 	}
 }
 
+func TestProjectDirectoryResolutionRejectsMalformedPresentFacts(t *testing.T) {
+	base := map[string]any{
+		"answer_kind": "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+		"records":     []any{},
+	}
+	cases := []struct {
+		name    string
+		key     string
+		value   any
+		message string
+	}{
+		{name: "records", key: "records", value: "not-a-list", message: "records must be a list"},
+		{name: "next hop", key: "next_hop", value: "not-an-object", message: "next_hop must be an object"},
+		{name: "selected route", key: "selected_route", value: "not-an-object", message: "selected_route must be an object"},
+		{name: "route candidates", key: "route_candidates", value: map[string]any{"node_id": "node-1"}, message: "route_candidates must be a list"},
+		{name: "route candidate item", key: "route_candidates", value: []any{"not-an-object"}, message: "route_candidates item must be an object"},
+		{name: "negative", key: "negative", value: "not-an-object", message: "negative must be an object"},
+		{name: "authority", key: "authority", value: "not-an-object", message: "authority must be an object"},
+		{name: "cache policy", key: "cache_policy", value: "not-an-object", message: "cache_policy must be an object"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := make(map[string]any, len(base)+1)
+			for key, value := range base {
+				payload[key] = value
+			}
+			payload[tc.key] = tc.value
+			_, err := ProjectDirectoryResolution(payload)
+			if err == nil || !strings.Contains(err.Error(), tc.message) {
+				t.Fatalf("ProjectDirectoryResolution error = %v, want %q", err, tc.message)
+			}
+		})
+	}
+}
+
 func TestDirectoryHelpersRejectUnboundedCursorAndSurfaceNegativeDetail(t *testing.T) {
 	if _, err := directoryCursor(strings.Repeat("x", maxDirectoryCursorLen+1)); err == nil {
 		t.Fatal("oversized directory cursor was accepted")

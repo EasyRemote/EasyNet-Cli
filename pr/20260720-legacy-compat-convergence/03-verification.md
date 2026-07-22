@@ -3221,3 +3221,22 @@ Commands and outcomes will be appended after implementation.
   graph after deleting the browser placeholder module.
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index is
   up to date with 1,018 files, 35,338 nodes, and 135,742 edges.
+
+## 2026-07-22 SDK Directory provider-output fail-closed projection
+
+- `gofmt -w sdk/go/directory.go sdk/go/directory_test.go` — PASS.
+- `(cd sdk/go && go test ./...)` — PASS.
+- `source sdk/conformance/python_toolchain.sh &&
+  resolve_sdk_python_toolchain /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli &&
+  cd sdk/python && PYTHONPATH=. "$SDK_CONFORMANCE_PYTHON" -m pytest -q
+  tests/test_directory.py` — PASS (`7` tests).
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes the SDK Directory provider-output fallback negative
+  fixture.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS;
+  includes `check_sdk_directory_projection_fail_closed_contract`.
+- `cargo test -q --test script_checks
+  canonical_runtime_convergence_v2_script_contract_holds` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `cargo fmt --check` — PASS.
+- `git diff --check` — PASS.

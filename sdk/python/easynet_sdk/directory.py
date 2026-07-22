@@ -211,7 +211,7 @@ def _project_resolution(output: Mapping[str, object]) -> DirectoryResolution:
     if isinstance(nested, Mapping):
         output = nested
     answer_kind = _mapping_text(output, "answer_kind")
-    if not answer_kind and _mapping(output.get("negative")):
+    if not answer_kind and _optional_mapping(output.get("negative"), "negative"):
         answer_kind = "RESOLVE_ANSWER_KIND_NEGATIVE"
     if not answer_kind:
         raise _invalid("Directory answer_kind is required")
@@ -225,15 +225,17 @@ def _project_resolution(output: Mapping[str, object]) -> DirectoryResolution:
         owner_ura=_mapping_text(output, "owner_ura"),
         ability_ura=_mapping_text(output, "ability_ura"),
         route_ura=_mapping_text(output, "route_ura"),
-        next_hop=_mapping(output.get("next_hop")),
-        selected_route=_mapping(output.get("selected_route")),
-        route_candidates=_mapping_sequence(output.get("route_candidates")),
+        next_hop=_optional_mapping(output.get("next_hop"), "next_hop"),
+        selected_route=_optional_mapping(output.get("selected_route"), "selected_route"),
+        route_candidates=_optional_mapping_sequence(
+            output.get("route_candidates"), "route_candidates"
+        ),
         records=records,
-        negative=_mapping(output.get("negative")),
+        negative=_optional_mapping(output.get("negative"), "negative"),
         next_cursor=_mapping_text(output, "next_cursor"),
         release_profile=_mapping_text(output, "release_profile"),
-        authority=_mapping(output.get("authority")),
-        cache_policy=_mapping(output.get("cache_policy")),
+        authority=_optional_mapping(output.get("authority"), "authority"),
+        cache_policy=_optional_mapping(output.get("cache_policy"), "cache_policy"),
     )
 
 
@@ -251,9 +253,7 @@ def _project_record(value: object) -> DirectoryRecord:
 
 
 def parse_directory_event(raw: object) -> DirectoryEvent:
-    value = _mapping(raw)
-    if not value:
-        raise _invalid("Directory event must be an object")
+    value = _required_mapping(raw, "Directory event")
     event_type = _mapping_text(value, "type")
     if not event_type:
         raise _invalid("Directory event type is required")
@@ -297,7 +297,7 @@ def _mapping_text(value: Mapping[str, object], *keys: str) -> str:
     return ""
 
 
-def _mapping(value: object) -> Mapping[str, object]:
+def _required_mapping(value: object, name: str) -> Mapping[str, object]:
     if isinstance(value, bytes):
         try:
             import json
@@ -305,7 +305,9 @@ def _mapping(value: object) -> Mapping[str, object]:
             decoded = json.loads(value)
         except (UnicodeDecodeError, ValueError) as error:
             raise _invalid(f"Directory JSON decode failed: {error}", error)
-        return dict(decoded) if isinstance(decoded, Mapping) else {}
+        if not isinstance(decoded, Mapping):
+            raise _invalid(f"{name} must be an object")
+        return dict(decoded)
     if isinstance(value, str):
         try:
             import json
@@ -313,17 +315,33 @@ def _mapping(value: object) -> Mapping[str, object]:
             decoded = json.loads(value)
         except ValueError as error:
             raise _invalid(f"Directory JSON decode failed: {error}", error)
-        return dict(decoded) if isinstance(decoded, Mapping) else {}
-    return dict(value) if isinstance(value, Mapping) else {}
+        if not isinstance(decoded, Mapping):
+            raise _invalid(f"{name} must be an object")
+        return dict(decoded)
+    if not isinstance(value, Mapping):
+        raise _invalid(f"{name} must be an object")
+    return dict(value)
 
 
-def _mapping_sequence(value: object) -> tuple[Mapping[str, object], ...]:
-    if not isinstance(value, list):
+def _optional_mapping(value: object, name: str) -> Mapping[str, object]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise _invalid(f"Directory {name} must be an object")
+    return dict(value)
+
+
+def _optional_mapping_sequence(
+    value: object, name: str
+) -> tuple[Mapping[str, object], ...]:
+    if value is None:
         return ()
+    if not isinstance(value, list):
+        raise _invalid(f"Directory {name} must be a list")
     projected: list[Mapping[str, object]] = []
     for item in value:
         if not isinstance(item, Mapping):
-            raise _invalid("Directory route candidate must be an object")
+            raise _invalid(f"Directory {name} item must be an object")
         projected.append(dict(item))
     return tuple(projected)
 

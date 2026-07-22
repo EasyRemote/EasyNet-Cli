@@ -250,14 +250,22 @@ func ProjectDirectoryResolution(output map[string]any) (DirectoryResolution, err
 		output = answer
 	}
 	answerKind := directoryString(output, "answer_kind")
-	if answerKind == "" && len(directoryMap(output["negative"])) > 0 {
+	negative, err := optionalDirectoryMap(output, "negative")
+	if err != nil {
+		return DirectoryResolution{}, err
+	}
+	if answerKind == "" && len(negative) > 0 {
 		answerKind = "RESOLVE_ANSWER_KIND_NEGATIVE"
 	}
 	if answerKind == "" {
 		return DirectoryResolution{}, invalidDirectory("Directory answer_kind is required", nil)
 	}
 	records := make([]DirectoryRecord, 0)
-	if rawRecords, ok := output["records"].([]any); ok {
+	if rawRecordsValue, ok := output["records"]; ok && rawRecordsValue != nil {
+		rawRecords, ok := rawRecordsValue.([]any)
+		if !ok {
+			return DirectoryResolution{}, invalidDirectory("Directory records must be a list", nil)
+		}
 		for _, raw := range rawRecords {
 			record, ok := raw.(map[string]any)
 			if !ok {
@@ -266,38 +274,62 @@ func ProjectDirectoryResolution(output map[string]any) (DirectoryResolution, err
 			records = append(records, ProjectDirectoryRecord(record))
 		}
 	}
+	nextHop, err := optionalDirectoryMap(output, "next_hop")
+	if err != nil {
+		return DirectoryResolution{}, err
+	}
+	selectedRoute, err := optionalDirectoryMap(output, "selected_route")
+	if err != nil {
+		return DirectoryResolution{}, err
+	}
+	routeCandidates, err := optionalDirectoryMapSlice(output, "route_candidates")
+	if err != nil {
+		return DirectoryResolution{}, err
+	}
+	authority, err := optionalDirectoryMap(output, "authority")
+	if err != nil {
+		return DirectoryResolution{}, err
+	}
+	cachePolicy, err := optionalDirectoryMap(output, "cache_policy")
+	if err != nil {
+		return DirectoryResolution{}, err
+	}
 	return DirectoryResolution{
 		AnswerKind:      answerKind,
 		CanonicalURA:    directoryString(output, "canonical_name"),
 		OwnerURA:        directoryString(output, "owner_ura"),
 		AbilityURA:      directoryString(output, "ability_ura"),
 		RouteURA:        directoryString(output, "route_ura"),
-		NextHop:         directoryMap(output["next_hop"]),
-		SelectedRoute:   directoryMap(output["selected_route"]),
-		RouteCandidates: directoryMapSlice(output["route_candidates"]),
+		NextHop:         nextHop,
+		SelectedRoute:   selectedRoute,
+		RouteCandidates: routeCandidates,
 		Records:         records,
-		Negative:        directoryMap(output["negative"]),
+		Negative:        negative,
 		NextCursor:      directoryString(output, "next_cursor"),
 		ReleaseProfile:  directoryString(output, "release_profile"),
-		Authority:       directoryMap(output["authority"]),
-		CachePolicy:     directoryMap(output["cache_policy"]),
+		Authority:       authority,
+		CachePolicy:     cachePolicy,
 	}, nil
 }
 
-func directoryMapSlice(value any) []map[string]any {
-	rows, ok := value.([]any)
+func optionalDirectoryMapSlice(value map[string]any, key string) ([]map[string]any, error) {
+	raw, present := value[key]
+	if !present || raw == nil {
+		return nil, nil
+	}
+	rows, ok := raw.([]any)
 	if !ok {
-		return nil
+		return nil, invalidDirectory("Directory "+key+" must be a list", nil)
 	}
 	result := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		object, ok := row.(map[string]any)
 		if !ok {
-			continue
+			return nil, invalidDirectory("Directory "+key+" item must be an object", nil)
 		}
 		result = append(result, directoryMap(object))
 	}
-	return result
+	return result, nil
 }
 
 // ProjectDirectoryRecord projects one raw namespace.resolve Directory record
@@ -363,6 +395,18 @@ func directoryMap(value any) map[string]any {
 		return copyValue
 	}
 	return nil
+}
+
+func optionalDirectoryMap(value map[string]any, key string) (map[string]any, error) {
+	raw, present := value[key]
+	if !present || raw == nil {
+		return nil, nil
+	}
+	object := directoryMap(raw)
+	if object == nil {
+		return nil, invalidDirectory("Directory "+key+" must be an object", nil)
+	}
+	return object, nil
 }
 
 func invalidDirectory(message string, cause error) error {

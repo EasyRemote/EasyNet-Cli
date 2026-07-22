@@ -486,3 +486,7 @@
   runtime abilities with placeholder outputs. A capability without a real
   provider-backed implementation stays absent from live registry, baseline,
   descriptor metadata, wire classifiers, and SDK/FFI live smoke contracts.
+- SDK Directory projection is provider-output validation, not read-model
+  repair. Missing/null optional facts may mean absent evidence, but malformed
+  present facts must fail closed and must never be rewritten into empty
+  objects, empty lists, or skipped route candidates.
