@@ -4033,6 +4033,67 @@ for index, text in enumerate(callers, start=1):
 PY
 }
 
+check_local_daemon_loopback_explicit_subject_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local grpc="$cli_root/src/support/platform/local_daemon_grpc.rs"
+
+  [[ -f "$grpc" ]] || fail "local daemon loopback source is missing: ${grpc#$cli_root/}"
+
+  "$PYTHON_BIN" - "$grpc" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+
+for token, code in (
+    ("LocalDaemonSelf", "self_subject_policy_present"),
+    ("local_daemon_self", "self_subject_constructor_present"),
+    ("local_daemon_default_callee_ura", "daemon_identity_named_as_callee_present"),
+    ("fn local_root(", "subjectless_local_root_constructor_present"),
+    ("LocalDaemonLoopbackTuplePlan::local_root(", "subjectless_local_root_call_present"),
+):
+    if token in text:
+        raise SystemExit(f"local_daemon_loopback_explicit_subject:{code}")
+
+subject_resolver = re.search(
+    r"impl LocalDaemonLoopbackSubjectPolicy\s*\{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if not subject_resolver:
+    raise SystemExit("local_daemon_loopback_explicit_subject:subject_policy_impl_missing")
+body = subject_resolver.group("body")
+if "fn resolve(&self) -> anyhow::Result<String>" not in body:
+    raise SystemExit("local_daemon_loopback_explicit_subject:subject_resolve_must_not_take_callee")
+if "callee_ura" in body:
+    raise SystemExit("local_daemon_loopback_explicit_subject:subject_resolve_reads_callee")
+
+helper = re.search(
+    r"pub\(crate\) fn invoke_local_daemon_ability\s*\([^)]*\)\s*->\s*anyhow::Result<serde_json::Value>\s*\{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if not helper:
+    raise SystemExit("local_daemon_loopback_explicit_subject:generic_helper_missing")
+helper_body = helper.group("body")
+for token, code in (
+    ("let subject_ura = local_daemon_identity_ura()?", "generic_helper_subject_resolution_missing"),
+    ("LocalDaemonLoopbackTuplePlan::local_root_for_subject", "generic_helper_explicit_subject_plan_missing"),
+    ("&subject_ura", "generic_helper_subject_not_bound_to_plan"),
+):
+    if token not in helper_body:
+        raise SystemExit(f"local_daemon_loopback_explicit_subject:{code}")
+
+for token, code in (
+    ("loopback_invoke_request_does_not_pre_resolve_descriptor_ref", "descriptor_projection_test_missing"),
+    ("loopback_tuple_plan_requires_explicit_targeted_subject", "explicit_subject_test_missing"),
+):
+    if token not in text:
+        raise SystemExit(f"local_daemon_loopback_explicit_subject:{code}")
+PY
+}
+
 check_sdk_principal_projection_fail_closed_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local go_principal="$cli_root/sdk/go/principal.go"
@@ -7611,6 +7672,7 @@ EOF
   check_retired_browser_mock_surface_contract
   check_runtime_wire_target_state_contract
   check_invocation_wire_callee_target_contract
+  check_local_daemon_loopback_explicit_subject_contract
   check_sdk_directory_projection_fail_closed_contract
   check_sdk_principal_projection_fail_closed_contract
   check_runtime_owner_signer_custody_contract
@@ -7703,6 +7765,7 @@ check_plugin_sidecar_helper_matrix_contract
 check_retired_browser_mock_surface_contract
 check_runtime_wire_target_state_contract
 check_invocation_wire_callee_target_contract
+check_local_daemon_loopback_explicit_subject_contract
 check_sdk_directory_projection_fail_closed_contract
 check_sdk_principal_projection_fail_closed_contract
 check_runtime_owner_signer_custody_contract

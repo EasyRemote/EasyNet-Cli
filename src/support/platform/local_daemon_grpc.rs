@@ -150,7 +150,6 @@ enum LocalDaemonLoopbackCalleePolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LocalDaemonLoopbackSubjectPolicy {
     Explicit(String),
-    LocalDaemonSelf,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -201,7 +200,7 @@ impl LocalDaemonLoopbackCalleePolicy {
 
     fn resolve(&self) -> anyhow::Result<String> {
         match self {
-            Self::LocalDaemon => local_daemon_default_callee_ura(),
+            Self::LocalDaemon => local_daemon_identity_ura(),
             Self::Explicit(callee_ura) => normalized_local_daemon_ura(callee_ura, "callee_ura"),
         }
     }
@@ -216,14 +215,9 @@ impl LocalDaemonLoopbackSubjectPolicy {
         )?))
     }
 
-    fn local_daemon_self() -> Self {
-        Self::LocalDaemonSelf
-    }
-
-    fn resolve(&self, callee_ura: &str) -> anyhow::Result<String> {
+    fn resolve(&self) -> anyhow::Result<String> {
         match self {
             Self::Explicit(subject) => normalized_local_daemon_ura(subject, "subject_ura"),
-            Self::LocalDaemonSelf => normalized_local_daemon_ura(callee_ura, "callee_ura"),
         }
     }
 
@@ -273,21 +267,6 @@ impl LocalDaemonLoopbackDerivationPolicy {
 
 #[cfg(feature = "axon-pb")]
 impl LocalDaemonLoopbackTuplePlan {
-    fn local_root(
-        function_name: &str,
-        payload_json: serde_json::Value,
-        timeout: Duration,
-    ) -> anyhow::Result<Self> {
-        Self::new(
-            function_name,
-            payload_json,
-            LocalDaemonLoopbackCalleePolicy::local_daemon(),
-            LocalDaemonLoopbackSubjectPolicy::local_daemon_self(),
-            LocalDaemonLoopbackDerivationPolicy::fresh_root(),
-            timeout,
-        )
-    }
-
     fn local_root_for_subject(
         function_name: &str,
         payload_json: serde_json::Value,
@@ -368,7 +347,7 @@ impl LocalDaemonLoopbackTuplePlan {
 
     fn into_invocation(self) -> anyhow::Result<LocalDaemonLoopbackInvocation> {
         let callee_ura = self.callee_policy.resolve()?;
-        let subject_ura = self.subject_policy.resolve(&callee_ura)?;
+        let subject_ura = self.subject_policy.resolve()?;
         LocalDaemonLoopbackInvocation::from_target(
             &self.function_name,
             self.payload_json,
@@ -428,9 +407,11 @@ pub(crate) fn invoke_local_daemon_ability(
     function_name: &str,
     payload_json: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    let tuple_plan = LocalDaemonLoopbackTuplePlan::local_root(
+    let subject_ura = local_daemon_identity_ura()?;
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::local_root_for_subject(
         function_name,
         payload_json,
+        &subject_ura,
         Duration::from_secs(30),
     )?;
     invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
@@ -1545,7 +1526,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
     )
     .map_err(|error| anyhow!("{function_name}: {error}"))?;
     let submitted_callee_ura = tuple_plan.callee_policy.resolve()?;
-    let submitted_subject_ura = tuple_plan.subject_policy.resolve(&submitted_callee_ura)?;
+    let submitted_subject_ura = tuple_plan.subject_policy.resolve()?;
     let invocation =
         local_daemon_loopback_invocation_from_tuple_plan(tuple_plan)?.with_trace_id(trace_id);
     let mut request = invocation.invoke_request()?;
@@ -1793,7 +1774,7 @@ fn local_daemon_loopback_caller_ura() -> anyhow::Result<String> {
 }
 
 #[cfg(feature = "axon-pb")]
-fn local_daemon_default_callee_ura() -> anyhow::Result<String> {
+fn local_daemon_identity_ura() -> anyhow::Result<String> {
     crate::daemon::identity::local_invocation::local_daemon_ura()
 }
 
@@ -1817,7 +1798,10 @@ mod tests {
             serde_json::json!({"query": "capabilities"}),
             LocalDaemonLoopbackCalleePolicy::explicit("easynet:///r/default/agent/dev.worker")
                 .expect("callee policy"),
-            LocalDaemonLoopbackSubjectPolicy::local_daemon_self(),
+            LocalDaemonLoopbackSubjectPolicy::required_explicit(
+                "easynet:///r/default/resource/daemon.local/catalog/discover",
+            )
+            .expect("subject policy"),
             LocalDaemonLoopbackDerivationPolicy::fresh_root(),
             Duration::from_secs(5),
         )
@@ -1857,7 +1841,7 @@ mod tests {
                 .subject
                 .as_ref()
                 .map(|subject| subject.ura.as_str()),
-            Some("easynet:///r/default/agent/dev.worker")
+            Some("easynet:///r/default/resource/daemon.local/catalog/discover")
         );
     }
 
@@ -1902,9 +1886,10 @@ mod tests {
             Duration::from_secs(5),
         )
         .is_err());
-        assert!(LocalDaemonLoopbackTuplePlan::local_root(
+        assert!(LocalDaemonLoopbackTuplePlan::local_root_for_subject(
             "job.run",
             serde_json::json!({"job": 1}),
+            "easynet:///r/acme/resource/user.jobs/job-1",
             Duration::ZERO,
         )
         .is_err());

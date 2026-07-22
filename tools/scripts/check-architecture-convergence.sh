@@ -10243,6 +10243,122 @@ for caller in invocation_wire_callers:
             )
 
 
+local_daemon_grpc = cli_root / "src/support/platform/local_daemon_grpc.rs"
+if local_daemon_grpc.exists():
+    text = source(local_daemon_grpc)
+    for token, detail in (
+        (
+            "LocalDaemonSelf",
+            "local daemon loopback subject must not be derived from callee",
+        ),
+        (
+            "local_daemon_self",
+            "local daemon loopback must not expose a self-subject constructor",
+        ),
+        (
+            "local_daemon_default_callee_ura",
+            "local daemon identity helper must not be named as a callee-only fallback",
+        ),
+        (
+            "fn local_root(",
+            "local daemon loopback must not expose a subjectless local_root constructor",
+        ),
+        (
+            "LocalDaemonLoopbackTuplePlan::local_root(",
+            "local daemon loopback callers must bind an explicit subject",
+        ),
+    ):
+        if token in text:
+            match = re.search(re.escape(token), text)
+            add(
+                "R92_LOCAL_DAEMON_LOOPBACK_EXPLICIT_SUBJECT",
+                local_daemon_grpc,
+                line_number(text, match.start() if match else 0),
+                detail,
+            )
+
+    subject_policy = re.search(
+        r"impl LocalDaemonLoopbackSubjectPolicy\s*\{(?P<body>.*?)\n\}",
+        text,
+        re.S,
+    )
+    if subject_policy is None:
+        add(
+            "R92_LOCAL_DAEMON_LOOPBACK_EXPLICIT_SUBJECT",
+            local_daemon_grpc,
+            1,
+            "local daemon loopback subject policy implementation is missing",
+        )
+    else:
+        body = subject_policy.group("body")
+        offset = subject_policy.start("body")
+        if "fn resolve(&self) -> anyhow::Result<String>" not in body:
+            add(
+                "R92_LOCAL_DAEMON_LOOPBACK_EXPLICIT_SUBJECT",
+                local_daemon_grpc,
+                line_number(text, offset),
+                "local daemon loopback subject resolution must not depend on callee",
+            )
+        if "callee_ura" in body:
+            add(
+                "R92_LOCAL_DAEMON_LOOPBACK_EXPLICIT_SUBJECT",
+                local_daemon_grpc,
+                line_number(text, offset),
+                "local daemon loopback subject policy must not read callee_ura",
+            )
+
+    helper = rust_method_body(text, "invoke_local_daemon_ability")
+    if helper is None:
+        add(
+            "R92_LOCAL_DAEMON_LOOPBACK_EXPLICIT_SUBJECT",
+            local_daemon_grpc,
+            1,
+            "generic local daemon helper is missing",
+        )
+    else:
+        offset, body = helper
+        for present, detail in (
+            (
+                "let subject_ura = local_daemon_identity_ura()?" in body,
+                "generic local daemon helper must resolve daemon subject before tuple construction",
+            ),
+            (
+                "LocalDaemonLoopbackTuplePlan::local_root_for_subject" in body,
+                "generic local daemon helper must use explicit-subject tuple construction",
+            ),
+            (
+                "&subject_ura" in body,
+                "generic local daemon helper must pass the explicit subject into the tuple plan",
+            ),
+        ):
+            if not present:
+                add(
+                    "R92_LOCAL_DAEMON_LOOPBACK_EXPLICIT_SUBJECT",
+                    local_daemon_grpc,
+                    line_number(text, offset),
+                    detail,
+                )
+
+    raw_text = local_daemon_grpc.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "loopback_invoke_request_does_not_pre_resolve_descriptor_ref",
+            "missing local daemon loopback descriptor projection regression test",
+        ),
+        (
+            "loopback_tuple_plan_requires_explicit_targeted_subject",
+            "missing local daemon loopback explicit-subject regression test",
+        ),
+    ):
+        if token not in raw_text:
+            add(
+                "R92_LOCAL_DAEMON_LOOPBACK_EXPLICIT_SUBJECT",
+                local_daemon_grpc,
+                1,
+                detail,
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(
