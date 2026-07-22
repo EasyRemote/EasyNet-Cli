@@ -21,7 +21,7 @@ const (
 	ConnectionClosed       ConnectionState = "Closed"
 )
 
-// ConnectOptions are daemon Runtime Core connection knobs.
+// ConnectOptions are Runtime Core connection knobs.
 type ConnectOptions struct {
 	Endpoint        string `json:"endpoint,omitempty"`
 	ControlPath     string `json:"control_path,omitempty"`
@@ -31,7 +31,7 @@ type ConnectOptions struct {
 	Reconnect       bool   `json:"reconnect,omitempty"`
 }
 
-// RuntimeEndpoint is the resolved daemon invocation endpoint projection.
+// RuntimeEndpoint is the resolved runtime invocation endpoint projection.
 type RuntimeEndpoint struct {
 	Endpoint        string `json:"endpoint"`
 	ControlPath     string `json:"control_path,omitempty"`
@@ -39,7 +39,7 @@ type RuntimeEndpoint struct {
 	ABIVersion      uint32 `json:"abi_version,omitempty"`
 }
 
-// RuntimeConnector supplies the concrete daemon connection steps for RuntimeConnection.
+// RuntimeConnector supplies concrete provider connection steps for RuntimeConnection.
 type RuntimeConnector interface {
 	Resolve(ctx context.Context, optionsJSON []byte) ([]byte, error)
 	Handshake(ctx context.Context, endpointJSON []byte) (RuntimeTransport, []byte, error)
@@ -96,7 +96,7 @@ func NewRuntimeConnection(connector RuntimeConnector) (*RuntimeConnection, error
 	}, nil
 }
 
-// Connect resolves and handshakes the daemon invocation transport.
+// Connect resolves and handshakes the runtime invocation transport.
 func (c *RuntimeConnection) Connect(ctx context.Context, opts ConnectOptions) error {
 	if c == nil || c.connector == nil {
 		return invalidRuntimeClient("runtime connection is not initialized")
@@ -260,7 +260,7 @@ func (c *RuntimeConnection) transition(next ConnectionState) error {
 	return nil
 }
 
-// NewRuntimeEndpointFromJSON decodes daemon endpoint discovery JSON.
+// NewRuntimeEndpointFromJSON decodes runtime endpoint discovery JSON.
 func NewRuntimeEndpointFromJSON(raw []byte) (RuntimeEndpoint, error) {
 	var endpoint RuntimeEndpoint
 	if err := json.Unmarshal(raw, &endpoint); err != nil {

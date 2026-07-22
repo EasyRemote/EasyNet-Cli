@@ -23,7 +23,7 @@ const (
 	managedSigningMaxCursorBytes         = 4096
 )
 
-// ManagedSigningStatus is the daemon-owned lifecycle state of a rotatable
+// ManagedSigningStatus is the provider-owned lifecycle state of a rotatable
 // signing key. Revoked is terminal; only Active keys can sign.
 type ManagedSigningStatus string
 

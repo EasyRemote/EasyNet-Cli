@@ -119,7 +119,7 @@ class AuthorityMetadata:
 
 @dataclass(frozen=True)
 class DelegationProof:
-    """Typed projection of daemon/Axon delegated-authority metadata."""
+    """Typed projection of runtime delegated-authority metadata."""
 
     issuer_ura: str
     subject_ura: str
@@ -173,7 +173,7 @@ class DelegationProof:
 
 @dataclass(frozen=True)
 class SessionAuthority:
-    """Typed projection of daemon/Axon session-authority metadata."""
+    """Typed projection of runtime session-authority metadata."""
 
     issuer_ura: str
     session_id: str

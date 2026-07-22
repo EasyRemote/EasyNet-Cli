@@ -102,7 +102,7 @@ func TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors(t *testing.T) {
 		}
 		args := seen["args"].(map[string]any)
 		if args["agent_ura"] != "easynet:///r/example/authority" || args["scope"] != "realm" {
-			t.Fatalf("provider did not lower filters to daemon catalog args: %#v", args)
+			t.Fatalf("provider did not lower filters to runtime catalog args: %#v", args)
 		}
 		return runtimeAbilityResultJSON(true, `{"abilities":[{
 			"name":"namespace.resolve",

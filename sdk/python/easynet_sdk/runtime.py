@@ -552,7 +552,7 @@ class RuntimeReceipt:
         return state
 
     def has_causal_anchor(self) -> bool:
-        """Return whether daemon/Axon supplied enough facts for causal linkage."""
+        """Return whether the runtime supplied enough facts for causal linkage."""
 
         return bool(self.receipt_ura and self.self_hash_hex)
 

@@ -8,7 +8,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/ability_descriptor_test.go",
-          "sha256": "7274cb17d56697b6964ee0bbc0636e226f500e7d1e6fd0536fcf6f2a062dfa62"
+          "sha256": "2db3a7983b7bb8253a30dafafafa9a68ab5529431bd370ced93ec9d3e525ee58"
         }
       ],
       "profile": "runtime_core"

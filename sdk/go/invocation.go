@@ -325,7 +325,7 @@ func (b *InvocationBuilder) inspectDraft() (InvocationDraft, error) {
 		}
 	}
 	// DescriptorRef canonical validation belongs to the Addressing provider
-	// and daemon/Axon boundary. Runtime Core validates tuple completeness here.
+	// and runtime identity boundary. Runtime Core validates tuple completeness here.
 	if b.causalContext == nil {
 		return InvocationDraft{}, invalidInvocation("causal_context is required", nil)
 	}

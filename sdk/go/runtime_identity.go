@@ -20,7 +20,7 @@ func identitySignerPolicyRef(ownerURA string, keyID string, publicKeyBase64 stri
 	return "daemon-key-inventory:sha256:" + hex.EncodeToString(hasher.Sum(nil)[:16])
 }
 
-// RuntimeSigningIdentity is an opaque daemon-owned signing capability. It
+// RuntimeSigningIdentity is an opaque provider-owned signing capability. It
 // intentionally exposes the public key and signing operation, never seed or
 // private-key bytes.
 type RuntimeSigningIdentity struct {
@@ -37,8 +37,8 @@ type CanonicalSigner interface {
 	SigningPublicKey() (ed25519.PublicKey, error)
 }
 
-// Sign attaches an Ed25519 signature to canonical bytes through the daemon
-// keyring. Canonicalization remains the caller's domain; key custody does not.
+// Sign attaches an Ed25519 signature to canonical bytes through the provider
+// signer. Canonicalization remains the caller's domain; key custody does not.
 func (i RuntimeSigningIdentity) Sign(canonicalBytes []byte) ([]byte, error) {
 	if i.signer == nil {
 		return nil, invalidRuntimeClient("runtime signing identity is not initialized")
@@ -57,17 +57,17 @@ func (i RuntimeSigningIdentity) SigningPublicKey() (ed25519.PublicKey, error) {
 	return append(ed25519.PublicKey(nil), i.PublicKey...), nil
 }
 
-// RuntimeSigningIdentityRequest resolves an existing daemon-owned identity.
+// RuntimeSigningIdentityRequest resolves an existing provider-owned identity.
 // VaultPath and Passphrase are intentionally not part of this API: the SDK
-// never opens the vault and the keyring daemon owns its lifecycle.
+// never opens the vault and the provider owns its lifecycle.
 type RuntimeSigningIdentityRequest struct {
 	OwnerURA   string
 	SocketPath string
 	Timeout    time.Duration
 }
 
-// EnsureRuntimeSigningIdentityRequest provisions an identity in the daemon
-// keyring. The daemon generates the key and returns only its public projection.
+// EnsureRuntimeSigningIdentityRequest provisions an identity in the provider
+// key service. The provider generates the key and returns only its public projection.
 type EnsureRuntimeSigningIdentityRequest struct {
 	OwnerURA   string
 	SocketPath string

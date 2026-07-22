@@ -1,4 +1,4 @@
-"""AbilityDescriptor projection through daemon-owned runtime catalog facts."""
+"""AbilityDescriptor projection through runtime catalog facts."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ class AbilityDescriptorHints:
 
 @dataclass(frozen=True)
 class AbilityDescriptorProjection:
-    """Generic SDK read model for one daemon-owned AbilityDescriptor row."""
+    """Generic SDK read model for one runtime AbilityDescriptor row."""
 
     ability_ura: str = ""
     descriptor_ref: str = ""
@@ -70,7 +70,7 @@ class AbilityDescriptorRef:
 
 @dataclass(frozen=True)
 class AbilityDescriptorListRequest:
-    """Request daemon-owned descriptor catalog rows with generic filters."""
+    """Request runtime descriptor catalog rows with generic filters."""
 
     call: RuntimeCallContext
     scope: str = ""
@@ -80,7 +80,7 @@ class AbilityDescriptorListRequest:
 
 @dataclass(frozen=True)
 class AbilityDescriptorGetRequest:
-    """Resolve one canonical AbilityDescriptor row from the daemon catalog."""
+    """Resolve one canonical AbilityDescriptor row from the runtime catalog."""
 
     call: RuntimeCallContext
     ability_ura: str
@@ -174,7 +174,7 @@ class RuntimeAbilityDescriptorProvider:
         for descriptor in page.descriptors:
             if descriptor.ability_ura != ability_ura:
                 raise _invalid_descriptor(
-                    "daemon returned descriptor outside requested ability_ura"
+                    "runtime returned descriptor outside requested ability_ura"
                 )
             if version and descriptor.version != version:
                 continue

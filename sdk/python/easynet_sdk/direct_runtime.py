@@ -341,7 +341,7 @@ class DirectRuntimeTransport:
             raise _grpc_error(exc, endpoint=self._endpoint) from exc
         except Exception as exc:
             raise _direct_error(
-                f"invoke daemon endpoint failed: {exc}",
+                f"invoke runtime endpoint failed: {exc}",
                 code=ErrorCode.ROUTE_UNAVAILABLE,
                 retry=RetryHint.UNKNOWN,
                 retryable=False,
@@ -2159,7 +2159,7 @@ def _response_failure(
     return {
         "code": code.value,
         "stage": "direct_runtime.invoke",
-        "message": f"daemon invocation ended in {terminal_state}",
+        "message": f"runtime invocation ended in {terminal_state}",
         "retryable": code == ErrorCode.TIMEOUT,
     }
 

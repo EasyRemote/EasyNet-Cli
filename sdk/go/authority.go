@@ -57,7 +57,7 @@ func (f AuthoritySignatureProviderFunc) SignAuthority(ctx context.Context, mater
 	return f(ctx, material)
 }
 
-// DelegationProof is a typed projection of daemon/Axon delegated-authority
+// DelegationProof is a typed projection of runtime delegated-authority
 // metadata. It does not own canonical signing or verification.
 type DelegationProof struct {
 	IssuerURA   string
@@ -74,7 +74,7 @@ type DelegationProof struct {
 
 func (DelegationProof) runtimeInvocationAuthority() {}
 
-// SessionAuthority is a typed projection of daemon/Axon session-authority
+// SessionAuthority is a typed projection of runtime session-authority
 // metadata. It does not own canonical signing or verification.
 type SessionAuthority struct {
 	IssuerURA                string

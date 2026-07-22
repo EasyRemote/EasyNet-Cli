@@ -63,7 +63,7 @@ class AbilityTargetRequest:
 
 @dataclass(frozen=True)
 class ResolvedAbilityTarget:
-    """Daemon/Axon-projected target facts for an ability Invocation."""
+    """Runtime-projected target facts for an ability Invocation."""
 
     ability_ura: str
     descriptor_ref: str
@@ -74,7 +74,7 @@ class ResolvedAbilityTarget:
 
 @dataclass(frozen=True)
 class AbilityChildContext:
-    """Child Invocation context anchored to a daemon/Axon parent receipt."""
+    """Child Invocation context anchored to a runtime parent receipt."""
 
     invoker: "AbilityInvocationClient"
     caller_ura: str
@@ -184,7 +184,7 @@ class AbilityInvocationClient:
         )
 
     def resolve_target(self, request: AbilityTargetRequest) -> ResolvedAbilityTarget:
-        """Resolve a generic ability target through daemon/Axon identity helpers."""
+        """Resolve a generic ability target through runtime identity helpers."""
 
         self._require_open()
         selector = self._target_selector(request)
@@ -462,7 +462,7 @@ class InvocationWireProjector:
     """Project a tuple-like object to a canonical Invocation wire DTO.
 
     Projection is intentionally independent of Runtime lifecycle. It needs only
-    the daemon-owned Addressing facade to bind descriptor identity; dispatch is
+    the runtime Addressing facade to bind descriptor identity; dispatch is
     owned by :class:`InvocationObjectAdapter` or Runtime Core clients.
     """
 

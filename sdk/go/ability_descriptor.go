@@ -44,7 +44,7 @@ type AbilityDescriptorProjection struct {
 
 // AbilityDescriptorRef is the SDK DTO projection of a descriptor identity.
 // DescriptorRef grammar and canonicalization are owned by Axon behind the
-// daemon/Identity profile boundary; this value object only carries the
+// runtime identity profile boundary; this value object only carries the
 // projected fields.
 type AbilityDescriptorRef struct {
 	Raw        string
@@ -52,9 +52,9 @@ type AbilityDescriptorRef struct {
 	Version    string
 }
 
-// AbilityDescriptorListRequest asks the daemon-owned runtime catalog for
+// AbilityDescriptorListRequest asks the runtime catalog for
 // generic AbilityDescriptor rows. The SDK exposes product-neutral filter names
-// and lowers them to the historical daemon argument fields.
+// and lowers them to the provider catalog argument fields.
 type AbilityDescriptorListRequest struct {
 	Call       RuntimeCallContext `json:"call"`
 	Scope      string             `json:"scope,omitempty"`
@@ -106,7 +106,7 @@ func (c *AbilityDescriptorClient) Get(ctx context.Context, request AbilityDescri
 	return c.provider.Get(ctx, request)
 }
 
-// RuntimeAbilityDescriptorProvider reads the daemon-owned
+// RuntimeAbilityDescriptorProvider reads the runtime
 // `meta.list_abilities` catalog through the generic RuntimeAbilityClient.
 type RuntimeAbilityDescriptorProvider struct {
 	ability *RuntimeAbilityClient
@@ -174,7 +174,7 @@ func (p *RuntimeAbilityDescriptorProvider) Get(ctx context.Context, request Abil
 	matches := make([]AbilityDescriptorProjection, 0, len(page.Descriptors))
 	for _, descriptor := range page.Descriptors {
 		if descriptor.AbilityURA != abilityURA {
-			return AbilityDescriptorProjection{}, invalidAbilityDescriptor("daemon returned descriptor outside requested ability_ura", nil)
+			return AbilityDescriptorProjection{}, invalidAbilityDescriptor("runtime returned descriptor outside requested ability_ura", nil)
 		}
 		if version != "" && descriptor.Version != version {
 			continue

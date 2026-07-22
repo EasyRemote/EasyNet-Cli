@@ -9,9 +9,9 @@ import (
 
 // DiscoveryTransport supplies Runtime Core feature discovery JSON.
 //
-// Implementations may use daemon local transport. Public backend code consumes
+// Implementations may use provider transport. Public backend code consumes
 // this Go interface rather than Axon packages, generated protobufs, C ABI
-// handles, or raw daemon sockets.
+// handles, or raw provider sockets.
 type DiscoveryTransport interface {
 	FeatureDiscovery(ctx context.Context) ([]byte, error)
 	Close(ctx context.Context) error
@@ -35,7 +35,7 @@ type Client struct {
 	closed    bool
 }
 
-// NewClient creates a Go SDK client over a daemon discovery transport.
+// NewClient creates a Go SDK client over a runtime discovery transport.
 func NewClient(transport DiscoveryTransport) (*Client, error) {
 	if transport == nil {
 		return nil, &SDKError{
@@ -100,7 +100,7 @@ type FeatureSet struct {
 	AxonPB     bool              `json:"axon_pb"`
 }
 
-// Version returns the daemon SDK version facts in a small typed DTO.
+// Version returns SDK version facts in a small typed DTO.
 func (f FeatureSet) Version() Version {
 	return Version{
 		ABIVersion: f.ABIVersion,
@@ -114,7 +114,7 @@ type Version struct {
 	SDKVersion string
 }
 
-// FeatureDiscovery reads and decodes daemon SDK feature discovery.
+// FeatureDiscovery reads and decodes SDK feature discovery.
 func (c *Client) FeatureDiscovery(ctx context.Context) (FeatureSet, error) {
 	transport, err := c.discoveryTransport(ctx)
 	if err != nil {
@@ -204,7 +204,7 @@ func (c *Client) Close(ctx context.Context) error {
 }
 
 // RequireABI reads feature discovery and fails with VersionMismatch when
-// the daemon SDK ABI does not match the caller's expected ABI.
+// the runtime SDK ABI does not match the caller's expected ABI.
 func (c *Client) RequireABI(ctx context.Context, expected uint32) (FeatureSet, error) {
 	if expected == 0 {
 		return FeatureSet{}, &SDKError{

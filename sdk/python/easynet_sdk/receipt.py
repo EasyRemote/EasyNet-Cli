@@ -144,7 +144,7 @@ class ReceiptTraceResult:
 
 @dataclass(frozen=True)
 class ReceiptReference:
-    """A daemon/Axon-issued receipt anchor usable as scalar causality."""
+    """A runtime-issued receipt anchor usable as scalar causality."""
 
     receipt_ura: str
     receipt_hash: bytes
@@ -176,7 +176,7 @@ class ReceiptReference:
 
     @classmethod
     def from_runtime_receipt(cls, receipt: object) -> "ReceiptReference":
-        """Build a causal reference from a daemon runtime receipt summary."""
+        """Build a causal reference from a runtime receipt summary."""
 
         if isinstance(receipt, RuntimeReceipt):
             receipt.validate_summary()

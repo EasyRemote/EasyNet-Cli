@@ -148,7 +148,7 @@ class SdkEnvironment:
     _owned: list[_Closable] = field(default_factory=list, init=False, repr=False)
 
     def feature_set(self) -> FeatureSet:
-        """Return daemon SDK feature discovery for the configured library."""
+        """Return SDK feature discovery for the configured runtime provider."""
 
         client = self.client()
         try:

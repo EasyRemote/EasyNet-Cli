@@ -308,7 +308,7 @@ class RuntimeInvocationTransport:
 
     def _require_open_locked(self) -> None:
         if self._state is not _RuntimeInvocationTransportState.OPEN:
-            raise _closed_transport("daemon invocation transport is closing or closed")
+            raise _closed_transport("runtime invocation transport is closing or closed")
 
 
 def _open_runtime_invocation_transport(
@@ -1355,7 +1355,7 @@ def _invocation_result_dict(result: InvocationResult) -> dict[str, object]:
 def _result_response_dict(result: Mapping[str, object]) -> dict[str, object]:
     if result.get("ok") is not True:
         error = result.get("error")
-        message = "daemon invocation failed"
+        message = "runtime invocation failed"
         raw_code: str | None = None
         if isinstance(error, Mapping) and isinstance(error.get("message"), str):
             message = error["message"]
@@ -1581,7 +1581,7 @@ def _missing_required_signer() -> SDKError:
         stage="runtime_signing",
         retry=RetryHint.NEVER,
         retryable=False,
-        message=("Signed invocation requires a daemon-authorized SDK Signer"),
+        message=("Signed invocation requires a provider-authorized SDK Signer"),
         details={"reason": "signing_path_pending"},
     )
 

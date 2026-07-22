@@ -24,7 +24,7 @@ type InvocationTraceEdge = axoninv.InvocationTraceEdge
 type InvocationLedgerRecord = axoninv.InvocationLedgerRecord
 type InvocationTraceGraph = axoninv.InvocationTraceGraph
 
-// ReceiptReference is a daemon/Axon-issued locator plus the exact canonical
+// ReceiptReference is a runtime-issued locator plus the exact canonical
 // receipt hash. The runtime SDK validates and projects it; it never fabricates
 // a receipt URA.
 type ReceiptReference struct {
@@ -54,7 +54,7 @@ func ReceiptReferenceFromAnchor(anchor InvocationReceiptAnchor) (ReceiptReferenc
 	return NewReceiptReference(anchor.ReceiptURA, receiptHash)
 }
 
-// ReceiptReferenceFromRuntimeReceipt projects a daemon runtime receipt summary
+// ReceiptReferenceFromRuntimeReceipt projects a runtime receipt summary
 // into the scalar causal reference used by Invocation builders. The SDK owns
 // receipt URA and hash validation; products must not fabricate anchors from
 // partial summaries.

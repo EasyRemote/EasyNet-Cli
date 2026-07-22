@@ -46,7 +46,7 @@ func (p SignerPolicy) ExpiresAtUnixMS() int64 {
 	return p.expiresAtUnixMS
 }
 
-// SigningMaterial is daemon/Axon-owned canonical material projected to SDK DTOs.
+// SigningMaterial is canonical runtime material projected to SDK DTOs.
 type SigningMaterial struct {
 	algorithm            string
 	canonicalBytesBase64 string
@@ -114,7 +114,7 @@ type PreparedInvocation struct {
 	signingMaterial  SigningMaterial
 }
 
-// NewPreparedInvocationFromJSON decodes daemon/Axon prepared signing material.
+// NewPreparedInvocationFromJSON decodes prepared runtime signing material.
 func NewPreparedInvocationFromJSON(raw []byte) (PreparedInvocation, error) {
 	return decodePreparedInvocation(raw, true)
 }
@@ -259,7 +259,7 @@ func (p PreparedInvocation) SignWithCallerSignature(signature InvocationSignatur
 	}, nil
 }
 
-// SignatureProvider produces caller signatures over daemon/Axon signing material.
+// SignatureProvider produces caller signatures over canonical signing material.
 type SignatureProvider interface {
 	Sign(material SigningMaterial, handle SignerHandle) (InvocationSignature, error)
 }
@@ -279,7 +279,7 @@ func (p StaticSignatureProvider) Sign(material SigningMaterial, handle SignerHan
 	return p.signature, nil
 }
 
-// Signer binds a daemon-authorized handle to a concrete signature provider.
+// Signer binds a provider-authorized handle to a concrete signature provider.
 type Signer struct {
 	handle   SignerHandle
 	provider SignatureProvider
@@ -442,7 +442,7 @@ func (s SignedInvocation) SubmitReady() bool {
 		strings.TrimSpace(s.prepared.SigningMaterial().CanonicalBytesBase64()) != ""
 }
 
-// MarshalJSON emits the daemon signed-invocation envelope shape.
+// MarshalJSON emits the runtime signed-invocation envelope shape.
 func (s SignedInvocation) MarshalJSON() ([]byte, error) {
 	if !s.SubmitReady() {
 		return nil, invalidInvocation("signed invocation is not submit-ready", nil)

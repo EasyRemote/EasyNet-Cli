@@ -8,9 +8,9 @@ import (
 
 // HealthTransport supplies Runtime Core health JSON.
 //
-// Implementations may call the daemon SDK boundary. Product code consumes this
+// Implementations may call a runtime provider boundary. Product code consumes this
 // interface rather than Axon packages, generated protobufs, C ABI handles, or
-// raw daemon sockets.
+// raw provider sockets.
 type HealthTransport interface {
 	RuntimeHealth(ctx context.Context) ([]byte, error)
 }
@@ -32,7 +32,7 @@ type HealthClient struct {
 	transport HealthTransport
 }
 
-// NewHealthClient creates a health facade over a daemon health transport.
+// NewHealthClient creates a health facade over a runtime health transport.
 func NewHealthClient(transport HealthTransport) (*HealthClient, error) {
 	if transport == nil {
 		return nil, &SDKError{
@@ -90,7 +90,7 @@ func (h RuntimeHealth) Ready() bool {
 	return h.RuntimeReady
 }
 
-// RuntimeHealth reads and decodes daemon runtime health.
+// RuntimeHealth reads and decodes runtime health.
 func (c *HealthClient) RuntimeHealth(ctx context.Context) (RuntimeHealth, error) {
 	if c == nil || c.transport == nil {
 		return RuntimeHealth{}, &SDKError{
@@ -124,7 +124,7 @@ func (c *HealthClient) RuntimeHealth(ctx context.Context) (RuntimeHealth, error)
 	return decodeRuntimeHealth(raw)
 }
 
-// Diagnostics reads and decodes daemon runtime diagnostics.
+// Diagnostics reads and decodes runtime diagnostics.
 func (c *HealthClient) Diagnostics(ctx context.Context) (DiagnosticsReport, error) {
 	if c == nil || c.transport == nil {
 		return DiagnosticsReport{}, &SDKError{

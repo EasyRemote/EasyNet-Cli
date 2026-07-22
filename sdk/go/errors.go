@@ -141,7 +141,7 @@ func (e *SDKError) SourceRef() string {
 	return detailString(e.Details, "source_ref")
 }
 
-// RuntimeError is the Runtime Core error projection required by the daemon SDK.
+// RuntimeError is the Runtime Core error projection required by the SDK.
 type RuntimeError = SDKError
 
 // RetryableForHint returns the explicit retryability represented by a retry hint.

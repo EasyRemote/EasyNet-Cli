@@ -1283,11 +1283,11 @@ func directResponseFailure(errorValue *axonpb.Error, terminalState string, stage
 	case "Completed", "Accepted", "Admitted", "Dispatched", "Running":
 		return nil
 	case "TimedOut":
-		return map[string]any{"code": string(ErrTimeout), "stage": stage, "message": "daemon invocation ended in TimedOut", "retryable": true}
+		return map[string]any{"code": string(ErrTimeout), "stage": stage, "message": "runtime invocation ended in TimedOut", "retryable": true}
 	case "Cancelled":
-		return map[string]any{"code": string(ErrCancelled), "stage": stage, "message": "daemon invocation ended in Cancelled", "retryable": false}
+		return map[string]any{"code": string(ErrCancelled), "stage": stage, "message": "runtime invocation ended in Cancelled", "retryable": false}
 	case "Failed":
-		return map[string]any{"code": string(ErrAbilityFailed), "stage": stage, "message": "daemon invocation ended in Failed", "retryable": false}
+		return map[string]any{"code": string(ErrAbilityFailed), "stage": stage, "message": "runtime invocation ended in Failed", "retryable": false}
 	default:
 		return nil
 	}

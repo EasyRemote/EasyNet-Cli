@@ -14,10 +14,10 @@ class HealthTransport(Protocol):
     """Narrow transport interface for Runtime Core health."""
 
     def runtime_health(self) -> bytes:
-        """Return raw runtime health JSON bytes from a daemon SDK boundary."""
+        """Return raw runtime health JSON bytes from a provider boundary."""
 
     def runtime_diagnostics(self) -> bytes:
-        """Return raw runtime diagnostics JSON bytes from a daemon SDK boundary."""
+        """Return raw runtime diagnostics JSON bytes from a provider boundary."""
 
 
 @dataclass(frozen=True)
@@ -100,7 +100,7 @@ class HealthClient:
         self._closed = False
 
     def runtime_health(self) -> RuntimeHealth:
-        """Read and decode daemon runtime health."""
+        """Read and decode runtime health."""
 
         self._require_open()
         try:
@@ -119,7 +119,7 @@ class HealthClient:
         return _decode_runtime_health(raw)
 
     def diagnostics(self) -> DiagnosticsReport:
-        """Read and decode daemon runtime diagnostics."""
+        """Read and decode runtime diagnostics."""
 
         self._require_open()
         transport = getattr(self._transport, "runtime_diagnostics", None)

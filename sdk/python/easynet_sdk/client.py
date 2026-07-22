@@ -14,7 +14,7 @@ class DiscoveryTransport(Protocol):
     """Narrow transport interface for Runtime Core feature discovery."""
 
     def feature_discovery(self) -> bytes:
-        """Return raw feature discovery JSON bytes from a daemon SDK boundary."""
+        """Return raw feature discovery JSON bytes from a provider boundary."""
 
     def close(self) -> None:
         """Release discovery transport resources."""
@@ -57,7 +57,7 @@ class Client:
         self._closed = False
 
     def feature_discovery(self) -> FeatureSet:
-        """Read and decode daemon SDK feature discovery."""
+        """Read and decode SDK feature discovery."""
 
         transport = self._require_open()
         try:

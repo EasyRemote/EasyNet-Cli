@@ -3,10 +3,10 @@
 This package is the Go implementation of the canonical, product-neutral
 runtime model. It exposes only the shared seams used by downstream products:
 
-- daemon discovery, lifecycle, connection and health;
+- runtime host discovery, lifecycle, connection and health;
 - Axon-backed canonical URA and descriptor-reference addressing;
 - authority metadata and policy-safe invocation drafts;
-- prepare/sign/submit with daemon-owned key custody;
+- prepare/sign/submit with provider-owned key custody;
 - unary, server-stream and bidirectional invocation state machines;
 - typed errors and terminal receipt facts.
 

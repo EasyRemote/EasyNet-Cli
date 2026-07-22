@@ -229,7 +229,7 @@ type RuntimeClient struct {
 	closed    bool
 }
 
-// NewRuntimeClient creates a Runtime Core facade over a daemon invocation transport.
+// NewRuntimeClient creates a Runtime Core facade over an invocation transport.
 func NewRuntimeClient(transport RuntimeTransport) (*RuntimeClient, error) {
 	if transport == nil {
 		return nil, &SDKError{
@@ -298,7 +298,7 @@ func (c *RuntimeClient) ResolveDescriptorRef(ctx context.Context, req RuntimeDes
 	return descriptorRef, nil
 }
 
-// PrepareOptions are daemon-owned prepare policy knobs.
+// PrepareOptions are runtime prepare policy knobs.
 type PrepareOptions struct {
 	ExpiresInMS int64  `json:"expires_in_ms,omitempty"`
 	SignerID    string `json:"signer_id,omitempty"`
@@ -403,7 +403,7 @@ func (c *RuntimeClient) OpenBidi(ctx context.Context, draft InvocationDraft, str
 	return NewBidiSessionFromJSON(bidiTransport, rawOpen)
 }
 
-// Prepare delegates canonical material generation to the daemon transport.
+// Prepare delegates canonical material generation to the runtime transport.
 func (c *RuntimeClient) Prepare(ctx context.Context, draft InvocationDraft, opts PrepareOptions) (PreparedInvocation, SigningMaterial, error) {
 	return c.prepare(ctx, draft, opts)
 }

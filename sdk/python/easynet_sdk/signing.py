@@ -91,7 +91,7 @@ class PreparedInvocation:
 
 
 class SignatureProvider(Protocol):
-    """Produces caller signatures over daemon/Axon signing material."""
+    """Produces caller signatures over canonical signing material."""
 
     def sign(
         self, material: SigningMaterial, handle: SignerHandle
@@ -115,7 +115,7 @@ class StaticSignatureProvider:
 
 @dataclass(frozen=True)
 class Signer:
-    """SDK signer workflow object over a daemon-authorized signer handle."""
+    """SDK signer workflow object over a provider-authorized signer handle."""
 
     handle: SignerHandle
     provider: SignatureProvider
