@@ -156,10 +156,7 @@ impl DispatchContext {
         if mission_id.is_empty() {
             return None;
         }
-        let depth = std::env::var(ENV_AGENT_DEPTH)
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(0);
+        let depth = std::env::var(ENV_AGENT_DEPTH).ok()?.parse::<u32>().ok()?;
         let origin_agent = std::env::var(ENV_ORIGIN_AGENT)
             .ok()
             .filter(|s| !s.is_empty());
@@ -213,19 +210,48 @@ pub fn enter(ctx: DispatchContext) -> ContextGuard {
     ContextGuard { prev }
 }
 
-/// Read the current thread's dispatch context, falling back to the
-/// process env vars if no in-process context is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DispatchContextSource {
+    ThreadLocal,
+    ProcessEnvironment,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedDispatchContext {
+    source: DispatchContextSource,
+    context: DispatchContext,
+}
+
+fn current_with_source() -> Option<ResolvedDispatchContext> {
+    if let Some(context) = CURRENT.with(|cell| cell.borrow().clone()) {
+        return Some(ResolvedDispatchContext {
+            source: DispatchContextSource::ThreadLocal,
+            context,
+        });
+    }
+
+    DispatchContext::from_env().map(|context| ResolvedDispatchContext {
+        source: DispatchContextSource::ProcessEnvironment,
+        context,
+    })
+}
+
+/// Read the current dispatch context from the explicit source chain.
 ///
-/// The fallback is the load-bearing reason this function exists: when
-/// the parent (a CLI mission runner) spawns an agent CLI subprocess,
-/// the child starts a fresh process with no thread-local set, but it
-/// inherits the env vars and must reconstruct the same view its parent
-/// had. Without the env-var fallback, the child would have to re-derive
-/// the depth from scratch and the recursion guard would never fire.
+/// The source ordering is load-bearing: in-process mission execution
+/// reads the thread-local context installed by `enter`; child agent
+/// subprocesses start without that thread-local and reconstruct the same
+/// typed context from the serialized process-environment handoff. This
+/// preserves recursion depth and audit attribution across process
+/// boundaries without treating the environment as a degraded compatibility
+/// path.
 pub fn current() -> Option<DispatchContext> {
-    CURRENT
-        .with(|cell| cell.borrow().clone())
-        .or_else(DispatchContext::from_env)
+    let resolved = current_with_source()?;
+    match resolved.source {
+        DispatchContextSource::ThreadLocal | DispatchContextSource::ProcessEnvironment => {
+            Some(resolved.context)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -344,6 +370,58 @@ mod tests {
         assert_eq!(recovered.mission_id, "mission-42");
         assert_eq!(recovered.depth, 3);
         assert_eq!(recovered.origin_agent.as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn current_reports_process_environment_source_for_child_handoff() {
+        let _lock = test_env_lock().lock().unwrap();
+        std::env::set_var(ENV_MISSION_ID, "child-process-run");
+        std::env::set_var(ENV_AGENT_DEPTH, "4");
+        std::env::remove_var(ENV_ORIGIN_AGENT);
+
+        let resolved = current_with_source().expect("process environment handoff");
+
+        std::env::remove_var(ENV_MISSION_ID);
+        std::env::remove_var(ENV_AGENT_DEPTH);
+        std::env::remove_var(ENV_ORIGIN_AGENT);
+
+        assert_eq!(resolved.source, DispatchContextSource::ProcessEnvironment);
+        assert_eq!(resolved.context.mission_id, "child-process-run");
+        assert_eq!(resolved.context.depth, 4);
+    }
+
+    #[test]
+    fn current_prefers_thread_local_source_over_process_environment() {
+        let _lock = test_env_lock().lock().unwrap();
+        std::env::set_var(ENV_MISSION_ID, "env-run");
+        std::env::set_var(ENV_AGENT_DEPTH, "9");
+        let _guard = enter(ctx("thread-run", 2));
+
+        let resolved = current_with_source().expect("thread-local context");
+
+        std::env::remove_var(ENV_MISSION_ID);
+        std::env::remove_var(ENV_AGENT_DEPTH);
+        std::env::remove_var(ENV_ORIGIN_AGENT);
+
+        assert_eq!(resolved.source, DispatchContextSource::ThreadLocal);
+        assert_eq!(resolved.context.mission_id, "thread-run");
+        assert_eq!(resolved.context.depth, 2);
+    }
+
+    #[test]
+    fn process_environment_handoff_rejects_missing_or_malformed_depth() {
+        let _lock = test_env_lock().lock().unwrap();
+
+        std::env::set_var(ENV_MISSION_ID, "missing-depth");
+        std::env::remove_var(ENV_AGENT_DEPTH);
+        assert!(DispatchContext::from_env().is_none());
+
+        std::env::set_var(ENV_AGENT_DEPTH, "not-a-depth");
+        assert!(DispatchContext::from_env().is_none());
+
+        std::env::remove_var(ENV_MISSION_ID);
+        std::env::remove_var(ENV_AGENT_DEPTH);
+        std::env::remove_var(ENV_ORIGIN_AGENT);
     }
 
     #[test]

@@ -308,7 +308,7 @@ pub fn send_external_with_overrides_and_progress(
 ///
 ///   Stage 1 (presence): a `DispatchContext` must be active for this
 ///   thread (installed via `mission_runs::run_inproc`'s guard, or
-///   inherited from a parent process via the env-var fallback).
+///   inherited from a parent process via the process-environment handoff).
 ///   Stage 2 (anti-forgery): the context's `mission_id` must correspond
 ///   to an existing mission run dir on disk under
 ///   `~/.easynet/missions/runs/`. This catches the trivial-forgery case
@@ -860,8 +860,8 @@ mod compose_prompt_tests {
 ///
 /// Stage 1 — presence: a `DispatchContext` must be active for this
 /// thread, either installed via `with_context` (the typed in-process
-/// channel) or recovered from the env-var fallback (the cross-process
-/// channel for spawned subprocesses).
+/// channel) or recovered from the process-environment handoff (the
+/// cross-process channel for spawned subprocesses).
 /// Stage 2 — anti-forgery: the context's mission id must correspond to
 /// an existing mission run directory under `~/.easynet/missions/runs/`.
 ///

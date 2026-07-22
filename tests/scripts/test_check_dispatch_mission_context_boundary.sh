@@ -14,6 +14,16 @@ trap 'rm -rf "$SB"' EXIT
 
 mkdir -p "$SB/tools/scripts" "$SB/src/daemon/execution/mission"
 cp "$SCRIPT" "$SB/tools/scripts/check-dispatch-mission-context-boundary.sh"
+cat > "$SB/src/daemon/execution/mission/context.rs" <<'RS'
+enum DispatchContextSource {
+    ThreadLocal,
+    ProcessEnvironment,
+}
+
+fn current_with_source() -> Option<DispatchContextSource> {
+    Some(DispatchContextSource::ProcessEnvironment)
+}
+RS
 cat > "$SB/src/daemon/execution/mission/dispatch.rs" <<'RS'
 fn check_mission_context_invariant() -> anyhow::Result<()> {
     anyhow::bail!("dispatch::send_to_agent called without a mission context");
@@ -28,6 +38,29 @@ RS
   cd "$SB"
   bash tools/scripts/check-dispatch-mission-context-boundary.sh
 ) >/dev/null || fail "happy path should pass"
+
+cat > "$SB/src/daemon/execution/mission/context.rs" <<'RS'
+fn current() {}
+RS
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-dispatch-mission-context-boundary.sh
+) >/tmp/check-dispatch-mission-context.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing explicit context source should exit 1 (got $rc)"
+
+cat > "$SB/src/daemon/execution/mission/context.rs" <<'RS'
+enum DispatchContextSource {
+    ThreadLocal,
+    ProcessEnvironment,
+}
+
+fn current_with_source() -> Option<DispatchContextSource> {
+    Some(DispatchContextSource::ProcessEnvironment)
+}
+RS
 
 cat >> "$SB/src/daemon/execution/mission/dispatch.rs" <<'RS'
 fn old_release_branch() -> anyhow::Result<()> {
