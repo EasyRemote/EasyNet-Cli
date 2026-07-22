@@ -222,24 +222,22 @@ func (c *DirectRuntimeConnector) handleTransport(ctx context.Context) RuntimeTra
 
 // DirectRuntimeOptions are SDK-internal direct runtime transport knobs.
 type DirectRuntimeOptions struct {
-	DialTimeoutMS        int64
-	InvokeTimeoutMS      int64
-	MaxMessageBytes      int
-	HandleTransport      RuntimeTransport
-	CloseHandleTransport bool
+	DialTimeoutMS   int64
+	InvokeTimeoutMS int64
+	MaxMessageBytes int
+	HandleTransport RuntimeTransport
 }
 
 // DirectRuntimeTransport is a concrete RuntimeTransport over Axon gRPC UDS.
 type DirectRuntimeTransport struct {
-	mu                   sync.Mutex
-	conn                 *grpc.ClientConn
-	client               axonpb.InvocationClient
-	endpoint             string
-	invokeTimeout        time.Duration
-	handle               RuntimeTransport
-	codec                *directDescriptorBoundCodec
-	closeHandleTransport bool
-	closed               bool
+	mu            sync.Mutex
+	conn          *grpc.ClientConn
+	client        axonpb.InvocationClient
+	endpoint      string
+	invokeTimeout time.Duration
+	handle        RuntimeTransport
+	codec         *directDescriptorBoundCodec
+	closed        bool
 }
 
 // OpenDirectRuntimeTransport opens a direct Runtime transport.
@@ -283,13 +281,12 @@ func OpenDirectRuntimeTransport(ctx context.Context, endpoint string, options Di
 		)
 	}
 	return &DirectRuntimeTransport{
-		conn:                 conn,
-		client:               axonpb.NewInvocationClient(conn),
-		endpoint:             endpoint,
-		invokeTimeout:        invokeTimeout,
-		handle:               options.HandleTransport,
-		codec:                codec,
-		closeHandleTransport: options.CloseHandleTransport,
+		conn:          conn,
+		client:        axonpb.NewInvocationClient(conn),
+		endpoint:      endpoint,
+		invokeTimeout: invokeTimeout,
+		handle:        options.HandleTransport,
+		codec:         codec,
 	}, nil
 }
 
@@ -457,27 +454,18 @@ func (t *DirectRuntimeTransport) Close(ctx context.Context) error {
 		return nil
 	}
 	conn := t.conn
-	handle := t.handle
-	closeHandle := t.closeHandleTransport
 	t.conn = nil
 	t.client = nil
 	t.handle = nil
 	t.codec = nil
-	t.closeHandleTransport = false
 	t.closed = true
 	t.mu.Unlock()
 	var closeErr error
 	if conn == nil {
-		if closeHandle && handle != nil {
-			return handle.Close(ctx)
-		}
 		return nil
 	}
 	if err := conn.Close(); err != nil {
 		closeErr = transportRuntimeError("close direct runtime transport failed", err)
-	}
-	if closeHandle && handle != nil {
-		closeErr = errors.Join(closeErr, handle.Close(ctx))
 	}
 	return closeErr
 }

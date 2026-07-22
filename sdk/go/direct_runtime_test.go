@@ -808,9 +808,8 @@ func TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry(t *testing.T) {
 func TestDirectRuntimeTransportDelegatesHandleOperations(t *testing.T) {
 	handle := &directRuntimeFakeHandleTransport{}
 	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
-		DialTimeoutMS:        3000,
-		HandleTransport:      handle,
-		CloseHandleTransport: true,
+		DialTimeoutMS:   3000,
+		HandleTransport: handle,
 	})
 	defer cleanup()
 
@@ -856,8 +855,8 @@ func TestDirectRuntimeTransportDelegatesHandleOperations(t *testing.T) {
 	if err := transport.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if handle.closeCalls != 1 {
-		t.Fatalf("handle close calls = %d, want 1", handle.closeCalls)
+	if handle.closeCalls != 0 {
+		t.Fatalf("borrowed handle close calls = %d, want 0", handle.closeCalls)
 	}
 }
 
