@@ -3,16 +3,20 @@
 ## 2026-07-22 FFI last-error typed TLS
 
 - `cargo test -q -p easynet --lib ffi::errors --features axon-pb` — PASS
-  (`8 passed`); legacy raw-message JSON projection test was deleted and typed
-  ABI-code/projection tests remain green.
+  (`9 passed`); includes
+  `error_json_null_message_does_not_read_tls_last_error`, proving explicit-code
+  JSON projection no longer reads stale TLS message state.
+- `cargo check -q -p easynet --lib --features axon-pb` — PASS with no
+  last-error dead-code warning after `last_error_message` was narrowed to
+  test-only.
 - `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
-  — PASS; includes a new negative fixture where `LastErrorRecord` carries
-  `Option<i32>` and message-only `set_last_error` projects to generic JSON.
-- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
-- `git diff --check` — PASS.
-- `cargo fmt --all -- --check` — PASS.
-- `cargo check -q -p easynet --lib --features axon-pb` — PASS.
+  — PASS; the FFI last-error fixture now also contains the retired
+  `last_error_message().unwrap_or_default()` explicit-code fallback, plus
+  `LastErrorRecord { code: Option<i32> }` and message-only `set_last_error`
+  generic JSON projection.
 - `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
 - `bash tools/scripts/check-architecture-convergence.sh` — PASS.
 - `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` —
   PASS.

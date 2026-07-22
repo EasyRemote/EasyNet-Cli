@@ -25,7 +25,9 @@
   from raw message text. Every recorded last error carries an explicit ABI
   code before it can be projected into the canonical runtime error DTO;
   message-only buffers remain text diagnostics and cannot synthesize
-  `ERR_GENERIC` proof.
+  `ERR_GENERIC` proof. Explicit-code JSON projection must not read the TLS
+  last-error slot as a message fallback; null message is explicit empty
+  message state, not permission to reuse stale thread-local diagnostics.
 - Canonical resource write surfaces must not infer producer facts. If a blob
   needs a filename or content type in its public record, the producer must
   submit that fact explicitly before the runtime stores or projects it.

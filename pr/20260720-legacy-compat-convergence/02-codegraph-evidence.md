@@ -19,6 +19,21 @@ Evidence will be appended after indexing and focused impact queries.
   `set_last_error` is removed, projection helpers take `i32` directly, and
   the SPEC v2 gate rejects reintroducing raw-text last-error JSON fallback.
 
+## 2026-07-22 FFI explicit-code message fallback audit
+
+- Follow-up `rg` over `src/ffi`, SDK bindings, and headers found the remaining
+  active fallback in `src/ffi/errors/mod.rs::easynet_error_json`: a null
+  explicit `message` parameter read `last_error_message().unwrap_or_default()`.
+- The root abstraction problem was stale TLS coupling. `easynet_error_json`
+  is an explicit `(abi_code, optional_message)` projector for bindings that
+  already hold a return code; it must not borrow message facts from the
+  thread-local last-error record, because that can pair a new ABI code with an
+  old runtime failure message.
+- After the change, null `message` projects to an explicit empty message, and
+  callers that need the recorded TLS error must use `easynet_last_error_json`.
+  The SPEC v2 gate now rejects `last_error_message().unwrap_or_default()` in
+  the FFI error source.
+
 ## 2026-07-22 Runtime-owner signer User custody audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was

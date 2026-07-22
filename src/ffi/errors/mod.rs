@@ -202,7 +202,10 @@ pub unsafe extern "C" fn easynet_last_error_json(out_error_json: *mut *mut c_cha
 /// directly and branch on `code` in the returned JSON.
 ///
 /// # Safety
-/// `message` may be null; if non-null it must be a valid UTF-8 C string.
+/// `message` may be null; null means the caller has no message for this
+/// explicit code projection. It does not read the TLS last-error slot; callers
+/// that need the recorded last error must use `easynet_last_error_json`.
+/// If non-null it must be a valid UTF-8 C string.
 /// `out_error_json` must be a non-null caller-owned pointer.
 #[no_mangle]
 pub unsafe extern "C" fn easynet_error_json(
@@ -220,7 +223,7 @@ pub unsafe extern "C" fn easynet_error_json(
     unsafe { *out_error_json = std::ptr::null_mut() };
 
     let message = if message.is_null() {
-        last_error_message().unwrap_or_default()
+        String::new()
     } else {
         match unsafe { CStr::from_ptr(message) }.to_str() {
             Ok(value) => value.to_string(),
@@ -242,6 +245,7 @@ pub unsafe extern "C" fn easynet_error_json(
     write_json_output("easynet_error_json", out_error_json, json)
 }
 
+#[cfg(test)]
 fn last_error_message() -> Option<String> {
     LAST_ERROR.with(|slot| {
         slot.borrow()
@@ -506,6 +510,25 @@ mod tests {
         assert_eq!(value["retry"], "safe");
         assert_eq!(value["message"], "deadline elapsed");
         assert_eq!(value["details"]["abi_symbol"], "ERR_TIMEOUT");
+    }
+
+    #[test]
+    fn error_json_null_message_does_not_read_tls_last_error() {
+        std::thread::spawn(|| {
+            set_last_error_code(ERR_NOT_FOUND, "stale descriptor error");
+            let mut out: *mut c_char = std::ptr::null_mut();
+            let code = unsafe { easynet_error_json(ERR_TIMEOUT, std::ptr::null(), &mut out) };
+            assert_eq!(code, EASYNET_OK);
+            let value: serde_json::Value =
+                unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
+            unsafe { crate::ffi::strings::easynet_string_free(out) };
+            assert_eq!(value["code"], "TIMEOUT");
+            assert_eq!(value["message"], "");
+            assert_eq!(value["details"]["abi_code"], ERR_TIMEOUT);
+            assert_eq!(value["details"]["abi_symbol"], "ERR_TIMEOUT");
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]

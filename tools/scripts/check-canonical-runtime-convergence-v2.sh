@@ -1974,6 +1974,7 @@ retired = {
     "typed_error_json_with_projection(Some(": "optional_projection_api",
     "code.unwrap_or(ERR_GENERIC)": "generic_projection_fallback",
     "last_error_json_projects_legacy_message_as_generic": "legacy_projection_test",
+    "last_error_message().unwrap_or_default()": "explicit_code_reads_tls_message",
 }
 for pattern, label in retired.items():
     if pattern in text:
@@ -1982,6 +1983,8 @@ for pattern, label in retired.items():
 for required in (
     "set_last_error_code(ERR_INVALID_HANDLE, \"bad handle\")",
     "set_last_error_code(ERR_GENERIC, \"a\\0b\\0c\")",
+    "error_json_null_message_does_not_read_tls_last_error",
+    "#[cfg(test)]\nfn last_error_message()",
     "fn typed_error_json(code: i32, message: &str)",
     "fn typed_error_json_with_projection(",
 ):
@@ -3757,6 +3760,10 @@ fn typed_error_json(code: Option<i32>, message: &str) -> serde_json::Value {
         "message": message,
         "details": {"abi_code": code.unwrap_or(ERR_GENERIC)}
     })
+}
+
+fn easynet_error_json() {
+    let message = last_error_message().unwrap_or_default();
 }
 
 fn last_error_json_projects_legacy_message_as_generic() {}
