@@ -34,7 +34,7 @@ use crate::daemon::ability::dispatch::{
     AxonAbilityCatalog, ControlPlaneImplementation, LocalRpcHandler, OwnerKind,
 };
 
-pub use identity::PagesIdentity;
+pub use identity::{PagesIdentity, PagesUserRootIdentity};
 
 /// Installation parameters for the Pages reference system. Carry
 /// the daemon's user identity (the `<user>` segment in every

@@ -22,6 +22,7 @@
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
+use crate::daemon::ability::builtins::resources::pages::{PagesIdentity, PagesUserRootIdentity};
 use crate::support::platform::local_invoke::{LocalAbilityTarget, LocalDaemonSystemAbilityIssuer};
 
 /// User-owned Pages ability verbs exposed by the local daemon.
@@ -180,47 +181,23 @@ pub fn run(args: PagesArgs) -> anyhow::Result<()> {
     }
 }
 
-fn current_user() -> anyhow::Result<String> {
-    // Production: read username from `EASYNET_PAGES_USER` env or
-    // `credentials.json`. M5 of the system-namespace migration
-    // banned the `legacy self alias` placeholder — an unpaired daemon has no
-    // user-rooted ability surface, so the CLI MUST surface the
-    // missing-identity error rather than silently dialling
-    // `self.pages.*` (which the registry no longer answers).
-    if let Some(v) = std::env::var("EASYNET_PAGES_USER")
-        .ok()
-        .filter(|s| !s.is_empty())
-    {
-        return Ok(v);
-    }
-    if let Some(v) = crate::daemon::persistence::config::load_credentials()
-        .ok()
-        .and_then(|c| c.username)
-        .filter(|s| !s.is_empty())
-    {
-        return Ok(v);
-    }
-    anyhow::bail!(
-        "no user identity bound to this daemon — run 'easynet device pair' first \
-         (or set EASYNET_PAGES_USER for dev rigs)"
-    )
-}
-
-fn current_realm() -> String {
-    std::env::var("EASYNET_PAGES_REALM")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            crate::daemon::persistence::config::load_credentials()
-                .ok()
-                .map(|c| c.realm)
-                .filter(|s| !s.is_empty())
+fn current_pages_user_root_identity() -> anyhow::Result<PagesUserRootIdentity> {
+    PagesIdentity::try_from_env()?
+        .user_root_identity()?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no user identity bound to this daemon — run 'easynet device pair' first \
+                 (or set EASYNET_PAGES_USER and EASYNET_PAGES_REALM for dev rigs)"
+            )
         })
-        .unwrap_or_else(|| crate::core::ura::REALM_EASYNET.to_string())
 }
 
-fn invoke_pages_ability(ability: &PagesAbility, args: Value) -> anyhow::Result<Value> {
-    let target = ability.local_target(&current_realm())?;
+fn invoke_pages_ability(
+    identity: &PagesUserRootIdentity,
+    ability: &PagesAbility,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let target = ability.local_target(&identity.realm)?;
     LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(
         &target,
         args,
@@ -230,14 +207,14 @@ fn invoke_pages_ability(ability: &PagesAbility, args: Value) -> anyhow::Result<V
 }
 
 fn run_create(a: CreateArgs) -> anyhow::Result<()> {
-    let user = current_user()?;
-    let ability = PagesAbility::for_user(&user, PagesAbilityVerb::Publish)?;
+    let identity = current_pages_user_root_identity()?;
+    let ability = PagesAbility::for_user(&identity.user, PagesAbilityVerb::Publish)?;
     let args_v = json!({
         "folder":     a.folder,
         "project_id": a.project_id,
         "visibility": a.visibility,
     });
-    let result = invoke_pages_ability(&ability, args_v)
+    let result = invoke_pages_ability(&identity, &ability, args_v)
         .map_err(|e| anyhow::anyhow!("pages create failed: {e}"))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -258,9 +235,9 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
 }
 
 fn run_list(a: ListArgs) -> anyhow::Result<()> {
-    let user = current_user()?;
-    let ability = PagesAbility::for_user(&user, PagesAbilityVerb::List)?;
-    let result = invoke_pages_ability(&ability, json!({}))
+    let identity = current_pages_user_root_identity()?;
+    let ability = PagesAbility::for_user(&identity.user, PagesAbilityVerb::List)?;
+    let result = invoke_pages_ability(&identity, &ability, json!({}))
         .map_err(|e| anyhow::anyhow!("pages list failed: {e}"))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -293,10 +270,10 @@ fn run_list(a: ListArgs) -> anyhow::Result<()> {
 }
 
 fn run_show(a: ShowArgs) -> anyhow::Result<()> {
-    let user = current_user()?;
-    let ability = PagesAbility::for_user(&user, PagesAbilityVerb::Get)?;
+    let identity = current_pages_user_root_identity()?;
+    let ability = PagesAbility::for_user(&identity.user, PagesAbilityVerb::Get)?;
     let args_v = json!({ "project_id": a.project_id });
-    let result = invoke_pages_ability(&ability, args_v)
+    let result = invoke_pages_ability(&identity, &ability, args_v)
         .map_err(|e| anyhow::anyhow!("pages show failed: {e}"))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -367,10 +344,10 @@ fn run_delete(a: DeleteArgs) -> anyhow::Result<()> {
             "delete is destructive — pass '--force' to confirm; this MVP does not prompt interactively"
         );
     }
-    let user = current_user()?;
-    let ability = PagesAbility::for_user(&user, PagesAbilityVerb::Unpublish)?;
+    let identity = current_pages_user_root_identity()?;
+    let ability = PagesAbility::for_user(&identity.user, PagesAbilityVerb::Unpublish)?;
     let args_v = json!({ "project_id": a.project_id });
-    let result = invoke_pages_ability(&ability, args_v)
+    let result = invoke_pages_ability(&identity, &ability, args_v)
         .map_err(|e| anyhow::anyhow!("pages delete failed: {e}"))?;
     let removed = result
         .get("removed")
@@ -385,10 +362,10 @@ fn run_delete(a: DeleteArgs) -> anyhow::Result<()> {
 }
 
 fn run_url(a: UrlArgs) -> anyhow::Result<()> {
-    let user = current_user()?;
-    let ability = PagesAbility::for_user(&user, PagesAbilityVerb::Get)?;
+    let identity = current_pages_user_root_identity()?;
+    let ability = PagesAbility::for_user(&identity.user, PagesAbilityVerb::Get)?;
     let args_v = json!({ "project_id": a.project_id });
-    let result = invoke_pages_ability(&ability, args_v)
+    let result = invoke_pages_ability(&identity, &ability, args_v)
         .map_err(|e| anyhow::anyhow!("pages url failed: {e}"))?;
     let url = result
         .get("url_root")
@@ -401,6 +378,24 @@ fn run_url(a: UrlArgs) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
+    use crate::daemon::persistence::config::{self, Credentials};
+
+    fn credentials(username: &str, realm: &str) -> Credentials {
+        Credentials {
+            node_id: "device-a".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "https://hub.example".to_string(),
+            realm: realm.to_string(),
+            deploy_signature: "sig".to_string(),
+            hub_api_base: None,
+            username: Some(username.to_string()),
+            user_id: Some("user-a".to_string()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        }
+    }
 
     #[test]
     fn pages_ability_projects_to_local_registry_key() {
@@ -431,5 +426,46 @@ mod tests {
         let err = PagesAbility::for_user("   ", PagesAbilityVerb::List)
             .expect_err("empty user must fail");
         assert!(format!("{err}").contains("non-empty user"));
+    }
+
+    #[test]
+    fn pages_cli_identity_projects_credentials_user_and_realm() {
+        let _home = HomeGuard::new();
+        config::save_credentials(&credentials("alice", "localhost")).expect("save credentials");
+
+        let identity = current_pages_user_root_identity().expect("pages identity");
+
+        assert_eq!(identity.user, "alice");
+        assert_eq!(identity.realm, "localhost");
+    }
+
+    #[test]
+    fn pages_cli_identity_rejects_env_user_without_realm() {
+        let _home = HomeGuard::new();
+        std::env::set_var("EASYNET_PAGES_USER", "alice");
+
+        let error = current_pages_user_root_identity()
+            .expect_err("env user without realm must not default to public realm");
+
+        assert!(
+            error.to_string().contains("requires an explicit realm"),
+            "wrong error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn pages_cli_identity_rejects_malformed_credentials_instead_of_defaulting() {
+        let _home = HomeGuard::new();
+        std::fs::create_dir_all(config::state_dir()).expect("state dir");
+        std::fs::write(config::state_dir().join("credentials.json"), b"{")
+            .expect("malformed credentials");
+
+        let error =
+            current_pages_user_root_identity().expect_err("malformed credentials must fail closed");
+
+        assert!(
+            error.to_string().contains("parse credentials"),
+            "wrong error: {error:#}"
+        );
     }
 }
