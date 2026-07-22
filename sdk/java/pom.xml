@@ -4,13 +4,13 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>run.easynet</groupId>
-  <artifactId>easynet-daemon-sdk</artifactId>
+  <groupId>run.runtime</groupId>
+  <artifactId>canonical-runtime-sdk</artifactId>
   <version>0.0.0-seam</version>
   <packaging>jar</packaging>
 
-  <name>EasyNet Daemon SDK Java Runtime Core Seam</name>
-  <description>Dependency-free Java Runtime Core seam for the EasyNet daemon SDK.</description>
+  <name>Canonical Runtime SDK Java Runtime Core Seam</name>
+  <description>Dependency-free Java Runtime Core seam for the canonical runtime SDK.</description>
 
   <properties>
     <maven.compiler.release>17</maven.compiler.release>

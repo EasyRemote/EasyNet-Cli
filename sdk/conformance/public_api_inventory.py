@@ -342,7 +342,7 @@ def _stable_clang_value(value: Any) -> Any:
 
 def java_inventory() -> dict[str, Any]:
     sources = sorted(
-        (ROOT / "sdk/java/src/main/java/run/easynet/daemon").glob("*.java")
+        (ROOT / "sdk/java/src/main/java/run/runtime/sdk").glob("*.java")
     )
     with tempfile.TemporaryDirectory() as directory:
         classes = Path(directory)

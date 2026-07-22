@@ -2768,7 +2768,7 @@ expected_helpers = {
     "python": "easynet_sdk.providers.easynet.plugin_exec",
     "go": "easynet.run/cli/sdk/go/provider/easynet/pluginexec",
     "rust": "easynet-provider-pluginexec",
-    "java": "run.easynet.daemon.provider.easynet.pluginexec",
+    "java": "run.runtime.sdk.provider.easynet.pluginexec",
     "node": "@easynet/daemon-sdk/provider/easynet/pluginexec",
 }
 expected_helper_files = {
@@ -2786,9 +2786,9 @@ expected_helper_files = {
         "sdk/rust/provider/easynet/pluginexec/tests/pluginexec.rs",
     ],
     "java": [
-        "sdk/java/src/main/java/run/easynet/daemon/provider/easynet/pluginexec/SidecarRuntime.java",
-        "sdk/java/src/main/java/run/easynet/daemon/provider/easynet/pluginexec/SidecarInvocation.java",
-        "sdk/java/src/test/java/run/easynet/daemon/provider/easynet/pluginexec/SidecarRuntimeTest.java",
+        "sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntime.java",
+        "sdk/java/src/main/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarInvocation.java",
+        "sdk/java/src/test/java/run/runtime/sdk/provider/easynet/pluginexec/SidecarRuntimeTest.java",
     ],
     "node": [
         "sdk/node/provider/easynet/pluginexec.js",
@@ -2875,7 +2875,7 @@ if "pluginexec.MustServe" not in text:
     raise SystemExit("plugin_go_template_missing_provider_helper")
 if "serve_exec_plugin" not in text or "easynet_provider_pluginexec" not in text:
     raise SystemExit("plugin_rust_template_missing_provider_helper")
-if "SidecarRuntime.serve" not in text or "run.easynet.daemon.provider.easynet.pluginexec" not in text:
+if "SidecarRuntime.serve" not in text or "run.runtime.sdk.provider.easynet.pluginexec" not in text:
     raise SystemExit("plugin_java_template_missing_provider_helper")
 if "serveExecPlugin" not in text:
     raise SystemExit("plugin_node_template_missing_provider_helper")
@@ -4112,9 +4112,9 @@ PY
 
 check_java_sdk_runtime_receipt_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
-  local result="$cli_root/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java"
-  local receipt="$cli_root/sdk/java/src/main/java/run/easynet/daemon/RuntimeReceipt.java"
-  local tests="$cli_root/sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+  local result="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
+  local receipt="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java"
+  local tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   [[ -f "$result" ]] || fail "Java InvocationResult source is missing: ${result#$cli_root/}"
   [[ -f "$receipt" ]] || fail "Java RuntimeReceipt source is missing: ${receipt#$cli_root/}"
   [[ -f "$tests" ]] || fail "Java runtime seam tests are missing: ${tests#$cli_root/}"
@@ -4240,8 +4240,8 @@ check_sdk_runtime_receipt_type_state_binding_contract() {
   local go_tests="$cli_root/sdk/go/runtime_test.go"
   local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime.py"
   local py_tests="$cli_root/sdk/python/tests/test_runtime.py"
-  local java_receipt="$cli_root/sdk/java/src/main/java/run/easynet/daemon/RuntimeReceipt.java"
-  local java_tests="$cli_root/sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+  local java_receipt="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java"
+  local java_tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   local node_runtime="$cli_root/sdk/node/index.js"
   local node_tests="$cli_root/sdk/node/test/runtime-core.test.mjs"
   [[ -f "$go_runtime" ]] || fail "Go runtime source is missing: ${go_runtime#$cli_root/}"
@@ -4492,22 +4492,22 @@ PY
   if ( AXON_ROOT="$tmp/axon-java-authority-helper"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java empty authority proof helper gate to fail"
   fi
-  mkdir -p "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon" \
-    "$tmp/cli-java-receipt-legacy/sdk/java/src/test/java/run/easynet/daemon"
-  cp "$ROOT/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java" \
-    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java"
-  cp "$ROOT/sdk/java/src/main/java/run/easynet/daemon/RuntimeReceipt.java" \
-    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon/RuntimeReceipt.java"
-  cp "$ROOT/sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java" \
-    "$tmp/cli-java-receipt-legacy/sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+  mkdir -p "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/runtime/sdk" \
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/test/java/run/runtime/sdk"
+  cp "$ROOT/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java" \
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
+  cp "$ROOT/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java" \
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java"
+  cp "$ROOT/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java" \
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   perl -0pi -e 's/requiredTerminalReceipt\(fields\)/optionalReceipt(fields, "terminal_receipt")/' \
-    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java"
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
   perl -0pi -e 's/private static Map<String, Object> requiredTerminalReceipt\(Map<String, Object> fields\)/private static Map<String, Object> optionalReceipt(Map<String, Object> fields, String field)/' \
-    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java"
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
   perl -0pi -e 's/throw SDKError\.validation\("invocation_result", "terminal_receipt is required"\);/return Map.of();/' \
-    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java"
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
   perl -0pi -e 's/fields\.containsKey\("terminal_receipt"\)/fields.containsKey(field)/g; s/fields\.get\("terminal_receipt"\)/fields.get(field)/g; s/"terminal_receipt must be an object"/field + " must be an object"/g' \
-    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java"
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
   if ( CLI_ROOT="$tmp/cli-java-receipt-legacy"; check_java_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java SDK receipt projection bypass gate to fail"
   fi
@@ -4589,8 +4589,8 @@ EOF
   mkdir -p "$tmp/cli-sdk-receipt-type-legacy/sdk/go" \
     "$tmp/cli-sdk-receipt-type-legacy/sdk/python/easynet_sdk" \
     "$tmp/cli-sdk-receipt-type-legacy/sdk/python/tests" \
-    "$tmp/cli-sdk-receipt-type-legacy/sdk/java/src/main/java/run/easynet/daemon" \
-    "$tmp/cli-sdk-receipt-type-legacy/sdk/java/src/test/java/run/easynet/daemon" \
+    "$tmp/cli-sdk-receipt-type-legacy/sdk/java/src/main/java/run/runtime/sdk" \
+    "$tmp/cli-sdk-receipt-type-legacy/sdk/java/src/test/java/run/runtime/sdk" \
     "$tmp/cli-sdk-receipt-type-legacy/sdk/node/test"
   cat >"$tmp/cli-sdk-receipt-type-legacy/sdk/go/runtime.go" <<'EOF'
 func (r RuntimeReceipt) ValidateSummary() error {
@@ -4606,13 +4606,13 @@ def validate_summary(self):
 EOF
   printf 'def test_runtime_receipt():\n    canonical_runtime_receipt("inv", "terminal", "Completed", 1)\n' \
     > "$tmp/cli-sdk-receipt-type-legacy/sdk/python/tests/test_runtime.py"
-  cat >"$tmp/cli-sdk-receipt-type-legacy/sdk/java/src/main/java/run/easynet/daemon/RuntimeReceipt.java" <<'EOF'
+  cat >"$tmp/cli-sdk-receipt-type-legacy/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java" <<'EOF'
 public final class RuntimeReceipt {
   private void validateSummary() { canonicalLifecycleState(state); }
 }
 EOF
   printf 'class RuntimeCoreSeamTest { void test() { canonicalRuntimeReceiptFixture("inv", "completed", "Completed", 1); } }\n' \
-    > "$tmp/cli-sdk-receipt-type-legacy/sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+    > "$tmp/cli-sdk-receipt-type-legacy/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   cat >"$tmp/cli-sdk-receipt-type-legacy/sdk/node/index.js" <<'EOF'
 export class RuntimeReceipt {
   validateSummary() { canonicalRuntimeReceiptState(this.state); }

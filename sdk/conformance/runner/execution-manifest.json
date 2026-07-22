@@ -582,7 +582,7 @@
       "case_id": "authority/mutual_exclusion",
       "selector": "authorityMetadataIsTypedAndMutuallyExclusive",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -590,7 +590,7 @@
       "case_id": "bidi/close_send_not_cancel",
       "selector": "streamAndBidiLifecyclesAreBounded",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -598,7 +598,7 @@
       "case_id": "bidi/frame0_required",
       "selector": "bidiFrame0IsRequiredBeforeRuntimeSessionEntry",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -606,7 +606,7 @@
       "case_id": "error/retry_hint",
       "selector": "retryHintsPreserveRetryability",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -614,7 +614,7 @@
       "case_id": "error/typed_json",
       "selector": "typedErrorsPreserveStableCategories",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -622,7 +622,7 @@
       "case_id": "health/api_vs_runtime",
       "selector": "healthKeepsLivenessSeparateFromReadiness",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -630,7 +630,7 @@
       "case_id": "invocation/canonical_material",
       "selector": "canonicalSigningMaterialComesFromPrepare",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -638,7 +638,7 @@
       "case_id": "invocation/complete_tuple",
       "selector": "completeTupleRejectsMissingCaller",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -646,7 +646,7 @@
       "case_id": "invocation/prepared_not_submittable",
       "selector": "preparedInvocationCannotBeSubmitted",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -654,7 +654,7 @@
       "case_id": "invocation/presigned_submit",
       "selector": "invocationPrepareSignSubmitPreservesTheCompleteTuple",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -662,7 +662,7 @@
       "case_id": "invocation/terminal_receipt_facts",
       "selector": "invocationResultUsesTerminalReceipt",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -670,7 +670,7 @@
       "case_id": "runtime_core/feature_discovery",
       "selector": "discoveryAndLifecycleAreExplicit",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -678,7 +678,7 @@
       "case_id": "stream/backpressure_bound",
       "selector": "streamAndBidiBackpressureAreBounded",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -686,7 +686,7 @@
       "case_id": "stream/order_terminal",
       "selector": "streamOrderAndTerminalArePreserved",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -694,7 +694,7 @@
       "case_id": "version/abi_compatible",
       "selector": "abiCompatibleAcceptsExactVersion",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {
@@ -702,7 +702,7 @@
       "case_id": "version/abi_incompatible",
       "selector": "abiIncompatibleRejectsMismatch",
       "evidence": [
-        "sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
       ]
     },
     {

@@ -22,7 +22,7 @@ if [[ ! -s "$sources_file" ]]; then
 fi
 
 javac -Xlint:all -Werror -d "$BUILD_DIR/classes" @"$sources_file"
-java -cp "$BUILD_DIR/classes" run.easynet.daemon.RuntimeCoreSeamTest
+java -cp "$BUILD_DIR/classes" run.runtime.sdk.RuntimeCoreSeamTest
 
 address_terms='U''RI|U''ri|u''ri'
 if grep -R -nE "\\b($address_terms)\\b|axon\\.v1|protobuf|easynet\\.run/axon|axonP[Bb]|AxonP[Bb]" \

@@ -369,7 +369,7 @@ def package_manifest() -> dict[str, list[dict[str, str]]]:
         "node": [{"path": "sdk/node/index.d.ts", "category": "public_facade"}],
         "java": [
             {
-                "path": "sdk/java/src/main/java/run/easynet/daemon",
+                "path": "sdk/java/src/main/java/run/runtime/sdk",
                 "category": "easynet_provider",
             }
         ],

@@ -1218,7 +1218,7 @@ fn execute_java_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterE
             "java",
             "-cp",
             classpath,
-            "run.easynet.daemon.RuntimeCoreSeamTest",
+            "run.runtime.sdk.RuntimeCoreSeamTest",
             "--list",
         ],
     )?;
@@ -1237,7 +1237,7 @@ fn execute_java_case(root: &Path, binding: &ExecutionBinding) -> Result<AdapterE
             "java",
             "-cp",
             classpath,
-            "run.easynet.daemon.RuntimeCoreSeamTest",
+            "run.runtime.sdk.RuntimeCoreSeamTest",
             &binding.selector,
         ],
     )?;
@@ -1266,7 +1266,7 @@ fn execute_java_cases(
             "java",
             "-cp",
             classpath,
-            "run.easynet.daemon.RuntimeCoreSeamTest",
+            "run.runtime.sdk.RuntimeCoreSeamTest",
             "--list",
         ],
     )?;
@@ -1292,7 +1292,7 @@ fn execute_java_cases(
                 "java",
                 "-cp",
                 classpath,
-                "run.easynet.daemon.RuntimeCoreSeamTest",
+                "run.runtime.sdk.RuntimeCoreSeamTest",
                 &binding.selector,
             ],
         )?;

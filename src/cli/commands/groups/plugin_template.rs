@@ -83,7 +83,7 @@ pub const PROVIDER_SIDECAR_HELPER_CAPABILITY_MATRIX: &[ProviderSidecarHelperCapa
         call_mode: ProviderSidecarCallMode::ExecInvoke,
         state: ProviderSidecarHelperState::CutoverReady,
         template_available: true,
-        helper_package: Some("run.easynet.daemon.provider.easynet.pluginexec"),
+        helper_package: Some("run.runtime.sdk.provider.easynet.pluginexec"),
     },
     ProviderSidecarHelperCapability {
         language: "c/c++",
@@ -456,8 +456,8 @@ The daemon runs `bin/exec-plugin`; it does not run `cargo run` at invocation tim
                 r#"This template uses the Java CLI SDK provider helper:
 
 ```java
-import run.easynet.daemon.provider.easynet.pluginexec.SidecarRuntime;
-import run.easynet.daemon.provider.easynet.pluginexec.SidecarInvocation;
+import run.runtime.sdk.provider.easynet.pluginexec.SidecarRuntime;
+import run.runtime.sdk.provider.easynet.pluginexec.SidecarInvocation;
 ```
 
 Build the executable wrapper target before install:
@@ -616,7 +616,7 @@ serde_json = "1"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>example.easynet.plugin</groupId>
+  <groupId>example.runtime.plugin</groupId>
   <artifactId>{artifact_id}</artifactId>
   <version>{package_version}</version>
   <packaging>jar</packaging>
@@ -624,16 +624,16 @@ serde_json = "1"
   <properties>
     <maven.compiler.release>17</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <easynet.sdk.jar>{sdk_jar}</easynet.sdk.jar>
+    <runtime.sdk.jar>{sdk_jar}</runtime.sdk.jar>
   </properties>
 
   <dependencies>
     <dependency>
-      <groupId>run.easynet</groupId>
-      <artifactId>easynet-daemon-sdk</artifactId>
+      <groupId>run.runtime</groupId>
+      <artifactId>canonical-runtime-sdk</artifactId>
       <version>0.0.0-seam</version>
       <scope>system</scope>
-      <systemPath>${{easynet.sdk.jar}}</systemPath>
+      <systemPath>${{runtime.sdk.jar}}</systemPath>
     </dependency>
   </dependencies>
 </project>
@@ -748,8 +748,8 @@ build:
 "#;
 
 const JAVA_EXEC_PLUGIN: &str = r#"import java.util.Map;
-import run.easynet.daemon.provider.easynet.pluginexec.SidecarRuntime;
-import run.easynet.daemon.provider.easynet.pluginexec.SidecarInvocation;
+import run.runtime.sdk.provider.easynet.pluginexec.SidecarRuntime;
+import run.runtime.sdk.provider.easynet.pluginexec.SidecarInvocation;
 
 public final class ExecPlugin {
     private ExecPlugin() {}
@@ -810,7 +810,7 @@ fn default_java_sdk_pom_path() -> PathBuf {
 
 fn default_java_sdk_jar_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("sdk/java/target/easynet-daemon-sdk-0.0.0-seam.jar")
+        .join("sdk/java/target/canonical-runtime-sdk-0.0.0-seam.jar")
 }
 
 fn ensure_empty_or_missing_dir(path: &Path) -> anyhow::Result<()> {
@@ -1145,11 +1145,12 @@ mod tests {
         assert!(main_body.contains("SidecarInvocation"));
         assert!(!main_body.contains("JsonFrameCodec"));
         let pom = fs::read_to_string(target.join("pom.xml")).expect("pom");
-        assert!(pom.contains("<artifactId>easynet-daemon-sdk</artifactId>"));
-        assert!(pom.contains("/sdk/java/target/easynet-daemon-sdk-0.0.0-seam.jar"));
+        assert!(pom.contains("<groupId>run.runtime</groupId>"));
+        assert!(pom.contains("<artifactId>canonical-runtime-sdk</artifactId>"));
+        assert!(pom.contains("/sdk/java/target/canonical-runtime-sdk-0.0.0-seam.jar"));
         let readme = fs::read_to_string(target.join("README.md")).expect("readme");
         assert!(readme.contains("Build the executable wrapper target before install"));
-        assert!(readme.contains("run.easynet.daemon.provider.easynet.pluginexec.SidecarRuntime"));
+        assert!(readme.contains("run.runtime.sdk.provider.easynet.pluginexec.SidecarRuntime"));
     }
 
     #[test]

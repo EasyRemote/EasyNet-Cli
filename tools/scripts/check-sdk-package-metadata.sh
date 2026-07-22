@@ -111,10 +111,10 @@ if pom_path is not None:
             found = pom.find(f"m:properties/m:{name}", ns)
             return "" if found is None or found.text is None else found.text.strip()
 
-        if text("groupId") != "run.easynet":
-            fail("java:groupId_must_be_run.easynet")
-        if text("artifactId") != "easynet-daemon-sdk":
-            fail("java:artifactId_must_be_easynet-daemon-sdk")
+        if text("groupId") != "run.runtime":
+            fail("java:groupId_must_be_run.runtime")
+        if text("artifactId") != "canonical-runtime-sdk":
+            fail("java:artifactId_must_be_canonical-runtime-sdk")
         if text("version") != "0.0.0-seam":
             fail("java:version_must_be_0.0.0-seam")
         if text("packaging") != "jar":
