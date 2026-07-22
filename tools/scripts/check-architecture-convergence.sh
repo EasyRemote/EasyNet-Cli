@@ -8195,8 +8195,8 @@ for (
     list_name,
     request_validator,
     filter_validator,
-    history_subject_validator,
-    history_owner_expansion,
+    canonical_session_admission,
+    retired_exact_subject_helper,
     history_test,
     history_test_name,
     filter_subject_test_name,
@@ -8206,10 +8206,10 @@ for (
         "List",
         "validateSessionHistoryRequest(request)",
         "validateSessionHistoryFilterBinding(request.Call, request.Filter)",
-        "sessionHistoryAuthoritySubjectMatches(authority, subjectURA)",
         "runtimeSessionAuthorityAdmitsSubject(authority, subjectURA)",
+        "sessionHistoryAuthoritySubjectMatches(",
         cli_root / "sdk/go/authorized_runtime_session_test.go",
-        "TestAuthorizedRuntimeSessionHistoryRejectsOwnerEquivalentSubjectExpansionBeforeReceiptProvider",
+        "TestAuthorizedRuntimeSessionHistoryAllowsUserOwnedResourceSubjectBeforeReceiptProvider",
         "TestAuthorizedRuntimeSessionHistoryAllowsSessionAuthorityWithExactDeviceSubjectFilter",
     ),
     (
@@ -8217,10 +8217,10 @@ for (
         "list",
         "_validate_session_history_request(request)",
         "_validate_session_history_filter_binding(request.call, request.filter)",
-        "_session_history_authority_subject_matches(authority, subject_ura)",
         "_session_authority_admits_subject(authority, subject_ura)",
+        "_session_history_authority_subject_matches(",
         cli_root / "sdk/python/tests/test_authorized_runtime_session.py",
-        "test_history_rejects_owner_equivalent_subject_expansion_before_receipt_provider",
+        "test_history_allows_user_owned_resource_subject_before_receipt_provider",
         "test_history_allows_session_authority_with_exact_device_subject_filter",
     ),
 ):
@@ -8266,26 +8266,26 @@ for (
             1,
             "Session history request validation must call filter tuple binding",
         )
-    if history_subject_validator not in text:
+    if canonical_session_admission not in text:
         add(
             "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
             path,
             1,
-            "Session history authority subject must use exact receipt query subject binding",
+            "Session history authority subject must reuse canonical session authority admission",
         )
-    if history_owner_expansion in text:
+    if retired_exact_subject_helper in text:
         add(
             "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
             path,
             1,
-            "Session history authority subject must not reuse owner-expanding runtime session admission",
+            "Retired history-only exact subject helper must not remain",
         )
     if history_test.exists() and history_test_name not in source(history_test):
         add(
             "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
             history_test,
             1,
-            "Session history tests must reject owner-equivalent subject expansion before provider dispatch",
+            "Session history tests must admit user-owned resource subjects through canonical session authority admission",
         )
     if history_test.exists() and filter_subject_test_name not in source(history_test):
         add(

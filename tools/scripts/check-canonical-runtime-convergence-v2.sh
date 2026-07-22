@@ -609,24 +609,24 @@ def section(text: str, start: str, end: str) -> str:
 
 go = read(go_path)
 if go:
-    require(
-        go_path,
-        "func sessionHistoryAuthoritySubjectMatches(",
-        "sdk_go_history_authority_exact_subject_helper_missing",
-    )
     body = section(
         go,
         "func validateSessionHistorySessionBinding(",
-        "func sessionHistoryAuthoritySubjectMatches(",
+        "func runtimeCallDetails(",
     )
-    if "sessionHistoryAuthoritySubjectMatches(authority, subjectURA)" not in body:
-        raise SystemExit("sdk_go_history_authority_subject_not_exact_bound")
-    if "runtimeSessionAuthorityAdmitsSubject(authority, subjectURA)" in body:
-        raise SystemExit("sdk_go_history_authority_uses_owner_expansion")
+    if "runtimeSessionAuthorityAdmitsSubject(authority, subjectURA)" not in body:
+        raise SystemExit("sdk_go_history_authority_not_using_canonical_subject_admission")
+    if "sessionHistoryAuthoritySubjectMatches(" in go:
+        raise SystemExit("sdk_go_history_authority_exact_subject_helper_retired")
     require(
         go_test_path,
-        "TestAuthorizedRuntimeSessionHistoryRejectsOwnerEquivalentSubjectExpansionBeforeReceiptProvider",
-        "sdk_go_history_authority_owner_expansion_test_missing",
+        "TestAuthorizedRuntimeSessionHistoryAllowsUserOwnedResourceSubjectBeforeReceiptProvider",
+        "sdk_go_history_authority_owner_admission_test_missing",
+    )
+    require(
+        go_test_path,
+        "TestAuthorizedRuntimeSessionHistoryRejectsPathSubstringOwnerSubjectBeforeReceiptProvider",
+        "sdk_go_history_authority_path_substring_test_missing",
     )
     require(
         go_test_path,
@@ -663,24 +663,24 @@ if py:
     ):
         if forbidden in py or forbidden in py_helper:
             raise SystemExit("sdk_python_authority_subject_substring_expansion")
-    require(
-        py_path,
-        "def _session_history_authority_subject_matches(",
-        "sdk_python_history_authority_exact_subject_helper_missing",
-    )
     body = section(
         py,
         "def _validate_session_history_authority_binding(",
-        "def _session_history_authority_subject_matches(",
+        "def _validate_runtime_call_required(",
     )
-    if "_session_history_authority_subject_matches(authority, subject_ura)" not in body:
-        raise SystemExit("sdk_python_history_authority_subject_not_exact_bound")
-    if "_session_authority_admits_subject(authority, subject_ura)" in body:
-        raise SystemExit("sdk_python_history_authority_uses_owner_expansion")
+    if "_session_authority_admits_subject(authority, subject_ura)" not in body:
+        raise SystemExit("sdk_python_history_authority_not_using_canonical_subject_admission")
+    if "_session_history_authority_subject_matches(" in py:
+        raise SystemExit("sdk_python_history_authority_exact_subject_helper_retired")
     require(
         py_test_path,
-        "test_history_rejects_owner_equivalent_subject_expansion_before_receipt_provider",
-        "sdk_python_history_authority_owner_expansion_test_missing",
+        "test_history_allows_user_owned_resource_subject_before_receipt_provider",
+        "sdk_python_history_authority_owner_admission_test_missing",
+    )
+    require(
+        py_test_path,
+        "test_history_rejects_path_substring_owner_subject_before_receipt_provider",
+        "sdk_python_history_authority_path_substring_test_missing",
     )
     require(
         py_test_path,
@@ -6274,27 +6274,44 @@ EOF
     "$tmp/sdk-history-authority-legacy/sdk/python/easynet_sdk" \
     "$tmp/sdk-history-authority-legacy/sdk/python/tests"
   printf '%s\n' \
+    'type SessionAuthority struct{}' \
     'func validateSessionHistorySessionBinding(authority *SessionAuthority, subjectURA string) error {' \
-    '  if !runtimeSessionAuthorityAdmitsSubject(authority, subjectURA) { return nil }' \
+    '  if !sessionHistoryAuthoritySubjectMatches(authority, subjectURA) { return nil }' \
     '  return nil' \
     '}' \
+    'func sessionHistoryAuthoritySubjectMatches(authority *SessionAuthority, subjectURA string) bool { return true }' \
+    'func runtimeCallDetails() {}' \
     'func validateSessionHistoryFilterBinding() {}' \
     > "$tmp/sdk-history-authority-legacy/sdk/go/authorized_runtime_session.go"
   printf '%s\n' \
-    'func TestAuthorizedRuntimeSessionHistoryRejectsAuthoritySubjectMismatchBeforeReceiptProvider() {}' \
+    'func TestAuthorizedRuntimeSessionHistoryAllowsUserOwnedResourceSubjectBeforeReceiptProvider() {}' \
+    'func TestAuthorizedRuntimeSessionHistoryRejectsPathSubstringOwnerSubjectBeforeReceiptProvider() {}' \
     > "$tmp/sdk-history-authority-legacy/sdk/go/authorized_runtime_session_test.go"
   printf '%s\n' \
+    'from ._session_authority_subjects import session_authority_admits_subject' \
     'def _validate_session_history_authority_binding(authority, subject_ura):' \
-    '    if not _session_authority_admits_subject(authority, subject_ura):' \
+    '    if not _session_history_authority_subject_matches(authority, subject_ura):' \
     '        return None' \
+    'def _session_history_authority_subject_matches(authority, subject_ura):' \
+    '    return authority.subject_ura.strip() == subject_ura.strip()' \
+    'def _validate_runtime_call_required(value, field_name):' \
+    '    return None' \
     'def _validate_session_history_filter_binding():' \
     '    return None' \
     > "$tmp/sdk-history-authority-legacy/sdk/python/easynet_sdk/authorized_runtime_session.py"
   printf '%s\n' \
-    'def test_history_rejects_authority_subject_mismatch_before_receipt_provider(): pass' \
+    'def session_authority_admits_subject(authority, subject_ura):' \
+    '    subject = parse_ura(subject_ura.strip())' \
+    '    owner_id = subject.components.get("owner_id")' \
+    '    owner_user_id = authority.session_owner_user_id.strip()' \
+    '    return owner_id == f"user.{owner_user_id}" or owner_id.startswith("agent.")' \
+    > "$tmp/sdk-history-authority-legacy/sdk/python/easynet_sdk/_session_authority_subjects.py"
+  printf '%s\n' \
+    'def test_history_allows_user_owned_resource_subject_before_receipt_provider(): pass' \
+    'def test_history_rejects_path_substring_owner_subject_before_receipt_provider(): pass' \
     > "$tmp/sdk-history-authority-legacy/sdk/python/tests/test_authorized_runtime_session.py"
   if ( check_sdk_history_authority_subject_contract "$tmp/sdk-history-authority-legacy" ) >/dev/null 2>&1; then
-    fail "self-test expected SDK history authority subject owner-expansion gate to fail"
+    fail "self-test expected SDK history authority canonical-admission gate to fail"
   fi
   mkdir -p "$tmp/principal-lifecycle-fallback/src/cli/commands/groups"
   printf '%s\n' \

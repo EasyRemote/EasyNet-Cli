@@ -117,13 +117,39 @@ func TestAuthorizedRuntimeSessionHistoryRejectsAuthoritySubjectMismatchBeforeRec
 	}
 }
 
-func TestAuthorizedRuntimeSessionHistoryRejectsOwnerEquivalentSubjectExpansionBeforeReceiptProvider(t *testing.T) {
+func TestAuthorizedRuntimeSessionHistoryAllowsUserOwnedResourceSubjectBeforeReceiptProvider(t *testing.T) {
 	session := newAuthorizedRuntimeSessionFixture(t)
 	request := ReceiptListRequest{
 		Call: RuntimeCallContext{
 			CallerURA:     "easynet:///r/example/agent/backend",
 			CalleeURA:     "easynet:///r/example/device/dev-a",
 			SubjectURA:    "easynet:///r/example/resource/user.alice/session/session-2",
+			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
+			CausalContext: map[string]any{"form": "none"},
+			Authority: sessionAuthorityFixture(t, map[string]any{
+				"scopes":                     []string{"invocation.history.list"},
+				"allowed_followup_abilities": []string{"invocation.history.list"},
+			}),
+		},
+		Limit: 10,
+	}
+
+	_, err := session.sdk.History().List(context.Background(), request)
+	if err != nil {
+		t.Fatalf("history list: %v", err)
+	}
+	if session.receipts.listCalls != 1 {
+		t.Fatalf("receipt provider calls = %d, want 1", session.receipts.listCalls)
+	}
+}
+
+func TestAuthorizedRuntimeSessionHistoryRejectsPathSubstringOwnerSubjectBeforeReceiptProvider(t *testing.T) {
+	session := newAuthorizedRuntimeSessionFixture(t)
+	request := ReceiptListRequest{
+		Call: RuntimeCallContext{
+			CallerURA:     "easynet:///r/example/agent/backend",
+			CalleeURA:     "easynet:///r/example/device/dev-a",
+			SubjectURA:    "easynet:///r/example/resource/device.dev-a/archive/resource/user.alice/session/session-1",
 			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 			CausalContext: map[string]any{"form": "none"},
 			Authority: sessionAuthorityFixture(t, map[string]any{
@@ -142,7 +168,7 @@ func TestAuthorizedRuntimeSessionHistoryRejectsOwnerEquivalentSubjectExpansionBe
 		t.Fatalf("error = %v", err)
 	}
 	if session.receipts.listCalls != 0 {
-		t.Fatalf("receipt provider called after owner-equivalent subject expansion: %d", session.receipts.listCalls)
+		t.Fatalf("receipt provider called after path-substring subject: %d", session.receipts.listCalls)
 	}
 }
 
