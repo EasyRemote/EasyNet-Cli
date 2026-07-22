@@ -2904,6 +2904,62 @@ PY
   fi
 }
 
+check_java_sdk_runtime_receipt_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local result="$cli_root/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java"
+  local receipt="$cli_root/sdk/java/src/main/java/run/easynet/daemon/RuntimeReceipt.java"
+  local tests="$cli_root/sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+  [[ -f "$result" ]] || fail "Java InvocationResult source is missing: ${result#$cli_root/}"
+  [[ -f "$receipt" ]] || fail "Java RuntimeReceipt source is missing: ${receipt#$cli_root/}"
+  [[ -f "$tests" ]] || fail "Java runtime seam tests are missing: ${tests#$cli_root/}"
+
+  "$PYTHON_BIN" - "$result" "$receipt" "$tests" <<'PY'
+import sys
+from pathlib import Path
+
+result_path, receipt_path, tests_path = map(Path, sys.argv[1:])
+result = result_path.read_text(encoding="utf-8")
+receipt = receipt_path.read_text(encoding="utf-8")
+tests = tests_path.read_text(encoding="utf-8")
+
+if "public final class RuntimeReceipt" not in receipt:
+    raise SystemExit("java_runtime_receipt_projection:runtime_receipt_type_missing")
+for fragment, label in {
+    "validateProofFacts": "proof_fact_validator_missing",
+    '"authority_proof"': "authority_proof_required_missing",
+    '"parent_receipts"': "parent_receipts_required_missing",
+    "receiptHash(": "hash_validator_missing",
+    "base64Bytes(": "base64_validator_missing",
+    "canonicalLifecycleState": "lifecycle_state_machine_missing",
+}.items():
+    if fragment not in receipt:
+        raise SystemExit(f"java_runtime_receipt_projection:{label}")
+
+if "RuntimeReceipt.fromMap(terminalReceipt)" not in result:
+    raise SystemExit("java_runtime_receipt_projection:invocation_result_not_using_receipt_validator")
+if "terminal_receipt state does not match invocation terminal_state" not in result:
+    raise SystemExit("java_runtime_receipt_projection:terminal_state_topology_missing")
+if 'fields.containsKey("receipt")' not in result or "retired receipt alias is not accepted" not in result:
+    raise SystemExit("java_runtime_receipt_projection:retired_receipt_alias_not_rejected")
+legacy_patterns = {
+    "terminalReceiptValue instanceof Map<?, ?> map ? copyStringMap(map) : Map.of()": "malformed_terminal_receipt_downgrade",
+    "terminalReceipt = terminalReceipt == null ? Map.of() : Map.copyOf(terminalReceipt);\n    if (ok": "constructor_without_receipt_validation",
+}
+for pattern, label in legacy_patterns.items():
+    if pattern in result:
+        raise SystemExit(f"java_runtime_receipt_projection:{label}")
+
+for required_test in (
+    "runtimeReceiptProofFactsAreMandatory",
+    "canonicalRuntimeReceiptFixture",
+    "missingProof.remove(\"authority_proof\")",
+    "retired receipt alias",
+):
+    if required_test not in tests:
+        raise SystemExit(f"java_runtime_receipt_projection:missing_test:{required_test}")
+PY
+}
+
 if [[ "${1:-}" == "--ura-only" ]]; then
   check_ura_vocabulary_contract
   check_axon_protocol_pack_ura_vector_contract
@@ -3089,6 +3145,25 @@ PY
     > "$tmp/axon-java-authority-helper/sdk/java/src/main/java/run/axon/sdk/invocation/Axiom.java"
   if ( AXON_ROOT="$tmp/axon-java-authority-helper"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java empty authority proof helper gate to fail"
+  fi
+  mkdir -p "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon" \
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/test/java/run/easynet/daemon"
+  cat >"$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java" <<'EOF'
+package run.easynet.daemon;
+import java.util.Map;
+public record InvocationResult(Map<String, Object> terminalReceipt) {
+  static InvocationResult fromJSON(Map<String, Object> fields) {
+    Object terminalReceiptValue = fields.get("terminal_receipt");
+    Map<String, Object> terminalReceipt =
+        terminalReceiptValue instanceof Map<?, ?> map ? Map.of() : Map.of();
+    return new InvocationResult(terminalReceipt);
+  }
+}
+EOF
+  printf 'package run.easynet.daemon;\npublic class RuntimeCoreSeamTest {}\n' \
+    > "$tmp/cli-java-receipt-legacy/sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+  if ( CLI_ROOT="$tmp/cli-java-receipt-legacy"; check_java_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Java SDK receipt projection bypass gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-python-receipt-runtime"
   printf 'binding = AxiomBinding(proof_facts=ReceiptProofFacts())\n' \
@@ -4251,6 +4326,7 @@ EOF
   check_cli_rust_local_fast_signer_boundary_contract
   check_cli_signed_submission_boundary_contract
   check_receipt_proof_fact_contract
+  check_java_sdk_runtime_receipt_projection_contract
   echo "canonical-runtime-convergence-v2 self-test ok"
   exit 0
 fi
@@ -4307,4 +4383,5 @@ check_axon_process_local_signer_fallback_contract
 check_cli_rust_local_fast_signer_boundary_contract
 check_cli_signed_submission_boundary_contract
 check_receipt_proof_fact_contract
+check_java_sdk_runtime_receipt_projection_contract
 echo "canonical-runtime-convergence-v2: OK"

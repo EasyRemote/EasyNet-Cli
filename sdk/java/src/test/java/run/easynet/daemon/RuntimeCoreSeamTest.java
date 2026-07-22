@@ -1,8 +1,11 @@
 package run.easynet.daemon;
 
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Base64;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +23,7 @@ public final class RuntimeCoreSeamTest {
           "healthKeepsLivenessSeparateFromReadiness",
           "invocationPrepareSignSubmitPreservesTheCompleteTuple",
           "invocationResultUsesTerminalReceipt",
+          "runtimeReceiptProofFactsAreMandatory",
           "authorityMetadataIsTypedAndMutuallyExclusive",
           "authorityMetadataRejectsAllZeroSessionOwners",
           "streamAndBidiLifecyclesAreBounded",
@@ -66,6 +70,7 @@ public final class RuntimeCoreSeamTest {
       case "invocationPrepareSignSubmitPreservesTheCompleteTuple" ->
           invocationPrepareSignSubmitPreservesTheCompleteTuple();
       case "invocationResultUsesTerminalReceipt" -> invocationResultUsesTerminalReceipt();
+      case "runtimeReceiptProofFactsAreMandatory" -> runtimeReceiptProofFactsAreMandatory();
       case "authorityMetadataIsTypedAndMutuallyExclusive" ->
           authorityMetadataIsTypedAndMutuallyExclusive();
       case "authorityMetadataRejectsAllZeroSessionOwners" ->
@@ -161,8 +166,8 @@ public final class RuntimeCoreSeamTest {
     InvocationResult result = runtime.invoke(draft);
     check(result.ok(), "generic invocation result");
     check(
-        "opaque-receipt-ref".equals(result.terminalReceipt().get("receipt_ref")),
-        "opaque terminal receipt facts are preserved");
+        "inv-direct".equals(result.terminalReceipt().get("invocation_id")),
+        "canonical terminal receipt facts are preserved");
 
     PreparedInvocation prepared = runtime.prepare(draft, Map.of("deadline_ms", 1000));
     check(!prepared.submitReady(), "prepared invocation is not submit-ready");
@@ -203,6 +208,7 @@ public final class RuntimeCoreSeamTest {
   }
 
   private static void invocationResultUsesTerminalReceipt() {
+    Map<String, Object> terminal = canonicalRuntimeReceiptFixture("inv-result", "completed", "Completed", 1);
     InvocationResult canonical =
         InvocationResult.fromJSON(
             JsonValueWriter.object(
@@ -212,24 +218,51 @@ public final class RuntimeCoreSeamTest {
                     "terminal_state",
                     "Completed",
                     "terminal_receipt",
-                    Map.of("receipt_ref", "canonical-terminal"))));
+                    terminal)));
     check(
-        "canonical-terminal".equals(canonical.terminalReceipt().get("receipt_ref")),
+        "inv-result".equals(canonical.terminalReceipt().get("invocation_id")),
         "terminal_receipt populates terminalReceipt");
 
-    InvocationResult legacyOnly =
-        InvocationResult.fromJSON(
-            JsonValueWriter.object(
-                Map.of(
-                    "ok",
-                    true,
-                    "terminal_state",
-                    "Completed",
-                    "receipt",
-                    Map.of("receipt_ref", "legacy-only"))));
-    check(
-        legacyOnly.terminalReceipt().isEmpty(),
-        "legacy receipt alias must not populate terminalReceipt");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "retired receipt alias is not accepted",
+        () ->
+            InvocationResult.fromJSON(
+                JsonValueWriter.object(
+                    Map.of(
+                        "ok",
+                        true,
+                        "terminal_state",
+                        "Completed",
+                        "receipt",
+                        terminal))));
+  }
+
+  private static void runtimeReceiptProofFactsAreMandatory() {
+    Map<String, Object> complete =
+        canonicalRuntimeReceiptFixture("inv-proof", "completed", "Completed", 1);
+    RuntimeReceipt receipt = RuntimeReceipt.fromMap(complete);
+    check("COMPLETED".equals(receipt.lifecycleState()), "canonical receipt lifecycle state");
+
+    Map<String, Object> missingProof = new LinkedHashMap<>(complete);
+    missingProof.remove("authority_proof");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "authority_proof",
+        () -> RuntimeReceipt.fromMap(missingProof));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "authority_proof",
+        () ->
+            InvocationResult.fromJSON(
+                JsonValueWriter.object(
+                    Map.of(
+                        "ok",
+                        true,
+                        "terminal_state",
+                        "Completed",
+                        "terminal_receipt",
+                        missingProof))));
   }
 
   private static void authorityMetadataIsTypedAndMutuallyExclusive() {
@@ -529,10 +562,19 @@ public final class RuntimeCoreSeamTest {
   }
 
   private static void expectSDKError(ErrorCode code, ThrowingRunnable action) {
+    expectSDKError(code, "", action);
+  }
+
+  private static void expectSDKError(ErrorCode code, String messageFragment, ThrowingRunnable action) {
     try {
       action.run();
     } catch (SDKError error) {
       check(error.code() == code, "expected " + code + " but got " + error.code());
+      if (!messageFragment.isBlank()) {
+        check(
+            error.getMessage().contains(messageFragment),
+            "expected error message to contain " + messageFragment + " but got " + error.getMessage());
+      }
       return;
     } catch (Exception error) {
       throw new AssertionError("expected SDKError but got " + error, error);
@@ -603,7 +645,7 @@ public final class RuntimeCoreSeamTest {
           InvocationTerminalState.COMPLETED,
           "{\"ok\":true}",
           null,
-          Map.of("receipt_ref", "opaque-receipt-ref", "receipt_hash", "opaque-hash"));
+          canonicalRuntimeReceiptFixture("inv-direct", "completed", "Completed", 1));
     }
 
     @Override
@@ -650,7 +692,7 @@ public final class RuntimeCoreSeamTest {
               "output_json",
               Map.of("done", true),
               "terminal_receipt",
-              Map.of("receipt_ref", "opaque-receipt-ref")));
+              canonicalRuntimeReceiptFixture("inv-await", "completed", "Completed", 1)));
     }
 
     @Override
@@ -752,6 +794,95 @@ public final class RuntimeCoreSeamTest {
         return frames.removeFirst();
       }
       return BidiFrame.data(sequence++, "{}");
+    }
+  }
+
+  private static Map<String, Object> canonicalRuntimeReceiptFixture(
+      String invocationId, String receiptType, String state, long index) {
+    byte[] proofPayload = bytes("canonical-runtime-test-proof");
+    Map<String, Object> receipt = new LinkedHashMap<>();
+    receipt.put(
+        "receipt_ura",
+        "easynet:///r/example/resource/runtime/invocation/"
+            + invocationId
+            + "/receipt/"
+            + index);
+    receipt.put("invocation_id", invocationId);
+    receipt.put("receipt_type", receiptType);
+    receipt.put("state", state);
+    receipt.put("index", index);
+    receipt.put("timestamp_unix_ms", 1_783_100_000_000L + index);
+    receipt.put("prev_receipt_hash_hex", "00".repeat(32));
+    receipt.put("self_hash_hex", "%064x".formatted(index + 1));
+    receipt.put("cleanup_complete", !"admitted".equalsIgnoreCase(state));
+    receipt.put("caller_binding", agentBinding(CALLER));
+    receipt.put("callee_binding", agentBinding(CALLEE));
+    receipt.put("subject_binding", agentBinding(CALLEE));
+    receipt.put("invocation_nonce_base64", NONCE);
+    receipt.put("causal_binding_kind", "none");
+    receipt.put("causal_binding", Map.of("form", "none"));
+    receipt.put(
+        "callee_signature",
+        Map.of(
+            "algorithm",
+            "ed25519",
+            "signature_base64",
+            Base64.getEncoder().encodeToString(repeatedByte(0x71, 64))));
+    receipt.put("signer_binding", agentBinding(CALLEE));
+    receipt.put("authority_binding_kind", "self");
+    receipt.put(
+        "authority_binding",
+        Map.of("kind", "self", "principal_ura", CALLEE));
+    receipt.put("ability_binding", DESCRIPTOR);
+    receipt.put("subject_ref", Map.of("kind", 1L, "ura", CALLEE, "profile", "axon-strict-v2"));
+    receipt.put("descriptor_version", "1.0.0");
+    receipt.put("schema_hash_hex", "11".repeat(32));
+    receipt.put("impl_hash_hex", "22".repeat(32));
+    receipt.put("runtime_env", "java-test");
+    receipt.put(
+        "authority_proof",
+        Map.of(
+            "proof_type",
+            "self",
+            "binding_kind",
+            "self",
+            "binding",
+            Map.of("kind", "self", "principal_ura", CALLEE),
+            "proof_payload_base64",
+            Base64.getEncoder().encodeToString(proofPayload),
+            "proof_hash_hex",
+            sha256Hex(proofPayload),
+            "issuer",
+            agentBinding(CALLEE),
+            "signature",
+            Map.of(
+                "algorithm",
+                "ed25519",
+                "signature_base64",
+                Base64.getEncoder().encodeToString(repeatedByte(0x72, 64))),
+            "admission_hook",
+            "test.runtime.admission"));
+    receipt.put("input_hash_hex", "33".repeat(32));
+    receipt.put("output_hash_hex", "44".repeat(32));
+    receipt.put("parent_receipts", List.of());
+    return Map.copyOf(receipt);
+  }
+
+  private static Map<String, Object> agentBinding(String ura) {
+    return Map.of("ura", ura, "profile", "axon-strict-v2");
+  }
+
+  private static byte[] repeatedByte(int value, int count) {
+    byte[] bytes = new byte[count];
+    java.util.Arrays.fill(bytes, (byte) value);
+    return bytes;
+  }
+
+  private static String sha256Hex(byte[] bytes) {
+    try {
+      return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+    } catch (NoSuchAlgorithmException error) {
+      throw new AssertionError(error);
     }
   }
 

@@ -2645,3 +2645,23 @@ Evidence will be appended after indexing and focused impact queries.
   model. It derives realm from direct URA, route-ref embedded Ability URA, or
   descriptor-ref embedded Ability URA. Invalid inputs return explicit
   `query_name_unavailable` authority state with no hub URA.
+
+## 2026-07-22 Java SDK runtime receipt projection audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS before the
+  focused audit; the index updated the Java SDK runtime-result files.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "RuntimeReceipt InvocationResult terminal_receipt authority_proof
+  parent_receipts Java SDK receipt projection"` confirmed the relevant
+  product-neutral SDK seam is the Java `InvocationResult` projection, while
+  Go/Python already model canonical `RuntimeReceipt` proof-fact validation.
+- Source inspection found the Java SDK had no runtime receipt type. It copied
+  `terminal_receipt` as an arbitrary string-key map, downgraded malformed or
+  non-object receipt values to an empty map, and ignored the retired top-level
+  `receipt` alias. This allowed product callers to observe a successful result
+  without SDK-side proof-fact validation.
+- Root abstraction problem: Java treated receipt facts as opaque product
+  decoration, while Go/Python treat them as canonical runtime receipt
+  projections. The fix adds a Java `RuntimeReceipt` state object and makes
+  `InvocationResult` consume it before exposing `terminalReceipt()`.

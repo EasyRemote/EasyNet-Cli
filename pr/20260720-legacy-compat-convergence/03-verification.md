@@ -2896,3 +2896,23 @@ Commands and outcomes will be appended after implementation.
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
   codegraph `status` reports `Index is up to date` with 35,311 nodes and
   135,509 edges.
+
+## 2026-07-22 Java SDK runtime receipt projection
+
+- `mvn -q -f sdk/java/pom.xml test` — PASS; covers Java runtime result
+  construction through canonical terminal receipts, retired `receipt` alias
+  rejection, and missing `authority_proof` rejection through both
+  `RuntimeReceipt` and `InvocationResult`.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` —
+  PASS; includes a negative fixture for the retired Java
+  `terminal_receipt` map-to-empty downgrade.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS;
+  includes `check_java_sdk_runtime_receipt_projection_contract`.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; codegraph
+  `status` reports `Index is up to date` with 1,019 files, 35,361 nodes, and
+  135,698 edges.

@@ -410,3 +410,8 @@
   descriptor ref that projects to an Ability URA. Malformed or unavailable
   query identity must project explicit unavailable authority state; it must not
   fabricate `localhost` hub authority or zone evidence.
+- SDK invocation result receipt projection must not be language-specific. A
+  non-empty `terminal_receipt` in any SDK is canonical runtime receipt input
+  and must validate required identity, lifecycle, hash, and proof facts before
+  being exposed to product callers. Retired top-level `receipt` aliases must
+  fail closed instead of being ignored or treated as empty receipt state.

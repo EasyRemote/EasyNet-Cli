@@ -1015,3 +1015,18 @@ Decisions will be appended as root-fork choices are made.
   malformed queries still return a negative resolver answer, but the authority
   object now carries `query_name_unavailable` instead of fabricated hub
   authority.
+
+## 2026-07-22 Java SDK runtime receipt projection
+
+- Treat Java SDK receipt parsing as the same canonical runtime model already
+  used by Go and Python. `RuntimeReceipt` is a generic SDK runtime type, not a
+  product receipt client or receipt history API.
+- Keep `InvocationResult.terminalReceipt()` as the existing map-shaped public
+  accessor, but require non-empty receipt maps to pass `RuntimeReceipt`
+  validation before construction returns.
+- Reject retired top-level `receipt` aliases instead of ignoring them. Silent
+  ignore was a compatibility layer that let product callers confuse malformed
+  receipt projection with absent receipt state.
+- Bind terminal receipt lifecycle to `InvocationResult` topology: receipt
+  state must match `terminal_state`, and the `ok` flag must match a completed
+  terminal receipt.
