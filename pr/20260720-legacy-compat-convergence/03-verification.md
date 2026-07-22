@@ -1,5 +1,20 @@
 # Verification
 
+## 2026-07-22 CLI ability catalogue schema-bound projection
+
+- `cargo test -q -p easynet --lib cli::daemon_client::ability_catalog
+  --features axon-pb` — PASS (`4 passed`); includes rejection of owner/name
+  repair for mismatched descriptor rows.
+- `cargo check -q -p easynet --lib --features axon-pb` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; the canonical ability catalogue self-test fixture now includes the
+  retired CLI `ability_version`, `input_schema`, and name-derived owner
+  fallbacks.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `cargo fmt --all -- --check` — PASS after rustfmt normalized
+  `ability show` state projection.
+
 ## 2026-07-22 SDK runtime failure code fallback removal
 
 - `go test ./... -run

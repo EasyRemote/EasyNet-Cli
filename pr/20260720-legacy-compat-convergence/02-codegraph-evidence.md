@@ -2,6 +2,27 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-22 CLI ability catalogue schema-bound projection audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was
+  up to date before the slice.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "src/cli/commands/groups/ability.rs meta.list_abilities best-effort
+  schema_summary input or_else ability inspect descriptor projection"` found
+  the active product-consumer seam:
+  `AbilityCatalogueClient::abilities_from_value` validated only
+  `descriptor_ref`, while `ability show` still treated catalogue rendering as
+  best-effort and repaired missing `owner_ura` from `name.split_once('.')`.
+- Targeted source inspection showed the renderer also read retired
+  `ability_version` and top-level `input_schema`, both inherited from the
+  pre-`meta.list_abilities` catalogue shape.
+- The refactor moved row consistency to the catalogue client boundary:
+  `ability_ura`, `descriptor_ref`, `owner_ura`, `name`, and `version` are
+  validated together before any CLI list/show command consumes the row.
+  `ability show` now reads only canonical `version` and
+  `schema_summary.input`, and owner display is guaranteed by the schema-bound
+  row instead of reconstructed by the renderer.
+
 ## 2026-07-22 SDK runtime failure code fallback audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was

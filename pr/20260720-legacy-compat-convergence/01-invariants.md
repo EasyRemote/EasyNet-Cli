@@ -244,6 +244,12 @@
   payload and must project to `PROTOCOL_MISMATCH`; it must not be repaired to
   `ADMISSION_DENIED` through a language-local fallback parameter or direct
   runtime adapter branch.
+- Product ability catalogue rows are schema-bound runtime facts. CLI
+  consumers of `meta.list_abilities` must validate `ability_ura`,
+  `descriptor_ref`, `owner_ura`, `name`, and `version` as one coherent
+  descriptor identity before list/show rendering. Renderers must not derive
+  owner from display name, read retired `ability_version` / `input_schema`
+  fields, or treat missing descriptor facts as best-effort UI metadata.
   user signer resolver and must fail before any runtime-owner key-service
   lookup if misrouted.
 - Remote-desktop session creation arguments are descriptor-bound product

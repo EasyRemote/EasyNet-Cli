@@ -2089,12 +2089,16 @@ check_canonical_ability_catalog_projection_contract() {
   local store="$cli_root/src/daemon/federation/read_model/hub_published_abilities.rs"
   local meta="$cli_root/src/daemon/ability/builtins/governance/meta.rs"
   local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+  local cli_catalog="$cli_root/src/cli/daemon_client/ability_catalog.rs"
+  local cli_ability="$cli_root/src/cli/commands/groups/ability.rs"
   [[ -f "$descriptor" ]] || fail "AbilityDescriptor source is missing: $descriptor"
   [[ -f "$store" ]] || fail "hub-published ability store is missing: $store"
   [[ -f "$meta" ]] || fail "meta.list_abilities source is missing: $meta"
   [[ -f "$ffi_invocation" ]] || fail "FFI invocation source is missing: $ffi_invocation"
+  [[ -f "$cli_catalog" ]] || fail "CLI ability catalogue client is missing: $cli_catalog"
+  [[ -f "$cli_ability" ]] || fail "CLI ability command source is missing: $cli_ability"
 
-  "$PYTHON_BIN" - "$descriptor" "$store" "$meta" "$ffi_invocation" <<'PY'
+  "$PYTHON_BIN" - "$descriptor" "$store" "$meta" "$ffi_invocation" "$cli_catalog" "$cli_ability" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -2103,9 +2107,13 @@ descriptor = Path(sys.argv[1]).read_text(encoding="utf-8")
 store = Path(sys.argv[2]).read_text(encoding="utf-8")
 meta = Path(sys.argv[3]).read_text(encoding="utf-8")
 ffi = Path(sys.argv[4]).read_text(encoding="utf-8")
+cli_catalog = Path(sys.argv[5]).read_text(encoding="utf-8")
+cli_ability = Path(sys.argv[6]).read_text(encoding="utf-8")
 
 descriptor_production = descriptor.split("\n#[cfg(test)]\nmod tests", 1)[0]
 production_store = store.split("\n#[cfg(test)]\nmod tests", 1)[0]
+cli_catalog_production = cli_catalog.split("\n#[cfg(test)]\nmod tests", 1)[0]
+cli_ability_production = cli_ability.split("\n#[cfg(test)]\nmod tests", 1)[0]
 if "pub fn descriptor_ref(&self) -> Result<String, DescriptorError>" not in descriptor_production:
     raise SystemExit("ability_descriptor:descriptor_ref_not_fallible")
 if "InvalidDescriptorIdentity" not in descriptor_production:
@@ -2162,6 +2170,40 @@ if "descriptor_catalog_dedupe_required_string" not in dedupe_body:
     raise SystemExit("ffi_descriptor_catalog:dedupe_required_fields_missing")
 if "descriptor_catalog_dedupe_rejects_schema_incomplete_rows" not in ffi:
     raise SystemExit("ffi_descriptor_catalog:missing_schema_incomplete_dedupe_test")
+
+if "fn schema_bound_catalogue_entry" not in cli_catalog_production:
+    raise SystemExit("cli_ability_catalog:schema_bound_entry_missing")
+for field in ("ability_ura", "owner_ura", "name", "version"):
+    if f'required_catalogue_string(object, index, "{field}")' not in cli_catalog_production:
+        raise SystemExit(f"cli_ability_catalog:required_field_missing:{field}")
+for token, code in (
+    ("AbilitySelector::parse(ability_ura)", "ability_selector_missing"),
+    ("owner_ura != selector.owner_ura()", "owner_binding_missing"),
+    ("name != selector.public_name()", "public_name_binding_missing"),
+    ("ability_ura_from_descriptor_ref(descriptor_ref)", "descriptor_ref_ability_binding_missing"),
+    ('descriptor_ref.starts_with(&format!("{ability_ura}@{version}#"))', "descriptor_ref_version_binding_missing"),
+):
+    if token not in cli_catalog_production:
+        raise SystemExit(f"cli_ability_catalog:{code}")
+if "abilities_from_value_rejects_name_derived_owner_repair" not in cli_catalog:
+    raise SystemExit("cli_ability_catalog:owner_repair_regression_test_missing")
+
+for forbidden, code in (
+    ('get("ability_version")', "retired_ability_version_field"),
+    ('get("input_schema")', "retired_input_schema_field"),
+    ("name.split_once", "name_derived_owner_fallback"),
+    ("unwrap_or(&args.ability_ura)", "ability_ura_as_name_fallback"),
+    ("best-effort: `meta.list_abilities`", "best_effort_catalogue_show"),
+):
+    if forbidden in cli_ability_production:
+        raise SystemExit(f"cli_ability_show:{code}")
+for token, code in (
+    ('get("version")', "canonical_version_missing"),
+    ('get("schema_summary").and_then(|s| s.get("input"))', "canonical_schema_summary_missing"),
+    ('expect("schema-bound catalogue row carries owner_ura")', "schema_bound_owner_projection_missing"),
+):
+    if token not in cli_ability_production:
+        raise SystemExit(f"cli_ability_show:{code}")
 PY
 }
 
@@ -4369,6 +4411,8 @@ EOF
   mkdir -p "$tmp/cli-opaque-hub-catalog/src/daemon/ability/descriptors"
   mkdir -p "$tmp/cli-opaque-hub-catalog/src/daemon/ability/builtins/governance"
   mkdir -p "$tmp/cli-opaque-hub-catalog/src/ffi/invocation"
+  mkdir -p "$tmp/cli-opaque-hub-catalog/src/cli/daemon_client"
+  mkdir -p "$tmp/cli-opaque-hub-catalog/src/cli/commands/groups"
   cat >"$tmp/cli-opaque-hub-catalog/src/daemon/ability/descriptors/surface.rs" <<'EOF'
 pub enum DescriptorError {}
 
@@ -4413,6 +4457,25 @@ fn dedupe_descriptor_catalog_entries(entries: Vec<serde_json::Value>) -> Vec<ser
         out.push(entry);
     }
     out
+}
+EOF
+  cat >"$tmp/cli-opaque-hub-catalog/src/cli/daemon_client/ability_catalog.rs" <<'EOF'
+fn schema_bound_catalogue_entry(entry: &serde_json::Value, index: usize) -> anyhow::Result<serde_json::Value> {
+    if entry.get("descriptor_ref").is_none() {
+        anyhow::bail!("missing descriptor_ref");
+    }
+    Ok(entry.clone())
+}
+EOF
+  cat >"$tmp/cli-opaque-hub-catalog/src/cli/commands/groups/ability.rs" <<'EOF'
+fn run_show(entry: serde_json::Value, args: ShowArgs) {
+    let name = entry.get("name").and_then(Value::as_str).unwrap_or(&args.ability_ura);
+    let version = entry.get("ability_version").and_then(Value::as_str).unwrap_or("-");
+    let owner = entry.get("owner_ura").and_then(Value::as_str)
+        .or_else(|| name.split_once('.').map(|(owner, _)| owner))
+        .unwrap_or("-");
+    let schema = entry.get("input_schema")
+        .or_else(|| entry.get("schema_summary").and_then(|s| s.get("input")));
 }
 EOF
   if ( CLI_ROOT="$tmp/cli-opaque-hub-catalog"; check_canonical_ability_catalog_projection_contract ) >/dev/null 2>&1; then

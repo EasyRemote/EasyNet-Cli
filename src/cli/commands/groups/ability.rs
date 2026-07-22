@@ -215,38 +215,23 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Human-readable contract surface. The fields below are
-    // best-effort: `meta.list_abilities` doesn't yet surface every
-    // historical `list_mcp_tools` field (version / state / hosted
-    // node), so the renderer falls back to "-" when a field is
-    // absent rather than failing — it's a *show* command, missing
-    // metadata should still print the rest.
     let name = entry
         .get("name")
         .and_then(Value::as_str)
-        .unwrap_or(&args.ability_ura);
+        .expect("schema-bound catalogue row carries name");
     let version = entry
-        .get("ability_version")
+        .get("version")
         .and_then(Value::as_str)
-        .unwrap_or("-");
+        .expect("schema-bound catalogue row carries version");
     let description = entry
         .get("description")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let state = entry
-        .get("state")
-        .and_then(Value::as_str)
-        .unwrap_or("UNKNOWN");
+    let state = entry.get("state").and_then(Value::as_str).unwrap_or("-");
     let owner = entry
         .get("owner_ura")
         .and_then(Value::as_str)
-        .or_else(|| {
-            // Fall back to deriving owner from the qualified name
-            // (`<owner>.<verb>`); aligns with `ability list`'s
-            // owner column when discover doesn't surface a URA.
-            name.split_once('.').map(|(o, _)| o)
-        })
-        .unwrap_or("-");
+        .expect("schema-bound catalogue row carries owner_ura");
 
     eprintln!();
     eprintln!(
@@ -260,10 +245,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     if !description.is_empty() {
         output::detail("description", description);
     }
-    if let Some(schema) = entry
-        .get("input_schema")
-        .or_else(|| entry.get("schema_summary").and_then(|s| s.get("input")))
-    {
+    if let Some(schema) = entry.get("schema_summary").and_then(|s| s.get("input")) {
         eprintln!();
         eprintln!("  {}", style("input schema").dim());
         println!("{}", serde_json::to_string_pretty(schema)?);
