@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-DOWNSTREAM_ITEMS = {"FederationRevokePayload"}
+DOWNSTREAM_ITEMS: set[str] = set()
 PRODUCT_NEUTRAL_CUTOVER_REF = "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces"
 
 

@@ -6414,7 +6414,6 @@
         "DirectRuntimeConnectorOptions",
         "DirectRuntimeTransport",
         "ErrDaemonOffline",
-        "FederationRevokePayload",
         "FileControlDiscoveryReader",
         "NewCABIClient",
         "NewCABIRuntimeHost",
@@ -7183,14 +7182,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "FederationRevokePayload": {
-          "canonical_replacement": [
-            "capability_inventory.principal_authorization_grants"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "EasyNet federation payload is a downstream provider carrier, not a canonical SDK capability."
         },
         "FileControlDiscoveryReader": {
           "canonical_replacement": [
@@ -18483,7 +18474,6 @@
       "FeatureSet.SDKVersion": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "FeatureSet.Symbols": "049fe780a072d52d06e36b3dedd64ad7285c44b424bb209e70c62bc4dedcb200",
       "FeatureSet.Version": "7f45e8d4547049c35384df1ec564466136511b7ef4306d76d45da81f742900a3",
-      "FederationRevokePayload": "f3d341f7ae4547f35426654fc17f391c7cc93348a56c04575e72dcc3dd811128",
       "FileControlDiscoveryReader": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "FileControlDiscoveryReader.ReadControlDiscovery": "37c54e54052afd904d77897240b7c2a0f158c0bcdc6f810096c0e1749a94f0ae",
       "HealthClient": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
