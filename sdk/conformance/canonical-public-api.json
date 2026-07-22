@@ -6478,10 +6478,7 @@
         "ControlDiscovery.SupportedIPCVersions",
         "ControlDiscoveryReader.ReadControlDiscovery",
         "ControlDiscoveryRuntimeConnector.Close",
-        "ControlDiscoveryRuntimeConnector.ControlPath",
         "ControlDiscoveryRuntimeConnector.Handshake",
-        "ControlDiscoveryRuntimeConnector.Inner",
-        "ControlDiscoveryRuntimeConnector.Reader",
         "ControlDiscoveryRuntimeConnector.Resolve",
         "DaemonKeyServiceRejection.Error",
         "DaemonKeyServiceRejection.Kind",
@@ -7639,31 +7636,7 @@
           "removal_phase": "quarantined",
           "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
         },
-        "ControlDiscoveryRuntimeConnector.ControlPath": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
         "ControlDiscoveryRuntimeConnector.Handshake": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscoveryRuntimeConnector.Inner": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscoveryRuntimeConnector.Reader": {
           "canonical_replacement": [
             "capability_inventory.native_runtime"
           ],
@@ -18379,12 +18352,9 @@
       "ControlDiscovery.SupportedIPCVersions": "f24ceae1da4afd1ac25e8d7086d9a7a5529ad57e21da06187cd2c545261fa7ff",
       "ControlDiscoveryReader": "11f6149ced0805d5660024303691fcb971443c7a2ed036b953773be2171af449",
       "ControlDiscoveryReader.ReadControlDiscovery": "37c54e54052afd904d77897240b7c2a0f158c0bcdc6f810096c0e1749a94f0ae",
-      "ControlDiscoveryRuntimeConnector": "dd6a7e2a4c7bb81761f87bc9ebae4074a692c424a1f214367d7e6d59f0c57c6f",
+      "ControlDiscoveryRuntimeConnector": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "ControlDiscoveryRuntimeConnector.Close": "0d464a887ccc7c5ec145a263e02280f50af96ec1b1fd7e770a900867d4a8ba14",
-      "ControlDiscoveryRuntimeConnector.ControlPath": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "ControlDiscoveryRuntimeConnector.Handshake": "f32ce8e8c46b438eeb492b2beed442f04602161f086ae1789c9dc5e8f6d8091d",
-      "ControlDiscoveryRuntimeConnector.Inner": "6441a633fd84cb52d0f80fbe80f44999ac44707ee7844f55def468e045650888",
-      "ControlDiscoveryRuntimeConnector.Reader": "4bc01a1f2836c0b04080099f08b1ddd4bb8adf283afa60ea9c0b4c2ec6b5074f",
       "ControlDiscoveryRuntimeConnector.Resolve": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86",
       "CreatePrincipalRequest": "f905eecf6f8c587e058280040b0cbed66f9de04da665334cbe1499372161a195",
       "CreatePrincipalRequest.Command": "dcbeb224267733666cd0d0b0d1377e7c538e6b1a194bd708bf31e2311f311562",

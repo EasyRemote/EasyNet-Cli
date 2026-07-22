@@ -100,9 +100,9 @@ func newControlDiscoveryFromJSON(raw []byte) (ControlDiscovery, error) {
 // ControlDiscoveryRuntimeConnector resolves RuntimeEndpoint from daemon
 // control discovery and delegates handshake to an inner connector.
 type ControlDiscoveryRuntimeConnector struct {
-	Inner       RuntimeConnector
-	ControlPath string
-	Reader      ControlDiscoveryReader
+	inner       RuntimeConnector
+	controlPath string
+	reader      ControlDiscoveryReader
 	closed      bool
 }
 
@@ -116,9 +116,9 @@ func NewControlDiscoveryRuntimeConnector(inner RuntimeConnector, controlPath str
 		reader = FileControlDiscoveryReader{}
 	}
 	return &ControlDiscoveryRuntimeConnector{
-		Inner:       inner,
-		ControlPath: controlPath,
-		Reader:      reader,
+		inner:       inner,
+		controlPath: controlPath,
+		reader:      reader,
 	}, nil
 }
 
@@ -132,7 +132,7 @@ func (c *ControlDiscoveryRuntimeConnector) Resolve(ctx context.Context, optionsJ
 	}
 	controlPath := options.ControlPath
 	if controlPath == "" {
-		controlPath = c.ControlPath
+		controlPath = c.controlPath
 	}
 	if options.Endpoint != "" {
 		return runtimeEndpointJSON(RuntimeEndpoint{
@@ -140,7 +140,7 @@ func (c *ControlDiscoveryRuntimeConnector) Resolve(ctx context.Context, optionsJ
 			ControlPath: controlPath,
 		})
 	}
-	discovery, err := c.Reader.ReadControlDiscovery(ctx, controlPath)
+	discovery, err := c.reader.ReadControlDiscovery(ctx, controlPath)
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +166,7 @@ func (c *ControlDiscoveryRuntimeConnector) Handshake(ctx context.Context, endpoi
 	if err := c.requireOpen(ctx); err != nil {
 		return nil, nil, err
 	}
-	return c.Inner.Handshake(ctx, endpointJSON)
+	return c.inner.Handshake(ctx, endpointJSON)
 }
 
 func (c *ControlDiscoveryRuntimeConnector) Close(ctx context.Context) error {
@@ -180,11 +180,11 @@ func (c *ControlDiscoveryRuntimeConnector) Close(ctx context.Context) error {
 		return nil
 	}
 	c.closed = true
-	return c.Inner.Close(ctx)
+	return c.inner.Close(ctx)
 }
 
 func (c *ControlDiscoveryRuntimeConnector) requireOpen(ctx context.Context) error {
-	if c == nil || c.Inner == nil || c.Reader == nil {
+	if c == nil || c.inner == nil || c.reader == nil {
 		return invalidRuntimeClient("runtime connector is not initialized")
 	}
 	if ctx == nil {
