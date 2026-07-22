@@ -29,7 +29,7 @@ func (t signedDirectRuntimeAbilityTransport) ResolveDescriptorRef(ctx context.Co
 }
 
 func TestRuntimeAbilityClientDeadlineIsProviderOwned(t *testing.T) {
-	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
+	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, directRuntimeOptions{
 		DialTimeoutMS:   3000,
 		InvokeTimeoutMS: 50,
 	})

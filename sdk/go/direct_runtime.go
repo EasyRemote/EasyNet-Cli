@@ -126,7 +126,7 @@ func (c *DirectRuntimeConnector) Handshake(ctx context.Context, endpointJSON []b
 		return nil, nil, err
 	}
 	handleTransport := c.handleTransport(ctx)
-	transport, err := OpenDirectRuntimeTransport(ctx, endpoint.Endpoint, DirectRuntimeOptions{
+	transport, err := openDirectRuntimeTransport(ctx, endpoint.Endpoint, directRuntimeOptions{
 		DialTimeoutMS:   options.DialTimeoutMS,
 		InvokeTimeoutMS: options.InvokeTimeoutMS,
 		MaxMessageBytes: options.MaxMessageBytes,
@@ -220,8 +220,7 @@ func (c *DirectRuntimeConnector) handleTransport(ctx context.Context) RuntimeTra
 	return c.handle
 }
 
-// DirectRuntimeOptions are SDK-internal direct runtime transport knobs.
-type DirectRuntimeOptions struct {
+type directRuntimeOptions struct {
 	DialTimeoutMS   int64
 	InvokeTimeoutMS int64
 	MaxMessageBytes int
@@ -240,8 +239,7 @@ type DirectRuntimeTransport struct {
 	closed        bool
 }
 
-// OpenDirectRuntimeTransport opens a direct Runtime transport.
-func OpenDirectRuntimeTransport(ctx context.Context, endpoint string, options DirectRuntimeOptions) (*DirectRuntimeTransport, error) {
+func openDirectRuntimeTransport(ctx context.Context, endpoint string, options directRuntimeOptions) (*DirectRuntimeTransport, error) {
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
 	}

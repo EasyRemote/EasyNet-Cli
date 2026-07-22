@@ -162,7 +162,7 @@ func (d *directRuntimeFakeDaemon) invokeTiming() (time.Duration, chan struct{}) 
 }
 
 func TestDirectRuntimeInvokeDeadlineIsTypedTimeout(t *testing.T) {
-	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
+	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, directRuntimeOptions{
 		DialTimeoutMS:   3000,
 		InvokeTimeoutMS: 50,
 	})
@@ -461,7 +461,7 @@ func TestDirectRuntimeGRPCErrorClassifiesHTTP2ProtocolReset(t *testing.T) {
 }
 
 func TestDirectRuntimeTransportUsesAxonCanonicalPublicRoute(t *testing.T) {
-	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
+	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, directRuntimeOptions{
 		DialTimeoutMS: 3000,
 	})
 	defer cleanup()
@@ -480,7 +480,7 @@ func TestDirectRuntimeTransportUsesAxonCanonicalPublicRoute(t *testing.T) {
 
 func TestDirectRuntimeTransportRejectsUnprojectedUserSubject(t *testing.T) {
 	handle := &directRuntimeFakeHandleTransport{}
-	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
+	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, directRuntimeOptions{
 		DialTimeoutMS:   3000,
 		HandleTransport: handle,
 	})
@@ -502,7 +502,7 @@ func TestDirectRuntimeTransportRejectsUnprojectedUserSubject(t *testing.T) {
 
 func TestDirectRuntimeTransportSubmitSignedDelegatesWithoutDirectDispatch(t *testing.T) {
 	handle := &directRuntimeFakeHandleTransport{}
-	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
+	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, directRuntimeOptions{
 		DialTimeoutMS:   3000,
 		HandleTransport: handle,
 	})
@@ -589,7 +589,7 @@ func TestDirectRuntimeTransportStreamsOverUnixSocket(t *testing.T) {
 }
 
 func TestDirectRuntimeStreamDeadlineIsTypedTimeout(t *testing.T) {
-	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
+	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, directRuntimeOptions{
 		DialTimeoutMS:   3000,
 		InvokeTimeoutMS: 50,
 	})
@@ -711,7 +711,7 @@ func TestDirectRuntimeTransportBidiOverUnixSocket(t *testing.T) {
 }
 
 func TestDirectRuntimeBidiDeadlineIsTypedTimeout(t *testing.T) {
-	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
+	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, directRuntimeOptions{
 		DialTimeoutMS:   3000,
 		InvokeTimeoutMS: 50,
 	})
@@ -807,7 +807,7 @@ func TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry(t *testing.T) {
 
 func TestDirectRuntimeTransportDelegatesHandleOperations(t *testing.T) {
 	handle := &directRuntimeFakeHandleTransport{}
-	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
+	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, directRuntimeOptions{
 		DialTimeoutMS:   3000,
 		HandleTransport: handle,
 	})
@@ -861,7 +861,7 @@ func TestDirectRuntimeTransportDelegatesHandleOperations(t *testing.T) {
 }
 
 func TestDirectRuntimeTransportRejectsHandleOperationsWithoutDelegate(t *testing.T) {
-	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{DialTimeoutMS: 3000})
+	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, directRuntimeOptions{DialTimeoutMS: 3000})
 	defer cleanup()
 
 	control, err := newRuntimeInvocationControlCapability(1)
@@ -923,7 +923,7 @@ func TestDirectRuntimeTransportRejectsHandleOperationsWithoutDelegate(t *testing
 
 func TestDirectRuntimeConnectorProjectsHandleCapabilities(t *testing.T) {
 	handle := &directRuntimeFakeHandleTransport{}
-	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{DialTimeoutMS: 3000})
+	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, directRuntimeOptions{DialTimeoutMS: 3000})
 	defer cleanup()
 	endpoint := transport.endpoint
 
@@ -983,10 +983,10 @@ func TestDirectRuntimeConnectorResolvesControlDiscovery(t *testing.T) {
 }
 
 func openDirectRuntimeTestTransport(t *testing.T) (*DirectRuntimeTransport, *directRuntimeFakeDaemon, func()) {
-	return openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{DialTimeoutMS: 3000})
+	return openDirectRuntimeTestTransportWithOptions(t, directRuntimeOptions{DialTimeoutMS: 3000})
 }
 
-func openDirectRuntimeTestTransportWithOptions(t *testing.T, options DirectRuntimeOptions) (*DirectRuntimeTransport, *directRuntimeFakeDaemon, func()) {
+func openDirectRuntimeTestTransportWithOptions(t *testing.T, options directRuntimeOptions) (*DirectRuntimeTransport, *directRuntimeFakeDaemon, func()) {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "easynet-go-direct-*")
 	if err != nil {
@@ -1009,12 +1009,12 @@ func openDirectRuntimeTestTransportWithOptions(t *testing.T, options DirectRunti
 	if options.DialTimeoutMS == 0 {
 		options.DialTimeoutMS = 3000
 	}
-	transport, err := OpenDirectRuntimeTransport(context.Background(), socket, options)
+	transport, err := openDirectRuntimeTransport(context.Background(), socket, options)
 	if err != nil {
 		server.Stop()
 		<-done
 		_ = os.RemoveAll(dir)
-		t.Fatalf("OpenDirectRuntimeTransport: %v", err)
+		t.Fatalf("openDirectRuntimeTransport: %v", err)
 	}
 	cleanup := func() {
 		_ = transport.Close(context.Background())
