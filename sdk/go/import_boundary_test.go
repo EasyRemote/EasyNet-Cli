@@ -209,7 +209,7 @@ func allowedTaggedDirectRuntimeProvider(path, text string) bool {
 	}
 	switch base {
 	case "direct_runtime.go":
-		return strings.Contains(text, "type DirectRuntimeTransport struct")
+		return strings.Contains(text, "type directRuntimeTransport struct")
 	case "direct_runtime_codec.go":
 		return strings.Contains(text, "type directDescriptorBoundCodec struct")
 	default:

@@ -982,11 +982,11 @@ func TestDirectRuntimeConnectorResolvesControlDiscovery(t *testing.T) {
 	}
 }
 
-func openDirectRuntimeTestTransport(t *testing.T) (*DirectRuntimeTransport, *directRuntimeFakeDaemon, func()) {
+func openDirectRuntimeTestTransport(t *testing.T) (*directRuntimeTransport, *directRuntimeFakeDaemon, func()) {
 	return openDirectRuntimeTestTransportWithOptions(t, directRuntimeOptions{DialTimeoutMS: 3000})
 }
 
-func openDirectRuntimeTestTransportWithOptions(t *testing.T, options directRuntimeOptions) (*DirectRuntimeTransport, *directRuntimeFakeDaemon, func()) {
+func openDirectRuntimeTestTransportWithOptions(t *testing.T, options directRuntimeOptions) (*directRuntimeTransport, *directRuntimeFakeDaemon, func()) {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "easynet-go-direct-*")
 	if err != nil {

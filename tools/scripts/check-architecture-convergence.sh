@@ -5669,7 +5669,7 @@ go_direct_runtime = cli_root / "sdk/go/direct_runtime.go"
 python_direct_runtime = cli_root / "sdk/python/easynet_sdk/direct_runtime.py"
 if go_direct_runtime.exists():
     text = source(go_direct_runtime)
-    if "func (t *DirectRuntimeTransport) requireHandleTransport(" not in text:
+    if "func (t *directRuntimeTransport) requireHandleTransport(" not in text:
         add(
             "R61_DIRECT_RUNTIME_HANDLE_OWNER_FORK",
             go_direct_runtime,

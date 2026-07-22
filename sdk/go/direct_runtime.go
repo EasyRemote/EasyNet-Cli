@@ -41,7 +41,7 @@ type directRuntimeConnector struct {
 	mu                   sync.Mutex
 	handle               RuntimeTransport
 	closeHandleTransport bool
-	transports           map[*DirectRuntimeTransport]struct{}
+	transports           map[*directRuntimeTransport]struct{}
 	closed               bool
 }
 
@@ -69,7 +69,7 @@ func newDirectRuntimeConnectorWithOptions(options directRuntimeConnectorOptions)
 		reader:               reader,
 		handle:               options.handleTransport,
 		closeHandleTransport: options.closeHandleTransport,
-		transports:           map[*DirectRuntimeTransport]struct{}{},
+		transports:           map[*directRuntimeTransport]struct{}{},
 	}
 }
 
@@ -169,11 +169,11 @@ func (c *directRuntimeConnector) Close(ctx context.Context) error {
 	closeHandle := c.closeHandleTransport
 	c.handle = nil
 	c.closeHandleTransport = false
-	transports := make([]*DirectRuntimeTransport, 0, len(c.transports))
+	transports := make([]*directRuntimeTransport, 0, len(c.transports))
 	for transport := range c.transports {
 		transports = append(transports, transport)
 	}
-	c.transports = map[*DirectRuntimeTransport]struct{}{}
+	c.transports = map[*directRuntimeTransport]struct{}{}
 	c.closed = true
 	c.mu.Unlock()
 
@@ -220,8 +220,8 @@ type directRuntimeOptions struct {
 	HandleTransport RuntimeTransport
 }
 
-// DirectRuntimeTransport is a concrete RuntimeTransport over Axon gRPC UDS.
-type DirectRuntimeTransport struct {
+// directRuntimeTransport is a concrete RuntimeTransport over Axon gRPC UDS.
+type directRuntimeTransport struct {
 	mu            sync.Mutex
 	conn          *grpc.ClientConn
 	client        axonpb.InvocationClient
@@ -232,7 +232,7 @@ type DirectRuntimeTransport struct {
 	closed        bool
 }
 
-func openDirectRuntimeTransport(ctx context.Context, endpoint string, options directRuntimeOptions) (*DirectRuntimeTransport, error) {
+func openDirectRuntimeTransport(ctx context.Context, endpoint string, options directRuntimeOptions) (*directRuntimeTransport, error) {
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
 	}
@@ -271,7 +271,7 @@ func openDirectRuntimeTransport(ctx context.Context, endpoint string, options di
 			err,
 		)
 	}
-	return &DirectRuntimeTransport{
+	return &directRuntimeTransport{
 		conn:          conn,
 		client:        axonpb.NewInvocationClient(conn),
 		endpoint:      endpoint,
@@ -281,7 +281,7 @@ func openDirectRuntimeTransport(ctx context.Context, endpoint string, options di
 	}, nil
 }
 
-func (t *DirectRuntimeTransport) Invoke(ctx context.Context, draftJSON []byte) ([]byte, error) {
+func (t *directRuntimeTransport) Invoke(ctx context.Context, draftJSON []byte) ([]byte, error) {
 	client, timeout, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, err
@@ -303,7 +303,7 @@ func (t *DirectRuntimeTransport) Invoke(ctx context.Context, draftJSON []byte) (
 	return directInvokeResponseJSON(invocation.draft, response)
 }
 
-func (t *DirectRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
+func (t *directRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
 	client, timeout, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -335,7 +335,7 @@ func (t *DirectRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byt
 	return transport, openJSON, nil
 }
 
-func (t *DirectRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
+func (t *directRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
 	client, timeout, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -370,7 +370,7 @@ func (t *DirectRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte,
 	return transport, openJSON, nil
 }
 
-func (t *DirectRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
+func (t *directRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
 	handle, err := t.requireHandleTransport(ctx)
 	if err != nil {
 		return nil, err
@@ -392,7 +392,7 @@ func (t *DirectRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, 
 	return handle.Prepare(ctx, projectedJSON, optionsJSON)
 }
 
-func (t *DirectRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error) {
+func (t *directRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error) {
 	handle, err := t.requireHandleTransport(ctx)
 	if err != nil {
 		return nil, err
@@ -400,7 +400,7 @@ func (t *DirectRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []
 	return handle.SubmitSigned(ctx, signedJSON)
 }
 
-func (t *DirectRuntimeTransport) AwaitHandle(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
+func (t *directRuntimeTransport) AwaitHandle(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
 	handle, err := t.requireHandleTransport(ctx)
 	if err != nil {
 		return nil, err
@@ -408,7 +408,7 @@ func (t *DirectRuntimeTransport) AwaitHandle(ctx context.Context, control Invoca
 	return handle.AwaitHandle(ctx, control)
 }
 
-func (t *DirectRuntimeTransport) CancelHandle(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error) {
+func (t *directRuntimeTransport) CancelHandle(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error) {
 	handle, err := t.requireHandleTransport(ctx)
 	if err != nil {
 		return nil, err
@@ -416,7 +416,7 @@ func (t *DirectRuntimeTransport) CancelHandle(ctx context.Context, control Invoc
 	return handle.CancelHandle(ctx, control, reason)
 }
 
-func (t *DirectRuntimeTransport) HandleEvents(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
+func (t *directRuntimeTransport) HandleEvents(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
 	handle, err := t.requireHandleTransport(ctx)
 	if err != nil {
 		return nil, err
@@ -424,7 +424,7 @@ func (t *DirectRuntimeTransport) HandleEvents(ctx context.Context, control Invoc
 	return handle.HandleEvents(ctx, control)
 }
 
-func (t *DirectRuntimeTransport) FreeHandle(ctx context.Context, control InvocationControlCapability) error {
+func (t *directRuntimeTransport) FreeHandle(ctx context.Context, control InvocationControlCapability) error {
 	handle, err := t.requireHandleTransport(ctx)
 	if err != nil {
 		return err
@@ -432,7 +432,7 @@ func (t *DirectRuntimeTransport) FreeHandle(ctx context.Context, control Invocat
 	return handle.FreeHandle(ctx, control)
 }
 
-func (t *DirectRuntimeTransport) Close(ctx context.Context) error {
+func (t *directRuntimeTransport) Close(ctx context.Context) error {
 	if t == nil {
 		return invalidRuntimeClient("runtime transport is not initialized")
 	}
@@ -461,7 +461,7 @@ func (t *DirectRuntimeTransport) Close(ctx context.Context) error {
 	return closeErr
 }
 
-func (t *DirectRuntimeTransport) requireOpen(ctx context.Context) (axonpb.InvocationClient, time.Duration, error) {
+func (t *directRuntimeTransport) requireOpen(ctx context.Context) (axonpb.InvocationClient, time.Duration, error) {
 	if t == nil {
 		return nil, 0, invalidRuntimeClient("runtime transport is not initialized")
 	}
@@ -476,7 +476,7 @@ func (t *DirectRuntimeTransport) requireOpen(ctx context.Context) (axonpb.Invoca
 	return t.client, t.invokeTimeout, nil
 }
 
-func (t *DirectRuntimeTransport) requireHandleTransport(ctx context.Context) (RuntimeTransport, error) {
+func (t *directRuntimeTransport) requireHandleTransport(ctx context.Context) (RuntimeTransport, error) {
 	if _, _, err := t.requireOpen(ctx); err != nil {
 		return nil, err
 	}

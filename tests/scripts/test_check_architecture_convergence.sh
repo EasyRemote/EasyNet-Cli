@@ -5159,11 +5159,11 @@ expect_fail \
 make_good_fixture
 mkdir -p "$CLI/sdk/go"
 cat >"$CLI/sdk/go/direct_runtime.go" <<'EOF'
-func (t *DirectRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
+func (t *directRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
     return directRuntimePrepare(ctx, t.addressing, draftJSON, optionsJSON)
 }
 
-func (t *DirectRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error) {
+func (t *directRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error) {
     snapshot := t.storeDirectHandle("Completed", true, nil)
     return directRuntimeHandleSnapshotJSON(snapshot)
 }

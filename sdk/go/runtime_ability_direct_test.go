@@ -11,7 +11,7 @@ import (
 )
 
 type directRuntimeAbilityTransport struct {
-	*DirectRuntimeTransport
+	*directRuntimeTransport
 	resolve func(context.Context, []byte) ([]byte, error)
 }
 
@@ -37,7 +37,7 @@ func TestRuntimeAbilityClientDeadlineIsProviderOwned(t *testing.T) {
 	invokeStarted := daemon.configureInvokeTiming(time.Second)
 
 	base := directRuntimeAbilityTransport{
-		DirectRuntimeTransport: transport,
+		directRuntimeTransport: transport,
 		resolve:                testResolveDescriptorRef(t),
 	}
 	seed := bytes.Repeat([]byte{0x42}, 32)
