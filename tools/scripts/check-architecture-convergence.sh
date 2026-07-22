@@ -1384,20 +1384,20 @@ ability_catalog_dispatch = cli_root / "src/daemon/ability/dispatch.rs"
 session_open_envelope = (
     cli_root / "src/daemon/invocation/bidi/session_initiator/envelope.rs"
 )
-legacy_transport_admission_roots = (
+retired_outer_admission_roots = (
     "verify_invoke(",
     "verify_invoke_stream(",
     "verify_envelope_for_bidi(",
 )
 for path in production_files(cli_root / "src/daemon/invocation", {".rs"}):
     text = source(path)
-    for token in legacy_transport_admission_roots:
+    for token in retired_outer_admission_roots:
         if token in text:
             add(
                 "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
                 path,
                 line_number(text, text.find(token)),
-                f"legacy outer transport admission root remains: `{token}`",
+                f"retired outer admission root remains: `{token}`",
             )
 if daemon_service.exists():
     service_text = source(daemon_service)

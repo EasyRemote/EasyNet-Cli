@@ -32,7 +32,7 @@ _FORBIDDEN_DEPENDENCY_NAMES = {
     "easynet-run-axon",
     "libeasynet-cli",
 }
-_LEGACY_TRANSPORT_PACKAGE = "_transport"
+_FORBIDDEN_INTERNAL_TRANSPORT_PACKAGE = "_transport"
 _SDK_DIRECT_RUNTIME_MODULE = _SDK_MODULE + ".direct_runtime"
 _DIRECT_RUNTIME_SYMBOLS = {
     "DirectRuntimeConnector",
@@ -141,7 +141,7 @@ class ConsumerBoundaryAuditor:
         text = source.read_text(encoding="utf-8")
         relative = str(source.relative_to(root) if source != root else source.name)
         violations: list[BoundaryViolation] = []
-        violations.extend(_audit_legacy_transport_path(relative))
+        violations.extend(_audit_forbidden_transport_path(relative))
         violations.extend(_audit_imports(relative, text))
         violations.extend(_audit_direct_runtime_internals(relative, text))
         violations.extend(_audit_raw_ffi_markers(relative, text))
@@ -193,7 +193,7 @@ def _audit_imports(path: str, text: str) -> tuple[BoundaryViolation, ...]:
                             line=node.lineno,
                         )
                     )
-                if _is_legacy_transport_module(alias.name):
+                if _is_forbidden_transport_module(alias.name):
                     violations.append(
                         BoundaryViolation(
                             path=path,
@@ -224,7 +224,7 @@ def _audit_imports(path: str, text: str) -> tuple[BoundaryViolation, ...]:
                         line=node.lineno,
                     )
                 )
-            if _is_legacy_transport_module(module, level=node.level):
+            if _is_forbidden_transport_module(module, level=node.level):
                 violations.append(
                     BoundaryViolation(
                         path=path,
@@ -243,7 +243,7 @@ def _audit_imports(path: str, text: str) -> tuple[BoundaryViolation, ...]:
                     )
                 )
             for alias in node.names:
-                if _is_legacy_transport_module(alias.name, level=node.level):
+                if _is_forbidden_transport_module(alias.name, level=node.level):
                     violations.append(
                         BoundaryViolation(
                             path=path,
@@ -264,9 +264,9 @@ def _audit_imports(path: str, text: str) -> tuple[BoundaryViolation, ...]:
     return tuple(violations)
 
 
-def _audit_legacy_transport_path(path: str) -> tuple[BoundaryViolation, ...]:
+def _audit_forbidden_transport_path(path: str) -> tuple[BoundaryViolation, ...]:
     parts = Path(path).parts
-    if _LEGACY_TRANSPORT_PACKAGE not in parts:
+    if _FORBIDDEN_INTERNAL_TRANSPORT_PACKAGE not in parts:
         return tuple()
     return (
         BoundaryViolation(
@@ -862,18 +862,18 @@ def _is_sdk_direct_runtime_module(module: str) -> bool:
     )
 
 
-def _is_legacy_transport_module(module: str, *, level: int = 0) -> bool:
-    if module == _LEGACY_TRANSPORT_PACKAGE or module.startswith(
-        _LEGACY_TRANSPORT_PACKAGE + "."
+def _is_forbidden_transport_module(module: str, *, level: int = 0) -> bool:
+    if module == _FORBIDDEN_INTERNAL_TRANSPORT_PACKAGE or module.startswith(
+        _FORBIDDEN_INTERNAL_TRANSPORT_PACKAGE + "."
     ):
         return True
     if level and (
-        module == _LEGACY_TRANSPORT_PACKAGE
-        or module.startswith(_LEGACY_TRANSPORT_PACKAGE + ".")
+        module == _FORBIDDEN_INTERNAL_TRANSPORT_PACKAGE
+        or module.startswith(_FORBIDDEN_INTERNAL_TRANSPORT_PACKAGE + ".")
     ):
         return True
     parts = module.split(".")
-    return _LEGACY_TRANSPORT_PACKAGE in parts
+    return _FORBIDDEN_INTERNAL_TRANSPORT_PACKAGE in parts
 
 
 def _is_python_manifest(path: Path) -> bool:
