@@ -7,7 +7,7 @@ import "fmt"
 // no product profile owns C ABI error decoding.
 func cabiErrorFromLastErrorJSON(raw []byte, ok bool, code int32, operation string) error {
 	if ok {
-		if decoded, err := DecodeDaemonErrorJSON(raw); err == nil && decoded != nil {
+		if decoded, err := decodeDaemonErrorJSON(raw); err == nil && decoded != nil {
 			return decoded
 		}
 	}

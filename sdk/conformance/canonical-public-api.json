@@ -6411,7 +6411,6 @@
         "ControlDiscoveryReaderFunc",
         "ControlDiscoveryRuntimeConnector",
         "DaemonKeyServiceRejection",
-        "DecodeDaemonErrorJSON",
         "DeviceNodeIDInRealm",
         "DirectRuntimeConnector",
         "DirectRuntimeConnectorOptions",
@@ -7204,14 +7203,6 @@
         "DaemonKeyServiceRejection": {
           "canonical_replacement": [
             "capability_inventory.managed_signing"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "DecodeDaemonErrorJSON": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
           ],
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
@@ -18657,7 +18648,6 @@
       "DaemonKeyServiceRejection.Kind": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "DaemonKeyServiceRejection.Message": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "DaemonKeyServiceRejection.Unwrap": "9b79f3eb494557dfb3929c2d8140c7e4273c4c73c18e3d215a3f6a2cab4540eb",
-      "DecodeDaemonErrorJSON": "3ffd709d25084ed7182857d4b07298d282b64f77c5bb3d38d9760fc9b3439705",
       "DefaultDirectoryPageLimit": "4bdfbcc03de0e1be3f60c602ba79892450166e1ffe081579cf06515f0e98a273",
       "DefaultReceiptHistoryLimit": "4bdfbcc03de0e1be3f60c602ba79892450166e1ffe081579cf06515f0e98a273",
       "DefaultRuntimeEventPageLimit": "4bdfbcc03de0e1be3f60c602ba79892450166e1ffe081579cf06515f0e98a273",

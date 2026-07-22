@@ -193,8 +193,9 @@ func ErrorClassForCode(code ErrorCode) ErrorClass {
 	}
 }
 
-// DecodeDaemonErrorJSON decodes the shared sdk/schemas/error.schema.json DTO.
-func DecodeDaemonErrorJSON(raw []byte) (*SDKError, error) {
+// decodeDaemonErrorJSON decodes the shared sdk/schemas/error.schema.json DTO
+// for internal transport adapters.
+func decodeDaemonErrorJSON(raw []byte) (*SDKError, error) {
 	if strings.TrimSpace(string(raw)) == "null" {
 		return nil, nil
 	}
