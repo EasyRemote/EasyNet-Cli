@@ -2659,3 +2659,28 @@ Commands and outcomes will be appended after implementation.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
   codegraph `status` reports `Index is up to date`.
+
+## 2026-07-22 Invocation history ledger URA projection
+
+- `cargo test -q ledger_resource_ura --lib --features axon-pb` — PASS (`1
+  passed`); covers unjoined null projection, canonical device/user/agent
+  ledger resource URAs, and malformed hosted identity fail-closed behavior.
+- `cargo test -q invocation_history --lib --features axon-pb` — PASS (`34
+  passed`); preserves existing history list/get/trace/path behavior after
+  making `ledger_ura` fallible.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative fixture for the retired
+  `ledger_resource_ura() -> Option<String>` and
+  `load_hosted_identity_status().ok()?` fallback.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` —
+  PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
+  codegraph `status` reports `Index is up to date`.

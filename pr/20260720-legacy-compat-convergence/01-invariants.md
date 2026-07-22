@@ -349,3 +349,8 @@
   missing or invalid `control.json` daemon identity is caller identity
   unavailable state; it must not collapse into `Option::None`, descriptor-not-
   found, caller-signer failure, owner-offline routing, or transport timeout.
+- Invocation history ledger identity is an owner projection, not optional UI
+  decoration. A daemon that has not joined may expose `ledger_ura: null`, but
+  unreadable hosted-identity state or malformed `host_device_agent_ura` must
+  fail the history response before the product treats an unbound ledger as
+  canonical evidence.

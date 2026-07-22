@@ -2394,3 +2394,24 @@ Evidence will be appended after indexing and focused impact queries.
   descriptor resolution. Missing/invalid control discovery now returns a
   caller-identity error before local catalog lookup or remote
   `meta.list_abilities` probing.
+
+## 2026-07-22 Invocation history ledger URA projection audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  invocation.history.list subject_filter ledger_resource_ura
+  session_owner_user_id AUTHORITY_SUBJECT_MISMATCH` surfaced
+  `ledger_resource_ura` as the history response owner-projection seam.
+- The codegraph source showed `ledger_resource_ura()` returning `Option<String>`
+  and using both `AgentAggregateRepository::load_hosted_identity_status().ok()?`
+  and `parse_ura(...).ok()?`, so aggregate load failures and malformed hosted
+  identity were indistinguishable from an unjoined daemon.
+- `rg -n "ledger_resource_ura\\(|load_hosted_identity_status\\(\\)\\.ok\\(\\)?"
+  src/daemon/ability/builtins/governance/invocation_history.rs
+  tests/scripts/test_check_architecture_convergence.sh` confirmed the same
+  compatibility pattern existed in the architecture good fixture.
+- Root abstraction problem: invocation history treated the ledger URA as
+  optional presentation metadata, even though it is the resource owner identity
+  for returned receipt evidence.
+- Boundary decision: unjoined state remains `Ok(None)`, but unreadable aggregate
+  projection and malformed `host_device_agent_ura` are now typed history
+  response failures.

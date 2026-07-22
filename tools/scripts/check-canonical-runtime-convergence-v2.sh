@@ -319,6 +319,60 @@ for test in (
 PY
 }
 
+check_invocation_history_ledger_ura_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local history="$cli_root/src/daemon/ability/builtins/governance/invocation_history.rs"
+  [[ -f "$history" ]] || return 0
+
+  "$PYTHON_BIN" - "$history" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+production = text.split("#[cfg(test)]", 1)[0]
+
+ledger = re.search(
+    r"fn ledger_resource_ura\(\) -> (?P<ret>[^\{]+)\{(?P<body>.*?)\n\}\n\nfn ledger_resource_ura_from_host_device_agent_ura",
+    production,
+    re.S,
+)
+if ledger is None:
+    raise SystemExit("invocation_history_ledger_ura_function_not_found")
+if "anyhow::Result<Option<String>>" not in ledger.group("ret"):
+    raise SystemExit("invocation_history_ledger_ura_not_fallible")
+ledger_body = ledger.group("body")
+if "load_hosted_identity_status().ok()" in ledger_body:
+    raise SystemExit("invocation_history_ledger_ura_aggregate_load_collapsed")
+if "invocation.history ledger owner projection unavailable" not in ledger_body:
+    raise SystemExit("invocation_history_ledger_ura_missing_projection_context")
+
+projection = re.search(
+    r"fn ledger_resource_ura_from_host_device_agent_ura\([^)]*\) -> (?P<ret>[^\{]+)\{(?P<body>.*?)\n\}\n\nfn fetch_records_from_path",
+    production,
+    re.S,
+)
+if projection is None:
+    raise SystemExit("invocation_history_ledger_ura_projection_helper_not_found")
+if "anyhow::Result<Option<String>>" not in projection.group("ret"):
+    raise SystemExit("invocation_history_ledger_ura_projection_helper_not_fallible")
+projection_body = projection.group("body")
+for required in (
+    "invalid host_device_agent_ura",
+    "return Ok(None);",
+    "resource_dot_ura",
+):
+    if required not in projection_body:
+        raise SystemExit(f"invocation_history_ledger_ura_projection_missing:{required}")
+if ".ok()?" in projection_body or "parse_ura(host_device_agent_ura).ok()" in projection_body:
+    raise SystemExit("invocation_history_ledger_ura_parse_collapsed")
+
+if "ledger_resource_ura_projection_distinguishes_unjoined_from_invalid_identity" not in text:
+    raise SystemExit("missing_invocation_history_ledger_ura_projection_test")
+PY
+}
+
 check_principal_lifecycle_cli_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local principal="$cli_root/src/cli/commands/groups/principal.rs"
@@ -3135,6 +3189,26 @@ EOF
   if ( check_invocation_history_get_key_contract "$tmp/invocation-history-attempt-key" ) >/dev/null 2>&1; then
     fail "self-test expected invocation.history.get attempt_id key gate to fail"
   fi
+  mkdir -p "$tmp/invocation-history-ledger-ura-legacy/src/daemon/ability/builtins/governance"
+  cat >"$tmp/invocation-history-ledger-ura-legacy/src/daemon/ability/builtins/governance/invocation_history.rs" <<'EOF'
+fn ledger_resource_ura() -> Option<String> {
+    let hosted_identity = AgentAggregateRepository::load_hosted_identity_status().ok()?;
+    let parsed = crate::core::ura::parse_ura(hosted_identity.host_device_agent_ura()?).ok()?;
+    let owner = format!("device.{}", parsed.device_id()?);
+    Some(crate::core::ura::resource_dot_ura(&parsed.realm, &owner, "billing/invocations"))
+}
+
+fn fetch_records_from_path() {}
+
+#[test]
+fn history_key_schema_excludes_attempt_id() {}
+
+#[test]
+fn get_history_rejects_attempt_id_key() {}
+EOF
+  if ( check_invocation_history_ledger_ura_contract "$tmp/invocation-history-ledger-ura-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected invocation.history ledger_ura projection fallback gate to fail"
+  fi
   mkdir -p "$tmp/principal-lifecycle-fallback/src/cli/commands/groups"
   printf '%s\n' \
     'fn principal_ability_realm_source(args: &Value) -> anyhow::Result<&str> {' \
@@ -3356,6 +3430,7 @@ EOF
   check_advertise_agent_ingress_contract
   check_agent_start_model_intent_contract
   check_invocation_history_get_key_contract
+  check_invocation_history_ledger_ura_contract
   check_principal_lifecycle_cli_schema_contract
   check_auth_agents_backend_shape_contract
   check_pages_identity_credentials_contract
@@ -3404,6 +3479,7 @@ check_go_sdk_public_ura_alias_contract
 check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract
+check_invocation_history_ledger_ura_contract
 check_principal_lifecycle_cli_schema_contract
 check_auth_agents_backend_shape_contract
 check_pages_identity_credentials_contract

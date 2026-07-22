@@ -865,9 +865,17 @@ EOF
   cat >"$CLI/src/daemon/ability/builtins/governance/invocation_history.rs" <<'EOF'
 use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 
-fn ledger_resource_ura() -> Option<String> {
-    let hosted_identity = AgentAggregateRepository::load_hosted_identity_status().ok()?;
-    hosted_identity.host_device_agent_ura().map(str::to_string)
+fn ledger_resource_ura() -> anyhow::Result<Option<String>> {
+    let hosted_identity = AgentAggregateRepository::load_hosted_identity_status()?;
+    ledger_resource_ura_from_host_device_agent_ura(hosted_identity.host_device_agent_ura())
+}
+
+fn ledger_resource_ura_from_host_device_agent_ura(host_device_agent_ura: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(host_device_agent_ura) = host_device_agent_ura else {
+        return Ok(None);
+    };
+    let parsed = crate::core::ura::parse_ura(host_device_agent_ura)?;
+    Ok(Some(crate::core::ura::resource_dot_ura(&parsed.realm, "device.dev-1", "billing/invocations")))
 }
 EOF
 	  cat >"$CLI/src/daemon/ability/builtins/agents/list.rs" <<'EOF'
@@ -4178,6 +4186,20 @@ fn handler() -> anyhow::Result<()> {
 EOF
 expect_fail \
   "governance status aggregate provider fork" \
+  "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/governance/invocation_history.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+
+fn ledger_resource_ura() -> Option<String> {
+    let hosted_identity = AgentAggregateRepository::load_hosted_identity_status().ok()?;
+    let parsed = crate::core::ura::parse_ura(hosted_identity.host_device_agent_ura()?).ok()?;
+    Some(crate::core::ura::resource_dot_ura(&parsed.realm, "device.dev-1", "billing/invocations"))
+}
+EOF
+expect_fail \
+  "invocation history ledger URA projection fallback" \
   "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK"
 
 make_good_fixture

@@ -872,3 +872,15 @@ Decisions will be appended as root-fork choices are made.
 - Add SPEC v2 and architecture guards against
   `runtime_owner_ura_from_session(session).ok()` inside the FFI descriptor
   resolver.
+
+## 2026-07-22 Invocation history ledger URA projection
+
+- Treat `ledger_ura` as receipt evidence ownership state rather than nullable
+  UI metadata. Missing hosted identity remains a valid unjoined state; malformed
+  or unavailable hosted identity fails closed.
+- Split the projection into a fallible aggregate loader and a pure
+  `host_device_agent_ura` parser so tests cover owner-shape semantics without
+  depending on the operator's local state directory.
+- Extend SPEC v2 and architecture gates to reject
+  `ledger_resource_ura() -> Option<String>` and
+  `load_hosted_identity_status().ok()?` fallback.

@@ -4447,6 +4447,52 @@ for governance_status_surface, surface_label in governance_status_surfaces:
     ):
         if token in production_text:
             add("R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK", governance_status_surface, 1, detail)
+    if surface_label == "invocation history":
+        ledger_body = rust_method_body(production_text, "ledger_resource_ura")
+        if ledger_body is None:
+            add(
+                "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+                governance_status_surface,
+                1,
+                "invocation history ledger URA projection must remain inspectable",
+            )
+        else:
+            offset, body = ledger_body
+            signature = production_text[offset : production_text.find("{", offset)]
+            if "anyhow::Result<Option<String>>" not in signature:
+                add(
+                    "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+                    governance_status_surface,
+                    line_number(production_text, offset),
+                    "invocation history ledger URA projection must preserve hosted-identity load failures",
+                )
+            for token, detail in (
+                (
+                    "load_hosted_identity_status().ok()",
+                    "invocation history ledger URA projection must not collapse aggregate load failure into null",
+                ),
+                (
+                    "parse_ura(",
+                    "invocation history ledger URA parsing must live in the fallible projection helper",
+                ),
+            ):
+                if token in body:
+                    add(
+                        "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+                        governance_status_surface,
+                        line_number(production_text, offset + body.find(token)),
+                        detail,
+                    )
+        projection_body = rust_method_body(
+            production_text, "ledger_resource_ura_from_host_device_agent_ura"
+        )
+        if projection_body is None:
+            add(
+                "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+                governance_status_surface,
+                1,
+                "invocation history ledger URA projection must isolate host identity parsing",
+            )
 
 # Rule 41: EAL agent dispatch consumes the Agent repository-owned registered
 # Agent registry projection. EAL member calls are execution paths; constructing
