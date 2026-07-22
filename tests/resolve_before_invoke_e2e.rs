@@ -212,7 +212,9 @@ added_at_unix_ms = 0
         .with_daemon_runtime(daemon_runtime)
         .with_transport_boundary(AdmissionTransportBoundary::LocalOnlyIpc)
         .with_directory_read_models(advertised_agents, Arc::clone(&ability_catalog_store))
-        .with_local_ability_catalog(Arc::clone(&catalog));
+        .with_local_ability_catalog(Arc::clone(&catalog))
+        .with_invocation_attempt_ledger_path(tempdir.path().join("invocation-attempts.jsonl"))
+        .expect("open invocation attempt audit ledger");
     service
         .register_daemon_unary_routes(HUB_URA)
         .await
@@ -280,10 +282,10 @@ fn invoke(
     function_name: &str,
     args: serde_json::Value,
 ) -> Request<InvokeRequest> {
-    invoke_with_subject(catalog, callee_ura, DEVICE_URA, function_name, args)
+    invoke_with_explicit_subject(catalog, callee_ura, DEVICE_URA, function_name, args)
 }
 
-fn invoke_with_subject(
+fn invoke_with_explicit_subject(
     catalog: &AxonAbilityCatalog,
     callee_ura: &str,
     subject_ura: &str,
@@ -485,7 +487,11 @@ async fn invoke_reaches_dispatch_precondition_when_owner_online_for_known_abilit
     .expect("invoke did not time out")
     .expect_err("known online ability must reach remote dispatch precondition");
 
-    assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(
+        status.code(),
+        tonic::Code::FailedPrecondition,
+        "online known ability must reach remote dispatch precondition, got: {status}"
+    );
     assert!(
         status.message().contains("PendingDispatchMap"),
         "online known ability must fail at remote dispatch precondition, got: {status}"
@@ -511,7 +517,11 @@ async fn invoke_surfaces_typed_nxdomain_when_owner_offline() {
     .expect("invoke did not time out")
     .expect_err("offline owner must surface a typed resolver negative");
 
-    assert_eq!(status.code(), tonic::Code::NotFound);
+    assert_eq!(
+        status.code(),
+        tonic::Code::NotFound,
+        "offline owner must surface NXDOMAIN as NOT_FOUND, got: {status}"
+    );
     assert!(
         status.message().contains("ROUTE_NEGATIVE")
             && status.message().contains("NEGATIVE_REASON_NXDOMAIN"),

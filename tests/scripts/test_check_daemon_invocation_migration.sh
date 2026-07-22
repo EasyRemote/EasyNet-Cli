@@ -392,6 +392,29 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "generic local invoke with_subject facade should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+python3 - \
+    "$SB/tests/resolve_before_invoke_e2e.rs" \
+    "$SB/src/daemon/ability/builtins/governance/teach.rs" \
+    "$SB/src/daemon/keyring/abilities.rs" <<'PY'
+from pathlib import Path
+import sys
+
+for path in map(Path, sys.argv[1:]):
+    text = path.read_text(encoding="utf-8")
+    text = text.replace("invoke_with_explicit_subject", "invoke_with_subject")
+    text = text.replace("caller_env_for_explicit_subject", "caller_env_with_subject")
+    text = text.replace(
+        "handle_with_bound_subject_and_signing_key",
+        "handle_with_subject_and_signing_key",
+    )
+    path.write_text(text, encoding="utf-8")
+PY
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "non-SDK subject helper vocabulary should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 cat >"$SB/src/__target_constructor_probe.rs" <<'RS'
 pub fn probe() {
     let _ = crate::daemon::invocation::routing::target::InvocationTarget::local_daemon_system(

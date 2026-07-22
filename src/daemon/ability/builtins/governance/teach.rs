@@ -1787,7 +1787,7 @@ mod tests {
         crate::core::ura::owner_ability_ura(owner_ura, public_name).expect("test ability subject")
     }
 
-    fn caller_env_with_subject(
+    fn caller_env_for_explicit_subject(
         caller: impl Into<String>,
         ability: impl Into<String>,
         subject: impl Into<String>,
@@ -1804,7 +1804,7 @@ mod tests {
         owner_ura: &str,
         public_name: &str,
     ) -> EnvelopeContext {
-        caller_env_with_subject(caller, TEACH, subject_for(owner_ura, public_name))
+        caller_env_for_explicit_subject(caller, TEACH, subject_for(owner_ura, public_name))
     }
 
     fn teach_env_with_hosted_delegation(
@@ -1851,11 +1851,11 @@ mod tests {
     }
 
     fn acquire_env(caller: impl Into<String>, source_descriptor_ura: &str) -> EnvelopeContext {
-        caller_env_with_subject(caller, ACQUIRE, source_descriptor_ura)
+        caller_env_for_explicit_subject(caller, ACQUIRE, source_descriptor_ura)
     }
 
     fn forget_env(caller: impl Into<String>, learner_ura: &str) -> EnvelopeContext {
-        caller_env_with_subject(caller, FORGET, subject_for(learner_ura, "quote"))
+        caller_env_for_explicit_subject(caller, FORGET, subject_for(learner_ura, "quote"))
     }
 
     fn executable_test_runtime() -> Arc<axon_sdk::invocation::LocalRuntime> {

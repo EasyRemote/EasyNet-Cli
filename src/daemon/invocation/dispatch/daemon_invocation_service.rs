@@ -1153,6 +1153,24 @@ impl DaemonInvocationService {
         self
     }
 
+    /// Attach the transport-boundary attempt audit ledger by path.
+    ///
+    /// This is the public configuration seam for integration harnesses and
+    /// embedders that construct `DaemonInvocationService` directly instead of
+    /// going through daemon boot. Boot code may still inject a pre-opened
+    /// ledger so all service clones share the same writer handle.
+    pub fn with_invocation_attempt_ledger_path(
+        mut self,
+        path: impl Into<PathBuf>,
+    ) -> anyhow::Result<Self> {
+        let ledger =
+            crate::daemon::invocation::dispatch::attempt_audit::InvocationAttemptLedger::open(
+                path,
+            )?;
+        self.runtime.attempt_ledger = Some(Arc::new(ledger));
+        Ok(self)
+    }
+
     /// Set this service's admission transport boundary. Boot serves the same
     /// service over local-only IPC and off-box TCP/TLS; the TCP-fed clone is
     /// given `OffBoxStrict` so a daemon-URA spoofer reaching the TCP port still

@@ -499,6 +499,33 @@ for token in (
             f"{local_loopback}: generic subject-bearing transport facade is retired: {token}"
         )
 
+for path, tokens in (
+    (
+        "tests/resolve_before_invoke_e2e.rs",
+        (
+            "fn invoke_with_subject(",
+        ),
+    ),
+    (
+        "src/daemon/ability/builtins/governance/teach.rs",
+        (
+            "caller_env_with_subject",
+        ),
+    ),
+    (
+        "src/daemon/keyring/abilities.rs",
+        (
+            "handle_with_subject_and_signing_key",
+        ),
+    ),
+):
+    source = read(path)
+    for token in tokens:
+        if token in source:
+            violations.append(
+                f"{path}: non-SDK subject helper must name explicit tuple/bound subject semantics: {token}"
+            )
+
 for match in re.finditer(
     r"(?:invoke_target_root_timeout|stream_target_root)\s*\([^)]*subject\s*:\s*Option\s*<\s*String\s*>",
     local_invoke_production,

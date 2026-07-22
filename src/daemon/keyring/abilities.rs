@@ -839,7 +839,7 @@ mod tests {
 
     // ── PR-N4 commit 2/N — federate_user_identity_token ──────
 
-    fn handle_with_subject_and_signing_key(
+    fn handle_with_bound_subject_and_signing_key(
     ) -> (Arc<dyn ManagedSigningProvider>, String, tempfile::TempDir) {
         let (h, d) = handle();
         let created = handle_create(
@@ -864,7 +864,7 @@ mod tests {
 
     #[test]
     fn federate_user_identity_token_happy_path() {
-        let (h, key_id, _d) = handle_with_subject_and_signing_key();
+        let (h, key_id, _d) = handle_with_bound_subject_and_signing_key();
         let resp = handle_federate_user_identity_token(
             &h,
             issuer_args(&key_id, "realm-b", 1_714_500_000_000),
@@ -902,7 +902,7 @@ mod tests {
         // The token issued by this handler must verify with the
         // user_binding_chain::verify_user_binding_signature
         // function — the consuming realm's gate.
-        let (h, key_id, _d) = handle_with_subject_and_signing_key();
+        let (h, key_id, _d) = handle_with_bound_subject_and_signing_key();
         let resp = handle_federate_user_identity_token(
             &h,
             issuer_args(&key_id, "realm-b", 1_714_500_000_000),
@@ -920,7 +920,7 @@ mod tests {
         // with the same target_realm + issued_at MUST have
         // distinct nonces, so the consuming realm's replay
         // store can dedup them as separate calls.
-        let (h, key_id, _d) = handle_with_subject_and_signing_key();
+        let (h, key_id, _d) = handle_with_bound_subject_and_signing_key();
         let args = issuer_args(&key_id, "realm-b", 1_714_500_000_000);
         let r1 = handle_federate_user_identity_token(&h, args.clone()).unwrap();
         let r2 = handle_federate_user_identity_token(&h, args).unwrap();
@@ -932,7 +932,7 @@ mod tests {
         // INV-3 unidirectional: the source realm cannot issue a
         // binding for itself; that's not a federated assertion,
         // just self-loop noise. Reject early.
-        let (h, key_id, _d) = handle_with_subject_and_signing_key();
+        let (h, key_id, _d) = handle_with_bound_subject_and_signing_key();
         let err = handle_federate_user_identity_token(
             &h,
             issuer_args(&key_id, "realm-a", 1_714_500_000_000),
@@ -999,7 +999,7 @@ mod tests {
 
     #[test]
     fn federate_user_identity_token_rejects_empty_target_realm() {
-        let (h, key_id, _d) = handle_with_subject_and_signing_key();
+        let (h, key_id, _d) = handle_with_bound_subject_and_signing_key();
         let err =
             handle_federate_user_identity_token(&h, issuer_args(&key_id, "", 1_714_500_000_000))
                 .expect_err("must reject empty target_realm");
