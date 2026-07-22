@@ -112,7 +112,7 @@ pub fn run(args: InvocationArgs) -> anyhow::Result<()> {
         InvocationAction::Stats(a) => run_stats(a),
         InvocationAction::Path => {
             let response: HistoryPathResponse =
-                invoke_invocation_ability(ABILITY_HISTORY_PATH, json!({}))?;
+                invoke_invocation_history_read(InvocationHistoryRead::Path)?;
             println!("{}", response.ledger_path);
             Ok(())
         }
@@ -390,8 +390,9 @@ fn ledger_path_label(path: Option<String>) -> String {
 /// no log spelunking. Pure projection over invocation.history.list;
 /// the daemon stays the only ledger reader.
 fn run_stats(args: StatsArgs) -> anyhow::Result<()> {
-    let response: HistoryListResponse =
-        invoke_invocation_ability(ABILITY_HISTORY_LIST, json!({ "limit": args.limit }))?;
+    let response: HistoryListResponse = invoke_invocation_history_read(
+        InvocationHistoryRead::List(InvocationHistoryListQuery::for_stats(args.limit)),
+    )?;
     let summary = summarize(&response.records);
 
     if args.format == OutputFormat::Json {
@@ -530,27 +531,29 @@ fn percentile(sorted: &[u64], p: u64) -> u64 {
 }
 
 fn fetch_history_list(args: &ListArgs) -> anyhow::Result<HistoryListResponse> {
-    invoke_invocation_ability(ABILITY_HISTORY_LIST, history_list_args(args))
+    invoke_invocation_history_read(InvocationHistoryRead::List(
+        InvocationHistoryListQuery::from_list_args(args),
+    ))
 }
 
 fn fetch_history_record(id: &str) -> anyhow::Result<HistoryGetResponse> {
-    invoke_invocation_ability(
-        ABILITY_HISTORY_GET,
-        json!({ "key": history_key_for_id(id) }),
-    )
+    invoke_invocation_history_read(InvocationHistoryRead::Get(
+        InvocationHistoryKey::for_record_lookup(id),
+    ))
 }
 
 fn fetch_trace_graph_by_trace_id(trace_id: &str) -> anyhow::Result<TraceGetResponse> {
-    invoke_invocation_ability(
-        ABILITY_TRACE_GET,
-        json!({ "key": { "trace_id": trace_id } }),
-    )
+    invoke_invocation_history_read(InvocationHistoryRead::Trace(InvocationHistoryKey::TraceId(
+        trace_id.to_string(),
+    )))
 }
 
-fn invoke_invocation_ability<T>(ability: &str, args: Value) -> anyhow::Result<T>
+fn invoke_invocation_history_read<T>(read: InvocationHistoryRead) -> anyhow::Result<T>
 where
     T: DeserializeOwned,
 {
+    let ability = read.ability();
+    let args = read.into_args();
     // Route through the canonical `local_invoke` surface so the
     // "one CLI subcommand = one ability invoke" rule
     // (`src/support/local_invoke.rs` doc) stays held — i.e. CLI
@@ -560,34 +563,122 @@ where
     serde_json::from_value(value).with_context(|| format!("decode {ability} response"))
 }
 
-fn history_list_args(args: &ListArgs) -> Value {
-    let mut filter = Map::new();
-    insert_filter_value(&mut filter, "state", args.state.as_deref());
-    insert_filter_value(&mut filter, "ability_ura", args.ability_ura.as_deref());
-    insert_filter_value(&mut filter, "caller_ura", args.caller.as_deref());
-    insert_filter_value(&mut filter, "callee_ura", args.callee.as_deref());
-    insert_filter_value(&mut filter, "agent_ura", args.agent_ura.as_deref());
-    insert_filter_value(&mut filter, "subject_ura", args.subject.as_deref());
-
-    let mut body = Map::new();
-    body.insert("limit".to_string(), json!(args.limit));
-    if !filter.is_empty() {
-        body.insert("filter".to_string(), Value::Object(filter));
-    }
-    Value::Object(body)
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InvocationHistoryRead {
+    Path,
+    List(InvocationHistoryListQuery),
+    Get(InvocationHistoryKey),
+    Trace(InvocationHistoryKey),
 }
 
-fn insert_filter_value(filter: &mut Map<String, Value>, key: &str, value: Option<&str>) {
-    if let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) {
-        filter.insert(key.to_string(), json!(value));
+impl InvocationHistoryRead {
+    fn ability(&self) -> &'static str {
+        match self {
+            Self::Path => ABILITY_HISTORY_PATH,
+            Self::List(_) => ABILITY_HISTORY_LIST,
+            Self::Get(_) => ABILITY_HISTORY_GET,
+            Self::Trace(_) => ABILITY_TRACE_GET,
+        }
+    }
+
+    fn into_args(self) -> Value {
+        match self {
+            Self::Path => Value::Object(Map::new()),
+            Self::List(query) => query.into_args(),
+            Self::Get(key) | Self::Trace(key) => json!({ "key": key.into_args() }),
+        }
     }
 }
 
-fn history_key_for_id(id: &str) -> Value {
-    if id.starts_with("easynet:///") {
-        json!({ "ura": id })
-    } else {
-        json!({ "request_id": id })
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InvocationHistoryListQuery {
+    limit: usize,
+    filter: InvocationHistoryFilter,
+}
+
+impl InvocationHistoryListQuery {
+    fn for_stats(limit: usize) -> Self {
+        Self {
+            limit,
+            filter: InvocationHistoryFilter::default(),
+        }
+    }
+
+    fn from_list_args(args: &ListArgs) -> Self {
+        Self {
+            limit: args.limit,
+            filter: InvocationHistoryFilter {
+                state: args.state.clone(),
+                ability_ura: args.ability_ura.clone(),
+                caller_ura: args.caller.clone(),
+                callee_ura: args.callee.clone(),
+                agent_ura: args.agent_ura.clone(),
+                subject_ura: args.subject.clone(),
+            },
+        }
+    }
+
+    fn into_args(self) -> Value {
+        let mut body = Map::new();
+        body.insert("limit".to_string(), json!(self.limit));
+        if let Some(filter) = self.filter.into_args() {
+            body.insert("filter".to_string(), filter);
+        }
+        Value::Object(body)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct InvocationHistoryFilter {
+    state: Option<String>,
+    ability_ura: Option<String>,
+    caller_ura: Option<String>,
+    callee_ura: Option<String>,
+    agent_ura: Option<String>,
+    subject_ura: Option<String>,
+}
+
+impl InvocationHistoryFilter {
+    fn into_args(self) -> Option<Value> {
+        let mut filter = Map::new();
+        Self::insert_arg_value(&mut filter, "state", self.state);
+        Self::insert_arg_value(&mut filter, "ability_ura", self.ability_ura);
+        Self::insert_arg_value(&mut filter, "caller_ura", self.caller_ura);
+        Self::insert_arg_value(&mut filter, "callee_ura", self.callee_ura);
+        Self::insert_arg_value(&mut filter, "agent_ura", self.agent_ura);
+        Self::insert_arg_value(&mut filter, "subject_ura", self.subject_ura);
+        (!filter.is_empty()).then(|| Value::Object(filter))
+    }
+
+    fn insert_arg_value(filter: &mut Map<String, Value>, key: &str, value: Option<String>) {
+        if let Some(value) = value.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+            filter.insert(key.to_string(), json!(value));
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InvocationHistoryKey {
+    InvocationUra(String),
+    RequestId(String),
+    TraceId(String),
+}
+
+impl InvocationHistoryKey {
+    fn for_record_lookup(id: &str) -> Self {
+        if id.starts_with("easynet:///") {
+            Self::InvocationUra(id.to_string())
+        } else {
+            Self::RequestId(id.to_string())
+        }
+    }
+
+    fn into_args(self) -> Value {
+        match self {
+            Self::InvocationUra(ura) => json!({ "ura": ura }),
+            Self::RequestId(request_id) => json!({ "request_id": request_id }),
+            Self::TraceId(trace_id) => json!({ "trace_id": trace_id }),
+        }
     }
 }
 
@@ -620,8 +711,100 @@ mod tests {
     use super::*;
 
     #[test]
-    fn history_list_args_emits_explicit_ura_scope_fields() {
-        let body = history_list_args(&ListArgs {
+    fn invocation_history_read_list_emits_explicit_ura_scope_fields() {
+        let body =
+            InvocationHistoryRead::List(InvocationHistoryListQuery::from_list_args(&ListArgs {
+                limit: 25,
+                state: Some("completed".into()),
+                ability_ura: Some("easynet:///r/test/ability/device.callee.fs.read".into()),
+                caller: Some("easynet:///r/test/device/caller".into()),
+                callee: None,
+                agent_ura: Some("easynet:///r/test/device/callee".into()),
+                subject: Some("easynet:///r/test/user/alice".into()),
+                format: OutputFormat::Json,
+            }))
+            .into_args();
+
+        assert_eq!(body["limit"], 25);
+        assert_eq!(
+            body["filter"]["ability_ura"],
+            "easynet:///r/test/ability/device.callee.fs.read"
+        );
+        assert_eq!(
+            body["filter"]["caller_ura"],
+            "easynet:///r/test/device/caller"
+        );
+        assert_eq!(
+            body["filter"]["agent_ura"],
+            "easynet:///r/test/device/callee"
+        );
+        assert_eq!(
+            body["filter"]["subject_ura"],
+            "easynet:///r/test/user/alice"
+        );
+        assert!(body["filter"].get("subject").is_none());
+    }
+
+    #[test]
+    fn invocation_history_read_list_omits_blank_filter_values() {
+        let body =
+            InvocationHistoryRead::List(InvocationHistoryListQuery::from_list_args(&ListArgs {
+                limit: 25,
+                state: Some(" ".into()),
+                ability_ura: None,
+                caller: None,
+                callee: None,
+                agent_ura: None,
+                subject: None,
+                format: OutputFormat::Json,
+            }))
+            .into_args();
+
+        assert_eq!(body["limit"], 25);
+        assert!(body.get("filter").is_none());
+    }
+
+    #[test]
+    fn invocation_history_read_projects_path_get_and_trace_queries() {
+        assert_eq!(InvocationHistoryRead::Path.ability(), ABILITY_HISTORY_PATH);
+        assert_eq!(InvocationHistoryRead::Path.into_args(), json!({}));
+
+        let by_ura = InvocationHistoryRead::Get(InvocationHistoryKey::for_record_lookup(
+            "easynet:///r/test/resource/invocation.i-1",
+        ));
+        assert_eq!(by_ura.ability(), ABILITY_HISTORY_GET);
+        assert_eq!(
+            by_ura.into_args(),
+            json!({ "key": { "ura": "easynet:///r/test/resource/invocation.i-1" } })
+        );
+
+        let by_request =
+            InvocationHistoryRead::Get(InvocationHistoryKey::for_record_lookup("req-1"));
+        assert_eq!(by_request.ability(), ABILITY_HISTORY_GET);
+        assert_eq!(
+            by_request.into_args(),
+            json!({ "key": { "request_id": "req-1" } })
+        );
+
+        let trace = InvocationHistoryRead::Trace(InvocationHistoryKey::TraceId("trace-1".into()));
+        assert_eq!(trace.ability(), ABILITY_TRACE_GET);
+        assert_eq!(
+            trace.into_args(),
+            json!({ "key": { "trace_id": "trace-1" } })
+        );
+    }
+
+    #[test]
+    fn invocation_history_stats_uses_list_query_without_scope_filter() {
+        let body =
+            InvocationHistoryRead::List(InvocationHistoryListQuery::for_stats(500)).into_args();
+
+        assert_eq!(body, json!({ "limit": 500 }));
+    }
+
+    #[test]
+    fn invocation_history_list_args_constructor_is_the_only_cli_filter_projection() {
+        let body = InvocationHistoryListQuery::from_list_args(&ListArgs {
             limit: 25,
             state: Some("completed".into()),
             ability_ura: Some("easynet:///r/test/ability/device.callee.fs.read".into()),
@@ -630,7 +813,8 @@ mod tests {
             agent_ura: Some("easynet:///r/test/device/callee".into()),
             subject: Some("easynet:///r/test/user/alice".into()),
             format: OutputFormat::Json,
-        });
+        })
+        .into_args();
 
         assert_eq!(body["limit"], 25);
         assert_eq!(

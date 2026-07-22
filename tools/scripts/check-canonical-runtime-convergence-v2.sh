@@ -498,6 +498,61 @@ for test in (
 PY
 }
 
+check_cli_invocation_history_read_model_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local invocation="$cli_root/src/cli/commands/groups/invocation.rs"
+  [[ -f "$invocation" ]] || return 0
+
+  "$PYTHON_BIN" - "$invocation" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+production = text.split("#[cfg(test)]", 1)[0]
+
+for required in (
+    "enum InvocationHistoryRead",
+    "struct InvocationHistoryListQuery",
+    "struct InvocationHistoryFilter",
+    "enum InvocationHistoryKey",
+    "fn invoke_invocation_history_read<T>(read: InvocationHistoryRead)",
+    "InvocationHistoryRead::Path",
+    "InvocationHistoryRead::List(InvocationHistoryListQuery::for_stats(args.limit))",
+    "InvocationHistoryListQuery::from_list_args(args)",
+    "InvocationHistoryKey::for_record_lookup(id)",
+    "InvocationHistoryKey::TraceId(",
+    "trace_id.to_string()",
+):
+    if required not in production:
+        raise SystemExit(f"cli_invocation_history_read_model_missing:{required}")
+
+for retired in (
+    "fn history_list_args(",
+    "fn insert_filter_value(",
+    "fn history_key_for_id(",
+    "invoke_invocation_ability(ABILITY_HISTORY_PATH, json!({}))",
+    'invoke_invocation_ability(ABILITY_HISTORY_LIST, json!({ "limit": args.limit }))',
+    'json!({ "key": history_key_for_id(id) })',
+    'json!({ "key": { "trace_id": trace_id } })',
+):
+    if retired in production:
+        raise SystemExit(f"cli_invocation_history_read_model_retired_json:{retired}")
+
+if "crate::support::platform::local_invoke::invoke_local_ability(ability, args)" not in production:
+    raise SystemExit("cli_invocation_history_read_model_not_using_local_invoke")
+
+for required_test in (
+    "invocation_history_read_list_emits_explicit_ura_scope_fields",
+    "invocation_history_read_list_omits_blank_filter_values",
+    "invocation_history_read_projects_path_get_and_trace_queries",
+    "invocation_history_stats_uses_list_query_without_scope_filter",
+):
+    if required_test not in text:
+        raise SystemExit(f"cli_invocation_history_read_model_missing_test:{required_test}")
+PY
+}
+
 check_sdk_history_authority_subject_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -5727,6 +5782,37 @@ EOF
   if ( check_invocation_history_filter_scope_contract "$tmp/invocation-history-filter-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected invocation.history filter scope gate to fail"
   fi
+  mkdir -p "$tmp/cli-invocation-history-read-legacy/src/cli/commands/groups"
+  cat >"$tmp/cli-invocation-history-read-legacy/src/cli/commands/groups/invocation.rs" <<'EOF'
+fn run_stats(args: StatsArgs) -> anyhow::Result<()> {
+    invoke_invocation_ability(ABILITY_HISTORY_LIST, json!({ "limit": args.limit }))
+}
+
+fn fetch_history_list(args: &ListArgs) -> anyhow::Result<HistoryListResponse> {
+    invoke_invocation_ability(ABILITY_HISTORY_LIST, history_list_args(args))
+}
+
+fn fetch_history_record(id: &str) -> anyhow::Result<HistoryGetResponse> {
+    invoke_invocation_ability(ABILITY_HISTORY_GET, json!({ "key": history_key_for_id(id) }))
+}
+
+fn fetch_trace_graph_by_trace_id(trace_id: &str) -> anyhow::Result<TraceGetResponse> {
+    invoke_invocation_ability(ABILITY_TRACE_GET, json!({ "key": { "trace_id": trace_id } }))
+}
+
+fn invoke_invocation_ability<T>(ability: &str, args: Value) -> anyhow::Result<T>
+where
+    T: DeserializeOwned,
+{
+    crate::support::platform::local_invoke::invoke_local_ability(ability, args)
+}
+
+fn history_list_args(args: &ListArgs) -> Value { json!({ "limit": args.limit }) }
+fn history_key_for_id(id: &str) -> Value { json!({ "request_id": id }) }
+EOF
+  if ( check_cli_invocation_history_read_model_contract "$tmp/cli-invocation-history-read-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected CLI invocation history read-model gate to fail"
+  fi
   mkdir -p "$tmp/sdk-history-authority-legacy/sdk/go" \
     "$tmp/sdk-history-authority-legacy/sdk/python/easynet_sdk" \
     "$tmp/sdk-history-authority-legacy/sdk/python/tests"
@@ -6325,6 +6411,7 @@ EOF
   check_invocation_history_get_key_contract
   check_invocation_history_ledger_ura_contract
   check_invocation_history_filter_scope_contract
+  check_cli_invocation_history_read_model_contract
   check_sdk_history_authority_subject_contract
   check_sdk_runtime_failure_code_contract
   check_principal_lifecycle_cli_schema_contract
@@ -6401,6 +6488,7 @@ check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract
 check_invocation_history_ledger_ura_contract
 check_invocation_history_filter_scope_contract
+check_cli_invocation_history_read_model_contract
 check_sdk_history_authority_subject_contract
 check_sdk_runtime_failure_code_contract
 check_principal_lifecycle_cli_schema_contract
