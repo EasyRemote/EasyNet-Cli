@@ -2,6 +2,18 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-22 observe.health contract-only projection
+
+- Treat `observe.health` as a canonical runtime health contract, not as a
+  payload echo or smoke-diagnostics surface. The handler now returns health
+  state only and ignores the caller payload.
+- Keep the canonical timestamp under `details.replied_at_unix_ms`; remove
+  top-level `replied_at_unix_ms` because it was a compatibility diagnostic
+  alias rather than a separate health fact.
+- Preserve existing caller behavior that keys off `status` and `details`, and
+  make stale callers that depended on `echo` fail visibly instead of silently
+  treating health as a generic debug echo endpoint.
+
 ## 2026-07-22 Docker EasyRemote exact invocation-history scope
 
 - Treat `invocation list --ability-ura` as the product e2e authority for

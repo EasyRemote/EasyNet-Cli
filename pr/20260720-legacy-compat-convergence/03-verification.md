@@ -1,5 +1,22 @@
 # Verification
 
+## 2026-07-22 observe.health contract-only projection
+
+- `cargo fmt --all -- --check` — PASS.
+- `cargo test -q -p easynet --lib governance::health --features axon-pb` —
+  PASS (`3 passed`).
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes the legacy `observe.health` echo diagnostics fixture.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS;
+  includes `check_observe_health_contract_projection_contract`.
+- `cargo check -q -p easynet --lib --features axon-pb` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` —
+  PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `git diff --check` — PASS.
+
 ## 2026-07-22 Docker EasyRemote exact invocation-history scope
 
 - `bash -n tools/scripts/docker-two-node-easyremote-cli-e2e.sh` — PASS.

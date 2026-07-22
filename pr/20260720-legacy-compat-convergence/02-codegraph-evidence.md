@@ -2821,3 +2821,26 @@ Evidence will be appended after indexing and focused impact queries.
   `ability_invocation_records` exact-only. Add SPEC v2 gate coverage so
   future Docker/EasyRemote e2e verification cannot reintroduce all-history
   scanning as acceptance evidence.
+
+## 2026-07-22 observe.health contract projection audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was
+  up to date for the checkout before this slice.
+- `rg -n
+  "agent_status|api_ready|session_state|connection_state|Back-compat diagnostics|governance.*health|ability\\.health|health"
+  src/daemon/ability/builtins/governance/health.rs src/cli src/daemon tests
+  tools/scripts -S` identified `observe.health` as a public runtime smoke
+  ability consumed by status, doctor, FFI smoke, and SDK live smoke checks.
+- Source inspection found `src/daemon/ability/builtins/governance/health.rs`
+  returning canonical fields plus top-level `echo` and
+  `replied_at_unix_ms` fields explicitly labeled as back-compat diagnostics.
+  The active product callers only require `status` and `details`; the extra
+  fields make the runtime health ability double as an echo/debug carrier.
+- Root abstraction problem: a health contract was preserving smoke diagnostic
+  payload reflection in the canonical runtime response. That keeps a
+  compatibility surface in the runtime domain rather than in a diagnostic
+  product wrapper.
+- Boundary decision: remove top-level compatibility diagnostics from
+  `observe.health`, retain `details.replied_at_unix_ms` as the canonical
+  timestamp fact, update focused tests, and add SPEC v2 coverage so the echo
+  carrier cannot return.

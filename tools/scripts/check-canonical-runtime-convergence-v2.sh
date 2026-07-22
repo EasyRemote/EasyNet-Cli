@@ -1115,6 +1115,48 @@ for expected in (
 PY
 }
 
+check_observe_health_contract_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local health="$cli_root/src/daemon/ability/builtins/governance/health.rs"
+  [[ -f "$health" ]] || fail "observe.health handler is missing: $health"
+
+  "$PYTHON_BIN" - "$health" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+for retired in (
+    "Back-compat diagnostics",
+    "smoke diagnostics",
+    '"echo"',
+    '"echo":',
+):
+    if retired in production:
+        raise SystemExit(f"observe_health_contract_projection:retired_diagnostic:{retired}")
+
+handler = re.search(r"fn handler\([^)]*\) -> anyhow::Result<Value> \{(?P<body>.*?)\n\}", production, re.S)
+if handler is None:
+    raise SystemExit("observe_health_contract_projection:handler_missing")
+body = handler.group("body")
+for required in (
+    '"status": "healthy"',
+    '"details"',
+    '"replied_at_unix_ms": ts',
+    '"components"',
+):
+    if required not in body:
+        raise SystemExit(f"observe_health_contract_projection:missing_contract_field:{required}")
+if re.search(r"\bargs\b", body):
+    raise SystemExit("observe_health_contract_projection:handler_still_echoes_input_args")
+description = re.search(r"pub fn description\(\) -> &'static str \{(?P<body>.*?)\n\}", production, re.S)
+if description is None or "Returns Axon observe.health status fields." not in description.group("body"):
+    raise SystemExit("observe_health_contract_projection:description_not_contract_only")
+PY
+}
+
 check_admission_owner_credentials_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local policy="$cli_root/src/daemon/invocation/admission/policy_gate.rs"
@@ -4763,6 +4805,19 @@ EOF
   if ( check_product_e2e_invocation_history_exact_scope_contract "$tmp/product-e2e-history-fallback" ) >/dev/null 2>&1; then
     fail "self-test expected product e2e invocation history fallback gate to fail"
   fi
+  mkdir -p "$tmp/observe-health-legacy/src/daemon/ability/builtins/governance"
+  cat >"$tmp/observe-health-legacy/src/daemon/ability/builtins/governance/health.rs" <<'EOF'
+fn handler(args: Value) -> anyhow::Result<Value> {
+  let ts = chrono::Utc::now().timestamp_millis();
+  Ok(json!({"status": "healthy", "details": {"replied_at_unix_ms": ts}, "components": {}, "echo": args, "replied_at_unix_ms": ts}))
+}
+pub fn description() -> &'static str {
+  "Local health probe. Returns Axon observe.health status fields plus smoke diagnostics."
+}
+EOF
+  if ( check_observe_health_contract_projection_contract "$tmp/observe-health-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected observe.health legacy diagnostics gate to fail"
+  fi
   mkdir -p "$tmp/admission-owner-legacy/src/daemon/invocation/admission"
   printf '%s\n' \
     'pub(crate) fn resolve_owner(subject_ura: &str, callee_ura: &str, daemon_ura: Option<&str>, trust_anchor: &RealmTrustAnchor) -> OwnerResolution {' \
@@ -4927,6 +4982,7 @@ EOF
   check_runtime_trust_user_key_inventory_scope_contract
   check_runtime_trust_user_key_write_scope_contract
   check_product_e2e_invocation_history_exact_scope_contract
+  check_observe_health_contract_projection_contract
   check_admission_owner_credentials_contract
   check_shared_local_device_owner_projection_contract
   check_node_session_authority_subject_contract
@@ -4990,6 +5046,7 @@ check_runtime_trust_revoke_credentials_contract
 check_runtime_trust_user_key_inventory_scope_contract
 check_runtime_trust_user_key_write_scope_contract
 check_product_e2e_invocation_history_exact_scope_contract
+check_observe_health_contract_projection_contract
 check_admission_owner_credentials_contract
 check_shared_local_device_owner_projection_contract
 check_node_session_authority_subject_contract

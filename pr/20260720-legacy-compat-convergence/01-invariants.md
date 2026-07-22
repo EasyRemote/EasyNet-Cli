@@ -447,3 +447,7 @@
   `invocation list --format json` scan is diagnostic data, not acceptance
   evidence; it must not be used as a fallback to prove one product operation
   produced exactly one finalized signed receipt chain.
+- `observe.health` is a runtime health contract, not an echo or smoke
+  diagnostics carrier. Its public response may expose `status`, `details`,
+  `uptime_ms`, `version`, and `components`; caller payloads must not be
+  reflected through top-level compatibility fields.
