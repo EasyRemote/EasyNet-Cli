@@ -88,7 +88,7 @@ pub const ABILITY_FEDERATION_RESOLVE: &str = conformance::ABILITY_FEDERATION_RES
 /// `namespace.resolve` — RFC-005 typed namespace resolver surface.
 /// This is a daemon ability reached through `axon.v1.Invocation`; it
 /// returns an Axon `ResolveAnswer` proto-JSON projection, not legacy
-/// directory rows.
+/// retired directory row shapes.
 pub const ABILITY_NAMESPACE_RESOLVE: &str = conformance::ABILITY_NAMESPACE_RESOLVE;
 
 /// `namespace.proxy_resolve` — daemon-local typed namespace proxy.
@@ -98,12 +98,6 @@ pub const ABILITY_NAMESPACE_RESOLVE: &str = conformance::ABILITY_NAMESPACE_RESOL
 /// backend product paths that previously consumed
 /// legacy federation directory rows.
 pub const ABILITY_NAMESPACE_PROXY_RESOLVE: &str = conformance::ABILITY_NAMESPACE_PROXY_RESOLVE;
-
-/// `federation.subscribe_directory` — the only federation.* ability
-/// served via `InvokeStream` (server-stream); the others go through
-/// unary `Invoke`.
-pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY: &str =
-    conformance::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY;
 
 /// `federation.revoke` — operator-driven removal of an agent from
 /// the registry via `PresenceRegistry::force_revoke`.
@@ -133,14 +127,9 @@ pub const ABILITY_FEDERATION_RESOLVE_KEY: &str = conformance::ABILITY_FEDERATION
 /// so reads here are pure lookup.
 pub const ABILITY_FEDERATION_DISCOVER: &str = conformance::ABILITY_FEDERATION_DISCOVER;
 
-/// `federation.subscribe_directory_v2` — server-stream variant
-/// of `subscribe_directory` that emits `DirectoryEvent` frames
-/// (Snapshot / Upsert / Remove / Heartbeat) per PR-N3 spec
-/// §2.2-2.3. Distinct from the legacy `federation.subscribe_
-/// directory` (which emits `SubscribeDirectoryInitial` +
-/// `PresenceEventDelta` shapes); the daemon serves both during
-/// the v1→v2 migration so subscriber-side rollout can ramp
-/// independently of hub upgrades.
+/// `federation.subscribe_directory_v2` — the canonical public federation
+/// directory stream. It emits typed `DirectoryEvent` frames (Snapshot / Upsert /
+/// Remove / Heartbeat) per PR-N3 spec §2.2-2.3.
 pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2: &str =
     conformance::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
 
@@ -202,7 +191,6 @@ pub const FEDERATION_ABILITIES: &[&str] = &[
     ABILITY_FEDERATION_DISCOVER,
     ABILITY_FEDERATION_LIST_USER_DEVICES,
     ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
-    ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_FEDERATION_REVOKE,
     ABILITY_FEDERATION_ADVERTISE_ABILITIES,
@@ -558,15 +546,6 @@ pub(crate) fn handle_heartbeat(
 
 /// Legacy v1 directory-stream projection. Kept separate from
 /// `ResolveAgentSummary` because `subscribe_directory` still speaks
-/// the historical `membership_ura` field while
-/// `federation.resolve` now matches the backend helper's `ura`
-/// field.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentSummary {
-    pub membership_ura: String,
-    pub status: String,
-}
-
 /// Handle a `federation.resolve` invocation.
 ///
 /// `catalog` is the mandatory owner projection read model the daemon
@@ -1381,46 +1360,11 @@ fn checked_revoke_now_unix_ms() -> anyhow::Result<u64> {
 // call (measured: one >256-frame burst killed 73% of 2048 in-flight
 // invocations).
 
-// ─── federation.subscribe_directory ────────────────────────────────
-//
-// Server-stream wrapper. The dispatcher routes `InvokeStream` calls
-// for `ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY` here. PR-1 staging
-// returns the initial snapshot only; the broadcast pump is added in
-// commit 6/9 when the dispatcher gains its long-lived task spawning
-// surface.
-
-/// Initial snapshot frame on a `federation.subscribe_directory`
-/// stream. The first frame; subsequent frames (added in commit
-/// 6/9) carry incremental events.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SubscribeDirectoryInitial {
-    /// Sorted ascending so byte-identical bytes land on the wire
-    /// from byte-identical state.
-    pub agents: Vec<AgentSummary>,
-}
-
-/// Build the initial snapshot frame. The dispatcher then attaches a
-/// `subscribe_events` receiver to pump subsequent frames; that
-/// wiring lives in `daemon_invocation_service.rs` once the registry
-/// is injected.
-#[must_use]
-pub fn build_subscribe_directory_initial(registry: &PresenceRegistry) -> SubscribeDirectoryInitial {
-    let agents = registry
-        .snapshot()
-        .into_iter()
-        .map(|ura| AgentSummary {
-            membership_ura: ura,
-            status: "active".to_string(),
-        })
-        .collect();
-    SubscribeDirectoryInitial { agents }
-}
-
 /// **PR-N3 N3-streaming-1**. Build the initial `Snapshot` frame
 /// for the v2 subscribe stream from the local presence registry.
 /// Each in-registry URA projects to a `DirectoryAgentSummary` via
-/// the pure-data adapter; sorted iteration mirrors v1's
-/// deterministic-bytes-from-deterministic-state contract.
+/// the pure-data adapter; sorted iteration keeps deterministic bytes
+/// for deterministic state.
 #[must_use]
 pub fn build_subscribe_directory_v2_snapshot(
     registry: &PresenceRegistry,
@@ -1499,10 +1443,6 @@ mod tests {
         assert_eq!(ABILITY_FEDERATION_RESOLVE, "federation.resolve");
         assert_eq!(ABILITY_NAMESPACE_RESOLVE, "namespace.resolve");
         assert_eq!(ABILITY_NAMESPACE_PROXY_RESOLVE, "namespace.proxy_resolve");
-        assert_eq!(
-            ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
-            "federation.subscribe_directory"
-        );
         assert_eq!(ABILITY_FEDERATION_REVOKE, "federation.revoke");
         assert_eq!(ABILITY_FEDERATION_RESOLVE_KEY, "federation.resolve_key");
         assert_eq!(ABILITY_FEDERATION_DISCOVER, "federation.discover");
@@ -3108,7 +3048,7 @@ mod tests {
     }
 
     #[test]
-    fn build_subscribe_directory_initial_snapshot_is_sorted() {
+    fn build_subscribe_directory_v2_snapshot_is_sorted() {
         let registry = PresenceRegistry::new();
         registry.insert(
             "easynet:///r/realm/device/c".to_string(),
@@ -3119,12 +3059,12 @@ mod tests {
             make_dispatch_sender(),
         );
 
-        let initial = build_subscribe_directory_initial(&registry);
-        let uras: Vec<&str> = initial
-            .agents
-            .iter()
-            .map(|a| a.membership_ura.as_str())
-            .collect();
+        let initial = build_subscribe_directory_v2_snapshot(&registry);
+        let crate::daemon::federation::directory::DirectoryEvent::Snapshot { agents, .. } = initial
+        else {
+            panic!("v2 initial frame must be a DirectoryEvent::Snapshot");
+        };
+        let uras: Vec<&str> = agents.iter().map(|a| a.agent_ura.as_str()).collect();
         assert_eq!(
             uras,
             vec!["easynet:///r/realm/device/a", "easynet:///r/realm/device/c"]

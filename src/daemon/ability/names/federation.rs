@@ -20,8 +20,6 @@ pub const NAMESPACE_RESOLVE: &str = crate::daemon::ability::conformance::ABILITY
 pub const NAMESPACE_PROXY_RESOLVE: &str =
     crate::daemon::ability::conformance::ABILITY_NAMESPACE_PROXY_RESOLVE;
 pub const RESOLVE_KEY: &str = crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY;
-pub const SUBSCRIBE_DIRECTORY: &str =
-    crate::daemon::ability::conformance::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY;
 pub const SUBSCRIBE_DIRECTORY_V2: &str =
     crate::daemon::ability::conformance::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
 pub const LIST_USER_DEVICES: &str =

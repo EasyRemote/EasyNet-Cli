@@ -5,7 +5,6 @@
 // Description: Owns every `InvokeStream` routing decision the daemon
 //              makes after transport policy (commit-plan-2 Axis E / E2):
 //
-//                * `federation.subscribe_directory`     — v1 presence pump
 //                * `federation.subscribe_directory_v2`  — DirectoryEvent
 //                  pump with §2.3 heartbeat cadence
 //                * everything else — RFC-005 resolve-first local dispatch
@@ -922,7 +921,6 @@ impl DaemonStreamRouteProvider {
         arguments: serde_json::Value,
     ) -> anyhow::Result<StreamSource> {
         match route {
-            DaemonStreamRoute::FederationSubscribeDirectory => self.subscribe_directory_v1(),
             DaemonStreamRoute::FederationSubscribeDirectoryV2 => {
                 self.subscribe_directory_v2(arguments)
             }
@@ -933,65 +931,6 @@ impl DaemonStreamRouteProvider {
         self.presence.upgrade().ok_or_else(|| {
             anyhow::anyhow!("{}: presence registry is no longer available", route.name())
         })
-    }
-
-    fn subscribe_directory_v1(&self) -> anyhow::Result<StreamSource> {
-        let presence = self.presence(DaemonStreamRoute::FederationSubscribeDirectory)?;
-        let initial = serde_json::to_value(federation_wrappers::build_subscribe_directory_initial(
-            &presence,
-        ))
-        .map_err(|err| anyhow::anyhow!("federation.subscribe_directory initial snapshot: {err}"))?;
-        let mut events = presence.subscribe_events();
-        let presence_weak = Arc::downgrade(&presence);
-        let lifecycle_weak = self.daemon_route_lifecycle.clone();
-        drop(presence);
-        let (tx, rx) = tokio::sync::broadcast::channel(256);
-        tokio::spawn(async move {
-            use tokio::sync::broadcast::error::RecvError;
-
-            let mut shutdown_tick = tokio::time::interval(std::time::Duration::from_millis(100));
-            shutdown_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                tokio::select! {
-                    recv = events.recv() => {
-                        match recv {
-                            Ok(event) => {
-                                let value = match serde_json::to_value(PresenceEventDelta::from(event)) {
-                                    Ok(value) => value,
-                                    Err(_) => break,
-                                };
-                                if tx.send(value).is_err() {
-                                    break;
-                                }
-                            }
-                            Err(RecvError::Lagged(_)) => {
-                                let Some(presence) = presence_weak.upgrade() else {
-                                    break;
-                                };
-                                let snapshot =
-                                    federation_wrappers::build_subscribe_directory_initial(&presence);
-                                drop(presence);
-                                let Ok(value) = serde_json::to_value(snapshot) else {
-                                    break;
-                                };
-                                if tx.send(value).is_err() {
-                                    break;
-                                }
-                            }
-                            Err(RecvError::Closed) => break,
-                        }
-                    }
-                    _ = shutdown_tick.tick() => {
-                        if lifecycle_weak.upgrade().is_none()
-                            || presence_weak.upgrade().is_none()
-                        {
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-        Ok(StreamSource::SnapshotThenLive(vec![initial], rx))
     }
 
     fn subscribe_directory_v2(&self, arguments: serde_json::Value) -> anyhow::Result<StreamSource> {
@@ -1128,7 +1067,6 @@ fn daemon_route_initial_sequence(
     request: &InvokeServerStreamRequest,
 ) -> Result<u64, Status> {
     match route {
-        DaemonStreamRoute::FederationSubscribeDirectory => Ok(0),
         DaemonStreamRoute::FederationSubscribeDirectoryV2 => {
             let resume_sequence = subscribe_directory_resume_sequence(&request.arguments)?;
             Ok(if resume_sequence == 0 {
@@ -1194,44 +1132,6 @@ fn remote_stream_chunk(parts: RemoteStreamChunkParts) -> InvokeStreamChunk {
         terminal_receipt: parts.terminal_receipt,
         error: parts.error,
         ..InvokeStreamChunk::default()
-    }
-}
-
-/// Wire projection of a presence transition for the v1
-/// `federation.subscribe_directory` stream.
-///
-/// Mirrors `daemon::invocation::bidi::state::presence::PresenceEvent` but with
-/// `serde::Serialize`-friendly field naming so the JSON encoding
-/// is stable for PR-4's schema-compat captures.
-#[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum PresenceEventDelta {
-    Online {
-        membership_ura: String,
-    },
-    Offline {
-        membership_ura: String,
-        reason: &'static str,
-    },
-}
-
-impl From<crate::daemon::invocation::bidi::state::presence::PresenceEvent> for PresenceEventDelta {
-    fn from(event: crate::daemon::invocation::bidi::state::presence::PresenceEvent) -> Self {
-        use crate::daemon::invocation::bidi::state::presence::{OfflineReason, PresenceEvent};
-        match event {
-            PresenceEvent::Online { ura } => Self::Online {
-                membership_ura: ura,
-            },
-            PresenceEvent::Offline { ura, reason } => Self::Offline {
-                membership_ura: ura,
-                reason: match reason {
-                    OfflineReason::StreamClosed => "stream_closed",
-                    OfflineReason::StreamReset => "stream_reset",
-                    OfflineReason::SendFailed => "send_failed",
-                    OfflineReason::AdminRevoked => "admin_revoked",
-                },
-            },
-        }
     }
 }
 

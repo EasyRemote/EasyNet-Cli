@@ -28,7 +28,7 @@
 // - Cross-realm directory federation enumeration (i.e. "list
 //   devices on peer hub B for the realm I belong to"). That
 //   requires `<agent>.discover` Tier 3 cross-hub merged view +
-//   `federation.subscribe_directory` cross-hub stream, both of
+//   `federation.subscribe_directory_v2` cross-hub stream, both of
 //   which are PR-N3 territory. Until PR-N3 lands, this command
 //   surfaces only the static config the local daemon has on
 //   disk.

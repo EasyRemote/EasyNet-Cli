@@ -271,6 +271,29 @@ Evidence will be appended after indexing and focused impact queries.
   are parsed fallibly, and handler errors return HTTP 400 before API ability
   dispatch.
 
+## 2026-07-22 Federation directory v1 stream retirement audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was
+  up to date for 1,018 files before the slice.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "federation.subscribe_directory federation.subscribe_directory_v2 legacy v1
+  directory stream active catalog dispatch"` identified the active dual-route
+  surface: `federation.subscribe_directory` remained in Hub conformance,
+  daemon Invocation descriptor contracts, stream route inventory, quota
+  exemptions, and stream dispatcher implementation while the cross-hub
+  federation supervisor already issued only
+  `federation.subscribe_directory_v2`.
+- Source inspection confirmed the v1 path was a public legacy directory
+  projection (`SubscribeDirectoryInitial` + `PresenceEventDelta`) rather than
+  a versioned edge adapter delegating into the canonical model.
+- The refactor retires v1 from the canonical active surface: removes its
+  conformance baseline/export, descriptor contract, stream route variant,
+  quota exemption, dispatcher branch, v1 DTOs/builders, and v1-specific tests.
+  Existing v2 stream tests now cover the canonical DirectoryEvent route and
+  unary rejection for the stream-only ability.
+- The SPEC v2 gate now rejects reintroducing the retired v1 stream ability
+  name, constant, DTOs, or snapshot builder under `src/` or `tests/`.
+
 ## 2026-07-21 Ability discovery candidate projection fallback audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph explore

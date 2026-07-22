@@ -1,107 +1,6 @@
 use super::*;
 
 #[tokio::test]
-async fn invoke_stream_dispatches_subscribe_directory_initial_frame_then_pump() {
-    use futures::StreamExt;
-
-    // Build the service with our own presence Arc so the test can drive the
-    // product broadcast pump while exact stream dispatch still enters through
-    // the production route registration path.
-    let presence = Arc::new(PresenceRegistry::new());
-    let svc = make_service_with_presence(Arc::clone(&presence));
-
-    let resp = svc
-        .invoke_stream(Request::new(InvokeServerStreamRequest {
-            envelope: Some(test_envelope()),
-            target: Some(test_invocation_target(
-                ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
-            )),
-            ..InvokeServerStreamRequest::default()
-        }))
-        .await
-        .expect("subscribe_directory initial frame returns Ok");
-
-    let mut stream = resp.into_inner();
-
-    // Frame 1 — the initial empty snapshot.
-    let first = stream
-        .next()
-        .await
-        .expect("at least one frame")
-        .expect("frame is Ok");
-    assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
-    let initial: federation_wrappers::SubscribeDirectoryInitial =
-        serde_json::from_slice(&first.payload).expect("decodes initial");
-    assert!(initial.agents.is_empty());
-
-    // Frame 2 — an Online delta after a registry insert is
-    // pumped through the broadcast subscriber.
-    let (sender, _rx) = tokio::sync::mpsc::channel::<
-        Result<crate::daemon::invocation::bidi::state::presence::DispatchFrame, tonic::Status>,
-    >(1);
-    presence.insert("easynet:///r/test-realm/device/n1".to_string(), sender);
-
-    let second = stream
-        .next()
-        .await
-        .expect("delta frame after insert")
-        .expect("frame is Ok");
-    let delta: serde_json::Value = serde_json::from_slice(&second.payload).expect("decodes");
-    assert_eq!(delta.get("kind").and_then(|v| v.as_str()), Some("online"));
-    assert_eq!(
-        delta.get("membership_ura").and_then(|v| v.as_str()),
-        Some("easynet:///r/test-realm/device/n1"),
-    );
-
-    drop(svc);
-    drop(presence);
-
-    let close = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
-        .await
-        .expect("pump closes within 2 s after route lifecycle drops");
-    let terminal = close
-        .expect("route lifecycle close yields terminal chunk")
-        .expect("terminal chunk is Ok");
-    assert!(terminal.terminal);
-    assert!(terminal.terminal_receipt.is_some());
-    let end = stream.next().await;
-    assert!(end.is_none());
-}
-
-#[tokio::test]
-async fn invoke_stream_subscribe_directory_closes_when_route_lifecycle_drops() {
-    use futures::StreamExt;
-
-    let presence = Arc::new(PresenceRegistry::new());
-    let svc = make_service_with_presence(Arc::clone(&presence));
-    let resp = svc
-        .invoke_stream(Request::new(InvokeServerStreamRequest {
-            envelope: Some(test_envelope()),
-            target: Some(test_invocation_target(
-                ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
-            )),
-            ..InvokeServerStreamRequest::default()
-        }))
-        .await
-        .expect("subscribe_directory stream starts");
-    let mut stream = resp.into_inner();
-    let _first = stream.next().await.expect("snapshot").expect("Ok");
-
-    drop(svc);
-    drop(presence);
-
-    let close = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
-        .await
-        .expect("route lifecycle closes v1 stream within 2 s");
-    let terminal = close
-        .expect("route lifecycle close yields terminal chunk")
-        .expect("terminal chunk is Ok");
-    assert!(terminal.terminal);
-    assert!(terminal.terminal_receipt.is_some());
-    assert!(stream.next().await.is_none());
-}
-
-#[tokio::test]
 async fn invoke_stream_dispatches_subscribe_directory_v2_emits_directory_events() {
     // PR-N3 N3-streaming-1. v2 stream emits DirectoryEvent
     // shapes (Snapshot first, then Upsert/Remove).
@@ -1288,7 +1187,7 @@ async fn invoke_stream_rejects_caller_not_in_trust_anchor() {
             .as_deref()
             .expect("test service ability catalog"),
         TEST_DAEMON_URA,
-        ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
+        ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
         crate::daemon::ability::CallMode::Stream,
     );
     match svc
@@ -1302,7 +1201,7 @@ async fn invoke_stream_rejects_caller_not_in_trust_anchor() {
                 &signing_key,
             )),
             target: Some(
-                wire_invocation_target(&descriptor_ref, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY)
+                wire_invocation_target(&descriptor_ref, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2)
                     .expect("typed descriptor target"),
             ),
             arguments,

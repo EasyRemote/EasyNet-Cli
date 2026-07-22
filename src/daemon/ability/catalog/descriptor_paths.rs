@@ -193,7 +193,6 @@ impl SystemAbilityDescriptorGroup {
             | federation::NAMESPACE_PROXY_RESOLVE
             | federation::RESOLVE_KEY
             | federation::DISCOVER
-            | federation::SUBSCRIBE_DIRECTORY
             | federation::SUBSCRIBE_DIRECTORY_V2
             | federation::LIST_USER_DEVICES
             | federation::PROXY_LIST_USER_DEVICES

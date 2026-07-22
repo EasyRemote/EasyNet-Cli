@@ -136,9 +136,8 @@ use crate::daemon::invocation::dispatch::federation_wrappers::{
     ABILITY_FEDERATION_DISCOVER, ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN,
     ABILITY_FEDERATION_LIST_USER_DEVICES, ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
     ABILITY_FEDERATION_RESOLVE, ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
-    ABILITY_FEDERATION_STATUS, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
-    ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2, ABILITY_NAMESPACE_PROXY_RESOLVE,
-    ABILITY_NAMESPACE_RESOLVE,
+    ABILITY_FEDERATION_STATUS, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
+    ABILITY_NAMESPACE_PROXY_RESOLVE, ABILITY_NAMESPACE_RESOLVE,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::BoxedDownStream;
 use crate::daemon::invocation::dispatch::unary_dispatcher::UnaryDispatcher;
@@ -281,15 +280,11 @@ pub(crate) const DAEMON_INVOCATION_UNARY_ROUTES: &[DaemonUnaryRoute] = DaemonUna
 /// arms in [`Invocation::invoke_stream`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DaemonStreamRoute {
-    FederationSubscribeDirectory,
     FederationSubscribeDirectoryV2,
 }
 
 impl DaemonStreamRoute {
-    pub(crate) const ALL: &'static [Self] = &[
-        Self::FederationSubscribeDirectory,
-        Self::FederationSubscribeDirectoryV2,
-    ];
+    pub(crate) const ALL: &'static [Self] = &[Self::FederationSubscribeDirectoryV2];
 
     #[must_use]
     pub(crate) fn from_function(function: &str) -> Option<Self> {
@@ -302,7 +297,6 @@ impl DaemonStreamRoute {
     #[must_use]
     pub(crate) const fn name(self) -> &'static str {
         match self {
-            Self::FederationSubscribeDirectory => ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
             Self::FederationSubscribeDirectoryV2 => ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
         }
     }
@@ -1402,10 +1396,9 @@ impl Invocation for DaemonInvocationService {
 
     type InvokeStreamStream = BoxedDownStream<InvokeStreamChunk>;
 
-    /// Spec §4 reference. Routes by
-    /// `InvokeServerStreamRequest.function_name`. PR-1 staging
-    /// supports `federation.subscribe_directory` with the initial
-    /// snapshot plus subsequent presence transitions.
+    /// Spec §4 reference. Routes by `InvokeServerStreamRequest.function_name`.
+    /// The public federation directory stream is the canonical
+    /// `federation.subscribe_directory_v2` DirectoryEvent surface.
     async fn invoke_stream(
         &self,
         request: Request<InvokeServerStreamRequest>,

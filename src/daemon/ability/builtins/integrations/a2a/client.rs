@@ -43,7 +43,7 @@
 //     call mode. Land when an actual remote streaming caller surfaces;
 //     the unary surface covers every concrete request known today.
 //   * a2a.client.list — outbound discovery. The realm hub's
-//     `federation.subscribe_directory` (C-M11) is the right
+//     `federation.subscribe_directory_v2` is the right
 //     surface for "what nodes can I talk to"; this ability
 //     focuses on the dispatch primitive.
 //

@@ -285,7 +285,6 @@ pub const ABILITY_NAMESPACE_RESOLVE: &str = "namespace.resolve";
 pub const ABILITY_NAMESPACE_PROXY_RESOLVE: &str = "namespace.proxy_resolve";
 pub const ABILITY_FEDERATION_RESOLVE_KEY: &str = "federation.resolve_key";
 pub const ABILITY_FEDERATION_DISCOVER: &str = "federation.discover";
-pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY: &str = "federation.subscribe_directory";
 pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2: &str = "federation.subscribe_directory_v2";
 pub const ABILITY_FEDERATION_LIST_USER_DEVICES: &str = "federation.list_user_devices";
 pub const ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES: &str = "federation.proxy_list_user_devices";
@@ -344,7 +343,6 @@ const HUB_BASELINE: &[BaselineAbility] = &[
     daemon_rpc!(ABILITY_NAMESPACE_PROXY_RESOLVE, HubNamespace),
     daemon_rpc!(ABILITY_FEDERATION_RESOLVE_KEY, HubFederation),
     daemon_rpc!(ABILITY_FEDERATION_DISCOVER, HubFederation),
-    daemon_stream!(ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, HubFederation),
     daemon_stream!(ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2, HubFederation),
     daemon_rpc!(ABILITY_FEDERATION_LIST_USER_DEVICES, HubFederation),
     daemon_rpc!(ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES, HubFederation),

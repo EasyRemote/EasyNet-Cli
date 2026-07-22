@@ -1765,6 +1765,39 @@ check_daemon_runtime_route_inventory_contract() {
   bash "$ROOT/tools/scripts/check-architecture-convergence.sh" >/dev/null
 }
 
+check_retired_federation_directory_v1_stream_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  "$PYTHON_BIN" - "$cli_root/src" "$cli_root/tests" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+roots = [Path(arg) for arg in sys.argv[1:]]
+retired_symbol_patterns = {
+    r"\bABILITY_FEDERATION_SUBSCRIBE_DIRECTORY\b(?!_V2)": "retired_v1_ability_constant",
+    r"\bfederation\.subscribe_directory\b(?!_v2)": "retired_v1_ability_name",
+    r"\bSubscribeDirectoryInitial\b": "retired_v1_snapshot_dto",
+    r"\bPresenceEventDelta\b": "retired_v1_delta_dto",
+    r"\bbuild_subscribe_directory_initial\b": "retired_v1_snapshot_builder",
+}
+
+for root in roots:
+    if not root.exists():
+        continue
+    for path in root.rglob("*.rs"):
+        if "target" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for pattern, label in retired_symbol_patterns.items():
+            match = re.search(pattern, text)
+            if match:
+                line = text.count("\n", 0, match.start()) + 1
+                raise SystemExit(
+                    f"federation_directory_v1_stream_retired:{label}:{path}:{line}"
+                )
+PY
+}
+
 check_route_resolver_descriptor_ref_selector_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local route_resolver="$cli_root/src/daemon/invocation/routing/route_resolver.rs"
@@ -5637,6 +5670,7 @@ check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
 check_daemon_runtime_route_inventory_contract
+check_retired_federation_directory_v1_stream_contract
 check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract
 check_daemon_invocation_service_descriptor_ref_route_projection_contract

@@ -33,12 +33,12 @@ use crate::daemon::ability::conformance::{
     ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_LIST_USER_DEVICES,
     ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES, ABILITY_FEDERATION_RESOLVE,
     ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE, ABILITY_FEDERATION_STATUS,
-    ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
-    ABILITY_IDENTITY_LIST_USER_PUBKEYS, ABILITY_IDENTITY_REGISTER_PUBKEY,
-    ABILITY_IDENTITY_REVOKE_USER_PUBKEY, ABILITY_NAMESPACE_PROXY_RESOLVE,
-    ABILITY_NAMESPACE_RESOLVE, ABILITY_PRINCIPAL_ADD_KEY, ABILITY_PRINCIPAL_BIND_FIRST_KEY,
-    ABILITY_PRINCIPAL_CONFIGURE_RECOVERY, ABILITY_PRINCIPAL_CREATE, ABILITY_PRINCIPAL_DELETE,
-    ABILITY_PRINCIPAL_GET, ABILITY_PRINCIPAL_ISSUE_ENROLLMENT, ABILITY_PRINCIPAL_ISSUE_GRANT,
+    ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2, ABILITY_IDENTITY_LIST_USER_PUBKEYS,
+    ABILITY_IDENTITY_REGISTER_PUBKEY, ABILITY_IDENTITY_REVOKE_USER_PUBKEY,
+    ABILITY_NAMESPACE_PROXY_RESOLVE, ABILITY_NAMESPACE_RESOLVE, ABILITY_PRINCIPAL_ADD_KEY,
+    ABILITY_PRINCIPAL_BIND_FIRST_KEY, ABILITY_PRINCIPAL_CONFIGURE_RECOVERY,
+    ABILITY_PRINCIPAL_CREATE, ABILITY_PRINCIPAL_DELETE, ABILITY_PRINCIPAL_GET,
+    ABILITY_PRINCIPAL_ISSUE_ENROLLMENT, ABILITY_PRINCIPAL_ISSUE_GRANT,
     ABILITY_PRINCIPAL_REACTIVATE, ABILITY_PRINCIPAL_RECOVER, ABILITY_PRINCIPAL_REVOKE_ENROLLMENT,
     ABILITY_PRINCIPAL_REVOKE_GRANT, ABILITY_PRINCIPAL_REVOKE_KEY, ABILITY_PRINCIPAL_ROTATE_KEY,
     ABILITY_PRINCIPAL_SUSPEND,
@@ -99,9 +99,7 @@ pub(crate) fn contract_layer(name: &str) -> Option<DaemonInvocationContractLayer
         | ABILITY_IDENTITY_LIST_USER_PUBKEYS
         | ABILITY_PRINCIPAL_GET => Introspection,
 
-        ABILITY_FEDERATION_HEARTBEAT
-        | ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY
-        | ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2 => Control,
+        ABILITY_FEDERATION_HEARTBEAT | ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2 => Control,
 
         ABILITY_FEDERATION_JOIN
         | ABILITY_FEDERATION_ADVERTISE_AGENT
@@ -141,9 +139,7 @@ pub(crate) fn admission_action_for(name: &str) -> Option<AdmissionAction> {
         | ABILITY_IDENTITY_LIST_USER_PUBKEYS
         | ABILITY_PRINCIPAL_GET => AdmissionAction::Read,
 
-        ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY | ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2 => {
-            AdmissionAction::Stream
-        }
+        ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2 => AdmissionAction::Stream,
 
         ABILITY_PRINCIPAL_CREATE
         | ABILITY_PRINCIPAL_BIND_FIRST_KEY
@@ -200,9 +196,6 @@ pub(crate) fn description_for(name: &str) -> Option<&'static str> {
         }
         ABILITY_FEDERATION_DISCOVER => {
             "Read federated directory entries visible to this hub."
-        }
-        ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY => {
-            "Subscribe to legacy federation directory snapshots and deltas."
         }
         ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2 => {
             "Subscribe to typed federation directory events."
@@ -347,16 +340,14 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
             &[],
             false,
         ),
-        ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY | ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2 => {
-            object_schema(
-                json!({
-                    "agent_ura": string_prop("Optional Agent or Device URA filter."),
-                    "since_generation": integer_prop("Optional generation cursor.")
-                }),
-                &[],
-                false,
-            )
-        }
+        ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2 => object_schema(
+            json!({
+                "agent_ura": string_prop("Optional Agent or Device URA filter."),
+                "since_generation": integer_prop("Optional generation cursor.")
+            }),
+            &[],
+            false,
+        ),
         ABILITY_FEDERATION_LIST_USER_DEVICES | ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES => {
             object_schema(
                 json!({

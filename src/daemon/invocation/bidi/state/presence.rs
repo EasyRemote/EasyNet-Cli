@@ -567,7 +567,7 @@ impl PresenceRegistry {
     }
 
     /// Take a deterministic snapshot of currently-online URAs. Used
-    /// as the initial frame of a `federation.subscribe_directory`
+    /// as the initial frame of a `federation.subscribe_directory_v2`
     /// pump and as the recovery path for a subscriber that received
     /// `Lagged`.
     ///

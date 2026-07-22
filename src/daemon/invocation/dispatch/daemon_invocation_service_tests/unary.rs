@@ -2449,14 +2449,17 @@ async fn invoke_dispatches_federation_revoke() {
 async fn invoke_rejects_subscribe_directory_via_unary_invoke() {
     let svc = make_service();
     match svc
-        .invoke(invoke_request(ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, "{}"))
+        .invoke(invoke_request(
+            ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
+            "{}",
+        ))
         .await
     {
         Err(err) => {
             assert_eq!(err.code(), tonic::Code::InvalidArgument);
             assert!(err.message().contains("server-stream"));
         }
-        Ok(_) => panic!("subscribe_directory must be rejected on unary Invoke"),
+        Ok(_) => panic!("subscribe_directory_v2 must be rejected on unary Invoke"),
     }
 }
 

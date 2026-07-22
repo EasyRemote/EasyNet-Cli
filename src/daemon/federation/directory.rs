@@ -1928,12 +1928,10 @@ mod tests {
                 "supervisor must dial the v2 stream ability; got {names:?}",
             );
             assert!(
-                names.iter().all(|name| {
-                    name
-                        != crate::daemon::invocation::dispatch::federation_wrappers
-                            ::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY
-                }),
-                "supervisor must not dial the legacy v1 stream ability; got {names:?}",
+                names
+                    .iter()
+                    .all(|name| name == "federation.subscribe_directory_v2"),
+                "supervisor must only dial the canonical v2 stream ability; got {names:?}",
             );
         }
 
