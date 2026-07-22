@@ -1892,6 +1892,64 @@ for required in (
 PY
 }
 
+check_daemon_runtime_session_binding_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local daemon="$cli_root/src/bin/easynet-daemon.rs"
+  local session="$cli_root/src/daemon/execution/session/mod.rs"
+  local session_ability="$cli_root/src/daemon/ability/builtins/device_control/session.rs"
+  [[ -f "$daemon" ]] || fail "daemon entrypoint is missing: $daemon"
+  [[ -f "$session" ]] || fail "session service source is missing: $session"
+  [[ -f "$session_ability" ]] || fail "session ability source is missing: $session_ability"
+
+  "$PYTHON_BIN" - "$daemon" "$session" "$session_ability" <<'PY'
+import sys
+from pathlib import Path
+
+daemon = Path(sys.argv[1]).read_text()
+session = Path(sys.argv[2]).read_text()
+session_ability = Path(sys.argv[3]).read_text()
+
+def production(text: str) -> str:
+    return text.split("#[cfg(test)]", 1)[0]
+
+daemon_prod = production(daemon)
+session_prod = production(session)
+session_ability_prod = production(session_ability)
+
+for source_name, text in (
+    ("daemon", daemon_prod),
+    ("session", session_prod),
+    ("session_ability", session_ability_prod),
+):
+    for retired in ('NodeId::new("self")', "TenantId::default_v1()"):
+        if retired in text:
+            raise SystemExit(f"daemon_runtime_session_binding_retired_default:{source_name}:{retired}")
+
+for required in (
+    "let daemon_identity = ready_daemon_identity(&daemon_config)?;",
+    "if let Some(node_id) = daemon_identity.node_id",
+    "kernel",
+    ".session_service()",
+    ".bind_runtime(NodeId::new(node_id), tenant.clone())",
+):
+    if required not in daemon:
+        raise SystemExit(f"daemon_runtime_session_binding_boot_missing:{required}")
+
+for required in (
+    "struct SessionRuntimeBinding",
+    "binding: RwLock<Option<SessionRuntimeBinding>>",
+    "pub fn bind_runtime(&self, node: NodeId, tenant: TenantId) -> anyhow::Result<()>",
+    "let binding = self.bound_runtime()?;",
+    "session.node = binding.node;",
+    "session.tenant = binding.tenant;",
+    "fn bound_runtime(&self) -> anyhow::Result<SessionRuntimeBinding>",
+    "admit_rejects_unbound_runtime_identity",
+):
+    if required not in session:
+        raise SystemExit(f"session_runtime_binding_missing:{required}")
+PY
+}
+
 check_daemon_runtime_tenant_store_binding_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local daemon="$cli_root/src/bin/easynet-daemon.rs"
@@ -5239,6 +5297,18 @@ EOF
   if ( CLI_ROOT="$tmp/cli-kernel-session-read-model"; check_kernel_runtime_session_read_model_contract ) >/dev/null 2>&1; then
     fail "self-test expected kernel session read-model default projection gate to fail"
   fi
+  mkdir -p "$tmp/cli-session-binding/src/bin" \
+    "$tmp/cli-session-binding/src/daemon/execution/session" \
+    "$tmp/cli-session-binding/src/daemon/ability/builtins/device_control"
+  printf 'fn main() { let _ = kernel.session_service(); }\n' \
+    > "$tmp/cli-session-binding/src/bin/easynet-daemon.rs"
+  printf 'pub struct SessionService; impl SessionService { pub fn admit(&self, session: Session) { let _ = Session { node: NodeId::new("self"), tenant: TenantId::default_v1(), ..session }; } }\n' \
+    > "$tmp/cli-session-binding/src/daemon/execution/session/mod.rs"
+  printf 'fn list_handler(svc: &SessionService) { let _ = NodeId::new("self"); }\n' \
+    > "$tmp/cli-session-binding/src/daemon/ability/builtins/device_control/session.rs"
+  if ( CLI_ROOT="$tmp/cli-session-binding"; check_daemon_runtime_session_binding_contract ) >/dev/null 2>&1; then
+    fail "self-test expected daemon runtime session binding default gate to fail"
+  fi
   mkdir -p "$tmp/cli-tenant-store-binding/src/bin" \
     "$tmp/cli-tenant-store-binding/src/daemon/execution/schedule" \
     "$tmp/cli-tenant-store-binding/src/daemon/execution/loop_instance" \
@@ -6021,6 +6091,7 @@ EOF
   check_daemon_runtime_route_inventory_contract
   check_daemon_local_runtime_identity_contract
   check_kernel_runtime_session_read_model_contract
+  check_daemon_runtime_session_binding_contract
   check_daemon_runtime_tenant_store_binding_contract
   check_route_resolver_descriptor_ref_selector_contract
   check_namespace_resolver_authority_projection_contract
@@ -6095,6 +6166,7 @@ check_daemon_tuple_route_contract
 check_daemon_runtime_route_inventory_contract
 check_daemon_local_runtime_identity_contract
 check_kernel_runtime_session_read_model_contract
+check_daemon_runtime_session_binding_contract
 check_daemon_runtime_tenant_store_binding_contract
 check_retired_federation_directory_v1_stream_contract
 check_route_resolver_descriptor_ref_selector_contract

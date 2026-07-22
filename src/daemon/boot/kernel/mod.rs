@@ -29,7 +29,7 @@ use axon_sdk::invocation::{
 use serde_json::json;
 
 use crate::core::domain::{
-    AgentId, DiscussRoom, LoopId, LoopInstance, NodeId, PermissionDecision, PermissionId,
+    AgentId, DiscussRoom, LoopId, LoopInstance, PermissionDecision, PermissionId,
     PermissionRequest, PermissionSensitivity, RoomId, ScheduleEntry, ScheduleId, Session,
     SessionId, TenantId,
 };
@@ -620,6 +620,7 @@ impl KernelApi for Kernel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::domain::NodeId;
     use axon_sdk::invocation::{make_ability, AbilityCallModes, AbilityOptions};
     use serde_json::json;
 
@@ -815,6 +816,9 @@ mod tests {
     fn invoke_success_returns_axon_finalization_and_indexes_canonical_session() {
         let k = Kernel::new();
         let device_ura = crate::core::ura::device_ura("tenant-a", "device-a");
+        k.session_service()
+            .bind_runtime(NodeId::new("device-a"), TenantId::new("tenant-a"))
+            .expect("bind kernel test session runtime");
         install_echo_runtime(&k, &device_ura, "observe.health");
         let request = k
             .prepare_local_system_rpc(

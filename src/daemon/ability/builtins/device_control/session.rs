@@ -166,12 +166,13 @@ mod tests {
 
     fn svc_with(ids: &[&str]) -> Arc<SessionService> {
         let svc = Arc::new(SessionService::new());
+        svc.bind_memory_for_test(NodeId::new("runtime-node"), TenantId::new("runtime-tenant"));
         for id in ids {
             svc.admit(SessionService::make_session(
                 SessionId::new(*id),
                 AgentId::new("a"),
-                NodeId::new("self"),
-                TenantId::default_v1(),
+                NodeId::new("caller-node"),
+                TenantId::new("caller-tenant"),
             ))
             .unwrap();
         }

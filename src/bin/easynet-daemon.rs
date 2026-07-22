@@ -260,6 +260,13 @@ async fn main() -> anyhow::Result<()> {
     //
     let tenant = TenantId::new(daemon_config.realm().to_string());
     boot_bus.emit_started("tenant-stores");
+    let daemon_identity = ready_daemon_identity(&daemon_config)?;
+    if let Some(node_id) = daemon_identity.node_id {
+        kernel
+            .session_service()
+            .bind_runtime(NodeId::new(node_id), tenant.clone())
+            .map_err(|err| anyhow::anyhow!("bind session runtime identity: {err:#}"))?;
+    }
     if let Err(e) = kernel.schedule_service().bind(&tenant) {
         eprintln!("[daemon] schedule store bind failed: {e:#}");
     }
