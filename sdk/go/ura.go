@@ -59,10 +59,10 @@ type ParsedURA struct {
 type AbilityOwnerKind string
 
 type AbilityOwner struct {
-	Kind     AbilityOwnerKind
-	UserID   string
-	AgentID  string
-	DeviceID string
+	Kind    AbilityOwnerKind
+	UserID  string
+	AgentID string
+	OwnerID string
 }
 
 type ParsedAbility struct {
@@ -268,9 +268,9 @@ func abilityOwnerFromAxon(owner axonsdk.AbilityOwner) AbilityOwner {
 		kind = abilityOwnerHub
 	}
 	return AbilityOwner{
-		Kind:     kind,
-		UserID:   owner.UserID,
-		AgentID:  owner.AgentID,
-		DeviceID: owner.DeviceID,
+		Kind:    kind,
+		UserID:  owner.UserID,
+		AgentID: owner.AgentID,
+		OwnerID: owner.DeviceID,
 	}
 }

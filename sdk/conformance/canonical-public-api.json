@@ -1805,6 +1805,7 @@
       "AbilityDescriptorRef.Version",
       "AbilityOwner.AgentID",
       "AbilityOwner.Kind",
+      "AbilityOwner.OwnerID",
       "AbilityOwner.UserID",
       "AbilityRef.Name",
       "AccessControlAbilityCallTrace.AbilityURA",
@@ -6433,7 +6434,6 @@
       "rust": [],
       "c_abi": [],
       "go": [
-        "AbilityOwner.DeviceID",
         "CABIDiscoveryTransport.Close",
         "CABIDiscoveryTransport.FeatureDiscovery",
         "CABIRuntimeLifecycleTransport.Attach",
@@ -7242,14 +7242,6 @@
       "rust": {},
       "c_abi": {},
       "go": {
-        "AbilityOwner.DeviceID": {
-          "canonical_replacement": [
-            "capability_inventory.canonical_addressing"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device identifiers outside URA grammar expose a product deployment model instead of generic runtime addressing."
-        },
         "CABIDiscoveryTransport.Close": {
           "canonical_replacement": [
             "capability_inventory.native_runtime"
@@ -10347,6 +10339,7 @@
         "members": [
           "AbilityOwner.AgentID",
           "AbilityOwner.Kind",
+          "AbilityOwner.OwnerID",
           "AbilityOwner.UserID",
           "Addressing.AbilityURAFromDescriptorRef",
           "Addressing.BuildDescriptorRef",
@@ -17504,10 +17497,10 @@
       "AbilityDescriptorRef.Raw": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityDescriptorRef.Version": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityNameFromURA": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
-      "AbilityOwner": "60f8d55d6898a05c8ceab7622f6b7a08f8214bdc5b468efd861c1a6e18eab8db",
+      "AbilityOwner": "d1351b32a519611b5a047606ffdbb364510f709dc5ed3ece3f72a8643d04f746",
       "AbilityOwner.AgentID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "AbilityOwner.DeviceID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityOwner.Kind": "cd943d7f31b9f3b619b87d161aedae0a4e937bf92cd11b79074977389baad950",
+      "AbilityOwner.OwnerID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityOwner.UserID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityOwnerAgent": "80b522b139b62ee74889d7f936b63bdc2e3535985f89a867394ea9a2c7d1e9b7",
       "AbilityOwnerKind": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",

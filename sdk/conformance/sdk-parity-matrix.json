@@ -82851,7 +82851,7 @@
         },
         {
           "item": "AbilityOwner",
-          "sha256": "60f8d55d6898a05c8ceab7622f6b7a08f8214bdc5b468efd861c1a6e18eab8db"
+          "sha256": "d1351b32a519611b5a047606ffdbb364510f709dc5ed3ece3f72a8643d04f746"
         },
         {
           "item": "AbilityOwnerAgent",
@@ -83068,6 +83068,10 @@
         {
           "item": "AbilityOwner.Kind",
           "sha256": "cd943d7f31b9f3b619b87d161aedae0a4e937bf92cd11b79074977389baad950"
+        },
+        {
+          "item": "AbilityOwner.OwnerID",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
           "item": "AbilityOwner.UserID",
@@ -83378,7 +83382,7 @@
             },
             {
               "item": "AbilityOwner",
-              "sha256": "60f8d55d6898a05c8ceab7622f6b7a08f8214bdc5b468efd861c1a6e18eab8db"
+              "sha256": "d1351b32a519611b5a047606ffdbb364510f709dc5ed3ece3f72a8643d04f746"
             },
             {
               "item": "AbilityOwnerAgent",
@@ -83595,6 +83599,10 @@
             {
               "item": "AbilityOwner.Kind",
               "sha256": "cd943d7f31b9f3b619b87d161aedae0a4e937bf92cd11b79074977389baad950"
+            },
+            {
+              "item": "AbilityOwner.OwnerID",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "AbilityOwner.UserID",

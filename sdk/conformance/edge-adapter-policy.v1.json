@@ -22,8 +22,8 @@
   "frozen_non_canonical_public_surface": {
     "manifest_path": "sdk/conformance/canonical-public-api.json",
     "json_pointer": "/non_canonical",
-    "sha256": "943af0e5ba4585555424591b0866225ddebbab734f8f85759cb228060b0a730f",
-    "shape_sha256": "27b0ee82c912c1f2807064b5346fbd89c842003e064b0fb324fa2361c78c4951",
+    "sha256": "407f2151e9873f6b7519a43eb640aac098cc7f0e24dc4b949dc81a5a2cf67199",
+    "shape_sha256": "6cc338d3ba8c2d193d295b7c05146585280f4ec2c99f4406a19d4470d6e33bd7",
     "counts": {
       "languages": {
         "rust": 0,
@@ -37,7 +37,7 @@
       "members": {
         "rust": 0,
         "c_abi": 0,
-        "go": 55,
+        "go": 54,
         "python": 33,
         "node": 0,
         "java": 0,

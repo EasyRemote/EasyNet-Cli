@@ -325,7 +325,7 @@ func ownerURAFromAbilityParts(parts ParsedURA) string {
 	case AbilityOwnerAgent:
 		return AgentURA(parts.Realm, parts.AbilityOwner.UserID, parts.AbilityOwner.AgentID)
 	case abilityOwnerDevice:
-		return DeviceURA(parts.Realm, parts.AbilityOwner.DeviceID)
+		return DeviceURA(parts.Realm, parts.AbilityOwner.OwnerID)
 	case abilityOwnerHub:
 		return HubURA(parts.Realm)
 	default:
