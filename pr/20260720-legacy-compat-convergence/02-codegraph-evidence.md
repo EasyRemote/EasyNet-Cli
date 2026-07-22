@@ -2599,3 +2599,25 @@ Evidence will be appended after indexing and focused impact queries.
 - Boundary decision: `invoke_bidi` now uses the same fallible
   `dispatch_function_name_for_route_table` as unary and stream before choosing
   an exact bidi route or generic bidi dispatch.
+
+## 2026-07-22 Invocation history filter scope audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` reported the current
+  checkout indexed and up to date.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  apply_filter_object subject_filter_values InvocationLedgerQuery invocation
+  history filter` identified `apply_filter_object` and
+  `subject_filter_values` as the single daemon projection seam where
+  product-supplied history filters become Axon `InvocationLedgerQuery` state.
+- Source inspection found `caller_ura`, `callee_ura`, `agent_ura`,
+  `subject_ura`, `subject_uras`, `ability_ura`, `ability_uras`,
+  `exclude_ability_uras`, and `state` were only non-empty string checks before
+  ledger and attempt-ledger reads. Malformed URAs could therefore become a
+  no-match query instead of invalid observation scope.
+- Root abstraction problem: invocation history observation scope was modeled
+  as generic JSON filter strings after SDK authority binding. The daemon
+  provider still needs its own schema-bound read-model parser because both
+  canonical ledger rows and pre-runtime attempt rows consume the same filter.
+- Boundary decision: history filter projection now uses typed helpers for
+  canonical URAs, principal URAs, Ability URAs, and supported ledger/attempt
+  states before opening either ledger.

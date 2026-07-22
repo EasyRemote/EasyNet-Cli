@@ -217,6 +217,12 @@
   before either canonical ledger records or pre-runtime attempt records are
   read/projected. Malformed filter scope must not widen to "all history" or
   collapse into an empty/no-match result.
+- Invocation history URA filters are schema-bound runtime facts, not opaque
+  strings. `caller_ura`, `callee_ura`, and `agent_ura` must be canonical
+  principal URAs; `subject_ura` and `subject_uras` must be canonical URAs;
+  `ability_ura`, `ability_uras`, and `exclude_ability_uras` must be canonical
+  Ability URAs; `state` must be an explicit ledger or attempt state before
+  any ledger is opened.
 - `invocation.history.list` session authority must be bound to the exact
   receipt query subject. The broader owner-aware runtime session admission
   rule may remain valid for descriptor-bound invocation, but receipt history

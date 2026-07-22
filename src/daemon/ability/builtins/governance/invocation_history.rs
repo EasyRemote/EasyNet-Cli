@@ -458,7 +458,7 @@ fn diagnostic_id(value: &Value) -> String {
 }
 
 fn string_set_arg(args: &Value, key: &'static str) -> anyhow::Result<HashSet<String>> {
-    value_string_set(args.get(key), key, false)
+    value_ability_ura_set(args.get(key), key, false)
 }
 
 /// Read a string set from `args.filter.<key>` (e.g. `filter.ability_uras`).
@@ -469,10 +469,39 @@ fn filter_string_set(args: &Value, key: &'static str) -> anyhow::Result<HashSet<
     let object = filter
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("filter must be an object"))?;
-    value_string_set(object.get(key), &format!("filter.{key}"), true)
+    value_ability_ura_set(object.get(key), &format!("filter.{key}"), true)
 }
 
-fn value_string_set(
+fn canonical_ura(value: &str, field: &str) -> anyhow::Result<String> {
+    let value = value.trim();
+    crate::core::ura::parse_ura(value)
+        .map_err(|error| anyhow::anyhow!("{field} must be a canonical URA: {error}"))?;
+    Ok(value.to_string())
+}
+
+fn canonical_principal_ura(value: &str, field: &str) -> anyhow::Result<String> {
+    let value = value.trim();
+    let parsed = crate::core::ura::parse_ura(value)
+        .map_err(|error| anyhow::anyhow!("{field} must be a canonical principal URA: {error}"))?;
+    if !matches!(
+        parsed.kind,
+        crate::core::ura::URAKind::Agent
+            | crate::core::ura::URAKind::Device
+            | crate::core::ura::URAKind::Authority
+    ) {
+        anyhow::bail!("{field} must be a canonical Agent, Device, or Authority URA");
+    }
+    Ok(value.to_string())
+}
+
+fn canonical_ability_ura(value: &str, field: &str) -> anyhow::Result<String> {
+    let value = value.trim();
+    crate::core::ura::AbilitySelector::parse(value)
+        .map_err(|error| anyhow::anyhow!("{field} must be a canonical Ability URA: {error}"))?;
+    Ok(value.to_string())
+}
+
+fn value_ability_ura_set(
     value: Option<&Value>,
     field: &str,
     require_non_empty: bool,
@@ -482,15 +511,15 @@ fn value_string_set(
     };
     let array = value
         .as_array()
-        .ok_or_else(|| anyhow::anyhow!("{field} must be an array of non-empty strings"))?;
+        .ok_or_else(|| anyhow::anyhow!("{field} must be an array of canonical Ability URAs"))?;
     if require_non_empty && array.is_empty() {
-        anyhow::bail!("{field} must include at least one non-empty string");
+        anyhow::bail!("{field} must include at least one canonical Ability URA");
     }
     let mut out = HashSet::new();
     for (index, item) in array.iter().enumerate() {
         let value = non_empty_str(item)
             .ok_or_else(|| anyhow::anyhow!("{field}[{index}] must be a non-empty string"))?;
-        out.insert(value.to_string());
+        out.insert(canonical_ability_ura(value, &format!("{field}[{index}]"))?);
     }
     Ok(out)
 }
@@ -526,7 +555,9 @@ fn fetch_key_from_value(value: &Value) -> anyhow::Result<InvocationLedgerFetchKe
         anyhow::anyhow!("key must be an object with ura, request_id, or trace_id")
     })?;
     if let Some(ura) = object.get("ura").and_then(non_empty_str) {
-        return Ok(InvocationLedgerFetchKey::InvocationUra(ura.to_string()));
+        return Ok(InvocationLedgerFetchKey::InvocationUra(canonical_ura(
+            ura, "key.ura",
+        )?));
     }
     if let Some(request_id) = object.get("request_id").and_then(non_empty_str) {
         return Ok(InvocationLedgerFetchKey::RequestId(request_id.to_string()));
@@ -545,7 +576,7 @@ fn apply_filter_object(
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("filter must be an object"))?;
     validate_filter_keys(object)?;
-    if let Some(caller) = optional_filter_string(object, "caller_ura")? {
+    if let Some(caller) = optional_principal_ura_filter_string(object, "caller_ura")? {
         query = query.caller_ura(caller);
     }
     let callee_ura = scoped_callee_ura(object)?;
@@ -555,10 +586,10 @@ fn apply_filter_object(
     if let Some(subjects) = subject_filter_values(object)? {
         query = query.subject_uras(subjects);
     }
-    if let Some(ability_ura) = optional_filter_string(object, "ability_ura")? {
+    if let Some(ability_ura) = optional_ability_ura_filter_string(object, "ability_ura")? {
         query = query.ability_ura(ability_ura);
     }
-    if let Some(state) = optional_filter_string(object, "state")? {
+    if let Some(state) = optional_state_filter_string(object, "state")? {
         query = query.state(state);
     }
     if let Some(trace_id) = optional_filter_string(object, "trace_id")? {
@@ -579,8 +610,8 @@ fn validate_filter_keys(object: &serde_json::Map<String, Value>) -> anyhow::Resu
 }
 
 fn scoped_callee_ura(object: &serde_json::Map<String, Value>) -> anyhow::Result<Option<String>> {
-    let callee = optional_filter_string(object, "callee_ura")?;
-    let agent = optional_filter_string(object, "agent_ura")?;
+    let callee = optional_principal_ura_filter_string(object, "callee_ura")?;
+    let agent = optional_principal_ura_filter_string(object, "agent_ura")?;
     match (callee, agent) {
         (Some(callee), Some(agent)) if callee != agent => {
             anyhow::bail!("filter.callee_ura and filter.agent_ura must match when both are set")
@@ -606,6 +637,59 @@ fn optional_filter_string<'a>(
         .ok_or_else(|| anyhow::anyhow!("filter.{key} must be a non-empty string"))
 }
 
+fn optional_principal_ura_filter_string(
+    object: &serde_json::Map<String, Value>,
+    key: &'static str,
+) -> anyhow::Result<Option<String>> {
+    let Some(value) = optional_filter_string(object, key)? else {
+        return Ok(None);
+    };
+    canonical_principal_ura(value, &format!("filter.{key}")).map(Some)
+}
+
+fn optional_ability_ura_filter_string(
+    object: &serde_json::Map<String, Value>,
+    key: &'static str,
+) -> anyhow::Result<Option<String>> {
+    let Some(value) = optional_filter_string(object, key)? else {
+        return Ok(None);
+    };
+    canonical_ability_ura(value, &format!("filter.{key}")).map(Some)
+}
+
+fn optional_state_filter_string(
+    object: &serde_json::Map<String, Value>,
+    key: &'static str,
+) -> anyhow::Result<Option<String>> {
+    let Some(value) = optional_filter_string(object, key)? else {
+        return Ok(None);
+    };
+    if !is_supported_history_state_filter(value) {
+        anyhow::bail!("filter.{key} must be a canonical invocation or attempt state");
+    }
+    Ok(Some(value.to_string()))
+}
+
+fn is_supported_history_state_filter(value: &str) -> bool {
+    matches!(
+        value,
+        "accepted"
+            | "admitted"
+            | "dispatched"
+            | "running"
+            | "completed"
+            | "failed"
+            | "timed_out"
+            | "cancelled"
+            | "received"
+            | "rejected"
+            | "runtime_started"
+            | "runtime_rejected"
+            | "runtime_completed"
+            | "runtime_failed"
+    )
+}
+
 fn subject_filter_values(
     object: &serde_json::Map<String, Value>,
 ) -> anyhow::Result<Option<Vec<String>>> {
@@ -617,7 +701,7 @@ fn subject_filter_values(
     if let Some(value) = single {
         let subject = non_empty_str(value)
             .ok_or_else(|| anyhow::anyhow!("filter.subject_ura must be a non-empty string"))?;
-        return Ok(Some(vec![subject.to_string()]));
+        return Ok(Some(vec![canonical_ura(subject, "filter.subject_ura")?]));
     }
     let Some(value) = many else {
         return Ok(None);
@@ -630,7 +714,10 @@ fn subject_filter_values(
         let subject = non_empty_str(item).ok_or_else(|| {
             anyhow::anyhow!("filter.subject_uras[{index}] must be a non-empty string")
         })?;
-        subjects.push(subject.to_string());
+        subjects.push(canonical_ura(
+            subject,
+            &format!("filter.subject_uras[{index}]"),
+        )?);
     }
     if subjects.is_empty() {
         anyhow::bail!("filter.subject_uras must include at least one non-empty string");
@@ -1324,7 +1411,7 @@ mod tests {
         let ledger = Arc::new(axon_sdk::invocation::InvocationLedger::open(&path).unwrap());
         let mut noisy = sample_record("req-noisy");
         noisy.ability_name = "terminal.read".to_string();
-        noisy.ability_ura = "easynet:///r/test/ability/terminal.read".to_string();
+        noisy.ability_ura = "easynet:///r/test/ability/device.dev.terminal.read".to_string();
         noisy.started_unix_ms = 3;
         let mut wanted = sample_record("req-wanted");
         wanted.started_unix_ms = 2;
@@ -1336,7 +1423,7 @@ mod tests {
             .list_history(json!({
                 "limit": 1,
                 "compact": true,
-                "exclude_ability_uras": ["easynet:///r/test/ability/terminal.read"]
+                "exclude_ability_uras": ["easynet:///r/test/ability/device.dev.terminal.read"]
             }))
             .unwrap();
         let records = value
@@ -1407,9 +1494,9 @@ mod tests {
         let path = dir.path().join("invocations.redb");
         let ledger = Arc::new(axon_sdk::invocation::InvocationLedger::open(&path).unwrap());
         let mut kept = sample_record("req-kept");
-        kept.ability_ura = "easynet:///r/test/ability/kept".to_string();
+        kept.ability_ura = "easynet:///r/test/ability/device.dev.kept".to_string();
         let mut excluded = sample_record("req-excluded");
-        excluded.ability_ura = "easynet:///r/test/ability/excluded".to_string();
+        excluded.ability_ura = "easynet:///r/test/ability/device.dev.excluded".to_string();
         ledger.put(&kept).unwrap();
         ledger.put(&excluded).unwrap();
 
@@ -1419,7 +1506,7 @@ mod tests {
                 "limit": 1,
                 "cursor": history_cursor_for(&excluded),
                 "filter": {
-                    "ability_uras": ["easynet:///r/test/ability/kept"]
+                    "ability_uras": ["easynet:///r/test/ability/device.dev.kept"]
                 }
             }))
             .unwrap_err()
@@ -1540,6 +1627,54 @@ mod tests {
     }
 
     #[test]
+    fn query_from_args_rejects_malformed_scope_uras_before_ledger_read() {
+        for (field, value, expected) in [
+            ("caller_ura", json!("not-a-ura"), "canonical principal URA"),
+            (
+                "callee_ura",
+                json!("easynet:///r/test/ability/authority.bad"),
+                "canonical Agent, Device, or Authority URA",
+            ),
+            ("agent_ura", json!("not-a-ura"), "canonical principal URA"),
+            ("subject_ura", json!("not-a-ura"), "canonical URA"),
+            (
+                "ability_ura",
+                json!("easynet:///r/test/device/not-an-ability"),
+                "canonical Ability URA",
+            ),
+            (
+                "state",
+                json!("maybe_done"),
+                "canonical invocation or attempt state",
+            ),
+        ] {
+            let err = query_from_args(&json!({
+                "filter": {
+                    field: value
+                }
+            }))
+            .unwrap_err()
+            .to_string();
+            assert!(
+                err.contains(expected),
+                "field {field} expected {expected:?}, got {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn query_from_args_rejects_malformed_key_ura_before_ledger_read() {
+        let err = query_from_args(&json!({
+            "key": {
+                "ura": "not-a-ura"
+            }
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("key.ura must be a canonical URA"), "got {err}");
+    }
+
+    #[test]
     fn query_from_args_rejects_ambiguous_subject_scope() {
         let err = query_from_args(&json!({
             "filter": {
@@ -1586,7 +1721,7 @@ mod tests {
 
         let err = reader
             .list_history(json!({
-                "exclude_ability_uras": ["easynet:///r/test/ability/ok", 7]
+                "exclude_ability_uras": ["easynet:///r/test/ability/device.ok.ok", 7]
             }))
             .unwrap_err()
             .to_string();
@@ -1604,7 +1739,20 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("filter.ability_uras must include at least one non-empty string"),
+            err.contains("filter.ability_uras must include at least one canonical Ability URA"),
+            "got {err}"
+        );
+
+        let err = reader
+            .list_history(json!({
+                "filter": {
+                    "ability_uras": ["easynet:///r/test/device/not-an-ability"]
+                }
+            }))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("filter.ability_uras[0] must be a canonical Ability URA"),
             "got {err}"
         );
     }
@@ -1754,14 +1902,14 @@ mod tests {
             .put(&record_with_ability(
                 "req-by-ura",
                 "liangbing.chat",
-                "easynet:///r/test/ability/dev.liangbing.chat",
+                "easynet:///r/test/ability/device.dev.liangbing.chat",
             ))
             .unwrap();
         ledger
             .put(&record_with_ability(
                 "req-second-ura",
                 "liangbing.chat",
-                "easynet:///r/_system/ability/liangbing.chat",
+                "easynet:///r/test/ability/authority.liangbing.chat",
             ))
             .unwrap();
         ledger
@@ -1780,8 +1928,8 @@ mod tests {
                 "limit": 50,
                 "filter": {
                     "ability_uras": [
-                        "easynet:///r/test/ability/dev.liangbing.chat",
-                        "easynet:///r/_system/ability/liangbing.chat",
+                        "easynet:///r/test/ability/device.dev.liangbing.chat",
+                        "easynet:///r/test/ability/authority.liangbing.chat",
                     ]
                 },
             }))
@@ -1806,21 +1954,25 @@ mod tests {
     #[test]
     fn retain_by_ability_ura_sets_applies_include_then_exclude() {
         let mut records = vec![
-            record_with_ability("a", "chat", "easynet:///r/test/ability/dev.a.chat"),
-            record_with_ability("b", "terminal.read", "easynet:///r/test/ability/dev.b.read"),
+            record_with_ability("a", "chat", "easynet:///r/test/ability/device.a.chat"),
+            record_with_ability(
+                "b",
+                "terminal.read",
+                "easynet:///r/test/ability/device.b.read",
+            ),
             record_with_ability(
                 "c",
                 "observe.health",
-                "easynet:///r/test/ability/dev.c.health",
+                "easynet:///r/test/ability/device.c.health",
             ),
         ];
         let include: HashSet<String> = [
-            "easynet:///r/test/ability/dev.a.chat".to_string(),
-            "easynet:///r/test/ability/dev.b.read".to_string(),
+            "easynet:///r/test/ability/device.a.chat".to_string(),
+            "easynet:///r/test/ability/device.b.read".to_string(),
         ]
         .into_iter()
         .collect();
-        let exclude: HashSet<String> = ["easynet:///r/test/ability/dev.b.read".to_string()]
+        let exclude: HashSet<String> = ["easynet:///r/test/ability/device.b.read".to_string()]
             .into_iter()
             .collect();
         retain_by_ability_ura_sets(&mut records, &include, &exclude);

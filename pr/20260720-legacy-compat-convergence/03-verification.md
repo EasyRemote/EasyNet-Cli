@@ -2849,3 +2849,23 @@ Commands and outcomes will be appended after implementation.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
   codegraph `status` reports `Index is up to date`.
+
+## 2026-07-22 Invocation history filter scope
+
+- `cargo test -q -p easynet --lib invocation_history --features axon-pb` —
+  PASS (`36 passed`); covers canonical key URA validation, malformed
+  caller/callee/agent/subject/ability/state filter rejection, canonical
+  Ability URA set filters, cursor behavior, and attempt-ledger filter sharing.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS;
+  includes `check_invocation_history_filter_scope_contract`.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` —
+  PASS; includes a negative fixture for the retired bare string filter
+  projection.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
+  codegraph `status` reports `Index is up to date` with 35,305 nodes and
+  135,492 edges.

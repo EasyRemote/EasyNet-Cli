@@ -373,6 +373,98 @@ if "ledger_resource_ura_projection_distinguishes_unjoined_from_invalid_identity"
 PY
 }
 
+check_invocation_history_filter_scope_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local history="$cli_root/src/daemon/ability/builtins/governance/invocation_history.rs"
+  [[ -f "$history" ]] || return 0
+
+  "$PYTHON_BIN" - "$history" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+production = text.split("#[cfg(test)]", 1)[0]
+
+for helper in (
+    "fn canonical_ura(",
+    "fn canonical_principal_ura(",
+    "fn canonical_ability_ura(",
+    "fn value_ability_ura_set(",
+    "fn optional_principal_ura_filter_string(",
+    "fn optional_ability_ura_filter_string(",
+    "fn optional_state_filter_string(",
+    "fn is_supported_history_state_filter(",
+):
+    if helper not in production:
+        raise SystemExit(f"invocation_history_filter_scope_helper_missing:{helper}")
+
+apply_filter = re.search(
+    r"fn apply_filter_object\([^)]*\) -> anyhow::Result<InvocationLedgerQuery> \{(?P<body>.*?)\n\}\n\nfn validate_filter_keys",
+    production,
+    re.S,
+)
+if apply_filter is None:
+    raise SystemExit("invocation_history_filter_scope_apply_filter_missing")
+apply_body = apply_filter.group("body")
+for required in (
+    'optional_principal_ura_filter_string(object, "caller_ura")',
+    'optional_ability_ura_filter_string(object, "ability_ura")',
+    'optional_state_filter_string(object, "state")',
+    "subject_filter_values(object)?",
+):
+    if required not in apply_body:
+        raise SystemExit(f"invocation_history_filter_scope_apply_missing:{required}")
+for retired in (
+    'optional_filter_string(object, "caller_ura")',
+    'optional_filter_string(object, "ability_ura")',
+    'optional_filter_string(object, "state")',
+):
+    if retired in apply_body:
+        raise SystemExit(f"invocation_history_filter_scope_apply_legacy:{retired}")
+
+scoped_callee = re.search(
+    r"fn scoped_callee_ura\([^)]*\) -> anyhow::Result<Option<String>> \{(?P<body>.*?)\n\}\n\nfn non_empty_str",
+    production,
+    re.S,
+)
+if scoped_callee is None:
+    raise SystemExit("invocation_history_filter_scope_callee_missing")
+scoped_body = scoped_callee.group("body")
+for required in (
+    'optional_principal_ura_filter_string(object, "callee_ura")',
+    'optional_principal_ura_filter_string(object, "agent_ura")',
+):
+    if required not in scoped_body:
+        raise SystemExit(f"invocation_history_filter_scope_callee_missing:{required}")
+
+fetch_key = re.search(
+    r"fn fetch_key_from_value\([^)]*\) -> anyhow::Result<InvocationLedgerFetchKey> \{(?P<body>.*?)\n\}\n\nfn apply_filter_object",
+    production,
+    re.S,
+)
+if fetch_key is None or "canonical_ura(" not in fetch_key.group("body"):
+    raise SystemExit("invocation_history_filter_scope_key_ura_not_canonical")
+
+subject_values = re.search(
+    r"fn subject_filter_values\([^)]*\) -> anyhow::Result<Option<Vec<String>>> \{(?P<body>.*?)\n\}\n\nfn ledger_path_from_config",
+    production,
+    re.S,
+)
+if subject_values is None or "canonical_ura(" not in subject_values.group("body"):
+    raise SystemExit("invocation_history_filter_scope_subjects_not_canonical")
+
+for test in (
+    "query_from_args_rejects_malformed_scope_uras_before_ledger_read",
+    "query_from_args_rejects_malformed_key_ura_before_ledger_read",
+    "list_history_rejects_malformed_ability_set_filters",
+):
+    if test not in text:
+        raise SystemExit(f"missing_invocation_history_filter_scope_test:{test}")
+PY
+}
+
 check_sdk_history_authority_subject_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -3672,6 +3764,31 @@ EOF
   if ( check_invocation_history_ledger_ura_contract "$tmp/invocation-history-ledger-ura-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected invocation.history ledger_ura projection fallback gate to fail"
   fi
+  mkdir -p "$tmp/invocation-history-filter-legacy/src/daemon/ability/builtins/governance"
+  cat >"$tmp/invocation-history-filter-legacy/src/daemon/ability/builtins/governance/invocation_history.rs" <<'EOF'
+fn fetch_key_from_value(value: &Value) -> anyhow::Result<InvocationLedgerFetchKey> {
+    if let Some(ura) = value.get("ura").and_then(non_empty_str) {
+        return Ok(InvocationLedgerFetchKey::InvocationUra(ura.to_string()));
+    }
+    anyhow::bail!("key")
+}
+
+fn apply_filter_object(mut query: InvocationLedgerQuery, object: &serde_json::Map<String, Value>) -> anyhow::Result<InvocationLedgerQuery> {
+    if let Some(caller) = optional_filter_string(object, "caller_ura")? { query = query.caller_ura(caller); }
+    if let Some(ability) = optional_filter_string(object, "ability_ura")? { query = query.ability_ura(ability); }
+    if let Some(state) = optional_filter_string(object, "state")? { query = query.state(state); }
+    Ok(query)
+}
+
+fn validate_filter_keys() {}
+
+fn query_from_args_rejects_malformed_scope_uras_before_ledger_read() {}
+fn query_from_args_rejects_malformed_key_ura_before_ledger_read() {}
+fn list_history_rejects_malformed_ability_set_filters() {}
+EOF
+  if ( check_invocation_history_filter_scope_contract "$tmp/invocation-history-filter-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected invocation.history filter scope gate to fail"
+  fi
   mkdir -p "$tmp/sdk-history-authority-legacy/sdk/go" \
     "$tmp/sdk-history-authority-legacy/sdk/python/easynet_sdk" \
     "$tmp/sdk-history-authority-legacy/sdk/python/tests"
@@ -3945,6 +4062,7 @@ EOF
   check_agent_start_model_intent_contract
   check_invocation_history_get_key_contract
   check_invocation_history_ledger_ura_contract
+  check_invocation_history_filter_scope_contract
   check_sdk_history_authority_subject_contract
   check_principal_lifecycle_cli_schema_contract
   check_auth_agents_backend_shape_contract
@@ -3999,6 +4117,7 @@ check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract
 check_invocation_history_ledger_ura_contract
+check_invocation_history_filter_scope_contract
 check_sdk_history_authority_subject_contract
 check_principal_lifecycle_cli_schema_contract
 check_auth_agents_backend_shape_contract

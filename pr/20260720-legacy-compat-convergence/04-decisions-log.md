@@ -986,3 +986,16 @@ Decisions will be appended as root-fork choices are made.
   frame-0 route selection no longer has its own descriptor-like token behavior.
 - Preserve generic bidi dispatch for non-descriptor public ability names.
   Descriptor-like failures are rejected before generic dispatch or escalation.
+
+## 2026-07-22 Invocation history filter scope
+
+- Treat history filters as authority-bearing observation scope, not UI search
+  strings. The provider validates scope before reading either the Axon ledger
+  or the pre-runtime attempt ledger.
+- Distinguish principal scope from generic subject scope:
+  `caller_ura`, `callee_ura`, and `agent_ura` must be canonical
+  Agent/Device/Authority URAs; `subject_ura` and `subject_uras` can be any
+  canonical URA that the ledger may store as an invocation subject.
+- Keep diagnostic attempt states explicit. `failed` remains an aggregate query
+  over failed attempt terminal states, but accepted state filter inputs are now
+  closed over canonical ledger and attempt state names.
