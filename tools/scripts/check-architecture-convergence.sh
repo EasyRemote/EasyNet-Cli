@@ -10438,6 +10438,126 @@ if local_daemon_grpc.exists():
             )
 
 
+local_target_subject_sources = [
+    cli_root / "src/daemon/invocation/routing/target.rs",
+    cli_root / "src/support/platform/local_invoke.rs",
+    cli_root / "src/daemon/ability/builtins/integrations/mcp/bridge.rs",
+    cli_root / "src/daemon/ability/builtins/integrations/a2a/bridge.rs",
+    cli_root / "src/daemon/ability/catalog/profiles/mcp.rs",
+]
+existing_local_target_subject_sources = [
+    path for path in local_target_subject_sources if path.exists()
+]
+if len(existing_local_target_subject_sources) != len(local_target_subject_sources):
+    for path in local_target_subject_sources:
+        if not path.exists():
+            add(
+                "R93_LOCAL_ABILITY_TARGET_SUBJECT_POLICY",
+                path,
+                1,
+                "local ability target subject policy source is missing",
+            )
+else:
+    source_texts = [source(path) for path in local_target_subject_sources]
+    raw_source_texts = [
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in local_target_subject_sources
+    ]
+    production_text = "\n".join(
+        text.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
+        for text in source_texts
+    )
+    if "default_subject_ura" in production_text:
+        match = re.search(r"default_subject_ura", production_text)
+        add(
+            "R93_LOCAL_ABILITY_TARGET_SUBJECT_POLICY",
+            local_target_subject_sources[0],
+            line_number(production_text, match.start() if match else 0),
+            "LocalAbilityTarget must not expose product-visible subject fallback policy",
+        )
+    target_text, local_invoke_text, mcp_bridge_text, a2a_bridge_text, mcp_profile_text = source_texts
+    for token, detail in (
+        (
+            "fn daemon_system_subject_ura_for_descriptor(",
+            "descriptor-derived daemon-system subject policy must remain centralized",
+        ),
+        (
+            "pub(crate) fn daemon_system_subject_ura(&self) -> anyhow::Result<String>",
+            "LocalAbilityTarget subject policy must remain crate-private",
+        ),
+        (
+            "pub fn local_root_for_target(",
+            "SystemInvocationTargetIssuer must issue target-bound daemon-system invocations",
+        ),
+    ):
+        if token not in target_text:
+            add(
+                "R93_LOCAL_ABILITY_TARGET_SUBJECT_POLICY",
+                local_target_subject_sources[0],
+                1,
+                detail,
+            )
+    for token, detail in (
+        (
+            "invoke_target_root_derived_subject_timeout",
+            "local daemon system invoker must expose a target-bound subject helper",
+        ),
+        (
+            "root_context_for_target",
+            "local system invocation context must expose a target-bound subject helper",
+        ),
+    ):
+        if token not in local_invoke_text:
+            add(
+                "R93_LOCAL_ABILITY_TARGET_SUBJECT_POLICY",
+                local_target_subject_sources[1],
+                1,
+                detail,
+            )
+    raw_local_invoke_text = raw_source_texts[1]
+    for token, detail in (
+        (
+            "local_system_context_for_agent_target_uses_agent_owner_subject",
+            "missing agent-owner subject regression test",
+        ),
+        (
+            "local_system_context_for_hub_target_uses_ability_subject",
+            "missing hub-owner subject regression test",
+        ),
+    ):
+        if token not in raw_local_invoke_text:
+            add(
+                "R93_LOCAL_ABILITY_TARGET_SUBJECT_POLICY",
+                local_target_subject_sources[1],
+                1,
+                detail,
+            )
+    for path, text, detail in (
+        (
+            local_target_subject_sources[2],
+            mcp_bridge_text,
+            "MCP bridge must use runtime-issued target subject policy",
+        ),
+        (
+            local_target_subject_sources[3],
+            a2a_bridge_text,
+            "A2A bridge must use runtime-issued target subject policy",
+        ),
+        (
+            local_target_subject_sources[4],
+            mcp_profile_text,
+            "MCP daemon profile must use runtime-issued target context policy",
+        ),
+    ):
+        if "local_root_for_target" not in text and "root_context_for_target" not in text:
+            add(
+                "R93_LOCAL_ABILITY_TARGET_SUBJECT_POLICY",
+                path,
+                1,
+                detail,
+            )
+
+
 if violations:
     for violation in sorted(violations):
         print(

@@ -575,9 +575,8 @@ impl DiscoverLadderTarget {
     fn device_aggregate() -> anyhow::Result<Self> {
         let owner = crate::daemon::identity::local_invocation::local_daemon_ura()?;
         let ability = crate::daemon::ability::builtins::agents::discover::DEVICE_DISCOVER_ABILITY;
-        let subject = discover_subject_for_owner(&owner, ability)?;
         Ok(Self {
-            target: LocalAbilityTarget::new(ability, &owner, subject)?,
+            target: LocalAbilityTarget::new(ability, &owner)?,
         })
     }
 
@@ -586,7 +585,6 @@ impl DiscoverLadderTarget {
             target: LocalAbilityTarget::new(
                 crate::daemon::ability::builtins::agents::discover::ABILITY_VERB,
                 agent_ura,
-                agent_ura,
             )?,
         })
     }
@@ -594,20 +592,6 @@ impl DiscoverLadderTarget {
     fn target(&self) -> &LocalAbilityTarget {
         &self.target
     }
-}
-
-fn discover_subject_for_owner(owner_ura: &str, ability: &str) -> anyhow::Result<String> {
-    let owner = crate::core::ura::parse_ura(owner_ura)
-        .map_err(|error| anyhow::anyhow!("discover owner URA is invalid: {error}"))?;
-    if owner.kind == crate::core::ura::URAKind::Authority {
-        let public_name = crate::core::ura::owner_local_ability_name(owner_ura, ability);
-        return crate::core::ura::owner_ability_ura(owner_ura, &public_name).ok_or_else(|| {
-            anyhow::anyhow!(
-                "cannot derive descriptor subject for Hub-owned discover ability {ability:?}"
-            )
-        });
-    }
-    Ok(owner_ura.to_string())
 }
 
 impl SourceWindowMode {
@@ -807,13 +791,12 @@ impl DiscoverRuntimeService {
         causal_parents: &[Value],
         trace_id: Option<&str>,
     ) -> anyhow::Result<(Value, Value)> {
-        let context =
-            crate::support::platform::local_invoke::LocalSystemInvocationIssuer::root_context(
-                self.plan.ladder.target().default_subject_ura(),
-                causal_parents,
-                std::time::Duration::from_secs(30),
-                trace_id,
-            )?;
+        let context = crate::support::platform::local_invoke::LocalSystemInvocationIssuer::root_context_for_target(
+            self.plan.ladder.target(),
+            causal_parents,
+            std::time::Duration::from_secs(30),
+            trace_id,
+        )?;
         let (value, metadata) = invoke_local_ability_target_with_invocation_meta(
             self.plan.ladder.target(),
             self.plan

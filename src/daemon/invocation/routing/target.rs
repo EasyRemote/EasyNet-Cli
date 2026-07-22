@@ -53,7 +53,6 @@ pub struct LocalAbilityTarget {
     ability_ura: String,
     dispatch_name: String,
     callee_ura: String,
-    default_subject_ura: String,
 }
 
 impl LocalAbilityTarget {
@@ -61,21 +60,14 @@ impl LocalAbilityTarget {
     ///
     /// Invariant 1: `dispatch_name` is the daemon registry key.
     /// Invariant 2: `callee_ura` is the Ability owner identity.
-    /// Invariant 3: `default_subject_ura` is descriptor-bound. Agent/device
-    /// owners can be subjects directly; hub owners use the Ability URA because
-    /// Axon's descriptor-bound subject set intentionally excludes Hub.
+    /// Invariant 3: daemon-system subject policy is not stored on this route
+    /// object. It is derived only by named daemon-system issuers.
     #[must_use]
     pub fn from_selector(selector: &crate::core::ura::AbilitySelector) -> Self {
-        let default_subject_ura = if selector.owner_kind() == "hub" {
-            selector.ability_ura()
-        } else {
-            selector.owner_ura()
-        };
         Self {
             ability_ura: selector.ability_ura().to_string(),
             dispatch_name: selector.local_registry_ability().to_string(),
             callee_ura: selector.owner_ura().to_string(),
-            default_subject_ura: default_subject_ura.to_string(),
         }
     }
 
@@ -83,20 +75,18 @@ impl LocalAbilityTarget {
     pub fn new(
         dispatch_name: impl Into<String>,
         callee_ura: impl Into<String>,
-        default_subject_ura: impl Into<String>,
     ) -> anyhow::Result<Self> {
         let dispatch_name = dispatch_name.into();
         let callee_ura = callee_ura.into();
-        let default_subject_ura = default_subject_ura.into();
         if dispatch_name.trim().is_empty() {
             anyhow::bail!("local ability target dispatch_name must not be empty");
         }
         if callee_ura.trim().is_empty() {
             anyhow::bail!("local ability target callee_ura must not be empty");
         }
-        if default_subject_ura.trim().is_empty() {
-            anyhow::bail!("local ability target default_subject_ura must not be empty");
-        }
+        crate::core::ura::parse_ura(&callee_ura).map_err(|error| {
+            anyhow::anyhow!("local ability target callee_ura is invalid: {error}")
+        })?;
         let public_name = crate::core::ura::owner_local_ability_name(&callee_ura, &dispatch_name);
         let ability_ura = crate::core::ura::owner_ability_ura(&callee_ura, &public_name)
             .ok_or_else(|| {
@@ -108,7 +98,6 @@ impl LocalAbilityTarget {
             ability_ura,
             dispatch_name,
             callee_ura,
-            default_subject_ura,
         })
     }
 
@@ -130,13 +119,9 @@ impl LocalAbilityTarget {
         &self.callee_ura
     }
 
-    /// Descriptor-derived subject policy used only by daemon-system issuers.
-    ///
-    /// Public/product ingress must not use this as a missing-subject fallback;
-    /// it must provide an explicit subject before transport entry.
-    #[must_use]
-    pub fn default_subject_ura(&self) -> &str {
-        &self.default_subject_ura
+    pub(crate) fn daemon_system_subject_ura(&self) -> anyhow::Result<String> {
+        let subject = daemon_system_subject_ura_for_descriptor(&self.ability_ura, &self.callee_ura);
+        checked_subject_ura(&subject, "local ability target daemon system subject")
     }
 }
 
@@ -234,7 +219,7 @@ fn checked_subject_ura(subject: &str, field: &str) -> anyhow::Result<String> {
     Ok(subject.to_string())
 }
 
-fn daemon_system_default_subject_ura(ability: &str, callee_ura: &str) -> String {
+fn daemon_system_subject_ura_for_descriptor(ability: &str, callee_ura: &str) -> String {
     crate::core::ura::AbilitySelector::parse(ability)
         .ok()
         .filter(|selector| selector.owner_kind() == "hub")
@@ -276,8 +261,8 @@ impl InvocationSubject {
         match self {
             Self::Explicit(subject) => checked_subject_ura(subject, "InvocationTarget.subject"),
             Self::DaemonSystemDerived => {
-                let default_subject = daemon_system_default_subject_ura(ability, callee_ura);
-                checked_subject_ura(&default_subject, "daemon system default subject")
+                let derived_subject = daemon_system_subject_ura_for_descriptor(ability, callee_ura);
+                checked_subject_ura(&derived_subject, "daemon system derived subject")
             }
         }
     }
@@ -457,7 +442,7 @@ impl InvocationTarget {
     /// Resolve the target's tuple subject against the selected callee.
     ///
     /// Public ingress has an explicit subject and daemon-system ingress has a
-    /// named descriptor-default policy. Keeping that policy here prevents
+    /// named descriptor-derived policy. Keeping that policy here prevents
     /// LocalRuntime adapters from inventing their own fallback subject rules.
     pub fn resolved_subject_ura(&self, callee_ura: &str) -> anyhow::Result<String> {
         self.subject.resolve_for_callee(&self.ability, callee_ura)
@@ -501,6 +486,19 @@ impl SystemInvocationTargetIssuer {
             call_mode,
             subject,
         )
+    }
+
+    pub fn local_root_for_target(
+        target: &LocalAbilityTarget,
+        normalized_args: Value,
+        call_mode: CallMode,
+    ) -> anyhow::Result<InvocationTarget> {
+        Ok(InvocationTarget::local_daemon_system_for_subject(
+            target.ability_ura().to_string(),
+            normalized_args,
+            call_mode,
+            target.daemon_system_subject_ura()?,
+        ))
     }
 
     #[must_use]

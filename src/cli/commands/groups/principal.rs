@@ -846,10 +846,9 @@ fn run_get(args: GetArgs) -> anyhow::Result<()> {
 
 fn invoke_principal_ability(ability: &str, args: Value) -> anyhow::Result<Value> {
     let target = principal_ability_target(ability, &args)?;
-    LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(
+    LocalDaemonSystemAbilityIssuer::invoke_target_root_derived_subject_timeout(
         &target,
         args,
-        target.default_subject_ura(),
         std::time::Duration::from_secs(30),
     )
     .with_context(|| format!("invoke {ability}"))
@@ -1449,10 +1448,6 @@ mod tests {
 
         assert_eq!(target.dispatch_name(), routes::PRINCIPAL_ABILITY_CREATE);
         assert_eq!(target.callee_ura(), "easynet:///r/realm/authority");
-        assert_eq!(
-            target.default_subject_ura(),
-            "easynet:///r/realm/ability/authority.principal.lifecycle.create"
-        );
     }
 
     #[test]
@@ -1464,10 +1459,6 @@ mod tests {
         assert_eq!(request["principal_ura"], "easynet:///r/realm/user/alice");
         assert_eq!(target.dispatch_name(), routes::PRINCIPAL_ABILITY_GET);
         assert_eq!(target.callee_ura(), "easynet:///r/realm/authority");
-        assert_eq!(
-            target.default_subject_ura(),
-            "easynet:///r/realm/ability/authority.principal.lifecycle.get"
-        );
     }
 
     #[test]

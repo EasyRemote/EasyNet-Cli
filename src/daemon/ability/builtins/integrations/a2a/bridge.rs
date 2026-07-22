@@ -222,12 +222,12 @@ fn send_task_handler(
         )));
     }
 
-    let invocation_target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
-        target.ability_ura().to_string(),
-        task_args,
-        CallMode::Rpc,
-        target.default_subject_ura().to_string(),
-    );
+    let invocation_target =
+        crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_target(
+            &target,
+            task_args,
+            CallMode::Rpc,
+        )?;
     match local.invoke_rpc_target_json(invocation_target) {
         Ok(value) => Ok(json!({
             "ok": true,

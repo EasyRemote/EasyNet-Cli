@@ -4120,6 +4120,65 @@ for token, code in (
 PY
 }
 
+check_local_ability_target_subject_policy_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local target="$cli_root/src/daemon/invocation/routing/target.rs"
+  local local_invoke="$cli_root/src/support/platform/local_invoke.rs"
+  local mcp_bridge="$cli_root/src/daemon/ability/builtins/integrations/mcp/bridge.rs"
+  local a2a_bridge="$cli_root/src/daemon/ability/builtins/integrations/a2a/bridge.rs"
+  local mcp_profile="$cli_root/src/daemon/ability/catalog/profiles/mcp.rs"
+
+  for path in "$target" "$local_invoke" "$mcp_bridge" "$a2a_bridge" "$mcp_profile"; do
+    [[ -f "$path" ]] || fail "local ability target subject policy source is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$target" "$local_invoke" "$mcp_bridge" "$a2a_bridge" "$mcp_profile" <<'PY'
+import sys
+from pathlib import Path
+
+target, local_invoke, mcp_bridge, a2a_bridge, mcp_profile = [
+    Path(arg).read_text(encoding="utf-8", errors="replace") for arg in sys.argv[1:]
+]
+
+production = "\n".join(
+    text.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
+    for text in (target, local_invoke, mcp_bridge, a2a_bridge, mcp_profile)
+)
+if "default_subject_ura" in production:
+    raise SystemExit("local_ability_target_subject_policy:default_subject_accessor_leaked")
+
+for token, code in (
+    ("fn daemon_system_subject_ura_for_descriptor(", "descriptor_policy_missing"),
+    ("pub(crate) fn daemon_system_subject_ura(&self) -> anyhow::Result<String>", "target_policy_method_missing"),
+    ("pub fn local_root_for_target(", "target_issuer_missing"),
+):
+    if token not in target:
+        raise SystemExit(f"local_ability_target_subject_policy:{code}")
+
+for token, code in (
+    ("invoke_target_root_derived_subject_timeout", "daemon_system_invoke_helper_missing"),
+    ("root_context_for_target", "system_context_target_helper_missing"),
+):
+    if token not in local_invoke:
+        raise SystemExit(f"local_ability_target_subject_policy:{code}")
+
+for text, code in (
+    (mcp_bridge, "mcp_bridge_not_migrated"),
+    (a2a_bridge, "a2a_bridge_not_migrated"),
+    (mcp_profile, "mcp_profile_not_migrated"),
+):
+    if "local_root_for_target" not in text and "root_context_for_target" not in text:
+        raise SystemExit(f"local_ability_target_subject_policy:{code}")
+
+for token, code in (
+    ("local_system_context_for_agent_target_uses_agent_owner_subject", "agent_subject_regression_missing"),
+    ("local_system_context_for_hub_target_uses_ability_subject", "hub_subject_regression_missing"),
+):
+    if token not in local_invoke:
+        raise SystemExit(f"local_ability_target_subject_policy:{code}")
+PY
+}
+
 check_sdk_principal_projection_fail_closed_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local go_principal="$cli_root/sdk/go/principal.go"
@@ -7667,6 +7726,7 @@ EOF
   check_admission_owner_credentials_contract
   check_shared_local_device_owner_projection_contract
   check_node_session_authority_subject_contract
+  check_local_ability_target_subject_policy_contract
   check_session_prelude_credentials_contract
   check_session_prelude_receipt_contract
   check_device_settings_loader_contract
@@ -7758,6 +7818,7 @@ check_observe_health_contract_projection_contract
 check_admission_owner_credentials_contract
 check_shared_local_device_owner_projection_contract
 check_node_session_authority_subject_contract
+check_local_ability_target_subject_policy_contract
 check_session_prelude_credentials_contract
 check_start_attach_user_signer_readiness_contract
 check_session_prelude_receipt_contract

@@ -188,12 +188,12 @@ fn call_tool_handler(
         )));
     }
 
-    let invocation_target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
-        ability_name.clone(),
-        arguments,
-        CallMode::Rpc,
-        target.default_subject_ura().to_string(),
-    );
+    let invocation_target =
+        crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_target(
+            &target,
+            arguments,
+            CallMode::Rpc,
+        )?;
 
     match registry.invoke_rpc_target_json(invocation_target) {
         Ok(value) => Ok(success_response(value)),

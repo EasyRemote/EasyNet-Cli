@@ -380,6 +380,15 @@ impl LocalDaemonSystemAbilityIssuer {
         )
     }
 
+    pub fn invoke_target_root_derived_subject_timeout(
+        target: &LocalAbilityTarget,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        let subject_ura = target.daemon_system_subject_ura()?;
+        Self::invoke_target_root_timeout(target, args, &subject_ura, timeout)
+    }
+
     pub fn stream_target_root(
         target: &LocalAbilityTarget,
         args: Value,
@@ -584,6 +593,20 @@ impl LocalSystemInvocationIssuer {
             trace_id,
         )
     }
+
+    pub fn root_context_for_target<'a>(
+        target: &LocalAbilityTarget,
+        causal_parents: &'a [Value],
+        step_timeout: std::time::Duration,
+        trace_id: Option<&'a str>,
+    ) -> anyhow::Result<LocalSystemInvocationContext<'a>> {
+        Self::root_context(
+            target.daemon_system_subject_ura()?,
+            causal_parents,
+            step_timeout,
+            trace_id,
+        )
+    }
 }
 
 /// Invoke a canonical local Ability target and return cryptographically
@@ -710,33 +733,44 @@ mod tests {
     }
 
     #[test]
-    fn local_ability_target_preserves_agent_owner_as_callee_and_subject() {
+    fn local_system_context_for_agent_target_uses_agent_owner_subject() {
         let selector = crate::core::ura::AbilitySelector::parse(
             "easynet:///r/acme/ability/alice.claude.weather",
         )
         .expect("agent ability selector");
         let target = LocalAbilityTarget::from_selector(&selector);
+        let context = LocalSystemInvocationIssuer::root_context_for_target(
+            &target,
+            &[],
+            std::time::Duration::from_secs(5),
+            None,
+        )
+        .expect("issuer context");
 
         assert_eq!(target.dispatch_name(), "claude.weather");
         assert_eq!(target.callee_ura(), "easynet:///r/acme/agent/alice.claude");
-        assert_eq!(
-            target.default_subject_ura(),
-            "easynet:///r/acme/agent/alice.claude"
-        );
+        assert_eq!(context.subject_ura, "easynet:///r/acme/agent/alice.claude");
     }
 
     #[test]
-    fn local_ability_target_uses_ability_subject_for_hub_owner() {
+    fn local_system_context_for_hub_target_uses_ability_subject() {
         let selector = crate::core::ura::AbilitySelector::parse(
             "easynet:///r/acme/ability/authority.federation.resolve",
         )
         .expect("hub ability selector");
         let target = LocalAbilityTarget::from_selector(&selector);
+        let context = LocalSystemInvocationIssuer::root_context_for_target(
+            &target,
+            &[],
+            std::time::Duration::from_secs(5),
+            None,
+        )
+        .expect("issuer context");
 
         assert_eq!(target.dispatch_name(), "federation.resolve");
         assert_eq!(target.callee_ura(), "easynet:///r/acme/authority");
         assert_eq!(
-            target.default_subject_ura(),
+            context.subject_ura,
             "easynet:///r/acme/ability/authority.federation.resolve"
         );
     }

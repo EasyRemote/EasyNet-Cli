@@ -87,7 +87,7 @@ impl PagesAbility {
 
     fn local_target(&self, realm: &str) -> anyhow::Result<LocalAbilityTarget> {
         let callee = crate::core::ura::agent_ura(realm, &self.user, "pages");
-        LocalAbilityTarget::new(self.local_registry_ability(), callee.clone(), callee)
+        LocalAbilityTarget::new(self.local_registry_ability(), callee)
     }
 }
 
@@ -198,10 +198,9 @@ fn invoke_pages_ability(
     args: Value,
 ) -> anyhow::Result<Value> {
     let target = ability.local_target(&identity.realm)?;
-    LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(
+    LocalDaemonSystemAbilityIssuer::invoke_target_root_derived_subject_timeout(
         &target,
         args,
-        target.default_subject_ura(),
         std::time::Duration::from_secs(30),
     )
 }
@@ -413,10 +412,6 @@ mod tests {
         assert_eq!(target.dispatch_name(), "pages.project_list");
         assert_eq!(
             target.callee_ura(),
-            "easynet:///r/localhost/agent/alice.pages"
-        );
-        assert_eq!(
-            target.default_subject_ura(),
             "easynet:///r/localhost/agent/alice.pages"
         );
     }
