@@ -944,3 +944,16 @@ Decisions will be appended as root-fork choices are made.
   semantics from the session initiator.
 - Commit heartbeat revision-only diffs. An empty `added`/`removed` set is still
   a valid cursor transition when the hub advances `hub_abilities_diff.revision`.
+
+## 2026-07-22 Heartbeat owner-projection refresh input
+
+- Treat the owner-projection cursor file as canonical heartbeat input. The
+  heartbeat builder must not submit a liveness update with an empty
+  `refresh_owner_uras` set when local cursor state exists but cannot be parsed
+  or validated.
+- Preserve the legitimate first-boot case: `owner_projections::load()` already
+  maps a missing file to an empty cursor file, so no separate compatibility
+  fallback is needed at the heartbeat layer.
+- Keep filtering by caller owner at the request edge. A heartbeat only refreshes
+  the caller's owner projection lease, while the cursor loader remains the
+  shared read-model source of all active owner cursors.

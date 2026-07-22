@@ -1031,6 +1031,15 @@ if "serde_json::from_slice" in heartbeat_projection or "if let Ok" in heartbeat_
     raise SystemExit("session_prelude_receipt:heartbeat_tolerant_decode")
 if "!diff.added.is_empty() || !diff.removed.is_empty()" in heartbeat:
     raise SystemExit("session_prelude_receipt:heartbeat_revision_only_diff_skipped")
+if "fn heartbeat_refresh_owner_uras_for_caller" not in heartbeat:
+    raise SystemExit("session_prelude_receipt:heartbeat_owner_refresh_projection_missing")
+if "heartbeat_refresh_owner_uras()" in heartbeat and ".unwrap_or_default()" in heartbeat:
+    raise SystemExit("session_prelude_receipt:heartbeat_owner_refresh_error_collapsed")
+owner_refresh_projection = heartbeat.split("fn heartbeat_refresh_owner_uras_for_caller", 1)[1].split(
+    "\nfn apply_federation_heartbeat_receipt", 1
+)[0]
+if "owner projection cursor unavailable" not in owner_refresh_projection:
+    raise SystemExit("session_prelude_receipt:heartbeat_owner_refresh_error_context_missing")
 
 for test in (
     "federation_join_receipt_rejects_empty_or_malformed_body",
@@ -1041,6 +1050,7 @@ for test in (
 for test in (
     "federation_heartbeat_receipt_rejects_empty_or_malformed_body",
     "federation_heartbeat_receipt_applies_revision_only_diff",
+    "heartbeat_refresh_owner_uras_rejects_corrupt_cursor_store",
 ):
     if test not in heartbeat:
         raise SystemExit(f"session_prelude_receipt:missing_heartbeat_test:{test}")

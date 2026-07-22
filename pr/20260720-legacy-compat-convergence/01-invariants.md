@@ -381,3 +381,8 @@
   heartbeat receipt with an empty diff but an advanced revision still commits
   the revision cursor; revision-only updates must not be skipped because
   `added` and `removed` are empty.
+- Federation heartbeat owner-projection refresh is a read-model state input,
+  not a best-effort optimization. A missing cursor store is a first-boot empty
+  state, but unreadable, schema-less, unsupported, or corrupt
+  `owner-projections.json` must fail closed before heartbeat submission instead
+  of being collapsed to an empty `refresh_owner_uras` list.

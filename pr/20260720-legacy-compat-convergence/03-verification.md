@@ -2684,6 +2684,25 @@ Commands and outcomes will be appended after implementation.
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
   codegraph `status` reports `Index is up to date` with 35,276 nodes and
   135,370 edges.
+
+## 2026-07-22 Heartbeat owner-projection cursor input
+
+- `cargo test -q -p easynet --lib
+  daemon::invocation::bidi::session_initiator::heartbeat::tests::heartbeat_refresh_owner_uras`
+  — PASS (`3 passed`); covers missing cursor store as empty first-boot state,
+  corrupt/schema-less cursor rejection, and caller-owner filtering.
+- `cargo test -q -p easynet --lib
+  daemon::invocation::bidi::session_initiator::heartbeat::tests::federation_heartbeat_receipt`
+  — PASS (`3 passed`); revalidated heartbeat receipt state after moving owner
+  refresh construction behind a fallible boundary.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
   codegraph `status` reports `Index is up to date`.

@@ -2515,3 +2515,22 @@ Evidence will be appended after indexing and focused impact queries.
 - Boundary decision: join and heartbeat receipts now flow through
   `ability_contract::parse_receipt`; empty/malformed bodies fail closed, and
   heartbeat always applies the parsed diff so revision-only transitions commit.
+
+## 2026-07-22 Heartbeat owner-projection cursor audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  heartbeat_refresh_owner_uras owner_projection apply_owner_projection
+  publish_owner_projection refresh_lease` showed
+  `send_federation_heartbeat` as the production call site that converted
+  `heartbeat_refresh_owner_uras()` errors into an empty refresh list.
+- `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/src/daemon/persistence/owner_projections.rs`
+  already treats a missing `owner-projections.json` as
+  `OwnerProjectionCursorFile::default()` and returns errors only for lock,
+  read, parse, unsupported schema, schema-less, or validation failures.
+- Root abstraction problem: heartbeat interpreted all owner-projection cursor
+  failures as "no local owners to refresh", which can make device liveness look
+  healthy while owner ability leases silently expire from `namespace.resolve`.
+- Boundary decision: owner-projection cursor loading is now a fallible input to
+  the heartbeat request builder. The helper preserves first-boot empty state but
+  returns `FailedPrecondition` for corrupt/unavailable cursor state before the
+  heartbeat is submitted.
