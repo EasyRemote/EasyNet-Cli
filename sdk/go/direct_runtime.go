@@ -35,8 +35,8 @@ const (
 // DirectRuntimeConnector opens a concrete Runtime Core transport over an Axon
 // Invocation gRPC endpoint.
 type DirectRuntimeConnector struct {
-	ControlPath string
-	Reader      ControlDiscoveryReader
+	controlPath string
+	reader      ControlDiscoveryReader
 
 	mu                   sync.Mutex
 	handle               RuntimeTransport
@@ -72,8 +72,8 @@ func NewDirectRuntimeConnectorWithOptions(options DirectRuntimeConnectorOptions)
 		reader = FileControlDiscoveryReader{}
 	}
 	return &DirectRuntimeConnector{
-		ControlPath:          options.ControlPath,
-		Reader:               reader,
+		controlPath:          options.ControlPath,
+		reader:               reader,
 		handle:               options.HandleTransport,
 		closeHandleTransport: options.CloseHandleTransport,
 		transports:           map[*DirectRuntimeTransport]struct{}{},
@@ -107,11 +107,11 @@ func (c *DirectRuntimeConnector) Resolve(ctx context.Context, optionsJSON []byte
 	}
 	controlPath := options.ControlPath
 	if controlPath == "" {
-		controlPath = c.ControlPath
+		controlPath = c.controlPath
 	}
 	endpoint := options.Endpoint
 	if endpoint == "" {
-		discovery, err := c.Reader.ReadControlDiscovery(ctx, controlPath)
+		discovery, err := c.reader.ReadControlDiscovery(ctx, controlPath)
 		if err != nil {
 			return nil, err
 		}
@@ -214,7 +214,7 @@ func (c *DirectRuntimeConnector) Close(ctx context.Context) error {
 }
 
 func (c *DirectRuntimeConnector) requireOpen(ctx context.Context) error {
-	if c == nil || c.Reader == nil {
+	if c == nil || c.reader == nil {
 		return invalidRuntimeClient("runtime connector is not initialized")
 	}
 	if ctx == nil {
