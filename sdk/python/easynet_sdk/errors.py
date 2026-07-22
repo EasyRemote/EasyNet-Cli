@@ -286,7 +286,7 @@ def canonical_failure_code(code: str | None = None) -> RuntimeFailureCode:
             if _is_canonical_extension_error_code(code):
                 return code
             return ErrorCode.PROTOCOL_MISMATCH
-    return ErrorCode.ADMISSION_DENIED
+    return ErrorCode.PROTOCOL_MISMATCH
 
 
 def canonical_terminal_state_code(state: str) -> ErrorCode:

@@ -1332,8 +1332,8 @@ func directResponseFailure(errorValue *axonpb.Error, terminalState string, stage
 }
 
 func directAxonFailure(errorValue *axonpb.Error, stage string) map[string]any {
-	code := runtimeFailureCode(errorValue.GetCode(), ErrAdmissionDenied)
-	if code == "" || code == ErrGeneric {
+	code := runtimeFailureCode(errorValue.GetCode())
+	if code == ErrGeneric {
 		code = ErrAdmissionDenied
 	}
 	return map[string]any{

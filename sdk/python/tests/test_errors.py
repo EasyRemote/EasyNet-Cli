@@ -96,7 +96,8 @@ class ErrorTests(unittest.TestCase):
         self,
     ) -> None:
         cases = {
-            "": ErrorCode.ADMISSION_DENIED,
+            "": ErrorCode.PROTOCOL_MISMATCH,
+            "   ": ErrorCode.PROTOCOL_MISMATCH,
             "TRANSPORT": ErrorCode.TRANSPORT,
             " AXON_MEMBERSHIP_REQUIRED ": "AXON_MEMBERSHIP_REQUIRED",
             "TARGET_NOT_IN_PRESENCE_REGISTRY": "TARGET_NOT_IN_PRESENCE_REGISTRY",

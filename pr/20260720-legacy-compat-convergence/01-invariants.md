@@ -238,6 +238,12 @@
 - Runtime-owner signing identity and managed-user signing identity are
   disjoint custody states. `RuntimeSigningIdentity` may bind only Agent,
   Device, or Authority owner URAs; User URAs must enter through the managed
+  user signing inventory before any caller signer lookup.
+- Runtime failure code projection is mandatory at the SDK/provider boundary.
+  A provider error object with a missing or blank `code` is malformed runtime
+  payload and must project to `PROTOCOL_MISMATCH`; it must not be repaired to
+  `ADMISSION_DENIED` through a language-local fallback parameter or direct
+  runtime adapter branch.
   user signer resolver and must fail before any runtime-owner key-service
   lookup if misrouted.
 - Remote-desktop session creation arguments are descriptor-bound product

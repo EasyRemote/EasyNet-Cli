@@ -2,6 +2,31 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-22 SDK runtime failure code fallback audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was
+  current before the slice.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "runtimeFailureCode fallback canonical_failure_code ADMISSION_DENIED
+  PROTOCOL_MISMATCH SDK error mapper"` identified the active cross-language
+  root fork:
+  `sdk/go/errors.go::runtimeFailureCode(code, fallback)` and
+  `sdk/python/easynet_sdk/errors.py::canonical_failure_code(None)` both
+  repaired missing runtime failure codes into `ADMISSION_DENIED`.
+- The same blast-radius query showed the Go function is only consumed by
+  direct runtime projection and tests, while Python consumers are
+  direct-runtime/transport projections plus `test_errors.py`. That made this
+  a bounded SDK canonical model refactor rather than a product feature change.
+- Source inspection found a second same-layer bypass in
+  `sdk/python/easynet_sdk/direct_runtime.py::_response_error_code`: it returned
+  `ADMISSION_DENIED` before calling the canonical mapper when protobuf
+  `Error.code` was empty. The Go direct-runtime adapter had the analogous
+  fallback parameter and an obsolete empty-code branch.
+- After the change, both SDKs treat missing/blank provider failure code as
+  `PROTOCOL_MISMATCH`, while preserving the existing terminal-state projection
+  where `terminal_state=Failed` without an error object maps to
+  `ADMISSION_DENIED`.
+
 ## 2026-07-22 FFI last-error typed TLS audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was

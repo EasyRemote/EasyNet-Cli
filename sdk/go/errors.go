@@ -346,10 +346,10 @@ func ParseErrorCode(code string) (ErrorCode, error) {
 	}
 }
 
-func runtimeFailureCode(code string, fallback ErrorCode) ErrorCode {
+func runtimeFailureCode(code string) ErrorCode {
 	code = strings.TrimSpace(code)
 	if code == "" {
-		return fallback
+		return ErrProtocolMismatch
 	}
 	parsed, err := ParseErrorCode(code)
 	if err == nil {

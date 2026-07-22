@@ -576,6 +576,96 @@ if py:
 PY
 }
 
+check_sdk_runtime_failure_code_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_errors="$cli_root/sdk/go/errors.go"
+  local go_direct="$cli_root/sdk/go/direct_runtime.go"
+  local go_errors_test="$cli_root/sdk/go/errors_test.go"
+  local go_direct_test="$cli_root/sdk/go/direct_runtime_codec_test.go"
+  local py_errors="$cli_root/sdk/python/easynet_sdk/errors.py"
+  local py_direct="$cli_root/sdk/python/easynet_sdk/direct_runtime.py"
+  local py_errors_test="$cli_root/sdk/python/tests/test_errors.py"
+  local py_direct_test="$cli_root/sdk/python/tests/test_direct_runtime.py"
+
+  "$PYTHON_BIN" - \
+    "$go_errors" \
+    "$go_direct" \
+    "$go_errors_test" \
+    "$go_direct_test" \
+    "$py_errors" \
+    "$py_direct" \
+    "$py_errors_test" \
+    "$py_direct_test" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+(
+    go_errors_path,
+    go_direct_path,
+    go_errors_test_path,
+    go_direct_test_path,
+    py_errors_path,
+    py_direct_path,
+    py_errors_test_path,
+    py_direct_test_path,
+) = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    return path.read_text() if path.exists() else ""
+
+def section(text: str, start: str, end: str) -> str:
+    offset = text.find(start)
+    if offset < 0:
+        raise SystemExit(f"sdk_runtime_failure_code_missing_section:{start}")
+    stop = text.find(end, offset + len(start))
+    return text[offset : stop if stop >= 0 else len(text)]
+
+go_errors = read(go_errors_path)
+if go_errors:
+    if re.search(r"func\s+runtimeFailureCode\s*\(\s*code\s+string\s*,\s*fallback\s+ErrorCode", go_errors):
+        raise SystemExit("sdk_go_runtime_failure_code_fallback_parameter")
+    body = section(go_errors, "func runtimeFailureCode(", "func isCanonicalExtensionErrorCode(")
+    if "return fallback" in body:
+        raise SystemExit("sdk_go_runtime_failure_code_return_fallback")
+    if "return ErrProtocolMismatch" not in body:
+        raise SystemExit("sdk_go_runtime_failure_code_missing_blank_protocol_mismatch")
+    go_direct = read(go_direct_path)
+    if "runtimeFailureCode(errorValue.GetCode()," in go_direct:
+        raise SystemExit("sdk_go_direct_runtime_failure_code_call_uses_fallback")
+    direct_body = section(go_direct, "func directAxonFailure(", "func directErrorStage(")
+    if "code == \"\"" in direct_body or "code == \"\" ||" in direct_body:
+        raise SystemExit("sdk_go_direct_runtime_failure_code_preserves_empty_branch")
+    go_tests = read(go_errors_test_path) + "\n" + read(go_direct_test_path)
+    for token in (
+        'ErrProtocolMismatch',
+        '"   ":',
+        "TestDirectAxonFailureProjectsMissingErrorCodeToProtocolMismatch",
+    ):
+        if token not in go_tests:
+            raise SystemExit(f"sdk_go_runtime_failure_code_test_missing:{token}")
+
+py_errors = read(py_errors_path)
+if py_errors:
+    py_body = section(py_errors, "def canonical_failure_code(", "def canonical_terminal_state_code(")
+    if "return ErrorCode.ADMISSION_DENIED" in py_body:
+        raise SystemExit("sdk_python_runtime_failure_code_blank_admission_fallback")
+    if "return ErrorCode.PROTOCOL_MISMATCH" not in py_body:
+        raise SystemExit("sdk_python_runtime_failure_code_missing_blank_protocol_mismatch")
+    py_direct = read(py_direct_path)
+    response_body = section(py_direct, "def _response_error_code(", "def _failure_code_value(")
+    if "return ErrorCode.ADMISSION_DENIED" in response_body or "if code:" in response_body:
+        raise SystemExit("sdk_python_direct_runtime_failure_code_preserves_empty_branch")
+    py_tests = read(py_errors_test_path) + "\n" + read(py_direct_test_path)
+    for token in (
+        '"   ": ErrorCode.PROTOCOL_MISMATCH',
+        'self.assertEqual(_response_error_code(""), ErrorCode.PROTOCOL_MISMATCH)',
+    ):
+        if token not in py_tests:
+            raise SystemExit(f"sdk_python_runtime_failure_code_test_missing:{token}")
+PY
+}
+
 check_principal_lifecycle_cli_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local principal="$cli_root/src/cli/commands/groups/principal.rs"
@@ -5046,6 +5136,46 @@ EOF
   if ( check_mission_traditional_target_conflict_contract "$tmp/mission-implicit-fallback" ) >/dev/null 2>&1; then
     fail "self-test expected Mission implicit fallback naming gate to fail"
   fi
+  mkdir -p "$tmp/sdk-runtime-failure-legacy/sdk/go" \
+    "$tmp/sdk-runtime-failure-legacy/sdk/python/easynet_sdk" \
+    "$tmp/sdk-runtime-failure-legacy/sdk/python/tests"
+  printf '%s\n' \
+    'func runtimeFailureCode(code string, fallback ErrorCode) ErrorCode {' \
+    '  if code == "" { return fallback }' \
+    '  return ErrProtocolMismatch' \
+    '}' \
+    > "$tmp/sdk-runtime-failure-legacy/sdk/go/errors.go"
+  printf '%s\n' \
+    'func directAxonFailure(errorValue *axonpb.Error, stage string) map[string]any {' \
+    '  code := runtimeFailureCode(errorValue.GetCode(), ErrAdmissionDenied)' \
+    '  if code == "" || code == ErrGeneric { code = ErrAdmissionDenied }' \
+    '  return nil' \
+    '}' \
+    'func directErrorStage() {}' \
+    > "$tmp/sdk-runtime-failure-legacy/sdk/go/direct_runtime.go"
+  printf '%s\n' \
+    'def canonical_failure_code(code=None):' \
+    '    if code:' \
+    '        return ErrorCode.PROTOCOL_MISMATCH' \
+    '    return ErrorCode.ADMISSION_DENIED' \
+    '' \
+    'def canonical_terminal_state_code(state): pass' \
+    > "$tmp/sdk-runtime-failure-legacy/sdk/python/easynet_sdk/errors.py"
+  printf '%s\n' \
+    'def _response_error_code(code):' \
+    '    if code:' \
+    '        return canonical_failure_code(code)' \
+    '    return ErrorCode.ADMISSION_DENIED' \
+    '' \
+    'def _failure_code_value(code): pass' \
+    > "$tmp/sdk-runtime-failure-legacy/sdk/python/easynet_sdk/direct_runtime.py"
+  touch "$tmp/sdk-runtime-failure-legacy/sdk/go/errors_test.go" \
+    "$tmp/sdk-runtime-failure-legacy/sdk/go/direct_runtime_codec_test.go" \
+    "$tmp/sdk-runtime-failure-legacy/sdk/python/tests/test_errors.py" \
+    "$tmp/sdk-runtime-failure-legacy/sdk/python/tests/test_direct_runtime.py"
+  if ( check_sdk_runtime_failure_code_contract "$tmp/sdk-runtime-failure-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK runtime failure code fallback gate to fail"
+  fi
   check_active_source_contract
   check_go_sdk_public_ura_alias_contract
   check_advertise_agent_ingress_contract
@@ -5054,6 +5184,7 @@ EOF
   check_invocation_history_ledger_ura_contract
   check_invocation_history_filter_scope_contract
   check_sdk_history_authority_subject_contract
+  check_sdk_runtime_failure_code_contract
   check_principal_lifecycle_cli_schema_contract
   check_auth_agents_backend_shape_contract
   check_pages_identity_credentials_contract
@@ -5119,6 +5250,7 @@ check_invocation_history_get_key_contract
 check_invocation_history_ledger_ura_contract
 check_invocation_history_filter_scope_contract
 check_sdk_history_authority_subject_contract
+check_sdk_runtime_failure_code_contract
 check_principal_lifecycle_cli_schema_contract
 check_auth_agents_backend_shape_contract
 check_pages_identity_credentials_contract

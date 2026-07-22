@@ -196,6 +196,13 @@ func TestDirectRuntimeUnaryReceiptFreeOutcomeRequiresTypedPreAdmissionFailure(t 
 	}
 }
 
+func TestDirectAxonFailureProjectsMissingErrorCodeToProtocolMismatch(t *testing.T) {
+	failure := directAxonFailure(&axonpb.Error{Message: "provider omitted code"}, "direct_runtime.invoke")
+	if got := failure["code"]; got != string(ErrProtocolMismatch) {
+		t.Fatalf("directAxonFailure missing code = %v, want %s", got, ErrProtocolMismatch)
+	}
+}
+
 func TestDirectRuntimeUnaryRejectsReceiptFreeProofFailureAndPartialReceiptPairs(t *testing.T) {
 	draft := directRuntimeDraft(t)
 	_, err := directInvokeResponseJSON(draft, &axonpb.InvokeResponse{

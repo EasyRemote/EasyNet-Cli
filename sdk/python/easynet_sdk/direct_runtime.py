@@ -2168,9 +2168,7 @@ def _response_failure(
 
 
 def _response_error_code(code: str) -> ErrorCode | str:
-    if code:
-        return canonical_failure_code(code)
-    return ErrorCode.ADMISSION_DENIED
+    return canonical_failure_code(code)
 
 
 def _failure_code_value(code: ErrorCode | str) -> str:

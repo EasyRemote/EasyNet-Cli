@@ -111,7 +111,8 @@ func TestDecodeDaemonErrorJSONRejectsLegacyCodeAliases(t *testing.T) {
 
 func TestRuntimeFailureCodePreservesDomainCodesAndRejectsLegacyAliases(t *testing.T) {
 	cases := map[string]ErrorCode{
-		"":                                ErrAdmissionDenied,
+		"":                                ErrProtocolMismatch,
+		"   ":                             ErrProtocolMismatch,
 		"TRANSPORT":                       ErrTransport,
 		"AXON_MEMBERSHIP_REQUIRED":        ErrorCode("AXON_MEMBERSHIP_REQUIRED"),
 		"TARGET_NOT_IN_PRESENCE_REGISTRY": ErrorCode("TARGET_NOT_IN_PRESENCE_REGISTRY"),
@@ -119,7 +120,7 @@ func TestRuntimeFailureCodePreservesDomainCodesAndRejectsLegacyAliases(t *testin
 		"DAEMON_DOWN":                     ErrProtocolMismatch,
 	}
 	for input, want := range cases {
-		if got := runtimeFailureCode(input, ErrAdmissionDenied); got != want {
+		if got := runtimeFailureCode(input); got != want {
 			t.Fatalf("runtimeFailureCode(%q) = %s, want %s", input, got, want)
 		}
 	}

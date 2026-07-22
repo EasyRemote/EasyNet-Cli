@@ -234874,7 +234874,7 @@
       "shape_evidence": [
         {
           "item": "RuntimeReceipt",
-          "sha256": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8"
+          "sha256": "697d35e65f9ebb2f77a5dcf3554574930a101132be29eaf4afb96d7f44271b3b"
         },
         {
           "item": "RuntimeReceiptAgentBinding",
@@ -235094,7 +235094,7 @@
         },
         {
           "item": "RuntimeReceipt.validate_summary",
-          "sha256": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429"
+          "sha256": "3084bf336ef2c3ed2d7737ce1a21da09992e6fd489785dacd814bed4f002094e"
         },
         {
           "item": "RuntimeReceiptAgentBinding.profile",
@@ -235233,7 +235233,7 @@
           "items": [
             {
               "item": "RuntimeReceipt",
-              "sha256": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8"
+              "sha256": "697d35e65f9ebb2f77a5dcf3554574930a101132be29eaf4afb96d7f44271b3b"
             },
             {
               "item": "RuntimeReceiptAgentBinding",
@@ -235453,7 +235453,7 @@
             },
             {
               "item": "RuntimeReceipt.validate_summary",
-              "sha256": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429"
+              "sha256": "3084bf336ef2c3ed2d7737ce1a21da09992e6fd489785dacd814bed4f002094e"
             },
             {
               "item": "RuntimeReceiptAgentBinding.profile",
@@ -235592,7 +235592,7 @@
           "items": [
             {
               "item": "RuntimeReceipt",
-              "sha256": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8"
+              "sha256": "697d35e65f9ebb2f77a5dcf3554574930a101132be29eaf4afb96d7f44271b3b"
             },
             {
               "item": "RuntimeReceiptAgentBinding",
@@ -235812,7 +235812,7 @@
             },
             {
               "item": "RuntimeReceipt.validate_summary",
-              "sha256": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429"
+              "sha256": "3084bf336ef2c3ed2d7737ce1a21da09992e6fd489785dacd814bed4f002094e"
             },
             {
               "item": "RuntimeReceiptAgentBinding.profile",
@@ -235951,7 +235951,7 @@
           "items": [
             {
               "item": "RuntimeReceipt",
-              "sha256": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8"
+              "sha256": "697d35e65f9ebb2f77a5dcf3554574930a101132be29eaf4afb96d7f44271b3b"
             },
             {
               "item": "RuntimeReceiptAgentBinding",
@@ -236171,7 +236171,7 @@
             },
             {
               "item": "RuntimeReceipt.validate_summary",
-              "sha256": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429"
+              "sha256": "3084bf336ef2c3ed2d7737ce1a21da09992e6fd489785dacd814bed4f002094e"
             },
             {
               "item": "RuntimeReceiptAgentBinding.profile",
@@ -236310,7 +236310,7 @@
           "items": [
             {
               "item": "RuntimeReceipt",
-              "sha256": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8"
+              "sha256": "697d35e65f9ebb2f77a5dcf3554574930a101132be29eaf4afb96d7f44271b3b"
             },
             {
               "item": "RuntimeReceiptAgentBinding",
@@ -236530,7 +236530,7 @@
             },
             {
               "item": "RuntimeReceipt.validate_summary",
-              "sha256": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429"
+              "sha256": "3084bf336ef2c3ed2d7737ce1a21da09992e6fd489785dacd814bed4f002094e"
             },
             {
               "item": "RuntimeReceiptAgentBinding.profile",
@@ -236669,7 +236669,7 @@
           "items": [
             {
               "item": "RuntimeReceipt",
-              "sha256": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8"
+              "sha256": "697d35e65f9ebb2f77a5dcf3554574930a101132be29eaf4afb96d7f44271b3b"
             },
             {
               "item": "RuntimeReceiptAgentBinding",
@@ -236889,7 +236889,7 @@
             },
             {
               "item": "RuntimeReceipt.validate_summary",
-              "sha256": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429"
+              "sha256": "3084bf336ef2c3ed2d7737ce1a21da09992e6fd489785dacd814bed4f002094e"
             },
             {
               "item": "RuntimeReceiptAgentBinding.profile",
@@ -237028,7 +237028,7 @@
           "items": [
             {
               "item": "RuntimeReceipt",
-              "sha256": "029e524043d0f494e114462d165c74fbe9d8ff15b50e6c819f56eaa859dd7ee8"
+              "sha256": "697d35e65f9ebb2f77a5dcf3554574930a101132be29eaf4afb96d7f44271b3b"
             },
             {
               "item": "RuntimeReceiptAgentBinding",
@@ -237248,7 +237248,7 @@
             },
             {
               "item": "RuntimeReceipt.validate_summary",
-              "sha256": "1bee24eeaf415161866998ae46a11a5dbb7d1701dc8ee047f0ed65f206b02429"
+              "sha256": "3084bf336ef2c3ed2d7737ce1a21da09992e6fd489785dacd814bed4f002094e"
             },
             {
               "item": "RuntimeReceiptAgentBinding.profile",
@@ -237393,8 +237393,332 @@
         "invocation/terminal_receipt_facts"
       ],
       "unproven_requirement_ids": [],
-      "shape_evidence": [],
-      "step_shape_evidence": [],
+      "shape_evidence": [
+        {
+          "item": "RuntimeReceipt",
+          "sha256": "04a5a04b93075cc2dedf1a716eac71846120c797c347ecb855d994bc6bb699ea"
+        },
+        {
+          "item": "RuntimeReceipt.fromObject",
+          "sha256": "95d52339c86d327f78fccba4c7f59eaa485cc14595f454a2dee0c0586dfb5aed"
+        },
+        {
+          "item": "RuntimeReceipt.invocationId",
+          "sha256": "c74321222b0273980a85231e62210b12c0329cd59e785f926c50d8c187406f06"
+        },
+        {
+          "item": "RuntimeReceipt.lifecycleState",
+          "sha256": "5dfdd37c7437d258ed2107088056a0afd9a2eb0e142133c8d1062819333674b3"
+        },
+        {
+          "item": "RuntimeReceipt.new",
+          "sha256": "091eeea7d988388c62cc60f8eeb6018db4e505451f67aa701f4607870d171fbb"
+        },
+        {
+          "item": "RuntimeReceipt.raw",
+          "sha256": "648d45bb2b74d1fc9f71b53dbef5e4f70c84fa9071a6dd1a57d698ef7e2dcffb"
+        },
+        {
+          "item": "RuntimeReceipt.rawProjection",
+          "sha256": "5f6f6695e0de2da7ccb831c477cef29567beba3c8af1de2b1f931bd511584e77"
+        },
+        {
+          "item": "RuntimeReceipt.receiptType",
+          "sha256": "3e0d0d09a91be25e1ab9c81f49ed8aea9577e10deb77ad0a1c1237a5ee90321e"
+        },
+        {
+          "item": "RuntimeReceipt.state",
+          "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+        },
+        {
+          "item": "RuntimeReceipt.validateSummary",
+          "sha256": "68494ca9fbab5820f521a7fa2c00996fbb5e1606acc423699dc5f2a43a06c67b"
+        }
+      ],
+      "step_shape_evidence": [
+        {
+          "case_id": "invocation/receipt_proof_required",
+          "action": "decode_complete_receipt_with_proof_facts",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "04a5a04b93075cc2dedf1a716eac71846120c797c347ecb855d994bc6bb699ea"
+            },
+            {
+              "item": "RuntimeReceipt.fromObject",
+              "sha256": "95d52339c86d327f78fccba4c7f59eaa485cc14595f454a2dee0c0586dfb5aed"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "c74321222b0273980a85231e62210b12c0329cd59e785f926c50d8c187406f06"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState",
+              "sha256": "5dfdd37c7437d258ed2107088056a0afd9a2eb0e142133c8d1062819333674b3"
+            },
+            {
+              "item": "RuntimeReceipt.new",
+              "sha256": "091eeea7d988388c62cc60f8eeb6018db4e505451f67aa701f4607870d171fbb"
+            },
+            {
+              "item": "RuntimeReceipt.raw",
+              "sha256": "648d45bb2b74d1fc9f71b53dbef5e4f70c84fa9071a6dd1a57d698ef7e2dcffb"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection",
+              "sha256": "5f6f6695e0de2da7ccb831c477cef29567beba3c8af1de2b1f931bd511584e77"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "3e0d0d09a91be25e1ab9c81f49ed8aea9577e10deb77ad0a1c1237a5ee90321e"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+            },
+            {
+              "item": "RuntimeReceipt.validateSummary",
+              "sha256": "68494ca9fbab5820f521a7fa2c00996fbb5e1606acc423699dc5f2a43a06c67b"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/receipt_proof_required",
+          "action": "reject_missing_authority_proof",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "04a5a04b93075cc2dedf1a716eac71846120c797c347ecb855d994bc6bb699ea"
+            },
+            {
+              "item": "RuntimeReceipt.fromObject",
+              "sha256": "95d52339c86d327f78fccba4c7f59eaa485cc14595f454a2dee0c0586dfb5aed"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "c74321222b0273980a85231e62210b12c0329cd59e785f926c50d8c187406f06"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState",
+              "sha256": "5dfdd37c7437d258ed2107088056a0afd9a2eb0e142133c8d1062819333674b3"
+            },
+            {
+              "item": "RuntimeReceipt.new",
+              "sha256": "091eeea7d988388c62cc60f8eeb6018db4e505451f67aa701f4607870d171fbb"
+            },
+            {
+              "item": "RuntimeReceipt.raw",
+              "sha256": "648d45bb2b74d1fc9f71b53dbef5e4f70c84fa9071a6dd1a57d698ef7e2dcffb"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection",
+              "sha256": "5f6f6695e0de2da7ccb831c477cef29567beba3c8af1de2b1f931bd511584e77"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "3e0d0d09a91be25e1ab9c81f49ed8aea9577e10deb77ad0a1c1237a5ee90321e"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+            },
+            {
+              "item": "RuntimeReceipt.validateSummary",
+              "sha256": "68494ca9fbab5820f521a7fa2c00996fbb5e1606acc423699dc5f2a43a06c67b"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/receipt_proof_required",
+          "action": "require_descriptor_binding",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "04a5a04b93075cc2dedf1a716eac71846120c797c347ecb855d994bc6bb699ea"
+            },
+            {
+              "item": "RuntimeReceipt.fromObject",
+              "sha256": "95d52339c86d327f78fccba4c7f59eaa485cc14595f454a2dee0c0586dfb5aed"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "c74321222b0273980a85231e62210b12c0329cd59e785f926c50d8c187406f06"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState",
+              "sha256": "5dfdd37c7437d258ed2107088056a0afd9a2eb0e142133c8d1062819333674b3"
+            },
+            {
+              "item": "RuntimeReceipt.new",
+              "sha256": "091eeea7d988388c62cc60f8eeb6018db4e505451f67aa701f4607870d171fbb"
+            },
+            {
+              "item": "RuntimeReceipt.raw",
+              "sha256": "648d45bb2b74d1fc9f71b53dbef5e4f70c84fa9071a6dd1a57d698ef7e2dcffb"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection",
+              "sha256": "5f6f6695e0de2da7ccb831c477cef29567beba3c8af1de2b1f931bd511584e77"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "3e0d0d09a91be25e1ab9c81f49ed8aea9577e10deb77ad0a1c1237a5ee90321e"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+            },
+            {
+              "item": "RuntimeReceipt.validateSummary",
+              "sha256": "68494ca9fbab5820f521a7fa2c00996fbb5e1606acc423699dc5f2a43a06c67b"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/receipt_proof_required",
+          "action": "require_parent_receipts_binding",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "04a5a04b93075cc2dedf1a716eac71846120c797c347ecb855d994bc6bb699ea"
+            },
+            {
+              "item": "RuntimeReceipt.fromObject",
+              "sha256": "95d52339c86d327f78fccba4c7f59eaa485cc14595f454a2dee0c0586dfb5aed"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "c74321222b0273980a85231e62210b12c0329cd59e785f926c50d8c187406f06"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState",
+              "sha256": "5dfdd37c7437d258ed2107088056a0afd9a2eb0e142133c8d1062819333674b3"
+            },
+            {
+              "item": "RuntimeReceipt.new",
+              "sha256": "091eeea7d988388c62cc60f8eeb6018db4e505451f67aa701f4607870d171fbb"
+            },
+            {
+              "item": "RuntimeReceipt.raw",
+              "sha256": "648d45bb2b74d1fc9f71b53dbef5e4f70c84fa9071a6dd1a57d698ef7e2dcffb"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection",
+              "sha256": "5f6f6695e0de2da7ccb831c477cef29567beba3c8af1de2b1f931bd511584e77"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "3e0d0d09a91be25e1ab9c81f49ed8aea9577e10deb77ad0a1c1237a5ee90321e"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+            },
+            {
+              "item": "RuntimeReceipt.validateSummary",
+              "sha256": "68494ca9fbab5820f521a7fa2c00996fbb5e1606acc423699dc5f2a43a06c67b"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/terminal_receipt_facts",
+          "action": "project_terminal_invocation_result",
+          "execution_case_bound": true,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "04a5a04b93075cc2dedf1a716eac71846120c797c347ecb855d994bc6bb699ea"
+            },
+            {
+              "item": "RuntimeReceipt.fromObject",
+              "sha256": "95d52339c86d327f78fccba4c7f59eaa485cc14595f454a2dee0c0586dfb5aed"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "c74321222b0273980a85231e62210b12c0329cd59e785f926c50d8c187406f06"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState",
+              "sha256": "5dfdd37c7437d258ed2107088056a0afd9a2eb0e142133c8d1062819333674b3"
+            },
+            {
+              "item": "RuntimeReceipt.new",
+              "sha256": "091eeea7d988388c62cc60f8eeb6018db4e505451f67aa701f4607870d171fbb"
+            },
+            {
+              "item": "RuntimeReceipt.raw",
+              "sha256": "648d45bb2b74d1fc9f71b53dbef5e4f70c84fa9071a6dd1a57d698ef7e2dcffb"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection",
+              "sha256": "5f6f6695e0de2da7ccb831c477cef29567beba3c8af1de2b1f931bd511584e77"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "3e0d0d09a91be25e1ab9c81f49ed8aea9577e10deb77ad0a1c1237a5ee90321e"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+            },
+            {
+              "item": "RuntimeReceipt.validateSummary",
+              "sha256": "68494ca9fbab5820f521a7fa2c00996fbb5e1606acc423699dc5f2a43a06c67b"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/terminal_receipt_facts",
+          "action": "preserve_opaque_receipt_facts",
+          "execution_case_bound": true,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "04a5a04b93075cc2dedf1a716eac71846120c797c347ecb855d994bc6bb699ea"
+            },
+            {
+              "item": "RuntimeReceipt.fromObject",
+              "sha256": "95d52339c86d327f78fccba4c7f59eaa485cc14595f454a2dee0c0586dfb5aed"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "c74321222b0273980a85231e62210b12c0329cd59e785f926c50d8c187406f06"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState",
+              "sha256": "5dfdd37c7437d258ed2107088056a0afd9a2eb0e142133c8d1062819333674b3"
+            },
+            {
+              "item": "RuntimeReceipt.new",
+              "sha256": "091eeea7d988388c62cc60f8eeb6018db4e505451f67aa701f4607870d171fbb"
+            },
+            {
+              "item": "RuntimeReceipt.raw",
+              "sha256": "648d45bb2b74d1fc9f71b53dbef5e4f70c84fa9071a6dd1a57d698ef7e2dcffb"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection",
+              "sha256": "5f6f6695e0de2da7ccb831c477cef29567beba3c8af1de2b1f931bd511584e77"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "3e0d0d09a91be25e1ab9c81f49ed8aea9577e10deb77ad0a1c1237a5ee90321e"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+            },
+            {
+              "item": "RuntimeReceipt.validateSummary",
+              "sha256": "68494ca9fbab5820f521a7fa2c00996fbb5e1606acc423699dc5f2a43a06c67b"
+            }
+          ]
+        }
+      ],
       "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/terminal_receipt_facts",
       "provider_proof_ref": null
     },
@@ -237407,8 +237731,276 @@
         "invocation/terminal_receipt_facts"
       ],
       "unproven_requirement_ids": [],
-      "shape_evidence": [],
-      "step_shape_evidence": [],
+      "shape_evidence": [
+        {
+          "item": "RuntimeReceipt",
+          "sha256": "2c26ca39b734b616df61849aeb4bba16cec85b311ea8d46964cfba8c716e2285"
+        },
+        {
+          "item": "RuntimeReceipt.fromMap",
+          "sha256": "8981f5e4639891836567bd6a6daa0e10d8674caf6777189c66427080e27c0831"
+        },
+        {
+          "item": "RuntimeReceipt.invocationId",
+          "sha256": "e267de46d50d2a7ea0aba4e9803bb6a68306cc62a784f3d3886519bec81b0a88"
+        },
+        {
+          "item": "RuntimeReceipt.lifecycleState",
+          "sha256": "9cb5b3e288926e67846b5ba84eb05d78df247f89d8ebef33ca82c40c177c5ea0"
+        },
+        {
+          "item": "RuntimeReceipt.raw",
+          "sha256": "95a8677d4787b323f67bbbbe20ad6a732a1d4fa268096481c568092c9ff61f4a"
+        },
+        {
+          "item": "RuntimeReceipt.rawProjection",
+          "sha256": "9c457101c154b2084b61d9b3046c9c477c0dfadff1d44ae61317e809d2575557"
+        },
+        {
+          "item": "RuntimeReceipt.receiptType",
+          "sha256": "f7861006aad7bffb228f546a3f04ae68efa1cbf130577f44fbf0ce7631a34a85"
+        },
+        {
+          "item": "RuntimeReceipt.state",
+          "sha256": "c08ee7d8f0c6e9ae06a73fbfefa42f17bcfd35d412c1451cf8692ada4b53f7bb"
+        }
+      ],
+      "step_shape_evidence": [
+        {
+          "case_id": "invocation/receipt_proof_required",
+          "action": "decode_complete_receipt_with_proof_facts",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "2c26ca39b734b616df61849aeb4bba16cec85b311ea8d46964cfba8c716e2285"
+            },
+            {
+              "item": "RuntimeReceipt.fromMap",
+              "sha256": "8981f5e4639891836567bd6a6daa0e10d8674caf6777189c66427080e27c0831"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "e267de46d50d2a7ea0aba4e9803bb6a68306cc62a784f3d3886519bec81b0a88"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState",
+              "sha256": "9cb5b3e288926e67846b5ba84eb05d78df247f89d8ebef33ca82c40c177c5ea0"
+            },
+            {
+              "item": "RuntimeReceipt.raw",
+              "sha256": "95a8677d4787b323f67bbbbe20ad6a732a1d4fa268096481c568092c9ff61f4a"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection",
+              "sha256": "9c457101c154b2084b61d9b3046c9c477c0dfadff1d44ae61317e809d2575557"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "f7861006aad7bffb228f546a3f04ae68efa1cbf130577f44fbf0ce7631a34a85"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "c08ee7d8f0c6e9ae06a73fbfefa42f17bcfd35d412c1451cf8692ada4b53f7bb"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/receipt_proof_required",
+          "action": "reject_missing_authority_proof",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "2c26ca39b734b616df61849aeb4bba16cec85b311ea8d46964cfba8c716e2285"
+            },
+            {
+              "item": "RuntimeReceipt.fromMap",
+              "sha256": "8981f5e4639891836567bd6a6daa0e10d8674caf6777189c66427080e27c0831"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "e267de46d50d2a7ea0aba4e9803bb6a68306cc62a784f3d3886519bec81b0a88"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState",
+              "sha256": "9cb5b3e288926e67846b5ba84eb05d78df247f89d8ebef33ca82c40c177c5ea0"
+            },
+            {
+              "item": "RuntimeReceipt.raw",
+              "sha256": "95a8677d4787b323f67bbbbe20ad6a732a1d4fa268096481c568092c9ff61f4a"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection",
+              "sha256": "9c457101c154b2084b61d9b3046c9c477c0dfadff1d44ae61317e809d2575557"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "f7861006aad7bffb228f546a3f04ae68efa1cbf130577f44fbf0ce7631a34a85"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "c08ee7d8f0c6e9ae06a73fbfefa42f17bcfd35d412c1451cf8692ada4b53f7bb"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/receipt_proof_required",
+          "action": "require_descriptor_binding",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "2c26ca39b734b616df61849aeb4bba16cec85b311ea8d46964cfba8c716e2285"
+            },
+            {
+              "item": "RuntimeReceipt.fromMap",
+              "sha256": "8981f5e4639891836567bd6a6daa0e10d8674caf6777189c66427080e27c0831"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "e267de46d50d2a7ea0aba4e9803bb6a68306cc62a784f3d3886519bec81b0a88"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState",
+              "sha256": "9cb5b3e288926e67846b5ba84eb05d78df247f89d8ebef33ca82c40c177c5ea0"
+            },
+            {
+              "item": "RuntimeReceipt.raw",
+              "sha256": "95a8677d4787b323f67bbbbe20ad6a732a1d4fa268096481c568092c9ff61f4a"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection",
+              "sha256": "9c457101c154b2084b61d9b3046c9c477c0dfadff1d44ae61317e809d2575557"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "f7861006aad7bffb228f546a3f04ae68efa1cbf130577f44fbf0ce7631a34a85"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "c08ee7d8f0c6e9ae06a73fbfefa42f17bcfd35d412c1451cf8692ada4b53f7bb"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/receipt_proof_required",
+          "action": "require_parent_receipts_binding",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "2c26ca39b734b616df61849aeb4bba16cec85b311ea8d46964cfba8c716e2285"
+            },
+            {
+              "item": "RuntimeReceipt.fromMap",
+              "sha256": "8981f5e4639891836567bd6a6daa0e10d8674caf6777189c66427080e27c0831"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "e267de46d50d2a7ea0aba4e9803bb6a68306cc62a784f3d3886519bec81b0a88"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState",
+              "sha256": "9cb5b3e288926e67846b5ba84eb05d78df247f89d8ebef33ca82c40c177c5ea0"
+            },
+            {
+              "item": "RuntimeReceipt.raw",
+              "sha256": "95a8677d4787b323f67bbbbe20ad6a732a1d4fa268096481c568092c9ff61f4a"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection",
+              "sha256": "9c457101c154b2084b61d9b3046c9c477c0dfadff1d44ae61317e809d2575557"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "f7861006aad7bffb228f546a3f04ae68efa1cbf130577f44fbf0ce7631a34a85"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "c08ee7d8f0c6e9ae06a73fbfefa42f17bcfd35d412c1451cf8692ada4b53f7bb"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/terminal_receipt_facts",
+          "action": "project_terminal_invocation_result",
+          "execution_case_bound": true,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "2c26ca39b734b616df61849aeb4bba16cec85b311ea8d46964cfba8c716e2285"
+            },
+            {
+              "item": "RuntimeReceipt.fromMap",
+              "sha256": "8981f5e4639891836567bd6a6daa0e10d8674caf6777189c66427080e27c0831"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "e267de46d50d2a7ea0aba4e9803bb6a68306cc62a784f3d3886519bec81b0a88"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState",
+              "sha256": "9cb5b3e288926e67846b5ba84eb05d78df247f89d8ebef33ca82c40c177c5ea0"
+            },
+            {
+              "item": "RuntimeReceipt.raw",
+              "sha256": "95a8677d4787b323f67bbbbe20ad6a732a1d4fa268096481c568092c9ff61f4a"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection",
+              "sha256": "9c457101c154b2084b61d9b3046c9c477c0dfadff1d44ae61317e809d2575557"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "f7861006aad7bffb228f546a3f04ae68efa1cbf130577f44fbf0ce7631a34a85"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "c08ee7d8f0c6e9ae06a73fbfefa42f17bcfd35d412c1451cf8692ada4b53f7bb"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/terminal_receipt_facts",
+          "action": "preserve_opaque_receipt_facts",
+          "execution_case_bound": true,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "2c26ca39b734b616df61849aeb4bba16cec85b311ea8d46964cfba8c716e2285"
+            },
+            {
+              "item": "RuntimeReceipt.fromMap",
+              "sha256": "8981f5e4639891836567bd6a6daa0e10d8674caf6777189c66427080e27c0831"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "e267de46d50d2a7ea0aba4e9803bb6a68306cc62a784f3d3886519bec81b0a88"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState",
+              "sha256": "9cb5b3e288926e67846b5ba84eb05d78df247f89d8ebef33ca82c40c177c5ea0"
+            },
+            {
+              "item": "RuntimeReceipt.raw",
+              "sha256": "95a8677d4787b323f67bbbbe20ad6a732a1d4fa268096481c568092c9ff61f4a"
+            },
+            {
+              "item": "RuntimeReceipt.rawProjection",
+              "sha256": "9c457101c154b2084b61d9b3046c9c477c0dfadff1d44ae61317e809d2575557"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "f7861006aad7bffb228f546a3f04ae68efa1cbf130577f44fbf0ce7631a34a85"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "c08ee7d8f0c6e9ae06a73fbfefa42f17bcfd35d412c1451cf8692ada4b53f7bb"
+            }
+          ]
+        }
+      ],
       "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/terminal_receipt_facts",
       "provider_proof_ref": null
     },
@@ -245762,7 +246354,7 @@
         },
         {
           "item": "canonical_failure_code",
-          "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+          "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
         },
         {
           "item": "canonical_terminal_state_code",
@@ -246109,7 +246701,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -246456,7 +247048,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -246803,7 +247395,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -247150,7 +247742,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -247497,7 +248089,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -247844,7 +248436,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -248191,7 +248783,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -248538,7 +249130,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -248885,7 +249477,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -249232,7 +249824,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -249579,7 +250171,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -249926,7 +250518,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -250273,7 +250865,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -250620,7 +251212,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -250967,7 +251559,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -251314,7 +251906,7 @@
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "11c1ee9d54c84bf3092ecb33ce7c455dcf724582041dc6608b4e25da56740172"
+              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
             },
             {
               "item": "canonical_terminal_state_code",

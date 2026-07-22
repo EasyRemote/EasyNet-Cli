@@ -39,6 +39,7 @@ from easynet_sdk.direct_runtime import (
     DirectRuntimeTransport,
     _canonical_receipt_document,
     _canonical_receipt_projection,
+    _response_error_code,
 )
 from test_runtime import complete_draft
 from addressing_fake import MemoryAddressingTransport
@@ -796,6 +797,11 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(result["ok"], False)
         self.assertEqual(result["terminal_state"], "Failed")
         self.assertEqual(error["code"], ErrorCode.ADMISSION_DENIED.value)
+
+    def test_direct_transport_projects_missing_error_code_to_protocol_mismatch(
+        self,
+    ) -> None:
+        self.assertEqual(_response_error_code(""), ErrorCode.PROTOCOL_MISMATCH)
 
     def test_direct_transport_projects_cancelled_terminal_state_to_cancelled(
         self,

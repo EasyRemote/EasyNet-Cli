@@ -1,5 +1,32 @@
 # Verification
 
+## 2026-07-22 SDK runtime failure code fallback removal
+
+- `go test ./... -run
+  'TestRuntimeFailureCodePreservesDomainCodesAndRejectsLegacyAliases'` from
+  `sdk/go` — PASS.
+- `go test -tags easynet_direct_runtime ./... -run
+  'TestDirectAxonFailureProjectsMissingErrorCodeToProtocolMismatch'` from
+  `sdk/go` — PASS.
+- `PYTHONPATH=sdk/python:../EasyNet-Axon/sdk/python:sdk/python/tests python3
+  -m unittest
+  sdk.python.tests.test_errors.ErrorTests.test_canonical_failure_code_preserves_domain_codes_and_rejects_aliases
+  sdk.python.tests.test_direct_runtime.DirectRuntimeTests.test_direct_transport_projects_missing_error_code_to_protocol_mismatch`
+  — PASS.
+- `python3 sdk/conformance/rebuild_public_api_model.py --write` — PASS;
+  updated `canonical-public-api.json` and `sdk-parity-matrix.json` source
+  attestation for the changed Go/Python SDK providers.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative fixture for Go fallback parameter /
+  `return fallback`, Python blank-code `ADMISSION_DENIED`, and direct-runtime
+  empty-code bypass.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; synced
+  changed SDK/gate files.
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index is up
+  to date.
+
 ## 2026-07-22 FFI last-error typed TLS
 
 - `cargo test -q -p easynet --lib ffi::errors --features axon-pb` — PASS
