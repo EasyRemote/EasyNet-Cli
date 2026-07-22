@@ -26,8 +26,6 @@ const (
 	AccessControlPrincipalUser       AccessControlPrincipalKind = "user"
 	AccessControlPrincipalToken      AccessControlPrincipalKind = "token"
 	AccessControlPrincipalAgent      AccessControlPrincipalKind = "agent"
-	AccessControlPrincipalHub        AccessControlPrincipalKind = "hub"
-	AccessControlPrincipalDevice     AccessControlPrincipalKind = "device"
 	AccessControlPrincipalService    AccessControlPrincipalKind = "service"
 	AccessControlPrincipalAutomation AccessControlPrincipalKind = "automation"
 )

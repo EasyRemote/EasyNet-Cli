@@ -6399,8 +6399,6 @@
         "easynet_string_free"
       ],
       "go": [
-        "AccessControlPrincipalDevice",
-        "AccessControlPrincipalHub",
         "CABIDiscoveryTransport",
         "CABIRuntimeLifecycleTransport",
         "CABIRuntimeTransport",
@@ -6492,8 +6490,6 @@
         "PrepareOptions.LocalDaemonSigning"
       ],
       "python": [
-        "AccessControlPrincipalKind.DEVICE",
-        "AccessControlPrincipalKind.HUB",
         "ControlDiscovery.capability_flags",
         "ControlDiscovery.daemon_version",
         "ControlDiscovery.from_json",
@@ -7059,22 +7055,6 @@
         }
       },
       "go": {
-        "AccessControlPrincipalDevice": {
-          "canonical_replacement": [
-            "capability_inventory.access_control"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
-        "AccessControlPrincipalHub": {
-          "canonical_replacement": [
-            "capability_inventory.access_control"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
         "CABIDiscoveryTransport": {
           "canonical_replacement": [
             "capability_inventory.native_runtime"
@@ -7712,22 +7692,6 @@
         }
       },
       "python": {
-        "AccessControlPrincipalKind.DEVICE": {
-          "canonical_replacement": [
-            "capability_inventory.access_control"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
-        "AccessControlPrincipalKind.HUB": {
-          "canonical_replacement": [
-            "capability_inventory.access_control"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
         "ControlDiscovery.capability_flags": {
           "canonical_replacement": [
             "capability_inventory.typed_errors"
@@ -17796,8 +17760,6 @@
       "AccessControlPolicyDecision.TokenID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AccessControlPrincipalAgent": "2a418e6e74d463824f3f27cf799a356793b31c3c8903bea4bea284082c48b09b",
       "AccessControlPrincipalAutomation": "7d17e92af40114fe0056729ca783c59e93b96d71388580aca8aee579fe0dddeb",
-      "AccessControlPrincipalDevice": "62b71052bbd6022e67d0cb71af0086794058a5081eddb32c3181dd4c494d803e",
-      "AccessControlPrincipalHub": "786bcd60c384a5f269a4a6818b2603ea06c2198e1319420b6ca08884b6ba2629",
       "AccessControlPrincipalKind": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AccessControlPrincipalService": "c111a9dbcdf5aef0b8d5e0d3439f6b5bbc604435eb5bb28d3bd1fc44b0d1c4e7",
       "AccessControlPrincipalToken": "e7fefcf53f85ad6d44faa23657ca1cb86acda3dc8e524e9dcae4bb37c6b34c2e",
@@ -20101,11 +20063,9 @@
       "AccessControlPolicyDecision.signature_key_id": "757d8d628c41149f36f1fbb0dbbacaac81c57d8c9fce6bb8f37e81a934043a10",
       "AccessControlPolicyDecision.subject_ura": "be716d6689daf3cee7201e75cc419c7b2f04f7e1032aa61f0cda0afff6a884d5",
       "AccessControlPolicyDecision.token_id": "9065620ceaeece66dd1dbe7082ecc0920169f39c8485fe57ee3c21f75dbafdbe",
-      "AccessControlPrincipalKind": "5e7a9dac04f46e942d893eac14e4bca83dc431e9f81d81a030a30c9abab437ba",
+      "AccessControlPrincipalKind": "9635642cfd9ac90338a84438dc50263c1edb0614954585ff8a4920194cc8856e",
       "AccessControlPrincipalKind.AGENT": "aa07185734cfa06d692609f187b9ea64db7067af6893616f3b4554cf4627b932",
       "AccessControlPrincipalKind.AUTOMATION": "8aeda6977465edd4fb71396473eea14636f3642e87c3a3f7a9c7ec26102678c0",
-      "AccessControlPrincipalKind.DEVICE": "aee5e0b1f39b0eed02556bd3e7820e8969c46a7466070ad62d15e7a214c65257",
-      "AccessControlPrincipalKind.HUB": "649bb9c911cdee29241a145cae110ffcda682502e65b1c127a996cd430b53c1f",
       "AccessControlPrincipalKind.SERVICE": "6f52aab62626a1e05234194e7cf73e311fbed229bb10bdd32abe83422bb69032",
       "AccessControlPrincipalKind.TOKEN": "8cbdacc5e802ae2496a3e6c3e31aa7ab19f53f0afe1324263d56457c7c3fe03b",
       "AccessControlPrincipalKind.USER": "c228ef3129a5aad5a763bb573865a3f45600f568ee2e2d4659eb4991ee318335",

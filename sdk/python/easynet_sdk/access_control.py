@@ -64,8 +64,6 @@ class AccessControlPrincipalKind(StrEnum):
     USER = "user"
     TOKEN = "token"
     AGENT = "agent"
-    HUB = "hub"
-    DEVICE = "device"
     SERVICE = "service"
     AUTOMATION = "automation"
 
