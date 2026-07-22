@@ -67,8 +67,8 @@ func TestConnectNativeRuntimeStopOnCloseKeepsStartedHandle(t *testing.T) {
 	transport := &nativeRuntimeTestDaemonTransport{}
 
 	runtime, _, closeFn, err := connectNativeRuntime(context.Background(), transport, NativeRuntimeOptions{
-		StartRequest:      testRuntimeHostStartRequest{payload: map[string]any{"mode": "hub"}},
-		StopDaemonOnClose: true,
+		StartRequest:       testRuntimeHostStartRequest{payload: map[string]any{"mode": "hub"}},
+		StopRuntimeOnClose: true,
 	})
 	if err != nil {
 		t.Fatalf("connect native runtime: %v", err)

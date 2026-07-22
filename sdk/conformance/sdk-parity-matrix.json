@@ -130986,7 +130986,7 @@
         },
         {
           "item": "NativeRuntimeOptions",
-          "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
+          "sha256": "78151dc3267c7b2e8a0b89605faa46edbae03fcd5ce87ae449979ec0d1208aed"
         },
         {
           "item": "OpenNativeRuntime",
@@ -131069,6 +131069,10 @@
           "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
         },
         {
+          "item": "NativeRuntimeOptions.StopRuntimeOnClose",
+          "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
+        },
+        {
           "item": "RuntimeEndpointPathOptions.DefaultPath",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
@@ -131133,7 +131137,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
+              "sha256": "78151dc3267c7b2e8a0b89605faa46edbae03fcd5ce87ae449979ec0d1208aed"
             },
             {
               "item": "OpenNativeRuntime",
@@ -131214,6 +131218,10 @@
             {
               "item": "NativeRuntimeOptions.StartRequest",
               "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
+            },
+            {
+              "item": "NativeRuntimeOptions.StopRuntimeOnClose",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -131280,7 +131288,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
+              "sha256": "78151dc3267c7b2e8a0b89605faa46edbae03fcd5ce87ae449979ec0d1208aed"
             },
             {
               "item": "OpenNativeRuntime",
@@ -131361,6 +131369,10 @@
             {
               "item": "NativeRuntimeOptions.StartRequest",
               "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
+            },
+            {
+              "item": "NativeRuntimeOptions.StopRuntimeOnClose",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -131427,7 +131439,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
+              "sha256": "78151dc3267c7b2e8a0b89605faa46edbae03fcd5ce87ae449979ec0d1208aed"
             },
             {
               "item": "OpenNativeRuntime",
@@ -131508,6 +131520,10 @@
             {
               "item": "NativeRuntimeOptions.StartRequest",
               "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
+            },
+            {
+              "item": "NativeRuntimeOptions.StopRuntimeOnClose",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -131574,7 +131590,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
+              "sha256": "78151dc3267c7b2e8a0b89605faa46edbae03fcd5ce87ae449979ec0d1208aed"
             },
             {
               "item": "OpenNativeRuntime",
@@ -131655,6 +131671,10 @@
             {
               "item": "NativeRuntimeOptions.StartRequest",
               "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
+            },
+            {
+              "item": "NativeRuntimeOptions.StopRuntimeOnClose",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -131721,7 +131741,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
+              "sha256": "78151dc3267c7b2e8a0b89605faa46edbae03fcd5ce87ae449979ec0d1208aed"
             },
             {
               "item": "OpenNativeRuntime",
@@ -131802,6 +131822,10 @@
             {
               "item": "NativeRuntimeOptions.StartRequest",
               "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
+            },
+            {
+              "item": "NativeRuntimeOptions.StopRuntimeOnClose",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -131868,7 +131892,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
+              "sha256": "78151dc3267c7b2e8a0b89605faa46edbae03fcd5ce87ae449979ec0d1208aed"
             },
             {
               "item": "OpenNativeRuntime",
@@ -131949,6 +131973,10 @@
             {
               "item": "NativeRuntimeOptions.StartRequest",
               "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
+            },
+            {
+              "item": "NativeRuntimeOptions.StopRuntimeOnClose",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -132015,7 +132043,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
+              "sha256": "78151dc3267c7b2e8a0b89605faa46edbae03fcd5ce87ae449979ec0d1208aed"
             },
             {
               "item": "OpenNativeRuntime",
@@ -132096,6 +132124,10 @@
             {
               "item": "NativeRuntimeOptions.StartRequest",
               "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
+            },
+            {
+              "item": "NativeRuntimeOptions.StopRuntimeOnClose",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",
@@ -132162,7 +132194,7 @@
             },
             {
               "item": "NativeRuntimeOptions",
-              "sha256": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4"
+              "sha256": "78151dc3267c7b2e8a0b89605faa46edbae03fcd5ce87ae449979ec0d1208aed"
             },
             {
               "item": "OpenNativeRuntime",
@@ -132243,6 +132275,10 @@
             {
               "item": "NativeRuntimeOptions.StartRequest",
               "sha256": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b"
+            },
+            {
+              "item": "NativeRuntimeOptions.StopRuntimeOnClose",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
             },
             {
               "item": "RuntimeEndpointPathOptions.DefaultPath",

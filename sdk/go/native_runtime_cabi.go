@@ -91,7 +91,7 @@ func startNativeRuntime(ctx context.Context, host *RuntimeHost, options NativeRu
 		_ = handle.Detach(ctx)
 		return nil, nil, nil, err
 	}
-	if options.StopDaemonOnClose {
+	if options.StopRuntimeOnClose {
 		return runtime, health, func(closeCtx context.Context) error {
 			return handle.StopRuntime(closeCtx, RuntimeHostStopOptions{})
 		}, nil

@@ -2574,6 +2574,7 @@
       "NativeRuntimeOptions.MaxMessageBytes",
       "NativeRuntimeOptions.Signer",
       "NativeRuntimeOptions.StartRequest",
+      "NativeRuntimeOptions.StopRuntimeOnClose",
       "ParsedAbility.LocalName",
       "ParsedAbility.Namespace",
       "ParsedAbility.Owner",
@@ -6486,7 +6487,6 @@
         "DirectRuntimeTransport.Prepare",
         "DirectRuntimeTransport.SubmitSigned",
         "FileControlDiscoveryReader.ReadControlDiscovery",
-        "NativeRuntimeOptions.StopDaemonOnClose",
         "PrepareOptions.LocalDaemonSigning"
       ],
       "python": [
@@ -7673,14 +7673,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "NativeRuntimeOptions.StopDaemonOnClose": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
         },
         "PrepareOptions.LocalDaemonSigning": {
           "canonical_replacement": [
@@ -11420,6 +11412,7 @@
           "NativeRuntimeOptions.MaxMessageBytes",
           "NativeRuntimeOptions.Signer",
           "NativeRuntimeOptions.StartRequest",
+          "NativeRuntimeOptions.StopRuntimeOnClose",
           "RuntimeEndpointPathOptions.DefaultPath",
           "RuntimeEndpointPathOptions.EnvVar",
           "RuntimeEndpointPathOptions.Path",
@@ -18639,7 +18632,7 @@
       "NativeRuntimeHandle.Client": "0e7b9fb0f4fa531c0e7de61de1bc04fcc194be908d8639d9858e71a23b23c23e",
       "NativeRuntimeHandle.Close": "0d464a887ccc7c5ec145a263e02280f50af96ec1b1fd7e770a900867d4a8ba14",
       "NativeRuntimeHandle.Health": "df9c36e5c23181c2be64eaeac96f5a6f03f4e1dacc6b427899ecf4c69e7705b0",
-      "NativeRuntimeOptions": "f91f73958f155f98445717a9b5f20691feea5c10b9b207ff6ae0ddef9b09b2f4",
+      "NativeRuntimeOptions": "78151dc3267c7b2e8a0b89605faa46edbae03fcd5ce87ae449979ec0d1208aed",
       "NativeRuntimeOptions.ControlPath": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "NativeRuntimeOptions.DialTimeoutMS": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57",
       "NativeRuntimeOptions.Endpoint": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
@@ -18648,7 +18641,7 @@
       "NativeRuntimeOptions.MaxMessageBytes": "6da88c34ba124c41f977db66a4fc5c1a951708d285c81bb0d47c3206f4c27ca8",
       "NativeRuntimeOptions.Signer": "619eb6284adcd6861cec96a1d11d5babc4650a0db1e8490996a47c6fc48cdc59",
       "NativeRuntimeOptions.StartRequest": "9ae5a246f1143aab9dbca2265d3da8e8086bed0700c2bc32a6de900c9430851b",
-      "NativeRuntimeOptions.StopDaemonOnClose": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903",
+      "NativeRuntimeOptions.StopRuntimeOnClose": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903",
       "NewAbilityDescriptorClient": "48965da53523fc507e0fb6b7d5e58ca71943b9f487794bcbe2641a3b6368611d",
       "NewAccessControlClient": "f3dea579460b66b9fb7a26cc128316a674133470069f3a47a39366154b6a6362",
       "NewAuthorityClient": "6e01a6f60f70fc72facd6f4563392ac07900e55878a4c212bb746d8919da7103",

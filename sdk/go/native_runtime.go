@@ -24,10 +24,10 @@ type NativeRuntimeOptions struct {
 	// before opening the runtime. The request is provider-owned; when nil,
 	// OpenNativeRuntime only discovers and attaches to an existing runtime host.
 	StartRequest RuntimeHostStartRequest
-	// StopDaemonOnClose stops the lifecycle handle opened from StartRequest
+	// StopRuntimeOnClose stops the lifecycle handle opened from StartRequest
 	// when the native runtime handle is closed. When false, the runtime host
 	// is detached after the runtime transport opens and keeps running.
-	StopDaemonOnClose bool
+	StopRuntimeOnClose bool
 }
 
 // NativeRuntimeHandle owns SDK facades opened from one native runtime provider.
