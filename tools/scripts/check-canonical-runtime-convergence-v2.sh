@@ -3790,6 +3790,16 @@ check_retired_browser_mock_surface_contract() {
   done
 }
 
+check_ability_deploy_product_neutrality_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local ability_deploy="$cli_root/src/daemon/ability/builtins/device_control/ability_management/ops.rs"
+  [[ -f "$ability_deploy" ]] || fail "ability.deploy runtime source is missing: ${ability_deploy#$cli_root/}"
+
+  if rg -n '\bEasyRemote\b|\bEasyNet Backend\b|\bEasyNet-specific\b|\bEasyRemote-specific\b' "$ability_deploy"; then
+    fail "ability.deploy runtime path preserves product-specific vocabulary"
+  fi
+}
+
 check_sdk_directory_projection_fail_closed_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local go_directory="$cli_root/sdk/go/directory.go"
@@ -6526,6 +6536,12 @@ EOF
   if ( CLI_ROOT="$tmp/cli-browser-mock"; check_retired_browser_mock_surface_contract ) >/dev/null 2>&1; then
     fail "self-test expected retired browser placeholder ability gate to fail"
   fi
+  mkdir -p "$tmp/cli-ability-deploy-product/src/daemon/ability/builtins/device_control/ability_management"
+  printf 'fn deploy() { /* EasyRemote writes namespace here */ }\n' \
+    > "$tmp/cli-ability-deploy-product/src/daemon/ability/builtins/device_control/ability_management/ops.rs"
+  if ( CLI_ROOT="$tmp/cli-ability-deploy-product"; check_ability_deploy_product_neutrality_contract ) >/dev/null 2>&1; then
+    fail "self-test expected ability.deploy product vocabulary gate to fail"
+  fi
   mkdir -p "$tmp/cli-local-runtime-identity/src/bin" \
     "$tmp/cli-local-runtime-identity/src/daemon/execution/loop_instance" \
     "$tmp/cli-local-runtime-identity/src/daemon/execution"
@@ -7797,6 +7813,7 @@ EOF
   check_federation_directory_device_projection_contract
   check_plugin_sidecar_helper_matrix_contract
   check_retired_browser_mock_surface_contract
+  check_ability_deploy_product_neutrality_contract
   check_runtime_wire_target_state_contract
   check_invocation_wire_callee_target_contract
   check_local_daemon_loopback_explicit_subject_contract
@@ -7892,6 +7909,7 @@ check_catalog_exact_runtime_key_contract
 check_federation_directory_device_projection_contract
 check_plugin_sidecar_helper_matrix_contract
 check_retired_browser_mock_surface_contract
+check_ability_deploy_product_neutrality_contract
 check_runtime_wire_target_state_contract
 check_invocation_wire_callee_target_contract
 check_local_daemon_loopback_explicit_subject_contract

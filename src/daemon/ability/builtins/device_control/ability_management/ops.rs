@@ -392,10 +392,10 @@ struct AbilityBundle {
     manifest_path: String,
     /// Raw manifest bytes (for the durable manifest_hash).
     manifest_bytes: Vec<u8>,
-    /// The deserialized manifest. EasyRemote writes extra fields
-    /// (`category`, `command`, `tool_name`, …); `AbilityManifest` has no
-    /// `deny_unknown_fields`, so they are ignored, and the canonical
-    /// `name` / `input_schema` / `exec` come through typed.
+    /// The deserialized manifest. External bundle authors may include provider
+    /// metadata (`category`, `command`, `tool_name`, …); `AbilityManifest` has
+    /// no `deny_unknown_fields`, so provider metadata is ignored, and the
+    /// canonical `name` / `input_schema` / `exec` come through typed.
     manifest: crate::daemon::ability::manifest::AbilityManifest,
     /// Verb-only local name (`generate`); namespace is separate.
     public_name: String,
@@ -427,7 +427,7 @@ impl AbilityBundle {
                     anyhow::anyhow!("invalid ability.json at {display_path}/ability.json: {e}")
                 })?;
 
-        // EasyRemote may carry the namespace separately; the manifest
+        // External bundles may carry the namespace separately; the manifest
         // `name` is the verb only (AbilityManifest.name forbids dots).
         let namespace = AbilityNamespace::parse(
             serde_json::from_slice::<Value>(&manifest_bytes)
