@@ -929,7 +929,7 @@ func TestDirectRuntimeConnectorProjectsHandleCapabilities(t *testing.T) {
 	endpoint := transport.endpoint
 
 	connector := NewDirectRuntimeConnectorWithOptions(DirectRuntimeConnectorOptions{
-		Reader: ControlDiscoveryReaderFunc(func(context.Context, string) (ControlDiscovery, error) {
+		Reader: controlDiscoveryReaderFunc(func(context.Context, string) (ControlDiscovery, error) {
 			return ControlDiscovery{InvocationEndpoint: endpoint}, nil
 		}),
 		HandleTransport:      handle,
@@ -955,7 +955,7 @@ func TestDirectRuntimeConnectorProjectsHandleCapabilities(t *testing.T) {
 }
 
 func TestDirectRuntimeConnectorResolvesControlDiscovery(t *testing.T) {
-	reader := ControlDiscoveryReaderFunc(func(ctx context.Context, controlPath string) (ControlDiscovery, error) {
+	reader := controlDiscoveryReaderFunc(func(ctx context.Context, controlPath string) (ControlDiscovery, error) {
 		return ControlDiscovery{InvocationEndpoint: "/tmp/direct.sock"}, nil
 	})
 	connector := NewDirectRuntimeConnector("/tmp/control.json", reader)

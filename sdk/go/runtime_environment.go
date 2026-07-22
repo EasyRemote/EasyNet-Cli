@@ -23,7 +23,7 @@ type RuntimeIdentityProjection struct {
 
 // RuntimeStateRoot resolves the SDK-owned local runtime state directory.
 func RuntimeStateRoot(controlPath string) (string, error) {
-	resolved, err := ResolveControlDiscoveryPath(controlPath)
+	resolved, err := resolveControlDiscoveryPath(controlPath)
 	if err != nil {
 		return "", err
 	}

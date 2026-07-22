@@ -37,16 +37,6 @@ type ControlDiscoveryReader interface {
 	ReadControlDiscovery(ctx context.Context, controlPath string) (ControlDiscovery, error)
 }
 
-// ControlDiscoveryReaderFunc adapts a function into a discovery reader.
-type ControlDiscoveryReaderFunc func(ctx context.Context, controlPath string) (ControlDiscovery, error)
-
-func (f ControlDiscoveryReaderFunc) ReadControlDiscovery(ctx context.Context, controlPath string) (ControlDiscovery, error) {
-	if f == nil {
-		return ControlDiscovery{}, invalidRuntimeClient("control discovery reader function is required")
-	}
-	return f(ctx, controlPath)
-}
-
 // FileControlDiscoveryReader reads daemon control.json from disk.
 type FileControlDiscoveryReader struct{}
 
@@ -59,7 +49,7 @@ func (FileControlDiscoveryReader) ReadControlDiscovery(ctx context.Context, cont
 		return ControlDiscovery{}, transportRuntimeError("read control discovery cancelled", ctx.Err())
 	default:
 	}
-	path, err := ResolveControlDiscoveryPath(controlPath)
+	path, err := resolveControlDiscoveryPath(controlPath)
 	if err != nil {
 		return ControlDiscovery{}, err
 	}
@@ -75,11 +65,10 @@ func (FileControlDiscoveryReader) ReadControlDiscovery(ctx context.Context, cont
 			Cause:     err,
 		}
 	}
-	return NewControlDiscoveryFromJSON(raw)
+	return newControlDiscoveryFromJSON(raw)
 }
 
-// ResolveControlDiscoveryPath returns the configured daemon control.json path.
-func ResolveControlDiscoveryPath(controlPath string) (string, error) {
+func resolveControlDiscoveryPath(controlPath string) (string, error) {
 	if controlPath != "" {
 		return controlPath, nil
 	}
@@ -97,8 +86,7 @@ func ResolveControlDiscoveryPath(controlPath string) (string, error) {
 	return filepath.Join(home, defaultControlDiscoveryPath), nil
 }
 
-// NewControlDiscoveryFromJSON decodes daemon control.json.
-func NewControlDiscoveryFromJSON(raw []byte) (ControlDiscovery, error) {
+func newControlDiscoveryFromJSON(raw []byte) (ControlDiscovery, error) {
 	var discovery ControlDiscovery
 	if err := json.Unmarshal(raw, &discovery); err != nil {
 		return ControlDiscovery{}, invalidRuntimePayload(fmt.Sprintf("decode control discovery JSON: %v", err), err)

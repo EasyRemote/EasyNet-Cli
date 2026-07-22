@@ -6408,7 +6408,6 @@
         "CABIRuntimeTransport",
         "ControlDiscovery",
         "ControlDiscoveryReader",
-        "ControlDiscoveryReaderFunc",
         "ControlDiscoveryRuntimeConnector",
         "DaemonKeyServiceRejection",
         "DeviceNodeIDInRealm",
@@ -6423,15 +6422,13 @@
         "FileControlDiscoveryReader",
         "NewCABIClient",
         "NewCABIRuntimeHost",
-        "NewControlDiscoveryFromJSON",
         "NewControlDiscoveryRuntimeConnector",
         "NewDirectRuntimeConnector",
         "NewDirectRuntimeConnectorWithOptions",
         "OpenCABIDiscoveryTransport",
         "OpenCABIRuntimeLifecycleTransport",
         "OpenDirectRuntimeTransport",
-        "RealmDevicePrefix",
-        "ResolveControlDiscoveryPath"
+        "RealmDevicePrefix"
       ],
       "python": [
         "ControlDiscovery",
@@ -6480,7 +6477,6 @@
         "ControlDiscovery.SocketPath",
         "ControlDiscovery.SupportedIPCVersions",
         "ControlDiscoveryReader.ReadControlDiscovery",
-        "ControlDiscoveryReaderFunc.ReadControlDiscovery",
         "ControlDiscoveryRuntimeConnector.Close",
         "ControlDiscoveryRuntimeConnector.ControlPath",
         "ControlDiscoveryRuntimeConnector.Handshake",
@@ -7160,14 +7156,6 @@
           "removal_phase": "quarantined",
           "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
         },
-        "ControlDiscoveryReaderFunc": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
         "ControlDiscoveryRuntimeConnector": {
           "canonical_replacement": [
             "capability_inventory.native_runtime"
@@ -7280,14 +7268,6 @@
           "removal_phase": "quarantined",
           "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
         },
-        "NewControlDiscoveryFromJSON": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
         "NewControlDiscoveryRuntimeConnector": {
           "canonical_replacement": [
             "capability_inventory.native_runtime"
@@ -7343,14 +7323,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
-        "ResolveControlDiscoveryPath": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
         }
       },
       "python": {
@@ -7652,14 +7624,6 @@
           "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
         },
         "ControlDiscoveryReader.ReadControlDiscovery": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscoveryReaderFunc.ReadControlDiscovery": {
           "canonical_replacement": [
             "capability_inventory.typed_errors"
           ],
@@ -18415,8 +18379,6 @@
       "ControlDiscovery.SupportedIPCVersions": "f24ceae1da4afd1ac25e8d7086d9a7a5529ad57e21da06187cd2c545261fa7ff",
       "ControlDiscoveryReader": "11f6149ced0805d5660024303691fcb971443c7a2ed036b953773be2171af449",
       "ControlDiscoveryReader.ReadControlDiscovery": "37c54e54052afd904d77897240b7c2a0f158c0bcdc6f810096c0e1749a94f0ae",
-      "ControlDiscoveryReaderFunc": "2d419a8993026030ab888fa333c127746c3e94f6ecd2accb5eb4a3d4f13dfd55",
-      "ControlDiscoveryReaderFunc.ReadControlDiscovery": "37c54e54052afd904d77897240b7c2a0f158c0bcdc6f810096c0e1749a94f0ae",
       "ControlDiscoveryRuntimeConnector": "dd6a7e2a4c7bb81761f87bc9ebae4074a692c424a1f214367d7e6d59f0c57c6f",
       "ControlDiscoveryRuntimeConnector.Close": "0d464a887ccc7c5ec145a263e02280f50af96ec1b1fd7e770a900867d4a8ba14",
       "ControlDiscoveryRuntimeConnector.ControlPath": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
@@ -18990,7 +18952,6 @@
       "NewCanonicalAuthorityClient": "f19b1dbdb1444807ce2fa497d54bcc63aab002d28bbcf2950a6fcf1182a53c03",
       "NewCanonicalAuthorityTransport": "a74f4651ebf27a3b550d79a185ee182e08ba736ee253b45ff77fdaf23daace21",
       "NewClient": "fea27df51c76ac18cc7b713c67d2f578fbf5bc303f8de0670caa526fe328ccd1",
-      "NewControlDiscoveryFromJSON": "ce4bacbdfbe10834de39fd38b522bb9ecd135e7518a295c99c342bd687b896e2",
       "NewControlDiscoveryRuntimeConnector": "a03690958533383375fef4a0cc24303a661f5b00dd53adce03129a8b8734cada",
       "NewDelegationProofFromMetadata": "3e9c6b26655be4d8bb727a55e2d154406ba5a93bf591fda88c5e89afc80b9e63",
       "NewDiagnosticsReportFromJSON": "e9530ce5ef8fcac1488f7333ddf3cf20cea6af2c975870cf0ff533276d2824eb",
@@ -19272,7 +19233,6 @@
       "RecoveryPolicy.Enabled": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903",
       "RecoveryPolicy.PolicyRef": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RecoveryPolicy.UpdatedUnixMS": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57",
-      "ResolveControlDiscoveryPath": "e5e4fd6b2c54fb5e678b1b056e12410d452db38c8b0c50a4e015dde3ea9f8f52",
       "ResolveRuntimeEndpointPath": "f494fb6be8be793f6b7a195ff03821909383c7c2450b0d86e87f8eabb9d7e7ef",
       "ResourceDotURA": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
       "ResourceNamespace": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",

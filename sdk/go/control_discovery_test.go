@@ -8,6 +8,15 @@ import (
 	"testing"
 )
 
+type controlDiscoveryReaderFunc func(ctx context.Context, controlPath string) (ControlDiscovery, error)
+
+func (f controlDiscoveryReaderFunc) ReadControlDiscovery(ctx context.Context, controlPath string) (ControlDiscovery, error) {
+	if f == nil {
+		return ControlDiscovery{}, invalidRuntimeClient("control discovery reader function is required")
+	}
+	return f(ctx, controlPath)
+}
+
 type memoryControlDiscoveryReader struct {
 	discovery ControlDiscovery
 	err       error
