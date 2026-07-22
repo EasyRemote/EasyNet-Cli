@@ -2749,6 +2749,13 @@ impl ExecutionIndex {
             .collect()
     }
 
+    fn handlers_for_key(&self, key: &ControlPlaneAbilityKey) -> RuntimeHandlerSet {
+        self.entries
+            .get(key)
+            .map(|entry| entry.handlers.clone())
+            .unwrap_or_default()
+    }
+
     fn has_mode(&self, ability: &str, call_mode: DescriptorCallMode) -> bool {
         let modes = self.handlers_for_ability(ability).modes();
         match call_mode {
@@ -4207,60 +4214,78 @@ impl AxonAbilityCatalog {
             })
     }
 
-    /// Resolve the unique authority root that owns `ability` from the
-    /// canonical control-plane registry (SPEC §9.1.A — the legacy
-    /// `authority_scope` side table is gone). Both static and dynamic
-    /// registrations write the same `control_plane`, so a single query
-    /// serves both; the static/dynamic key helpers differ only in which
-    /// handler set they gate presence on.
+    /// Prove that an authority-scoped execution key is backed by exact
+    /// control-plane records for every installed handler mode.
     ///
-    /// `registry.get()` is deliberately NOT used here: it errors when one
-    /// ability name publishes multiple call modes, whereas the legacy table
-    /// (and these key helpers) are call-mode-agnostic. `authority_roots_for_ability`
-    /// collapses modes and dedups, so a single owner yields exactly one root.
-    fn control_plane_authority_root(&self, ability: &str) -> anyhow::Result<Option<String>> {
-        let roots = self
-            .control_plane
-            .read()
-            .expect("control_plane RwLock poisoned")
-            .authority_roots_for_ability(ability);
-        match roots.as_slice() {
-            [] => Ok(None),
-            [root] => Ok(Some(root.clone())),
-            _ => anyhow::bail!(
-                "ability {ability:?} resolves to multiple authority roots {roots:?}; \
-                 cannot derive a single authority-scoped control-plane key"
-            ),
+    /// This is intentionally not an ability-name lookup. The canonical owner /
+    /// authority / descriptor truth is keyed by `(authority_root, ability,
+    /// call_mode)`, so runtime key derivation must validate the same tuple that
+    /// will be registered in `LocalRuntime`. Same-name records under another
+    /// authority are unrelated facts and must not rescue this execution row.
+    fn verify_execution_key_control_plane_modes(
+        &self,
+        origin: ExecutionOrigin,
+        key: &ControlPlaneAbilityKey,
+        handlers: &RuntimeHandlerSet,
+    ) -> anyhow::Result<()> {
+        if handlers.is_empty() {
+            anyhow::bail!(
+                "{origin:?} ability {:?} under authority {:?} has no execution handlers",
+                key.ability(),
+                key.authority_root()
+            );
         }
+        for slot in handlers.slots() {
+            let call_mode = slot.call_mode();
+            if self
+                .control_plane_record_for_authority_mode(
+                    key.authority_root(),
+                    key.ability(),
+                    call_mode,
+                )?
+                .is_none()
+            {
+                anyhow::bail!(
+                    "{origin:?} ability {:?} under authority {:?} has {} handler state \
+                     but no exact control-plane record for {:?}",
+                    key.ability(),
+                    key.authority_root(),
+                    slot.label(),
+                    call_mode
+                );
+            }
+        }
+        Ok(())
     }
 
     fn static_control_plane_key(
         &self,
         ability: &str,
     ) -> anyhow::Result<Option<ControlPlaneAbilityKey>> {
-        let execution_key = self
-            .execution_index
-            .read()
-            .expect("execution_index RwLock poisoned")
-            .origin_key_by_ability(ability, ExecutionOrigin::Static)?;
+        let (execution_key, handlers) = {
+            let execution_index = self
+                .execution_index
+                .read()
+                .expect("execution_index RwLock poisoned");
+            let execution_key =
+                execution_index.origin_key_by_ability(ability, ExecutionOrigin::Static)?;
+            let handlers = execution_key
+                .as_ref()
+                .map(|key| execution_index.handlers_for_key(key))
+                .unwrap_or_default();
+            (execution_key, handlers)
+        };
         if let Some(key) = execution_key {
-            let Some(root) = self.control_plane_authority_root(ability)? else {
-                anyhow::bail!(
-                    "static ability {ability:?} has handlers but no control-plane authority record"
-                );
-            };
-            if root != key.authority_root() {
-                anyhow::bail!(
-                    "static ability {ability:?} handler authority {:?} disagrees with control-plane authority {:?}",
-                    key.authority_root(),
-                    root
-                );
-            }
+            self.verify_execution_key_control_plane_modes(
+                ExecutionOrigin::Static,
+                &key,
+                &handlers,
+            )?;
             return Ok(Some(key));
         }
         if self.has_static_handler(ability) {
             anyhow::bail!(
-                "static ability {ability:?} has handlers but no control-plane authority record"
+                "static ability {ability:?} has handlers but no exact control-plane authority/mode record"
             );
         }
         Ok(None)
@@ -4270,29 +4295,30 @@ impl AxonAbilityCatalog {
         &self,
         ability: &str,
     ) -> anyhow::Result<Option<ControlPlaneAbilityKey>> {
-        let execution_key = self
-            .execution_index
-            .read()
-            .expect("execution_index RwLock poisoned")
-            .origin_key_by_ability(ability, ExecutionOrigin::Dynamic)?;
+        let (execution_key, handlers) = {
+            let execution_index = self
+                .execution_index
+                .read()
+                .expect("execution_index RwLock poisoned");
+            let execution_key =
+                execution_index.origin_key_by_ability(ability, ExecutionOrigin::Dynamic)?;
+            let handlers = execution_key
+                .as_ref()
+                .map(|key| execution_index.handlers_for_key(key))
+                .unwrap_or_default();
+            (execution_key, handlers)
+        };
         if let Some(key) = execution_key {
-            let Some(root) = self.control_plane_authority_root(ability)? else {
-                anyhow::bail!(
-                    "dynamic ability {ability:?} has handlers but no control-plane authority record"
-                );
-            };
-            if root != key.authority_root() {
-                anyhow::bail!(
-                    "dynamic ability {ability:?} handler authority {:?} disagrees with control-plane authority {:?}",
-                    key.authority_root(),
-                    root
-                );
-            }
+            self.verify_execution_key_control_plane_modes(
+                ExecutionOrigin::Dynamic,
+                &key,
+                &handlers,
+            )?;
             return Ok(Some(key));
         }
         if self.has_dynamic(ability) {
             anyhow::bail!(
-                "dynamic ability {ability:?} has handlers but no control-plane authority record"
+                "dynamic ability {ability:?} has handlers but no exact control-plane authority/mode record"
             );
         }
         Ok(None)
@@ -7310,6 +7336,103 @@ mod tests {
         assert!(!reg.has_rpc("runtime.rpc"));
         assert!(!reg.has_stream("runtime.stream"));
         assert!(!reg.has_bidi("runtime.bidi"));
+    }
+
+    #[test]
+    fn static_runtime_key_validates_exact_authority_mode_record() {
+        let mut reg = combined_catalog();
+        register_test_rpc(&mut reg, "shared.route", OwnerKind::Device, ok_handler());
+        let device_key = reg
+            .handler_control_plane_key("shared.route")
+            .expect("device RPC handler has an exact control-plane record");
+
+        reg.register_control_plane_descriptor_with_owner(
+            "shared.route",
+            &OwnerKind::Hub,
+            &test_manifest(
+                "shared.route",
+                "Same public name under an unrelated Hub Stream authority.",
+                serde_json::json!({"type": "object"}),
+            ),
+            DescriptorCallMode::Stream,
+            ReceiptSemantics::Operational,
+            &ControlPlaneImplementation::native_daemon(),
+        )
+        .expect("unrelated Hub Stream descriptor registers");
+
+        let got = reg
+            .handler_control_plane_key("shared.route")
+            .expect("runtime key derivation must validate only the device RPC tuple");
+
+        assert_eq!(got, device_key);
+    }
+
+    #[test]
+    fn static_runtime_key_rejects_unrelated_authority_record_as_rescue_path() {
+        let mut reg = combined_catalog();
+        register_test_rpc(&mut reg, "shared.missing", OwnerKind::Device, ok_handler());
+        let device_key = reg
+            .handler_control_plane_key("shared.missing")
+            .expect("device RPC handler has an exact control-plane record");
+        assert!(reg.remove_control_plane_record_for_authority_mode(
+            device_key.authority_root(),
+            device_key.ability(),
+            DescriptorCallMode::Rpc,
+        ));
+        reg.register_control_plane_descriptor_with_owner(
+            "shared.missing",
+            &OwnerKind::Hub,
+            &test_manifest(
+                "shared.missing",
+                "Unrelated Hub RPC descriptor must not rescue Device handler state.",
+                serde_json::json!({"type": "object"}),
+            ),
+            DescriptorCallMode::Rpc,
+            ReceiptSemantics::Operational,
+            &ControlPlaneImplementation::native_daemon(),
+        )
+        .expect("unrelated Hub RPC descriptor registers");
+
+        let err = reg
+            .handler_control_plane_key("shared.missing")
+            .expect_err("device handler must require its own exact authority/mode record");
+
+        assert!(
+            err.to_string().contains("no exact control-plane record"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn dynamic_runtime_key_validates_exact_authority_mode_record() {
+        let reg = combined_catalog();
+        hot_register_test_rpc(&reg, "dynamic.shared", OwnerKind::Device, ok_handler())
+            .expect("dynamic device RPC registers");
+        let device_key = reg
+            .dynamic_control_plane_key("dynamic.shared")
+            .expect("dynamic key lookup succeeds")
+            .expect("dynamic device key exists");
+
+        reg.register_control_plane_descriptor_with_owner(
+            "dynamic.shared",
+            &OwnerKind::Hub,
+            &test_manifest(
+                "dynamic.shared",
+                "Same public name under an unrelated Hub Stream authority.",
+                serde_json::json!({"type": "object"}),
+            ),
+            DescriptorCallMode::Stream,
+            ReceiptSemantics::Operational,
+            &ControlPlaneImplementation::native_daemon(),
+        )
+        .expect("unrelated Hub Stream descriptor registers");
+
+        let got = reg
+            .dynamic_control_plane_key("dynamic.shared")
+            .expect("dynamic key lookup succeeds")
+            .expect("runtime key derivation must validate only the device RPC tuple");
+
+        assert_eq!(got, device_key);
     }
 
     #[test]

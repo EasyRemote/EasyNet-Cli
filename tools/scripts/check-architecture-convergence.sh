@@ -5882,6 +5882,7 @@ if cancellation_registry.exists():
 # receipts indistinguishable from current authority state.
 ability_dispatch = cli_root / "src/daemon/ability/dispatch.rs"
 if ability_dispatch.exists():
+    raw_text = ability_dispatch.read_text(encoding="utf-8", errors="replace")
     text = source(ability_dispatch)
     production_text = text.split("#[cfg(test)]", 1)[0]
     hot_authority_requirements = (
@@ -6003,6 +6004,67 @@ if ability_dispatch.exists():
             line_number(production_text, match.start() if match else 0),
             "retired runtime-key helper must not remain as a routeability fallback surface",
         )
+    if "fn control_plane_authority_root" in production_text:
+        match = re.search(r"fn\s+control_plane_authority_root", production_text)
+        add(
+            "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+            ability_dispatch,
+            line_number(production_text, match.start() if match else 0),
+            "runtime key derivation must not collapse control-plane records by ability name",
+        )
+    runtime_key_verifier = rust_method_body(production_text, "verify_execution_key_control_plane_modes")
+    if runtime_key_verifier is None:
+        add(
+            "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+            ability_dispatch,
+            1,
+            "AxonAbilityCatalog must verify runtime keys against exact authority/mode control-plane records",
+        )
+    else:
+        offset, body = runtime_key_verifier
+        for token, detail in (
+            (
+                "control_plane_record_for_authority_mode",
+                "runtime key verifier must query exact authority/mode control-plane rows",
+            ),
+            (
+                "key.authority_root()",
+                "runtime key verifier must bind the execution authority root",
+            ),
+            (
+                "slot.call_mode()",
+                "runtime key verifier must bind every installed handler mode",
+            ),
+        ):
+            if token not in body:
+                add(
+                    "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+                    ability_dispatch,
+                    line_number(production_text, offset),
+                    detail,
+                )
+    for token in (
+        "static_runtime_key_validates_exact_authority_mode_record",
+        "static_runtime_key_rejects_unrelated_authority_record_as_rescue_path",
+        "dynamic_runtime_key_validates_exact_authority_mode_record",
+    ):
+        if token not in raw_text:
+            add(
+                "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+                ability_dispatch,
+                1,
+                f"missing exact authority/mode runtime-key test: {token}",
+            )
+    control_plane_source = cli_root / "src/daemon/ability/control_plane.rs"
+    if control_plane_source.exists():
+        control_plane_text = source(control_plane_source)
+        if "authority_roots_for_ability" in control_plane_text:
+            add(
+                "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+                control_plane_source,
+                1,
+                "retired ability-level authority-root collapse query must not remain in control-plane registry",
+            )
 
     list_rpc_names = rust_method_body(production_text, "list_rpc_names")
     if list_rpc_names is None:

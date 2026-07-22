@@ -3306,6 +3306,80 @@ if "fn deterministic_registry_snapshot_does_not_replay_hosted_agent_runtime" not
 PY
 }
 
+check_catalog_exact_runtime_key_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local dispatch="$cli_root/src/daemon/ability/dispatch.rs"
+  local control_plane="$cli_root/src/daemon/ability/control_plane.rs"
+  [[ -f "$dispatch" ]] || fail "ability dispatch source is missing"
+  [[ -f "$control_plane" ]] || fail "ability control-plane source is missing"
+
+  "$PYTHON_BIN" - "$dispatch" "$control_plane" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+dispatch = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+control_plane = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+
+if "fn control_plane_authority_root" in dispatch:
+    raise SystemExit("catalog_runtime_key:ability_level_authority_root_helper_present")
+if "authority_roots_for_ability" in control_plane:
+    raise SystemExit("catalog_runtime_key:ability_level_authority_root_query_present")
+
+match = re.search(
+    r"fn\s+verify_execution_key_control_plane_modes\s*\([^)]*\)\s*->\s*anyhow::Result<\(\)>\s*\{(?P<body>.*?)\n    \}",
+    dispatch,
+    re.S,
+)
+if not match:
+    raise SystemExit("catalog_runtime_key:exact_verifier_missing")
+body = match.group("body")
+for token, code in (
+    ("control_plane_record_for_authority_mode", "exact_authority_mode_lookup_missing"),
+    ("key.authority_root()", "execution_authority_binding_missing"),
+    ("key.ability()", "execution_ability_binding_missing"),
+    ("slot.call_mode()", "handler_mode_binding_missing"),
+    ("no exact control-plane record", "fail_closed_error_missing"),
+):
+    if token not in body:
+        raise SystemExit(f"catalog_runtime_key:{code}")
+
+for method in ("static_control_plane_key", "dynamic_control_plane_key"):
+    method_match = re.search(
+        rf"fn\s+{method}\s*\([^)]*\)\s*->\s*anyhow::Result<Option<ControlPlaneAbilityKey>>\s*\{{(?P<body>.*?)\n    \}}",
+        dispatch,
+        re.S,
+    )
+    if not method_match:
+        raise SystemExit(f"catalog_runtime_key:{method}_missing")
+    method_body = method_match.group("body")
+    for token, code in (
+        ("origin_key_by_ability", "execution_key_lookup_missing"),
+        ("handlers_for_key", "authority_keyed_handler_read_missing"),
+        ("verify_execution_key_control_plane_modes", "exact_verifier_not_used"),
+    ):
+        if token not in method_body:
+            raise SystemExit(f"catalog_runtime_key:{method}:{code}")
+
+for token, code in (
+    (
+        "static_runtime_key_validates_exact_authority_mode_record",
+        "static_positive_test_missing",
+    ),
+    (
+        "static_runtime_key_rejects_unrelated_authority_record_as_rescue_path",
+        "static_negative_test_missing",
+    ),
+    (
+        "dynamic_runtime_key_validates_exact_authority_mode_record",
+        "dynamic_positive_test_missing",
+    ),
+):
+    if token not in dispatch:
+        raise SystemExit(f"catalog_runtime_key:{code}")
+PY
+}
+
 check_plugin_sidecar_helper_matrix_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local template="$cli_root/src/cli/commands/groups/plugin_template.rs"
@@ -7320,6 +7394,7 @@ EOF
   check_ffi_last_error_typed_tls_contract
   check_canonical_ability_catalog_projection_contract
   check_daemon_runtime_assembly_contract
+  check_catalog_exact_runtime_key_contract
   check_plugin_sidecar_helper_matrix_contract
   check_retired_browser_mock_surface_contract
   check_runtime_wire_target_state_contract
@@ -7409,6 +7484,7 @@ check_ffi_invocation_json_projection_contract
 check_ffi_last_error_typed_tls_contract
 check_canonical_ability_catalog_projection_contract
 check_daemon_runtime_assembly_contract
+check_catalog_exact_runtime_key_contract
 check_plugin_sidecar_helper_matrix_contract
 check_retired_browser_mock_surface_contract
 check_runtime_wire_target_state_contract

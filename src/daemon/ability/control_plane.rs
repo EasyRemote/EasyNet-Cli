@@ -510,23 +510,6 @@ impl AbilityControlPlaneRegistry {
         self.descriptors.names()
     }
 
-    /// Distinct authority roots that own `ability` across all registered modes.
-    ///
-    /// Runtime dispatch keys are descriptor-owner URAs, not bare ability names.
-    /// Callers that need to register or invoke through `LocalRuntime` use this
-    /// to prove that a name maps to one owner before deriving a protocol key.
-    pub fn authority_roots_for_ability(&self, ability: &str) -> Vec<String> {
-        let mut roots = self
-            .descriptors
-            .keys()
-            .filter(|key| key.ability() == ability)
-            .map(|key| key.authority_root().to_string())
-            .collect::<Vec<_>>();
-        roots.sort();
-        roots.dedup();
-        roots
-    }
-
     /// Every registered control-plane record, joined from the descriptor,
     /// authority, and implementation facets through the shared
     /// `AbilityControlPlaneKey`. This is the single read API that
