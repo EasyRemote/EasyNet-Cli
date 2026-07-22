@@ -252,20 +252,25 @@ async fn main() -> anyhow::Result<()> {
     }
     boot_bus.emit_ok("daemon-key-service");
 
-    // Bind sub-services that have a disk-backed store to the
-    // current tenant so persistence actually works across daemon
-    // restarts. Without this call, ScheduleService and LoopService
-    // operate on an in-memory cache only — schedules and loops
-    // vanish on every reboot.
+    // Bind runtime state services to the current daemon identity.
+    // Session/discuss read models must carry the same node/tenant
+    // facts that the signer, descriptor resolver, and admission
+    // authority validate. ScheduleService and LoopService also bind
+    // tenant-scoped stores here so their state survives restarts.
     //
     let tenant = TenantId::new(daemon_config.realm().to_string());
     boot_bus.emit_started("tenant-stores");
     let daemon_identity = ready_daemon_identity(&daemon_config)?;
     if let Some(node_id) = daemon_identity.node_id {
+        let runtime_node = NodeId::new(node_id);
         kernel
             .session_service()
-            .bind_runtime(NodeId::new(node_id), tenant.clone())
+            .bind_runtime(runtime_node.clone(), tenant.clone())
             .map_err(|err| anyhow::anyhow!("bind session runtime identity: {err:#}"))?;
+        kernel
+            .discuss_service()
+            .bind_runtime(runtime_node, tenant.clone())
+            .map_err(|err| anyhow::anyhow!("bind discuss runtime identity: {err:#}"))?;
     }
     if let Err(e) = kernel.schedule_service().bind(&tenant) {
         eprintln!("[daemon] schedule store bind failed: {e:#}");

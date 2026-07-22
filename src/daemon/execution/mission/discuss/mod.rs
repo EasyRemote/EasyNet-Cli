@@ -77,14 +77,42 @@ impl RoomState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiscussRuntimeBinding {
+    node: NodeId,
+    tenant: TenantId,
+}
+
 #[derive(Default)]
 pub struct DiscussService {
+    binding: RwLock<Option<DiscussRuntimeBinding>>,
     rooms: RwLock<BTreeMap<RoomId, RoomState>>,
 }
 
 impl DiscussService {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn bind_runtime(&self, node: NodeId, tenant: TenantId) -> anyhow::Result<()> {
+        if node.as_str().trim().is_empty() {
+            anyhow::bail!("DiscussService runtime node must not be empty");
+        }
+        if tenant.as_str().trim().is_empty() {
+            anyhow::bail!("DiscussService runtime tenant must not be empty");
+        }
+        let mut binding = self
+            .binding
+            .write()
+            .map_err(|_| anyhow::anyhow!("DiscussService runtime binding lock poisoned"))?;
+        *binding = Some(DiscussRuntimeBinding { node, tenant });
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn bind_memory_for_test(&self, node: NodeId, tenant: TenantId) {
+        self.bind_runtime(node, tenant)
+            .expect("bind test discuss runtime");
     }
 
     /// Create a new room. Generates a fresh `RoomId`, indexes
@@ -97,11 +125,12 @@ impl DiscussService {
         if participants.is_empty() {
             anyhow::bail!("discuss.create: participants list must not be empty");
         }
+        let binding = self.bound_runtime()?;
         let id = RoomId::new(format!("room-{}", Uuid::new_v4()));
         let meta = DiscussRoom {
             id: id.clone(),
-            origin_node: NodeId::new("self"),
-            tenant: TenantId::default_v1(),
+            origin_node: binding.node,
+            tenant: binding.tenant,
             participants: participants.into_iter().map(AgentId::new).collect(),
             topic,
             created_unix_ms: chrono::Utc::now().timestamp_millis(),
@@ -112,6 +141,14 @@ impl DiscussService {
             .map_err(|_| anyhow::anyhow!("DiscussService lock poisoned"))?;
         g.insert(id.clone(), RoomState::new(meta));
         Ok(id)
+    }
+
+    fn bound_runtime(&self) -> anyhow::Result<DiscussRuntimeBinding> {
+        self.binding
+            .read()
+            .map_err(|_| anyhow::anyhow!("DiscussService runtime binding lock poisoned"))?
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("DiscussService is not bound to a runtime identity"))
     }
 
     /// Post a turn into a room. Appends to the in-memory log,
@@ -213,15 +250,23 @@ impl std::fmt::Debug for DiscussService {
 mod tests {
     use super::*;
 
+    fn bound_service() -> DiscussService {
+        let svc = DiscussService::new();
+        svc.bind_memory_for_test(NodeId::new("runtime-node"), TenantId::new("runtime-tenant"));
+        svc
+    }
+
     #[test]
     fn create_then_list_returns_the_room() {
-        let s = DiscussService::new();
+        let s = bound_service();
         let id = s
             .create(vec!["alice".into(), "bob".into()], Some("topic".into()))
             .unwrap();
         let listed = s.list().expect("list rooms");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, id);
+        assert_eq!(listed[0].origin_node, NodeId::new("runtime-node"));
+        assert_eq!(listed[0].tenant, TenantId::new("runtime-tenant"));
         assert_eq!(listed[0].participants.len(), 2);
         assert_eq!(listed[0].topic.as_deref(), Some("topic"));
     }
@@ -247,8 +292,16 @@ mod tests {
     }
 
     #[test]
-    fn post_assigns_monotonic_sequence_per_room() {
+    fn create_rejects_unbound_runtime_identity() {
         let s = DiscussService::new();
+        let err = s.create(vec!["alice".into()], None).unwrap_err();
+        assert!(format!("{err:#}").contains("DiscussService is not bound to a runtime identity"));
+        assert!(s.list().expect("list rooms").is_empty());
+    }
+
+    #[test]
+    fn post_assigns_monotonic_sequence_per_room() {
+        let s = bound_service();
         let r = s.create(vec!["alice".into(), "bob".into()], None).unwrap();
         let s0 = s.post(&r, AgentId::new("alice"), "hi", None).unwrap();
         let s1 = s.post(&r, AgentId::new("bob"), "hello", None).unwrap();
@@ -260,7 +313,7 @@ mod tests {
 
     #[test]
     fn turns_from_honours_since_seq() {
-        let s = DiscussService::new();
+        let s = bound_service();
         let r = s.create(vec!["alice".into()], None).unwrap();
         for i in 0..5 {
             s.post(&r, AgentId::new("alice"), format!("msg{i}"), None)

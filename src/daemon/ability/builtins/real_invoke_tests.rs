@@ -1443,6 +1443,10 @@ fn real_consent_list_pending_returns_empty_on_fresh_service() {
 fn real_discuss_create_then_post_round_trips_through_the_service() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::mission::discuss::DiscussService::new());
+    svc.bind_memory_for_test(
+        crate::core::domain::NodeId::new("runtime-node"),
+        crate::core::domain::TenantId::new("runtime-tenant"),
+    );
     let mut reg = runtime_attached_catalog();
     discuss_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
@@ -2718,6 +2722,10 @@ fn real_consent_subscribe_returns_a_stream_source() {
 fn real_discuss_subscribe_returns_a_stream_source() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::mission::discuss::DiscussService::new());
+    svc.bind_memory_for_test(
+        crate::core::domain::NodeId::new("runtime-node"),
+        crate::core::domain::TenantId::new("runtime-tenant"),
+    );
     let mut reg = runtime_attached_catalog();
     discuss_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));

@@ -1928,9 +1928,10 @@ for source_name, text in (
 for required in (
     "let daemon_identity = ready_daemon_identity(&daemon_config)?;",
     "if let Some(node_id) = daemon_identity.node_id",
+    "let runtime_node = NodeId::new(node_id);",
     "kernel",
     ".session_service()",
-    ".bind_runtime(NodeId::new(node_id), tenant.clone())",
+    ".bind_runtime(runtime_node.clone(), tenant.clone())",
 ):
     if required not in daemon:
         raise SystemExit(f"daemon_runtime_session_binding_boot_missing:{required}")
@@ -1947,6 +1948,65 @@ for required in (
 ):
     if required not in session:
         raise SystemExit(f"session_runtime_binding_missing:{required}")
+PY
+}
+
+check_daemon_runtime_discuss_binding_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local daemon="$cli_root/src/bin/easynet-daemon.rs"
+  local discuss="$cli_root/src/daemon/execution/mission/discuss/mod.rs"
+  local discuss_ability="$cli_root/src/daemon/ability/builtins/automation/discuss.rs"
+  [[ -f "$daemon" ]] || fail "daemon entrypoint is missing: $daemon"
+  [[ -f "$discuss" ]] || fail "discuss service source is missing: $discuss"
+  [[ -f "$discuss_ability" ]] || fail "discuss ability source is missing: $discuss_ability"
+
+  "$PYTHON_BIN" - "$daemon" "$discuss" "$discuss_ability" <<'PY'
+import sys
+from pathlib import Path
+
+daemon = Path(sys.argv[1]).read_text()
+discuss = Path(sys.argv[2]).read_text()
+discuss_ability = Path(sys.argv[3]).read_text()
+
+def production(text: str) -> str:
+    return text.split("#[cfg(test)]", 1)[0]
+
+daemon_prod = production(daemon)
+discuss_prod = production(discuss)
+discuss_ability_prod = production(discuss_ability)
+
+for source_name, text in (
+    ("daemon", daemon_prod),
+    ("discuss", discuss_prod),
+    ("discuss_ability", discuss_ability_prod),
+):
+    for retired in ('NodeId::new("self")', "TenantId::default_v1()"):
+        if retired in text:
+            raise SystemExit(f"daemon_runtime_discuss_binding_retired_default:{source_name}:{retired}")
+
+for required in (
+    "let daemon_identity = ready_daemon_identity(&daemon_config)?;",
+    "if let Some(node_id) = daemon_identity.node_id",
+    "let runtime_node = NodeId::new(node_id);",
+    "kernel",
+    ".discuss_service()",
+    ".bind_runtime(runtime_node, tenant.clone())",
+):
+    if required not in daemon:
+        raise SystemExit(f"daemon_runtime_discuss_binding_boot_missing:{required}")
+
+for required in (
+    "struct DiscussRuntimeBinding",
+    "binding: RwLock<Option<DiscussRuntimeBinding>>",
+    "pub fn bind_runtime(&self, node: NodeId, tenant: TenantId) -> anyhow::Result<()>",
+    "let binding = self.bound_runtime()?;",
+    "origin_node: binding.node,",
+    "tenant: binding.tenant,",
+    "fn bound_runtime(&self) -> anyhow::Result<DiscussRuntimeBinding>",
+    "create_rejects_unbound_runtime_identity",
+):
+    if required not in discuss:
+        raise SystemExit(f"discuss_runtime_binding_missing:{required}")
 PY
 }
 
@@ -5309,6 +5369,18 @@ EOF
   if ( CLI_ROOT="$tmp/cli-session-binding"; check_daemon_runtime_session_binding_contract ) >/dev/null 2>&1; then
     fail "self-test expected daemon runtime session binding default gate to fail"
   fi
+  mkdir -p "$tmp/cli-discuss-binding/src/bin" \
+    "$tmp/cli-discuss-binding/src/daemon/execution/mission/discuss" \
+    "$tmp/cli-discuss-binding/src/daemon/ability/builtins/automation"
+  printf 'fn main() { let _ = kernel.discuss_service(); }\n' \
+    > "$tmp/cli-discuss-binding/src/bin/easynet-daemon.rs"
+  printf 'pub struct DiscussService; impl DiscussService { pub fn create(&self) { let _ = DiscussRoom { origin_node: NodeId::new("self"), tenant: TenantId::default_v1() }; } }\n' \
+    > "$tmp/cli-discuss-binding/src/daemon/execution/mission/discuss/mod.rs"
+  printf 'fn create_handler(svc: &DiscussService) { svc.create(); }\n' \
+    > "$tmp/cli-discuss-binding/src/daemon/ability/builtins/automation/discuss.rs"
+  if ( CLI_ROOT="$tmp/cli-discuss-binding"; check_daemon_runtime_discuss_binding_contract ) >/dev/null 2>&1; then
+    fail "self-test expected daemon runtime discuss binding default gate to fail"
+  fi
   mkdir -p "$tmp/cli-tenant-store-binding/src/bin" \
     "$tmp/cli-tenant-store-binding/src/daemon/execution/schedule" \
     "$tmp/cli-tenant-store-binding/src/daemon/execution/loop_instance" \
@@ -6092,6 +6164,7 @@ EOF
   check_daemon_local_runtime_identity_contract
   check_kernel_runtime_session_read_model_contract
   check_daemon_runtime_session_binding_contract
+  check_daemon_runtime_discuss_binding_contract
   check_daemon_runtime_tenant_store_binding_contract
   check_route_resolver_descriptor_ref_selector_contract
   check_namespace_resolver_authority_projection_contract
@@ -6167,6 +6240,7 @@ check_daemon_runtime_route_inventory_contract
 check_daemon_local_runtime_identity_contract
 check_kernel_runtime_session_read_model_contract
 check_daemon_runtime_session_binding_contract
+check_daemon_runtime_discuss_binding_contract
 check_daemon_runtime_tenant_store_binding_contract
 check_retired_federation_directory_v1_stream_contract
 check_route_resolver_descriptor_ref_selector_contract

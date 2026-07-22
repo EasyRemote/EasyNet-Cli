@@ -228,9 +228,12 @@ pub fn list_turns_input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::domain::{NodeId, TenantId};
 
     fn fresh() -> Arc<DiscussService> {
-        Arc::new(DiscussService::new())
+        let svc = Arc::new(DiscussService::new());
+        svc.bind_memory_for_test(NodeId::new("runtime-node"), TenantId::new("runtime-tenant"));
+        svc
     }
 
     #[tokio::test]
