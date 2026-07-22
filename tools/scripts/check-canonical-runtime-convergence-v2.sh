@@ -992,6 +992,61 @@ for test in (
 PY
 }
 
+check_session_prelude_receipt_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local prelude="$cli_root/src/daemon/invocation/bidi/session_initiator/prelude.rs"
+  local heartbeat="$cli_root/src/daemon/invocation/bidi/session_initiator/heartbeat.rs"
+  [[ -f "$prelude" ]] || return 0
+  [[ -f "$heartbeat" ]] || return 0
+
+  "$PYTHON_BIN" - "$prelude" "$heartbeat" <<'PY'
+import sys
+from pathlib import Path
+
+prelude = Path(sys.argv[1]).read_text(encoding="utf-8")
+heartbeat = Path(sys.argv[2]).read_text(encoding="utf-8")
+
+if "fn apply_federation_join_receipt" not in prelude:
+    raise SystemExit("session_prelude_receipt:join_projection_missing")
+join_projection = prelude.split("fn apply_federation_join_receipt", 1)[1].split(
+    "\nfn federation_join_public_key_hex", 1
+)[0]
+if "parse_receipt::<" not in join_projection or "JoinReceipt" not in join_projection:
+    raise SystemExit("session_prelude_receipt:join_parse_receipt_missing")
+if "receipt body is empty" not in join_projection:
+    raise SystemExit("session_prelude_receipt:join_empty_body_gate_missing")
+if "serde_json::from_slice" in join_projection or "if let Ok" in join_projection:
+    raise SystemExit("session_prelude_receipt:join_tolerant_decode")
+
+if "fn apply_federation_heartbeat_receipt" not in heartbeat:
+    raise SystemExit("session_prelude_receipt:heartbeat_projection_missing")
+heartbeat_projection = heartbeat.split("fn apply_federation_heartbeat_receipt", 1)[1].split(
+    "\n#[cfg(test)]", 1
+)[0]
+if "parse_receipt::<" not in heartbeat_projection or "HeartbeatReceipt" not in heartbeat_projection:
+    raise SystemExit("session_prelude_receipt:heartbeat_parse_receipt_missing")
+if "receipt body is empty" not in heartbeat_projection:
+    raise SystemExit("session_prelude_receipt:heartbeat_empty_body_gate_missing")
+if "serde_json::from_slice" in heartbeat_projection or "if let Ok" in heartbeat_projection:
+    raise SystemExit("session_prelude_receipt:heartbeat_tolerant_decode")
+if "!diff.added.is_empty() || !diff.removed.is_empty()" in heartbeat:
+    raise SystemExit("session_prelude_receipt:heartbeat_revision_only_diff_skipped")
+
+for test in (
+    "federation_join_receipt_rejects_empty_or_malformed_body",
+    "federation_join_receipt_seeds_canonical_hub_catalog",
+):
+    if test not in prelude:
+        raise SystemExit(f"session_prelude_receipt:missing_join_test:{test}")
+for test in (
+    "federation_heartbeat_receipt_rejects_empty_or_malformed_body",
+    "federation_heartbeat_receipt_applies_revision_only_diff",
+):
+    if test not in heartbeat:
+        raise SystemExit(f"session_prelude_receipt:missing_heartbeat_test:{test}")
+PY
+}
+
 check_device_settings_loader_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local config="$cli_root/src/daemon/persistence/config.rs"
@@ -3647,6 +3702,31 @@ EOF
   if ( check_session_prelude_credentials_contract "$tmp/session-prelude-credentials-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected session prelude credential fallback gate to fail"
   fi
+  mkdir -p "$tmp/session-prelude-receipt-legacy/src/daemon/invocation/bidi/session_initiator"
+  printf '%s\n' \
+    'fn apply_federation_join_receipt(body_bytes: &[u8], hub_published_abilities: &HubPublishedAbilityStore) -> Result<(), tonic::Status> {' \
+    '  if !body_bytes.is_empty() {' \
+    '    if let Ok(body) = serde_json::from_slice::<crate::daemon::federation::client::ability_contract::JoinReceipt>(body_bytes) {' \
+    '      hub_published_abilities.seed_from_snapshot(body.hub_abilities_revision, body.hub_published_abilities);' \
+    '    }' \
+    '  }' \
+    '  Ok(())' \
+    '}' \
+    'fn federation_join_public_key_hex() {}' \
+    > "$tmp/session-prelude-receipt-legacy/src/daemon/invocation/bidi/session_initiator/prelude.rs"
+  printf '%s\n' \
+    'fn apply_federation_heartbeat_receipt(body_bytes: &[u8], hub_published_abilities: &HubPublishedAbilityStore) -> Result<(), tonic::Status> {' \
+    '  if let Ok(receipt) = serde_json::from_slice::<crate::daemon::federation::client::ability_contract::HeartbeatReceipt>(body_bytes) {' \
+    '    let diff = receipt.hub_abilities_diff;' \
+    '    if !diff.added.is_empty() || !diff.removed.is_empty() { hub_published_abilities.apply_diff(diff); }' \
+    '  }' \
+    '  Ok(())' \
+    '}' \
+    '#[cfg(test)] mod tests {}' \
+    > "$tmp/session-prelude-receipt-legacy/src/daemon/invocation/bidi/session_initiator/heartbeat.rs"
+  if ( check_session_prelude_receipt_contract "$tmp/session-prelude-receipt-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected session prelude receipt fallback gate to fail"
+  fi
   mkdir -p "$tmp/device-settings-legacy/src/daemon/persistence" \
     "$tmp/device-settings-legacy/src/cli/commands"
   printf '%s\n' \
@@ -3701,6 +3781,7 @@ EOF
   check_shared_local_device_owner_projection_contract
   check_node_session_authority_subject_contract
   check_session_prelude_credentials_contract
+  check_session_prelude_receipt_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_edge_adapter_policy_contract
@@ -3753,6 +3834,7 @@ check_admission_owner_credentials_contract
 check_shared_local_device_owner_projection_contract
 check_node_session_authority_subject_contract
 check_session_prelude_credentials_contract
+check_session_prelude_receipt_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_edge_adapter_policy_contract

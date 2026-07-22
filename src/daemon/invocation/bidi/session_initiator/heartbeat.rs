@@ -137,21 +137,111 @@ async fn send_federation_heartbeat(
     let request =
         signed_prelude_request(signer, caller_ura, "federation.heartbeat", arguments).await?;
     let response = invoke_prelude_unary(client, request, "federation.heartbeat").await?;
-    let body_bytes = response.result;
-    if !body_bytes.is_empty() {
-        if let Ok(receipt) = serde_json::from_slice::<
-            crate::daemon::federation::client::ability_contract::HeartbeatReceipt,
-        >(&body_bytes)
-        {
-            let diff = receipt.hub_abilities_diff;
-            if !diff.added.is_empty() || !diff.removed.is_empty() {
-                hub_published_abilities.apply_diff(diff).map_err(|error| {
-                    tonic::Status::failed_precondition(format!(
-                        "federation.heartbeat hub ability catalog invalid: {error}"
-                    ))
-                })?;
-            }
+    apply_federation_heartbeat_receipt(&response.result, hub_published_abilities)?;
+    Ok(())
+}
+
+fn apply_federation_heartbeat_receipt(
+    body_bytes: &[u8],
+    hub_published_abilities: &HubPublishedAbilityStore,
+) -> Result<(), tonic::Status> {
+    if body_bytes.is_empty() {
+        return Err(tonic::Status::failed_precondition(
+            "federation.heartbeat receipt body is empty",
+        ));
+    }
+    let receipt = crate::daemon::federation::client::ability_contract::parse_receipt::<
+        crate::daemon::federation::client::ability_contract::HeartbeatReceipt,
+    >(body_bytes)
+    .map_err(|error| {
+        tonic::Status::failed_precondition(format!("federation.heartbeat receipt invalid: {error}"))
+    })?;
+    hub_published_abilities
+        .apply_diff(receipt.hub_abilities_diff)
+        .map_err(|error| {
+            tonic::Status::failed_precondition(format!(
+                "federation.heartbeat hub ability catalog invalid: {error}"
+            ))
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_federation_heartbeat_receipt;
+    use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
+    use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
+    use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
+
+    fn canonical_hub_entry(name: &str) -> HubAbilityEntry {
+        HubAbilityEntry {
+            name: name.to_string(),
+            descriptor: serde_json::to_value(
+                AbilityDescriptor::new(
+                    name,
+                    &crate::core::ura::hub_ura("realm"),
+                    Visibility::Public,
+                    AdmissionAction::Read,
+                )
+                .expect("canonical hub descriptor"),
+            )
+            .expect("descriptor json"),
         }
     }
-    Ok(())
+
+    #[test]
+    fn federation_heartbeat_receipt_rejects_empty_or_malformed_body() {
+        let store = HubPublishedAbilityStore::new();
+        let empty = apply_federation_heartbeat_receipt(&[], &store)
+            .expect_err("empty heartbeat receipt must fail closed");
+        assert_eq!(empty.code(), tonic::Code::FailedPrecondition);
+        assert!(empty.message().contains("receipt body is empty"));
+
+        let malformed = apply_federation_heartbeat_receipt(br#"not-json"#, &store)
+            .expect_err("malformed heartbeat receipt must fail closed");
+        assert_eq!(malformed.code(), tonic::Code::FailedPrecondition);
+        assert!(malformed
+            .message()
+            .contains("federation.heartbeat receipt invalid"));
+    }
+
+    #[test]
+    fn federation_heartbeat_receipt_applies_revision_only_diff() {
+        let store = HubPublishedAbilityStore::new();
+        let body = serde_json::to_vec(&serde_json::json!({
+            "membership_status": "active",
+            "realm_directory_size": 1,
+            "hub_abilities_diff": {
+                "revision": 21,
+                "added": [],
+                "removed": []
+            }
+        }))
+        .expect("heartbeat receipt json");
+
+        apply_federation_heartbeat_receipt(&body, &store)
+            .expect("canonical revision-only heartbeat receipt");
+
+        assert_eq!(store.revision(), 21);
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn federation_heartbeat_receipt_applies_canonical_added_rows() {
+        let store = HubPublishedAbilityStore::new();
+        let body = serde_json::to_vec(&serde_json::json!({
+            "membership_status": "active",
+            "realm_directory_size": 1,
+            "hub_abilities_diff": {
+                "revision": 22,
+                "added": [canonical_hub_entry("test.scope")],
+                "removed": []
+            }
+        }))
+        .expect("heartbeat receipt json");
+
+        apply_federation_heartbeat_receipt(&body, &store).expect("canonical heartbeat receipt");
+
+        assert_eq!(store.revision(), 22);
+        assert_eq!(store.snapshot()[0].public_name(), "test.scope");
+    }
 }

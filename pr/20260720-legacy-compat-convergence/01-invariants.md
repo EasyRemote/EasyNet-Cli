@@ -373,3 +373,11 @@
   Schema-incomplete descriptor rows must fail closed at the catalog boundary
   instead of being silently dropped and later reported as descriptor misses,
   route invisibility, or remote timeout.
+- Federation session preludes must parse join and heartbeat receipts through
+  the typed federation receipt contract. Empty or malformed receipt bodies are
+  unavailable hub state and must fail the prelude/heartbeat transition; they
+  must not be ignored as a successful no-op.
+- Hub ability revision is part of the federation heartbeat state machine. A
+  heartbeat receipt with an empty diff but an advanced revision still commits
+  the revision cursor; revision-only updates must not be skipped because
+  `added` and `removed` are empty.

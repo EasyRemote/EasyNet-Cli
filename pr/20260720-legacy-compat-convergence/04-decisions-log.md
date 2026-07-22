@@ -933,3 +933,14 @@ Decisions will be appended as root-fork choices are made.
   `descriptor_ref` or other identity fields now returns a catalog integrity
   error instead of silently filtering the row and manufacturing later
   descriptor-not-found diagnostics.
+
+## 2026-07-22 Federation prelude receipt state machine
+
+- Treat `federation.join` and `federation.heartbeat` response bodies as typed
+  receipt inputs to the session state machine. They are no longer best-effort
+  JSON decorations that can be skipped after decode failure.
+- Reuse `ability_contract::parse_receipt` for join and heartbeat rather than
+  hand-rolled `serde_json::from_slice`, removing duplicated weaker parsing
+  semantics from the session initiator.
+- Commit heartbeat revision-only diffs. An empty `added`/`removed` set is still
+  a valid cursor transition when the hub advances `hub_abilities_diff.revision`.

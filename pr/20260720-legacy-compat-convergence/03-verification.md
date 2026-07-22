@@ -2682,6 +2682,10 @@ Commands and outcomes will be appended after implementation.
 - `git diff --check` — PASS.
 - `/Users/macbook.silan.tech/.local/bin/codegraph sync
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
+  codegraph `status` reports `Index is up to date` with 35,276 nodes and
+  135,370 edges.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
   codegraph `status` reports `Index is up to date`.
 
 ## 2026-07-22 Canonical ability catalog projection
@@ -2711,6 +2715,28 @@ Commands and outcomes will be appended after implementation.
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
   codegraph `status` reports `Index is up to date` with 35,260 nodes and
   135,317 edges.
+
+## 2026-07-22 Federation prelude receipt state machine
+
+- `cargo test -q -p easynet --lib
+  daemon::invocation::bidi::session_initiator::prelude::tests::federation_join_receipt_rejects_empty_or_malformed_body`
+  — PASS.
+- `cargo test -q -p easynet --lib
+  daemon::invocation::bidi::session_initiator::prelude::tests::federation_join_receipt_seeds_canonical_hub_catalog`
+  — PASS.
+- `cargo test -q -p easynet --lib
+  daemon::invocation::bidi::session_initiator::heartbeat::tests::federation_heartbeat_receipt`
+  — PASS (`3 passed`); covers empty/malformed heartbeat receipt rejection,
+  revision-only diff cursor advancement, and canonical added-row projection.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative fixture for tolerant join/heartbeat receipt
+  decode and revision-only diff skipping.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
 
 ## 2026-07-22 FFI descriptor runtime owner precondition
 

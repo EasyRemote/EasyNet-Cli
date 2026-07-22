@@ -504,32 +504,16 @@ async fn send_federation_join_prelude(
     match client.invoke(request).await {
         Ok(reply) => {
             let body_bytes = reply.into_inner().result;
-            if !body_bytes.is_empty() {
-                if let Ok(body) = serde_json::from_slice::<
-                    crate::daemon::federation::client::ability_contract::JoinReceipt,
-                >(&body_bytes)
-                {
-                    hub_published_abilities
-                        .seed_from_snapshot(
-                            body.hub_abilities_revision,
-                            body.hub_published_abilities,
-                        )
-                        .map_err(|error| {
-                            tonic::Status::failed_precondition(format!(
-                                "federation.join hub ability catalog invalid: {error}"
-                            ))
-                        })?;
-                    if !hub_published_abilities.is_empty() {
-                        let ability_count = hub_published_abilities.len();
-                        let hub_abilities_revision = body.hub_abilities_revision;
-                        crate::op_event!(
-                            component = session,
-                            kind = hub_broadcast_abilities_seeded,
-                            ability_count = ability_count,
-                            hub_abilities_revision = hub_abilities_revision,
-                        );
-                    }
-                }
+            let projection = apply_federation_join_receipt(&body_bytes, hub_published_abilities)?;
+            if projection.seeded_ability_count > 0 {
+                let ability_count = projection.seeded_ability_count;
+                let hub_abilities_revision = projection.hub_abilities_revision;
+                crate::op_event!(
+                    component = session,
+                    kind = hub_broadcast_abilities_seeded,
+                    ability_count = ability_count,
+                    hub_abilities_revision = hub_abilities_revision,
+                );
             }
             Ok(())
         }
@@ -541,6 +525,40 @@ async fn send_federation_join_prelude(
         }
         Err(status) => Err(status),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FederationJoinReceiptProjection {
+    seeded_ability_count: usize,
+    hub_abilities_revision: u64,
+}
+
+fn apply_federation_join_receipt(
+    body_bytes: &[u8],
+    hub_published_abilities: &HubPublishedAbilityStore,
+) -> Result<FederationJoinReceiptProjection, tonic::Status> {
+    if body_bytes.is_empty() {
+        return Err(tonic::Status::failed_precondition(
+            "federation.join receipt body is empty",
+        ));
+    }
+    let body = crate::daemon::federation::client::ability_contract::parse_receipt::<
+        crate::daemon::federation::client::ability_contract::JoinReceipt,
+    >(body_bytes)
+    .map_err(|error| {
+        tonic::Status::failed_precondition(format!("federation.join receipt invalid: {error}"))
+    })?;
+    hub_published_abilities
+        .seed_from_snapshot(body.hub_abilities_revision, body.hub_published_abilities)
+        .map_err(|error| {
+            tonic::Status::failed_precondition(format!(
+                "federation.join hub ability catalog invalid: {error}"
+            ))
+        })?;
+    Ok(FederationJoinReceiptProjection {
+        seeded_ability_count: hub_published_abilities.len(),
+        hub_abilities_revision: body.hub_abilities_revision,
+    })
 }
 
 fn federation_join_public_key_hex(signer: &dyn CanonicalSigner) -> Result<String, Status> {
@@ -1203,11 +1221,13 @@ pub(super) fn committed_owner_ability_descriptors(
 #[cfg(test)]
 mod tests {
     use super::{
-        paired_user_resolve_key_args, paired_user_trust_present, resolved_public_keys,
-        sync_paired_user_trust_prelude, HostedAgentPreludePublicationPlan, UserTrustBootstrapError,
-        UserTrustBootstrapOutcome, UserTrustSync,
+        apply_federation_join_receipt, paired_user_resolve_key_args, paired_user_trust_present,
+        resolved_public_keys, sync_paired_user_trust_prelude, HostedAgentPreludePublicationPlan,
+        UserTrustBootstrapError, UserTrustBootstrapOutcome, UserTrustSync,
     };
     use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
+    use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
+    use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
     use crate::daemon::identity::self_identity::TestCanonicalSigner;
     use crate::daemon::persistence::config::state_dir;
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
@@ -1215,6 +1235,22 @@ mod tests {
     use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
     use std::sync::Arc;
     use tonic::transport::Channel;
+
+    fn canonical_hub_entry(name: &str) -> HubAbilityEntry {
+        HubAbilityEntry {
+            name: name.to_string(),
+            descriptor: serde_json::to_value(
+                AbilityDescriptor::new(
+                    name,
+                    &crate::core::ura::hub_ura("realm"),
+                    Visibility::Public,
+                    AdmissionAction::Read,
+                )
+                .expect("canonical hub descriptor"),
+            )
+            .expect("descriptor json"),
+        }
+    }
 
     #[test]
     fn resolved_public_keys_prefers_array_response() {
@@ -1271,6 +1307,43 @@ mod tests {
                 .contains("resolve_key_response_public_keys_b64[0]_empty"),
             "{empty_err:#}"
         );
+    }
+
+    #[test]
+    fn federation_join_receipt_rejects_empty_or_malformed_body() {
+        let store = HubPublishedAbilityStore::new();
+        let empty = apply_federation_join_receipt(&[], &store)
+            .expect_err("empty join receipt must fail closed");
+        assert_eq!(empty.code(), tonic::Code::FailedPrecondition);
+        assert!(empty.message().contains("receipt body is empty"));
+
+        let malformed = apply_federation_join_receipt(br#"{"unexpected":"shape"}"#, &store)
+            .expect_err("malformed join receipt must fail closed");
+        assert_eq!(malformed.code(), tonic::Code::FailedPrecondition);
+        assert!(malformed
+            .message()
+            .contains("federation.join receipt invalid"));
+    }
+
+    #[test]
+    fn federation_join_receipt_seeds_canonical_hub_catalog() {
+        let store = HubPublishedAbilityStore::new();
+        let body = serde_json::to_vec(&serde_json::json!({
+            "membership_ura": "easynet:///r/realm/device/n1",
+            "realm": "realm",
+            "join_receipt_hash": "a".repeat(64),
+            "hub_abilities_revision": 17,
+            "hub_published_abilities": [canonical_hub_entry("test.scope")]
+        }))
+        .expect("join receipt json");
+
+        let projection =
+            apply_federation_join_receipt(&body, &store).expect("canonical join receipt");
+
+        assert_eq!(projection.seeded_ability_count, 1);
+        assert_eq!(projection.hub_abilities_revision, 17);
+        assert_eq!(store.revision(), 17);
+        assert_eq!(store.snapshot()[0].public_name(), "test.scope");
     }
 
     fn user_trust_sync_with_key(user_ura: &str) -> UserTrustSync {

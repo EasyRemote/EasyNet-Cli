@@ -2493,3 +2493,25 @@ Evidence will be appended after indexing and focused impact queries.
   federation wire JSON into canonical `AbilityDescriptor` projections. FFI
   descriptor catalog dedupe now rejects schema-incomplete rows instead of
   silently dropping them.
+
+## 2026-07-22 Federation prelude receipt state audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  federation_join_prelude heartbeat hub_published_abilities seed_from_snapshot
+  apply_diff JoinReceipt HeartbeatReceipt` showed the federation read-model
+  update blast radius is limited to
+  `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/src/daemon/invocation/bidi/session_initiator/prelude.rs`,
+  `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/src/daemon/invocation/bidi/session_initiator/heartbeat.rs`,
+  and `HubPublishedAbilityStore`.
+- `rg -n "if let Ok\\(.*JoinReceipt|if let Ok\\(.*HeartbeatReceipt|from_slice::<.*(JoinReceipt|HeartbeatReceipt)"
+  src tests tools -S` identified direct `serde_json::from_slice` paths that
+  swallowed malformed join/heartbeat receipts and returned `Ok(())`.
+- The same audit found heartbeat applied `HubAbilitiesDiff` only when
+  `added` or `removed` was non-empty, so a revision-only receipt did not commit
+  the hub ability revision cursor.
+- Root abstraction problem: federation prelude treated receipt parsing as
+  optional compatibility decoration even though receipts are the state-machine
+  input for hub-published ability projection.
+- Boundary decision: join and heartbeat receipts now flow through
+  `ability_contract::parse_receipt`; empty/malformed bodies fail closed, and
+  heartbeat always applies the parsed diff so revision-only transitions commit.
