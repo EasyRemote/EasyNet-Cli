@@ -36,6 +36,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 
+use crate::cli::presentation::identity::runtime_user_binding_display;
 use crate::core::ura;
 use crate::daemon::persistence::config::{
     self, atomic_write_with_permissions, state_dir, WritePermissions,
@@ -420,13 +421,11 @@ pub fn run_whoami(_args: WhoamiArgs) -> anyhow::Result<()> {
             let realm = c.realm_str().to_string();
             let hub_ura = ura::hub_ura(&realm);
             let device_ura = ura::device_ura(&realm, &c.node_id);
-            let user_ura = c.user_ura().ok();
             println!("(no interactive auth session on this host)");
             println!("paired as a device:");
             let mut rows: Vec<(&str, &str)> = vec![("Hub", hub_ura.as_str())];
-            if let Some(ref u) = user_ura {
-                rows.push(("Current user", u.as_str()));
-            }
+            let user_binding = runtime_user_binding_display(&c);
+            rows.push(("Current user", user_binding.value()));
             rows.push(("Current device", device_ura.as_str()));
             rows.push(("Realm", realm.as_str()));
             output::kv_section_stdout(&rows);

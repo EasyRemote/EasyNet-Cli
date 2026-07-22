@@ -16,6 +16,7 @@
 use clap::Args;
 use serde_json::{json, Value};
 
+use crate::cli::presentation::identity::runtime_user_binding_display;
 use crate::core::ura;
 use crate::daemon::boot::join_connection_state;
 use crate::daemon::lifecycle::{RuntimeLifecycleService, RuntimeLifecycleStatus};
@@ -255,11 +256,9 @@ fn render_paired_credentials(creds: &config::Credentials) {
     let device_ura = ura::device_ura(realm, &creds.node_id);
     // Per RFC-001 §3.2, hub / user / device are all first-class agents; the user
     // row must use the immutable product user id, not the display username slug.
-    let user_ura = creds.user_ura().ok();
     let mut rows: Vec<(&str, &str)> = vec![("Hub", hub_ura.as_str())];
-    if let Some(ref u) = user_ura {
-        rows.push(("Current user", u.as_str()));
-    }
+    let user_binding = runtime_user_binding_display(creds);
+    rows.push(("Current user", user_binding.value()));
     rows.push(("Current device", device_ura.as_str()));
     rows.push(("Realm", realm));
     output::kv_section(&rows);

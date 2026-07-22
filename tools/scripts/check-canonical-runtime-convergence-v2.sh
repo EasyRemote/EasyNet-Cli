@@ -1115,6 +1115,8 @@ src_root = Path(sys.argv[1])
 retired = (
     "load_credentials().ok()",
     "load_credentials().ok()?",
+    "user_ura().ok()",
+    "if let Ok(user_ura) =",
 )
 violations = []
 for path in src_root.rglob("*.rs"):
@@ -1126,6 +1128,32 @@ if violations:
     raise SystemExit(
         "cli_credentials_optional_read_retired_fallback:" + ",".join(violations)
     )
+
+identity = src_root / "cli" / "presentation" / "identity.rs"
+if not identity.exists():
+    raise SystemExit("cli_identity_projection_shared_projector_missing")
+identity_text = identity.read_text()
+for token in (
+    "pub enum RuntimeUserBindingDisplayState",
+    "pub struct RuntimeUserBindingDisplay",
+    "pub fn runtime_user_binding_display(creds: &config::Credentials)",
+    "RuntimeUserBindingDisplayState::Bound",
+    "RuntimeUserBindingDisplayState::Unbound",
+    "RuntimeUserBindingDisplayState::Invalid",
+    "display_projects_bound_user_ura",
+    "display_projects_unbound_federation_native_state",
+    "display_projects_invalid_user_binding_state",
+):
+    if token not in identity_text:
+        raise SystemExit(f"cli_identity_projection_shared_projector_missing:{token}")
+for rel in (
+    "cli/commands/status.rs",
+    "cli/commands/auth.rs",
+    "cli/presentation/banner.rs",
+):
+    path = src_root / rel
+    if path.exists() and "runtime_user_binding_display" not in path.read_text():
+        raise SystemExit(f"cli_identity_projection_surface_not_using_projector:{rel}")
 PY
 }
 
@@ -1149,6 +1177,14 @@ if fn is None:
     raise SystemExit("credentials_validate_complete_missing")
 body = fn.group("body")
 for required in (
+    "pub enum RuntimeUserBinding",
+    "Bound { user_ura: String }",
+    "Unbound { reason: &'static str }",
+    "pub fn runtime_user_binding(&self) -> anyhow::Result<RuntimeUserBinding>",
+):
+    if required not in text:
+        raise SystemExit(f"credentials_user_binding_projection_missing:{required}")
+for required in (
     "self.join_receipt_hash().is_none()",
     "self.username_slug()?",
     "self.user_id()?",
@@ -1160,6 +1196,9 @@ for test in (
     "save_credentials_accepts_federation_join_receipt_without_user_binding",
     "save_credentials_rejects_join_receipt_with_all_zero_user_id",
     "load_credentials_rejects_join_receipt_with_all_zero_user_id",
+    "runtime_user_binding_projects_bound_user_ura",
+    "runtime_user_binding_makes_federation_native_device_only_explicit",
+    "runtime_user_binding_rejects_blank_join_user_id_instead_of_hiding_it",
 ):
     if test not in text:
         raise SystemExit(f"credentials_user_binding_validation_missing_test:{test}")
@@ -7031,6 +7070,16 @@ EOF
     > "$tmp/cli-credentials-ok-fallback/src/cli/presentation/banner.rs"
   if ( check_cli_credentials_optional_read_contract "$tmp/cli-credentials-ok-fallback" ) >/dev/null 2>&1; then
     fail "self-test expected credentials .ok fallback gate to fail"
+  fi
+  mkdir -p "$tmp/cli-user-ura-ok-fallback/src/cli/commands"
+  printf '%s\n' \
+    'fn render_pairing(creds: Credentials) {' \
+    '  let user_ura = creds.user_ura().ok();' \
+    '  let _ = user_ura;' \
+    '}' \
+    > "$tmp/cli-user-ura-ok-fallback/src/cli/commands/status.rs"
+  if ( check_cli_credentials_optional_read_contract "$tmp/cli-user-ura-ok-fallback" ) >/dev/null 2>&1; then
+    fail "self-test expected user_ura .ok fallback gate to fail"
   fi
   mkdir -p "$tmp/credentials-user-binding-legacy/src/daemon/persistence"
   cat >"$tmp/credentials-user-binding-legacy/src/daemon/persistence/config.rs" <<'EOF'

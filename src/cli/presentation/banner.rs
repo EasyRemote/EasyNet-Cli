@@ -30,6 +30,9 @@
 
 use std::io::IsTerminal;
 
+use crate::cli::presentation::identity::{
+    runtime_user_binding_display, RuntimeUserBindingDisplayState,
+};
 use crate::core::ura;
 use crate::daemon::lifecycle::{
     RuntimeLifecycleError, RuntimeLifecycleService, RuntimeLifecycleStatus, RuntimeStatusReport,
@@ -228,11 +231,9 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
     //
     // All three are first-class agents in the ontology, so all
     // three carry equal visual weight. The user URA is derived
-    // from credentials.json's `username` field (populated by the
-    // Phase 14 backend during validate-pairing); when missing
-    // we suppress the row rather than showing a placeholder —
-    // older paired devices simply don't expose user-level
-    // identity yet.
+    // from credentials.json's immutable user binding; when federation-native
+    // credentials are intentionally device-only we render that state explicitly
+    // instead of suppressing the row as a compatibility fallback.
     //
     // The transport URL (creds.hub_endpoint) is intentionally NOT
     // shown here — URA is the ontology-canonical identity for a
@@ -250,14 +251,19 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
             let hub_ura = ura::hub_ura(realm);
             let device_ura = ura::device_ura(realm, &c.node_id);
             write_row(buf, style, "Hub:", &style.paint(sgr::DIM, &hub_ura));
-            if let Ok(user_ura) = c.user_ura() {
-                write_row(
-                    buf,
-                    style,
-                    "Current user:",
-                    &style.paint(sgr::DIM, &user_ura),
-                );
-            }
+            let user_binding = runtime_user_binding_display(c);
+            let user_sgr = match user_binding.state() {
+                RuntimeUserBindingDisplayState::Bound | RuntimeUserBindingDisplayState::Unbound => {
+                    sgr::DIM
+                }
+                RuntimeUserBindingDisplayState::Invalid => sgr::WARN,
+            };
+            write_row(
+                buf,
+                style,
+                "Current user:",
+                &style.paint(user_sgr, user_binding.value()),
+            );
             write_row(
                 buf,
                 style,
@@ -580,6 +586,36 @@ mod tests {
         assert!(
             !out.contains("not paired  ·  run 'easynet device join <token>'"),
             "invalid credentials must not render as unpaired: {out}"
+        );
+    }
+
+    #[test]
+    fn federation_native_device_only_credentials_render_explicit_unbound_user() {
+        let _home = HomeGuard::new();
+        let credentials = config::Credentials {
+            node_id: "device-a".to_string(),
+            credential_token: String::new(),
+            hub_endpoint: "https://hub.example:50443".to_string(),
+            realm: "localhost".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: None,
+            user_id: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: Some("a".repeat(64)),
+        };
+        config::save_credentials(&credentials).expect("save federation-native credentials");
+
+        let out = render_plain_with_current_home();
+
+        assert!(
+            out.contains("Current user:"),
+            "banner must keep the user binding row visible: {out}"
+        );
+        assert!(
+            out.contains("not bound (federation-native device credential)"),
+            "banner must render explicit unbound user state: {out}"
         );
     }
 }

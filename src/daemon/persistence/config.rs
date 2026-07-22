@@ -423,6 +423,12 @@ pub struct Credentials {
     pub join_receipt_hash: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeUserBinding {
+    Bound { user_ura: String },
+    Unbound { reason: &'static str },
+}
+
 impl Credentials {
     /// Returns the paired realm.
     pub fn realm_str(&self) -> &str {
@@ -484,6 +490,30 @@ impl Credentials {
             self.realm_str(),
             self.user_id()?,
         ))
+    }
+
+    /// Project the paired credential into an explicit runtime User binding
+    /// state. Token-paired devices must carry a concrete user identity; the
+    /// federation-native join lineage may intentionally be device-only until a
+    /// downstream product binds a user principal.
+    pub fn runtime_user_binding(&self) -> anyhow::Result<RuntimeUserBinding> {
+        if self
+            .user_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Ok(RuntimeUserBinding::Bound {
+                user_ura: self.user_ura()?,
+            });
+        }
+        if self.join_receipt_hash().is_some() && self.user_id.is_none() {
+            return Ok(RuntimeUserBinding::Unbound {
+                reason: "not bound (federation-native device credential)",
+            });
+        }
+        Ok(RuntimeUserBinding::Bound {
+            user_ura: self.user_ura()?,
+        })
     }
 
     pub fn join_receipt_hash(&self) -> Option<&str> {
@@ -772,6 +802,81 @@ mod tests {
             join_receipt_hash: None,
         };
         assert_eq!(creds.api_base(), "https://api.example.com");
+    }
+
+    #[test]
+    fn runtime_user_binding_projects_bound_user_ura() {
+        let creds = Credentials {
+            node_id: "n".into(),
+            credential_token: "t".into(),
+            hub_endpoint: "axon://easynet.run:50051".into(),
+            realm: "tenant".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+
+        assert_eq!(
+            creds.runtime_user_binding().expect("runtime user binding"),
+            RuntimeUserBinding::Bound {
+                user_ura: "easynet:///r/tenant/user/user-alice".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_user_binding_makes_federation_native_device_only_explicit() {
+        let creds = Credentials {
+            node_id: "n".into(),
+            credential_token: String::new(),
+            hub_endpoint: "https://hub.example:50443".into(),
+            realm: "tenant".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: None,
+            user_id: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: Some("a".repeat(64)),
+        };
+
+        assert_eq!(
+            creds
+                .runtime_user_binding()
+                .expect("device-only federation binding"),
+            RuntimeUserBinding::Unbound {
+                reason: "not bound (federation-native device credential)",
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_user_binding_rejects_blank_join_user_id_instead_of_hiding_it() {
+        let creds = Credentials {
+            node_id: "n".into(),
+            credential_token: String::new(),
+            hub_endpoint: "https://hub.example:50443".into(),
+            realm: "tenant".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: None,
+            user_id: Some("   ".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: Some("a".repeat(64)),
+        };
+
+        let err = creds
+            .runtime_user_binding()
+            .expect_err("blank explicit user_id is invalid");
+        assert!(
+            err.to_string().contains("missing user_id"),
+            "explicit blank user_id must not become unbound: {err}"
+        );
     }
 
     #[test]

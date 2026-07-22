@@ -8000,6 +8000,88 @@ if banner_mod.exists():
             line_number(text, text.find("config::load().ok()")),
             "banner must not swallow runtime projection load failures",
         )
+    for retired, detail in (
+        (
+            "user_ura().ok()",
+            "banner must not hide invalid paired user identity projection",
+        ),
+        (
+            "if let Ok(user_ura)",
+            "banner must render explicit paired user binding state instead of swallowing projection errors",
+        ),
+    ):
+        if retired in text:
+            add(
+                "R99_BANNER_RUNTIME_PROJECTION_FAIL_CLOSED",
+                banner_mod,
+                line_number(text, text.find(retired)),
+                detail,
+            )
+
+
+for identity_surface in (
+    cli_root / "src/cli/commands/status.rs",
+    cli_root / "src/cli/commands/auth.rs",
+):
+    if identity_surface.exists():
+        text = source(identity_surface)
+        for retired, detail in (
+            (
+                "user_ura().ok()",
+                "CLI identity surfaces must not hide invalid paired user identity projection",
+            ),
+            (
+                "if let Ok(user_ura)",
+                "CLI identity surfaces must render explicit runtime user binding state",
+            ),
+        ):
+            if retired in text:
+                add(
+                    "R99_CLI_IDENTITY_PROJECTION_FAIL_CLOSED",
+                    identity_surface,
+                    line_number(text, text.find(retired)),
+                    detail,
+                )
+
+
+identity_projection = cli_root / "src/cli/presentation/identity.rs"
+if identity_projection.exists():
+    text = source(identity_projection)
+    for token, detail in (
+        (
+            "pub enum RuntimeUserBindingDisplayState",
+            "CLI identity projection must model bound/unbound/invalid states explicitly",
+        ),
+        (
+            "pub fn runtime_user_binding_display(creds: &config::Credentials)",
+            "CLI identity projection must centralize runtime user binding display",
+        ),
+        (
+            "RuntimeUserBindingDisplayState::Invalid",
+            "CLI identity projection must preserve invalid credential projection as an explicit state",
+        ),
+    ):
+        if token not in text:
+            add("R99_CLI_IDENTITY_PROJECTION_FAIL_CLOSED", identity_projection, 1, detail)
+else:
+    add(
+        "R99_CLI_IDENTITY_PROJECTION_FAIL_CLOSED",
+        identity_projection,
+        1,
+        "CLI identity projection shared projector is missing",
+    )
+for surface in (
+    cli_root / "src/cli/commands/status.rs",
+    cli_root / "src/cli/commands/auth.rs",
+    cli_root / "src/cli/presentation/banner.rs",
+):
+    if surface.exists() and "runtime_user_binding_display" not in source(surface):
+        add(
+            "R99_CLI_IDENTITY_PROJECTION_FAIL_CLOSED",
+            surface,
+            1,
+            "CLI identity surfaces must reuse the shared runtime user binding projector",
+        )
 
 
 # Rule 91: C ABI diagnostics descriptor fallback must keep descriptor
