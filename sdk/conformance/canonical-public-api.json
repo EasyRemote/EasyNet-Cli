@@ -6404,8 +6404,6 @@
         "CABIDiscoveryTransport",
         "CABIRuntimeLifecycleTransport",
         "CABIRuntimeTransport",
-        "ControlDiscovery",
-        "ControlDiscoveryReader",
         "ErrDaemonOffline",
         "NewCABIClient",
         "NewCABIRuntimeHost",
@@ -6449,15 +6447,6 @@
         "CABIRuntimeTransport.RuntimeDiagnostics",
         "CABIRuntimeTransport.RuntimeHealth",
         "CABIRuntimeTransport.SubmitSigned",
-        "ControlDiscovery.CapabilityFlags",
-        "ControlDiscovery.DaemonVersion",
-        "ControlDiscovery.InvocationEndpoint",
-        "ControlDiscovery.PID",
-        "ControlDiscovery.PagesPort",
-        "ControlDiscovery.PipeName",
-        "ControlDiscovery.SocketPath",
-        "ControlDiscovery.SupportedIPCVersions",
-        "ControlDiscoveryReader.ReadControlDiscovery",
         "PrepareOptions.LocalDaemonSigning"
       ],
       "python": [
@@ -7050,22 +7039,6 @@
           "removal_phase": "quarantined",
           "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
         },
-        "ControlDiscovery": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscoveryReader": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
         "ErrDaemonOffline": {
           "canonical_replacement": [
             "capability_inventory.runtime_lifecycle"
@@ -7332,78 +7305,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "ControlDiscovery.CapabilityFlags": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.DaemonVersion": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.InvocationEndpoint": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.PID": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.PagesPort": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.PipeName": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.SocketPath": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscovery.SupportedIPCVersions": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "ControlDiscoveryReader.ReadControlDiscovery": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
         },
         "PrepareOptions.LocalDaemonSigning": {
           "canonical_replacement": [
@@ -15200,7 +15101,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "c03b9c494bc5a890c9e16c777bba4596dcf9fc8553de892953d6785ecfde22e0",
+          "sha256": "503c71aefbb0a97346449d496b0a4a776e5a2277276ec472f48e0f537d64e5ca",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15306,7 +15207,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "c03b9c494bc5a890c9e16c777bba4596dcf9fc8553de892953d6785ecfde22e0",
+          "sha256": "503c71aefbb0a97346449d496b0a4a776e5a2277276ec472f48e0f537d64e5ca",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15392,7 +15293,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "c03b9c494bc5a890c9e16c777bba4596dcf9fc8553de892953d6785ecfde22e0",
+          "sha256": "503c71aefbb0a97346449d496b0a4a776e5a2277276ec472f48e0f537d64e5ca",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15498,7 +15399,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "c03b9c494bc5a890c9e16c777bba4596dcf9fc8553de892953d6785ecfde22e0",
+          "sha256": "503c71aefbb0a97346449d496b0a4a776e5a2277276ec472f48e0f537d64e5ca",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15850,7 +15751,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "c03b9c494bc5a890c9e16c777bba4596dcf9fc8553de892953d6785ecfde22e0",
+          "sha256": "503c71aefbb0a97346449d496b0a4a776e5a2277276ec472f48e0f537d64e5ca",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -16508,7 +16409,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "c03b9c494bc5a890c9e16c777bba4596dcf9fc8553de892953d6785ecfde22e0",
+          "sha256": "503c71aefbb0a97346449d496b0a4a776e5a2277276ec472f48e0f537d64e5ca",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -17828,17 +17729,6 @@
       "ContentEnvelope.Encryption": "bb9d7a2b183f8fcc91ddf2d035c7f996d3121744b856fd3badfb051004e2fe9a",
       "ContentEnvelope.KeyID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "ContentEnvelope.SchemaURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "ControlDiscovery": "7a673cbcb3ba3c8269c23c292b11d8bf624dddd63b0f5cccc39616ff0e702c93",
-      "ControlDiscovery.CapabilityFlags": "4af101177fe720bf0766557228231c42b38635920ef7206f518a04030b3dcdf0",
-      "ControlDiscovery.DaemonVersion": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "ControlDiscovery.InvocationEndpoint": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "ControlDiscovery.PID": "6da88c34ba124c41f977db66a4fc5c1a951708d285c81bb0d47c3206f4c27ca8",
-      "ControlDiscovery.PagesPort": "6da88c34ba124c41f977db66a4fc5c1a951708d285c81bb0d47c3206f4c27ca8",
-      "ControlDiscovery.PipeName": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "ControlDiscovery.SocketPath": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "ControlDiscovery.SupportedIPCVersions": "f24ceae1da4afd1ac25e8d7086d9a7a5529ad57e21da06187cd2c545261fa7ff",
-      "ControlDiscoveryReader": "11f6149ced0805d5660024303691fcb971443c7a2ed036b953773be2171af449",
-      "ControlDiscoveryReader.ReadControlDiscovery": "37c54e54052afd904d77897240b7c2a0f158c0bcdc6f810096c0e1749a94f0ae",
       "CreatePrincipalRequest": "f905eecf6f8c587e058280040b0cbed66f9de04da665334cbe1499372161a195",
       "CreatePrincipalRequest.Command": "dcbeb224267733666cd0d0b0d1377e7c538e6b1a194bd708bf31e2311f311562",
       "CreatePrincipalRequest.PrincipalURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
@@ -23495,7 +23385,7 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/direct_runtime.go",
-      "sha256": "c03b9c494bc5a890c9e16c777bba4596dcf9fc8553de892953d6785ecfde22e0",
+      "sha256": "503c71aefbb0a97346449d496b0a4a776e5a2277276ec472f48e0f537d64e5ca",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/go/connection.go",
       "interface_sha256": "8a81c30b8f3d50915a70ff45ee9d81ee363ac4a4c0a34fec50040c56c6f15e8a",

@@ -16,12 +16,23 @@ type IpcVersionRange struct {
 	Max int `json:"max"`
 }
 
-// ControlDiscovery is the local daemon control.json projection.
+// controlDiscovery is the local daemon control.json projection.
 //
 // It is discovery data only. Invocation wire encoding, signing, routing, and
 // Axon protocol semantics stay behind the RuntimeTransport selected by
 // RuntimeConnection handshake.
-type ControlDiscovery struct {
+type controlDiscovery struct {
+	socketPath           string          `json:"socket_path,omitempty"`
+	pipeName             string          `json:"pipe_name,omitempty"`
+	invocationEndpoint   string          `json:"invocation_endpoint,omitempty"`
+	pid                  int             `json:"pid,omitempty"`
+	daemonVersion        string          `json:"daemon_version,omitempty"`
+	supportedIPCVersions IpcVersionRange `json:"supported_ipc_versions,omitempty"`
+	capabilityFlags      []string        `json:"capability_flags,omitempty"`
+	pagesPort            int             `json:"pages_port,omitempty"`
+}
+
+type controlDiscoveryJSON struct {
 	SocketPath           string          `json:"socket_path,omitempty"`
 	PipeName             string          `json:"pipe_name,omitempty"`
 	InvocationEndpoint   string          `json:"invocation_endpoint,omitempty"`
@@ -32,29 +43,45 @@ type ControlDiscovery struct {
 	PagesPort            int             `json:"pages_port,omitempty"`
 }
 
-// ControlDiscoveryReader supplies daemon discovery facts to runtime connectors.
-type ControlDiscoveryReader interface {
-	ReadControlDiscovery(ctx context.Context, controlPath string) (ControlDiscovery, error)
+func (d *controlDiscovery) UnmarshalJSON(raw []byte) error {
+	var wire controlDiscoveryJSON
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return err
+	}
+	d.socketPath = wire.SocketPath
+	d.pipeName = wire.PipeName
+	d.invocationEndpoint = wire.InvocationEndpoint
+	d.pid = wire.PID
+	d.daemonVersion = wire.DaemonVersion
+	d.supportedIPCVersions = wire.SupportedIPCVersions
+	d.capabilityFlags = wire.CapabilityFlags
+	d.pagesPort = wire.PagesPort
+	return nil
+}
+
+// controlDiscoveryReader supplies daemon discovery facts to runtime connectors.
+type controlDiscoveryReader interface {
+	readControlDiscovery(ctx context.Context, controlPath string) (controlDiscovery, error)
 }
 
 type fileControlDiscoveryReader struct{}
 
-func (fileControlDiscoveryReader) ReadControlDiscovery(ctx context.Context, controlPath string) (ControlDiscovery, error) {
+func (fileControlDiscoveryReader) readControlDiscovery(ctx context.Context, controlPath string) (controlDiscovery, error) {
 	if ctx == nil {
-		return ControlDiscovery{}, invalidRuntimeClient("context is required")
+		return controlDiscovery{}, invalidRuntimeClient("context is required")
 	}
 	select {
 	case <-ctx.Done():
-		return ControlDiscovery{}, transportRuntimeError("read control discovery cancelled", ctx.Err())
+		return controlDiscovery{}, transportRuntimeError("read control discovery cancelled", ctx.Err())
 	default:
 	}
 	path, err := resolveControlDiscoveryPath(controlPath)
 	if err != nil {
-		return ControlDiscovery{}, err
+		return controlDiscovery{}, err
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return ControlDiscovery{}, &SDKError{
+		return controlDiscovery{}, &SDKError{
 			Code:      ErrDaemonOffline,
 			Stage:     "control_discovery",
 			Retry:     RetrySafe,
@@ -85,13 +112,13 @@ func resolveControlDiscoveryPath(controlPath string) (string, error) {
 	return filepath.Join(home, defaultControlDiscoveryPath), nil
 }
 
-func newControlDiscoveryFromJSON(raw []byte) (ControlDiscovery, error) {
-	var discovery ControlDiscovery
+func newControlDiscoveryFromJSON(raw []byte) (controlDiscovery, error) {
+	var discovery controlDiscovery
 	if err := json.Unmarshal(raw, &discovery); err != nil {
-		return ControlDiscovery{}, invalidRuntimePayload(fmt.Sprintf("decode control discovery JSON: %v", err), err)
+		return controlDiscovery{}, invalidRuntimePayload(fmt.Sprintf("decode control discovery JSON: %v", err), err)
 	}
-	if discovery.CapabilityFlags == nil {
-		discovery.CapabilityFlags = []string{}
+	if discovery.capabilityFlags == nil {
+		discovery.capabilityFlags = []string{}
 	}
 	return discovery, nil
 }
@@ -101,11 +128,11 @@ func newControlDiscoveryFromJSON(raw []byte) (ControlDiscovery, error) {
 type controlDiscoveryRuntimeConnector struct {
 	inner       RuntimeConnector
 	controlPath string
-	reader      ControlDiscoveryReader
+	reader      controlDiscoveryReader
 	closed      bool
 }
 
-func newControlDiscoveryRuntimeConnector(inner RuntimeConnector, controlPath string, reader ControlDiscoveryReader) (*controlDiscoveryRuntimeConnector, error) {
+func newControlDiscoveryRuntimeConnector(inner RuntimeConnector, controlPath string, reader controlDiscoveryReader) (*controlDiscoveryRuntimeConnector, error) {
 	if inner == nil {
 		return nil, invalidRuntimeClient("inner runtime connector is required")
 	}
@@ -137,11 +164,11 @@ func (c *controlDiscoveryRuntimeConnector) Resolve(ctx context.Context, optionsJ
 			ControlPath: controlPath,
 		})
 	}
-	discovery, err := c.reader.ReadControlDiscovery(ctx, controlPath)
+	discovery, err := c.reader.readControlDiscovery(ctx, controlPath)
 	if err != nil {
 		return nil, err
 	}
-	if discovery.InvocationEndpoint == "" {
+	if discovery.invocationEndpoint == "" {
 		return nil, &SDKError{
 			Code:      ErrControlOnly,
 			Stage:     "control_discovery",
@@ -152,7 +179,7 @@ func (c *controlDiscoveryRuntimeConnector) Resolve(ctx context.Context, optionsJ
 		}
 	}
 	return runtimeEndpointJSON(RuntimeEndpoint{
-		Endpoint:        discovery.InvocationEndpoint,
+		Endpoint:        discovery.invocationEndpoint,
 		ControlPath:     controlPath,
 		ProtocolVersion: "axon.v1.Invocation",
 		ABIVersion:      0,

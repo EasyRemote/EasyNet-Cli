@@ -36,7 +36,7 @@ const (
 // Invocation gRPC endpoint.
 type directRuntimeConnector struct {
 	controlPath string
-	reader      ControlDiscoveryReader
+	reader      controlDiscoveryReader
 
 	mu                   sync.Mutex
 	handle               RuntimeTransport
@@ -47,12 +47,12 @@ type directRuntimeConnector struct {
 
 type directRuntimeConnectorOptions struct {
 	controlPath          string
-	reader               ControlDiscoveryReader
+	reader               controlDiscoveryReader
 	handleTransport      RuntimeTransport
 	closeHandleTransport bool
 }
 
-func newDirectRuntimeConnector(controlPath string, reader ControlDiscoveryReader) *directRuntimeConnector {
+func newDirectRuntimeConnector(controlPath string, reader controlDiscoveryReader) *directRuntimeConnector {
 	return newDirectRuntimeConnectorWithOptions(directRuntimeConnectorOptions{
 		controlPath: controlPath,
 		reader:      reader,
@@ -87,11 +87,11 @@ func (c *directRuntimeConnector) Resolve(ctx context.Context, optionsJSON []byte
 	}
 	endpoint := options.Endpoint
 	if endpoint == "" {
-		discovery, err := c.reader.ReadControlDiscovery(ctx, controlPath)
+		discovery, err := c.reader.readControlDiscovery(ctx, controlPath)
 		if err != nil {
 			return nil, err
 		}
-		if discovery.InvocationEndpoint == "" {
+		if discovery.invocationEndpoint == "" {
 			return nil, &SDKError{
 				Code:      ErrControlOnly,
 				Stage:     "direct_runtime.resolve",
@@ -101,7 +101,7 @@ func (c *directRuntimeConnector) Resolve(ctx context.Context, optionsJSON []byte
 				Details:   map[string]any{"control_path": controlPath},
 			}
 		}
-		endpoint = discovery.InvocationEndpoint
+		endpoint = discovery.invocationEndpoint
 	}
 	return directRuntimeEndpointJSON(RuntimeEndpoint{
 		Endpoint:        endpoint,

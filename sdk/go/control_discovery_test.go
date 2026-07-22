@@ -8,25 +8,25 @@ import (
 	"testing"
 )
 
-type controlDiscoveryReaderFunc func(ctx context.Context, controlPath string) (ControlDiscovery, error)
+type controlDiscoveryReaderFunc func(ctx context.Context, controlPath string) (controlDiscovery, error)
 
-func (f controlDiscoveryReaderFunc) ReadControlDiscovery(ctx context.Context, controlPath string) (ControlDiscovery, error) {
+func (f controlDiscoveryReaderFunc) readControlDiscovery(ctx context.Context, controlPath string) (controlDiscovery, error) {
 	if f == nil {
-		return ControlDiscovery{}, invalidRuntimeClient("control discovery reader function is required")
+		return controlDiscovery{}, invalidRuntimeClient("control discovery reader function is required")
 	}
 	return f(ctx, controlPath)
 }
 
 type memoryControlDiscoveryReader struct {
-	discovery ControlDiscovery
+	discovery controlDiscovery
 	err       error
 	calls     []string
 }
 
-func (r *memoryControlDiscoveryReader) ReadControlDiscovery(ctx context.Context, controlPath string) (ControlDiscovery, error) {
+func (r *memoryControlDiscoveryReader) readControlDiscovery(ctx context.Context, controlPath string) (controlDiscovery, error) {
 	r.calls = append(r.calls, controlPath)
 	if r.err != nil {
-		return ControlDiscovery{}, r.err
+		return controlDiscovery{}, r.err
 	}
 	return r.discovery, nil
 }
@@ -34,7 +34,7 @@ func (r *memoryControlDiscoveryReader) ReadControlDiscovery(ctx context.Context,
 func TestControlDiscoveryRuntimeConnectorUsesExplicitEndpointWithoutReadingDiscovery(t *testing.T) {
 	inner := &memoryRuntimeConnector{}
 	reader := &memoryControlDiscoveryReader{
-		discovery: ControlDiscovery{InvocationEndpoint: "unix:///tmp/discovered.sock"},
+		discovery: controlDiscovery{invocationEndpoint: "unix:///tmp/discovered.sock"},
 	}
 	connector, err := newControlDiscoveryRuntimeConnector(inner, "/tmp/default-control.json", reader)
 	if err != nil {
@@ -64,11 +64,11 @@ func TestControlDiscoveryRuntimeConnectorUsesExplicitEndpointWithoutReadingDisco
 func TestControlDiscoveryRuntimeConnectorReadsInvocationEndpoint(t *testing.T) {
 	inner := &memoryRuntimeConnector{}
 	reader := &memoryControlDiscoveryReader{
-		discovery: ControlDiscovery{
-			SocketPath:         "/tmp/control.sock",
-			InvocationEndpoint: "unix:///tmp/discovered-daemon.sock",
-			DaemonVersion:      "0.91.30",
-			CapabilityFlags:    []string{"invocation", "stream"},
+		discovery: controlDiscovery{
+			socketPath:         "/tmp/control.sock",
+			invocationEndpoint: "unix:///tmp/discovered-daemon.sock",
+			daemonVersion:      "0.91.30",
+			capabilityFlags:    []string{"invocation", "stream"},
 		},
 	}
 	connector, err := newControlDiscoveryRuntimeConnector(inner, "/tmp/default-control.json", reader)
@@ -108,7 +108,7 @@ func TestControlDiscoveryRuntimeConnectorRejectsControlOnlyDiscovery(t *testing.
 	connector, err := newControlDiscoveryRuntimeConnector(
 		&memoryRuntimeConnector{},
 		"/tmp/control-only.json",
-		&memoryControlDiscoveryReader{discovery: ControlDiscovery{SocketPath: "/tmp/control.sock"}},
+		&memoryControlDiscoveryReader{discovery: controlDiscovery{socketPath: "/tmp/control.sock"}},
 	)
 	if err != nil {
 		t.Fatalf("newControlDiscoveryRuntimeConnector: %v", err)
@@ -136,13 +136,13 @@ func TestFileControlDiscoveryReaderReadsControlJSON(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	discovery, err := fileControlDiscoveryReader{}.ReadControlDiscovery(context.Background(), path)
+	discovery, err := fileControlDiscoveryReader{}.readControlDiscovery(context.Background(), path)
 	if err != nil {
-		t.Fatalf("ReadControlDiscovery: %v", err)
+		t.Fatalf("readControlDiscovery: %v", err)
 	}
-	if discovery.InvocationEndpoint != "unix:///tmp/daemon.sock" ||
-		discovery.PID != 42 ||
-		len(discovery.CapabilityFlags) != 2 {
+	if discovery.invocationEndpoint != "unix:///tmp/daemon.sock" ||
+		discovery.pid != 42 ||
+		len(discovery.capabilityFlags) != 2 {
 		t.Fatalf("discovery = %#v", discovery)
 	}
 }
@@ -169,7 +169,7 @@ func TestControlDiscoveryRuntimeConnectorPassesResolvedEndpointToInnerHandshake(
 		inner,
 		"",
 		&memoryControlDiscoveryReader{
-			discovery: ControlDiscovery{InvocationEndpoint: "unix:///tmp/daemon.sock"},
+			discovery: controlDiscovery{invocationEndpoint: "unix:///tmp/daemon.sock"},
 		},
 	)
 	if err != nil {
