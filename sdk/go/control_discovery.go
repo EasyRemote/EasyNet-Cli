@@ -105,9 +105,7 @@ type ControlDiscoveryRuntimeConnector struct {
 	closed      bool
 }
 
-// NewControlDiscoveryRuntimeConnector creates a RuntimeConnector that resolves
-// daemon invocation endpoints from control discovery before delegating handshake.
-func NewControlDiscoveryRuntimeConnector(inner RuntimeConnector, controlPath string, reader ControlDiscoveryReader) (*ControlDiscoveryRuntimeConnector, error) {
+func newControlDiscoveryRuntimeConnector(inner RuntimeConnector, controlPath string, reader ControlDiscoveryReader) (*ControlDiscoveryRuntimeConnector, error) {
 	if inner == nil {
 		return nil, invalidRuntimeClient("inner runtime connector is required")
 	}

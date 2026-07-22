@@ -36,9 +36,9 @@ func TestControlDiscoveryRuntimeConnectorUsesExplicitEndpointWithoutReadingDisco
 	reader := &memoryControlDiscoveryReader{
 		discovery: ControlDiscovery{InvocationEndpoint: "unix:///tmp/discovered.sock"},
 	}
-	connector, err := NewControlDiscoveryRuntimeConnector(inner, "/tmp/default-control.json", reader)
+	connector, err := newControlDiscoveryRuntimeConnector(inner, "/tmp/default-control.json", reader)
 	if err != nil {
-		t.Fatalf("NewControlDiscoveryRuntimeConnector: %v", err)
+		t.Fatalf("newControlDiscoveryRuntimeConnector: %v", err)
 	}
 
 	raw, err := connector.Resolve(context.Background(), []byte(`{
@@ -71,9 +71,9 @@ func TestControlDiscoveryRuntimeConnectorReadsInvocationEndpoint(t *testing.T) {
 			CapabilityFlags:    []string{"invocation", "stream"},
 		},
 	}
-	connector, err := NewControlDiscoveryRuntimeConnector(inner, "/tmp/default-control.json", reader)
+	connector, err := newControlDiscoveryRuntimeConnector(inner, "/tmp/default-control.json", reader)
 	if err != nil {
-		t.Fatalf("NewControlDiscoveryRuntimeConnector: %v", err)
+		t.Fatalf("newControlDiscoveryRuntimeConnector: %v", err)
 	}
 
 	connection, err := NewRuntimeConnection(connector)
@@ -105,13 +105,13 @@ func TestControlDiscoveryRuntimeConnectorReadsInvocationEndpoint(t *testing.T) {
 }
 
 func TestControlDiscoveryRuntimeConnectorRejectsControlOnlyDiscovery(t *testing.T) {
-	connector, err := NewControlDiscoveryRuntimeConnector(
+	connector, err := newControlDiscoveryRuntimeConnector(
 		&memoryRuntimeConnector{},
 		"/tmp/control-only.json",
 		&memoryControlDiscoveryReader{discovery: ControlDiscovery{SocketPath: "/tmp/control.sock"}},
 	)
 	if err != nil {
-		t.Fatalf("NewControlDiscoveryRuntimeConnector: %v", err)
+		t.Fatalf("newControlDiscoveryRuntimeConnector: %v", err)
 	}
 
 	_, err = connector.Resolve(context.Background(), nil)
@@ -165,7 +165,7 @@ func TestControlDiscoveryRuntimeConnectorPassesResolvedEndpointToInnerHandshake(
 			}, []byte(`{"ready":true}`), nil
 		},
 	}
-	connector, err := NewControlDiscoveryRuntimeConnector(
+	connector, err := newControlDiscoveryRuntimeConnector(
 		inner,
 		"",
 		&memoryControlDiscoveryReader{
@@ -173,7 +173,7 @@ func TestControlDiscoveryRuntimeConnectorPassesResolvedEndpointToInnerHandshake(
 		},
 	)
 	if err != nil {
-		t.Fatalf("NewControlDiscoveryRuntimeConnector: %v", err)
+		t.Fatalf("newControlDiscoveryRuntimeConnector: %v", err)
 	}
 	connection, err := NewRuntimeConnection(connector)
 	if err != nil {
