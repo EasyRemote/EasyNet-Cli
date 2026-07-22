@@ -3100,3 +3100,32 @@ Evidence will be appended after indexing and focused impact queries.
 - Added cross-language malformed `answer` tests and extended the SPEC v2
   Directory projection gate plus self-test fixture so this downgrade cannot
   return.
+
+## 2026-07-22 Java InvocationResult terminal receipt fail-closed audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore --max-files 12
+  "Java InvocationResult terminal_receipt optionalReceipt RuntimeReceipt proof
+  facts canonical invocation result"` traced the Java daemon SDK invocation
+  result projection to `sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java`.
+- Source inspection found the Java decoder still accepted an absent or null
+  `terminal_receipt` through the old optional receipt path, then allowed
+  `validateTerminalReceipt` to return early for an empty map. That preserved a
+  receipt-free product observation path even though `RuntimeReceipt` already
+  owns proof-fact validation.
+- Root abstraction problem: the Java SDK daemon JSON projection was still
+  treating the terminal receipt as an optional compatibility field instead of
+  the canonical invocation result checkpoint. That let a Java consumer observe
+  an invocation result without an Axon-finalized terminal receipt chain.
+- Boundary decision: keep the public record shape source-compatible, but make
+  daemon JSON decoding fail closed. Canonical invocation result JSON must carry
+  `terminal_receipt`; missing, null, malformed, mismatched-state, or retired
+  `receipt` alias input is rejected before reaching product code.
+- Added Java seam tests for missing and null `terminal_receipt`, and extended
+  `check-canonical-runtime-convergence-v2.sh` plus its self-test fixture to
+  reject the old optional Java decoder.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` synced the changed
+  Java/gate files; `/Users/macbook.silan.tech/.local/bin/codegraph status .`
+  then reported an up-to-date graph with 1,018 files, 35,356 nodes, and
+  135,723 edges. `codegraph query ... "optionalReceipt terminal_receipt
+  InvocationResult"` no longer reports a Java `optionalReceipt` production
+  symbol after re-indexing.

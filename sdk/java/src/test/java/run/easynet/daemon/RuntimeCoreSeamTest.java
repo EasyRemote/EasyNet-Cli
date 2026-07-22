@@ -225,6 +225,32 @@ public final class RuntimeCoreSeamTest {
 
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
+        "terminal_receipt is required",
+        () ->
+            InvocationResult.fromJSON(
+                JsonValueWriter.object(
+                    Map.of(
+                        "ok",
+                        true,
+                        "terminal_state",
+                        "Completed"))));
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "terminal_receipt is required",
+        () ->
+            InvocationResult.fromJSON(
+                JsonValueWriter.object(
+                    nullableMapOf(
+                        "ok",
+                        true,
+                        "terminal_state",
+                        "Completed",
+                        "terminal_receipt",
+                        null))));
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
         "retired receipt alias is not accepted",
         () ->
             InvocationResult.fromJSON(
@@ -877,6 +903,21 @@ public final class RuntimeCoreSeamTest {
 
   private static Map<String, Object> agentBinding(String ura) {
     return Map.of("ura", ura, "profile", "axon-strict-v2");
+  }
+
+  private static Map<String, Object> nullableMapOf(Object... entries) {
+    if (entries.length % 2 != 0) {
+      throw new IllegalArgumentException("nullable map entries must be key/value pairs");
+    }
+    Map<String, Object> out = new LinkedHashMap<>();
+    for (int i = 0; i < entries.length; i += 2) {
+      Object key = entries[i];
+      if (!(key instanceof String text) || text.isBlank()) {
+        throw new IllegalArgumentException("nullable map keys must be non-empty strings");
+      }
+      out.put(text, entries[i + 1]);
+    }
+    return out;
   }
 
   private static byte[] repeatedByte(int value, int count) {

@@ -3820,12 +3820,17 @@ for fragment, label in {
 
 if "RuntimeReceipt.fromMap(terminalReceipt)" not in result:
     raise SystemExit("java_runtime_receipt_projection:invocation_result_not_using_receipt_validator")
+if "requiredTerminalReceipt(fields)" not in result:
+    raise SystemExit("java_runtime_receipt_projection:terminal_receipt_not_required")
+if "terminal_receipt is required" not in result:
+    raise SystemExit("java_runtime_receipt_projection:terminal_receipt_required_error_missing")
 if "terminal_receipt state does not match invocation terminal_state" not in result:
     raise SystemExit("java_runtime_receipt_projection:terminal_state_topology_missing")
 if 'fields.containsKey("receipt")' not in result or "retired receipt alias is not accepted" not in result:
     raise SystemExit("java_runtime_receipt_projection:retired_receipt_alias_not_rejected")
 legacy_patterns = {
     "terminalReceiptValue instanceof Map<?, ?> map ? copyStringMap(map) : Map.of()": "malformed_terminal_receipt_downgrade",
+    "optionalReceipt(fields, \"terminal_receipt\")": "optional_terminal_receipt_decoder",
     "terminalReceipt = terminalReceipt == null ? Map.of() : Map.copyOf(terminalReceipt);\n    if (ok": "constructor_without_receipt_validation",
 }
 for pattern, label in legacy_patterns.items():
@@ -3836,6 +3841,7 @@ for required_test in (
     "runtimeReceiptProofFactsAreMandatory",
     "canonicalRuntimeReceiptFixture",
     "missingProof.remove(\"authority_proof\")",
+    "terminal_receipt is required",
     "retired receipt alias",
 ):
     if required_test not in tests:
@@ -4165,20 +4171,20 @@ PY
   fi
   mkdir -p "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon" \
     "$tmp/cli-java-receipt-legacy/sdk/java/src/test/java/run/easynet/daemon"
-  cat >"$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java" <<'EOF'
-package run.easynet.daemon;
-import java.util.Map;
-public record InvocationResult(Map<String, Object> terminalReceipt) {
-  static InvocationResult fromJSON(Map<String, Object> fields) {
-    Object terminalReceiptValue = fields.get("terminal_receipt");
-    Map<String, Object> terminalReceipt =
-        terminalReceiptValue instanceof Map<?, ?> map ? Map.of() : Map.of();
-    return new InvocationResult(terminalReceipt);
-  }
-}
-EOF
-  printf 'package run.easynet.daemon;\npublic class RuntimeCoreSeamTest {}\n' \
-    > "$tmp/cli-java-receipt-legacy/sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+  cp "$ROOT/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java" \
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java"
+  cp "$ROOT/sdk/java/src/main/java/run/easynet/daemon/RuntimeReceipt.java" \
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon/RuntimeReceipt.java"
+  cp "$ROOT/sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java" \
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+  perl -0pi -e 's/requiredTerminalReceipt\(fields\)/optionalReceipt(fields, "terminal_receipt")/' \
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java"
+  perl -0pi -e 's/private static Map<String, Object> requiredTerminalReceipt\(Map<String, Object> fields\)/private static Map<String, Object> optionalReceipt(Map<String, Object> fields, String field)/' \
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java"
+  perl -0pi -e 's/throw SDKError\.validation\("invocation_result", "terminal_receipt is required"\);/return Map.of();/' \
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java"
+  perl -0pi -e 's/fields\.containsKey\("terminal_receipt"\)/fields.containsKey(field)/g; s/fields\.get\("terminal_receipt"\)/fields.get(field)/g; s/"terminal_receipt must be an object"/field + " must be an object"/g' \
+    "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/easynet/daemon/InvocationResult.java"
   if ( CLI_ROOT="$tmp/cli-java-receipt-legacy"; check_java_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java SDK receipt projection bypass gate to fail"
   fi

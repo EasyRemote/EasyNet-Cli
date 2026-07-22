@@ -32,7 +32,7 @@ public record InvocationResult(
     boolean ok = bool(fields, "ok");
     String state = string(fields, "terminal_state");
     Object output = fields.get("output_json");
-    Map<String, Object> terminalReceipt = optionalReceipt(fields, "terminal_receipt");
+    Map<String, Object> terminalReceipt = requiredTerminalReceipt(fields);
     SDKError error = ok ? null : SDKError.validation("runtime", "invocation failed");
     return new InvocationResult(
         ok,
@@ -42,13 +42,13 @@ public record InvocationResult(
         terminalReceipt);
   }
 
-  private static Map<String, Object> optionalReceipt(Map<String, Object> fields, String field) {
-    if (!fields.containsKey(field) || fields.get(field) == null) {
-      return Map.of();
+  private static Map<String, Object> requiredTerminalReceipt(Map<String, Object> fields) {
+    if (!fields.containsKey("terminal_receipt") || fields.get("terminal_receipt") == null) {
+      throw SDKError.validation("invocation_result", "terminal_receipt is required");
     }
-    Object value = fields.get(field);
+    Object value = fields.get("terminal_receipt");
     if (!(value instanceof Map<?, ?> map)) {
-      throw SDKError.validation("invocation_result", field + " must be an object");
+      throw SDKError.validation("invocation_result", "terminal_receipt must be an object");
     }
     return copyStringMap(map);
   }
