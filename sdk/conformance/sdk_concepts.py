@@ -943,7 +943,6 @@ def self_test(tmp: Path) -> None:
         "ModeDevice": "Non-URA device/hub",
         "RuntimeModeHub": "Non-URA device/hub",
         "RuntimeAdminAbilityClient.RevokeDevice": "Non-URA device/hub",
-        "CABIDiscoveryTransport": "C ABI transport/provider",
     }
     for item, marker in quarantine_cases.items():
         reason = canonical_quarantine_reason(item)

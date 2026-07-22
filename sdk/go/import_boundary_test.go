@@ -235,7 +235,7 @@ func allowedPrivateCABIAdapter(path, text string) bool {
 	if !strings.Contains(text, "easynet_cabi") || !strings.Contains(text, "cgo") {
 		return false
 	}
-	return (base == "cabi_dynamic.go" && strings.Contains(text, "type CABIDiscoveryTransport struct")) ||
+	return (base == "cabi_dynamic.go" && strings.Contains(text, "func openCABIDynamicLibrary(")) ||
 		(base == "cabi_runtime.go" && strings.Contains(text, "type CABIRuntimeLifecycleTransport struct")) ||
 		(base == "cabi_callbacks.go" && strings.Contains(text, "easynetGoStreamCallback"))
 }

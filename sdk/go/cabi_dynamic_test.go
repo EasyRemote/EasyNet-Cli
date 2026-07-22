@@ -8,16 +8,14 @@ import (
 	"testing"
 )
 
-var _ DiscoveryTransport = (*CABIDiscoveryTransport)(nil)
-
-func TestCABIDiscoveryCandidatesPreferExplicitPath(t *testing.T) {
+func TestCABILibraryCandidatesPreferExplicitPath(t *testing.T) {
 	candidates := cabiLibraryCandidates("/opt/easynet/libeasynet_cli.custom")
 	if len(candidates) != 1 || candidates[0] != "/opt/easynet/libeasynet_cli.custom" {
 		t.Fatalf("explicit path was not the only C ABI candidate: %#v", candidates)
 	}
 }
 
-func TestCABIDiscoveryCandidatesUsePlatformLibraryName(t *testing.T) {
+func TestCABILibraryCandidatesUsePlatformLibraryName(t *testing.T) {
 	candidates := cabiLibraryCandidates("")
 	if len(candidates) != 1 {
 		t.Fatalf("default loading must use only the system library name: %#v", candidates)
