@@ -144,7 +144,7 @@ pub fn resource_ref_for_local_path(
         &mapped.relative_path,
         capability,
         expires_unix_ms,
-    ))
+    )?)
 }
 
 /// Resolve and revalidate the `resource_ref` field from ability args.
@@ -256,26 +256,24 @@ fn resource_ref_value(
     relative_path: &str,
     capability: FilesystemResourceCapability,
     expires_unix_ms: i64,
-) -> Value {
-    // Bind the local-mapping ResourceRef to this device's REAL paired identity
-    // (realm + node_id), not a fixed `localhost`/`local-device` placeholder. The
-    // realm is hub-issued at join and every other URA mint honours it; this was
-    // the one production site that advertised `easynet:///r/localhost/...` while
-    // the device's real URA lives under its paired realm. Fall back to the
-    // canonical unpaired sentinel (default/local) when no credentials exist,
-    // mirroring `local_invocation_identity::local_device_ura`.
-    let (realm, device_id) = crate::daemon::persistence::config::load_credentials()
-        .ok()
-        .map(|c| (c.realm, c.node_id))
-        .unwrap_or_else(|| {
-            (
-                crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM.to_string(),
-                crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_DEVICE_ID.to_string(),
-            )
-        });
+) -> Result<Value> {
+    let owner_ura = crate::daemon::identity::local_invocation::local_device_ura()
+        .map_err(|error| anyhow!("resource_ref: local device owner unavailable: {error}"))?;
+    let parsed_owner = crate::core::ura::parse_ura(&owner_ura)
+        .map_err(|error| anyhow!("resource_ref: local device owner is invalid: {error}"))?;
+    if parsed_owner.kind != crate::core::ura::URAKind::Device {
+        return Err(anyhow!(
+            "resource_ref: local device owner must be a Device URA, got {}",
+            parsed_owner.kind
+        ));
+    }
+    let device_id = parsed_owner
+        .device_id()
+        .ok_or_else(|| anyhow!("resource_ref: local device owner omitted device id"))?
+        .to_string();
+    let realm = parsed_owner.realm;
     let owner_token = format!("device.{device_id}");
-    let owner_ura = crate::core::ura::device_ura(&realm, &device_id);
-    json!({
+    Ok(json!({
         "resource_ura": crate::core::ura::resource_dot_ura(
             &realm,
             &owner_token,
@@ -287,7 +285,7 @@ fn resource_ref_value(
         "capability": capability.as_str(),
         "expires_unix_ms": expires_unix_ms,
         "revision": LOCAL_RESOURCE_REF_REVISION
-    })
+    }))
 }
 
 fn map_local_path_to_virtual_resource(path: &Path) -> Result<LocalFilesystemResourcePath> {
@@ -546,6 +544,7 @@ pub(crate) fn resource_ref_for_tmp_relative_path(
     expires_unix_ms: i64,
 ) -> Value {
     resource_ref_value(VIRTUAL_ROOT_TMP, relative_path, capability, expires_unix_ms)
+        .expect("test filesystem ResourceRef owner identity must be provisioned")
 }
 
 #[cfg(test)]
@@ -564,11 +563,29 @@ mod tests {
         now_unix_ms().saturating_add(delta_ms)
     }
 
+    fn provision_local_device_credentials() -> crate::cli::commands::test_support::HomeGuard {
+        let home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "dev-a".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "axon://hub.example:50051".to_string(),
+                realm: "acme".to_string(),
+                username: Some("alice".to_string()),
+                user_id: Some("user-alice".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("write filesystem ResourceRef test credentials");
+        home
+    }
+
     fn resource_ref(
         relative_path: &str,
         capability: FilesystemResourceCapability,
         expires_unix_ms: i64,
     ) -> Value {
+        let _home = provision_local_device_credentials();
         resource_ref_for_tmp_relative_path(relative_path, capability, expires_unix_ms)
     }
 
@@ -583,6 +600,49 @@ mod tests {
         assert!(err
             .to_string()
             .contains("outside built-in filesystem virtual roots"));
+    }
+
+    #[test]
+    fn resource_ref_for_local_path_rejects_missing_local_device_identity() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let rel = unique_resource_rel("identity-required.txt");
+        let local = std::env::temp_dir().join(&rel);
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::write(&local, "metadata").unwrap();
+
+        let err = resource_ref_for_local_path(&local, FilesystemResourceCapability::Read)
+            .expect_err("filesystem ResourceRef minting must require local device identity");
+
+        assert!(
+            err.to_string()
+                .contains("resource_ref: local device owner unavailable"),
+            "unexpected error: {err}"
+        );
+        std::fs::remove_file(&local).ok();
+        std::fs::remove_dir_all(local.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn resource_ref_for_local_path_binds_credentials_backed_device_owner() {
+        let _home = provision_local_device_credentials();
+        let rel = unique_resource_rel("owner.txt");
+        let local = std::env::temp_dir().join(&rel);
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::write(&local, "metadata").unwrap();
+
+        let reference = resource_ref_for_local_path(&local, FilesystemResourceCapability::Read)
+            .expect("filesystem ResourceRef minted with local device identity");
+
+        assert_eq!(
+            reference["owner_ura"],
+            crate::core::ura::device_ura("acme", "dev-a")
+        );
+        assert!(reference["resource_ura"]
+            .as_str()
+            .expect("resource_ura string")
+            .starts_with("easynet:///r/acme/resource/device.dev-a/fs/tmp/"));
+        std::fs::remove_file(&local).ok();
+        std::fs::remove_dir_all(local.parent().unwrap()).ok();
     }
 
     #[test]
