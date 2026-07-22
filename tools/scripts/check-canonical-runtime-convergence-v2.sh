@@ -1610,6 +1610,50 @@ for required_test in (
 PY
 }
 
+check_ffi_invocation_json_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+  [[ -f "$ffi_invocation" ]] || fail "FFI invocation source is missing: $ffi_invocation"
+
+  "$PYTHON_BIN" - "$ffi_invocation" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(all(test, feature = \"axon-pb\"))]\nmod tests", 1)[0]
+
+retired_patterns = {
+    "serde_json::from_slice::<serde_json::Value>(&result.output).ok()": "unary_output_json_parse_downgrade",
+    "serde_json::from_slice::<serde_json::Value>(&chunk.payload).ok()": "stream_payload_json_parse_downgrade",
+}
+for pattern, label in retired_patterns.items():
+    if pattern in production:
+        raise SystemExit(f"ffi_invocation_json_projection:{label}")
+
+if "fn runtime_json_projection(" not in production:
+    raise SystemExit("ffi_invocation_json_projection:shared_projection_helper_missing")
+if "payload is not valid JSON" not in production:
+    raise SystemExit("ffi_invocation_json_projection:declared_json_error_missing")
+if not re.search(
+    r"fn invocation_outcome_json_with_tuple\([^)]*\)\s*->\s*Result<serde_json::Value,\s*String>",
+    production,
+    re.S,
+):
+    raise SystemExit("ffi_invocation_json_projection:unary_projection_not_fallible")
+if "runtime_json_projection(&chunk.payload, &chunk.content_type, \"payload_json\")?" not in production:
+    raise SystemExit("ffi_invocation_json_projection:stream_projection_not_shared")
+if "runtime_json_projection(&result.output, &result.output_content_type, \"output_json\")?" not in production:
+    raise SystemExit("ffi_invocation_json_projection:unary_projection_not_shared")
+for required_test in (
+    "unary_result_json_rejects_declared_json_output_that_is_not_json",
+    "stream_chunk_json_rejects_declared_json_payload_that_is_not_json",
+):
+    if required_test not in text:
+        raise SystemExit(f"ffi_invocation_json_projection:missing_test:{required_test}")
+PY
+}
+
 check_canonical_ability_catalog_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local descriptor="$cli_root/src/daemon/ability/descriptors/surface.rs"
@@ -3333,6 +3377,29 @@ EOF
   if ( CLI_ROOT="$tmp/cli-node-receipt-legacy"; check_node_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Node SDK receipt projection bypass gate to fail"
   fi
+  mkdir -p "$tmp/cli-ffi-json-legacy/src/ffi/invocation"
+  cat >"$tmp/cli-ffi-json-legacy/src/ffi/invocation/mod.rs" <<'EOF'
+fn invocation_outcome_json_with_tuple() -> serde_json::Value {
+    let output_json = if result_content_type_is_json(&result.output_content_type) {
+        serde_json::from_slice::<serde_json::Value>(&result.output).ok()
+    } else {
+        None
+    };
+    serde_json::json!({"output_json": output_json})
+}
+
+fn stream_chunk_json() -> Result<serde_json::Value, String> {
+    let payload_json = if chunk.content_type == "application/json" {
+        serde_json::from_slice::<serde_json::Value>(&chunk.payload).ok()
+    } else {
+        None
+    };
+    Ok(serde_json::json!({"payload_json": payload_json}))
+}
+EOF
+  if ( CLI_ROOT="$tmp/cli-ffi-json-legacy"; check_ffi_invocation_json_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected FFI JSON projection downgrade gate to fail"
+  fi
   mkdir -p "$tmp/cli-sdk-receipt-type-legacy/sdk/go" \
     "$tmp/cli-sdk-receipt-type-legacy/sdk/python/easynet_sdk" \
     "$tmp/cli-sdk-receipt-type-legacy/sdk/python/tests" \
@@ -4521,6 +4588,7 @@ EOF
   check_namespace_resolver_authority_projection_contract
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
   check_ffi_descriptor_runtime_owner_contract
+  check_ffi_invocation_json_projection_contract
   check_canonical_ability_catalog_projection_contract
   check_daemon_runtime_assembly_contract
   check_plugin_sidecar_helper_matrix_contract
@@ -4580,6 +4648,7 @@ check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract
 check_daemon_invocation_service_descriptor_ref_route_projection_contract
 check_ffi_descriptor_runtime_owner_contract
+check_ffi_invocation_json_projection_contract
 check_canonical_ability_catalog_projection_contract
 check_daemon_runtime_assembly_contract
 check_plugin_sidecar_helper_matrix_contract

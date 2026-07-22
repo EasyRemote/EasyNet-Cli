@@ -1062,3 +1062,19 @@ Decisions will be appended as root-fork choices are made.
 - Remove the `Option` projection shape from production callers. Callers that
   need descriptor identity now propagate a descriptor/read-model error instead
   of turning derivation failure into a missing descriptor.
+
+## 2026-07-22 FFI invocation JSON projection
+
+- Treat declared JSON output as schema-bound runtime projection state. If
+  unary output or stream payload bytes are not valid JSON while the content
+  type declares JSON, FFI projection returns an explicit protocol error instead
+  of `null` JSON.
+- Keep base64 output as the lossless byte carrier. It is evidence for what the
+  runtime returned, not a compatibility repair path for a malformed JSON read
+  model.
+- Centralize unary and stream JSON parsing in `runtime_json_projection` so
+  public FFI invoke, handle await, handle events, and stream callback
+  projection cannot drift into separate JSON semantics.
+- Preserve the public ABI shape: successful outputs still expose
+  `output_json`/`payload_json` plus base64 fields, while corrupt declared JSON
+  now fails at the FFI observation boundary with `ERR_PROTOCOL`.

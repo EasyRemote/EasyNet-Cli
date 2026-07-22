@@ -2682,7 +2682,15 @@ fn invoke_with_axon_pb(
         Ok(outcome) => outcome,
         Err(error) => return ffi_daemon_error("easynet_invocation_invoke", error),
     };
-    let output = invocation_outcome_json_with_tuple(outcome, tuple_json);
+    let output = match invocation_outcome_json_with_tuple(outcome, tuple_json) {
+        Ok(output) => output,
+        Err(message) => {
+            return record_invocation_error(
+                ERR_PROTOCOL,
+                format!("easynet_invocation_invoke: {message}"),
+            );
+        }
+    };
     let json = match serde_json::to_string(&output) {
         Ok(json) => json,
         Err(err) => {
@@ -2947,7 +2955,18 @@ fn submit_signed_handle_with_axon_pb(
     let shared = active.shared.clone();
     let invocation_handle_id = insert_invocation_handle(active);
     let submitted = match get_invocation_handle_for_owner(owner_binding, invocation_handle_id) {
-        Ok(Some(handle)) => handle.submitted_json(invocation_handle_id).to_string(),
+        Ok(Some(handle)) => match handle.submitted_json(invocation_handle_id) {
+            Ok(json) => json.to_string(),
+            Err(failure) => {
+                return record_invocation_error(
+                    failure.abi_code,
+                    format!(
+                        "easynet_invocation_submit_signed_handle: {}",
+                        failure.message
+                    ),
+                );
+            }
+        },
         Ok(None) | Err(_) => {
             return record_invocation_error(
                 ERR_GENERIC,
@@ -3102,7 +3121,15 @@ fn invocation_handle_events_with_axon_pb(
             );
         }
     };
-    let json = handle.events_json(invocation_handle_id).to_string();
+    let json = match handle.events_json(invocation_handle_id) {
+        Ok(json) => json.to_string(),
+        Err(failure) => {
+            return record_invocation_error(
+                failure.abi_code,
+                format!("easynet_invocation_handle_events: {}", failure.message),
+            );
+        }
+    };
     let ptr = alloc_output_cstring(json);
     if ptr.is_null() {
         return record_invocation_error(
@@ -3949,7 +3976,10 @@ impl ActiveInvocationHandle {
         (handle, receiver)
     }
 
-    fn submitted_json(&self, invocation_handle_id: InvocationHandleId) -> serde_json::Value {
+    fn submitted_json(
+        &self,
+        invocation_handle_id: InvocationHandleId,
+    ) -> Result<serde_json::Value, InvocationObservationFailure> {
         self.shared.snapshot_json(invocation_handle_id)
     }
 
@@ -3960,7 +3990,12 @@ impl ActiveInvocationHandle {
 
     fn await_result_json(&self) -> Result<serde_json::Value, InvocationObservationFailure> {
         let (outcome, tuple_json) = self.shared.await_outcome_with_tuple_json()?;
-        Ok(invocation_outcome_json_with_tuple(outcome, tuple_json))
+        invocation_outcome_json_with_tuple(outcome, tuple_json).map_err(|message| {
+            InvocationObservationFailure {
+                abi_code: ERR_PROTOCOL,
+                message,
+            }
+        })
     }
 
     fn cancel(&self, reason: Option<String>) -> InvocationHandleCancelOutcome {
@@ -3976,7 +4011,10 @@ impl ActiveInvocationHandle {
         outcome
     }
 
-    fn events_json(&self, invocation_handle_id: InvocationHandleId) -> serde_json::Value {
+    fn events_json(
+        &self,
+        invocation_handle_id: InvocationHandleId,
+    ) -> Result<serde_json::Value, InvocationObservationFailure> {
         self.shared.snapshot_json(invocation_handle_id)
     }
 }
@@ -4127,7 +4165,10 @@ impl InvocationHandleShared {
         self.terminal.notify_all();
     }
 
-    fn snapshot_json(&self, invocation_handle_id: InvocationHandleId) -> serde_json::Value {
+    fn snapshot_json(
+        &self,
+        invocation_handle_id: InvocationHandleId,
+    ) -> Result<serde_json::Value, InvocationObservationFailure> {
         let state = self.lock();
         state.snapshot_json(invocation_handle_id)
     }
@@ -4202,18 +4243,35 @@ impl InvocationHandleState {
         self.terminal_outcome = Some(outcome);
     }
 
-    fn snapshot_json(&self, invocation_handle_id: InvocationHandleId) -> serde_json::Value {
-        serde_json::json!({
+    fn snapshot_json(
+        &self,
+        invocation_handle_id: InvocationHandleId,
+    ) -> Result<serde_json::Value, InvocationObservationFailure> {
+        let events = self
+            .events
+            .iter()
+            .map(|event| event.to_json(&self.tuple_json))
+            .collect::<Result<Vec<_>, _>>()?;
+        let result = self
+            .terminal_outcome
+            .clone()
+            .map(|outcome| invocation_outcome_json_with_tuple(outcome, self.tuple_json.clone()))
+            .transpose()
+            .map_err(|message| InvocationObservationFailure {
+                abi_code: ERR_PROTOCOL,
+                message,
+            })?;
+        Ok(serde_json::json!({
             "handle_id": invocation_handle_id,
             "state": self.phase.as_str(),
             "terminal": self.phase.is_terminal(),
-            "events": self.events.iter().map(|event| event.to_json(&self.tuple_json)).collect::<Vec<_>>(),
-            "result": self.terminal_outcome.clone().map(|outcome| invocation_outcome_json_with_tuple(outcome, self.tuple_json.clone())),
+            "events": events,
+            "result": result,
             "observation_error": self.observation_failure.as_ref().map(|failure| serde_json::json!({
                 "abi_code": failure.abi_code,
                 "message": failure.message,
             })),
-        })
+        }))
     }
 }
 
@@ -4230,15 +4288,27 @@ struct InvocationHandleEvent {
 
 #[cfg(feature = "axon-pb")]
 impl InvocationHandleEvent {
-    fn to_json(&self, tuple_json: &serde_json::Value) -> serde_json::Value {
-        serde_json::json!({
+    fn to_json(
+        &self,
+        tuple_json: &serde_json::Value,
+    ) -> Result<serde_json::Value, InvocationObservationFailure> {
+        let result = self
+            .outcome
+            .clone()
+            .map(|outcome| invocation_outcome_json_with_tuple(outcome, tuple_json.clone()))
+            .transpose()
+            .map_err(|message| InvocationObservationFailure {
+                abi_code: ERR_PROTOCOL,
+                message,
+            })?;
+        Ok(serde_json::json!({
             "sequence": self.sequence,
             "kind": self.kind,
             "state": self.state.as_str(),
             "terminal": self.terminal,
             "reason": self.reason,
-            "result": self.outcome.clone().map(|outcome| invocation_outcome_json_with_tuple(outcome, tuple_json.clone())),
-        })
+            "result": result,
+        }))
     }
 }
 
@@ -6201,17 +6271,14 @@ fn signed_invocation_json(signed: &crate::daemon::SignedInvocation) -> serde_jso
 fn invocation_outcome_json_with_tuple(
     outcome: crate::daemon::InvocationOutcome,
     tuple_json: serde_json::Value,
-) -> serde_json::Value {
+) -> Result<serde_json::Value, String> {
     use base64::Engine;
     let (result, stages) = outcome.into_parts();
     debug_assert_eq!(result.receipt, stages.terminal);
-    let output_json = if result_content_type_is_json(&result.output_content_type) {
-        serde_json::from_slice::<serde_json::Value>(&result.output).ok()
-    } else {
-        None
-    };
+    let output_json =
+        runtime_json_projection(&result.output, &result.output_content_type, "output_json")?;
     let terminal_receipt = stages.terminal;
-    serde_json::json!({
+    Ok(serde_json::json!({
         "ok": result.error.is_none(),
         "tuple": tuple_json,
         "terminal_state": result.terminal_state,
@@ -6222,12 +6289,30 @@ fn invocation_outcome_json_with_tuple(
         "admission_receipt": stages.admission.map(receipt_summary_dto_json),
         "terminal_receipt": terminal_receipt.map(receipt_summary_dto_json),
         "error": result.error.map(runtime_error_json),
-    })
+    }))
 }
 
 #[cfg(feature = "axon-pb")]
 fn result_content_type_is_json(content_type: &str) -> bool {
     content_type.to_ascii_lowercase().contains("json")
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_json_projection(
+    payload: &[u8],
+    content_type: &str,
+    projection_field: &'static str,
+) -> Result<Option<serde_json::Value>, String> {
+    if !result_content_type_is_json(content_type) {
+        return Ok(None);
+    }
+    serde_json::from_slice::<serde_json::Value>(payload)
+        .map(Some)
+        .map_err(|error| {
+            format!(
+                "{projection_field} declares JSON content type {content_type:?} but payload is not valid JSON: {error}"
+            )
+        })
 }
 
 #[cfg(feature = "axon-pb")]
@@ -6331,11 +6416,8 @@ fn stream_chunk_json(
 ) -> Result<serde_json::Value, String> {
     use base64::Engine;
     let payload_base64 = base64::engine::general_purpose::STANDARD.encode(&chunk.payload);
-    let payload_json = if chunk.content_type == "application/json" {
-        serde_json::from_slice::<serde_json::Value>(&chunk.payload).ok()
-    } else {
-        None
-    };
+    let payload_json =
+        runtime_json_projection(&chunk.payload, &chunk.content_type, "payload_json")?;
     let admission_receipt = chunk
         .admission_receipt
         .map(|receipt| verifier.verify_admission(receipt))
@@ -7215,7 +7297,8 @@ mod tests {
         );
         assert!(admission_index < terminal_index);
 
-        let json = invocation_outcome_json_with_tuple(outcome, serde_json::json!({}));
+        let json = invocation_outcome_json_with_tuple(outcome, serde_json::json!({}))
+            .expect("canonical JSON result projection");
         assert_eq!(json["output_json"], serde_json::json!({"ok": true}));
         assert!(json["output_base64"]
             .as_str()
@@ -7262,6 +7345,28 @@ mod tests {
             json["terminal_receipt"]["authority_proof"]["binding"]["kind"],
             "self"
         );
+    }
+
+    #[test]
+    fn unary_result_json_rejects_declared_json_output_that_is_not_json() {
+        let result = crate::daemon::InvocationResult {
+            tuple: signed_fixture_tuple(),
+            terminal_state: "Completed".to_string(),
+            output_content_type: "application/json".to_string(),
+            output: b"not-json".to_vec(),
+            elapsed_ms: 7,
+            receipt: None,
+            error: None,
+        };
+        let outcome = crate::daemon::InvocationOutcome::new(
+            result,
+            crate::daemon::InvocationReceiptStages::default(),
+        );
+
+        let error = invocation_outcome_json_with_tuple(outcome, serde_json::json!({}))
+            .expect_err("declared JSON output must fail closed");
+        assert!(error.contains("output_json declares JSON content type"));
+        assert!(error.contains("payload is not valid JSON"));
     }
 
     fn active_bidi_session(
@@ -7789,7 +7894,7 @@ mod tests {
         assert_typed_last_error(
             "INVALID_ARGUMENT",
             ERR_INVALID_ARG,
-            "signed invocation signer id must not be empty",
+            "missing field `key_id_hint`",
         );
         assert_eq!(easynet_prepared_invocation_free(prepared_id), EASYNET_OK);
         crate::ffi::client::handle::release(handle);
@@ -8555,7 +8660,7 @@ mod tests {
         .expect("receipt-free pre-admission rejection");
 
         assert!(shared.observe_canonical_outcome(outcome).unwrap());
-        let snapshot = shared.snapshot_json(41);
+        let snapshot = shared.snapshot_json(41).unwrap();
         assert_eq!(snapshot["terminal"], true);
         assert_eq!(snapshot["state"], "Failed");
         assert_eq!(snapshot["events"][1]["kind"], "failed");
@@ -8611,11 +8716,11 @@ mod tests {
             .observe_cancel_command_outcome(command_outcome)
             .expect("cancel command has canonical completion");
         assert_eq!(
-            handle.shared.snapshot_json(invocation_handle_id)["terminal"],
+            handle.shared.snapshot_json(invocation_handle_id).unwrap()["terminal"],
             false
         );
         assert_eq!(
-            handle.shared.snapshot_json(invocation_handle_id)["state"],
+            handle.shared.snapshot_json(invocation_handle_id).unwrap()["state"],
             "CancelRequested"
         );
 
@@ -8636,7 +8741,7 @@ mod tests {
         assert!(after_terminal.cancelled);
         assert!(after_terminal.terminal);
 
-        let events_json = handle.events_json(invocation_handle_id);
+        let events_json = handle.events_json(invocation_handle_id).unwrap();
         assert_eq!(events_json["events"].as_array().unwrap().len(), 4);
         assert_eq!(events_json["events"][1]["state"], "CancelRequested");
         assert_eq!(events_json["events"][1]["terminal"], false);
@@ -10157,6 +10262,24 @@ mod tests {
         assert!(value.get("content_type").is_none());
         assert_eq!(value["payload_json"]["ready"], true);
         assert_eq!(value["payload_base64"], "eyJyZWFkeSI6dHJ1ZX0=");
+    }
+
+    #[test]
+    fn stream_chunk_json_rejects_declared_json_payload_that_is_not_json() {
+        let chunk = axon_sdk::pb::axon::v1::InvokeStreamChunk {
+            invocation_id: "inv-1".to_string(),
+            state: 2,
+            payload: b"not-json".to_vec(),
+            content_type: "application/json".to_string(),
+            sequence: 7,
+            terminal: false,
+            ..axon_sdk::pb::axon::v1::InvokeStreamChunk::default()
+        };
+
+        let error = stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk)
+            .expect_err("declared JSON stream payload must fail closed");
+        assert!(error.contains("payload_json declares JSON content type"));
+        assert!(error.contains("payload is not valid JSON"));
     }
 
     #[test]

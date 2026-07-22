@@ -426,3 +426,8 @@
   at the descriptor/read-model boundary; descriptor-ref construction failure
   must never be projected as `None`, a missing row, route invisibility, or
   remote discovery timeout.
+- FFI invocation result and stream payload JSON projections are schema-bound
+  read-model facts. If a payload declares a JSON content type, invalid JSON is
+  corrupt runtime output and must fail closed; `output_base64`/`payload_base64`
+  remains the lossless byte projection but must not repair schema corruption by
+  silently emitting `null` JSON.

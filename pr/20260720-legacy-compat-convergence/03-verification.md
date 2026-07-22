@@ -2975,3 +2975,32 @@ Commands and outcomes will be appended after implementation.
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS.
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index is up
   to date with 1,019 files, 35,397 nodes, and 135,799 edges.
+
+## 2026-07-22 FFI invocation JSON projection
+
+- `cargo test -q -p easynet --lib
+  unary_result_json_rejects_declared_json_output_that_is_not_json --features
+  axon-pb` — PASS; proves declared JSON unary output no longer projects as
+  `null` when parsing fails.
+- `cargo test -q -p easynet --lib
+  stream_chunk_json_rejects_declared_json_payload_that_is_not_json --features
+  axon-pb` — PASS; proves declared JSON stream payloads fail closed before
+  callback projection.
+- `cargo test -q -p easynet --lib ffi::invocation::tests --features
+  axon-pb` — PASS (`88` tests); covers the migrated handle snapshot/events
+  projection plus existing FFI invocation construction/signing/stream paths.
+- `cargo check -q -p easynet --lib --features axon-pb` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes the legacy `.ok()` JSON projection downgrade fixture.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS;
+  includes `check_ffi_invocation_json_projection_contract`.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` —
+  PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index is up
+  to date with 1,019 files, 35,400 nodes, and 135,836 edges.

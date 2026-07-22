@@ -2720,3 +2720,28 @@ Evidence will be appended after indexing and focused impact queries.
   fail-closed `Result`, migrate hub-published validation to propagate
   descriptor identity errors, and update SPEC v2 so `.ok()`/`.is_none()`
   descriptor-ref derivation cannot re-enter production.
+
+## 2026-07-22 FFI invocation JSON projection audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was
+  up to date for the current checkout with 1,019 files, 35,397 nodes, and
+  135,799 edges before this slice.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "FFI invocation output_json payload_json serde_json from_slice ok declared
+  JSON projection stream_chunk_json invocation_outcome_json_with_tuple"`
+  identified `src/ffi/invocation/mod.rs::invocation_outcome_json_with_tuple`
+  and `src/ffi/invocation/mod.rs::stream_chunk_json` as the two FFI read-model
+  projection seams converting runtime bytes into product-consumable JSON.
+- Source inspection found both seams accepted declared JSON content types and
+  used `serde_json::from_slice::<serde_json::Value>(...).ok()`. A malformed
+  runtime JSON payload therefore still returned a successful FFI JSON response
+  with `output_json`/`payload_json` set to `null` while the base64 payload
+  preserved the corrupt bytes.
+- Root abstraction problem: JSON projection was treated as optional product
+  convenience instead of a schema-bound read-model fact. Lossless base64 bytes
+  are valid transport evidence, but they do not make an invalid declared JSON
+  payload a valid runtime JSON projection.
+- Boundary decision: route unary result and stream chunk JSON projection
+  through one fallible `runtime_json_projection` helper, make handle
+  snapshot/event result projection fallible, and add SPEC v2 checks plus
+  focused negative tests so the retired `.ok()` downgrade cannot return.
