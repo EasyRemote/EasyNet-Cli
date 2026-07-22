@@ -165,7 +165,29 @@ fn validate_attach_identity(
     validate_mode(request, identity)?;
     validate_realm(request, identity)?;
     validate_node_id(request, identity)?;
+    validate_attach_capabilities(request, report)?;
     Ok(())
+}
+
+fn validate_attach_capabilities(
+    request: &RuntimeStartRequest,
+    report: &RuntimeStatusReport,
+) -> Result<(), RuntimeLifecycleError> {
+    if !matches!(request.mode, RuntimeStartMode::Device) {
+        return Ok(());
+    }
+    if report
+        .daemon()
+        .has_capability_flag(crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER)
+    {
+        return Ok(());
+    }
+    Err(
+        RuntimeLifecycleError::StartRefusedMissingRuntimeCapability {
+            mode: "device",
+            capability: crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER,
+        },
+    )
 }
 
 fn validate_mode(
@@ -260,8 +282,18 @@ mod tests {
             pid: std::process::id(),
             daemon_version: env!("CARGO_PKG_VERSION").to_string(),
             supported_ipc_versions: discovery::IpcVersionRange::single(discovery::IPC_VERSION_V1),
-            capability_flags: Vec::new(),
+            capability_flags: vec![discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string()],
             pages_port: None,
+        }
+    }
+
+    fn discovery_with_identity_and_flags(
+        identity: discovery::DaemonIdentity,
+        capability_flags: Vec<String>,
+    ) -> discovery::ControlDiscovery {
+        discovery::ControlDiscovery {
+            capability_flags,
+            ..discovery_with_identity(identity)
         }
     }
 
@@ -305,6 +337,33 @@ mod tests {
             ),
             "Invariant 3: start must not attach to control-only daemon"
         );
+    }
+
+    #[test]
+    fn start_preflight_refuses_device_attach_without_paired_user_signer_readiness() {
+        let daemon = DaemonDiscoverySnapshot::from_parts(
+            Some(discovery_with_identity_and_flags(identity(), Vec::new())),
+            Some(std::process::id()),
+            true,
+            true,
+            true,
+            endpoints(),
+        );
+        let status = RuntimeStatusReport::from_parts(None, daemon);
+
+        let err = preflight_start(
+            &RuntimeStartRequest::device("tenant-test", "node-test"),
+            &status,
+        )
+        .expect_err("device attach must require paired user signer readiness");
+
+        assert!(matches!(
+            err,
+            RuntimeLifecycleError::StartRefusedMissingRuntimeCapability {
+                capability: discovery::flags::PAIRED_USER_RUNTIME_SIGNER,
+                ..
+            }
+        ));
     }
 
     #[test]

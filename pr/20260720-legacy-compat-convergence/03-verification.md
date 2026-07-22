@@ -119,6 +119,25 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-22 Start attach paired-user signer readiness
+
+- `cargo fmt` — PASS.
+- `cargo test -q daemon::boot::lifecycle::start::tests --lib` — PASS
+  (`4 passed`); includes refusal to attach a Device daemon that lacks the
+  `paired_user_runtime_signer` ready-discovery flag.
+- `cargo test -q
+  daemon::control::discovery::tests::round_trip_preserves_version_range_and_flags
+  --lib` — PASS; discovery round-trip preserves capability flags.
+- `cargo check -q --bin easynet-daemon --features axon-pb` — PASS; daemon
+  Ready discovery initializes the new runtime capability field.
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative fixture where Device start attach has no
+  paired-user signer readiness flag.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS.
+
 ## 2026-07-22 Runtime-owner signer User custody guard
 
 - `cargo test -q runtime_owner_signing_identity_rejects_user_before_keyring_lookup --lib`

@@ -2,6 +2,34 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-22 Start attach paired-user signer readiness audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was
+  up to date at the start of this slice.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "legacy compatibility fallback placeholder browser.open_session
+  invocation.history.list authority subject signer route descriptor"`
+  surfaced the invocation-history/signer failure chain as an active lifecycle
+  boundary rather than an SDK DTO issue: user-as-caller remote descriptor
+  resolution depends on the paired User managed signing key being present
+  before the daemon advertises product Invocation readiness.
+- Source inspection found the provisioning root in
+  `daemon::invocation::start_daemon_invocation_transport`:
+  `register_paired_user_runtime_signer` provisions the managed User signing
+  key and registers its public projection into runtime trust before the
+  Invocation listener is published.
+- The root compatibility defect was the attach path. `easynet start` accepted
+  an already-running daemon after checking only mode/realm/node identity, so
+  a daemon started before this invariant could still be treated as ready and
+  later fail product calls with `requires a caller signer`.
+- The refactor makes readiness explicit in `control.json`: Device/Both daemon
+  Ready now declares `paired_user_runtime_signer`, lifecycle discovery exposes
+  that flag as a daemon-owned process fact, and start preflight refuses Device
+  attach when the flag is absent. This removes the silent compatibility attach
+  layer instead of repairing signer absence inside descriptor resolution.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` — PASS; synced the
+  changed lifecycle/discovery/gate sources after implementation.
+
 ## 2026-07-22 CLI ability catalogue schema-bound projection audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was

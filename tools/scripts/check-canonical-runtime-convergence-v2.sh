@@ -1503,6 +1503,80 @@ for test in (
 PY
 }
 
+check_start_attach_user_signer_readiness_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local discovery="$cli_root/src/daemon/control/discovery.rs"
+  local server="$cli_root/src/daemon/control/server.rs"
+  local daemon_bin="$cli_root/src/bin/easynet-daemon.rs"
+  local lifecycle_start="$cli_root/src/daemon/boot/lifecycle/start.rs"
+  local lifecycle_discovery="$cli_root/src/daemon/boot/lifecycle/discovery.rs"
+  local lifecycle_errors="$cli_root/src/daemon/boot/lifecycle/errors.rs"
+  [[ -f "$discovery" ]] || fail "control discovery source is missing: $discovery"
+  [[ -f "$server" ]] || fail "control server source is missing: $server"
+  [[ -f "$daemon_bin" ]] || fail "daemon bin source is missing: $daemon_bin"
+  [[ -f "$lifecycle_start" ]] || fail "lifecycle start source is missing: $lifecycle_start"
+  [[ -f "$lifecycle_discovery" ]] || fail "lifecycle discovery source is missing: $lifecycle_discovery"
+  [[ -f "$lifecycle_errors" ]] || fail "lifecycle errors source is missing: $lifecycle_errors"
+
+  "$PYTHON_BIN" - "$discovery" "$server" "$daemon_bin" "$lifecycle_start" "$lifecycle_discovery" "$lifecycle_errors" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+discovery, server, daemon_bin, start, lifecycle_discovery, errors = [
+    Path(arg).read_text() for arg in sys.argv[1:]
+]
+
+if 'pub const PAIRED_USER_RUNTIME_SIGNER: &str = "paired_user_runtime_signer";' not in discovery:
+    raise SystemExit("start_attach_user_signer_readiness:flag_missing")
+
+if "pub capability_flags: Vec<String>" not in server:
+    raise SystemExit("start_attach_user_signer_readiness:runtime_discovery_flags_missing")
+if "fn discovery_capability_flags(" not in server:
+    raise SystemExit("start_attach_user_signer_readiness:flag_merger_missing")
+if "runtime.capability_flags" not in server:
+    raise SystemExit("start_attach_user_signer_readiness:ready_flags_not_consumed")
+for required in ("flags::BOOT_STATUS", "flags::CONTROL_DIAGNOSTICS"):
+    if required not in server:
+        raise SystemExit(f"start_attach_user_signer_readiness:base_flag_missing:{required}")
+
+ready = re.search(r"fn ready_runtime_discovery\(\) -> anyhow::Result<server::ControlRuntimeDiscovery> \{(?P<body>.*?)\n\}", daemon_bin, re.DOTALL)
+if ready is None:
+    raise SystemExit("start_attach_user_signer_readiness:ready_discovery_missing")
+ready_body = ready.group("body")
+for required in (
+    "DaemonMode::Device | DaemonMode::Both",
+    "flags::PAIRED_USER_RUNTIME_SIGNER",
+    "capability_flags",
+):
+    if required not in ready_body:
+        raise SystemExit(f"start_attach_user_signer_readiness:ready_discovery_missing:{required}")
+
+if "pub fn has_capability_flag(&self, flag: &str) -> bool" not in lifecycle_discovery:
+    raise SystemExit("start_attach_user_signer_readiness:daemon_snapshot_flag_query_missing")
+
+for required in (
+    "fn validate_attach_capabilities(",
+    "has_capability_flag(crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER)",
+    "StartRefusedMissingRuntimeCapability",
+    "start_preflight_refuses_device_attach_without_paired_user_signer_readiness",
+):
+    if required not in start:
+        raise SystemExit(f"start_attach_user_signer_readiness:start_missing:{required}")
+
+if "StartRefusedMissingRuntimeCapability" not in errors:
+    raise SystemExit("start_attach_user_signer_readiness:error_variant_missing")
+
+retired = (
+    "RuntimeStartPreflightAction::AlreadyRunning => Ok(())",
+    "RuntimeStartPreflightAction::AttachAndRebuildProjection => Ok(())",
+)
+for token in retired:
+    if token in start and "validate_attach_capabilities" not in start:
+        raise SystemExit(f"start_attach_user_signer_readiness:unchecked_attach:{token}")
+PY
+}
+
 check_session_prelude_receipt_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local prelude="$cli_root/src/daemon/invocation/bidi/session_initiator/prelude.rs"
@@ -5136,6 +5210,44 @@ EOF
   if ( check_session_prelude_credentials_contract "$tmp/session-prelude-credentials-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected session prelude credential fallback gate to fail"
   fi
+  mkdir -p "$tmp/start-attach-user-signer-legacy/src/daemon/control" \
+    "$tmp/start-attach-user-signer-legacy/src/bin" \
+    "$tmp/start-attach-user-signer-legacy/src/daemon/boot/lifecycle"
+  printf '%s\n' \
+    'pub mod flags {' \
+    '  pub const BOOT_STATUS: &str = "boot_status";' \
+    '  pub const CONTROL_DIAGNOSTICS: &str = "control_diagnostics";' \
+    '}' \
+    > "$tmp/start-attach-user-signer-legacy/src/daemon/control/discovery.rs"
+  printf '%s\n' \
+    'pub struct ControlRuntimeDiscovery { pub invocation_endpoint: std::path::PathBuf, pub daemon_identity: DaemonIdentity }' \
+    'fn write_discovery_for(runtime: Option<ControlRuntimeDiscovery>) {' \
+    '  let capability_flags = vec![flags::BOOT_STATUS.into(), flags::CONTROL_DIAGNOSTICS.into()];' \
+    '}' \
+    > "$tmp/start-attach-user-signer-legacy/src/daemon/control/server.rs"
+  printf '%s\n' \
+    'fn ready_runtime_discovery() -> anyhow::Result<server::ControlRuntimeDiscovery> {' \
+    '  Ok(server::ControlRuntimeDiscovery { invocation_endpoint: resolved_local_uds_path_with_env_override(), daemon_identity: DaemonIdentity { mode: "device".into(), realm: "tenant".into(), node_id: None } })' \
+    '}' \
+    > "$tmp/start-attach-user-signer-legacy/src/bin/easynet-daemon.rs"
+  printf '%s\n' \
+    'impl DaemonDiscoverySnapshot {' \
+    '  pub fn identity(&self) -> Option<&DaemonIdentity> { None }' \
+    '}' \
+    > "$tmp/start-attach-user-signer-legacy/src/daemon/boot/lifecycle/discovery.rs"
+  printf '%s\n' \
+    'pub enum RuntimeLifecycleError { StartRefusedIdentityMismatch, StartRefusedMissingDaemonIdentity }' \
+    > "$tmp/start-attach-user-signer-legacy/src/daemon/boot/lifecycle/errors.rs"
+  printf '%s\n' \
+    'fn validate_attach_identity(request: &RuntimeStartRequest, report: &RuntimeStatusReport) -> Result<(), RuntimeLifecycleError> {' \
+    '  let identity = report.daemon().identity().ok_or(RuntimeLifecycleError::StartRefusedMissingDaemonIdentity)?;' \
+    '  validate_mode(request, identity)?; validate_realm(request, identity)?; validate_node_id(request, identity)?; Ok(())' \
+    '}' \
+    '#[cfg(test)] mod tests { fn start_preflight_attaches_when_projection_is_missing_but_daemon_is_live() {} }' \
+    > "$tmp/start-attach-user-signer-legacy/src/daemon/boot/lifecycle/start.rs"
+  if ( check_start_attach_user_signer_readiness_contract "$tmp/start-attach-user-signer-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected start attach user signer readiness gate to fail"
+  fi
   mkdir -p "$tmp/session-prelude-receipt-legacy/src/daemon/invocation/bidi/session_initiator"
   printf '%s\n' \
     'fn apply_federation_join_receipt(body_bytes: &[u8], hub_published_abilities: &HubPublishedAbilityStore) -> Result<(), tonic::Status> {' \
@@ -5299,6 +5411,7 @@ EOF
   check_java_sdk_runtime_receipt_projection_contract
   check_node_sdk_runtime_receipt_projection_contract
   check_sdk_runtime_receipt_type_state_binding_contract
+  check_start_attach_user_signer_readiness_contract
   echo "canonical-runtime-convergence-v2 self-test ok"
   exit 0
 fi
@@ -5327,6 +5440,7 @@ check_admission_owner_credentials_contract
 check_shared_local_device_owner_projection_contract
 check_node_session_authority_subject_contract
 check_session_prelude_credentials_contract
+check_start_attach_user_signer_readiness_contract
 check_session_prelude_receipt_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract

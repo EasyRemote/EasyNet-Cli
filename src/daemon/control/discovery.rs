@@ -157,6 +157,10 @@ pub mod flags {
     pub const BOOT_STATUS: &str = "boot_status";
     /// The daemon exposes local non-product diagnostics over control.sock.
     pub const CONTROL_DIAGNOSTICS: &str = "control_diagnostics";
+    /// Device/Both daemon Ready proves the paired User caller signer was
+    /// provisioned and registered in the runtime trust anchor before the local
+    /// Invocation listener became attachable.
+    pub const PAIRED_USER_RUNTIME_SIGNER: &str = "paired_user_runtime_signer";
 }
 
 /// Default discovery path. Callers should prefer this over rolling

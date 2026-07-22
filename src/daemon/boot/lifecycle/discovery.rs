@@ -119,6 +119,17 @@ impl DaemonDiscoverySnapshot {
             .and_then(|disc| disc.daemon_identity.as_ref())
     }
 
+    /// Whether the daemon advertised an explicit runtime readiness capability.
+    pub fn has_capability_flag(&self, flag: &str) -> bool {
+        let flag = flag.trim();
+        !flag.is_empty()
+            && self.control_discovery.as_ref().is_some_and(|disc| {
+                disc.capability_flags
+                    .iter()
+                    .any(|candidate| candidate == flag)
+            })
+    }
+
     /// Best-known daemon PID.
     pub fn pid(&self) -> Option<u32> {
         self.pid
@@ -164,6 +175,7 @@ impl DaemonDiscoverySnapshot {
             "invocation_accepting": self.invocation_accepting,
             "control_socket": self.endpoints.control().display().to_string(),
             "invocation_endpoint": self.endpoints.invocation().display().to_string(),
+            "capability_flags": self.control_discovery.as_ref().map(|disc| disc.capability_flags.clone()).unwrap_or_default(),
             "identity": self.identity().map(|identity| json!({
                 "mode": identity.mode,
                 "realm": identity.realm,

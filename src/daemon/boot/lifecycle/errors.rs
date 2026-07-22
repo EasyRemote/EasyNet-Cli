@@ -51,6 +51,14 @@ pub enum RuntimeLifecycleError {
         actual: String,
     },
 
+    /// Start refused because a live daemon is missing a readiness capability
+    /// required by the requested runtime mode.
+    #[error("daemon runtime capability `{capability}` is required for {mode} attach but was not advertised")]
+    StartRefusedMissingRuntimeCapability {
+        mode: &'static str,
+        capability: &'static str,
+    },
+
     /// Removing a stale runtime projection failed during start preflight.
     #[error("remove stale runtime projection failed: {message}")]
     ProjectionRemoveFailed { message: String },
@@ -86,7 +94,8 @@ impl RuntimeLifecycleError {
     /// State-machine status implied by this boundary error.
     pub fn status_hint(&self) -> Option<RuntimeLifecycleStatus> {
         match self {
-            Self::StartRefusedIdentityMismatch { .. } => {
+            Self::StartRefusedIdentityMismatch { .. }
+            | Self::StartRefusedMissingRuntimeCapability { .. } => {
                 Some(RuntimeLifecycleStatus::IdentityMismatch)
             }
             Self::ProjectionPersistFailed { .. }

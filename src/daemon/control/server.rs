@@ -105,6 +105,8 @@ pub struct ControlRuntimeDiscovery {
     pub invocation_endpoint: std::path::PathBuf,
     /// Mode/realm/node tuple this daemon process owns.
     pub daemon_identity: DaemonIdentity,
+    /// Runtime readiness capabilities proven before Ready was published.
+    pub capability_flags: Vec<String>,
 }
 
 /// Bind, advertise, and run the Control-plane accept loop until the
@@ -397,13 +399,15 @@ fn write_discovery_for(
     runtime: Option<ControlRuntimeDiscovery>,
 ) -> anyhow::Result<()> {
     let pid = std::process::id();
-    let (invocation_endpoint, daemon_identity) = match runtime {
+    let (invocation_endpoint, daemon_identity, runtime_flags) = match runtime {
         Some(runtime) => (
             Some(runtime.invocation_endpoint),
             Some(runtime.daemon_identity),
+            runtime.capability_flags,
         ),
-        None => (None, None),
+        None => (None, None, Vec::new()),
     };
+    let capability_flags = discovery_capability_flags(runtime_flags);
     let disc = ControlDiscovery {
         socket_path: addr.as_uds_path().map(|p| p.to_path_buf()),
         pipe_name: addr.as_pipe_name().map(|s| s.to_string()),
@@ -412,10 +416,23 @@ fn write_discovery_for(
         pid,
         daemon_version: env!("CARGO_PKG_VERSION").to_string(),
         supported_ipc_versions: IpcVersionRange::single(IPC_VERSION_V1),
-        capability_flags: vec![flags::BOOT_STATUS.into(), flags::CONTROL_DIAGNOSTICS.into()],
+        capability_flags,
         pages_port,
     };
     discovery::write(&discovery::default_path(), &disc)
+}
+
+fn discovery_capability_flags(runtime_flags: Vec<String>) -> Vec<String> {
+    let mut flags = std::collections::BTreeSet::new();
+    flags.insert(flags::BOOT_STATUS.to_string());
+    flags.insert(flags::CONTROL_DIAGNOSTICS.to_string());
+    flags.extend(
+        runtime_flags
+            .into_iter()
+            .map(|flag| flag.trim().to_string())
+            .filter(|flag| !flag.is_empty()),
+    );
+    flags.into_iter().collect()
 }
 
 /// Test-only booting-state server harness for control-plane client tests.

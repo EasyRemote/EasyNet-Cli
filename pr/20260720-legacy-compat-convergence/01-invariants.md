@@ -124,6 +124,11 @@
   public projection has been registered into runtime trust. Missing paired User
   identity is invalid boot state, not permission to defer repair until a
   remote descriptor invocation fails.
+- Runtime start attach must consume daemon-owned readiness facts, not just
+  process/socket presence. A live Device daemon is attachable only if its
+  ready discovery explicitly declares that paired User runtime signing custody
+  was provisioned before Invocation became visible; otherwise start must fail
+  closed and force a clean daemon restart.
 - Ability-target ingress must carry a complete invocation tuple before it
   reaches the generic runtime/provider seam. `subject_ura` is caller intent,
   not a fact that may be derived from an ability selector or descriptor

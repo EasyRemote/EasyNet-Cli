@@ -706,6 +706,12 @@ fn ready_runtime_discovery() -> anyhow::Result<server::ControlRuntimeDiscovery> 
         .ok()
         .map(|raw| raw.trim().to_string())
         .filter(|raw| !raw.is_empty());
+    let mut capability_flags = Vec::new();
+    if matches!(config.mode(), DaemonMode::Device | DaemonMode::Both) {
+        capability_flags.push(
+            easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string(),
+        );
+    }
     Ok(server::ControlRuntimeDiscovery {
         invocation_endpoint: resolved_local_uds_path_with_env_override(),
         daemon_identity: DaemonIdentity {
@@ -713,6 +719,7 @@ fn ready_runtime_discovery() -> anyhow::Result<server::ControlRuntimeDiscovery> 
             realm: config.realm().to_string(),
             node_id,
         },
+        capability_flags,
     })
 }
 
