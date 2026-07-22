@@ -48,6 +48,9 @@ use crate::daemon::ability::dispatch::{AxonAbilityCatalog, ControlPlaneImplement
 use crate::daemon::ability::manifest::AbilityManifest;
 use crate::daemon::ability::{AbilityImplSource, AuthorityScope, RuntimeEnv};
 use crate::daemon::execution::mcp::McpClientService;
+use crate::support::async_bridge::{
+    spawn_current_thread_tokio, try_run_blocking, NoRuntimeFallback,
+};
 
 /// Stable prefix stamped into `AbilityDescriptor.source` for every
 /// reflectively-registered upstream MCP tool, before the
@@ -243,30 +246,21 @@ impl McpReflectionSupervisor {
     /// callers that need orderly shutdown of the reflection pass
     /// must use [`Self::run_once`] from a tracked task instead.
     pub fn spawn_lazy(self) {
-        if let Err(e) = std::thread::Builder::new()
-            .name("easynet-mcp-reflection".to_string())
-            .spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        crate::op_event!(
-                            component = mcp_reflective,
-                            kind = lazy_reflection_skipped,
-                            level = "warn",
-                            reason = "runtime_build_failed",
-                            error = format!("{e}"),
-                        );
-                        return;
-                    }
-                };
-                rt.block_on(async move {
-                    self.run_lazy_once().await;
-                });
-            })
-        {
+        if let Err(e) = spawn_current_thread_tokio(
+            "easynet-mcp-reflection",
+            async move {
+                self.run_lazy_once().await;
+            },
+            |error| {
+                crate::op_event!(
+                    component = mcp_reflective,
+                    kind = lazy_reflection_skipped,
+                    level = "warn",
+                    reason = "runtime_build_failed",
+                    error = format!("{error}"),
+                );
+            },
+        ) {
             crate::op_event!(
                 component = mcp_reflective,
                 kind = lazy_reflection_skipped,
@@ -342,7 +336,11 @@ impl McpReflectionSupervisor {
         let snapshot = initially_reflected.clone();
         let this = self.clone();
         let fut = async move { this.attach_refresh_sinks(&snapshot).await };
-        if let Err(e) = run_blocking(fut, "build mcp-refresh-sink runtime") {
+        if let Err(e) = try_run_blocking(
+            fut,
+            NoRuntimeFallback::BuildCurrentThreadTokio,
+            "build mcp-refresh-sink runtime",
+        ) {
             crate::op_event!(
                 component = mcp_reflective,
                 kind = hot_reload_sink_skipped,
@@ -412,7 +410,11 @@ pub fn run_eager_blocking(
         client.reset_connections().await;
         report
     };
-    match run_blocking(fut, "build mcp-reflect runtime") {
+    match try_run_blocking(
+        fut,
+        NoRuntimeFallback::BuildCurrentThreadTokio,
+        "build mcp-reflect runtime",
+    ) {
         Ok(report) => {
             log_eager_reflect_report(&report);
             let per_server = reflected_names_by_server(&report);
@@ -553,30 +555,6 @@ impl PostArcReflection {
                 McpReflectionSupervisor::new(client, registry, owner_ura).spawn_lazy();
             }
         }
-    }
-}
-
-/// Run an async future to completion from a synchronous caller,
-/// reusing an ambient tokio runtime when present and constructing a
-/// short-lived current-thread runtime otherwise. The `bridge_label`
-/// is interpolated into the error message when runtime construction
-/// fails so the operator can tell which call site failed without
-/// reading the stack trace.
-fn run_blocking<F: std::future::Future<Output = T>, T>(
-    fut: F,
-    bridge_label: &str,
-) -> Result<T, String> {
-    match tokio::runtime::Handle::try_current() {
-        Ok(_) => Ok(tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(fut)
-        })),
-        Err(_) => match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(rt) => Ok(rt.block_on(fut)),
-            Err(e) => Err(format!("{bridge_label}: {e}")),
-        },
     }
 }
 

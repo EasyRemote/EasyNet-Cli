@@ -18,6 +18,30 @@ fail() {
   exit 1
 }
 
+check_mcp_reflection_async_bridge_contract() {
+  local cli_root="${1:-$ROOT}"
+  local reflective="$cli_root/src/daemon/ability/builtins/integrations/mcp/reflective_registry.rs"
+  local bridge="$cli_root/src/support/async_bridge/mod.rs"
+  [[ -e "$reflective" ]] || fail "MCP reflective registry source not found"
+  [[ -e "$bridge" ]] || fail "canonical async bridge source not found"
+
+  if rg -n 'fn\s+run_blocking\s*<|tokio::runtime::Builder::new_current_thread\(\)' "$reflective"; then
+    fail "MCP reflective registry must not own a private async runtime bridge"
+  fi
+  if ! rg -q 'try_run_blocking' "$reflective"; then
+    fail "MCP reflective registry must use the canonical fallible async bridge"
+  fi
+  if ! rg -q 'spawn_current_thread_tokio' "$reflective"; then
+    fail "MCP reflective registry lazy worker must use the canonical async bridge spawner"
+  fi
+  if ! rg -q 'pub fn try_run_blocking' "$bridge"; then
+    fail "canonical async bridge must expose a fallible runtime bridge provider"
+  fi
+  if ! rg -q 'pub fn spawn_current_thread_tokio' "$bridge"; then
+    fail "canonical async bridge must expose a detached current-thread runtime spawner"
+  fi
+}
+
 check_manifest_contract() {
   "$PYTHON_BIN" - \
     "$MANIFEST" \
@@ -6461,6 +6485,22 @@ EOF
   if ( check_sdk_root_runtime_description_contract "$tmp/sdk-root-product-named" ) >/dev/null 2>&1; then
     fail "self-test expected SDK root product-named runtime description gate to fail"
   fi
+  mkdir -p "$tmp/cli-mcp-local-bridge/src/daemon/ability/builtins/integrations/mcp" \
+    "$tmp/cli-mcp-local-bridge/src/support/async_bridge"
+  cat >"$tmp/cli-mcp-local-bridge/src/daemon/ability/builtins/integrations/mcp/reflective_registry.rs" <<'EOF'
+fn run_blocking<F: std::future::Future<Output = T>, T>(fut: F) -> T {
+    match tokio::runtime::Handle::try_current() {
+        Ok(_) => tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut)),
+        Err(_) => tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(fut),
+    }
+}
+EOF
+  printf 'pub fn try_run_blocking() {}\n' \
+    > "$tmp/cli-mcp-local-bridge/src/support/async_bridge/mod.rs"
+  if ( check_mcp_reflection_async_bridge_contract "$tmp/cli-mcp-local-bridge" ) >/dev/null 2>&1; then
+    fail "self-test expected MCP local async bridge gate to fail"
+  fi
+  check_mcp_reflection_async_bridge_contract
   check_active_source_contract
   check_sdk_root_runtime_description_contract
   check_go_sdk_public_ura_alias_contract
@@ -6538,6 +6578,7 @@ fi
 
 check_lifecycle_evidence_freshness_contract
 check_manifest_contract
+check_mcp_reflection_async_bridge_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract
 check_go_sdk_public_ura_alias_contract
