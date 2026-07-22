@@ -759,18 +759,18 @@ def _collect_pages(
             items.append(item)
             if len(items) > MAX_MANAGED_SIGNING_AUTO_ITEMS:
                 raise invalid_key_service_payload(
-                    "managed signing compatibility pagination exceeded its item bound"
+                    "managed signing bounded pagination exceeded its item bound"
                 )
         if next_cursor is None:
             return tuple(items)
         if not isinstance(next_cursor, str) or next_cursor in seen_cursors:
             raise invalid_key_service_payload(
-                "managed signing compatibility pagination repeated a cursor"
+                "managed signing bounded pagination repeated a cursor"
             )
         seen_cursors.add(next_cursor)
         cursor = next_cursor
     raise invalid_key_service_payload(
-        "managed signing compatibility pagination exceeded its page bound"
+        "managed signing bounded pagination exceeded its page bound"
     )
 
 

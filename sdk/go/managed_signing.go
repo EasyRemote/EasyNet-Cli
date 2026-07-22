@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	// ManagedSigningDefaultPageLimit bounds every compatibility List call.
+	// ManagedSigningDefaultPageLimit bounds every managed-signing List call.
 	ManagedSigningDefaultPageLimit uint32 = 16
 	// ManagedSigningMaxPageLimit is the largest page the SDK will request or
 	// accept from the daemon key service.
