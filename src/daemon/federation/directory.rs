@@ -43,9 +43,8 @@ pub use crate::daemon::federation::wire_contract::{
 
 // ── PresenceEvent → DirectoryEvent adapter (PR-N3 N3-streaming-1) ──
 
-/// Project a single presence-registry URA into a `DirectoryEntry`
-/// suitable for legacy discover/list projections. The projection is
-/// pure — given a URA string and an
+/// Project a single presence-registry Device URA into a `DirectoryEntry`.
+/// The projection is pure — given a canonical Device URA string and an
 /// `is_active` flag, returns a deterministic entry shape.
 ///
 /// `origin_realm` is `None` because the local hub speaks for its
@@ -57,83 +56,96 @@ pub use crate::daemon::federation::wire_contract::{
 /// pairing rows for display_name / last-seen) is N3-6 backend-Go
 /// territory.
 ///
-/// `node_id` is parsed from the URA tail. Canonical v4.1.4 device
-/// URAs use `/device/<node>`. Non-canonical URAs (which should not
-/// appear in the registry, but defensive handling matters) get
-/// `node_id = agent_ura.clone()` so downstream consumers always
-/// have a non-empty key.
+/// `node_id` is parsed from the URA tail. Non-canonical rows are rejected
+/// instead of projected with a synthetic id.
 #[cfg(feature = "axon-pb")]
-#[must_use]
-pub fn presence_ura_to_directory_entry(agent_ura: &str, is_active: bool) -> DirectoryEntry {
-    DirectoryEntry {
+pub fn presence_ura_to_directory_entry(
+    agent_ura: &str,
+    is_active: bool,
+) -> Result<DirectoryEntry, String> {
+    let node_id = canonical_device_node_id(agent_ura, "presence directory entry")?;
+    Ok(DirectoryEntry {
         agent_ura: agent_ura.to_string(),
-        node_id: agent_ura_to_node_id(agent_ura),
+        node_id,
         display_name: None,
         status: if is_active { "active" } else { "stale" }.to_string(),
         origin_realm: None,
         hub_endpoint: None,
         last_seen_unix_ms: None,
-    }
+    })
 }
 
 #[cfg(feature = "axon-pb")]
-#[must_use]
 pub fn presence_ura_to_directory_agent_summary(
     agent_ura: &str,
     is_active: bool,
-) -> DirectoryAgentSummary {
-    DirectoryAgentSummary {
+) -> Result<DirectoryAgentSummary, String> {
+    canonical_device_node_id(agent_ura, "presence directory summary")?;
+    Ok(DirectoryAgentSummary {
         agent_ura: agent_ura.to_string(),
         signing_authority: SigningAuthority::SelfSigned,
         status: if is_active { "active" } else { "stale" }.to_string(),
         ability_count: 0,
-    }
+    })
 }
 
 #[cfg(feature = "axon-pb")]
-#[must_use]
-pub fn presence_uras_to_directory_snapshot<I>(uras: I, snapshot_unix_ms: i64) -> DirectoryEvent
+pub fn presence_uras_to_directory_snapshot<I>(
+    uras: I,
+    snapshot_unix_ms: i64,
+) -> Result<DirectoryEvent, String>
 where
     I: IntoIterator,
     I::Item: AsRef<str>,
 {
-    let agents = uras
-        .into_iter()
-        .map(|ura| presence_ura_to_directory_agent_summary(ura.as_ref(), true))
-        .collect();
-    DirectoryEvent::Snapshot {
+    let mut agents = Vec::new();
+    for ura in uras {
+        agents.push(presence_ura_to_directory_agent_summary(ura.as_ref(), true)?);
+    }
+    Ok(DirectoryEvent::Snapshot {
         agents,
         snapshot_unix_ms,
-    }
+    })
 }
 
 #[cfg(feature = "axon-pb")]
-#[must_use]
 pub fn directory_agent_summary_to_entry(
     agent: &DirectoryAgentSummary,
     peer_realm: &str,
-) -> DirectoryEntry {
-    DirectoryEntry {
+) -> Result<DirectoryEntry, String> {
+    let node_id = canonical_device_node_id(&agent.agent_ura, "directory agent summary")?;
+    Ok(DirectoryEntry {
         agent_ura: agent.agent_ura.clone(),
-        node_id: agent_ura_to_node_id(&agent.agent_ura),
+        node_id,
         display_name: None,
         status: agent.status.clone(),
         origin_realm: Some(peer_realm.to_string()),
         hub_endpoint: None,
         last_seen_unix_ms: None,
-    }
+    })
 }
 
 #[cfg(feature = "axon-pb")]
-#[must_use]
-fn agent_ura_to_node_id(agent_ura: &str) -> String {
-    match crate::core::ura::parse_ura(agent_ura) {
-        Ok(parsed) if parsed.kind == crate::core::ura::URAKind::Device => parsed
-            .device_id()
-            .map(str::to_string)
-            .unwrap_or_else(|| agent_ura.to_string()),
-        _ => agent_ura.to_string(),
+fn canonical_device_node_id(agent_ura: &str, source: &str) -> Result<String, String> {
+    let parsed = crate::core::ura::parse_ura(agent_ura)
+        .map_err(|error| format!("{source}: {agent_ura:?} is not a canonical URA: {error}"))?;
+    if parsed.kind != crate::core::ura::URAKind::Device {
+        return Err(format!(
+            "{source}: {agent_ura:?} is not a canonical Device URA"
+        ));
     }
+    let node_id = parsed
+        .device_id()
+        .map(str::trim)
+        .filter(|node_id| !node_id.is_empty())
+        .ok_or_else(|| format!("{source}: {agent_ura:?} is missing canonical device id"))?;
+    let canonical_ura = crate::core::ura::device_ura(&parsed.realm, node_id);
+    if canonical_ura != agent_ura {
+        return Err(format!(
+            "{source}: {agent_ura:?} is not canonical; expected {canonical_ura:?}"
+        ));
+    }
+    Ok(node_id.to_string())
 }
 
 #[cfg(feature = "axon-pb")]
@@ -154,40 +166,45 @@ pub fn now_unix_ms() -> i64 {
 /// `subscribe_directory_v2` server stream wraps a per-subscriber
 /// `broadcast::Receiver<PresenceEvent>` with this adapter so the
 /// outbound frames carry the `DirectoryEvent` wire shape rather
-/// than the legacy `AgentSummary` shape.
+/// than the older presence `AgentSummary` shape.
 #[cfg(feature = "axon-pb")]
 #[must_use]
 pub fn presence_event_to_directory_event(
     event: &crate::daemon::invocation::bidi::state::presence::PresenceEvent,
-) -> DirectoryEvent {
+) -> Result<DirectoryEvent, String> {
     presence_event_to_directory_event_at(event, now_unix_ms())
 }
 
 #[cfg(feature = "axon-pb")]
-#[must_use]
 pub fn presence_event_to_directory_event_at(
     event: &crate::daemon::invocation::bidi::state::presence::PresenceEvent,
     unix_ms: i64,
-) -> DirectoryEvent {
+) -> Result<DirectoryEvent, String> {
     use crate::daemon::invocation::bidi::state::presence::PresenceEvent;
     match event {
-        PresenceEvent::Online { ura } => DirectoryEvent::AgentAdvertised {
-            agent_ura: ura.clone(),
-            signing_authority: SigningAuthority::SelfSigned,
-            replaced_prior: false,
-            unix_ms,
-        },
-        PresenceEvent::Offline { ura, reason } => DirectoryEvent::AgentRevoked {
-            agent_ura: ura.clone(),
-            was_active: true,
-            // `OfflineReason::as_wire_str` is the single source of
-            // truth for the snake_case label; both this projection
-            // and the op-event `reason=` field share it so an SRE
-            // pipeline grepping `reason=stream_closed` matches in
-            // both surfaces.
-            reason: reason.as_wire_str().to_string(),
-            unix_ms,
-        },
+        PresenceEvent::Online { ura } => {
+            canonical_device_node_id(ura, "presence online directory event")?;
+            Ok(DirectoryEvent::AgentAdvertised {
+                agent_ura: ura.clone(),
+                signing_authority: SigningAuthority::SelfSigned,
+                replaced_prior: false,
+                unix_ms,
+            })
+        }
+        PresenceEvent::Offline { ura, reason } => {
+            canonical_device_node_id(ura, "presence offline directory event")?;
+            Ok(DirectoryEvent::AgentRevoked {
+                agent_ura: ura.clone(),
+                was_active: true,
+                // `OfflineReason::as_wire_str` is the single source of
+                // truth for the snake_case label; both this projection
+                // and the op-event `reason=` field share it so an SRE
+                // pipeline grepping `reason=stream_closed` matches in
+                // both surfaces.
+                reason: reason.as_wire_str().to_string(),
+                unix_ms,
+            })
+        }
     }
 }
 
@@ -409,14 +426,15 @@ impl DirectoryView {
     /// peer's signing key is bound to its own realm by DEC-N1
     /// §2.4 admission), cross-realm spoofing is blocked at two
     /// layers.
-    pub fn apply_frame(&mut self, event: &DirectoryEvent) {
+    pub fn apply_frame(&mut self, event: &DirectoryEvent) -> Result<(), String> {
         match event {
             DirectoryEvent::Snapshot { agents, .. } => {
-                self.entries.clear();
+                let mut next_entries = BTreeMap::new();
                 for raw in agents {
-                    let entry = directory_agent_summary_to_entry(raw, &self.peer_realm);
-                    self.entries.insert(entry.agent_ura.clone(), entry);
+                    let entry = directory_agent_summary_to_entry(raw, &self.peer_realm)?;
+                    next_entries.insert(entry.agent_ura.clone(), entry);
                 }
+                self.entries = next_entries;
             }
             DirectoryEvent::AgentAdvertised {
                 agent_ura,
@@ -429,7 +447,7 @@ impl DirectoryView {
                     status: "active".to_string(),
                     ability_count: 0,
                 };
-                let entry = directory_agent_summary_to_entry(&summary, &self.peer_realm);
+                let entry = directory_agent_summary_to_entry(&summary, &self.peer_realm)?;
                 self.entries.insert(entry.agent_ura.clone(), entry);
             }
             DirectoryEvent::OwnerProjectionChanged { .. } => {
@@ -441,6 +459,7 @@ impl DirectoryView {
                 // in this agent-keyed view.
             }
             DirectoryEvent::AgentRevoked { agent_ura, .. } => {
+                canonical_device_node_id(agent_ura, "directory revoke event")?;
                 self.entries.remove(agent_ura);
             }
             DirectoryEvent::Heartbeat { .. } => {
@@ -452,6 +471,7 @@ impl DirectoryView {
                 // rather than a panic.
             }
         }
+        Ok(())
     }
 
     /// Replace this view from `federation.discover` rows. This is
@@ -663,7 +683,9 @@ impl RemoteDirectoryClient {
         // FSM accepted the frame; it's safe to apply to the
         // view. Heartbeat is the only frame that doesn't mutate
         // the view (apply_frame's Heartbeat arm is a no-op).
-        self.view.apply_frame(event);
+        self.view
+            .apply_frame(event)
+            .map_err(|_| FsmError::ProtocolViolation("invalid directory frame"))?;
         Ok(())
     }
 
@@ -1162,10 +1184,9 @@ where
 mod tests {
     use super::*;
 
-    fn legacy_entry_json() -> &'static str {
-        // The PR-N1 commit 8/N readers see this exact shape on
-        // the wire. Legacy emit drops the schema-B fields
-        // entirely; new emit includes them.
+    fn minimal_local_entry_json() -> &'static str {
+        // Local minimal rows may omit enrichment fields that are unknown to
+        // the presence-only projection.
         r#"{
             "agent_ura": "easynet:///r/realm-a/device/device-A",
             "node_id": "node-1",
@@ -1187,11 +1208,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_entry_deserialises_with_origin_realm_none() {
-        // Schema-B forward-compat: a 4-field legacy entry
-        // round-trips without errors and the new optional
-        // fields surface as None / None / None.
-        let entry: DirectoryEntry = serde_json::from_str(legacy_entry_json()).expect("deserialise");
+    fn minimal_local_entry_deserialises_with_origin_realm_none() {
+        let entry: DirectoryEntry =
+            serde_json::from_str(minimal_local_entry_json()).expect("deserialise");
         assert_eq!(entry.agent_ura, "easynet:///r/realm-a/device/device-A");
         assert_eq!(entry.node_id, "node-1");
         assert_eq!(entry.display_name.as_deref(), Some("silan-laptop"));
@@ -1565,7 +1584,8 @@ mod tests {
         view.apply_frame(&advertised_event(entry_with_claimed_origin(
             "easynet:///r/realm-b/device/peer-device",
             Some("realm-c"),
-        )));
+        )))
+        .expect("canonical device upsert applies");
         let stamped = view
             .lookup("easynet:///r/realm-b/device/peer-device")
             .expect("entry stored");
@@ -1574,15 +1594,15 @@ mod tests {
 
     #[test]
     fn apply_upsert_stamps_origin_realm_when_peer_omitted_it() {
-        // Peer's bytes had `origin_realm = None` (the legacy
-        // schema-A shape). The receiver still stamps the peer's
-        // realm so consumers downstream cannot accidentally see
-        // a None for a cross-realm entry.
+        // Peer's bytes omitted origin ownership. The receiver still stamps the
+        // peer's realm so consumers downstream cannot accidentally see a None
+        // for a cross-realm entry.
         let mut view = DirectoryView::new("realm-b".to_string());
         view.apply_frame(&advertised_event(entry_with_claimed_origin(
             "easynet:///r/realm-b/device/peer-device",
             None,
-        )));
+        )))
+        .expect("canonical device upsert applies");
         let stamped = view
             .lookup("easynet:///r/realm-b/device/peer-device")
             .expect("entry stored");
@@ -1595,14 +1615,16 @@ mod tests {
         view.apply_frame(&snapshot_event(vec![entry_with_claimed_origin(
             "easynet:///r/realm-b/device/peer-device",
             None,
-        )]));
+        )]))
+        .expect("canonical device snapshot applies");
         assert!(view
             .lookup("easynet:///r/realm-b/device/peer-device")
             .is_some());
         view.apply_frame(&revoked_event(
             "easynet:///r/realm-b/device/peer-device",
             "shutdown",
-        ));
+        ))
+        .expect("canonical device revoke applies");
         assert!(view
             .lookup("easynet:///r/realm-b/device/peer-device")
             .is_none());
@@ -1617,13 +1639,63 @@ mod tests {
         view.apply_frame(&advertised_event(entry_with_claimed_origin(
             "easynet:///r/realm-b/device/old",
             None,
-        )));
+        )))
+        .expect("canonical device upsert applies");
         view.apply_frame(&snapshot_event(vec![entry_with_claimed_origin(
             "easynet:///r/realm-b/device/new",
             None,
-        )]));
+        )]))
+        .expect("canonical device snapshot applies");
         assert!(view.lookup("easynet:///r/realm-b/device/old").is_none());
         assert!(view.lookup("easynet:///r/realm-b/device/new").is_some());
+    }
+
+    #[test]
+    fn apply_snapshot_rejects_invalid_agent_ura_without_mutating_view() {
+        let mut view = DirectoryView::new("realm-b".to_string());
+        view.apply_frame(&advertised_event(entry_with_claimed_origin(
+            "easynet:///r/realm-b/device/stable",
+            None,
+        )))
+        .expect("canonical device upsert applies");
+        let before = view.entries.clone();
+
+        let err = view
+            .apply_frame(&DirectoryEvent::Snapshot {
+                agents: vec![DirectoryAgentSummary {
+                    agent_ura: "easynet:///r/realm-b/agent/user.device-carryover".to_string(),
+                    signing_authority: SigningAuthority::SelfSigned,
+                    status: "active".to_string(),
+                    ability_count: 0,
+                }],
+                snapshot_unix_ms: 1_714_492_800_000,
+            })
+            .expect_err("agent URA must not publish as a directory device row");
+        assert!(
+            err.contains("not a canonical Device URA"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(view.entries, before, "invalid snapshot must not commit");
+    }
+
+    #[test]
+    fn apply_upsert_rejects_invalid_agent_ura_without_mutating_view() {
+        let mut view = DirectoryView::new("realm-b".to_string());
+        let before = view.entries.clone();
+
+        let err = view
+            .apply_frame(&DirectoryEvent::AgentAdvertised {
+                agent_ura: "not-canonical".to_string(),
+                signing_authority: SigningAuthority::SelfSigned,
+                replaced_prior: false,
+                unix_ms: 1_714_492_800_000,
+            })
+            .expect_err("malformed URA must not publish as a directory device row");
+        assert!(
+            err.contains("not a canonical URA"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(view.entries, before, "invalid upsert must not commit");
     }
 
     #[test]
@@ -1632,9 +1704,11 @@ mod tests {
         view.apply_frame(&advertised_event(entry_with_claimed_origin(
             "easynet:///r/realm-b/device/peer",
             None,
-        )));
+        )))
+        .expect("canonical device upsert applies");
         let before = view.entries.clone();
-        view.apply_frame(&heartbeat_event(1_714_500_000_000));
+        view.apply_frame(&heartbeat_event(1_714_500_000_000))
+            .expect("heartbeat applies");
         assert_eq!(view.entries, before, "heartbeat must not mutate the view");
     }
 
@@ -2248,10 +2322,12 @@ mod tests {
         let cell = SharedFederatedDirectoryView::default();
         // Pre-populate realm-c (a different peer).
         let mut realm_c_view = DirectoryView::new("realm-c".to_string());
-        realm_c_view.apply_frame(&advertised_event(entry_with_claimed_origin(
-            "easynet:///r/realm-c/device/keep",
-            None,
-        )));
+        realm_c_view
+            .apply_frame(&advertised_event(entry_with_claimed_origin(
+                "easynet:///r/realm-c/device/keep",
+                None,
+            )))
+            .expect("canonical device upsert applies");
         let mut prior = BTreeMap::new();
         prior.insert("realm-c".to_string(), Arc::new(realm_c_view));
         cell.replace(prior);
@@ -2502,15 +2578,19 @@ mod tests {
         // earliest realm). BTreeMap iteration gives us this for
         // free, but pin the contract with a test.
         let mut realm_b = DirectoryView::new("realm-b".to_string());
-        realm_b.apply_frame(&advertised_event(entry_with_claimed_origin(
-            "easynet:///r/shared/device/dup",
-            None,
-        )));
+        realm_b
+            .apply_frame(&advertised_event(entry_with_claimed_origin(
+                "easynet:///r/shared/device/dup",
+                None,
+            )))
+            .expect("canonical device upsert applies");
         let mut realm_c = DirectoryView::new("realm-c".to_string());
-        realm_c.apply_frame(&advertised_event(entry_with_claimed_origin(
-            "easynet:///r/shared/device/dup",
-            None,
-        )));
+        realm_c
+            .apply_frame(&advertised_event(entry_with_claimed_origin(
+                "easynet:///r/shared/device/dup",
+                None,
+            )))
+            .expect("canonical device upsert applies");
         let mut peers = BTreeMap::new();
         peers.insert("realm-c".to_string(), Arc::new(realm_c));
         peers.insert("realm-b".to_string(), Arc::new(realm_b));
@@ -2551,7 +2631,8 @@ mod tests {
         #[test]
         fn presence_ura_to_directory_entry_extracts_node_id_from_canonical_shape() {
             let entry =
-                presence_ura_to_directory_entry("easynet:///r/realm-a/device/device-X", true);
+                presence_ura_to_directory_entry("easynet:///r/realm-a/device/device-X", true)
+                    .expect("canonical device projects");
             assert_eq!(entry.agent_ura, "easynet:///r/realm-a/device/device-X");
             assert_eq!(entry.node_id, "device-X");
             assert_eq!(entry.status, "active");
@@ -2566,26 +2647,30 @@ mod tests {
         #[test]
         fn presence_ura_to_directory_entry_inactive_marks_status_stale() {
             let entry =
-                presence_ura_to_directory_entry("easynet:///r/realm-a/device/device-X", false);
+                presence_ura_to_directory_entry("easynet:///r/realm-a/device/device-X", false)
+                    .expect("canonical device projects");
             assert_eq!(entry.status, "stale");
         }
 
         #[test]
-        fn presence_ura_to_directory_entry_treats_legacy_agent_shape_as_non_canonical() {
-            let entry =
-                presence_ura_to_directory_entry("easynet:///r/realm-a/agent/device-X", true);
-            assert_eq!(entry.agent_ura, "easynet:///r/realm-a/agent/device-X");
-            assert_eq!(entry.node_id, "easynet:///r/realm-a/agent/device-X");
+        fn presence_ura_to_directory_entry_rejects_agent_shape() {
+            let err =
+                presence_ura_to_directory_entry("easynet:///r/realm-a/agent/user.device-X", true)
+                    .expect_err("agent URA must not project into device directory");
+            assert!(
+                err.contains("not a canonical Device URA"),
+                "unexpected error: {err}"
+            );
         }
 
         #[test]
-        fn presence_ura_to_directory_entry_falls_back_when_ura_non_canonical() {
-            // Defensive — registry should never hold these, but
-            // the adapter must produce a non-empty node_id
-            // anyway so downstream code never sees an empty key.
-            let entry = presence_ura_to_directory_entry("not-canonical", true);
-            assert_eq!(entry.node_id, "not-canonical");
-            assert_eq!(entry.agent_ura, "not-canonical");
+        fn presence_ura_to_directory_entry_rejects_malformed_ura() {
+            let err = presence_ura_to_directory_entry("not-canonical", true)
+                .expect_err("malformed URA must not project into device directory");
+            assert!(
+                err.contains("not a canonical URA"),
+                "unexpected error: {err}"
+            );
         }
 
         #[test]
@@ -2595,7 +2680,8 @@ mod tests {
                     ura: "easynet:///r/realm-a/device/x".to_string(),
                 },
                 1_714_492_800_000,
-            );
+            )
+            .expect("canonical device online event projects");
             match evt {
                 DirectoryEvent::AgentAdvertised {
                     agent_ura,
@@ -2613,6 +2699,21 @@ mod tests {
         }
 
         #[test]
+        fn presence_event_rejects_non_device_ura() {
+            let err = presence_event_to_directory_event_at(
+                &PresenceEvent::Online {
+                    ura: "easynet:///r/realm-a/agent/user.x".to_string(),
+                },
+                1_714_492_800_000,
+            )
+            .expect_err("agent URA must not publish as directory event");
+            assert!(
+                err.contains("not a canonical Device URA"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
         fn presence_event_offline_projects_to_agent_revoked_with_reason_string() {
             let cases = [
                 (OfflineReason::StreamClosed, "stream_closed"),
@@ -2627,7 +2728,8 @@ mod tests {
                         reason,
                     },
                     1_714_492_800_000,
-                );
+                )
+                .expect("canonical device offline event projects");
                 match evt {
                     DirectoryEvent::AgentRevoked {
                         agent_ura,
@@ -2655,10 +2757,12 @@ mod tests {
 
         let mut next = BTreeMap::new();
         let mut peer_view = DirectoryView::new("realm-b".to_string());
-        peer_view.apply_frame(&advertised_event(entry_with_claimed_origin(
-            "easynet:///r/realm-b/device/peer",
-            None,
-        )));
+        peer_view
+            .apply_frame(&advertised_event(entry_with_claimed_origin(
+                "easynet:///r/realm-b/device/peer",
+                None,
+            )))
+            .expect("canonical device upsert applies");
         next.insert("realm-b".to_string(), Arc::new(peer_view));
         cell.replace(next);
 

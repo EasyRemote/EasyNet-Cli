@@ -9987,6 +9987,146 @@ if kernel_mod.exists():
                 "Kernel::pending_permission_requests must return PermissionService::pending directly and propagate pending queue failures",
             )
 
+federation_directory = cli_root / "src/daemon/federation/directory.rs"
+federation_wrappers = cli_root / "src/daemon/invocation/dispatch/federation_wrappers.rs"
+stream_dispatcher = cli_root / "src/daemon/invocation/streams/stream_dispatcher.rs"
+if federation_directory.exists():
+    text = source(federation_directory)
+    raw_text = federation_directory.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "fn agent_ura_to_node_id",
+            "federation directory must not retain raw-URA node_id fallback helper",
+        ),
+        (
+            "unwrap_or_else(|| agent_ura.to_string())",
+            "federation directory must not use raw URA as fallback node_id",
+        ),
+        (
+            "node_id = agent_ura.clone()",
+            "federation directory comments must not preserve raw-URA node_id fallback semantics",
+        ),
+        (
+            "presence_ura_to_directory_entry_falls_back_when_ura_non_canonical",
+            "federation directory tests must reject malformed URAs instead of protecting fallback projection",
+        ),
+        (
+            "presence_ura_to_directory_entry_treats_legacy_agent_shape_as_non_canonical",
+            "federation directory tests must reject agent-shaped URAs instead of protecting legacy projection",
+        ),
+    ):
+        haystack = raw_text if "tests must" in detail else text
+        if token in haystack:
+            match = re.search(re.escape(token), haystack)
+            add(
+                "R90_FEDERATION_DIRECTORY_DEVICE_PROJECTION",
+                federation_directory,
+                line_number(haystack, match.start() if match else 0),
+                detail,
+            )
+    for token, detail in (
+        (
+            "fn canonical_device_node_id",
+            "federation directory must centralize Device URA validation before projection",
+        ),
+        (
+            "parsed.kind != crate::core::ura::URAKind::Device",
+            "federation directory must reject non-Device URAs",
+        ),
+        (
+            "crate::core::ura::device_ura(&parsed.realm, node_id)",
+            "federation directory must rebuild and compare canonical Device URA",
+        ),
+        (
+            "apply_snapshot_rejects_invalid_agent_ura_without_mutating_view",
+            "federation directory must test atomic rejection for invalid snapshots",
+        ),
+        (
+            "presence_event_rejects_non_device_ura",
+            "federation directory must test live event rejection for non-Device URAs",
+        ),
+    ):
+        haystack = raw_text if "test" in detail else text
+        if token not in haystack:
+            add(
+                "R90_FEDERATION_DIRECTORY_DEVICE_PROJECTION",
+                federation_directory,
+                1,
+                detail,
+            )
+    apply_frame = rust_method_body(text, "apply_frame")
+    if apply_frame is None:
+        add(
+            "R90_FEDERATION_DIRECTORY_DEVICE_PROJECTION",
+            federation_directory,
+            1,
+            "DirectoryView::apply_frame must remain the fail-closed remote directory mutation boundary",
+        )
+    else:
+        offset, body = apply_frame
+        signature = text[offset : text.find("{", offset) + 1]
+        if "Result<(), String>" not in signature:
+            add(
+                "R90_FEDERATION_DIRECTORY_DEVICE_PROJECTION",
+                federation_directory,
+                line_number(text, offset),
+                "DirectoryView::apply_frame must return Result so invalid frames cannot mutate state",
+            )
+        for token, detail in (
+            (
+                "let mut next_entries = BTreeMap::new();",
+                "DirectoryView::apply_frame must stage snapshots before committing",
+            ),
+            (
+                "self.entries = next_entries;",
+                "DirectoryView::apply_frame must commit snapshots atomically after validation",
+            ),
+            (
+                "directory_agent_summary_to_entry(raw, &self.peer_realm)?",
+                "DirectoryView::apply_frame must validate every snapshot entry",
+            ),
+            (
+                "canonical_device_node_id(agent_ura, \"directory revoke event\")?",
+                "DirectoryView::apply_frame must validate revoke URAs",
+            ),
+        ):
+            if token not in body:
+                add(
+                    "R90_FEDERATION_DIRECTORY_DEVICE_PROJECTION",
+                    federation_directory,
+                    line_number(text, offset),
+                    detail,
+                )
+
+if federation_wrappers.exists():
+    raw_text = federation_wrappers.read_text(encoding="utf-8", errors="replace")
+    if "build_subscribe_directory_v2_snapshot_rejects_non_device_presence_row" not in raw_text:
+        add(
+            "R90_FEDERATION_DIRECTORY_DEVICE_PROJECTION",
+            federation_wrappers,
+            1,
+            "subscribe_directory_v2 snapshot builder must reject non-Device presence rows",
+        )
+if stream_dispatcher.exists():
+    text = source(stream_dispatcher)
+    for token, detail in (
+        (
+            "invalid_presence_event",
+            "subscribe_directory_v2 stream must surface invalid live presence events",
+        ),
+        (
+            "invalid_presence_snapshot",
+            "subscribe_directory_v2 stream must surface invalid lag-recovery snapshots",
+        ),
+    ):
+        if token not in text:
+            add(
+                "R90_FEDERATION_DIRECTORY_DEVICE_PROJECTION",
+                stream_dispatcher,
+                1,
+                detail,
+            )
+
 
 if violations:
     for violation in sorted(violations):

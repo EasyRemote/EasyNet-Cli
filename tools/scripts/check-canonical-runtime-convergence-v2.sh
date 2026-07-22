@@ -3846,6 +3846,78 @@ for text, name in ((go_test, "go"), (py_test, "python")):
 PY
 }
 
+check_federation_directory_device_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local directory="$cli_root/src/daemon/federation/directory.rs"
+  local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  local stream_dispatcher="$cli_root/src/daemon/invocation/streams/stream_dispatcher.rs"
+
+  [[ -f "$directory" ]] || fail "federation directory source is missing"
+  [[ -f "$wrappers" ]] || fail "federation wrappers source is missing"
+  [[ -f "$stream_dispatcher" ]] || fail "stream dispatcher source is missing"
+
+  "$PYTHON_BIN" - "$directory" "$wrappers" "$stream_dispatcher" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+directory = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+wrappers = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+stream_dispatcher = Path(sys.argv[3]).read_text(encoding="utf-8", errors="replace")
+
+for token, code in (
+    ("fn agent_ura_to_node_id", "raw_ura_node_id_fallback_helper_present"),
+    ("unwrap_or_else(|| agent_ura.to_string())", "raw_ura_node_id_fallback_present"),
+    ("node_id = agent_ura.clone()", "raw_ura_node_id_wording_present"),
+    ("presence_ura_to_directory_entry_falls_back_when_ura_non_canonical", "fallback_test_present"),
+    ("presence_ura_to_directory_entry_treats_legacy_agent_shape_as_non_canonical", "legacy_agent_projection_test_present"),
+):
+    if token in directory:
+        raise SystemExit(f"federation_directory_device_projection:{code}")
+
+for token, code in (
+    ("fn canonical_device_node_id", "canonical_device_validator_missing"),
+    ("parsed.kind != crate::core::ura::URAKind::Device", "device_kind_gate_missing"),
+    ("crate::core::ura::device_ura(&parsed.realm, node_id)", "canonical_device_ura_rebuild_missing"),
+    ("pub fn presence_uras_to_directory_snapshot", "snapshot_adapter_missing"),
+    (") -> Result<DirectoryEvent, String>", "snapshot_adapter_must_be_fallible"),
+    ("pub fn presence_event_to_directory_event_at", "event_adapter_missing"),
+    ("apply_snapshot_rejects_invalid_agent_ura_without_mutating_view", "atomic_snapshot_rejection_test_missing"),
+    ("presence_event_rejects_non_device_ura", "event_rejection_test_missing"),
+):
+    if token not in directory:
+        raise SystemExit(f"federation_directory_device_projection:{code}")
+
+apply_frame = re.search(
+    r"pub fn apply_frame\s*\([^)]*\)\s*->\s*Result<\(\), String>\s*\{(?P<body>.*?)\n    \}",
+    directory,
+    re.S,
+)
+if not apply_frame:
+    raise SystemExit("federation_directory_device_projection:apply_frame_fallible_missing")
+body = apply_frame.group("body")
+for token, code in (
+    ("let mut next_entries = BTreeMap::new();", "snapshot_staging_map_missing"),
+    ("self.entries = next_entries;", "snapshot_atomic_commit_missing"),
+    ("directory_agent_summary_to_entry(raw, &self.peer_realm)?", "snapshot_entry_validation_missing"),
+    ("canonical_device_node_id(agent_ura, \"directory revoke event\")?", "revoke_validation_missing"),
+):
+    if token not in body:
+        raise SystemExit(f"federation_directory_device_projection:{code}")
+
+if "build_subscribe_directory_v2_snapshot_rejects_non_device_presence_row" not in wrappers:
+    raise SystemExit("federation_directory_device_projection:snapshot_builder_rejection_test_missing")
+if "build_subscribe_directory_v2_snapshot(&presence)" not in stream_dispatcher:
+    raise SystemExit("federation_directory_device_projection:stream_dispatcher_snapshot_builder_missing")
+for token, code in (
+    ("invalid_presence_event", "stream_invalid_event_observability_missing"),
+    ("invalid_presence_snapshot", "stream_invalid_snapshot_observability_missing"),
+):
+    if token not in stream_dispatcher:
+        raise SystemExit(f"federation_directory_device_projection:{code}")
+PY
+}
+
 check_runtime_wire_target_state_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local descriptor_binding="$cli_root/src/daemon/invocation/dispatch/descriptor_binding.rs"
@@ -7469,6 +7541,7 @@ EOF
   check_canonical_ability_catalog_projection_contract
   check_daemon_runtime_assembly_contract
   check_catalog_exact_runtime_key_contract
+  check_federation_directory_device_projection_contract
   check_plugin_sidecar_helper_matrix_contract
   check_retired_browser_mock_surface_contract
   check_runtime_wire_target_state_contract
@@ -7559,6 +7632,7 @@ check_ffi_last_error_typed_tls_contract
 check_canonical_ability_catalog_projection_contract
 check_daemon_runtime_assembly_contract
 check_catalog_exact_runtime_key_contract
+check_federation_directory_device_projection_contract
 check_plugin_sidecar_helper_matrix_contract
 check_retired_browser_mock_surface_contract
 check_runtime_wire_target_state_contract

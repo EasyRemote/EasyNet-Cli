@@ -940,10 +940,11 @@ impl DaemonStreamRouteProvider {
 
         subscribe_directory_resume_sequence_value(&arguments)?;
         let presence = self.presence(DaemonStreamRoute::FederationSubscribeDirectoryV2)?;
-        let initial = serde_json::to_value(
-            federation_wrappers::build_subscribe_directory_v2_snapshot(&presence),
-        )
-        .map_err(|err| {
+        let initial_snapshot =
+            federation_wrappers::build_subscribe_directory_v2_snapshot(&presence).map_err(
+                |err| anyhow::anyhow!("federation.subscribe_directory_v2 initial snapshot: {err}"),
+            )?;
+        let initial = serde_json::to_value(initial_snapshot).map_err(|err| {
             anyhow::anyhow!("federation.subscribe_directory_v2 initial snapshot: {err}")
         })?;
         let mut events = presence.subscribe_events();
@@ -966,7 +967,18 @@ impl DaemonStreamRouteProvider {
                     recv = events.recv() => {
                         match recv {
                             Ok(event) => {
-                                let value = match serde_json::to_value(presence_event_to_directory_event(&event)) {
+                                let directory_event = match presence_event_to_directory_event(&event) {
+                                    Ok(event) => event,
+                                    Err(err) => {
+                                        crate::op_event!(
+                                            component = federation_directory,
+                                            kind = invalid_presence_event,
+                                            error = err,
+                                        );
+                                        break;
+                                    }
+                                };
+                                let value = match serde_json::to_value(directory_event) {
                                     Ok(value) => value,
                                     Err(_) => break,
                                 };
@@ -978,10 +990,19 @@ impl DaemonStreamRouteProvider {
                                 let Some(presence) = presence_weak.upgrade() else {
                                     break;
                                 };
-                                let snapshot =
-                                    federation_wrappers::build_subscribe_directory_v2_snapshot(
-                                        &presence,
-                                    );
+                                let snapshot = match federation_wrappers::build_subscribe_directory_v2_snapshot(
+                                    &presence,
+                                ) {
+                                    Ok(snapshot) => snapshot,
+                                    Err(err) => {
+                                        crate::op_event!(
+                                            component = federation_directory,
+                                            kind = invalid_presence_snapshot,
+                                            error = err,
+                                        );
+                                        break;
+                                    }
+                                };
                                 drop(presence);
                                 let Ok(value) = serde_json::to_value(snapshot) else {
                                     break;

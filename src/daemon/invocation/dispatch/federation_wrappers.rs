@@ -1368,7 +1368,7 @@ fn checked_revoke_now_unix_ms() -> anyhow::Result<u64> {
 #[must_use]
 pub fn build_subscribe_directory_v2_snapshot(
     registry: &PresenceRegistry,
-) -> crate::daemon::federation::directory::DirectoryEvent {
+) -> Result<crate::daemon::federation::directory::DirectoryEvent, String> {
     crate::daemon::federation::directory::presence_uras_to_directory_snapshot(
         registry.snapshot(),
         crate::daemon::federation::directory::now_unix_ms(),
@@ -3059,7 +3059,8 @@ mod tests {
             make_dispatch_sender(),
         );
 
-        let initial = build_subscribe_directory_v2_snapshot(&registry);
+        let initial = build_subscribe_directory_v2_snapshot(&registry)
+            .expect("canonical device snapshot builds");
         let crate::daemon::federation::directory::DirectoryEvent::Snapshot { agents, .. } = initial
         else {
             panic!("v2 initial frame must be a DirectoryEvent::Snapshot");
@@ -3068,6 +3069,22 @@ mod tests {
         assert_eq!(
             uras,
             vec!["easynet:///r/realm/device/a", "easynet:///r/realm/device/c"]
+        );
+    }
+
+    #[test]
+    fn build_subscribe_directory_v2_snapshot_rejects_non_device_presence_row() {
+        let registry = PresenceRegistry::new();
+        registry.insert(
+            "easynet:///r/realm/agent/user.device-carryover".to_string(),
+            make_dispatch_sender(),
+        );
+
+        let err = build_subscribe_directory_v2_snapshot(&registry)
+            .expect_err("agent URA must not publish as a directory device row");
+        assert!(
+            err.contains("not a canonical Device URA"),
+            "unexpected error: {err}"
         );
     }
 }
