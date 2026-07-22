@@ -1,5 +1,16 @@
 # Verification
 
+## 2026-07-22 Docker EasyRemote exact invocation-history scope
+
+- `bash -n tools/scripts/docker-two-node-easyremote-cli-e2e.sh` — PASS.
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `bash tools/scripts/docker-two-node-easyremote-cli-e2e.sh --self-test` —
+  PASS (`docker-two-node-easyremote-cli-e2e self-test ok`).
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes the all-history fallback Docker e2e negative fixture.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS;
+  includes `check_product_e2e_invocation_history_exact_scope_contract`.
+
 ## 2026-07-22 Runtime trust write-scope tuple convergence
 
 - `cargo fmt --all -- --check` — PASS.

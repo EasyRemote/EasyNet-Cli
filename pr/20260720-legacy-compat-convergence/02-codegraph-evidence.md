@@ -2796,3 +2796,28 @@ Evidence will be appended after indexing and focused impact queries.
   `identity.revoke_user_pubkey`, deny unknown legacy fields, update intent
   accessors and local callers, and add SPEC v2 coverage so retired
   `agent_ura` write tuples cannot re-enter.
+
+## 2026-07-22 Docker EasyRemote exact history audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was
+  up to date for the checkout before this slice.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "ability_invocation_records fallback_name exact_name
+  docker-two-node-easyremote-cli-e2e invocation_records"` identified
+  `tools/scripts/docker-two-node-easyremote-cli-e2e.sh` as the product e2e
+  acceptance path that post-validates provider-hosted Agent, user plugin,
+  CLI-to-EasyRemote, and native EasyNet dispatch receipt chains.
+- Source inspection found `ability_invocation_records(exact_name,
+  fallback_name, ability_ura)` first used the exact
+  `invocation list --ability-ura` artifact, but if that artifact was empty it
+  scanned a broad `invocation list --format json` artifact and matched records
+  by ability URA inside arbitrary fields.
+- Root abstraction problem: the product mutation test was allowed to pass even
+  when the exact ability-scoped history read model failed. That preserves a
+  second observation authority and weakens the SPEC requirement that one
+  product operation maps to one Axon-finalized signed receipt chain under the
+  canonical scoped route.
+- Boundary decision: delete the broad all-history fallback artifacts and make
+  `ability_invocation_records` exact-only. Add SPEC v2 gate coverage so
+  future Docker/EasyRemote e2e verification cannot reintroduce all-history
+  scanning as acceptance evidence.

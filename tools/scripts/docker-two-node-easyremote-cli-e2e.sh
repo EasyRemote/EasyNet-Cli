@@ -672,8 +672,6 @@ caller_cli "ability invoke '$PROVIDER_AGENT_CHAT_DESCRIPTOR_REF' --node '$PROVID
   >"$OUT_DIR/caller-cli-provider-agent-chat-invoke.json" 2>"$OUT_DIR/caller-cli-provider-agent-chat-invoke.err"
 provider_cli "invocation list --ability-ura '$PROVIDER_AGENT_CHAT_URA' --format json" \
   >"$OUT_DIR/provider-invocation-list-provider-agent-after-cli.json" 2>"$OUT_DIR/provider-invocation-list-provider-agent-after-cli.err"
-provider_cli "invocation list --format json" \
-  >"$OUT_DIR/provider-invocation-list-all-after-provider-agent-cli.json" 2>"$OUT_DIR/provider-invocation-list-all-after-provider-agent-cli.err"
 provider_cli "agent remove '$PROVIDER_AGENT_NAME' --purge" >"$OUT_DIR/provider-agent-remove.txt" 2>"$OUT_DIR/provider-agent-remove.err"
 provider_cli "agent list" >"$OUT_DIR/provider-agent-list-after-remove.txt" 2>"$OUT_DIR/provider-agent-list-after-remove.err"
 wait_caller_ability_absent "$PROVIDER_URA" "$PROVIDER_AGENT_CHAT_ABILITY" "caller-ability-list-provider-after-agent-remove"
@@ -809,8 +807,6 @@ caller_cli "ability stream '$USER_PLUGIN_DESCRIPTOR_REF' --node '$PROVIDER_URA' 
   >"$OUT_DIR/caller-cli-user-plugin-stream.json" 2>"$OUT_DIR/caller-cli-user-plugin-stream.err"
 provider_cli "invocation list --ability-ura '$USER_PLUGIN_ABILITY_URA' --format json" \
   >"$OUT_DIR/provider-invocation-list-user-plugin-after-cli.json" 2>"$OUT_DIR/provider-invocation-list-user-plugin-after-cli.err"
-provider_cli "invocation list --format json" \
-  >"$OUT_DIR/provider-invocation-list-all-after-user-plugin-cli.json" 2>"$OUT_DIR/provider-invocation-list-all-after-user-plugin-cli.err"
 provider_cli "plugin remove '$USER_PLUGIN_ID' '$USER_PLUGIN_VERSION'" >"$OUT_DIR/provider-plugin-remove-user-plugin.txt" 2>"$OUT_DIR/provider-plugin-remove-user-plugin.err"
 provider_cli "plugin list --format json" >"$OUT_DIR/provider-plugin-list-after-user-plugin-remove.json" 2>"$OUT_DIR/provider-plugin-list-after-user-plugin-remove.err"
 wait_caller_ability_absent "$PROVIDER_URA" "$USER_PLUGIN_ABILITY" "caller-ability-list-provider-after-plugin-remove"
@@ -948,8 +944,6 @@ caller_cli "ability stream '$ADD_DESCRIPTOR_REF' --node '$PROVIDER_URA' --subjec
   >"$OUT_DIR/caller-cli-add-stream.json" 2>"$OUT_DIR/caller-cli-add-stream.err"
 provider_cli "invocation list --ability-ura '$ADD_URA' --format json" \
   >"$OUT_DIR/provider-invocation-list-add-after-cli.json" 2>"$OUT_DIR/provider-invocation-list-add-after-cli.err"
-provider_cli "invocation list --format json" \
-  >"$OUT_DIR/provider-invocation-list-all-after-cli.json" 2>"$OUT_DIR/provider-invocation-list-all-after-cli.err"
 
 echo "==> calling EasyRemote provider from caller device with @remote syntax matrix"
 cat >"$SHARED_DIR/easyremote_caller.py" <<'PY'
@@ -1108,8 +1102,6 @@ service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet
 cp "$SHARED_DIR/easyremote-caller.log" "$OUT_DIR/easyremote-caller.log"
 provider_cli "invocation list --ability-ura '$NATIVE_ABILITY_URA' --format json" \
   >"$OUT_DIR/provider-invocation-list-native-after-easyremote.json" 2>"$OUT_DIR/provider-invocation-list-native-after-easyremote.err"
-provider_cli "invocation list --format json" \
-  >"$OUT_DIR/provider-invocation-list-all-after-easyremote.json" 2>"$OUT_DIR/provider-invocation-list-all-after-easyremote.err"
 
 echo "==> uninstalling one provider EasyRemote ability and verifying caller sees removal"
 provider_cli "ability uninstall '$ADD_URA' --yes" >"$OUT_DIR/provider-ability-uninstall-add.json" 2>"$OUT_DIR/provider-ability-uninstall-add.err"
@@ -1174,26 +1166,8 @@ def invocation_records(name: str):
         return payload.get("records") or payload.get("items") or []
     return payload if isinstance(payload, list) else []
 
-def ability_invocation_records(exact_name: str, fallback_name: str, ability_ura: str):
-    exact = invocation_records(exact_name)
-    if exact:
-        return exact
-    records = invocation_records(fallback_name)
-    matched = []
-    for record in records:
-        if not isinstance(record, dict):
-            continue
-        fields = [
-            str(record.get("ability_ura") or ""),
-            str(record.get("ability_name") or ""),
-            str(record.get("descriptor_ref") or ""),
-        ]
-        if any(ability_ura == field or ability_ura in field for field in fields):
-            matched.append(record)
-            continue
-        if ability_ura in json.dumps(record, separators=(",", ":"), sort_keys=True):
-            matched.append(record)
-    return matched
+def ability_invocation_records(exact_name: str):
+    return invocation_records(exact_name)
 
 def payload_contains(value, needle: str) -> bool:
     return needle in json.dumps(value, separators=(",", ":"), sort_keys=True)
@@ -1234,24 +1208,16 @@ user_plugin_show = load("caller-ability-show-user-plugin.json") or {}
 remote_results = load("easyremote-remote-results.json") or {}
 cli_stream = load("caller-cli-add-stream.json") or []
 provider_agent_records = ability_invocation_records(
-    "provider-invocation-list-provider-agent-after-cli.json",
-    "provider-invocation-list-all-after-provider-agent-cli.json",
-    provider_agent_chat_ura,
+    "provider-invocation-list-provider-agent-after-cli.json"
 )
 user_plugin_records = ability_invocation_records(
-    "provider-invocation-list-user-plugin-after-cli.json",
-    "provider-invocation-list-all-after-user-plugin-cli.json",
-    user_plugin_ability_ura,
+    "provider-invocation-list-user-plugin-after-cli.json"
 )
 cli_add_records = ability_invocation_records(
-    "provider-invocation-list-add-after-cli.json",
-    "provider-invocation-list-all-after-cli.json",
-    ability_uras["add"],
+    "provider-invocation-list-add-after-cli.json"
 )
 native_records = ability_invocation_records(
-    "provider-invocation-list-native-after-easyremote.json",
-    "provider-invocation-list-all-after-easyremote.json",
-    native_ability_ura,
+    "provider-invocation-list-native-after-easyremote.json"
 )
 provider_agent_rows = ability_rows("caller-ability-list-provider-agent.json")
 provider_agent_rows_after_remove = ability_rows("caller-ability-list-provider-after-agent-remove.json")
@@ -1443,7 +1409,6 @@ report = {
         "chat_ability_ura": provider_agent_chat_ura,
         "invoke_result": provider_agent_invoke,
         "canonical_invocation_records": provider_agent_canonical_records,
-        "all_invocation_records": provider_agent_records,
     },
     "user_plugin": {
         "package_id": user_plugin_id,

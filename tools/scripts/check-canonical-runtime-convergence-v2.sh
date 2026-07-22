@@ -1072,6 +1072,49 @@ for required_test, source in (
 PY
 }
 
+check_product_e2e_invocation_history_exact_scope_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local script="$cli_root/tools/scripts/docker-two-node-easyremote-cli-e2e.sh"
+  [[ -f "$script" ]] || fail "docker EasyRemote CLI e2e script is missing: $script"
+
+  "$PYTHON_BIN" - "$script" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+script = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+for retired in (
+    "fallback_name",
+    "provider-invocation-list-all-after",
+    "all_invocation_records",
+):
+    if retired in script:
+        raise SystemExit(f"product_e2e_invocation_history_exact_scope:retired_fallback:{retired}")
+
+if re.search(r'provider_cli\s+"invocation list --format json"', script):
+    raise SystemExit("product_e2e_invocation_history_exact_scope:unscoped_provider_history_read")
+
+helper = re.search(
+    r"def ability_invocation_records\(exact_name: str\):\n(?P<body>(?:    .*\n)+)",
+    script,
+)
+if helper is None:
+    raise SystemExit("product_e2e_invocation_history_exact_scope:exact_helper_missing")
+if "return invocation_records(exact_name)" not in helper.group("body"):
+    raise SystemExit("product_e2e_invocation_history_exact_scope:helper_not_exact_only")
+
+for expected in (
+    "provider-invocation-list-provider-agent-after-cli.json",
+    "provider-invocation-list-user-plugin-after-cli.json",
+    "provider-invocation-list-add-after-cli.json",
+    "provider-invocation-list-native-after-easyremote.json",
+):
+    if expected not in script:
+        raise SystemExit(f"product_e2e_invocation_history_exact_scope:missing_exact_artifact:{expected}")
+PY
+}
+
 check_admission_owner_credentials_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local policy="$cli_root/src/daemon/invocation/admission/policy_gate.rs"
@@ -4705,6 +4748,21 @@ EOF
   if ( check_runtime_trust_user_key_write_scope_contract "$tmp/runtime-trust-user-key-write-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected runtime trust user-key write scope gate to fail"
   fi
+  mkdir -p "$tmp/product-e2e-history-fallback/tools/scripts"
+  printf '%s\n' \
+    'provider_cli "invocation list --ability-ura '\''$ADD_URA'\'' --format json" >"$OUT_DIR/provider-invocation-list-add-after-cli.json"' \
+    'provider_cli "invocation list --format json" >"$OUT_DIR/provider-invocation-list-all-after-cli.json"' \
+    'def invocation_records(name: str): return []' \
+    'def ability_invocation_records(exact_name: str, fallback_name: str, ability_ura: str):' \
+    '    exact = invocation_records(exact_name)' \
+    '    if exact:' \
+    '        return exact' \
+    '    return invocation_records(fallback_name)' \
+    'all_invocation_records = ability_invocation_records("provider-invocation-list-add-after-cli.json", "provider-invocation-list-all-after-cli.json", ability_ura)' \
+    > "$tmp/product-e2e-history-fallback/tools/scripts/docker-two-node-easyremote-cli-e2e.sh"
+  if ( check_product_e2e_invocation_history_exact_scope_contract "$tmp/product-e2e-history-fallback" ) >/dev/null 2>&1; then
+    fail "self-test expected product e2e invocation history fallback gate to fail"
+  fi
   mkdir -p "$tmp/admission-owner-legacy/src/daemon/invocation/admission"
   printf '%s\n' \
     'pub(crate) fn resolve_owner(subject_ura: &str, callee_ura: &str, daemon_ura: Option<&str>, trust_anchor: &RealmTrustAnchor) -> OwnerResolution {' \
@@ -4868,6 +4926,7 @@ EOF
   check_runtime_trust_revoke_credentials_contract
   check_runtime_trust_user_key_inventory_scope_contract
   check_runtime_trust_user_key_write_scope_contract
+  check_product_e2e_invocation_history_exact_scope_contract
   check_admission_owner_credentials_contract
   check_shared_local_device_owner_projection_contract
   check_node_session_authority_subject_contract
@@ -4930,6 +4989,7 @@ check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_runtime_trust_user_key_inventory_scope_contract
 check_runtime_trust_user_key_write_scope_contract
+check_product_e2e_invocation_history_exact_scope_contract
 check_admission_owner_credentials_contract
 check_shared_local_device_owner_projection_contract
 check_node_session_authority_subject_contract

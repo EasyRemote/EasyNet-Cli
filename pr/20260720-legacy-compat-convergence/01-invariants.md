@@ -442,3 +442,8 @@
   that schema is migrated, but it must not reappear as the request field or
   intent accessor for `identity.register_pubkey` or
   `identity.revoke_user_pubkey`.
+- Product Docker/EasyRemote e2e must validate invocation history through the
+  exact scoped `invocation list --ability-ura` read model. A broad
+  `invocation list --format json` scan is diagnostic data, not acceptance
+  evidence; it must not be used as a fallback to prove one product operation
+  produced exactly one finalized signed receipt chain.

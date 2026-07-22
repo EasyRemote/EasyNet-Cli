@@ -2,6 +2,18 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-22 Docker EasyRemote exact invocation-history scope
+
+- Treat `invocation list --ability-ura` as the product e2e authority for
+  verifying one operation's receipt chain. If the exact scoped read is empty,
+  the product path is not proven and the e2e must fail.
+- Remove broad `invocation list --format json` fallback artifacts from the
+  Docker/EasyRemote acceptance script. Broad history is useful for debugging,
+  but it is not valid acceptance evidence for exact route/history cutover.
+- Keep verification at the product script boundary and reinforce it in SPEC v2
+  gate coverage. This prevents future local fixes from making the product e2e
+  green by scanning unscoped ledger state.
+
 ## 2026-07-22 runtime trust write-scope tuple convergence
 
 - Treat `identity.register_pubkey` as generic principal trust registration,
