@@ -2745,3 +2745,27 @@ Evidence will be appended after indexing and focused impact queries.
   through one fallible `runtime_json_projection` helper, make handle
   snapshot/event result projection fallible, and add SPEC v2 checks plus
   focused negative tests so the retired `.ok()` downgrade cannot return.
+
+## 2026-07-22 Runtime trust user-key inventory scope audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was
+  up to date for the current checkout with 1,019 files, 35,400 nodes, and
+  135,836 edges before this slice.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "identity.list_user_pubkeys agent_ura user_ura RuntimeTrustReader
+  user_snapshot caller signer custody"` identified
+  `src/daemon/invocation/admission/list_user_pubkeys.rs::handle` and
+  `src/daemon/invocation/admission/runtime_trust.rs::user_snapshot` as the
+  read-model seam for user signing key inventory.
+- Source inspection found `identity.list_user_pubkeys` accepted
+  `{"agent_ura": "<user URA>"}`, returned `agent_ura`, and only checked that
+  the field was non-empty before reading trust rows. The RuntimeTrust snapshot
+  also named the user scope `agent_ura`.
+- Root abstraction problem: a User signer custody read model was using a
+  generic Agent field name and no User-kind validation. That lets product and
+  SDK callers carry the wrong identity concept until a later signer,
+  descriptor, or authority stage fails with less precise errors.
+- Boundary decision: make the read model explicitly User-scoped by requiring
+  canonical `user_ura` input, projecting `user_ura` output, renaming the
+  RuntimeTrust snapshot field, migrating local callers, and adding a SPEC v2
+  gate that rejects the retired `agent_ura` list path.

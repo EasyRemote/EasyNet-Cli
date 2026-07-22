@@ -208,7 +208,7 @@ fn check_user_signing_key() -> Check {
 
     match crate::support::platform::local_invoke::invoke_local_ability(
         "identity.list_user_pubkeys",
-        serde_json::json!({ "agent_ura": user_ura }),
+        serde_json::json!({ "user_ura": user_ura }),
     ) {
         Ok(v) => {
             let n = v

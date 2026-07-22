@@ -1078,3 +1078,18 @@ Decisions will be appended as root-fork choices are made.
 - Preserve the public ABI shape: successful outputs still expose
   `output_json`/`payload_json` plus base64 fields, while corrupt declared JSON
   now fails at the FFI observation boundary with `ERR_PROTOCOL`.
+
+## 2026-07-22 Runtime trust user-key inventory scope
+
+- Treat `identity.list_user_pubkeys` as a User-key inventory read model, not a
+  generic Agent trust lookup. Its request and response shape now use
+  `user_ura`.
+- Reject retired `agent_ura` input at the handler boundary with
+  `deny_unknown_fields`. This intentionally surfaces stale product callers
+  instead of letting them query signer custody with the wrong identity concept.
+- Validate `user_ura` through the canonical URA parser and require
+  `URAKind::User` before reading trust rows. Unknown users may still return an
+  empty key list; malformed or non-User scopes are invalid input.
+- Keep register/revoke write-side `agent_ura` naming out of this commit. That
+  is a wider trust-anchor schema migration; this slice closes the read-model
+  path directly involved in user signer inventory checks.

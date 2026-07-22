@@ -866,6 +866,80 @@ if dispatcher:
 PY
 }
 
+check_runtime_trust_user_key_inventory_scope_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local list_handler="$cli_root/src/daemon/invocation/admission/list_user_pubkeys.rs"
+  local trust="$cli_root/src/daemon/invocation/admission/runtime_trust.rs"
+  local contracts="$cli_root/src/daemon/ability/catalog/daemon_invocation_contracts.rs"
+  local cli_user="$cli_root/src/cli/commands/user_signing_identity.rs"
+  local doctor="$cli_root/src/cli/commands/doctor.rs"
+  [[ -f "$list_handler" ]] || fail "identity.list_user_pubkeys handler is missing: $list_handler"
+  [[ -f "$trust" ]] || fail "runtime trust aggregate is missing: $trust"
+  [[ -f "$contracts" ]] || fail "daemon invocation contracts source is missing: $contracts"
+
+  "$PYTHON_BIN" - "$list_handler" "$trust" "$contracts" "$cli_user" "$doctor" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+handler = Path(sys.argv[1]).read_text(encoding="utf-8")
+trust = Path(sys.argv[2]).read_text(encoding="utf-8")
+contracts = Path(sys.argv[3]).read_text(encoding="utf-8")
+cli_user = Path(sys.argv[4]).read_text(encoding="utf-8") if Path(sys.argv[4]).exists() else ""
+doctor = Path(sys.argv[5]).read_text(encoding="utf-8") if Path(sys.argv[5]).exists() else ""
+
+production_handler = handler.split("\n#[cfg(test)]\nmod tests", 1)[0]
+if "struct ListArgs" not in production_handler or "user_ura: String" not in production_handler:
+    raise SystemExit("runtime_trust_user_key_inventory:list_args_not_user_scoped")
+if "agent_ura: String" in production_handler:
+    raise SystemExit("runtime_trust_user_key_inventory:list_args_preserve_agent_ura")
+if "#[serde(deny_unknown_fields)]" not in production_handler:
+    raise SystemExit("runtime_trust_user_key_inventory:unknown_fields_not_rejected")
+for required in (
+    "fn required_user_ura(",
+    "parse_ura(user_ura)",
+    "URAKind::User",
+    "identity.list_user_pubkeys: user_ura is required",
+    "identity.list_user_pubkeys: user_ura must be a canonical User URA",
+    "identity.list_user_pubkeys: user_ura must identify a User",
+):
+    if required not in production_handler:
+        raise SystemExit(f"runtime_trust_user_key_inventory:missing_user_scope_guard:{required}")
+if '"agent_ura"' in production_handler:
+    raise SystemExit("runtime_trust_user_key_inventory:production_handler_mentions_retired_agent_field")
+if "pub(crate) fn user_snapshot(&self, user_ura: &str)" not in trust:
+    raise SystemExit("runtime_trust_user_key_inventory:user_snapshot_not_user_named")
+if "pub(crate) user_ura: String" not in trust:
+    raise SystemExit("runtime_trust_user_key_inventory:snapshot_field_not_user_ura")
+if re.search(r"RuntimeTrustUserSnapshot\s*\{[^}]*agent_ura\s*:", trust, re.S):
+    raise SystemExit("runtime_trust_user_key_inventory:snapshot_constructs_agent_ura")
+contracts_section = contracts.split("ABILITY_IDENTITY_LIST_USER_PUBKEYS => object_schema(", 1)
+if len(contracts_section) != 2:
+    raise SystemExit("runtime_trust_user_key_inventory:contract_schema_missing")
+schema_body = contracts_section[1].split("),", 1)[0]
+if '"user_ura"' not in schema_body or '"agent_ura"' in schema_body:
+    raise SystemExit("runtime_trust_user_key_inventory:contract_schema_not_user_scoped")
+def list_user_pubkey_calls(source: str):
+    for match in re.finditer(r'"identity\.list_user_pubkeys"', source):
+        start = match.start()
+        end = source.find(";", match.end())
+        yield source[start : end if end >= 0 else min(len(source), match.end() + 240)]
+
+for source, label in ((cli_user, "cli_user"), (doctor, "doctor")):
+    for call in list_user_pubkey_calls(source):
+        if '"agent_ura"' in call:
+            raise SystemExit(f"runtime_trust_user_key_inventory:{label}_uses_retired_agent_field")
+        if '"user_ura"' not in call:
+            raise SystemExit(f"runtime_trust_user_key_inventory:{label}_missing_user_field")
+for required_test in (
+    "list_rejects_retired_agent_ura_request_field",
+    "list_rejects_non_user_ura_scope",
+):
+    if required_test not in handler:
+        raise SystemExit(f"runtime_trust_user_key_inventory:missing_test:{required_test}")
+PY
+}
+
 check_admission_owner_credentials_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local policy="$cli_root/src/daemon/invocation/admission/policy_gate.rs"
@@ -4412,6 +4486,51 @@ EOF
   if ( check_runtime_trust_revoke_credentials_contract "$tmp/runtime-trust-revoke-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected runtime trust revoke credential fallback gate to fail"
   fi
+  mkdir -p "$tmp/runtime-trust-user-key-legacy/src/daemon/invocation/admission" \
+    "$tmp/runtime-trust-user-key-legacy/src/daemon/ability/catalog" \
+    "$tmp/runtime-trust-user-key-legacy/src/cli/commands"
+  cat >"$tmp/runtime-trust-user-key-legacy/src/daemon/invocation/admission/list_user_pubkeys.rs" <<'EOF'
+use serde::Deserialize;
+#[derive(Debug, Deserialize)]
+struct ListArgs {
+    agent_ura: String,
+}
+pub struct ListResponse {
+    pub agent_ura: String,
+}
+pub(crate) fn handle() {
+    let snapshot = runtime_trust.user_snapshot(&args.agent_ura);
+}
+#[cfg(test)]
+mod tests {}
+EOF
+  cat >"$tmp/runtime-trust-user-key-legacy/src/daemon/invocation/admission/runtime_trust.rs" <<'EOF'
+pub(crate) struct RuntimeTrustReader;
+impl RuntimeTrustReader {
+    pub(crate) fn user_snapshot(&self, agent_ura: &str) -> RuntimeTrustUserSnapshot {
+        RuntimeTrustUserSnapshot { agent_ura: agent_ura.to_string() }
+    }
+}
+pub(crate) struct RuntimeTrustUserSnapshot {
+    pub(crate) agent_ura: String,
+}
+EOF
+  cat >"$tmp/runtime-trust-user-key-legacy/src/daemon/ability/catalog/daemon_invocation_contracts.rs" <<'EOF'
+fn schema() {
+    ABILITY_IDENTITY_LIST_USER_PUBKEYS => object_schema(
+        json!({"agent_ura": string_prop("User URA whose trusted keys should be listed.")}),
+        &["agent_ura"],
+        false,
+    )
+}
+EOF
+  printf 'fn contains(user_ura: &str) { invoke_local_ability("identity.list_user_pubkeys", serde_json::json!({ "agent_ura": user_ura })); }\n' \
+    > "$tmp/runtime-trust-user-key-legacy/src/cli/commands/user_signing_identity.rs"
+  printf 'fn check(user_ura: &str) { invoke_local_ability("identity.list_user_pubkeys", serde_json::json!({ "agent_ura": user_ura })); }\n' \
+    > "$tmp/runtime-trust-user-key-legacy/src/cli/commands/doctor.rs"
+  if ( check_runtime_trust_user_key_inventory_scope_contract "$tmp/runtime-trust-user-key-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected runtime trust user-key inventory agent_ura gate to fail"
+  fi
   mkdir -p "$tmp/admission-owner-legacy/src/daemon/invocation/admission"
   printf '%s\n' \
     'pub(crate) fn resolve_owner(subject_ura: &str, callee_ura: &str, daemon_ura: Option<&str>, trust_anchor: &RealmTrustAnchor) -> OwnerResolution {' \
@@ -4573,6 +4692,7 @@ EOF
   check_pages_identity_credentials_contract
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
+  check_runtime_trust_user_key_inventory_scope_contract
   check_admission_owner_credentials_contract
   check_shared_local_device_owner_projection_contract
   check_node_session_authority_subject_contract
@@ -4633,6 +4753,7 @@ check_auth_agents_backend_shape_contract
 check_pages_identity_credentials_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
+check_runtime_trust_user_key_inventory_scope_contract
 check_admission_owner_credentials_contract
 check_shared_local_device_owner_projection_contract
 check_node_session_authority_subject_contract

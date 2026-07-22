@@ -395,9 +395,9 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
         ),
         ABILITY_IDENTITY_LIST_USER_PUBKEYS => object_schema(
             json!({
-                "agent_ura": string_prop("User URA whose trusted keys should be listed.")
+                "user_ura": string_prop("User URA whose trusted keys should be listed.")
             }),
-            &["agent_ura"],
+            &["user_ura"],
             false,
         ),
         ABILITY_IDENTITY_REVOKE_USER_PUBKEY => object_schema(

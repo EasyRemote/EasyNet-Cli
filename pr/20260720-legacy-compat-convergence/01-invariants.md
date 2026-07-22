@@ -431,3 +431,7 @@
   corrupt runtime output and must fail closed; `output_base64`/`payload_base64`
   remains the lossless byte projection but must not repair schema corruption by
   silently emitting `null` JSON.
+- Runtime trust user-key inventory is scoped by canonical User URA, not by a
+  generic Agent identity field. `identity.list_user_pubkeys` request, response,
+  schema, CLI callers, and RuntimeTrust snapshot state must use `user_ura` and
+  reject retired `agent_ura` input before reading trust rows.

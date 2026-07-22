@@ -89,10 +89,10 @@ impl<'a> RuntimeTrustReader<'a> {
         Self { cell }
     }
 
-    pub(crate) fn user_snapshot(&self, agent_ura: &str) -> RuntimeTrustUserSnapshot {
+    pub(crate) fn user_snapshot(&self, user_ura: &str) -> RuntimeTrustUserSnapshot {
         let anchor = self.cell.snapshot();
         let keys = anchor
-            .lookup_user_all(agent_ura)
+            .lookup_user_all(user_ura)
             .iter()
             .map(|entry| RuntimeTrustUserKey {
                 public_key_b64: entry.public_key_b64.clone(),
@@ -100,17 +100,17 @@ impl<'a> RuntimeTrustReader<'a> {
             })
             .collect();
         RuntimeTrustUserSnapshot {
-            agent_ura: agent_ura.to_string(),
+            user_ura: user_ura.to_string(),
             keys,
-            rotation_epoch: anchor.user_rotation_epoch(agent_ura),
-            revoked_key_count: anchor.revoked_user_pubkey_count(agent_ura),
+            rotation_epoch: anchor.user_rotation_epoch(user_ura),
+            revoked_key_count: anchor.revoked_user_pubkey_count(user_ura),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeTrustUserSnapshot {
-    pub(crate) agent_ura: String,
+    pub(crate) user_ura: String,
     pub(crate) keys: Vec<RuntimeTrustUserKey>,
     pub(crate) rotation_epoch: u64,
     pub(crate) revoked_key_count: usize,
@@ -637,7 +637,7 @@ mod tests {
             .keys
             .is_empty());
         let snapshot = ctx.reader().user_snapshot("easynet:///r/realm/user/alice");
-        assert_eq!(snapshot.agent_ura, "easynet:///r/realm/user/alice");
+        assert_eq!(snapshot.user_ura, "easynet:///r/realm/user/alice");
         assert_eq!(snapshot.rotation_epoch, 1);
         assert_eq!(snapshot.revoked_key_count, 1);
 
