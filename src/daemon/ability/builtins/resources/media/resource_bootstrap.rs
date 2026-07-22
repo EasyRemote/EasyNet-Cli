@@ -7,7 +7,9 @@
 // checks at invocation time; this module only makes stable URAs
 // discoverable through meta.list_resources.
 
-use std::collections::{BTreeMap, HashSet};
+#[cfg(not(target_os = "macos"))]
+use std::collections::BTreeMap;
+use std::collections::HashSet;
 
 use serde_json::{json, Value};
 
@@ -26,7 +28,21 @@ struct DiscoveredResource {
 #[derive(Debug, Default)]
 struct DiscoveredResources {
     resources: Vec<DiscoveredResource>,
-    screen_targets_scanned: bool,
+    screen_target_discovery: ScreenTargetDiscoveryState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ScreenTargetDiscoveryState {
+    #[default]
+    NotAttempted,
+    Scanned,
+    Unavailable,
+}
+
+impl ScreenTargetDiscoveryState {
+    fn permits_stale_prune(self) -> bool {
+        matches!(self, Self::Scanned)
+    }
 }
 
 /// Seed/update the resources table for this daemon's local media
@@ -42,7 +58,7 @@ pub fn seed_default_device_resources(realm: &str, owner_agent: &str) -> anyhow::
 
     let mut file = resources::load()?;
     let discovered = discover_default_resources();
-    if discovered.screen_targets_scanned {
+    if discovered.screen_target_discovery.permits_stale_prune() {
         prune_stale_auto_screen_targets(&mut file, realm, owner_agent, &discovered.resources);
     }
     for resource in discovered.resources {
@@ -126,10 +142,11 @@ fn discover_default_resources() -> DiscoveredResources {
     discovered.resources.extend(discover_displays());
     match discover_screen_targets() {
         Ok(targets) => {
-            discovered.screen_targets_scanned = true;
+            discovered.screen_target_discovery = ScreenTargetDiscoveryState::Scanned;
             discovered.resources.extend(targets);
         }
         Err(err) => {
+            discovered.screen_target_discovery = ScreenTargetDiscoveryState::Unavailable;
             crate::op_event!(
                 component = media_resource_bootstrap,
                 kind = screen_target_discovery_failed,
@@ -222,26 +239,7 @@ fn discover_displays() -> Vec<DiscoveredResource> {
 
 #[cfg(target_os = "macos")]
 fn discover_screen_targets() -> anyhow::Result<Vec<DiscoveredResource>> {
-    match macos_screen_targets::discover() {
-        Ok(targets) if !targets.is_empty() => Ok(targets),
-        Ok(_) => {
-            crate::op_event!(
-                component = media_resource_bootstrap,
-                kind = native_screen_target_discovery_empty,
-                fallback = "xcap",
-            );
-            discover_screen_targets_with_xcap()
-        }
-        Err(err) => {
-            crate::op_event!(
-                component = media_resource_bootstrap,
-                kind = native_screen_target_discovery_failed,
-                reason = err.to_string(),
-                fallback = "xcap",
-            );
-            discover_screen_targets_with_xcap()
-        }
-    }
+    macos_screen_targets::discover()
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -252,6 +250,7 @@ fn discover_screen_targets() -> anyhow::Result<Vec<DiscoveredResource>> {
     discover_screen_targets_with_xcap()
 }
 
+#[cfg(not(target_os = "macos"))]
 fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>> {
     let windows =
         xcap::Window::all().map_err(|err| anyhow::anyhow!("xcap Window::all failed: {err}"))?;
@@ -1059,10 +1058,10 @@ mod tests {
         .expect("seed previous window");
         let discovered = DiscoveredResources {
             resources: Vec::new(),
-            screen_targets_scanned: false,
+            screen_target_discovery: ScreenTargetDiscoveryState::Unavailable,
         };
 
-        if discovered.screen_targets_scanned {
+        if discovered.screen_target_discovery.permits_stale_prune() {
             prune_stale_auto_screen_targets(
                 &mut file,
                 "acme",
@@ -1073,6 +1072,41 @@ mod tests {
 
         assert_eq!(file.resources.len(), 1);
         assert_eq!(file.resources[0].hardware_id, "window:xcap:10:100");
+    }
+
+    #[test]
+    fn successful_empty_screen_target_scan_prunes_stale_auto_targets() {
+        let mut file = ResourcesFile::default();
+        apply_discovered_resource(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/device/node-1",
+            DiscoveredResource {
+                kind: ResourceType::Window,
+                hardware_id: "window:xcap:10:100".into(),
+                display_name: "Previously Seen".into(),
+                metadata: json!({"backend": "xcap", "auto_prune": true}),
+            },
+        )
+        .expect("seed previous window");
+        let discovered = DiscoveredResources {
+            resources: Vec::new(),
+            screen_target_discovery: ScreenTargetDiscoveryState::Scanned,
+        };
+
+        if discovered.screen_target_discovery.permits_stale_prune() {
+            prune_stale_auto_screen_targets(
+                &mut file,
+                "acme",
+                "easynet:///r/acme/device/node-1",
+                &discovered.resources,
+            );
+        }
+
+        assert!(
+            file.resources.is_empty(),
+            "authoritative empty scans should prune stale auto-bootstrap targets"
+        );
     }
 
     #[test]

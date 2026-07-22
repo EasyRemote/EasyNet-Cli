@@ -246,6 +246,14 @@ fn voice_call_product_contract_script_holds() {
 }
 
 #[test]
+fn media_screen_target_provider_boundary_script_holds() {
+    // Pins media resource bootstrap to one authoritative screen-target
+    // discovery provider per platform; macOS native discovery must not
+    // silently repopulate durable resource URAs through xcap fallback.
+    run_bash_script("tests/scripts/test_check_media_screen_target_provider_boundary.sh");
+}
+
+#[test]
 fn orchestration_service_boundary_script_holds() {
     // Pins mission.discuss_round session continuity to a registry-
     // scoped service and keeps agent-cycle inputs grouped.
