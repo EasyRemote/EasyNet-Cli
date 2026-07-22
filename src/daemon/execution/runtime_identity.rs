@@ -30,12 +30,46 @@
 // descriptor-bound SDK requests. This object is the shared identity seam that
 // keeps those producers on the same canonical runtime model.
 
-use crate::core::domain::NodeId;
+use crate::core::domain::{NodeId, TenantId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalRuntimeInvocationIdentity {
     realm: String,
     local_node: NodeId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalRuntimeSessionProjection {
+    tenant: TenantId,
+    node: NodeId,
+}
+
+impl LocalRuntimeSessionProjection {
+    pub fn from_callee_ura(callee_ura: &str) -> anyhow::Result<Self> {
+        let parsed = crate::core::ura::parse_ura(callee_ura)
+            .map_err(|error| anyhow::anyhow!("project runtime session callee URA: {error}"))?;
+        if parsed.kind != crate::core::ura::URAKind::Device {
+            anyhow::bail!(
+                "runtime session read-model projection requires Device callee URA, got {}",
+                parsed.kind
+            );
+        }
+        let device_id = parsed
+            .device_id()
+            .ok_or_else(|| anyhow::anyhow!("runtime session Device callee omitted device id"))?;
+        Ok(Self {
+            tenant: TenantId::new(parsed.realm.clone()),
+            node: NodeId::new(device_id),
+        })
+    }
+
+    pub fn tenant(&self) -> &TenantId {
+        &self.tenant
+    }
+
+    pub fn node(&self) -> &NodeId {
+        &self.node
+    }
 }
 
 impl LocalRuntimeInvocationIdentity {
@@ -103,6 +137,27 @@ mod tests {
         let err = LocalRuntimeInvocationIdentity::new("  ", NodeId::new("node-a")).unwrap_err();
         assert!(
             err.to_string().contains("non-empty realm"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn projects_session_read_model_from_device_callee_ura() {
+        let projection =
+            LocalRuntimeSessionProjection::from_callee_ura("easynet:///r/tenant-a/device/device-a")
+                .unwrap();
+
+        assert_eq!(projection.tenant().as_str(), "tenant-a");
+        assert_eq!(projection.node().as_str(), "device-a");
+    }
+
+    #[test]
+    fn rejects_non_device_session_read_model_callee() {
+        let err = LocalRuntimeSessionProjection::from_callee_ura("easynet:///r/tenant-a/authority")
+            .unwrap_err();
+
+        assert!(
+            err.to_string().contains("requires Device callee URA"),
             "unexpected error: {err}"
         );
     }

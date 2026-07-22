@@ -1845,6 +1845,53 @@ for required in (
 PY
 }
 
+check_kernel_runtime_session_read_model_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local kernel="$cli_root/src/daemon/boot/kernel/mod.rs"
+  local identity="$cli_root/src/daemon/execution/runtime_identity.rs"
+  [[ -f "$kernel" ]] || fail "kernel source is missing: $kernel"
+  [[ -f "$identity" ]] || fail "local runtime identity source is missing: $identity"
+
+  "$PYTHON_BIN" - "$kernel" "$identity" <<'PY'
+import sys
+from pathlib import Path
+
+kernel = Path(sys.argv[1]).read_text()
+identity = Path(sys.argv[2]).read_text()
+kernel_prod = kernel.split("#[cfg(test)]", 1)[0]
+
+for retired in (
+    'node: NodeId::new("self")',
+    'tenant: TenantId::default_v1()',
+):
+    if retired in kernel_prod:
+        raise SystemExit(f"kernel_session_read_model_retired_projection:{retired}")
+
+for required in (
+    "pub struct LocalRuntimeSessionProjection",
+    "pub fn from_callee_ura(callee_ura: &str) -> anyhow::Result<Self>",
+    "parsed.kind != crate::core::ura::URAKind::Device",
+    "TenantId::new(parsed.realm.clone())",
+    "NodeId::new(device_id)",
+    "projects_session_read_model_from_device_callee_ura",
+    "rejects_non_device_session_read_model_callee",
+):
+    if required not in identity:
+        raise SystemExit(f"kernel_session_projection_identity_missing:{required}")
+
+for required in (
+    "runtime_identity::LocalRuntimeSessionProjection",
+    "tenant: tenant.clone()",
+    "let session_projection = LocalRuntimeSessionProjection::from_callee_ura(&callee)?;",
+    "node: session_projection.node().clone()",
+    "tenant: session_projection.tenant().clone()",
+    "invoke_rejects_non_device_session_projection_without_admitting_row",
+):
+    if required not in kernel:
+        raise SystemExit(f"kernel_session_read_model_cutover_missing:{required}")
+PY
+}
+
 check_retired_federation_directory_v1_stream_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   "$PYTHON_BIN" - "$cli_root/src" "$cli_root/tests" <<'PY'
@@ -5105,6 +5152,15 @@ EOF
   if ( CLI_ROOT="$tmp/cli-local-runtime-identity"; check_daemon_local_runtime_identity_contract ) >/dev/null 2>&1; then
     fail "self-test expected local runtime identity default-URA gate to fail"
   fi
+  mkdir -p "$tmp/cli-kernel-session-read-model/src/daemon/boot/kernel" \
+    "$tmp/cli-kernel-session-read-model/src/daemon/execution"
+  printf 'fn dispatch_via_local_runtime() { Session { node: NodeId::new("self"), tenant: TenantId::default_v1() }; }\n' \
+    > "$tmp/cli-kernel-session-read-model/src/daemon/boot/kernel/mod.rs"
+  printf 'pub struct LocalRuntimeSessionProjection;\n' \
+    > "$tmp/cli-kernel-session-read-model/src/daemon/execution/runtime_identity.rs"
+  if ( CLI_ROOT="$tmp/cli-kernel-session-read-model"; check_kernel_runtime_session_read_model_contract ) >/dev/null 2>&1; then
+    fail "self-test expected kernel session read-model default projection gate to fail"
+  fi
   mkdir -p "$tmp/cli-directory-fallback/sdk/go" \
     "$tmp/cli-directory-fallback/sdk/python/easynet_sdk" \
     "$tmp/cli-directory-fallback/sdk/python/tests"
@@ -5871,6 +5927,7 @@ EOF
   check_daemon_tuple_route_contract
   check_daemon_runtime_route_inventory_contract
   check_daemon_local_runtime_identity_contract
+  check_kernel_runtime_session_read_model_contract
   check_route_resolver_descriptor_ref_selector_contract
   check_namespace_resolver_authority_projection_contract
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
@@ -5943,6 +6000,7 @@ check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
 check_daemon_runtime_route_inventory_contract
 check_daemon_local_runtime_identity_contract
+check_kernel_runtime_session_read_model_contract
 check_retired_federation_directory_v1_stream_contract
 check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract

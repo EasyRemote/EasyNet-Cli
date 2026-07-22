@@ -41,6 +41,7 @@ use crate::daemon::execution::{
     loop_instance::LoopService,
     mission::discuss::DiscussService,
     permission::{AskContext, PermissionService},
+    runtime_identity::LocalRuntimeSessionProjection,
     schedule::ScheduleService,
     session::SessionService,
 };
@@ -165,6 +166,7 @@ impl Kernel {
         session_id: &SessionId,
         agent_name: &str,
         args: &serde_json::Value,
+        tenant: &TenantId,
     ) -> PermissionDecision {
         let prompt_preview: String = args
             .get("prompt")
@@ -186,7 +188,7 @@ impl Kernel {
             prompt: pending_prompt,
             sensitivity: PermissionSensitivity::Medium,
             session: session_id.clone(),
-            tenant: TenantId::default_v1(),
+            tenant: tenant.clone(),
             capability_claim: None,
         };
         // The broker's `ask` is sync but blocks on a tokio oneshot
@@ -209,6 +211,7 @@ impl Kernel {
         callee: String,
         ability: String,
         args: serde_json::Value,
+        session_projection: LocalRuntimeSessionProjection,
         permission_decision: Option<PermissionDecision>,
     ) -> anyhow::Result<FinalizedInvocation> {
         let runtime = Arc::clone(
@@ -237,8 +240,8 @@ impl Kernel {
                 .admit(Session {
                     id: session_id.clone(),
                     agent: AgentId::new(admit_agent.clone()),
-                    node: NodeId::new("self"),
-                    tenant: TenantId::default_v1(),
+                    node: session_projection.node().clone(),
+                    tenant: session_projection.tenant().clone(),
                     started_unix_ms: chrono::Utc::now().timestamp_millis(),
                     ended_unix_ms: None,
                 })
@@ -515,14 +518,19 @@ impl KernelApi for Kernel {
             .to_string();
         let args = serde_json::from_slice(request.payload())
             .map_err(|err| anyhow::anyhow!("KernelApi::invoke requires a JSON payload: {err}"))?;
+        let session_projection = LocalRuntimeSessionProjection::from_callee_ura(&callee)?;
 
         let permission_decision = if should_gate(&ability) {
             let permission_session_id = SessionId::new(format!(
                 "permission-{}",
                 hex::encode(envelope.invocation_nonce)
             ));
-            let decision =
-                self.gate_permission(&permission_session_id, agent_portion(&ability), &args);
+            let decision = self.gate_permission(
+                &permission_session_id,
+                agent_portion(&ability),
+                &args,
+                session_projection.tenant(),
+            );
             if decision == PermissionDecision::Deny {
                 anyhow::bail!("permission denied for {ability}");
             }
@@ -531,7 +539,15 @@ impl KernelApi for Kernel {
             None
         };
 
-        self.dispatch_via_local_runtime(request, caller, callee, ability, args, permission_decision)
+        self.dispatch_via_local_runtime(
+            request,
+            caller,
+            callee,
+            ability,
+            args,
+            session_projection,
+            permission_decision,
+        )
     }
 
     fn list_active_sessions(&self) -> anyhow::Result<Vec<Session>> {
@@ -798,7 +814,7 @@ mod tests {
     #[test]
     fn invoke_success_returns_axon_finalization_and_indexes_canonical_session() {
         let k = Kernel::new();
-        let device_ura = crate::core::ura::device_ura("localhost", "a");
+        let device_ura = crate::core::ura::device_ura("tenant-a", "device-a");
         install_echo_runtime(&k, &device_ura, "observe.health");
         let request = k
             .prepare_local_system_rpc(
@@ -822,6 +838,12 @@ mod tests {
         assert_ne!(finalized.terminal_receipt.self_hash(), [0u8; 32]);
 
         let session_id = SessionId::new(finalized.terminal_receipt.invocation_id().to_string());
+        let indexed = k
+            .get_session(&session_id)
+            .expect("session lookup")
+            .expect("canonical session row");
+        assert_eq!(indexed.node, NodeId::new("device-a"));
+        assert_eq!(indexed.tenant, TenantId::new("tenant-a"));
         let history = k.session_events(&session_id, 0).expect("canonical session");
         assert!(history
             .iter()
@@ -829,6 +851,32 @@ mod tests {
         assert!(history
             .iter()
             .any(|event| event["kind"] == "invoke_terminal"));
+    }
+
+    #[test]
+    fn invoke_rejects_non_device_session_projection_without_admitting_row() {
+        let k = Kernel::new();
+        let hub_ura = crate::core::ura::hub_ura("tenant-a");
+        let subject_ura = crate::core::ura::device_ura("tenant-a", "device-a");
+        let request = test_system_request(
+            &hub_ura,
+            "observe.health",
+            &subject_ura,
+            serde_json::to_vec(&json!({"ok": true})).unwrap(),
+        );
+
+        let err = k
+            .invoke(request)
+            .expect_err("Kernel session read model must require Device callee");
+
+        assert!(
+            err.to_string().contains("requires Device callee URA"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            k.list_active_sessions().unwrap().is_empty(),
+            "rejected projection must not admit a synthetic session row"
+        );
     }
 
     #[test]
