@@ -304,6 +304,13 @@ fn dispatch_mission_context_boundary_script_holds() {
 }
 
 #[test]
+fn plugin_control_subject_boundary_script_holds() {
+    // Pins plugin control subject resolution to typed credential absence.
+    // Existing malformed credentials must not be hidden as unpaired state.
+    run_bash_script("tests/scripts/test_check_plugin_control_subject_boundary.sh");
+}
+
+#[test]
 fn runtime_abilities_manifest_boundary_script_holds() {
     // Pins per-agent ability discovery to authored manifests under
     // AgentDirectory. Missing roots must not synthesize chat abilities.

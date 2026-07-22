@@ -735,8 +735,9 @@ fn invoke_plugin_control_ability_via_daemon(
     ability: &'static str,
     args: serde_json::Value,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    let Some(subject) = plugin_control_subject_ura()? else {
-        return Ok(None);
+    let subject = match PluginControlSubject::resolve()? {
+        PluginControlSubject::Available(subject) => subject,
+        PluginControlSubject::Unpaired => return Ok(None),
     };
     match crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(
         ability, args, &subject,
@@ -753,26 +754,23 @@ fn invoke_plugin_control_ability_via_daemon(
 }
 
 #[cfg(feature = "axon-pb")]
-fn plugin_control_subject_ura() -> anyhow::Result<Option<String>> {
-    match crate::daemon::persistence::config::load_credentials() {
-        Ok(creds) => Ok(Some(crate::core::ura::device_ura(
-            creds.realm.trim(),
-            creds.node_id.trim(),
-        ))),
-        Err(err) => {
-            if is_missing_or_incomplete_credentials(&err) {
-                Ok(None)
-            } else {
-                Err(err)
-            }
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PluginControlSubject {
+    Available(String),
+    Unpaired,
 }
 
 #[cfg(feature = "axon-pb")]
-fn is_missing_or_incomplete_credentials(err: &anyhow::Error) -> bool {
-    let msg = err.to_string();
-    msg.contains("no credentials found") || msg.contains("credentials file is incomplete")
+impl PluginControlSubject {
+    fn resolve() -> anyhow::Result<Self> {
+        let Some(creds) = crate::daemon::persistence::config::load_credentials_optional()? else {
+            return Ok(Self::Unpaired);
+        };
+        Ok(Self::Available(crate::core::ura::device_ura(
+            creds.realm.trim(),
+            creds.node_id.trim(),
+        )))
+    }
 }
 
 #[cfg(all(test, feature = "axon-pb"))]
@@ -807,7 +805,58 @@ mod tests {
     fn plugin_control_subject_is_unavailable_when_unpaired() {
         let _guard = crate::cli::commands::test_support::HomeGuard::new();
 
-        assert_eq!(plugin_control_subject_ura().unwrap(), None);
+        assert_eq!(
+            PluginControlSubject::resolve().unwrap(),
+            PluginControlSubject::Unpaired
+        );
+    }
+
+    #[test]
+    fn plugin_control_subject_rejects_malformed_credentials() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(crate::daemon::persistence::config::state_dir())
+            .expect("state dir");
+        std::fs::write(
+            crate::daemon::persistence::config::state_dir().join("credentials.json"),
+            b"{",
+        )
+        .expect("write malformed credentials");
+
+        let err = PluginControlSubject::resolve()
+            .expect_err("malformed credentials must not look like unpaired state");
+
+        assert!(
+            err.to_string().contains("parse credentials"),
+            "wrong error: {err}"
+        );
+    }
+
+    #[test]
+    fn plugin_control_subject_rejects_incomplete_credentials() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(crate::daemon::persistence::config::state_dir())
+            .expect("state dir");
+        std::fs::write(
+            crate::daemon::persistence::config::state_dir().join("credentials.json"),
+            r#"{
+  "node_id": "",
+  "credential_token": "token",
+  "hub_endpoint": "axon://hub.example:7700",
+  "realm": "acme",
+  "username": "alice",
+  "user_id": "user-alice"
+}
+"#,
+        )
+        .expect("write incomplete credentials");
+
+        let err = PluginControlSubject::resolve()
+            .expect_err("incomplete credentials must not look like unpaired state");
+
+        assert!(
+            err.to_string().contains("validate credentials"),
+            "wrong error: {err}"
+        );
     }
 
     #[test]
@@ -827,8 +876,8 @@ mod tests {
         .expect("write test credentials");
 
         assert_eq!(
-            plugin_control_subject_ura().unwrap().as_deref(),
-            Some("easynet:///r/acme/device/dev-a")
+            PluginControlSubject::resolve().unwrap(),
+            PluginControlSubject::Available("easynet:///r/acme/device/dev-a".to_string())
         );
     }
 }
