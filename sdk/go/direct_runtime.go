@@ -80,23 +80,6 @@ func NewDirectRuntimeConnectorWithOptions(options DirectRuntimeConnectorOptions)
 	}
 }
 
-// WithHandleTransport sets the Runtime Core handle transport used for
-// prepare/submit/handle operations. The caller must set closeOnConnectorClose
-// only when this connector owns the handle transport lifecycle.
-func (c *DirectRuntimeConnector) WithHandleTransport(handle RuntimeTransport, closeOnConnectorClose bool) *DirectRuntimeConnector {
-	if c == nil {
-		return c
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		return c
-	}
-	c.handle = handle
-	c.closeHandleTransport = closeOnConnectorClose
-	return c
-}
-
 func (c *DirectRuntimeConnector) Resolve(ctx context.Context, optionsJSON []byte) ([]byte, error) {
 	if err := c.requireOpen(ctx); err != nil {
 		return nil, err
