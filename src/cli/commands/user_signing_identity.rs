@@ -80,7 +80,7 @@ impl UserPublicKeyRegistry for LocalUserPublicKeyRegistry {
         let register_subject =
             crate::core::ura::owner_ability_ura(&local_device_ura, "identity.register_pubkey")
                 .ok_or_else(|| anyhow!("derive identity.register_pubkey descriptor subject"))?;
-        crate::support::platform::local_invoke::invoke_local_ability_with_subject(
+        crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(
             "identity.register_pubkey",
             serde_json::json!({
                 "principal_ura": user_ura,

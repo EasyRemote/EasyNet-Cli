@@ -738,7 +738,7 @@ fn invoke_plugin_control_ability_via_daemon(
     let Some(subject) = plugin_control_subject_ura()? else {
         return Ok(None);
     };
-    match crate::support::platform::local_invoke::invoke_local_ability_with_subject(
+    match crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(
         ability, args, &subject,
     ) {
         Ok(value) => Ok(Some(value)),

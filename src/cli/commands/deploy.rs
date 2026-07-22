@@ -18,7 +18,8 @@
 // -----------------------
 //   1. Validate args locally (path exists, node id non-empty).
 //   2. Mint a ResourceRef and map args → JSON request body.
-//   3. invoke_local_ability("ability.deploy", body).
+//   3. Invoke `ability.deploy` through LocalDaemonSystemAbilityIssuer with the
+//      minted ResourceRef URA as the daemon-system subject.
 //   4. Print the daemon's response.
 //
 // All policy (manifest validation, signature handling, ordering of
@@ -35,7 +36,7 @@ use console::style;
 use serde_json::json;
 
 use crate::daemon::resources::files::{resource_ref_for_local_path, FilesystemResourceCapability};
-use crate::support::platform::local_invoke::invoke_local_ability_with_subject;
+use crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer;
 use crate::support::platform::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
@@ -84,7 +85,7 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
         .map(str::to_string)
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| anyhow::anyhow!("minted ResourceRef did not include resource_ura"))?;
-    let result = invoke_local_ability_with_subject(
+    let result = LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(
         "ability.deploy",
         json!({
             "resource_ref": resource_ref,

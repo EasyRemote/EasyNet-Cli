@@ -183,7 +183,8 @@ fn run_run(args: RunArgs) -> anyhow::Result<()> {
     );
 
     let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura()?;
-    let value = crate::support::platform::local_invoke::invoke_local_ability_with_subject_timeout(
+    let value =
+        crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::invoke_root_for_subject_timeout(
         crate::daemon::ability::builtins::automation::mission::ABILITY_RUN,
         serde_json::json!({"source": source, "label": args.file}),
         &local_device_ura,

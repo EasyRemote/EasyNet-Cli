@@ -139,12 +139,6 @@ pub(crate) async fn connect_channel(
     }
 }
 
-/// Small value object for invoking daemon-hosted Axon abilities over
-/// the local Invocation transport. CLI modules should depend on this
-/// client instead of rebuilding socket/protobuf/tonic plumbing.
-#[derive(Debug, Clone)]
-pub(crate) struct LocalDaemonAbilityClient;
-
 #[cfg(feature = "axon-pb")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LocalDaemonLoopbackCalleePolicy {
@@ -294,7 +288,7 @@ impl LocalDaemonLoopbackTuplePlan {
         )
     }
 
-    fn local_root_with_subject(
+    fn local_root_for_subject(
         function_name: &str,
         payload_json: serde_json::Value,
         subject_ura: &str,
@@ -310,7 +304,7 @@ impl LocalDaemonLoopbackTuplePlan {
         )
     }
 
-    fn targeted_root_with_subject(
+    fn targeted_root_for_subject(
         function_name: &str,
         payload_json: serde_json::Value,
         callee_ura: &str,
@@ -430,112 +424,6 @@ fn local_daemon_connect_error(
 }
 
 #[cfg(feature = "axon-pb")]
-impl LocalDaemonAbilityClient {
-    fn grpc() -> Self {
-        Self
-    }
-
-    pub(crate) fn new() -> anyhow::Result<Self> {
-        Self::validate_socket()?;
-        Ok(Self::grpc())
-    }
-
-    pub(crate) fn invoke_with_subject(
-        &self,
-        function_name: &str,
-        payload_json: serde_json::Value,
-        subject_ura: &str,
-    ) -> anyhow::Result<serde_json::Value> {
-        self.invoke_with_subject_and_timeout(
-            function_name,
-            payload_json,
-            subject_ura,
-            Duration::from_secs(30),
-        )
-    }
-
-    fn invoke_with_subject_and_timeout(
-        &self,
-        function_name: &str,
-        payload_json: serde_json::Value,
-        subject_ura: &str,
-        timeout: Duration,
-    ) -> anyhow::Result<serde_json::Value> {
-        let tuple_plan = LocalDaemonLoopbackTuplePlan::local_root_with_subject(
-            function_name,
-            payload_json,
-            subject_ura,
-            timeout,
-        )?;
-        invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
-    }
-
-    fn validate_socket() -> anyhow::Result<()> {
-        let socket_path = resolve_socket_path();
-        if !probe_accepting(&socket_path) {
-            return Err(anyhow::Error::new(
-                crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
-                    "daemon not running: gRPC listener not reachable at {}. Start it with `easynet runtime start` or `easynet start`.",
-                    socket_path.display()
-                )),
-            ));
-        }
-        Ok(())
-    }
-}
-
-#[cfg(not(feature = "axon-pb"))]
-#[allow(dead_code)]
-impl LocalDaemonAbilityClient {
-    pub(crate) fn new() -> anyhow::Result<Self> {
-        Err(anyhow::Error::new(
-            crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(
-                "invoking daemon-hosted Axon abilities requires the `axon-pb` feature; rebuild \
-                 with `cargo build --features axon-pb`"
-                    .to_string(),
-            ),
-        ))
-    }
-
-    pub(crate) fn invoke(
-        &self,
-        function_name: &str,
-        _payload_json: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
-        anyhow::bail!(
-            "invoking `{}` through the local Axon daemon requires the `axon-pb` feature; \
-             rebuild with `cargo build --features axon-pb`",
-            function_name
-        )
-    }
-
-    pub(crate) fn invoke_with_subject(
-        &self,
-        function_name: &str,
-        payload_json: serde_json::Value,
-        _subject_ura: &str,
-    ) -> anyhow::Result<serde_json::Value> {
-        self.invoke(function_name, payload_json)
-    }
-}
-
-/// Invoke a daemon-hosted ability through Axon's local Invocation gRPC
-/// transport (`daemon.sock`) with an explicit subject. Transport-level entry;
-/// CLI surfaces MUST go through
-/// [`crate::support::platform::local_invoke::invoke_local_ability_with_subject`]
-/// instead so the "one CLI subcommand = one ability invoke" contract is held
-/// in exactly one module. This free fn exists for `support`-internal use only
-/// (the `local_invoke` shim forwards here).
-#[cfg(feature = "axon-pb")]
-pub(crate) fn invoke_local_daemon_ability_with_subject(
-    function_name: &str,
-    payload_json: serde_json::Value,
-    subject_ura: &str,
-) -> anyhow::Result<serde_json::Value> {
-    LocalDaemonAbilityClient::new()?.invoke_with_subject(function_name, payload_json, subject_ura)
-}
-
-#[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_local_daemon_ability(
     function_name: &str,
     payload_json: serde_json::Value,
@@ -549,13 +437,13 @@ pub(crate) fn invoke_local_daemon_ability(
 }
 
 #[cfg(feature = "axon-pb")]
-pub(crate) fn invoke_local_daemon_ability_with_subject_timeout(
+pub(crate) fn invoke_local_daemon_system_ability_root_for_subject_timeout(
     function_name: &str,
     payload_json: serde_json::Value,
     subject_ura: &str,
     timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
-    let tuple_plan = LocalDaemonLoopbackTuplePlan::local_root_with_subject(
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::local_root_for_subject(
         function_name,
         payload_json,
         subject_ura,
@@ -572,7 +460,7 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
     subject_ura: &str,
     timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
-    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_subject(
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_for_subject(
         function_name,
         payload_json,
         callee_ura,
@@ -610,11 +498,10 @@ pub(crate) fn invoke_local_daemon_ability_targeted_explicit_root_timeout(
 /// Invoke a daemon-hosted server-stream ability through Axon's local
 /// Invocation gRPC transport and drain its JSON frames.
 ///
-/// This is the stream-mode twin of
-/// [`invoke_local_daemon_ability_with_subject`]. It deliberately
-/// talks to the daemon process, not an in-process test runtime,
-/// because stateful stream abilities keep their session state inside
-/// that process.
+/// This is the stream-mode twin of the unary daemon-system root issuer. It
+/// deliberately talks to the daemon process, not an in-process test runtime,
+/// because stateful stream abilities keep their session state inside that
+/// process.
 #[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
     function_name: &str,
@@ -624,7 +511,7 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_stream_root(
     timeout: Duration,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
-    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_subject(
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_for_subject(
         function_name,
         payload_json,
         callee_ura,
@@ -1853,22 +1740,18 @@ pub(crate) fn invoke_local_daemon_ability(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub(crate) fn invoke_local_daemon_ability_with_subject(
+pub(crate) fn invoke_local_daemon_system_ability_root_for_subject_timeout(
     function_name: &str,
-    payload_json: serde_json::Value,
-    _subject_ura: &str,
-) -> anyhow::Result<serde_json::Value> {
-    invoke_local_daemon_ability(function_name, payload_json)
-}
-
-#[cfg(not(feature = "axon-pb"))]
-pub(crate) fn invoke_local_daemon_ability_with_subject_timeout(
-    function_name: &str,
-    payload_json: serde_json::Value,
+    _payload_json: serde_json::Value,
     _subject_ura: &str,
     _timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
-    invoke_local_daemon_ability(function_name, payload_json)
+    Err(anyhow::Error::new(
+        crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
+            "invoking daemon-system `{function_name}` through the local Axon daemon requires the \
+             `axon-pb` feature; rebuild with `cargo build --features axon-pb`"
+        )),
+    ))
 }
 
 #[cfg(not(feature = "axon-pb"))]
@@ -1980,7 +1863,7 @@ mod tests {
 
     #[test]
     fn loopback_tuple_plan_requires_explicit_targeted_subject() {
-        let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_subject(
+        let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_for_subject(
             "job.run",
             serde_json::json!({"job": 1}),
             "easynet:///r/acme/device/edge-1",
@@ -2011,7 +1894,7 @@ mod tests {
             Some("easynet:///r/acme/resource/user.jobs/job-1")
         );
 
-        assert!(LocalDaemonLoopbackTuplePlan::targeted_root_with_subject(
+        assert!(LocalDaemonLoopbackTuplePlan::targeted_root_for_subject(
             "job.run",
             serde_json::json!({"job": 1}),
             "easynet:///r/acme/device/edge-1",
@@ -2025,7 +1908,7 @@ mod tests {
             Duration::ZERO,
         )
         .is_err());
-        assert!(LocalDaemonLoopbackTuplePlan::local_root_with_subject(
+        assert!(LocalDaemonLoopbackTuplePlan::local_root_for_subject(
             "job.run",
             serde_json::json!({"job": 1}),
             "",
@@ -2108,7 +1991,7 @@ mod tests {
         };
         use axon_sdk::pb::axon::v1::InvokeResponse;
 
-        let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_subject(
+        let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_for_subject(
             "job.run",
             serde_json::json!({"job": 1}),
             "easynet:///r/acme/device/edge-1",

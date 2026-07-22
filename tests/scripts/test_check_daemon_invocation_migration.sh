@@ -323,6 +323,60 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "InvocationTarget retired tuple mutation API should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+python3 - "$SB/src/support/platform/local_invoke.rs" "$SB/src/support/platform/local_daemon_grpc.rs" <<'PY'
+from pathlib import Path
+import sys
+
+local_invoke = Path(sys.argv[1])
+local_daemon = Path(sys.argv[2])
+
+text = local_invoke.read_text(encoding="utf-8")
+needle = "pub struct LocalDaemonSystemAbilityIssuer;"
+insertion = '''
+pub fn invoke_local_ability_with_subject(
+    ability: &str,
+    args: serde_json::Value,
+    subject_ura: &str,
+) -> anyhow::Result<serde_json::Value> {
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_with_subject(
+        ability,
+        args,
+        subject_ura,
+    )
+}
+
+'''
+local_invoke.write_text(text.replace(needle, insertion + needle, 1), encoding="utf-8")
+
+text = local_daemon.read_text(encoding="utf-8")
+needle = "#[cfg(feature = \"axon-pb\")]\npub(crate) fn invoke_local_daemon_ability("
+insertion = '''
+pub(crate) struct LocalDaemonAbilityClient;
+
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_local_daemon_ability_with_subject(
+    function_name: &str,
+    payload_json: serde_json::Value,
+    subject_ura: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::local_root_for_subject(
+        function_name,
+        payload_json,
+        subject_ura,
+        std::time::Duration::from_secs(30),
+    )?;
+    invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
+}
+
+'''
+local_daemon.write_text(text.replace(needle, insertion + needle, 1), encoding="utf-8")
+PY
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "generic local invoke with_subject facade should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 cat >"$SB/src/__target_constructor_probe.rs" <<'RS'
 pub fn probe() {
     let _ = crate::daemon::invocation::routing::target::InvocationTarget::local_daemon_system(

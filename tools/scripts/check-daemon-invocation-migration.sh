@@ -443,6 +443,8 @@ local_invoke = "src/support/platform/local_invoke.rs"
 local_invoke_text = read(local_invoke)
 for token, detail in (
     ("pub struct LocalDaemonSystemAbilityIssuer", "named local daemon-system ability issuer"),
+    ("invoke_root_for_subject", "daemon-system local root subject issuer"),
+    ("invoke_root_for_subject_timeout", "daemon-system local root subject timeout issuer"),
     ("invoke_target_root_timeout", "daemon-system unary target issuer"),
     ("stream_target_root", "daemon-system stream target issuer"),
     ("invoke_local_ability_target_explicit_root_timeout", "public local unary explicit tuple helper"),
@@ -473,6 +475,29 @@ for match in re.finditer(
     )
 
 local_invoke_production = production_source(local_invoke_text)
+for token in (
+    "pub fn invoke_local_ability_with_subject",
+    "pub fn invoke_local_ability_with_subject_timeout",
+):
+    if token in local_invoke_production:
+        violations.append(
+            f"{local_invoke}: generic subject-bearing local invoke facade is retired: {token}"
+        )
+
+for token in (
+    "struct LocalDaemonAbilityClient",
+    "local_root_with_subject",
+    "targeted_root_with_subject",
+    "pub(crate) fn invoke_local_daemon_ability_with_subject",
+    "pub(crate) fn invoke_local_daemon_ability_with_subject_timeout",
+    "fn invoke_with_subject(",
+    "fn invoke_with_subject_and_timeout(",
+):
+    if token in local_production:
+        violations.append(
+            f"{local_loopback}: generic subject-bearing transport facade is retired: {token}"
+        )
+
 for match in re.finditer(
     r"(?:invoke_target_root_timeout|stream_target_root)\s*\([^)]*subject\s*:\s*Option\s*<\s*String\s*>",
     local_invoke_production,

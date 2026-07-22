@@ -316,48 +316,16 @@ pub fn classify_invoke_error(err: &anyhow::Error) -> LocalInvokeErrorKind {
 /// it needs typed handling.
 ///
 /// **Canonical entry point for the "one CLI subcommand = one
-/// ability invoke" contract.** CLI surfaces MUST go through this
-/// function (or [`invoke_local_ability_with_subject`]), not the
-/// transport-level free fns in `support::local_daemon_grpc`. The
-/// indirection looks redundant — the body is one line — but it
-/// matters: the day the local-ability transport evolves, this is
-/// the **one** call site that knows the underlying transport.
-/// Callers that bypass it become per-surface transport coupling.
+/// ability invoke" contract.** CLI surfaces that invoke daemon-self
+/// root abilities use this function. Surfaces that intentionally bind
+/// a daemon-system root invocation to an explicit subject use
+/// [`LocalDaemonSystemAbilityIssuer`]. The indirection looks redundant
+/// — the body is one line — but it matters: the day the local-ability
+/// transport evolves, this is the **one** call site that knows the
+/// underlying transport. Callers that bypass it become per-surface
+/// transport coupling.
 pub fn invoke_local_ability(ability: &str, args: Value) -> anyhow::Result<Value> {
     crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability(ability, args)
-}
-
-/// Invoke a daemon-hosted ability with an explicit envelope subject.
-///
-/// The subject lands in `EnvelopeContext.subject` for handlers that consume it
-/// (e.g. `camera.snapshot`, which routes its frame from the resource the
-/// subject URA names). Missing subject is not a transport state: callers that
-/// need daemon-self root semantics use [`invoke_local_ability`], while callers
-/// that carry product/public tuple facts must pass a concrete `subject_ura`.
-pub fn invoke_local_ability_with_subject(
-    ability: &str,
-    args: Value,
-    subject_ura: &str,
-) -> anyhow::Result<Value> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_with_subject(
-        ability,
-        args,
-        subject_ura,
-    )
-}
-
-pub fn invoke_local_ability_with_subject_timeout(
-    ability: &str,
-    args: Value,
-    subject_ura: &str,
-    timeout: std::time::Duration,
-) -> anyhow::Result<Value> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_with_subject_timeout(
-        ability,
-        args,
-        subject_ura,
-        timeout,
-    )
 }
 
 /// Named issuer for product CLI commands that invoke daemon-local abilities as
@@ -370,6 +338,33 @@ pub fn invoke_local_ability_with_subject_timeout(
 pub struct LocalDaemonSystemAbilityIssuer;
 
 impl LocalDaemonSystemAbilityIssuer {
+    pub fn invoke_root_for_subject(
+        ability: &str,
+        args: Value,
+        subject_ura: &str,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_root_for_subject_timeout(
+            ability,
+            args,
+            subject_ura,
+            std::time::Duration::from_secs(30),
+        )
+    }
+
+    pub fn invoke_root_for_subject_timeout(
+        ability: &str,
+        args: Value,
+        subject_ura: &str,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        crate::support::platform::local_daemon_grpc::invoke_local_daemon_system_ability_root_for_subject_timeout(
+            ability,
+            args,
+            subject_ura,
+            timeout,
+        )
+    }
+
     pub fn invoke_target_root_timeout(
         target: &LocalAbilityTarget,
         args: Value,
