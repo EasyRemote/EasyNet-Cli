@@ -295,10 +295,9 @@ func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
 	}
 
 	prepared, material, err := client.Prepare(context.Background(), completeDraftForRuntimeTest(t), PrepareOptions{
-		ExpiresInMS:        60000,
-		SignerID:           "signer-alice-key-1",
-		PolicyRef:          "daemon-key-inventory:sha256:test-policy",
-		LocalDaemonSigning: true,
+		ExpiresInMS: 60000,
+		SignerID:    "signer-alice-key-1",
+		PolicyRef:  "daemon-key-inventory:sha256:test-policy",
 	})
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
@@ -314,8 +313,7 @@ func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
 	}
 	if seenOptions["expires_in_ms"].(float64) != 60000 ||
 		seenOptions["signer_id"] != "signer-alice-key-1" ||
-		seenOptions["policy_ref"] != "daemon-key-inventory:sha256:test-policy" ||
-		seenOptions["local_daemon_signing"] != true {
+		seenOptions["policy_ref"] != "daemon-key-inventory:sha256:test-policy" {
 		t.Fatalf("latest prepare options not sent to transport: %#v", seenOptions)
 	}
 }

@@ -326,7 +326,6 @@ class AbilityInvocationClientTests(unittest.TestCase):
                 expires_in_ms=60000,
                 signer_id="signer-alice-key-1",
                 policy_ref="daemon-key-inventory:sha256:test-policy",
-                local_daemon_signing=True,
             ),
         )
 
@@ -339,7 +338,6 @@ class AbilityInvocationClientTests(unittest.TestCase):
                 "expires_in_ms": 60000,
                 "signer_id": "signer-alice-key-1",
                 "policy_ref": "daemon-key-inventory:sha256:test-policy",
-                "local_daemon_signing": True,
             },
         )
         assert runtime.seen_draft is not None

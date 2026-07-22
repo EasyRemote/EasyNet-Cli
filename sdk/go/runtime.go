@@ -300,10 +300,9 @@ func (c *RuntimeClient) ResolveDescriptorRef(ctx context.Context, req RuntimeDes
 
 // PrepareOptions are daemon-owned prepare policy knobs.
 type PrepareOptions struct {
-	ExpiresInMS        int64  `json:"expires_in_ms,omitempty"`
-	SignerID           string `json:"signer_id,omitempty"`
-	PolicyRef          string `json:"policy_ref,omitempty"`
-	LocalDaemonSigning bool   `json:"local_daemon_signing,omitempty"`
+	ExpiresInMS int64  `json:"expires_in_ms,omitempty"`
+	SignerID    string `json:"signer_id,omitempty"`
+	PolicyRef   string `json:"policy_ref,omitempty"`
 }
 
 // RuntimeRecoveryRequest declares one bounded runtime restart-recovery scan.

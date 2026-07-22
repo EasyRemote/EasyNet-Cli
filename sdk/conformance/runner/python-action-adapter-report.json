@@ -460,7 +460,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_ability_invocation.py",
-          "sha256": "5734db17b69c1d612c732928ee6ffdad8abd0544c11b1618b53e6f96f1747ea5"
+          "sha256": "279dc95a054d8d76c9247ced685adb925c6f6f0b6b5b90802eacd5d6727ec6a4"
         }
       ]
     },
@@ -482,7 +482,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_ability_invocation.py",
-          "sha256": "5734db17b69c1d612c732928ee6ffdad8abd0544c11b1618b53e6f96f1747ea5"
+          "sha256": "279dc95a054d8d76c9247ced685adb925c6f6f0b6b5b90802eacd5d6727ec6a4"
         }
       ]
     },
@@ -515,7 +515,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_transport.py",
-          "sha256": "8346034c57a446c2f31073d5220d32d639a22a2ccfef7f09500decc4d914fc5e"
+          "sha256": "2251b85acceebe498a16057d06b3b5942c85470a9953c39429b49cbe9f101e35"
         }
       ]
     },

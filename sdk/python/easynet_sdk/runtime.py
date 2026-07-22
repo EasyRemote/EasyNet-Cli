@@ -87,7 +87,6 @@ class PrepareOptions:
     expires_in_ms: int = 0
     signer_id: str = ""
     policy_ref: str = ""
-    local_daemon_signing: bool = False
 
     def to_json_dict(self) -> dict[str, object]:
         value: dict[str, object] = {}
@@ -98,8 +97,6 @@ class PrepareOptions:
 
         if self.policy_ref:
             value["policy_ref"] = self.policy_ref
-        if self.local_daemon_signing:
-            value["local_daemon_signing"] = self.local_daemon_signing
         return value
 
     def to_json_bytes(self) -> bytes:
