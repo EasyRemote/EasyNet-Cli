@@ -61,7 +61,7 @@ func ReadRuntimeIdentityProjection(ctx context.Context, credentialsPath string, 
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return RuntimeIdentityProjection{}, &SDKError{
-			Code:      ErrDaemonOffline,
+			Code:      ErrRuntimeOffline,
 			Stage:     "runtime_environment",
 			Retry:     RetrySafe,
 			Retryable: RetryableForHint(RetrySafe),

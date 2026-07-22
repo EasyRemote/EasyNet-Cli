@@ -43,11 +43,11 @@ class ControlIpcTests(unittest.TestCase):
         self.assertEqual(discovery.supported_ipc_versions, IpcVersionRange(1, 1))
         self.assertEqual(discovery.capability_flags, ("boot_status",))
 
-    def test_missing_discovery_maps_to_daemon_offline(self) -> None:
+    def test_missing_discovery_maps_to_runtime_offline(self) -> None:
         with self.assertRaises(SDKError) as caught:
             read_control_discovery("/tmp/no-such-control-file-for-sdk-test.json")
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.DAEMON_OFFLINE))
+        self.assertTrue(is_code(caught.exception, ErrorCode.RUNTIME_OFFLINE))
 
     def test_disjoint_version_range_fails_before_dial(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -2039,7 +2039,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertTrue(is_code(raised.exception, ErrorCode.NOT_IMPLEMENTED))
         self.assertEqual(raised.exception.stage, "direct_runtime")
 
-    def test_direct_transport_maps_missing_endpoint_to_daemon_offline(self) -> None:
+    def test_direct_transport_maps_missing_endpoint_to_runtime_offline(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             endpoint = str(Path(tmp) / "missing.sock")
             with self.assertRaises(SDKError) as raised:
@@ -2049,7 +2049,7 @@ class DirectRuntimeTests(unittest.TestCase):
                     identity=_identity(),
                 )
 
-        self.assertTrue(is_code(raised.exception, ErrorCode.DAEMON_OFFLINE))
+        self.assertTrue(is_code(raised.exception, ErrorCode.RUNTIME_OFFLINE))
 
     def test_direct_transport_requires_identity_projection_before_open(self) -> None:
         with self.assertRaises(SDKError) as raised:

@@ -265,7 +265,7 @@ func openDirectRuntimeTransport(ctx context.Context, endpoint string, options di
 	if err != nil {
 		return nil, directRuntimeError(
 			"runtime invocation endpoint is not ready",
-			ErrDaemonOffline,
+			ErrRuntimeOffline,
 			RetrySafe,
 			map[string]any{"endpoint": endpoint},
 			err,
@@ -1669,7 +1669,7 @@ func directRuntimeGRPCError(err error, endpoint string) error {
 	case codes.DeadlineExceeded:
 		code, retry, retryable = ErrTimeout, RetrySafe, true
 	case codes.Unavailable:
-		code, retry, retryable = ErrDaemonOffline, RetrySafe, true
+		code, retry, retryable = ErrRuntimeOffline, RetrySafe, true
 	case codes.InvalidArgument:
 		code, retry, retryable = ErrInvalidInvocation, RetryNever, false
 	case codes.PermissionDenied:

@@ -57,7 +57,7 @@ def read_runtime_identity_projection(
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise SDKError(
-            code=ErrorCode.DAEMON_OFFLINE,
+            code=ErrorCode.RUNTIME_OFFLINE,
             stage="runtime_environment",
             retry=RetryHint.SAFE,
             retryable=True,

@@ -3,7 +3,7 @@ package easynet
 import "testing"
 
 func TestDecodeTransportErrorJSONDecodesFixtureShape(t *testing.T) {
-	err, decodeErr := decodeDaemonErrorJSON([]byte(`{
+	err, decodeErr := decodeRuntimeErrorJSON([]byte(`{
 		"code": "INVALID_ARGUMENT",
 		"stage": "prepare",
 		"message": "missing caller_ura",
@@ -14,10 +14,10 @@ func TestDecodeTransportErrorJSONDecodesFixtureShape(t *testing.T) {
 		"details": {}
 	}`))
 	if decodeErr != nil {
-		t.Fatalf("decodeDaemonErrorJSON: %v", decodeErr)
+		t.Fatalf("decodeRuntimeErrorJSON: %v", decodeErr)
 	}
 	if err == nil {
-		t.Fatalf("decodeDaemonErrorJSON returned nil")
+		t.Fatalf("decodeRuntimeErrorJSON returned nil")
 	}
 	if err.Code != ErrInvalidArgument {
 		t.Fatalf("code = %s, want %s", err.Code, ErrInvalidArgument)
@@ -31,7 +31,7 @@ func TestDecodeTransportErrorJSONDecodesFixtureShape(t *testing.T) {
 }
 
 func TestDecodeTransportErrorJSONPreservesRuntimeRefsAndRetryability(t *testing.T) {
-	err, decodeErr := decodeDaemonErrorJSON([]byte(`{
+	err, decodeErr := decodeRuntimeErrorJSON([]byte(`{
 		"code": "TIMEOUT",
 		"stage": "transport",
 		"message": "deadline elapsed",
@@ -42,7 +42,7 @@ func TestDecodeTransportErrorJSONPreservesRuntimeRefsAndRetryability(t *testing.
 		"details": {"abi_symbol": "ERR_TIMEOUT"}
 	}`))
 	if decodeErr != nil {
-		t.Fatalf("decodeDaemonErrorJSON: %v", decodeErr)
+		t.Fatalf("decodeRuntimeErrorJSON: %v", decodeErr)
 	}
 	if err.Code != ErrTimeout {
 		t.Fatalf("code = %s, want %s", err.Code, ErrTimeout)
@@ -66,7 +66,7 @@ func TestDecodeTransportErrorJSONPreservesRuntimeRefsAndRetryability(t *testing.
 
 func TestParseErrorCodeAcceptsOnlyCanonicalSchemaValues(t *testing.T) {
 	cases := map[string]ErrorCode{
-		"DAEMON_OFFLINE":       ErrDaemonOffline,
+		"RUNTIME_OFFLINE":      ErrRuntimeOffline,
 		"VERSION_MISMATCH":     ErrVersionMismatch,
 		"VERSION_INCOMPATIBLE": ErrVersionIncompatible,
 		"ADMISSION_DENIED":     ErrAdmissionDenied,
@@ -92,8 +92,8 @@ func TestParseErrorCodeAcceptsOnlyCanonicalSchemaValues(t *testing.T) {
 }
 
 func TestDecodeTransportErrorJSONRejectsLegacyCodeAliases(t *testing.T) {
-	for _, code := range []string{"InvalidArgument", "DaemonDown", "DAEMON_DOWN", "VersionIncompatible"} {
-		_, err := decodeDaemonErrorJSON([]byte(`{
+	for _, code := range []string{"InvalidArgument", "DaemonDown", "DAEMON_DOWN", "DAEMON_OFFLINE", "VersionIncompatible"} {
+		_, err := decodeRuntimeErrorJSON([]byte(`{
 			"code": "` + code + `",
 			"stage": "runtime",
 			"message": "legacy code",
@@ -101,7 +101,7 @@ func TestDecodeTransportErrorJSONRejectsLegacyCodeAliases(t *testing.T) {
 			"details": {}
 		}`))
 		if err == nil {
-			t.Fatalf("decodeDaemonErrorJSON accepted legacy code %q", code)
+			t.Fatalf("decodeRuntimeErrorJSON accepted legacy code %q", code)
 		}
 		if !IsCode(err, ErrInvalidArgument) {
 			t.Fatalf("legacy code %q error = %v, want %s", code, err, ErrInvalidArgument)
@@ -118,6 +118,7 @@ func TestRuntimeFailureCodePreservesDomainCodesAndRejectsLegacyAliases(t *testin
 		"TARGET_NOT_IN_PRESENCE_REGISTRY": ErrorCode("TARGET_NOT_IN_PRESENCE_REGISTRY"),
 		"InvalidArgument":                 ErrProtocolMismatch,
 		"DAEMON_DOWN":                     ErrProtocolMismatch,
+		"DAEMON_OFFLINE":                  ErrProtocolMismatch,
 	}
 	for input, want := range cases {
 		if got := runtimeFailureCode(input); got != want {
@@ -131,7 +132,7 @@ func TestErrorClassForCodeProjectsStableClasses(t *testing.T) {
 		ErrInvalidArgument:     ErrorClassValidation,
 		ErrInvalidHandle:       ErrorClassHandle,
 		ErrNotInitialized:      ErrorClassLifecycle,
-		ErrDaemonOffline:       ErrorClassAvailability,
+		ErrRuntimeOffline:      ErrorClassAvailability,
 		ErrTransport:           ErrorClassAvailability,
 		ErrPermissionDenied:    ErrorClassPermission,
 		ErrHTTPAuthDenied:      ErrorClassPermission,
@@ -171,7 +172,7 @@ func TestIsCodeMatchesExactCanonicalRequests(t *testing.T) {
 }
 
 func TestDecodeTransportErrorJSONRejectsInvalidRetryHint(t *testing.T) {
-	_, err := decodeDaemonErrorJSON([]byte(`{
+	_, err := decodeRuntimeErrorJSON([]byte(`{
 		"code": "TIMEOUT",
 		"stage": "transport",
 		"message": "deadline elapsed",
@@ -179,7 +180,7 @@ func TestDecodeTransportErrorJSONRejectsInvalidRetryHint(t *testing.T) {
 		"details": {}
 	}`))
 	if err == nil {
-		t.Fatalf("decodeDaemonErrorJSON succeeded, want invalid argument")
+		t.Fatalf("decodeRuntimeErrorJSON succeeded, want invalid argument")
 	}
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
@@ -187,9 +188,9 @@ func TestDecodeTransportErrorJSONRejectsInvalidRetryHint(t *testing.T) {
 }
 
 func TestDecodeTransportErrorJSONNullIsNoError(t *testing.T) {
-	err, decodeErr := decodeDaemonErrorJSON([]byte(`null`))
+	err, decodeErr := decodeRuntimeErrorJSON([]byte(`null`))
 	if decodeErr != nil {
-		t.Fatalf("decodeDaemonErrorJSON: %v", decodeErr)
+		t.Fatalf("decodeRuntimeErrorJSON: %v", decodeErr)
 	}
 	if err != nil {
 		t.Fatalf("err = %#v, want nil", err)

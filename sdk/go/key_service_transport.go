@@ -84,7 +84,7 @@ func (c daemonKeyServiceClient) call(request map[string]any) (map[string]json.Ra
 	if err != nil {
 		cause := fmt.Errorf("%w at %s: %v", errDaemonKeyServiceUnavailable, c.socketPath, err)
 		return nil, &SDKError{
-			Code:      ErrDaemonOffline,
+			Code:      ErrRuntimeOffline,
 			Stage:     "key_service",
 			Retry:     RetrySafe,
 			Retryable: true,

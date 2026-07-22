@@ -181862,7 +181862,7 @@
         },
         {
           "item": "read_control_discovery",
-          "sha256": "4bee27694063723b4784270700d896dfa2d7182581b5a6a870cced57cdd37082"
+          "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
         },
         {
           "item": "ConnectOptions.control_path",
@@ -182049,7 +182049,7 @@
             },
             {
               "item": "read_control_discovery",
-              "sha256": "4bee27694063723b4784270700d896dfa2d7182581b5a6a870cced57cdd37082"
+              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -182236,7 +182236,7 @@
             },
             {
               "item": "read_control_discovery",
-              "sha256": "4bee27694063723b4784270700d896dfa2d7182581b5a6a870cced57cdd37082"
+              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -182423,7 +182423,7 @@
             },
             {
               "item": "read_control_discovery",
-              "sha256": "4bee27694063723b4784270700d896dfa2d7182581b5a6a870cced57cdd37082"
+              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -182610,7 +182610,7 @@
             },
             {
               "item": "read_control_discovery",
-              "sha256": "4bee27694063723b4784270700d896dfa2d7182581b5a6a870cced57cdd37082"
+              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -182797,7 +182797,7 @@
             },
             {
               "item": "read_control_discovery",
-              "sha256": "4bee27694063723b4784270700d896dfa2d7182581b5a6a870cced57cdd37082"
+              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -182984,7 +182984,7 @@
             },
             {
               "item": "read_control_discovery",
-              "sha256": "4bee27694063723b4784270700d896dfa2d7182581b5a6a870cced57cdd37082"
+              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -183171,7 +183171,7 @@
             },
             {
               "item": "read_control_discovery",
-              "sha256": "4bee27694063723b4784270700d896dfa2d7182581b5a6a870cced57cdd37082"
+              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -183358,7 +183358,7 @@
             },
             {
               "item": "read_control_discovery",
-              "sha256": "4bee27694063723b4784270700d896dfa2d7182581b5a6a870cced57cdd37082"
+              "sha256": "9f91cdbe0c049f2e965330189039330749f13e5d875814c67501a636105d6b17"
             },
             {
               "item": "ConnectOptions.control_path",
@@ -192054,7 +192054,7 @@
         },
         {
           "item": "read_runtime_identity_projection",
-          "sha256": "6f0ec24f4fa58cb1e20e2cb15d3de120dd8fe4d9751cbc3dcd789e91e7d5e75f"
+          "sha256": "2cb1ed29c80c0cc687a2aad79d30279cd4477cd4adcc7c9c5375662a3d74ba72"
         },
         {
           "item": "runtime_credentials_path",
@@ -192149,7 +192149,7 @@
             },
             {
               "item": "read_runtime_identity_projection",
-              "sha256": "6f0ec24f4fa58cb1e20e2cb15d3de120dd8fe4d9751cbc3dcd789e91e7d5e75f"
+              "sha256": "2cb1ed29c80c0cc687a2aad79d30279cd4477cd4adcc7c9c5375662a3d74ba72"
             },
             {
               "item": "runtime_credentials_path",
@@ -192244,7 +192244,7 @@
             },
             {
               "item": "read_runtime_identity_projection",
-              "sha256": "6f0ec24f4fa58cb1e20e2cb15d3de120dd8fe4d9751cbc3dcd789e91e7d5e75f"
+              "sha256": "2cb1ed29c80c0cc687a2aad79d30279cd4477cd4adcc7c9c5375662a3d74ba72"
             },
             {
               "item": "runtime_credentials_path",
@@ -241186,6 +241186,10 @@
           "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
         },
         {
+          "item": "ErrRuntimeOffline",
+          "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
+        },
+        {
           "item": "ErrRuntimeRouteUnavailable",
           "sha256": "bd2f3ac057978497507d9bcd0453f30fd6247c89fe53cd9c0999046297fde921"
         },
@@ -241497,6 +241501,10 @@
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
             },
             {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
+            },
+            {
               "item": "ErrRuntimeRouteUnavailable",
               "sha256": "bd2f3ac057978497507d9bcd0453f30fd6247c89fe53cd9c0999046297fde921"
             },
@@ -241806,6 +241814,10 @@
             {
               "item": "ErrRouteUnavailable",
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
+            },
+            {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
             },
             {
               "item": "ErrRuntimeRouteUnavailable",
@@ -242119,6 +242131,10 @@
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
             },
             {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
+            },
+            {
               "item": "ErrRuntimeRouteUnavailable",
               "sha256": "bd2f3ac057978497507d9bcd0453f30fd6247c89fe53cd9c0999046297fde921"
             },
@@ -242430,6 +242446,10 @@
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
             },
             {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
+            },
+            {
               "item": "ErrRuntimeRouteUnavailable",
               "sha256": "bd2f3ac057978497507d9bcd0453f30fd6247c89fe53cd9c0999046297fde921"
             },
@@ -242739,6 +242759,10 @@
             {
               "item": "ErrRouteUnavailable",
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
+            },
+            {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
             },
             {
               "item": "ErrRuntimeRouteUnavailable",
@@ -243052,6 +243076,10 @@
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
             },
             {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
+            },
+            {
               "item": "ErrRuntimeRouteUnavailable",
               "sha256": "bd2f3ac057978497507d9bcd0453f30fd6247c89fe53cd9c0999046297fde921"
             },
@@ -243361,6 +243389,10 @@
             {
               "item": "ErrRouteUnavailable",
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
+            },
+            {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
             },
             {
               "item": "ErrRuntimeRouteUnavailable",
@@ -243674,6 +243706,10 @@
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
             },
             {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
+            },
+            {
               "item": "ErrRuntimeRouteUnavailable",
               "sha256": "bd2f3ac057978497507d9bcd0453f30fd6247c89fe53cd9c0999046297fde921"
             },
@@ -243983,6 +244019,10 @@
             {
               "item": "ErrRouteUnavailable",
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
+            },
+            {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
             },
             {
               "item": "ErrRuntimeRouteUnavailable",
@@ -244296,6 +244336,10 @@
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
             },
             {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
+            },
+            {
               "item": "ErrRuntimeRouteUnavailable",
               "sha256": "bd2f3ac057978497507d9bcd0453f30fd6247c89fe53cd9c0999046297fde921"
             },
@@ -244605,6 +244649,10 @@
             {
               "item": "ErrRouteUnavailable",
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
+            },
+            {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
             },
             {
               "item": "ErrRuntimeRouteUnavailable",
@@ -244918,6 +244966,10 @@
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
             },
             {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
+            },
+            {
               "item": "ErrRuntimeRouteUnavailable",
               "sha256": "bd2f3ac057978497507d9bcd0453f30fd6247c89fe53cd9c0999046297fde921"
             },
@@ -245227,6 +245279,10 @@
             {
               "item": "ErrRouteUnavailable",
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
+            },
+            {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
             },
             {
               "item": "ErrRuntimeRouteUnavailable",
@@ -245540,6 +245596,10 @@
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
             },
             {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
+            },
+            {
               "item": "ErrRuntimeRouteUnavailable",
               "sha256": "bd2f3ac057978497507d9bcd0453f30fd6247c89fe53cd9c0999046297fde921"
             },
@@ -245851,6 +245911,10 @@
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
             },
             {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
+            },
+            {
               "item": "ErrRuntimeRouteUnavailable",
               "sha256": "bd2f3ac057978497507d9bcd0453f30fd6247c89fe53cd9c0999046297fde921"
             },
@@ -246160,6 +246224,10 @@
             {
               "item": "ErrRouteUnavailable",
               "sha256": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942"
+            },
+            {
+              "item": "ErrRuntimeOffline",
+              "sha256": "232dac39d5b836fe95c8e56bf55fa35d513cdf2e89ddd33c9850ad6646c8cead"
             },
             {
               "item": "ErrRuntimeRouteUnavailable",
@@ -246382,7 +246450,7 @@
         },
         {
           "item": "ErrorCode",
-          "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+          "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
         },
         {
           "item": "RetryHint",
@@ -246394,11 +246462,11 @@
         },
         {
           "item": "SDKError",
-          "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+          "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
         },
         {
           "item": "canonical_failure_code",
-          "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+          "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
         },
         {
           "item": "canonical_terminal_state_code",
@@ -246406,7 +246474,7 @@
         },
         {
           "item": "error_class_for_code",
-          "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+          "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
         },
         {
           "item": "is_code",
@@ -246414,7 +246482,7 @@
         },
         {
           "item": "normalize_error_code",
-          "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+          "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
         },
         {
           "item": "profile_error_details",
@@ -246621,6 +246689,10 @@
           "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
         },
         {
+          "item": "ErrorCode.RUNTIME_OFFLINE",
+          "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
+        },
+        {
           "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
           "sha256": "68837ea181ae21fd40580a6ed4db70f4850c1d011ad44af2be15f45f48442616"
         },
@@ -246729,7 +246801,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -246741,11 +246813,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -246753,7 +246825,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -246761,7 +246833,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -246966,6 +247038,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -247076,7 +247152,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -247088,11 +247164,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -247100,7 +247176,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -247108,7 +247184,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -247313,6 +247389,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -247423,7 +247503,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -247435,11 +247515,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -247447,7 +247527,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -247455,7 +247535,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -247660,6 +247740,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -247770,7 +247854,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -247782,11 +247866,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -247794,7 +247878,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -247802,7 +247886,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -248007,6 +248091,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -248117,7 +248205,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -248129,11 +248217,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -248141,7 +248229,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -248149,7 +248237,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -248354,6 +248442,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -248464,7 +248556,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -248476,11 +248568,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -248488,7 +248580,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -248496,7 +248588,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -248701,6 +248793,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -248811,7 +248907,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -248823,11 +248919,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -248835,7 +248931,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -248843,7 +248939,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -249048,6 +249144,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -249158,7 +249258,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -249170,11 +249270,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -249182,7 +249282,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -249190,7 +249290,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -249395,6 +249495,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -249505,7 +249609,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -249517,11 +249621,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -249529,7 +249633,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -249537,7 +249641,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -249742,6 +249846,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -249852,7 +249960,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -249864,11 +249972,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -249876,7 +249984,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -249884,7 +249992,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -250089,6 +250197,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -250199,7 +250311,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -250211,11 +250323,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -250223,7 +250335,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -250231,7 +250343,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -250436,6 +250548,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -250546,7 +250662,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -250558,11 +250674,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -250570,7 +250686,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -250578,7 +250694,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -250783,6 +250899,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -250893,7 +251013,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -250905,11 +251025,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -250917,7 +251037,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -250925,7 +251045,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -251130,6 +251250,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -251240,7 +251364,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -251252,11 +251376,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -251264,7 +251388,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -251272,7 +251396,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -251477,6 +251601,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -251587,7 +251715,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -251599,11 +251727,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -251611,7 +251739,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -251619,7 +251747,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -251824,6 +251952,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",
@@ -251934,7 +252066,7 @@
             },
             {
               "item": "ErrorCode",
-              "sha256": "640d721b3ed7e02f64b691fe5a02c45f6da4a159d76805ac6af6fa79a560369c"
+              "sha256": "299c2a7c60c267db2d6dda1c5429a1e70b13fd7c58b4c303ba414288385a534e"
             },
             {
               "item": "RetryHint",
@@ -251946,11 +252078,11 @@
             },
             {
               "item": "SDKError",
-              "sha256": "23994a481b4a520e533d3e3e495449da1ea7d256d9a30cff893b61832157da13"
+              "sha256": "3e3a16f181e57dde892976dc01dd96976db38fe3fbf8b7af0a3c15417209c32a"
             },
             {
               "item": "canonical_failure_code",
-              "sha256": "3ac2184af3c86f8571b6c190c47a227a07fc130406957d190a05c32d7e5cd921"
+              "sha256": "6c80833c6170caf21bc32d07cff8d224839d6bd36a1e3bdd6c2590e11ae66868"
             },
             {
               "item": "canonical_terminal_state_code",
@@ -251958,7 +252090,7 @@
             },
             {
               "item": "error_class_for_code",
-              "sha256": "5bb7b4dd653bd6bc997d7f1d16252bfa83c6d7a81ea73939256ee983a0733aa4"
+              "sha256": "5f96beff1e9c6e65c795ae6a5ffbc21bc127c597f85f055553666ca30a94b13f"
             },
             {
               "item": "is_code",
@@ -251966,7 +252098,7 @@
             },
             {
               "item": "normalize_error_code",
-              "sha256": "7b440acfdf0dcea7ffb568f83dc45b7bee16ce7b1b6e2d31dce4dbf390002c6f"
+              "sha256": "ee69858b5ababd539a1df15cc7192658f055c9585715fd5823099857d4b19f94"
             },
             {
               "item": "profile_error_details",
@@ -252171,6 +252303,10 @@
             {
               "item": "ErrorCode.ROUTE_UNAVAILABLE",
               "sha256": "0097460cc10fcf56d868d6b5df6900c2912deffdb4ad89a3c9c7142c4feb925c"
+            },
+            {
+              "item": "ErrorCode.RUNTIME_OFFLINE",
+              "sha256": "926a1bb0c37754ebeb2083695cd236b774dfbc429f62b8a008708091a4ac41ab"
             },
             {
               "item": "ErrorCode.RUNTIME_ROUTE_UNAVAILABLE",

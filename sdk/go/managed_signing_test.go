@@ -535,7 +535,7 @@ func TestDaemonKeyServiceErrorTaxonomySeparatesAvailabilityTransportAndExecution
 			t.Fatalf("NewManagedSigningClient: %v", err)
 		}
 		_, err = client.PublicProjection("key-1")
-		assertManagedSigningSDKError(t, err, ErrDaemonOffline, RetrySafe, true)
+		assertManagedSigningSDKError(t, err, ErrRuntimeOffline, RetrySafe, true)
 	})
 
 	t.Run("post-connect IO failure", func(t *testing.T) {

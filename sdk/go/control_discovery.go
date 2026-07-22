@@ -82,7 +82,7 @@ func (fileControlDiscoveryReader) readControlDiscovery(ctx context.Context, cont
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return controlDiscovery{}, &SDKError{
-			Code:      ErrDaemonOffline,
+			Code:      ErrRuntimeOffline,
 			Stage:     "control_discovery",
 			Retry:     RetrySafe,
 			Retryable: RetryableForHint(RetrySafe),

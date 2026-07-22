@@ -563,7 +563,7 @@ class ManagedSigningTests(unittest.TestCase):
             )
             with self.assertRaises(SDKError) as offline:
                 client.sign("key", b"canonical")
-        self.assertEqual(offline.exception.code, ErrorCode.DAEMON_OFFLINE)
+        self.assertEqual(offline.exception.code, ErrorCode.RUNTIME_OFFLINE)
 
         with KeyServiceServer([KeyServiceResponsePlan(None)]) as server:
             with self.assertRaises(SDKError) as transport:

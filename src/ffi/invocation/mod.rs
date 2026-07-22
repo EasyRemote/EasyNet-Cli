@@ -449,7 +449,7 @@ fn descriptor_resolution_error_projection(message: &str) -> (i32, ErrorProjectio
         return (
             ERR_DAEMON_DOWN,
             ErrorProjection {
-                code: "DAEMON_OFFLINE",
+                code: "RUNTIME_OFFLINE",
                 stage: "transport",
                 retry: "after_backoff",
             },
@@ -10215,7 +10215,7 @@ mod tests {
 
         assert_eq!(code, ERR_DAEMON_DOWN);
         let error = read_last_error_json();
-        assert_eq!(error["code"], "DAEMON_OFFLINE");
+        assert_eq!(error["code"], "RUNTIME_OFFLINE");
         assert_eq!(error["stage"], "transport");
         assert_eq!(error["retry"], "after_backoff");
         assert_eq!(error["details"]["abi_code"], ERR_DAEMON_DOWN);

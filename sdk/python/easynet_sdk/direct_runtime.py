@@ -301,7 +301,7 @@ class DirectRuntimeTransport:
             _close_channel(channel)
             raise _direct_error(
                 "runtime invocation endpoint is not ready",
-                code=ErrorCode.DAEMON_OFFLINE,
+                code=ErrorCode.RUNTIME_OFFLINE,
                 retry=RetryHint.SAFE,
                 retryable=True,
                 details={"endpoint": endpoint},
@@ -2282,7 +2282,7 @@ def _grpc_error(error: grpc.RpcError, *, endpoint: str) -> SDKError:
     mapping = {
         grpc.StatusCode.CANCELLED: (ErrorCode.CANCELLED, RetryHint.UNKNOWN, False),
         grpc.StatusCode.DEADLINE_EXCEEDED: (ErrorCode.TIMEOUT, RetryHint.SAFE, True),
-        grpc.StatusCode.UNAVAILABLE: (ErrorCode.DAEMON_OFFLINE, RetryHint.SAFE, True),
+        grpc.StatusCode.UNAVAILABLE: (ErrorCode.RUNTIME_OFFLINE, RetryHint.SAFE, True),
         grpc.StatusCode.INVALID_ARGUMENT: (
             ErrorCode.INVALID_INVOCATION,
             RetryHint.NEVER,

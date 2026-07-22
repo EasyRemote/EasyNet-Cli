@@ -17,7 +17,7 @@ const (
 	ErrInvalidUTF8         ErrorCode = "INVALID_UTF8"
 	ErrNotInitialized      ErrorCode = "NOT_INITIALIZED"
 	ErrAlreadyInit         ErrorCode = "ALREADY_INIT"
-	ErrDaemonOffline       ErrorCode = "DAEMON_OFFLINE"
+	ErrRuntimeOffline      ErrorCode = "RUNTIME_OFFLINE"
 	ErrPermissionDenied    ErrorCode = "PERMISSION_DENIED"
 	ErrAdmissionDenied     ErrorCode = "ADMISSION_DENIED"
 	ErrHTTPAuthDenied      ErrorCode = "HTTP_AUTH_DENIED"
@@ -164,7 +164,7 @@ func ErrorClassForCode(code ErrorCode) ErrorClass {
 		return ErrorClassHandle
 	case ErrNotInitialized, ErrAlreadyInit:
 		return ErrorClassLifecycle
-	case ErrDaemonOffline, ErrTransport:
+	case ErrRuntimeOffline, ErrTransport:
 		return ErrorClassAvailability
 	case ErrPermissionDenied, ErrHTTPAuthDenied, ErrCallerIdentityUnavailable:
 		return ErrorClassPermission
@@ -193,31 +193,31 @@ func ErrorClassForCode(code ErrorCode) ErrorClass {
 	}
 }
 
-// decodeDaemonErrorJSON decodes the shared sdk/schemas/error.schema.json DTO
+// decodeRuntimeErrorJSON decodes the shared sdk/schemas/error.schema.json DTO
 // for internal transport adapters.
-func decodeDaemonErrorJSON(raw []byte) (*SDKError, error) {
+func decodeRuntimeErrorJSON(raw []byte) (*SDKError, error) {
 	if strings.TrimSpace(string(raw)) == "null" {
 		return nil, nil
 	}
-	var dto daemonErrorDTO
+	var dto runtimeErrorDTO
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return nil, &SDKError{
 			Code:      ErrInvalidArgument,
 			Stage:     "decode",
 			Retry:     RetryNever,
 			Retryable: false,
-			Message:   fmt.Sprintf("decode daemon error JSON: %v", err),
+			Message:   fmt.Sprintf("decode runtime error JSON: %v", err),
 			Cause:     err,
 		}
 	}
 	if dto.Code == "" {
-		return nil, invalidDaemonError("code is required")
+		return nil, invalidRuntimeError("code is required")
 	}
 	if dto.Stage == "" {
-		return nil, invalidDaemonError("stage is required")
+		return nil, invalidRuntimeError("stage is required")
 	}
 	if dto.Message == nil {
-		return nil, invalidDaemonError("message is required")
+		return nil, invalidRuntimeError("message is required")
 	}
 	retry, err := parseRetryHint(dto.Retry)
 	if err != nil {
@@ -244,7 +244,7 @@ func decodeDaemonErrorJSON(raw []byte) (*SDKError, error) {
 	}, nil
 }
 
-type daemonErrorDTO struct {
+type runtimeErrorDTO struct {
 	Code         string         `json:"code"`
 	Stage        string         `json:"stage"`
 	Message      *string        `json:"message"`
@@ -270,8 +270,8 @@ func ParseErrorCode(code string) (ErrorCode, error) {
 		return ErrNotInitialized, nil
 	case "ALREADY_INIT":
 		return ErrAlreadyInit, nil
-	case "DAEMON_OFFLINE":
-		return ErrDaemonOffline, nil
+	case "RUNTIME_OFFLINE":
+		return ErrRuntimeOffline, nil
 	case "PERMISSION_DENIED":
 		return ErrPermissionDenied, nil
 	case "ADMISSION_DENIED":
@@ -343,7 +343,7 @@ func ParseErrorCode(code string) (ErrorCode, error) {
 	case "PROVIDER_UNAVAILABLE":
 		return ErrProviderUnavailable, nil
 	default:
-		return "", invalidDaemonError(fmt.Sprintf("unknown daemon error code: %s", code))
+		return "", invalidRuntimeError(fmt.Sprintf("unknown runtime error code: %s", code))
 	}
 }
 
@@ -364,7 +364,7 @@ func runtimeFailureCode(code string) ErrorCode {
 
 func isCanonicalExtensionErrorCode(code string) bool {
 	switch code {
-	case "DAEMON_DOWN":
+	case "DAEMON_DOWN", "DAEMON_OFFLINE":
 		return false
 	}
 	hasLetter := false
@@ -442,11 +442,11 @@ func parseRetryHint(value string) (RetryHint, error) {
 	case RetryNever, RetrySafe, RetryAfterBackoff, RetryUnknown:
 		return RetryHint(value), nil
 	default:
-		return "", invalidDaemonError("retry must be never, safe, after_backoff, or unknown")
+		return "", invalidRuntimeError("retry must be never, safe, after_backoff, or unknown")
 	}
 }
 
-func invalidDaemonError(message string) error {
+func invalidRuntimeError(message string) error {
 	return &SDKError{
 		Code:      ErrInvalidArgument,
 		Stage:     "decode",

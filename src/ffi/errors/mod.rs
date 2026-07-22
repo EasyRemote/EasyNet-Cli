@@ -196,7 +196,7 @@ pub unsafe extern "C" fn easynet_last_error_json(out_error_json: *mut *mut c_cha
 }
 
 /// Project a stable C ABI error code and optional message into the
-/// shared `DaemonError` JSON DTO.
+/// shared `RuntimeError` JSON DTO.
 ///
 /// Bindings that already have a non-zero return code can call this
 /// directly and branch on `code` in the returned JSON.
@@ -357,7 +357,7 @@ fn error_metadata(code: i32) -> ErrorMetadata {
             retry: "never",
         },
         ERR_DAEMON_DOWN => ErrorMetadata {
-            code: "DAEMON_OFFLINE",
+            code: "RUNTIME_OFFLINE",
             abi_symbol: "ERR_DAEMON_DOWN",
             stage: "transport",
             retry: "after_backoff",
@@ -534,7 +534,7 @@ mod tests {
     #[test]
     fn error_json_projects_abi_codes_to_canonical_runtime_codes() {
         for (abi_code, expected_code, expected_symbol) in [
-            (ERR_DAEMON_DOWN, "DAEMON_OFFLINE", "ERR_DAEMON_DOWN"),
+            (ERR_DAEMON_DOWN, "RUNTIME_OFFLINE", "ERR_DAEMON_DOWN"),
             (
                 ERR_VERSION_INCOMPATIBLE,
                 "VERSION_MISMATCH",

@@ -62,7 +62,7 @@ class KeyServiceClient:
                 _set_remaining_timeout(connection, deadline)
                 connection.connect(self.socket_path)
             except OSError as exc:
-                raise _daemon_offline(self.socket_path, exc) from exc
+                raise _runtime_offline(self.socket_path, exc) from exc
 
             try:
                 _set_remaining_timeout(connection, deadline)
@@ -276,9 +276,9 @@ def _set_remaining_timeout(connection: socket.socket, deadline: float) -> None:
         ) from exc
 
 
-def _daemon_offline(path: str, cause: OSError) -> SDKError:
+def _runtime_offline(path: str, cause: OSError) -> SDKError:
     return SDKError(
-        code=ErrorCode.DAEMON_OFFLINE,
+        code=ErrorCode.RUNTIME_OFFLINE,
         stage="key_service",
         retry=RetryHint.SAFE,
         message=f"daemon key service unavailable at {path}: {cause}",

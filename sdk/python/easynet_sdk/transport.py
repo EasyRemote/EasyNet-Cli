@@ -1500,7 +1500,7 @@ def _stream_error_payload(value: Any) -> Mapping[str, object] | None:
 _REMOTE_ERROR_CODES = {
     "CANCELLED": ErrorCode.CANCELLED,
     "DEADLINE_EXCEEDED": ErrorCode.TIMEOUT,
-    "UNAVAILABLE": ErrorCode.DAEMON_OFFLINE,
+    "UNAVAILABLE": ErrorCode.RUNTIME_OFFLINE,
     "INVALID_ARGUMENT": ErrorCode.INVALID_ARGUMENT,
     "RESOURCE_EXHAUSTED": ErrorCode.ADMISSION_DENIED,
     "PERMISSION_DENIED": ErrorCode.PERMISSION_DENIED,

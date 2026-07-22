@@ -87,7 +87,7 @@ func TestSdkEnvironmentRejectsMissingRequiredBoundaries(t *testing.T) {
 	if _, err := NewSdkEnvironment(DiscoveryTransportFunc(func(context.Context) ([]byte, error) {
 		return []byte(`{"abi_version":5}`), nil
 	}), nil, SdkEnvironmentOptions{}); !IsCode(err, ErrInvalidArgument) {
-		t.Fatalf("nil daemon error = %v", err)
+		t.Fatalf("nil runtime error = %v", err)
 	}
 }
 

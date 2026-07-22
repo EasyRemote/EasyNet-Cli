@@ -17,7 +17,7 @@ class ErrorCode(StrEnum):
     INVALID_UTF8 = "INVALID_UTF8"
     NOT_INITIALIZED = "NOT_INITIALIZED"
     ALREADY_INIT = "ALREADY_INIT"
-    DAEMON_OFFLINE = "DAEMON_OFFLINE"
+    RUNTIME_OFFLINE = "RUNTIME_OFFLINE"
     PERMISSION_DENIED = "PERMISSION_DENIED"
     ADMISSION_DENIED = "ADMISSION_DENIED"
     HTTP_AUTH_DENIED = "HTTP_AUTH_DENIED"
@@ -138,7 +138,7 @@ class SDKError(Exception):
                     stage="decode",
                     retry=RetryHint.NEVER,
                     retryable=False,
-                    message=f"decode daemon error JSON: {exc}",
+                    message=f"decode runtime error JSON: {exc}",
                     cause=exc,
                 ) from exc
         else:
@@ -153,11 +153,11 @@ class SDKError(Exception):
                 stage="decode",
                 retry=RetryHint.NEVER,
                 retryable=False,
-                message=f"decode daemon error JSON: {exc}",
+                message=f"decode runtime error JSON: {exc}",
                 cause=exc,
             ) from exc
         if not isinstance(decoded, dict):
-            raise _invalid_daemon_error("daemon error JSON must be an object")
+            raise _invalid_runtime_error("runtime error JSON must be an object")
 
         code = _required_string(decoded, "code")
         stage = _required_string(decoded, "stage")
@@ -165,7 +165,7 @@ class SDKError(Exception):
         retry = _retry_hint(_required_string(decoded, "retry"))
         details = decoded.get("details", {})
         if not isinstance(details, dict):
-            raise _invalid_daemon_error("details must be an object")
+            raise _invalid_runtime_error("details must be an object")
 
         return cls(
             code=normalize_error_code(code),
@@ -217,7 +217,7 @@ def error_class_for_code(code: ErrorCode | str) -> ErrorClass:
             return ErrorClass.HANDLE
         case ErrorCode.NOT_INITIALIZED | ErrorCode.ALREADY_INIT:
             return ErrorClass.LIFECYCLE
-        case ErrorCode.DAEMON_OFFLINE | ErrorCode.TRANSPORT:
+        case ErrorCode.RUNTIME_OFFLINE | ErrorCode.TRANSPORT:
             return ErrorClass.AVAILABILITY
         case (
             ErrorCode.PERMISSION_DENIED
@@ -266,16 +266,16 @@ def error_class_for_code(code: ErrorCode | str) -> ErrorClass:
 
 
 def normalize_error_code(code: str) -> ErrorCode:
-    """Parse the current canonical daemon error-code schema value."""
+    """Parse the current canonical runtime error-code schema value."""
 
     try:
         return ErrorCode(code)
     except ValueError as exc:
-        raise _invalid_daemon_error(f"unknown daemon error code: {code}") from exc
+        raise _invalid_runtime_error(f"unknown runtime error code: {code}") from exc
 
 
 def canonical_failure_code(code: str | None = None) -> RuntimeFailureCode:
-    """Project daemon/wire failure codes into the canonical SDK taxonomy."""
+    """Project runtime/wire failure codes into the canonical SDK taxonomy."""
 
     if code is not None:
         code = code.strip()
@@ -334,7 +334,7 @@ def _retry_hint(value: str) -> RetryHint:
     try:
         return RetryHint(value)
     except ValueError as exc:
-        raise _invalid_daemon_error(
+        raise _invalid_runtime_error(
             "retry must be never, safe, after_backoff, or unknown"
         ) from exc
 
@@ -344,7 +344,7 @@ def _required_string(
 ) -> str:
     value = decoded.get(field_name)
     if not isinstance(value, str) or (not allow_empty and value == ""):
-        raise _invalid_daemon_error(f"{field_name} is required")
+        raise _invalid_runtime_error(f"{field_name} is required")
     return value
 
 
@@ -352,11 +352,11 @@ def _optional_string(value: object, field_name: str) -> Optional[str]:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise _invalid_daemon_error(f"{field_name} must be a string or null")
+        raise _invalid_runtime_error(f"{field_name} must be a string or null")
     return value
 
 
-def _invalid_daemon_error(message: str) -> SDKError:
+def _invalid_runtime_error(message: str) -> SDKError:
     return SDKError(
         code=ErrorCode.INVALID_ARGUMENT,
         stage="decode",
@@ -372,7 +372,7 @@ def _detail_string(details: Mapping[str, object], key: str) -> str:
 
 
 def _is_canonical_extension_error_code(code: str) -> bool:
-    if code == "DAEMON_DOWN":
+    if code in {"DAEMON_DOWN", "DAEMON_OFFLINE"}:
         return False
     saw_letter = False
     for char in code:

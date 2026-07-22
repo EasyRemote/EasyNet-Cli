@@ -175,7 +175,7 @@ class ControlIpcClient:
             raise
         except Exception as exc:
             raise SDKError(
-                code=ErrorCode.DAEMON_OFFLINE,
+                code=ErrorCode.RUNTIME_OFFLINE,
                 stage="control_ipc",
                 retry=RetryHint.SAFE,
                 retryable=True,
@@ -263,7 +263,7 @@ class ControlIpcClient:
                 chunk = self._sock.recv(remaining)
                 if not chunk:
                     raise SDKError(
-                        code=ErrorCode.DAEMON_OFFLINE,
+                        code=ErrorCode.RUNTIME_OFFLINE,
                         stage="control_ipc",
                         retry=RetryHint.SAFE,
                         retryable=True,
@@ -307,7 +307,7 @@ def read_control_discovery(control_path: str | Path = "") -> ControlDiscovery:
         raw = path.read_bytes()
     except FileNotFoundError as exc:
         raise SDKError(
-            code=ErrorCode.DAEMON_OFFLINE,
+            code=ErrorCode.RUNTIME_OFFLINE,
             stage="control_ipc",
             retry=RetryHint.SAFE,
             retryable=True,

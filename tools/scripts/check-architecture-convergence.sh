@@ -855,7 +855,7 @@ runtime_failure_extension_markers = (
             "func runtimeFailureCode(",
             "isCanonicalExtensionErrorCode(code)",
             'return ErrorCode(code)',
-            'case "DAEMON_DOWN":',
+            'case "DAEMON_DOWN", "DAEMON_OFFLINE":',
         ),
     ),
     (
@@ -864,7 +864,7 @@ runtime_failure_extension_markers = (
             "def canonical_failure_code(",
             "_is_canonical_extension_error_code(code)",
             "return code",
-            'code == "DAEMON_DOWN"',
+            'code in {"DAEMON_DOWN", "DAEMON_OFFLINE"}',
         ),
     ),
 )

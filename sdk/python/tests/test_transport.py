@@ -654,7 +654,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             session.recv()
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.DAEMON_OFFLINE))
+        self.assertTrue(is_code(caught.exception, ErrorCode.RUNTIME_OFFLINE))
         self.assertEqual(caught.exception.stage, "bidi")
         self.assertEqual(caught.exception.details["reason"], "host_gone")
 
@@ -1653,7 +1653,7 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
                 values.append(item.value)
 
         self.assertEqual(values, ["a"])
-        self.assertTrue(is_code(caught.exception, ErrorCode.DAEMON_OFFLINE))
+        self.assertTrue(is_code(caught.exception, ErrorCode.RUNTIME_OFFLINE))
         self.assertEqual(caught.exception.message, "down")
 
     def test_stream_adapter_projects_host_error_payloads(self) -> None:

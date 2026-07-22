@@ -61,7 +61,7 @@ class ErrorTests(unittest.TestCase):
             "NOT_FOUND": ErrorCode.NOT_FOUND,
             "PROTOCOL": ErrorCode.PROTOCOL,
             "TRANSPORT": ErrorCode.TRANSPORT,
-            "DAEMON_OFFLINE": ErrorCode.DAEMON_OFFLINE,
+            "RUNTIME_OFFLINE": ErrorCode.RUNTIME_OFFLINE,
             "VERSION_MISMATCH": ErrorCode.VERSION_MISMATCH,
             "ADMISSION_DENIED": ErrorCode.ADMISSION_DENIED,
             "HTTP_AUTH_DENIED": ErrorCode.HTTP_AUTH_DENIED,
@@ -78,7 +78,7 @@ class ErrorTests(unittest.TestCase):
                 self.assertEqual(normalize_error_code(raw), expected)
 
     def test_from_json_rejects_legacy_error_code_aliases(self) -> None:
-        for code in ("InvalidArgument", "DaemonDown", "DAEMON_DOWN", "VersionIncompatible"):
+        for code in ("InvalidArgument", "DaemonDown", "DAEMON_DOWN", "DAEMON_OFFLINE", "VersionIncompatible"):
             with self.subTest(code=code):
                 with self.assertRaises(SDKError) as caught:
                     SDKError.from_json(
@@ -103,6 +103,7 @@ class ErrorTests(unittest.TestCase):
             "TARGET_NOT_IN_PRESENCE_REGISTRY": "TARGET_NOT_IN_PRESENCE_REGISTRY",
             "InvalidArgument": ErrorCode.PROTOCOL_MISMATCH,
             "DAEMON_DOWN": ErrorCode.PROTOCOL_MISMATCH,
+            "DAEMON_OFFLINE": ErrorCode.PROTOCOL_MISMATCH,
         }
         for raw, expected in cases.items():
             with self.subTest(raw=raw):
@@ -124,7 +125,7 @@ class ErrorTests(unittest.TestCase):
             ErrorCode.INVALID_ARGUMENT: ErrorClass.VALIDATION,
             ErrorCode.INVALID_HANDLE: ErrorClass.HANDLE,
             ErrorCode.NOT_INITIALIZED: ErrorClass.LIFECYCLE,
-            ErrorCode.DAEMON_OFFLINE: ErrorClass.AVAILABILITY,
+            ErrorCode.RUNTIME_OFFLINE: ErrorClass.AVAILABILITY,
             ErrorCode.TRANSPORT: ErrorClass.AVAILABILITY,
             ErrorCode.PERMISSION_DENIED: ErrorClass.PERMISSION,
             ErrorCode.HTTP_AUTH_DENIED: ErrorClass.PERMISSION,
