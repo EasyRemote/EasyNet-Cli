@@ -2952,3 +2952,26 @@ Commands and outcomes will be appended after implementation.
   changed SDK/gate files.
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index is up
   to date with 1,019 files, 35,395 nodes, and 135,788 edges.
+
+## 2026-07-22 AbilityDescriptor descriptor-ref derivation
+
+- `cargo test -q -p easynet --lib descriptor_ref --features axon-pb` — PASS
+  (`40` tests); includes direct fail-closed descriptor-ref derivation for a
+  corrupt descriptor identity and existing descriptor-ref route/bridge tests.
+- `cargo test -q -p easynet --lib hub_published_abilities --features axon-pb`
+  — PASS (`8` tests); confirms hub-published ability rows still validate
+  canonical descriptors after descriptor-ref derivation became fallible.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes the legacy optional descriptor-ref fixture under the
+  canonical ability catalogue projection gate.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
+- `cargo check -q -p easynet --lib --features axon-pb` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `cargo fmt --all -- --check` — PASS after applying `cargo fmt --all`.
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index is up
+  to date with 1,019 files, 35,397 nodes, and 135,799 edges.

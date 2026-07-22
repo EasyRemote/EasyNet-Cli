@@ -699,14 +699,9 @@ impl AbilityDescriptorWire {
             }
         }
         if !wire_descriptor_ref.is_empty() {
-            let Some(actual) = descriptor.descriptor_ref() else {
-                return Err(format!(
-                    "wire descriptor_ref {wire_descriptor_ref:?} cannot be validated for owner {:?} \
-                     and name {:?}",
-                    descriptor.owner_ura,
-                    descriptor.public_name()
-                ));
-            };
+            let actual = descriptor
+                .descriptor_ref()
+                .map_err(|error| format!("derive canonical descriptor_ref: {error}"))?;
             if wire_descriptor_ref != actual {
                 return Err(format!(
                     "wire descriptor_ref {wire_descriptor_ref:?} does not match computed {actual:?}"
@@ -731,6 +726,7 @@ pub enum DescriptorError {
     EmptyOwner,
     InvalidOwnerUra { owner_ura: String },
     InvalidVersion { version: String },
+    InvalidDescriptorIdentity { detail: String },
 }
 
 impl std::fmt::Display for DescriptorError {
@@ -749,6 +745,9 @@ impl std::fmt::Display for DescriptorError {
             ),
             DescriptorError::InvalidVersion { version } => {
                 write!(f, "descriptor version {version:?} is not a valid semver")
+            }
+            DescriptorError::InvalidDescriptorIdentity { detail } => {
+                write!(f, "invalid descriptor identity: {detail}")
             }
         }
     }
@@ -1105,10 +1104,30 @@ impl AbilityDescriptor {
             .prefixed_hex()
     }
 
-    pub fn descriptor_ref(&self) -> Option<String> {
-        let ability_ura = self.canonical_ability_ura()?;
-        let descriptor_hash = self.descriptor_hash_prefixed();
-        let descriptor_hash_hex = descriptor_hash.strip_prefix("sha256:")?;
+    pub fn descriptor_ref(&self) -> Result<String, DescriptorError> {
+        let public_name = self.public_name();
+        let ability_ura = self.canonical_ability_ura().ok_or_else(|| {
+            DescriptorError::InvalidDescriptorIdentity {
+                detail: format!(
+                    "owner {:?} and name {public_name:?} do not derive a canonical Ability URA",
+                    self.owner_ura
+                ),
+            }
+        })?;
+        let descriptor_hash =
+            crate::daemon::ability::descriptors::descriptor_hash_for_ability_ura_parts(
+                &ability_ura,
+                &public_name,
+                &self.version,
+                self.call_mode,
+                crate::daemon::ability::descriptors::SchemaHash(self.schema_hash_bytes()),
+            )
+            .prefixed_hex();
+        let descriptor_hash_hex = descriptor_hash.strip_prefix("sha256:").ok_or_else(|| {
+            DescriptorError::InvalidDescriptorIdentity {
+                detail: format!("descriptor_hash {descriptor_hash:?} is not sha256-prefixed"),
+            }
+        })?;
         axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
             "{}@{}#{}!{}",
             ability_ura,
@@ -1116,7 +1135,9 @@ impl AbilityDescriptor {
             descriptor_hash_hex,
             self.admission_action.as_str()
         ))
-        .ok()
+        .map_err(|error| DescriptorError::InvalidDescriptorIdentity {
+            detail: format!("invalid derived descriptor_ref: {error}"),
+        })
     }
 
     pub fn identity(&self) -> Option<AbilityIdentity> {
@@ -1619,6 +1640,25 @@ mod tests {
     }
 
     #[test]
+    fn descriptor_ref_derivation_fails_closed_for_corrupt_identity() {
+        let mut descriptor = must(
+            "agent.list",
+            "easynet:///r/acme/device/dev-1",
+            Visibility::Scoped,
+        );
+        descriptor.owner_ura = "not-a-ura".into();
+        let error = descriptor
+            .descriptor_ref()
+            .expect_err("descriptor_ref derivation must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("do not derive a canonical Ability URA"),
+            "unexpected descriptor_ref error: {error}"
+        );
+    }
+
+    #[test]
     fn descriptor_exposes_canonical_agent_ability_identity() {
         let d = must(
             "chat",
@@ -1669,8 +1709,10 @@ mod tests {
             .expect("wire descriptor_ref");
 
         assert_eq!(
-            Some(descriptor_ref.to_string()),
-            descriptor.descriptor_ref()
+            descriptor_ref.to_string(),
+            descriptor
+                .descriptor_ref()
+                .expect("descriptor derives canonical descriptor_ref")
         );
         let expected_ref_prefix = format!(
             "{}@1.0.0#",

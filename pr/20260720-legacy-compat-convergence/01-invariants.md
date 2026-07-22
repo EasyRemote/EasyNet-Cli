@@ -421,3 +421,8 @@
   (`completed`, `failed`, `timed_out`, etc.) before any product observes the
   receipt, even when the receipt is consumed directly rather than through
   `InvocationResult`.
+- AbilityDescriptor descriptor identity is mandatory provider output. A
+  governed descriptor must derive a canonical `descriptor_ref` or fail closed
+  at the descriptor/read-model boundary; descriptor-ref construction failure
+  must never be projected as `None`, a missing row, route invisibility, or
+  remote discovery timeout.

@@ -1049,3 +1049,16 @@ Decisions will be appended as root-fork choices are made.
   receipt tests. Terminality is represented by lifecycle states such as
   `completed`, `failed`, `timed_out`, and `cancelled`, not by a second receipt
   type vocabulary.
+
+## 2026-07-22 AbilityDescriptor descriptor-ref derivation
+
+- Treat `descriptor_ref` as mandatory derived descriptor identity, not as an
+  optional wire convenience. A descriptor that cannot derive it is corrupt
+  provider state and must fail before entering federation or product catalogue
+  projections.
+- Keep descriptor-ref construction owned by `AbilityDescriptor` so catalogues,
+  `meta.list_abilities`, hub-published abilities, and future provider seams do
+  not hand-roll descriptor identity.
+- Remove the `Option` projection shape from production callers. Callers that
+  need descriptor identity now propagate a descriptor/read-model error instead
+  of turning derivation failure into a missing descriptor.

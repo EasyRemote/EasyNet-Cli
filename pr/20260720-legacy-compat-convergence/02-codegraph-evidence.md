@@ -2696,3 +2696,27 @@ Evidence will be appended after indexing and focused impact queries.
   validate `receipt_type == canonicalReceiptType(lifecycle_state)` inside the
   receipt type boundary, and SPEC v2 has a cross-SDK gate plus negative legacy
   fixture so the old opaque/terminal receipt path cannot reappear.
+
+## 2026-07-22 AbilityDescriptor descriptor-ref derivation audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was
+  up to date for the current checkout before this slice.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "descriptor resolver fallback descriptor_ref meta.list_abilities route owner
+  offline caller signer"` identified `AbilityDescriptor::descriptor_ref` as a
+  low-level descriptor identity seam with no direct covering tests and showed
+  hub-published ability validation still treated derivation failure as
+  `descriptor_ref().is_none()`.
+- Source inspection found `AbilityDescriptor::descriptor_ref() -> Option`
+  deriving the canonical descriptor ref, then using `?`/`.ok()` for canonical
+  Ability URA, hash-prefix, and descriptor-ref validation failures. That
+  collapsed corrupt descriptor identity into an absent optional field.
+- Root abstraction problem: descriptor identity is not optional descriptor
+  decoration. `meta.list_abilities`, hub-published ability rows, route
+  selection, and FFI descriptor resolution all rely on `descriptor_ref` as a
+  canonical authority fact; failure to derive it must surface at the
+  descriptor/read-model boundary.
+- Boundary decision: replace optional descriptor-ref derivation with a
+  fail-closed `Result`, migrate hub-published validation to propagate
+  descriptor identity errors, and update SPEC v2 so `.ok()`/`.is_none()`
+  descriptor-ref derivation cannot re-enter production.

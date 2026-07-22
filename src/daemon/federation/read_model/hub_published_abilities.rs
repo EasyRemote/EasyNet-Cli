@@ -181,12 +181,12 @@ fn validate_hub_ability_entry(
             entry.name, public_name
         ));
     }
-    if descriptor.descriptor_ref().is_none() {
-        return Err(format!(
-            "hub-published ability row {index} named {:?} has no canonical descriptor_ref",
+    descriptor.descriptor_ref().map_err(|error| {
+        format!(
+            "hub-published ability row {index} named {:?} has invalid canonical descriptor_ref: {error}",
             entry.name
-        ));
-    }
+        )
+    })?;
     Ok(descriptor)
 }
 

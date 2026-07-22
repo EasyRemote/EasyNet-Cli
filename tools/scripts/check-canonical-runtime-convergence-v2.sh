@@ -1612,23 +1612,35 @@ PY
 
 check_canonical_ability_catalog_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
+  local descriptor="$cli_root/src/daemon/ability/descriptors/surface.rs"
   local store="$cli_root/src/daemon/federation/read_model/hub_published_abilities.rs"
   local meta="$cli_root/src/daemon/ability/builtins/governance/meta.rs"
   local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+  [[ -f "$descriptor" ]] || fail "AbilityDescriptor source is missing: $descriptor"
   [[ -f "$store" ]] || fail "hub-published ability store is missing: $store"
   [[ -f "$meta" ]] || fail "meta.list_abilities source is missing: $meta"
   [[ -f "$ffi_invocation" ]] || fail "FFI invocation source is missing: $ffi_invocation"
 
-  "$PYTHON_BIN" - "$store" "$meta" "$ffi_invocation" <<'PY'
+  "$PYTHON_BIN" - "$descriptor" "$store" "$meta" "$ffi_invocation" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-store = Path(sys.argv[1]).read_text(encoding="utf-8")
-meta = Path(sys.argv[2]).read_text(encoding="utf-8")
-ffi = Path(sys.argv[3]).read_text(encoding="utf-8")
+descriptor = Path(sys.argv[1]).read_text(encoding="utf-8")
+store = Path(sys.argv[2]).read_text(encoding="utf-8")
+meta = Path(sys.argv[3]).read_text(encoding="utf-8")
+ffi = Path(sys.argv[4]).read_text(encoding="utf-8")
 
+descriptor_production = descriptor.split("\n#[cfg(test)]\nmod tests", 1)[0]
 production_store = store.split("\n#[cfg(test)]\nmod tests", 1)[0]
+if "pub fn descriptor_ref(&self) -> Result<String, DescriptorError>" not in descriptor_production:
+    raise SystemExit("ability_descriptor:descriptor_ref_not_fallible")
+if "InvalidDescriptorIdentity" not in descriptor_production:
+    raise SystemExit("ability_descriptor:descriptor_identity_error_missing")
+if ".descriptor_ref().ok()" in descriptor_production or ".descriptor_ref().is_none()" in descriptor_production:
+    raise SystemExit("ability_descriptor:descriptor_ref_optional_collapse")
+if "descriptor_ref_derivation_fails_closed_for_corrupt_identity" not in descriptor:
+    raise SystemExit("ability_descriptor:descriptor_ref_fail_closed_test_missing")
 if "entries: BTreeMap<String, AbilityDescriptor>" not in production_store:
     raise SystemExit("hub_published_store:entries_not_canonical_descriptor")
 if "entries: BTreeMap<String, HubAbilityEntry>" in production_store:
@@ -1637,8 +1649,10 @@ if "fn validate_hub_ability_entry" not in production_store:
     raise SystemExit("hub_published_store:validation_boundary_missing")
 if "serde_json::from_value(entry.descriptor)" not in production_store:
     raise SystemExit("hub_published_store:descriptor_parse_missing")
-if "descriptor.descriptor_ref().is_none()" not in production_store:
-    raise SystemExit("hub_published_store:descriptor_ref_gate_missing")
+if "descriptor.descriptor_ref().map_err" not in production_store:
+    raise SystemExit("hub_published_store:descriptor_ref_error_propagation_missing")
+if "descriptor.descriptor_ref().is_none()" in production_store:
+    raise SystemExit("hub_published_store:descriptor_ref_optional_collapse")
 if "pub fn seed_from_snapshot" not in production_store or "-> Result<(), String>" not in production_store:
     raise SystemExit("hub_published_store:seed_not_fallible")
 if "pub fn apply_diff" not in production_store or "-> Result<(), String>" not in production_store:
@@ -3824,8 +3838,20 @@ EOF
     fail "self-test expected FFI descriptor runtime owner fallback gate to fail"
   fi
   mkdir -p "$tmp/cli-opaque-hub-catalog/src/daemon/federation/read_model"
+  mkdir -p "$tmp/cli-opaque-hub-catalog/src/daemon/ability/descriptors"
   mkdir -p "$tmp/cli-opaque-hub-catalog/src/daemon/ability/builtins/governance"
   mkdir -p "$tmp/cli-opaque-hub-catalog/src/ffi/invocation"
+  cat >"$tmp/cli-opaque-hub-catalog/src/daemon/ability/descriptors/surface.rs" <<'EOF'
+pub enum DescriptorError {}
+
+pub struct AbilityDescriptor {}
+
+impl AbilityDescriptor {
+    pub fn descriptor_ref(&self) -> Option<String> {
+        axon_sdk::invocation::canonical_ability_descriptor_ref("legacy").ok()
+    }
+}
+EOF
   cat >"$tmp/cli-opaque-hub-catalog/src/daemon/federation/read_model/hub_published_abilities.rs" <<'EOF'
 use std::collections::BTreeMap;
 use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
