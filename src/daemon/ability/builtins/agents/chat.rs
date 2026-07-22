@@ -2104,7 +2104,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_accepts_legacy_prompt_only_args() {
+    fn parse_accepts_canonical_minimal_prompt_args() {
         let args = ChatArgs::parse(&json!({"prompt": "hi"})).unwrap();
         assert_eq!(args.prompt, "hi");
         assert!(args.context.is_none());
@@ -2116,7 +2116,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_accepts_legacy_prompt_and_context() {
+    fn parse_accepts_canonical_prompt_and_context_args() {
         let args = ChatArgs::parse(&json!({
             "prompt": "hi",
             "context": "you are helpful"

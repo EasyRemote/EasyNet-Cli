@@ -260,6 +260,13 @@ fn discover_scope_boundary_script_holds() {
 }
 
 #[test]
+fn chat_ability_input_boundary_script_holds() {
+    // Pins <agent>.chat to the manifest-backed flat prompt/context shape as
+    // canonical input, not a retired compatibility alias for a second model.
+    run_bash_script("tests/scripts/test_check_chat_ability_input_boundary.sh");
+}
+
+#[test]
 fn skill_list_managed_dir_boundary_script_holds() {
     // Pins skill.list to the current managed install directory
     // per agent type. Claude Code no longer scans root-level skills.
