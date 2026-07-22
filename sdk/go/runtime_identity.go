@@ -20,15 +20,6 @@ func identitySignerPolicyRef(ownerURA string, keyID string, publicKeyBase64 stri
 	return "daemon-key-inventory:sha256:" + hex.EncodeToString(hasher.Sum(nil)[:16])
 }
 
-var (
-	// ErrRuntimeIdentityNotFound is retained as the runtime-identity domain
-	// alias for the canonical daemon key-service not-found condition.
-	ErrRuntimeIdentityNotFound = ErrDaemonKeyServiceNotFound
-	// ErrRuntimeIdentityUnavailable is retained as the runtime-identity domain
-	// alias for the canonical daemon key-service availability condition.
-	ErrRuntimeIdentityUnavailable = ErrDaemonKeyServiceUnavailable
-)
-
 // RuntimeSigningIdentity is an opaque daemon-owned signing capability. It
 // intentionally exposes the public key and signing operation, never seed or
 // private-key bytes.

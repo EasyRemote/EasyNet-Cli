@@ -41,6 +41,10 @@ provider_profile_projection_violations() {
   rg -n '\b(DaemonStartProjection|RuntimeHostStartProjection|from_profile|def\s+(hub|device|start_daemon|attach_daemon|discover_daemon|connect_local)\s*\(|func\s+(Hub|Device)StartProjection)\b' "$@"
 }
 
+runtime_identity_alias_violations() {
+  rg -n '\bErrRuntimeIdentity(NotFound|Unavailable)\b' "$@"
+}
+
 retired_product_sdk_modules() {
   cat <<'EOF'
 sdk/go/profiles.go
@@ -154,6 +158,12 @@ if [[ "${1:-}" == "--self-test" ]]; then
   printf 'IMPLICIT_DEVELOPMENT_PROVIDER = "target/release/deps/libeasynet_cli.so"\n' >"$injected"
   if ! development_loader_violations "$injected" >/dev/null; then
     fail "self-test failed to detect development deps directory in SDK provider loader"
+  fi
+  rm -f "$injected"
+  injected="$tmp/sdk/go/__runtime_identity_alias_negative.go"
+  printf 'package neutralitynegative\nvar ErrRuntimeIdentityNotFound = ErrDaemonKeyServiceNotFound\n' >"$injected"
+  if ! runtime_identity_alias_violations "$injected" >/dev/null; then
+    fail "self-test failed to detect retired runtime identity error alias"
   fi
   rm -f "$injected"
   injected="$tmp/sdk/python/easynet_sdk/providers/easynet/lifecycle.py"
@@ -276,6 +286,10 @@ fi
 forbidden_ability_pattern="[\"'](mission\\.|agent\\.(start|stop|refresh|list)|openai\\.|pages\\.|project_list[\"'])"
 if rg -n "$forbidden_ability_pattern" "${production_sources[@]}"; then
   fail "product ability literal leaked into runtime SDK production source"
+fi
+
+if runtime_identity_alias_violations "${production_sources[@]}"; then
+  fail "retired runtime identity error alias leaked into runtime SDK production source"
 fi
 
 for path in sdk/go/runtime_events.go sdk/python/easynet_sdk/runtime_events.py; do

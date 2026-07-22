@@ -6420,8 +6420,6 @@
         "ErrDaemonKeyServiceNotFound",
         "ErrDaemonKeyServiceUnavailable",
         "ErrDaemonOffline",
-        "ErrRuntimeIdentityNotFound",
-        "ErrRuntimeIdentityUnavailable",
         "FederationRevokePayload",
         "FileControlDiscoveryReader",
         "NewCABIClient",
@@ -7282,22 +7280,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "ErrRuntimeIdentityNotFound": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_identity"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Runtime identity error aliases are source-compatible names for daemon key-service errors, not independent canonical capability evidence."
-        },
-        "ErrRuntimeIdentityUnavailable": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_identity"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Runtime identity error aliases are source-compatible names for daemon key-service errors, not independent canonical capability evidence."
         },
         "FederationRevokePayload": {
           "canonical_replacement": [
@@ -18933,8 +18915,6 @@
       "ErrProviderUnavailable": "79ccbf5b976c874fe82770eb98e76564405600d738b2c6e8eeecfb03405883ac",
       "ErrReceiptProofFactsMissing": "db981a0f2b7df1c19a8a64d34c2ea4c3d078afdcadf8d0d5c0bde7ab6abaa37c",
       "ErrRouteUnavailable": "ca80e808e58d29c9f439b213dee93887f75d798e0c588d60403a1ff97e217942",
-      "ErrRuntimeIdentityNotFound": "96793d434431a19c5b1921615b5e136f56375d13e757518be3bde76a9db271aa",
-      "ErrRuntimeIdentityUnavailable": "d9f6bb853e7f0f3984e8fa329d4dc4500ea8f2ada93aa97aeb720bc8beac7e5a",
       "ErrRuntimeRouteUnavailable": "bd2f3ac057978497507d9bcd0453f30fd6247c89fe53cd9c0999046297fde921",
       "ErrSignatureDenied": "c0f6f52dcd22b560825a7688d619d7092f6efb80c9e575f92a073ec9ca5fd16a",
       "ErrTerminalReceiptUnavailable": "71ea8b44f6015d9291f552b2a5df64589e9f0e0eb9802387570535b35ca8cb55",
