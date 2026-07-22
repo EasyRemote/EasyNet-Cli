@@ -526,7 +526,11 @@ class RuntimeReceipt:
             raise _invalid_runtime("runtime receipt summary is missing receipt_type")
         if not self.state:
             raise _invalid_runtime("runtime receipt summary is missing state")
-        self.lifecycle_state
+        lifecycle_state = self.lifecycle_state
+        if self.receipt_type != _canonical_receipt_type(lifecycle_state):
+            raise _invalid_runtime(
+                "runtime receipt receipt_type does not match its lifecycle state"
+            )
         self.prev_receipt_hash()
         self.self_receipt_hash()
         self.validate_proof_facts()

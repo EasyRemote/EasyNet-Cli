@@ -389,7 +389,7 @@ func TestRuntimeClientPrepareSigningMaterialRejectsCanonicalCommitmentMismatch(t
 }
 
 func TestRuntimeReceiptProofFactsRequired(t *testing.T) {
-	fixture := canonicalRuntimeReceiptFixture("inv-1", "terminal", "Completed", 1)
+	fixture := canonicalRuntimeReceiptFixture("inv-1", "completed", "Completed", 1)
 	fixture["self_hash_hex"] = strings.Repeat("aa", 32)
 	fixture["causal_binding_kind"] = "scalar"
 	fixture["causal_binding"] = map[string]any{
@@ -420,7 +420,7 @@ func TestRuntimeReceiptProofFactsRequired(t *testing.T) {
 		t.Fatalf("authority binding not decoded: %#v", receipt.AuthorityBinding)
 	}
 
-	incomplete := canonicalRuntimeReceiptFixture("inv-1", "terminal", "Completed", 1)
+	incomplete := canonicalRuntimeReceiptFixture("inv-1", "completed", "Completed", 1)
 	delete(incomplete, "authority_proof")
 	if _, err := NewRuntimeReceiptFromJSON(mustJSON(incomplete)); err == nil {
 		t.Fatal("NewRuntimeReceiptFromJSON accepted receipt without proof facts")
@@ -448,10 +448,17 @@ func TestRuntimeReceiptOwnsFailClosedLifecycleProjection(t *testing.T) {
 			t.Fatalf("NewRuntimeReceiptFromJSON(state=%v) = %v, want %s", invalid, err, ErrInvalidArgument)
 		}
 	}
+
+	for _, invalid := range []string{"terminal", "failed", "Completed"} {
+		malformed := canonicalRuntimeReceiptFixture("inv-state", invalid, "completed", 1)
+		if _, err := NewRuntimeReceiptFromJSON(mustJSON(malformed)); !IsCode(err, ErrInvalidArgument) {
+			t.Fatalf("NewRuntimeReceiptFromJSON(receipt_type=%q) = %v, want %s", invalid, err, ErrInvalidArgument)
+		}
+	}
 }
 
 func TestRuntimeReceiptRejectsMalformedSummaryHash(t *testing.T) {
-	fixture := canonicalRuntimeReceiptFixture("inv-1", "terminal", "Completed", 1)
+	fixture := canonicalRuntimeReceiptFixture("inv-1", "completed", "Completed", 1)
 	fixture["self_hash_hex"] = "aa"
 	if _, err := NewRuntimeReceiptFromJSON(mustJSON(fixture)); err == nil {
 		t.Fatal("NewRuntimeReceiptFromJSON accepted short self hash")
@@ -519,7 +526,7 @@ func TestRuntimeReceiptRejectsMalformedCanonicalProofFacts(t *testing.T) {
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
-			fixture := canonicalRuntimeReceiptFixture("inv-1", "terminal", "Completed", 1)
+			fixture := canonicalRuntimeReceiptFixture("inv-1", "completed", "Completed", 1)
 			mutate(fixture)
 			if _, err := NewRuntimeReceiptFromJSON(mustJSON(fixture)); !IsCode(err, ErrInvalidArgument) {
 				t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)

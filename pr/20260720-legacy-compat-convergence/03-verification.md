@@ -2916,3 +2916,39 @@ Commands and outcomes will be appended after implementation.
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; codegraph
   `status` reports `Index is up to date` with 1,019 files, 35,361 nodes, and
   135,698 edges.
+
+## 2026-07-22 Node SDK and cross-SDK RuntimeReceipt type/state binding
+
+- `go test . -run
+  'TestRuntimeReceipt|TestInvocationResultRejectsConflictingCanonicalReceiptBindings'`
+  from `sdk/go` — PASS; covers direct RuntimeReceipt proof facts, fail-closed
+  lifecycle parsing, and rejection of retired `terminal`/mismatched
+  `receipt_type` values before result-topology parsing.
+- `PYTHONPATH=sdk/python:../EasyNet-Axon/sdk/python:sdk/python/tests
+  python3 -m unittest sdk.python.tests.test_runtime` — PASS (`36` tests);
+  covers direct Python `RuntimeReceipt` proof-fact validation and
+  lifecycle-derived `receipt_type` rejection.
+- `mvn -q -f sdk/java/pom.xml test` — PASS; covers Java `RuntimeReceipt`
+  direct rejection of `receipt_type="terminal"` and InvocationResult receipt
+  projection.
+- `npm test --prefix sdk/node` — PASS (`36` tests); covers the new Node
+  `RuntimeReceipt`, mandatory proof facts, retired top-level `receipt` alias
+  rejection, and canonical terminal receipt conformance fixtures.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS;
+  includes the SPEC gate self-test harness after adding the cross-SDK
+  receipt type/state binding contract.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes negative fixtures for opaque Node receipt projection and
+  SDK RuntimeReceipt type/state binding regressions.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS;
+  includes `check_node_sdk_runtime_receipt_projection_contract` and
+  `check_sdk_runtime_receipt_type_state_binding_contract`.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; synced the
+  changed SDK/gate files.
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index is up
+  to date with 1,019 files, 35,395 nodes, and 135,788 edges.

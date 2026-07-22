@@ -59,9 +59,14 @@ public final class RuntimeReceipt {
       throw SDKError.validation(
           "runtime_receipt", "runtime receipt summary is missing receipt_type");
     }
-    if (canonicalLifecycleState(state).equals("UNSPECIFIED")) {
+    String lifecycleState = canonicalLifecycleState(state);
+    if (lifecycleState.equals("UNSPECIFIED")) {
       throw SDKError.validation(
           "runtime_receipt", "runtime receipt lifecycle state must not be UNSPECIFIED");
+    }
+    if (!receiptType.equals(canonicalReceiptType(lifecycleState))) {
+      throw SDKError.validation(
+          "runtime_receipt", "runtime receipt receipt_type does not match its lifecycle state");
     }
     receiptHash(raw, "prev_receipt_hash_hex", true);
     receiptHash(raw, "self_hash_hex", false);
@@ -144,6 +149,20 @@ public final class RuntimeReceipt {
       case "cancelled", "Cancelled", "CANCELLED" -> "CANCELLED";
       case "unspecified", "Unspecified", "UNSPECIFIED" -> "UNSPECIFIED";
       default -> throw SDKError.validation("runtime_receipt", "unknown receipt state " + value);
+    };
+  }
+
+  private static String canonicalReceiptType(String lifecycleState) {
+    return switch (lifecycleState) {
+      case "ACCEPTED" -> "accepted";
+      case "ADMITTED" -> "admitted";
+      case "DISPATCHED" -> "dispatched";
+      case "RUNNING" -> "running";
+      case "COMPLETED" -> "completed";
+      case "FAILED" -> "failed";
+      case "TIMED_OUT" -> "timed_out";
+      case "CANCELLED" -> "cancelled";
+      default -> "";
     };
   }
 

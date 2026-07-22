@@ -977,8 +977,15 @@ func (r RuntimeReceipt) ValidateSummary() error {
 	if strings.TrimSpace(r.State) == "" {
 		return invalidRuntimePayload("runtime receipt summary is missing state", nil)
 	}
-	if _, err := r.LifecycleState(); err != nil {
+	state, err := r.LifecycleState()
+	if err != nil {
 		return err
+	}
+	if r.ReceiptType != canonicalReceiptType(state) {
+		return invalidRuntimePayload(
+			"runtime receipt receipt_type does not match its lifecycle state",
+			nil,
+		)
 	}
 	if _, err := r.PrevReceiptHash(); err != nil {
 		return err

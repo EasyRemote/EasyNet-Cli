@@ -695,6 +695,42 @@ export class InvocationDraft {
   }
 }
 
+export class RuntimeReceipt {
+  constructor(raw) {
+    this.raw = objectValue(raw, "runtime receipt");
+    this.invocationId = requiredRuntimeString(this.raw.invocation_id, "invocation_id");
+    this.receiptType = requiredRuntimeString(this.raw.receipt_type, "receipt_type");
+    this.state = requiredRuntimeString(this.raw.state, "state");
+    this.validateSummary();
+    Object.freeze(this.raw);
+  }
+
+  static fromObject(raw) {
+    return new RuntimeReceipt(raw);
+  }
+
+  lifecycleState() {
+    return canonicalRuntimeReceiptState(this.state);
+  }
+
+  rawProjection() {
+    return { ...this.raw };
+  }
+
+  validateSummary() {
+    const lifecycleState = canonicalRuntimeReceiptState(this.state);
+    if (lifecycleState === "UNSPECIFIED") {
+      throw invalidRuntime("runtime receipt lifecycle state must not be UNSPECIFIED");
+    }
+    if (this.receiptType !== canonicalRuntimeReceiptType(lifecycleState)) {
+      throw invalidRuntime("runtime receipt receipt_type does not match its lifecycle state");
+    }
+    runtimeReceiptHash(this.raw.prev_receipt_hash_hex, "prev_receipt_hash_hex", true);
+    runtimeReceiptHash(this.raw.self_hash_hex, "self_hash_hex", false);
+    validateRuntimeReceiptProofFacts(this.raw);
+  }
+}
+
 export class InvocationBuilder {
   constructor() {
     this.fields = { metadata: {} };
@@ -1672,15 +1708,245 @@ function requireBoundRuntime(runtime) {
 
 function invocationResultFromJSON(raw) {
   const decoded = parseJSON(raw, "invocation result");
+  if (Object.hasOwn(decoded, "receipt")) {
+    throw invalidRuntime("invocation result must use terminal_receipt; retired receipt alias is not accepted");
+  }
   const result = { ...decoded };
-  delete result.receipt;
   if (decoded.terminal_receipt === undefined || decoded.terminal_receipt === null) {
     delete result.terminalReceipt;
   } else {
-    result.terminalReceipt = objectValue(decoded.terminal_receipt, "terminal_receipt");
+    result.terminalReceipt = validatedTerminalReceipt(
+      decoded.terminal_receipt,
+      decoded.terminal_state,
+      decoded.ok,
+    );
   }
   delete result.terminal_receipt;
   return result;
+}
+
+function validatedTerminalReceipt(value, terminalState, ok) {
+  const receipt = RuntimeReceipt.fromObject(objectValue(value, "terminal_receipt"));
+  const receiptState = receipt.lifecycleState();
+  const resultState = canonicalRuntimeReceiptState(requiredRuntimeString(terminalState, "terminal_state"));
+  const resultOk = runtimeBoolean(ok, "ok");
+  if (receiptState !== resultState) {
+    throw invalidRuntime("terminal_receipt state does not match invocation terminal_state");
+  }
+  if (resultOk !== (receiptState === "COMPLETED")) {
+    throw invalidRuntime("invocation result ok flag does not match terminal receipt state");
+  }
+  return receipt.rawProjection();
+}
+
+function validateRuntimeReceiptProofFacts(raw) {
+  requireRuntimeReceiptAgentBinding(raw.caller_binding, "caller_binding");
+  requireRuntimeReceiptAgentBinding(raw.callee_binding, "callee_binding");
+  requireRuntimeReceiptAgentBinding(raw.subject_binding, "subject_binding");
+  validateRuntimeBase64(
+    requiredRuntimeString(raw.invocation_nonce_base64, "invocation_nonce_base64"),
+    "invocation_nonce_base64",
+    16,
+    false,
+  );
+  const causalKind = requiredRuntimeString(raw.causal_binding_kind, "causal_binding_kind");
+  validateRuntimeReceiptCausalBinding(causalKind, objectValue(raw.causal_binding, "causal_binding"));
+  requireRuntimeReceiptSignature(raw.callee_signature, "callee_signature");
+  requireRuntimeReceiptAgentBinding(raw.signer_binding, "signer_binding");
+  const authorityKind = requiredRuntimeString(raw.authority_binding_kind, "authority_binding_kind");
+  const authorityBinding = requireRuntimeReceiptAuthorityBinding(raw.authority_binding, "authority_binding");
+  if (authorityBinding.kind !== authorityKind) {
+    throw invalidRuntime("runtime receipt authority_binding kind does not match authority_binding_kind");
+  }
+  requiredRuntimeString(raw.ability_binding, "ability_binding");
+  requireRuntimeReceiptEntityRef(raw.subject_ref, "subject_ref");
+  requiredRuntimeString(raw.descriptor_version, "descriptor_version");
+  runtimeReceiptHash(raw.schema_hash_hex, "schema_hash_hex", false);
+  runtimeReceiptHash(raw.impl_hash_hex, "impl_hash_hex", false);
+  requiredRuntimeString(raw.runtime_env, "runtime_env");
+  const proof = objectValue(raw.authority_proof, "authority_proof");
+  requiredRuntimeString(proof.proof_type, "authority_proof.proof_type");
+  const proofBindingKind = requiredRuntimeString(proof.binding_kind, "authority_proof.binding_kind");
+  if (proofBindingKind !== authorityKind) {
+    throw invalidRuntime("runtime receipt authority_proof binding_kind does not match authority_binding_kind");
+  }
+  const proofBinding = requireRuntimeReceiptAuthorityBinding(proof.binding, "authority_proof.binding");
+  if (stableRuntimeObjectJSON(proofBinding) !== stableRuntimeObjectJSON(authorityBinding)) {
+    throw invalidRuntime("runtime receipt authority_proof binding does not match authority_binding");
+  }
+  validateRuntimeBase64(
+    stringValue(proof.proof_payload_base64, "authority_proof.proof_payload_base64", true),
+    "authority_proof.proof_payload_base64",
+    null,
+    true,
+  );
+  runtimeReceiptHash(proof.proof_hash_hex, "authority_proof.proof_hash_hex", false);
+  requireRuntimeReceiptAgentBinding(proof.issuer, "authority_proof.issuer");
+  requireRuntimeReceiptSignature(proof.signature, "authority_proof.signature");
+  runtimeReceiptHash(raw.input_hash_hex, "input_hash_hex", false);
+  runtimeReceiptHash(raw.output_hash_hex, "output_hash_hex", false);
+  requireRuntimeReceiptParents(raw.parent_receipts);
+}
+
+function canonicalRuntimeReceiptState(value) {
+  switch (requiredRuntimeString(value, "state").trim()) {
+    case "accepted":
+    case "Accepted":
+    case "ACCEPTED":
+      return "ACCEPTED";
+    case "admitted":
+    case "Admitted":
+    case "ADMITTED":
+      return "ADMITTED";
+    case "dispatched":
+    case "Dispatched":
+    case "DISPATCHED":
+      return "DISPATCHED";
+    case "running":
+    case "Running":
+    case "RUNNING":
+      return "RUNNING";
+    case "completed":
+    case "Completed":
+    case "COMPLETED":
+      return "COMPLETED";
+    case "failed":
+    case "Failed":
+    case "FAILED":
+      return "FAILED";
+    case "timed_out":
+    case "TimedOut":
+    case "TIMED_OUT":
+      return "TIMED_OUT";
+    case "cancelled":
+    case "Cancelled":
+    case "CANCELLED":
+      return "CANCELLED";
+    case "unspecified":
+    case "Unspecified":
+    case "UNSPECIFIED":
+      return "UNSPECIFIED";
+    default:
+      throw invalidRuntime(`unknown receipt state ${value}`);
+  }
+}
+
+function canonicalRuntimeReceiptType(state) {
+  switch (state) {
+    case "ACCEPTED":
+      return "accepted";
+    case "ADMITTED":
+      return "admitted";
+    case "DISPATCHED":
+      return "dispatched";
+    case "RUNNING":
+      return "running";
+    case "COMPLETED":
+      return "completed";
+    case "FAILED":
+      return "failed";
+    case "TIMED_OUT":
+      return "timed_out";
+    case "CANCELLED":
+      return "cancelled";
+    default:
+      throw invalidRuntime(`unsupported receipt lifecycle state ${state}`);
+  }
+}
+
+function validateRuntimeReceiptCausalBinding(kind, binding) {
+  const form = requiredRuntimeString(binding.form, "causal_binding.form");
+  if (form !== kind) {
+    throw invalidRuntime("runtime receipt causal_binding form does not match causal_binding_kind");
+  }
+  if (form === "none") {
+    return;
+  }
+  if (form === "scalar") {
+    requireRuntimeReceiptRef(binding.receipt, "causal_binding.receipt");
+    return;
+  }
+  if (form === "list") {
+    if (!Array.isArray(binding.prior) || binding.prior.length === 0) {
+      throw invalidRuntime("causal_binding.prior must be a non-empty array");
+    }
+    binding.prior.forEach((receipt, index) => {
+      requireRuntimeReceiptRef(receipt, `causal_binding.prior[${index}]`);
+    });
+    return;
+  }
+  if (form === "merkle") {
+    runtimeReceiptHash(binding.root_hex, "causal_binding.root_hex", false);
+    requiredRuntimeString(binding.proof_ura, "causal_binding.proof_ura");
+    return;
+  }
+  throw invalidRuntime(`unsupported causal_binding form ${form}`);
+}
+
+function requireRuntimeReceiptRef(value, field) {
+  const ref = objectValue(value, field);
+  runtimeReceiptHash(ref.receipt_hash_hex, `${field}.receipt_hash_hex`, false);
+  requiredRuntimeString(ref.receipt_ura, `${field}.receipt_ura`);
+}
+
+function requireRuntimeReceiptParents(value) {
+  if (!Array.isArray(value)) {
+    throw invalidRuntime("parent_receipts must be an array");
+  }
+  value.forEach((receipt, index) => {
+    requireRuntimeReceiptRef(receipt, `parent_receipts[${index}]`);
+  });
+}
+
+function requireRuntimeReceiptAgentBinding(value, field) {
+  const binding = objectValue(value, field);
+  requiredRuntimeString(binding.ura, `${field}.ura`);
+  requiredRuntimeString(binding.profile, `${field}.profile`);
+}
+
+function requireRuntimeReceiptEntityRef(value, field) {
+  const ref = objectValue(value, field);
+  if (!Number.isInteger(ref.kind) || ref.kind < 1 || ref.kind > 4) {
+    throw invalidRuntime(`${field}.kind is not canonical`);
+  }
+  requiredRuntimeString(ref.ura, `${field}.ura`);
+  requiredRuntimeString(ref.profile, `${field}.profile`);
+}
+
+function requireRuntimeReceiptAuthorityBinding(value, field) {
+  const binding = objectValue(value, field);
+  requiredRuntimeString(binding.kind, `${field}.kind`);
+  return binding;
+}
+
+function requireRuntimeReceiptSignature(value, field) {
+  const signature = objectValue(value, field);
+  requiredRuntimeString(signature.algorithm, `${field}.algorithm`);
+  validateRuntimeBase64(
+    requiredRuntimeString(signature.signature_base64, `${field}.signature_base64`),
+    `${field}.signature_base64`,
+  );
+}
+
+function runtimeReceiptHash(value, field, allowZero) {
+  const text = requiredRuntimeString(value, field);
+  validateRuntimeHex(text, field, 64);
+  if (!allowZero && /^0{64}$/i.test(text)) {
+    throw invalidRuntime(`${field} must not be all-zero`);
+  }
+}
+
+function stableRuntimeObjectJSON(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableRuntimeObjectJSON).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableRuntimeObjectJSON(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function rejectRuntimeFields(value, allowed) {
@@ -1830,15 +2096,18 @@ function backpressureSDK(message, details = {}) {
   });
 }
 
-function validateRuntimeBase64(value, field) {
+function validateRuntimeBase64(value, field, expectedLength = null, allowEmpty = false) {
   let raw;
   try {
     raw = Buffer.from(value, "base64");
   } catch {
     throw invalidRuntime(`${field} must be base64`);
   }
-  if (raw.length === 0 || raw.toString("base64") !== value) {
+  if ((raw.length === 0 && !allowEmpty) || raw.toString("base64") !== value) {
     throw invalidRuntime(`${field} must be base64`);
+  }
+  if (expectedLength !== null && raw.length !== expectedLength) {
+    throw invalidRuntime(`${field} must decode to exactly ${expectedLength} bytes`);
   }
 }
 

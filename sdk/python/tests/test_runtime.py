@@ -583,13 +583,13 @@ class RuntimeTests(unittest.TestCase):
             ),
         }
         for name, (field_name, value) in cases.items():
-            receipt = canonical_runtime_receipt("inv-1", "terminal", "Completed", 1)
+            receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
             receipt[field_name] = value
             with self.subTest(case=name):
                 with self.assertRaises(SDKError):
                     RuntimeReceipt.from_mapping(receipt)
 
-        receipt = canonical_runtime_receipt("inv-1", "terminal", "Completed", 1)
+        receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
         proof = receipt["authority_proof"]
         assert isinstance(proof, dict)
         proof["proof_hash_hex"] = "ff" * 32
@@ -778,6 +778,17 @@ class RuntimeTests(unittest.TestCase):
             )
             malformed["state"] = invalid
             with self.subTest(state=invalid), self.assertRaises(SDKError) as caught:
+                RuntimeReceipt.from_required_mapping(malformed)
+            self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        for invalid in ("terminal", "failed", "Completed"):
+            malformed = canonical_runtime_receipt(
+                "inv-state",
+                invalid,
+                "completed",
+                1,
+            )
+            with self.subTest(receipt_type=invalid), self.assertRaises(SDKError) as caught:
                 RuntimeReceipt.from_required_mapping(malformed)
             self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 

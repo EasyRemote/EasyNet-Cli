@@ -2960,6 +2960,140 @@ for required_test in (
 PY
 }
 
+check_node_sdk_runtime_receipt_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local runtime="$cli_root/sdk/node/index.js"
+  local types="$cli_root/sdk/node/index.d.ts"
+  local tests="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  local conformance="$cli_root/sdk/node/test/conformance-cases.test.mjs"
+  [[ -f "$runtime" ]] || fail "Node runtime source is missing: ${runtime#$cli_root/}"
+  [[ -f "$types" ]] || fail "Node runtime declarations are missing: ${types#$cli_root/}"
+  [[ -f "$tests" ]] || fail "Node runtime tests are missing: ${tests#$cli_root/}"
+  [[ -f "$conformance" ]] || fail "Node conformance tests are missing: ${conformance#$cli_root/}"
+
+  "$PYTHON_BIN" - "$runtime" "$types" "$tests" "$conformance" <<'PY'
+import sys
+from pathlib import Path
+
+runtime_path, types_path, tests_path, conformance_path = map(Path, sys.argv[1:])
+runtime = runtime_path.read_text(encoding="utf-8")
+types = types_path.read_text(encoding="utf-8")
+tests = tests_path.read_text(encoding="utf-8")
+conformance = conformance_path.read_text(encoding="utf-8")
+test_corpus = tests + "\n" + conformance
+
+if "export class RuntimeReceipt" not in runtime:
+    raise SystemExit("node_runtime_receipt_projection:runtime_receipt_type_missing")
+if "export class RuntimeReceipt" not in types:
+    raise SystemExit("node_runtime_receipt_projection:runtime_receipt_declaration_missing")
+for fragment, label in {
+    "validateRuntimeReceiptProofFacts": "proof_fact_validator_missing",
+    "raw.authority_proof": "authority_proof_required_missing",
+    "requireRuntimeReceiptParents(raw.parent_receipts)": "parent_receipts_required_missing",
+    "canonicalRuntimeReceiptState": "lifecycle_state_machine_missing",
+    "canonicalRuntimeReceiptType": "receipt_type_state_binding_missing",
+    "runtimeReceiptHash": "hash_validator_missing",
+    "validateRuntimeBase64": "base64_validator_missing",
+}.items():
+    if fragment not in runtime:
+        raise SystemExit(f"node_runtime_receipt_projection:{label}")
+
+if "RuntimeReceipt.fromObject(objectValue(value, \"terminal_receipt\"))" not in runtime:
+    raise SystemExit("node_runtime_receipt_projection:invocation_result_not_using_receipt_validator")
+if 'Object.hasOwn(decoded, "receipt")' not in runtime or "retired receipt alias is not accepted" not in runtime:
+    raise SystemExit("node_runtime_receipt_projection:retired_receipt_alias_not_rejected")
+for forbidden, label in {
+    "delete result.receipt": "retired_receipt_alias_delete",
+    "terminal_receipt: { receipt_ref": "opaque_terminal_receipt_fixture",
+    "receipt_ref:": "opaque_receipt_ref_fixture",
+}.items():
+    if forbidden in runtime or forbidden in test_corpus:
+        raise SystemExit(f"node_runtime_receipt_projection:{label}")
+
+for required_test in (
+    "runtime receipt proof facts are mandatory",
+    "canonicalRuntimeReceipt",
+    "delete missingProof.authority_proof",
+    "receipt_type",
+    "retired receipt alias is not accepted",
+):
+    if required_test not in test_corpus:
+        raise SystemExit(f"node_runtime_receipt_projection:missing_test:{required_test}")
+PY
+}
+
+check_sdk_runtime_receipt_type_state_binding_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local go_runtime="$cli_root/sdk/go/runtime.go"
+  local go_tests="$cli_root/sdk/go/runtime_test.go"
+  local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime.py"
+  local py_tests="$cli_root/sdk/python/tests/test_runtime.py"
+  local java_receipt="$cli_root/sdk/java/src/main/java/run/easynet/daemon/RuntimeReceipt.java"
+  local java_tests="$cli_root/sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+  local node_runtime="$cli_root/sdk/node/index.js"
+  local node_tests="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  [[ -f "$go_runtime" ]] || fail "Go runtime source is missing: ${go_runtime#$cli_root/}"
+  [[ -f "$go_tests" ]] || fail "Go runtime tests are missing: ${go_tests#$cli_root/}"
+  [[ -f "$py_runtime" ]] || fail "Python runtime source is missing: ${py_runtime#$cli_root/}"
+  [[ -f "$py_tests" ]] || fail "Python runtime tests are missing: ${py_tests#$cli_root/}"
+  [[ -f "$java_receipt" ]] || fail "Java RuntimeReceipt source is missing: ${java_receipt#$cli_root/}"
+  [[ -f "$java_tests" ]] || fail "Java runtime tests are missing: ${java_tests#$cli_root/}"
+  [[ -f "$node_runtime" ]] || fail "Node runtime source is missing: ${node_runtime#$cli_root/}"
+  [[ -f "$node_tests" ]] || fail "Node runtime tests are missing: ${node_tests#$cli_root/}"
+
+  "$PYTHON_BIN" - "$go_runtime" "$go_tests" "$py_runtime" "$py_tests" "$java_receipt" "$java_tests" "$node_runtime" "$node_tests" <<'PY'
+import sys
+from pathlib import Path
+
+go_runtime, go_tests, py_runtime, py_tests, java_receipt, java_tests, node_runtime, node_tests = [
+    Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]
+]
+
+checks = {
+    "go": (
+        go_runtime,
+        go_tests,
+        "r.ReceiptType != canonicalReceiptType(state)",
+        "runtime receipt receipt_type does not match its lifecycle state",
+        '"terminal", "failed", "Completed"',
+    ),
+    "python": (
+        py_runtime,
+        py_tests,
+        "self.receipt_type != _canonical_receipt_type(lifecycle_state)",
+        "runtime receipt receipt_type does not match its lifecycle state",
+        '("terminal", "failed", "Completed")',
+    ),
+    "java": (
+        java_receipt,
+        java_tests,
+        "!receiptType.equals(canonicalReceiptType(lifecycleState))",
+        "runtime receipt receipt_type does not match its lifecycle state",
+        'mismatchedType.put("receipt_type", "terminal")',
+    ),
+    "node": (
+        node_runtime,
+        node_tests,
+        "this.receiptType !== canonicalRuntimeReceiptType(lifecycleState)",
+        "runtime receipt receipt_type does not match its lifecycle state",
+        'state: "Failed"',
+    ),
+}
+
+for language, (runtime, tests, binding_fragment, error_fragment, test_fragment) in checks.items():
+    if binding_fragment not in runtime:
+        raise SystemExit(f"sdk_runtime_receipt_type_state_binding:{language}:binding_missing")
+    if error_fragment not in runtime:
+        raise SystemExit(f"sdk_runtime_receipt_type_state_binding:{language}:error_missing")
+    if test_fragment not in tests or "receipt_type" not in tests:
+        raise SystemExit(f"sdk_runtime_receipt_type_state_binding:{language}:negative_test_missing")
+
+for corpus, language in ((go_tests, "go"), (py_tests, "python")):
+    if '"terminal", "Completed"' in corpus or '"terminal", "completed"' in corpus:
+        raise SystemExit(f"sdk_runtime_receipt_type_state_binding:{language}:legacy_terminal_fixture")
+PY
+}
+
 if [[ "${1:-}" == "--ura-only" ]]; then
   check_ura_vocabulary_contract
   check_axon_protocol_pack_ura_vector_contract
@@ -3164,6 +3298,63 @@ EOF
     > "$tmp/cli-java-receipt-legacy/sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
   if ( CLI_ROOT="$tmp/cli-java-receipt-legacy"; check_java_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java SDK receipt projection bypass gate to fail"
+  fi
+  mkdir -p "$tmp/cli-node-receipt-legacy/sdk/node/test"
+  cat >"$tmp/cli-node-receipt-legacy/sdk/node/index.js" <<'EOF'
+function invocationResultFromJSON(raw) {
+  const decoded = JSON.parse(raw);
+  const result = { ...decoded };
+  delete result.receipt;
+  if (decoded.terminal_receipt !== undefined && decoded.terminal_receipt !== null) {
+    result.terminalReceipt = decoded.terminal_receipt;
+  }
+  return result;
+}
+EOF
+  printf 'export class RuntimeClient {}\n' > "$tmp/cli-node-receipt-legacy/sdk/node/index.d.ts"
+  printf 'test("invocation result receipt", () => ({terminal_receipt: { receipt_ref: "opaque" }}));\n' \
+    > "$tmp/cli-node-receipt-legacy/sdk/node/test/runtime-core.test.mjs"
+  printf 'test("conformance terminal receipt facts are explicit", () => ({receipt_ref: "opaque"}));\n' \
+    > "$tmp/cli-node-receipt-legacy/sdk/node/test/conformance-cases.test.mjs"
+  if ( CLI_ROOT="$tmp/cli-node-receipt-legacy"; check_node_sdk_runtime_receipt_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Node SDK receipt projection bypass gate to fail"
+  fi
+  mkdir -p "$tmp/cli-sdk-receipt-type-legacy/sdk/go" \
+    "$tmp/cli-sdk-receipt-type-legacy/sdk/python/easynet_sdk" \
+    "$tmp/cli-sdk-receipt-type-legacy/sdk/python/tests" \
+    "$tmp/cli-sdk-receipt-type-legacy/sdk/java/src/main/java/run/easynet/daemon" \
+    "$tmp/cli-sdk-receipt-type-legacy/sdk/java/src/test/java/run/easynet/daemon" \
+    "$tmp/cli-sdk-receipt-type-legacy/sdk/node/test"
+  cat >"$tmp/cli-sdk-receipt-type-legacy/sdk/go/runtime.go" <<'EOF'
+func (r RuntimeReceipt) ValidateSummary() error {
+  _, err := r.LifecycleState()
+  return err
+}
+EOF
+  printf 'func TestRuntimeReceipt(t *testing.T) { canonicalRuntimeReceiptFixture("inv", "terminal", "Completed", 1) }\n' \
+    > "$tmp/cli-sdk-receipt-type-legacy/sdk/go/runtime_test.go"
+  cat >"$tmp/cli-sdk-receipt-type-legacy/sdk/python/easynet_sdk/runtime.py" <<'EOF'
+def validate_summary(self):
+    self.lifecycle_state
+EOF
+  printf 'def test_runtime_receipt():\n    canonical_runtime_receipt("inv", "terminal", "Completed", 1)\n' \
+    > "$tmp/cli-sdk-receipt-type-legacy/sdk/python/tests/test_runtime.py"
+  cat >"$tmp/cli-sdk-receipt-type-legacy/sdk/java/src/main/java/run/easynet/daemon/RuntimeReceipt.java" <<'EOF'
+public final class RuntimeReceipt {
+  private void validateSummary() { canonicalLifecycleState(state); }
+}
+EOF
+  printf 'class RuntimeCoreSeamTest { void test() { canonicalRuntimeReceiptFixture("inv", "completed", "Completed", 1); } }\n' \
+    > "$tmp/cli-sdk-receipt-type-legacy/sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java"
+  cat >"$tmp/cli-sdk-receipt-type-legacy/sdk/node/index.js" <<'EOF'
+export class RuntimeReceipt {
+  validateSummary() { canonicalRuntimeReceiptState(this.state); }
+}
+EOF
+  printf 'test("runtime receipt proof facts are mandatory", () => ({ receipt_type: "completed" }));\n' \
+    > "$tmp/cli-sdk-receipt-type-legacy/sdk/node/test/runtime-core.test.mjs"
+  if ( CLI_ROOT="$tmp/cli-sdk-receipt-type-legacy"; check_sdk_runtime_receipt_type_state_binding_contract ) >/dev/null 2>&1; then
+    fail "self-test expected SDK runtime receipt type/state binding gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-python-receipt-runtime"
   printf 'binding = AxiomBinding(proof_facts=ReceiptProofFacts())\n' \
@@ -4327,6 +4518,8 @@ EOF
   check_cli_signed_submission_boundary_contract
   check_receipt_proof_fact_contract
   check_java_sdk_runtime_receipt_projection_contract
+  check_node_sdk_runtime_receipt_projection_contract
+  check_sdk_runtime_receipt_type_state_binding_contract
   echo "canonical-runtime-convergence-v2 self-test ok"
   exit 0
 fi
@@ -4384,4 +4577,6 @@ check_cli_rust_local_fast_signer_boundary_contract
 check_cli_signed_submission_boundary_contract
 check_receipt_proof_fact_contract
 check_java_sdk_runtime_receipt_projection_contract
+check_node_sdk_runtime_receipt_projection_contract
+check_sdk_runtime_receipt_type_state_binding_contract
 echo "canonical-runtime-convergence-v2: OK"

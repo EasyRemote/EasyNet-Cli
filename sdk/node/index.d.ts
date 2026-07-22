@@ -370,6 +370,18 @@ export class InvocationDraft {
   toJSONString(): string;
 }
 
+export class RuntimeReceipt {
+  raw: Record<string, unknown>;
+  invocationId: string;
+  receiptType: string;
+  state: string;
+  constructor(raw: Record<string, unknown>);
+  static fromObject(raw: Record<string, unknown>): RuntimeReceipt;
+  lifecycleState(): string;
+  rawProjection(): Record<string, unknown>;
+  validateSummary(): void;
+}
+
 export class InvocationBuilder {
   withCallerURA(value: string): this;
   withCalleeURA(value: string): this;

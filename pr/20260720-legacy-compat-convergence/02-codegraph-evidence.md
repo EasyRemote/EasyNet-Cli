@@ -2665,3 +2665,34 @@ Evidence will be appended after indexing and focused impact queries.
   decoration, while Go/Python treat them as canonical runtime receipt
   projections. The fix adds a Java `RuntimeReceipt` state object and makes
   `InvocationResult` consume it before exposing `terminalReceipt()`.
+
+## 2026-07-22 Node SDK and cross-SDK RuntimeReceipt type/state audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index was
+  up to date for the current checkout with 1,019 files, 35,394 nodes, and
+  135,857 edges before this slice.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "Node SDK RuntimeReceipt invocationResultFromJSON terminal_receipt receipt
+  alias"` identified `sdk/node/index.js::invocationResultFromJSON` as the
+  Node runtime result seam and showed Java/Go/Python already have
+  `RuntimeReceipt` objects while Node had been projecting receipt maps
+  directly.
+- Source inspection found the Node SDK accepted a retired top-level `receipt`
+  alias by deleting it, copied `terminal_receipt` as an opaque object, and kept
+  `receipt_ref` fixtures in runtime/conformance tests. That let products
+  observe a successful invocation result without SDK-side proof-fact
+  validation.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "RuntimeReceipt receipt_type lifecycle state canonicalReceiptType
+  _canonical_receipt_type canonicalReceiptType Java Node"` then exposed a
+  cross-language model drift: Node's new `RuntimeReceipt` bound
+  `receipt_type` to lifecycle state, while Go/Python/Java still placed that
+  check primarily in `InvocationResult` topology.
+- Root abstraction problem: receipt lifecycle/type consistency belongs to the
+  canonical `RuntimeReceipt` projection itself, not to a subset of product
+  result parsers. Direct consumers of `RuntimeReceipt` must not be able to
+  accept the retired generic `terminal` receipt type for a Completed receipt.
+- Boundary decision: Node now exports a generic `RuntimeReceipt`, all four SDKs
+  validate `receipt_type == canonicalReceiptType(lifecycle_state)` inside the
+  receipt type boundary, and SPEC v2 has a cross-SDK gate plus negative legacy
+  fixture so the old opaque/terminal receipt path cannot reappear.

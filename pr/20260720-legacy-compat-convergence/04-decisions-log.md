@@ -1030,3 +1030,22 @@ Decisions will be appended as root-fork choices are made.
 - Bind terminal receipt lifecycle to `InvocationResult` topology: receipt
   state must match `terminal_state`, and the `ok` flag must match a completed
   terminal receipt.
+
+## 2026-07-22 Node SDK and cross-SDK RuntimeReceipt type/state binding
+
+- Treat Node SDK runtime receipts as first-class canonical runtime projections,
+  not JavaScript map decoration. `InvocationResult` now constructs
+  `RuntimeReceipt` before exposing `terminalReceipt`, and the retired
+  top-level `receipt` alias is rejected instead of ignored.
+- Treat receipt proof facts as mandatory in Node at the same boundary as
+  Go/Python/Java: caller/callee/subject binding, nonce, causal binding,
+  callee signature, authority binding/proof, subject ref, schema/impl hashes,
+  input/output hashes, and parent receipts are validated before product code
+  receives the receipt projection.
+- Move `receipt_type`/lifecycle binding to the `RuntimeReceipt` type in every
+  SDK. `InvocationResult` keeps result-topology checks, but direct receipt
+  consumers now receive the same fail-closed canonical model.
+- Delete the retired generic `terminal` fixture model from Go/Python runtime
+  receipt tests. Terminality is represented by lifecycle states such as
+  `completed`, `failed`, `timed_out`, and `cancelled`, not by a second receipt
+  type vocabulary.

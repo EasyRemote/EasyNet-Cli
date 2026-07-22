@@ -244,6 +244,13 @@ public final class RuntimeCoreSeamTest {
     RuntimeReceipt receipt = RuntimeReceipt.fromMap(complete);
     check("COMPLETED".equals(receipt.lifecycleState()), "canonical receipt lifecycle state");
 
+    Map<String, Object> mismatchedType = new LinkedHashMap<>(complete);
+    mismatchedType.put("receipt_type", "terminal");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "receipt_type",
+        () -> RuntimeReceipt.fromMap(mismatchedType));
+
     Map<String, Object> missingProof = new LinkedHashMap<>(complete);
     missingProof.remove("authority_proof");
     expectSDKError(

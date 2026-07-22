@@ -6,6 +6,7 @@ import {
   InvocationBuilder,
   InvocationSignature,
   RuntimeClient,
+  RuntimeReceipt,
   type RuntimeTransport,
 } from "../index.js";
 import * as sdk from "../index.js";
@@ -29,6 +30,49 @@ for (const product of productSymbols) {
 const callerURA = "easynet:///r/example/agent/alice.sdk";
 const calleeURA = "easynet:///r/example/device/dev-a";
 const descriptorRef = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0";
+const agentBinding = (ura: string) => ({ ura, profile: "axon-strict-v2" });
+const terminalReceipt = {
+  receipt_ura: "easynet:///r/example/resource/runtime/invocation/inv-types/receipt/1",
+  invocation_id: "inv-types",
+  receipt_type: "completed",
+  state: "Completed",
+  index: 1,
+  timestamp_unix_ms: 1_783_100_000_001,
+  prev_receipt_hash_hex: "00".repeat(32),
+  self_hash_hex: "01".repeat(32),
+  cleanup_complete: true,
+  caller_binding: agentBinding(callerURA),
+  callee_binding: agentBinding(calleeURA),
+  subject_binding: agentBinding(calleeURA),
+  invocation_nonce_base64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+  causal_binding_kind: "none",
+  causal_binding: { form: "none" },
+  callee_signature: { algorithm: "ed25519", signature_base64: Buffer.alloc(64, 0x71).toString("base64") },
+  signer_binding: agentBinding(calleeURA),
+  authority_binding_kind: "self",
+  authority_binding: { kind: "self", principal_ura: calleeURA },
+  ability_binding: descriptorRef,
+  subject_ref: { kind: 1, ura: calleeURA, profile: "axon-strict-v2" },
+  descriptor_version: "1.0.0",
+  schema_hash_hex: "11".repeat(32),
+  impl_hash_hex: "22".repeat(32),
+  runtime_env: "node-type-test",
+  authority_proof: {
+    proof_type: "self",
+    binding_kind: "self",
+    binding: { kind: "self", principal_ura: calleeURA },
+    proof_payload_base64: "",
+    proof_hash_hex: "55".repeat(32),
+    issuer: agentBinding(calleeURA),
+    signature: { algorithm: "ed25519", signature_base64: Buffer.alloc(64, 0x72).toString("base64") },
+    admission_hook: "test.runtime.admission",
+  },
+  input_hash_hex: "33".repeat(32),
+  output_hash_hex: "44".repeat(32),
+  parent_receipts: [],
+};
+const receipt = RuntimeReceipt.fromObject(terminalReceipt);
+receipt.validateSummary();
 const delegation = Buffer.from(
   JSON.stringify({
     payload: {
@@ -45,7 +89,7 @@ const delegation = Buffer.from(
 ).toString("base64");
 
 const transport: RuntimeTransport = {
-  invoke: async () => JSON.stringify({ ok: true, terminal_receipt: { receipt_ref: "opaque" } }),
+  invoke: async () => JSON.stringify({ ok: true, terminal_state: "Completed", terminal_receipt: terminalReceipt }),
   prepare: async (draftJSON) => JSON.stringify({
     prepared_id: "prepared-1",
     tuple: JSON.parse(new TextDecoder().decode(draftJSON)),

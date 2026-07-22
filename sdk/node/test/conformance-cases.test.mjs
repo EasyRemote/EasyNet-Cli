@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import * as sdk from "../index.js";
 
@@ -41,6 +42,58 @@ function runtime(overrides = {}) {
     ...overrides,
   });
 }
+
+const agentBinding = (ura) => ({ ura, profile: "axon-strict-v2" });
+
+const canonicalRuntimeReceipt = (invocationId, receiptType, state, index) => {
+  const proofPayload = Buffer.from("canonical-runtime-test-proof");
+  return {
+    receipt_ura: `easynet:///r/example/resource/runtime/invocation/${invocationId}/receipt/${index}`,
+    invocation_id: invocationId,
+    receipt_type: receiptType,
+    state,
+    index,
+    timestamp_unix_ms: 1_783_100_000_000 + index,
+    prev_receipt_hash_hex: "00".repeat(32),
+    self_hash_hex: (index + 1).toString(16).padStart(64, "0"),
+    cleanup_complete: true,
+    caller_binding: agentBinding(caller),
+    callee_binding: agentBinding(callee),
+    subject_binding: agentBinding(callee),
+    invocation_nonce_base64: nonce,
+    causal_binding_kind: "none",
+    causal_binding: { form: "none" },
+    callee_signature: {
+      algorithm: "ed25519",
+      signature_base64: Buffer.alloc(64, 0x71).toString("base64"),
+    },
+    signer_binding: agentBinding(callee),
+    authority_binding_kind: "self",
+    authority_binding: { kind: "self", principal_ura: callee },
+    ability_binding: descriptor,
+    subject_ref: { kind: 1, ura: callee, profile: "axon-strict-v2" },
+    descriptor_version: "1.0.0",
+    schema_hash_hex: "11".repeat(32),
+    impl_hash_hex: "22".repeat(32),
+    runtime_env: "node-test",
+    authority_proof: {
+      proof_type: "self",
+      binding_kind: "self",
+      binding: { kind: "self", principal_ura: callee },
+      proof_payload_base64: proofPayload.toString("base64"),
+      proof_hash_hex: createHash("sha256").update(proofPayload).digest("hex"),
+      issuer: agentBinding(callee),
+      signature: {
+        algorithm: "ed25519",
+        signature_base64: Buffer.alloc(64, 0x72).toString("base64"),
+      },
+      admission_hook: "test.runtime.admission",
+    },
+    input_hash_hex: "33".repeat(32),
+    output_hash_hex: "44".repeat(32),
+    parent_receipts: [],
+  };
+};
 
 test("conformance version compatible accepts exact ABI", async () => {
   const client = new sdk.Client({ featureDiscovery: () => JSON.stringify({ abi_version: 5, sdk_version: "test" }) });
@@ -123,16 +176,16 @@ test("conformance terminal handle state is monotonic", async () => {
 });
 
 test("conformance terminal receipt facts are explicit", async () => {
+  const terminal = canonicalRuntimeReceipt("inv-conformance", "completed", "Completed", 1);
   const client = runtime({
     invoke: () => JSON.stringify({
       ok: true,
       terminal_state: "Completed",
-      terminal_receipt: { receipt_ref: "canonical-terminal" },
-      receipt: { receipt_ref: "legacy-only" },
+      terminal_receipt: terminal,
     }),
   });
   const result = await client.invoke(builder().build());
-  assert.equal(result.terminalReceipt.receipt_ref, "canonical-terminal");
+  assert.equal(result.terminalReceipt.invocation_id, "inv-conformance");
   assert.equal(Object.hasOwn(result, "receipt"), false);
   assert.equal(Object.hasOwn(result, "terminal_receipt"), false);
 });

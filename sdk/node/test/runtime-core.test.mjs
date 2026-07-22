@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import * as sdk from "../index.js";
@@ -35,6 +36,7 @@ const expectedExports = [
   "RetryHint",
   "RuntimeClient",
   "RuntimeHealth",
+  "RuntimeReceipt",
   "SDKError",
   "SESSION_AUTHORITY_METADATA_KEY",
   "SessionAuthority",
@@ -148,6 +150,58 @@ const preparedJSON = (draft) =>
     submit_ready: false,
   });
 
+const agentBinding = (ura) => ({ ura, profile: "axon-strict-v2" });
+
+const canonicalRuntimeReceipt = (invocationId, receiptType, state, index) => {
+  const proofPayload = Buffer.from("canonical-runtime-test-proof");
+  return {
+    receipt_ura: `easynet:///r/example/resource/runtime/invocation/${invocationId}/receipt/${index}`,
+    invocation_id: invocationId,
+    receipt_type: receiptType,
+    state,
+    index,
+    timestamp_unix_ms: 1_783_100_000_000 + index,
+    prev_receipt_hash_hex: "00".repeat(32),
+    self_hash_hex: (index + 1).toString(16).padStart(64, "0"),
+    cleanup_complete: !["admitted", "Admitted", "ADMITTED"].includes(state),
+    caller_binding: agentBinding(caller),
+    callee_binding: agentBinding(callee),
+    subject_binding: agentBinding(callee),
+    invocation_nonce_base64: nonce,
+    causal_binding_kind: "none",
+    causal_binding: { form: "none" },
+    callee_signature: {
+      algorithm: "ed25519",
+      signature_base64: Buffer.alloc(64, 0x71).toString("base64"),
+    },
+    signer_binding: agentBinding(callee),
+    authority_binding_kind: "self",
+    authority_binding: { kind: "self", principal_ura: callee },
+    ability_binding: descriptor,
+    subject_ref: { kind: 1, ura: callee, profile: "axon-strict-v2" },
+    descriptor_version: "1.0.0",
+    schema_hash_hex: "11".repeat(32),
+    impl_hash_hex: "22".repeat(32),
+    runtime_env: "node-test",
+    authority_proof: {
+      proof_type: "self",
+      binding_kind: "self",
+      binding: { kind: "self", principal_ura: callee },
+      proof_payload_base64: proofPayload.toString("base64"),
+      proof_hash_hex: createHash("sha256").update(proofPayload).digest("hex"),
+      issuer: agentBinding(callee),
+      signature: {
+        algorithm: "ed25519",
+        signature_base64: Buffer.alloc(64, 0x72).toString("base64"),
+      },
+      admission_hook: "test.runtime.admission",
+    },
+    input_hash_hex: "33".repeat(32),
+    output_hash_hex: "44".repeat(32),
+    parent_receipts: [],
+  };
+};
+
 test("runtime package exports exactly the generic public surface", async () => {
   assert.deepEqual(Object.keys(sdk).sort(), expectedExports);
 
@@ -241,7 +295,7 @@ test("prepare, caller-sign, submit, and handle lifecycle preserve generic invoca
         ok: true,
         terminal_state: "Completed",
         output: { ok: true },
-        terminal_receipt: { receipt_ref: "opaque-receipt-ref", receipt_hash: "opaque-hash" },
+        terminal_receipt: canonicalRuntimeReceipt("inv-direct", "completed", "Completed", 1),
       });
     },
     prepare: (draftJSON, optionsJSON) => {
@@ -260,7 +314,7 @@ test("prepare, caller-sign, submit, and handle lifecycle preserve generic invoca
       return JSON.stringify({
         ok: true,
         terminal_state: "Completed",
-        terminal_receipt: { receipt_ref: "opaque-receipt-ref" },
+        terminal_receipt: canonicalRuntimeReceipt("inv-await", "completed", "Completed", 1),
       });
     },
     cancelHandle: (control, reason) => {
@@ -286,7 +340,7 @@ test("prepare, caller-sign, submit, and handle lifecycle preserve generic invoca
 
   const draft = completeDraft();
   const invoked = await runtime.invoke(draft);
-  assert.equal(invoked.terminalReceipt.receipt_ref, "opaque-receipt-ref");
+  assert.equal(invoked.terminalReceipt.invocation_id, "inv-direct");
   assert.equal(Object.hasOwn(invoked, "receipt"), false);
   assert.equal(Object.hasOwn(invoked, "terminal_receipt"), false);
   const prepared = await runtime.prepare(draft, { deadline_ms: 1000 });
@@ -302,7 +356,7 @@ test("prepare, caller-sign, submit, and handle lifecycle preserve generic invoca
   assert.equal(handle.controlCapability._adapterHandleId(), 7);
   assert.equal(calls.find(([name]) => name === "submit")[1].signer_id, "caller-key-1");
   const awaited = await handle.awaitResult();
-  assert.equal(awaited.terminalReceipt.receipt_ref, "opaque-receipt-ref");
+  assert.equal(awaited.terminalReceipt.invocation_id, "inv-await");
   assert.equal(Object.hasOwn(awaited, "receipt"), false);
   assert.equal(Object.hasOwn(awaited, "terminal_receipt"), false);
   assert.equal((await handle.cancel("done")).terminal, true);
@@ -318,25 +372,21 @@ test("prepare, caller-sign, submit, and handle lifecycle preserve generic invoca
 });
 
 test("invocation results expose terminalReceipt without legacy receipt fallback", async () => {
+  const terminal = canonicalRuntimeReceipt("inv-result", "completed", "Completed", 1);
   const runtime = new sdk.RuntimeClient({
     invoke: () => JSON.stringify({
       ok: true,
       terminal_state: "Completed",
-      terminal_receipt: { receipt_ref: "canonical-terminal" },
-      receipt: { receipt_ref: "legacy-only" },
+      terminal_receipt: terminal,
     }),
     prepare: (draftJSON) => preparedJSON(JSON.parse(Buffer.from(draftJSON).toString("utf8"))),
     submitSigned: () =>
       JSON.stringify({ handle_id: 7, state: "Running", terminal: false, events: [], result: null }),
-    awaitHandle: () => JSON.stringify({
-      ok: true,
-      terminal_state: "Completed",
-      receipt: { receipt_ref: "legacy-only" },
-    }),
+    awaitHandle: () => JSON.stringify({ ok: true, terminal_state: "Completed", receipt: terminal }),
   });
 
   const invoked = await runtime.invoke(completeDraft());
-  assert.equal(invoked.terminalReceipt.receipt_ref, "canonical-terminal");
+  assert.equal(invoked.terminalReceipt.invocation_id, "inv-result");
   assert.equal(Object.hasOwn(invoked, "receipt"), false);
   assert.equal(Object.hasOwn(invoked, "terminal_receipt"), false);
 
@@ -348,11 +398,43 @@ test("invocation results expose terminalReceipt without legacy receipt fallback"
       key_id_hint: "caller-key-1",
     })
     .submit();
-  const legacyOnly = await handle.awaitResult();
-  assert.equal(Object.hasOwn(legacyOnly, "terminalReceipt"), false);
-  assert.equal(Object.hasOwn(legacyOnly, "receipt"), false);
+  await assert.rejects(
+    () => handle.awaitResult(),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("retired receipt alias is not accepted"),
+  );
 
   await runtime.close();
+});
+
+test("runtime receipt proof facts are mandatory", () => {
+  const complete = canonicalRuntimeReceipt("inv-proof", "completed", "Completed", 1);
+  const receipt = sdk.RuntimeReceipt.fromObject(complete);
+  assert.equal(receipt.lifecycleState(), "COMPLETED");
+  assert.equal(receipt.invocationId, "inv-proof");
+
+  const missingProof = { ...complete };
+  delete missingProof.authority_proof;
+  assert.throws(
+    () => sdk.RuntimeReceipt.fromObject(missingProof),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("authority_proof"),
+  );
+  assert.throws(
+    () =>
+      sdk.RuntimeReceipt.fromObject({
+        ...complete,
+        state: "Failed",
+      }),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("receipt_type"),
+  );
 });
 
 test("public invocation handle JSON is observation-only", async () => {

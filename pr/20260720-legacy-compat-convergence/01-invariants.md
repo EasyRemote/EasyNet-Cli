@@ -415,3 +415,9 @@
   and must validate required identity, lifecycle, hash, and proof facts before
   being exposed to product callers. Retired top-level `receipt` aliases must
   fail closed instead of being ignored or treated as empty receipt state.
+- RuntimeReceipt owns receipt lifecycle/type consistency in every SDK. The
+  retired generic `terminal` receipt type is not canonical runtime state;
+  `receipt_type` must equal the lifecycle-derived canonical type
+  (`completed`, `failed`, `timed_out`, etc.) before any product observes the
+  receipt, even when the receipt is consumed directly rather than through
+  `InvocationResult`.
