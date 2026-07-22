@@ -927,12 +927,12 @@ func TestDirectRuntimeConnectorProjectsHandleCapabilities(t *testing.T) {
 	defer cleanup()
 	endpoint := transport.endpoint
 
-	connector := NewDirectRuntimeConnectorWithOptions(DirectRuntimeConnectorOptions{
-		Reader: controlDiscoveryReaderFunc(func(context.Context, string) (ControlDiscovery, error) {
+	connector := newDirectRuntimeConnectorWithOptions(directRuntimeConnectorOptions{
+		reader: controlDiscoveryReaderFunc(func(context.Context, string) (ControlDiscovery, error) {
 			return ControlDiscovery{InvocationEndpoint: endpoint}, nil
 		}),
-		HandleTransport:      handle,
-		CloseHandleTransport: true,
+		handleTransport:      handle,
+		closeHandleTransport: true,
 	})
 	connection, err := NewRuntimeConnection(connector)
 	if err != nil {
@@ -957,7 +957,7 @@ func TestDirectRuntimeConnectorResolvesControlDiscovery(t *testing.T) {
 	reader := controlDiscoveryReaderFunc(func(ctx context.Context, controlPath string) (ControlDiscovery, error) {
 		return ControlDiscovery{InvocationEndpoint: "/tmp/direct.sock"}, nil
 	})
-	connector := NewDirectRuntimeConnector("/tmp/control.json", reader)
+	connector := newDirectRuntimeConnector("/tmp/control.json", reader)
 	raw, err := connector.Resolve(context.Background(), []byte(`{
 		"dial_timeout_ms": 123,
 		"invoke_timeout_ms": 456,

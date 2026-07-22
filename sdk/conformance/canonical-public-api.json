@@ -6408,13 +6408,10 @@
         "ControlDiscoveryReader",
         "ControlDiscoveryRuntimeConnector",
         "DirectRuntimeConnector",
-        "DirectRuntimeConnectorOptions",
         "DirectRuntimeTransport",
         "ErrDaemonOffline",
         "NewCABIClient",
         "NewCABIRuntimeHost",
-        "NewDirectRuntimeConnector",
-        "NewDirectRuntimeConnectorWithOptions",
         "OpenCABIDiscoveryTransport",
         "OpenCABIRuntimeLifecycleTransport"
       ],
@@ -6470,10 +6467,6 @@
         "DirectRuntimeConnector.Close",
         "DirectRuntimeConnector.Handshake",
         "DirectRuntimeConnector.Resolve",
-        "DirectRuntimeConnectorOptions.CloseHandleTransport",
-        "DirectRuntimeConnectorOptions.ControlPath",
-        "DirectRuntimeConnectorOptions.HandleTransport",
-        "DirectRuntimeConnectorOptions.Reader",
         "DirectRuntimeTransport.AwaitHandle",
         "DirectRuntimeTransport.CancelHandle",
         "DirectRuntimeTransport.Close",
@@ -7108,14 +7101,6 @@
           "removal_phase": "quarantined",
           "reason": "Direct runtime exports are EasyNet daemon provider/source-compatibility surface, not canonical SDK capability evidence."
         },
-        "DirectRuntimeConnectorOptions": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Direct runtime exports are EasyNet daemon provider/source-compatibility surface, not canonical SDK capability evidence."
-        },
         "DirectRuntimeTransport": {
           "canonical_replacement": [
             "capability_inventory.native_runtime"
@@ -7147,22 +7132,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "NewDirectRuntimeConnector": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Direct runtime exports are EasyNet daemon provider/source-compatibility surface, not canonical SDK capability evidence."
-        },
-        "NewDirectRuntimeConnectorWithOptions": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Direct runtime exports are EasyNet daemon provider/source-compatibility surface, not canonical SDK capability evidence."
         },
         "OpenCABIDiscoveryTransport": {
           "canonical_replacement": [
@@ -7520,38 +7489,6 @@
           "reason": "Direct runtime exports are EasyNet daemon provider/source-compatibility surface, not canonical SDK capability evidence."
         },
         "DirectRuntimeConnector.Resolve": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Direct runtime exports are EasyNet daemon provider/source-compatibility surface, not canonical SDK capability evidence."
-        },
-        "DirectRuntimeConnectorOptions.CloseHandleTransport": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Direct runtime exports are EasyNet daemon provider/source-compatibility surface, not canonical SDK capability evidence."
-        },
-        "DirectRuntimeConnectorOptions.ControlPath": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Direct runtime exports are EasyNet daemon provider/source-compatibility surface, not canonical SDK capability evidence."
-        },
-        "DirectRuntimeConnectorOptions.HandleTransport": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Direct runtime exports are EasyNet daemon provider/source-compatibility surface, not canonical SDK capability evidence."
-        },
-        "DirectRuntimeConnectorOptions.Reader": {
           "canonical_replacement": [
             "capability_inventory.native_runtime"
           ],
@@ -15434,7 +15371,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "6275409fa01a94b40ae144f843d641d92342725fe53452d14329b386df703be7",
+          "sha256": "889363c60b2d3e1b5bf82a7a573ba41bd9126764dc2c7803c91680c542bd86b6",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15540,7 +15477,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "6275409fa01a94b40ae144f843d641d92342725fe53452d14329b386df703be7",
+          "sha256": "889363c60b2d3e1b5bf82a7a573ba41bd9126764dc2c7803c91680c542bd86b6",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15626,7 +15563,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "6275409fa01a94b40ae144f843d641d92342725fe53452d14329b386df703be7",
+          "sha256": "889363c60b2d3e1b5bf82a7a573ba41bd9126764dc2c7803c91680c542bd86b6",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15732,7 +15669,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "6275409fa01a94b40ae144f843d641d92342725fe53452d14329b386df703be7",
+          "sha256": "889363c60b2d3e1b5bf82a7a573ba41bd9126764dc2c7803c91680c542bd86b6",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -16084,7 +16021,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "6275409fa01a94b40ae144f843d641d92342725fe53452d14329b386df703be7",
+          "sha256": "889363c60b2d3e1b5bf82a7a573ba41bd9126764dc2c7803c91680c542bd86b6",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -16742,7 +16679,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "6275409fa01a94b40ae144f843d641d92342725fe53452d14329b386df703be7",
+          "sha256": "889363c60b2d3e1b5bf82a7a573ba41bd9126764dc2c7803c91680c542bd86b6",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -18165,11 +18102,6 @@
       "DirectRuntimeConnector.Close": "0d464a887ccc7c5ec145a263e02280f50af96ec1b1fd7e770a900867d4a8ba14",
       "DirectRuntimeConnector.Handshake": "f32ce8e8c46b438eeb492b2beed442f04602161f086ae1789c9dc5e8f6d8091d",
       "DirectRuntimeConnector.Resolve": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86",
-      "DirectRuntimeConnectorOptions": "821bd3daf10a5527a31a25bbff3390da5ea35a498e1cd2218037f66156f42c22",
-      "DirectRuntimeConnectorOptions.CloseHandleTransport": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903",
-      "DirectRuntimeConnectorOptions.ControlPath": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "DirectRuntimeConnectorOptions.HandleTransport": "0b1930560dddd8877eca63b269e3ed1d9091d8c2c1b93754f5b1ef3576c87d40",
-      "DirectRuntimeConnectorOptions.Reader": "4bc01a1f2836c0b04080099f08b1ddd4bb8adf283afa60ea9c0b4c2ec6b5074f",
       "DirectRuntimeTransport": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "DirectRuntimeTransport.AwaitHandle": "40f76e3162e9942e3466c99ac797aad7aa2ca4a5cb712891e1a2a45a201ebf19",
       "DirectRuntimeTransport.CancelHandle": "11eefa42c1cf877a03870312221675ef6a3076251fe0e133e06a562ec0c95940",
@@ -18625,8 +18557,6 @@
       "NewClient": "fea27df51c76ac18cc7b713c67d2f578fbf5bc303f8de0670caa526fe328ccd1",
       "NewDelegationProofFromMetadata": "3e9c6b26655be4d8bb727a55e2d154406ba5a93bf591fda88c5e89afc80b9e63",
       "NewDiagnosticsReportFromJSON": "e9530ce5ef8fcac1488f7333ddf3cf20cea6af2c975870cf0ff533276d2824eb",
-      "NewDirectRuntimeConnector": "4ea7602de28ef6a5419752734ff7bf2df89fad088b0f249f1d8ba48e8a10637d",
-      "NewDirectRuntimeConnectorWithOptions": "4492e87a05a7099e14c3e5b932f03860b9c67d12c7a5bb622dd4090503f9ce20",
       "NewDirectoryClient": "3e70a53f6b9914338a9254f5c9c6ac1bd5ab6f0eb42e80055f5613f142417d95",
       "NewDirectoryCursor": "7b8a37cd41d02e031b11cb6e80a2959dcf1ca8e45256dbd01731e61106acd094",
       "NewEndpointsFromJSON": "f646c3dde431ecbb87e4f2a4a21a735d5671b1219abf7b600661719845146dbc",
@@ -23755,7 +23685,7 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/direct_runtime.go",
-      "sha256": "6275409fa01a94b40ae144f843d641d92342725fe53452d14329b386df703be7",
+      "sha256": "889363c60b2d3e1b5bf82a7a573ba41bd9126764dc2c7803c91680c542bd86b6",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/go/connection.go",
       "interface_sha256": "8a81c30b8f3d50915a70ff45ee9d81ee363ac4a4c0a34fec50040c56c6f15e8a",

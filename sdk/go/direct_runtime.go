@@ -45,37 +45,30 @@ type DirectRuntimeConnector struct {
 	closed               bool
 }
 
-// DirectRuntimeConnectorOptions configures a concrete direct runtime
-// connector. HandleTransport is the SDK-owned Runtime Core surface for
-// prepare/submit/handle operations; direct gRPC remains the invoke/stream/bidi
-// transport.
-type DirectRuntimeConnectorOptions struct {
-	ControlPath          string
-	Reader               ControlDiscoveryReader
-	HandleTransport      RuntimeTransport
-	CloseHandleTransport bool
+type directRuntimeConnectorOptions struct {
+	controlPath          string
+	reader               ControlDiscoveryReader
+	handleTransport      RuntimeTransport
+	closeHandleTransport bool
 }
 
-// NewDirectRuntimeConnector creates a direct Runtime connector.
-func NewDirectRuntimeConnector(controlPath string, reader ControlDiscoveryReader) *DirectRuntimeConnector {
-	return NewDirectRuntimeConnectorWithOptions(DirectRuntimeConnectorOptions{
-		ControlPath: controlPath,
-		Reader:      reader,
+func newDirectRuntimeConnector(controlPath string, reader ControlDiscoveryReader) *DirectRuntimeConnector {
+	return newDirectRuntimeConnectorWithOptions(directRuntimeConnectorOptions{
+		controlPath: controlPath,
+		reader:      reader,
 	})
 }
 
-// NewDirectRuntimeConnectorWithOptions creates a direct Runtime
-// connector with explicit handle-transport ownership.
-func NewDirectRuntimeConnectorWithOptions(options DirectRuntimeConnectorOptions) *DirectRuntimeConnector {
-	reader := options.Reader
+func newDirectRuntimeConnectorWithOptions(options directRuntimeConnectorOptions) *DirectRuntimeConnector {
+	reader := options.reader
 	if reader == nil {
 		reader = fileControlDiscoveryReader{}
 	}
 	return &DirectRuntimeConnector{
-		controlPath:          options.ControlPath,
+		controlPath:          options.controlPath,
 		reader:               reader,
-		handle:               options.HandleTransport,
-		closeHandleTransport: options.CloseHandleTransport,
+		handle:               options.handleTransport,
+		closeHandleTransport: options.closeHandleTransport,
 		transports:           map[*DirectRuntimeTransport]struct{}{},
 	}
 }
