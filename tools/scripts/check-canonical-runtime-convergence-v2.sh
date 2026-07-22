@@ -3787,6 +3787,7 @@ check_product_identity_boundary_contract() {
   bash "$ROOT/tools/scripts/check-current-realm-hub-context-boundary.sh" >/dev/null
   bash "$ROOT/tools/scripts/check-call-create-participant-identity-boundary.sh" >/dev/null
   bash "$ROOT/tools/scripts/check-runtime-state-read-subject-boundary.sh" >/dev/null
+  bash "$ROOT/tools/scripts/check-status-pairing-state-boundary.sh" >/dev/null
 }
 
 check_axon_product_protocol_boundary_contract() {

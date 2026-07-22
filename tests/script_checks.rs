@@ -332,6 +332,13 @@ fn runtime_state_read_subject_boundary_script_holds() {
 }
 
 #[test]
+fn status_pairing_state_boundary_script_holds() {
+    // Pins runtime status pairing diagnostics to explicit paired/unpaired/invalid
+    // states. Invalid credentials must not render as ordinary unpaired setup.
+    run_bash_script("tests/scripts/test_check_status_pairing_state_boundary.sh");
+}
+
+#[test]
 fn runtime_abilities_manifest_boundary_script_holds() {
     // Pins per-agent ability discovery to authored manifests under
     // AgentDirectory. Missing roots must not synthesize chat abilities.

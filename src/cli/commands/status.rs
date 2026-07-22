@@ -37,34 +37,7 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
     output::info(&format!("EasyNet CLI v{}", env!("CARGO_PKG_VERSION")));
     render_connection_state();
 
-    // Pairing block — addressed by URA (the ontology-canonical
-    // identity per RFC-001 §3.2). The transport URL
-    // (creds.hub_endpoint) is intentionally NOT shown: it is an
-    // implementation detail. Same rule the `easynet --help` banner
-    // applies. `realm` is the v4.1.4 wire field name; the in-memory
-    // field is still `tenant_id` for migration reasons but the
-    // rendered label tracks the spec.
-    if let Ok(creds) = config::load_credentials() {
-        output::info("Device pairing:");
-        let realm = creds.realm_str();
-        let hub_ura = ura::hub_ura(realm);
-        let device_ura = ura::device_ura(realm, &creds.node_id);
-        // Per RFC-001 §3.2, hub / user / device are all first-class
-        // agents; the user row must use the immutable product user id,
-        // not the display username slug.
-        let user_ura = creds.user_ura().ok();
-        let mut rows: Vec<(&str, &str)> = vec![("Hub", hub_ura.as_str())];
-        if let Some(ref u) = user_ura {
-            rows.push(("Current user", u.as_str()));
-        }
-        rows.push(("Current device", device_ura.as_str()));
-        rows.push(("Realm", realm));
-        output::kv_section(&rows);
-        eprintln!();
-    } else {
-        output::info("Device: not paired (run 'easynet device join <token>')");
-        eprintln!();
-    }
+    render_pairing_state(StatusPairingState::load());
 
     let lifecycle = RuntimeLifecycleService::new();
     let report = lifecycle.status()?;
@@ -221,6 +194,78 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+enum StatusPairingState {
+    Paired(config::Credentials),
+    Unpaired,
+    Invalid { reason: String },
+}
+
+impl StatusPairingState {
+    fn load() -> Self {
+        Self::from_credentials_result(config::load_credentials_optional())
+    }
+
+    fn from_credentials_result(result: anyhow::Result<Option<config::Credentials>>) -> Self {
+        match result {
+            Ok(Some(credentials)) => Self::Paired(credentials),
+            Ok(None) => Self::Unpaired,
+            Err(error) => Self::Invalid {
+                reason: format!("{error:#}"),
+            },
+        }
+    }
+
+    #[cfg(test)]
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Paired(_) => "paired",
+            Self::Unpaired => "unpaired",
+            Self::Invalid { .. } => "invalid",
+        }
+    }
+}
+
+fn render_pairing_state(state: StatusPairingState) {
+    match state {
+        StatusPairingState::Paired(creds) => render_paired_credentials(&creds),
+        StatusPairingState::Unpaired => {
+            output::info("Device: not paired (run 'easynet device join <token>')");
+            eprintln!();
+        }
+        StatusPairingState::Invalid { reason } => {
+            output::info(
+                "Device: credentials invalid (run 'easynet device join <token>' to re-pair)",
+            );
+            output::kv_section(&[("Reason", reason.as_str())]);
+            eprintln!();
+        }
+    }
+}
+
+// Pairing block — addressed by URA (the ontology-canonical identity per
+// RFC-001 §3.2). The transport URL (creds.hub_endpoint) is intentionally NOT
+// shown: it is an implementation detail. Same rule the `easynet --help` banner
+// applies. `realm` is the v4.1.4 wire field name; the in-memory field is still
+// `tenant_id` for migration reasons but the rendered label tracks the spec.
+fn render_paired_credentials(creds: &config::Credentials) {
+    output::info("Device pairing:");
+    let realm = creds.realm_str();
+    let hub_ura = ura::hub_ura(realm);
+    let device_ura = ura::device_ura(realm, &creds.node_id);
+    // Per RFC-001 §3.2, hub / user / device are all first-class agents; the user
+    // row must use the immutable product user id, not the display username slug.
+    let user_ura = creds.user_ura().ok();
+    let mut rows: Vec<(&str, &str)> = vec![("Hub", hub_ura.as_str())];
+    if let Some(ref u) = user_ura {
+        rows.push(("Current user", u.as_str()));
+    }
+    rows.push(("Current device", device_ura.as_str()));
+    rows.push(("Realm", realm));
+    output::kv_section(&rows);
+    eprintln!();
+}
+
 fn render_connection_state() {
     let snapshot = join_connection_state::latest_snapshot();
     output::info("Connection state:");
@@ -289,6 +334,54 @@ fn require_fleet_directory_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn complete_credentials() -> config::Credentials {
+        config::Credentials {
+            node_id: "device-a".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.example:7700".to_string(),
+            realm: "localhost".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".to_string()),
+            user_id: Some("user-alice".to_string()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        }
+    }
+
+    #[test]
+    fn status_pairing_state_reports_paired_credentials() {
+        let state = StatusPairingState::from_credentials_result(Ok(Some(complete_credentials())));
+
+        assert_eq!(state.label(), "paired");
+    }
+
+    #[test]
+    fn status_pairing_state_reports_unpaired_only_for_missing_credentials() {
+        let state = StatusPairingState::from_credentials_result(Ok(None));
+
+        assert_eq!(state.label(), "unpaired");
+    }
+
+    #[test]
+    fn status_pairing_state_rejects_malformed_credentials_as_invalid() {
+        let state = StatusPairingState::from_credentials_result(Err(anyhow::anyhow!(
+            "parse credentials from /tmp/credentials.json: expected value"
+        )));
+
+        assert_eq!(state.label(), "invalid");
+        match state {
+            StatusPairingState::Invalid { reason } => {
+                assert!(
+                    reason.contains("parse credentials"),
+                    "invalid state must preserve reason: {reason}"
+                );
+            }
+            other => panic!("expected invalid state, got {other:?}"),
+        }
+    }
 
     #[test]
     fn fleet_directory_failure_is_not_projected_as_empty_nodes() {
