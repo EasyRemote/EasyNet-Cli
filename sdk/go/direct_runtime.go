@@ -1719,9 +1719,9 @@ func unsupportedDirectCancellation(endpoint, runtimeID, capability string) *SDKE
 	}
 }
 
-func durationFromMillis(value int64, fallback time.Duration) time.Duration {
+func durationFromMillis(value int64, defaultValue time.Duration) time.Duration {
 	if value <= 0 {
-		return fallback
+		return defaultValue
 	}
 	return time.Duration(value) * time.Millisecond
 }

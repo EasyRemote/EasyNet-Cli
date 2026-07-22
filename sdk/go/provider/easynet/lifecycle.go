@@ -22,7 +22,7 @@ type DiscoverOptions = contract.DiscoverOptions
 type StopOptions = contract.StopOptions
 
 // Lifecycle is the EasyNet provider facade over one canonical RuntimeHost.
-// It owns no lifecycle state and performs no fallback provider selection.
+// It owns no lifecycle state and performs no implicit provider selection.
 type Lifecycle struct {
 	host *runtimesdk.RuntimeHost
 }

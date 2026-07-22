@@ -14,8 +14,8 @@ import (
 
 const (
 	// daemonKeyServiceProtocolVersion is the only accepted managed-signing
-	// protocol shape. v2 adds purpose-bound signing intents; there is no v1
-	// request fallback.
+	// protocol shape. v2 adds purpose-bound signing intents; v1 downgrade is
+	// rejected.
 	daemonKeyServiceProtocolVersion = 2
 	// daemonKeyServiceMaxCanonicalSigningBytes is the canonical runtime
 	// signing boundary. Base64 expands a maximum payload to roughly 86 MiB;

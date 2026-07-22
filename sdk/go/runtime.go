@@ -934,7 +934,7 @@ func (r RuntimeReceipt) HasCausalAnchor() bool {
 }
 
 // LifecycleState returns the canonical typed state carried by this receipt.
-// Receipt projections must never use UNSPECIFIED as a fallback.
+// Receipt projections must never default to UNSPECIFIED.
 func (r RuntimeReceipt) LifecycleState() (InvocationLifecycleState, error) {
 	state, err := ParseInvocationLifecycleState(r.State)
 	if err != nil {

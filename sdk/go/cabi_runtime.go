@@ -519,8 +519,8 @@ func (t *cabiRuntimeLifecycleTransport) detachCHandle(handle uint64) error {
 	return nil
 }
 
-func (t *cabiRuntimeLifecycleTransport) lastErrorOrCode(code int32, fallback string) error {
-	return cabiRuntimeLastErrorOrCode(t.symbols, code, fallback)
+func (t *cabiRuntimeLifecycleTransport) lastErrorOrCode(code int32, operation string) error {
+	return cabiRuntimeLastErrorOrCode(t.symbols, code, operation)
 }
 
 func (t *cabiRuntimeLifecycleTransport) openClientHandle(runtimeHostHandle uint64, profile string) (uint64, error) {
@@ -1042,8 +1042,8 @@ func (t *cabiRuntimeTransport) removeBidi(bidi *cabiBidiTransport) {
 	t.mu.Unlock()
 }
 
-func (t *cabiRuntimeTransport) lastErrorOrCode(code int32, fallback string) error {
-	return cabiRuntimeLastErrorOrCode(t.symbols, code, fallback)
+func (t *cabiRuntimeTransport) lastErrorOrCode(code int32, operation string) error {
+	return cabiRuntimeLastErrorOrCode(t.symbols, code, operation)
 }
 
 type cabiStreamTransport struct {
@@ -1628,14 +1628,14 @@ func bindCABIRuntimeSymbols(library unsafe.Pointer) (cabiRuntimeSymbols, error) 
 	return symbols, nil
 }
 
-func cabiRuntimeLastErrorOrCode(symbols cabiRuntimeSymbols, code int32, fallback string) error {
+func cabiRuntimeLastErrorOrCode(symbols cabiRuntimeSymbols, code int32, operation string) error {
 	var out *C.char
 	errCode := int32(C.runtime_cabi_call_last_error_json(symbols.lastErrorJSON, &out))
 	if errCode == 0 && out != nil {
 		raw := cabiTakeCString(symbols.stringFree, out)
-		return cabiErrorFromLastErrorJSON(raw, true, code, fallback)
+		return cabiErrorFromLastErrorJSON(raw, true, code, operation)
 	}
-	return cabiErrorFromLastErrorJSON(nil, false, code, fallback)
+	return cabiErrorFromLastErrorJSON(nil, false, code, operation)
 }
 
 func cabiWithCString(payload []byte, call func(*C.char) C.int32_t) C.int32_t {
