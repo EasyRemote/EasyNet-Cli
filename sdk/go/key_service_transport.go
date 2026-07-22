@@ -34,31 +34,25 @@ var daemonKeyServiceForbiddenCustodyFields = [...]string{
 }
 
 var (
-	// ErrDaemonKeyServiceNotFound identifies a missing public projection in
-	// the daemon-owned key service.
-	ErrDaemonKeyServiceNotFound = errors.New("daemon key service: entry not found")
-	// ErrDaemonKeyServiceUnavailable identifies an unavailable local daemon
-	// key-service endpoint.
-	ErrDaemonKeyServiceUnavailable = errors.New("daemon key service unavailable")
+	errDaemonKeyServiceNotFound    = errors.New("daemon key service: entry not found")
+	errDaemonKeyServiceUnavailable = errors.New("daemon key service unavailable")
 )
 
-// DaemonKeyServiceRejection preserves the daemon's stable rejection kind
-// without forcing callers to parse human-readable messages.
-type DaemonKeyServiceRejection struct {
-	Kind    string
-	Message string
+type daemonKeyServiceRejection struct {
+	kind    string
+	message string
 }
 
-func (e *DaemonKeyServiceRejection) Error() string {
+func (e *daemonKeyServiceRejection) Error() string {
 	if e == nil {
 		return "daemon key service rejection"
 	}
-	return fmt.Sprintf("daemon key service rejected request (%s): %s", e.Kind, e.Message)
+	return fmt.Sprintf("daemon key service rejected request (%s): %s", e.kind, e.message)
 }
 
-func (e *DaemonKeyServiceRejection) Unwrap() error {
-	if e != nil && e.Kind == "not_found" {
-		return ErrDaemonKeyServiceNotFound
+func (e *daemonKeyServiceRejection) Unwrap() error {
+	if e != nil && e.kind == "not_found" {
+		return errDaemonKeyServiceNotFound
 	}
 	return nil
 }
@@ -88,7 +82,7 @@ func (c daemonKeyServiceClient) call(request map[string]any) (map[string]json.Ra
 	dialer := net.Dialer{Deadline: deadline}
 	connection, err := dialer.Dial("unix", c.socketPath)
 	if err != nil {
-		cause := fmt.Errorf("%w at %s: %v", ErrDaemonKeyServiceUnavailable, c.socketPath, err)
+		cause := fmt.Errorf("%w at %s: %v", errDaemonKeyServiceUnavailable, c.socketPath, err)
 		return nil, &SDKError{
 			Code:      ErrDaemonOffline,
 			Stage:     "key_service",
@@ -245,7 +239,7 @@ func daemonKeyServiceRejected(kind, message string) error {
 	case "base64", "serde", "corrupt", "bad_seed_len":
 		code = ErrProtocol
 	}
-	rejection := &DaemonKeyServiceRejection{Kind: kind, Message: message}
+	rejection := &daemonKeyServiceRejection{kind: kind, message: message}
 	return &SDKError{
 		Code:      code,
 		Stage:     "key_service",

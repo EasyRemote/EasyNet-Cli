@@ -177,9 +177,9 @@ func TestManagedSigningClientProjectsTypedLifecycleRejection(t *testing.T) {
 	if !IsCode(err, ErrPolicyDenied) {
 		t.Fatalf("Sign error = %v, want policy-denied SDK error", err)
 	}
-	var rejection *DaemonKeyServiceRejection
-	if !errors.As(err, &rejection) || rejection.Kind != "lifecycle" {
-		t.Fatalf("Sign rejection = %#v, want lifecycle kind", rejection)
+	var sdkError *SDKError
+	if !errors.As(err, &sdkError) || sdkError.Details["kind"] != "lifecycle" {
+		t.Fatalf("Sign rejection details = %#v, want lifecycle kind", sdkError)
 	}
 }
 
