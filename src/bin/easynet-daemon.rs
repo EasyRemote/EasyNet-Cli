@@ -46,6 +46,7 @@ use easynet_cli::daemon::control::boot_events::{BootBus, BootEvent};
 use easynet_cli::daemon::control::discovery::DaemonIdentity;
 use easynet_cli::daemon::control::{discovery, server};
 use easynet_cli::daemon::execution::loop_instance::KernelLoopInvocationDriver;
+use easynet_cli::daemon::execution::runtime_identity::LocalRuntimeInvocationIdentity;
 use easynet_cli::daemon::execution::schedule::ScheduleService;
 use easynet_cli::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use easynet_cli::daemon::persistence::config;
@@ -269,12 +270,9 @@ async fn main() -> anyhow::Result<()> {
     }
     boot_bus.emit_ok("tenant-stores");
 
+    let runtime_invocation_identity = local_runtime_invocation_identity(&daemon_config)?;
+
     boot_bus.emit_started("loop-controller");
-    let local_node = std::env::var("EASYNET_NODE_ID")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(NodeId::new)
-        .unwrap_or_else(|| NodeId::new("self"));
     if media_resource_bootstrap_enabled() {
         match config::load_credentials() {
             Ok(creds) => {
@@ -296,15 +294,21 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("[daemon] media resource bootstrap skipped: {ENV_BOOTSTRAP_MEDIA_RESOURCES}=0");
     }
     let kernel_api: Arc<dyn KernelApi> = Arc::clone(&kernel) as Arc<dyn KernelApi>;
-    let loop_driver = Arc::new(KernelLoopInvocationDriver::new(
-        Arc::clone(&kernel_api),
-        local_node.clone(),
-    ));
-    if let Err(e) = kernel.loop_service().install_driver(loop_driver) {
-        eprintln!("[daemon] loop controller install failed: {e:#}");
-    }
-    if let Err(e) = kernel.loop_service().resume_inflight() {
-        eprintln!("[daemon] loop resume failed: {e:#}");
+    if let Some(identity) = runtime_invocation_identity.clone() {
+        let loop_driver = Arc::new(KernelLoopInvocationDriver::new(
+            Arc::clone(&kernel_api),
+            identity,
+        ));
+        if let Err(e) = kernel.loop_service().install_driver(loop_driver) {
+            eprintln!("[daemon] loop controller install failed: {e:#}");
+        }
+        if let Err(e) = kernel.loop_service().resume_inflight() {
+            eprintln!("[daemon] loop resume failed: {e:#}");
+        }
+    } else {
+        eprintln!(
+            "[daemon] loop controller has no local device invocation identity; driver not installed"
+        );
     }
     boot_bus.emit_ok("loop-controller");
 
@@ -600,8 +604,13 @@ async fn main() -> anyhow::Result<()> {
     // to session.attach see the same lifecycle they would
     // see for a Client-initiated invoke.
     boot_bus.emit_started("schedule-tick");
-    spawn_schedule_tick(kernel_for_tick, schedule_for_tick);
-    boot_bus.emit_ok("schedule-tick");
+    if let Some(identity) = runtime_invocation_identity {
+        spawn_schedule_tick(kernel_for_tick, schedule_for_tick, identity);
+        boot_bus.emit_ok("schedule-tick");
+    } else {
+        eprintln!("[daemon] schedule tick has no local device invocation identity; skipped");
+        boot_bus.emit_skipped("schedule-tick");
+    }
 
     // RFC-006-B v0.6 — Pages reference system listener.
     //
@@ -747,6 +756,16 @@ fn ready_daemon_identity(config: &DaemonConfig) -> anyhow::Result<DaemonIdentity
     })
 }
 
+fn local_runtime_invocation_identity(
+    config: &DaemonConfig,
+) -> anyhow::Result<Option<LocalRuntimeInvocationIdentity>> {
+    let identity = ready_daemon_identity(config)?;
+    let Some(node_id) = identity.node_id else {
+        return Ok(None);
+    };
+    LocalRuntimeInvocationIdentity::new(identity.realm, NodeId::new(node_id)).map(Some)
+}
+
 fn media_resource_bootstrap_enabled() -> bool {
     match std::env::var(ENV_BOOTSTRAP_MEDIA_RESOURCES) {
         Ok(value) => !matches!(
@@ -817,7 +836,7 @@ fn open_invocation_ledger() -> Option<Arc<axon_sdk::invocation::InvocationLedger
 ///
 ///   ability       = "<target_agent>.chat"
 ///   caller        = `_system.local`
-///   callee        = local node URA (v1 single-node)
+///   callee        = target device URA in the daemon-configured realm
 ///   subject       = schedule URA
 ///   nonce         = fresh
 ///   causal_context = None   (v1; v2 will cite a canonical prior receipt)
@@ -834,7 +853,11 @@ fn open_invocation_ledger() -> Option<Arc<axon_sdk::invocation::InvocationLedger
 /// the cron expression's resolution is finer than the tick period.
 /// Daemon restart loses this state — schedules due since the last
 /// fire will refire once on resume per their misfire policy.
-fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
+fn spawn_schedule_tick(
+    kernel: Arc<Kernel>,
+    schedule: Arc<ScheduleService>,
+    identity: LocalRuntimeInvocationIdentity,
+) {
     const TICK_PERIOD: Duration = Duration::from_secs(15);
     tokio::spawn(async move {
         let last_fire: Arc<Mutex<HashMap<ScheduleId, i64>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -900,13 +923,8 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                         fire.schedule_id, fire.fire_at, fire.catch_up
                     ),
                 };
-                let local_device_ura =
-                    easynet_cli::core::ura::device_ura("default", entry.target_node.as_str());
-                let schedule_subject_ura = easynet_cli::core::ura::resource_dot_ura(
-                    "default",
-                    &format!("schedule.{}", fire.schedule_id.as_str()),
-                    "",
-                );
+                let (local_device_ura, schedule_subject_ura) =
+                    schedule_tick_invocation_uras(&identity, &entry.target_node, &fire.schedule_id);
                 let payload = match serde_json::to_vec(&serde_json::json!({"prompt": prompt})) {
                     Ok(payload) => payload,
                     Err(err) => {
@@ -952,6 +970,17 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
             }
         }
     });
+}
+
+fn schedule_tick_invocation_uras(
+    identity: &LocalRuntimeInvocationIdentity,
+    target_node: &NodeId,
+    schedule_id: &ScheduleId,
+) -> (String, String) {
+    (
+        identity.device_ura_for_node(target_node.as_str()),
+        identity.resource_subject_ura(&format!("schedule.{}", schedule_id.as_str()), ""),
+    )
 }
 
 #[cfg(test)]
@@ -1103,6 +1132,68 @@ hub_endpoint = "https://hub.example:50443"
             }),
             "device ready discovery must advertise paired user signer readiness"
         );
+    }
+
+    #[test]
+    fn local_runtime_invocation_identity_uses_paired_credentials_not_env() {
+        let _home = TestHomeGuard::new();
+        std::env::set_var("EASYNET_NODE_ID", "stale-env-node");
+        write_daemon_config(
+            r#"[daemon]
+mode = "device"
+realm = "tenant-a"
+hub_endpoint = "https://hub.example:50443"
+"#,
+        );
+        config::save_credentials(&paired_credentials("tenant-a", "credential-node"))
+            .expect("save paired credentials");
+        let config = DaemonConfig::load(&default_config_path()).expect("load config");
+
+        let identity = local_runtime_invocation_identity(&config)
+            .expect("runtime identity")
+            .expect("device identity");
+
+        assert_eq!(
+            identity.local_device_ura(),
+            "easynet:///r/tenant-a/device/credential-node"
+        );
+        assert!(!identity.local_device_ura().contains("stale-env-node"));
+        assert!(!identity.local_device_ura().contains("/r/default/"));
+    }
+
+    #[test]
+    fn local_runtime_invocation_identity_is_absent_for_hub_without_device_node() {
+        let _home = TestHomeGuard::new();
+        write_daemon_config(
+            r#"[daemon]
+mode = "hub"
+realm = "tenant-a"
+listen_tcp = "127.0.0.1:50443"
+tls_cert_pem = "/tmp/cert.pem"
+tls_key_pem = "/tmp/key.pem"
+"#,
+        );
+        let config = DaemonConfig::load(&default_config_path()).expect("load config");
+
+        let identity = local_runtime_invocation_identity(&config).expect("runtime identity");
+
+        assert!(identity.is_none());
+    }
+
+    #[test]
+    fn schedule_tick_invocation_uras_use_runtime_realm() {
+        let identity =
+            LocalRuntimeInvocationIdentity::new("tenant-a", NodeId::new("local-node")).unwrap();
+        let target_node = NodeId::new("target-node");
+        let schedule_id = ScheduleId::new("nightly");
+
+        let (callee, subject) =
+            schedule_tick_invocation_uras(&identity, &target_node, &schedule_id);
+
+        assert_eq!(callee, "easynet:///r/tenant-a/device/target-node");
+        assert_eq!(subject, "easynet:///r/tenant-a/resource/schedule.nightly");
+        assert!(!callee.contains("/r/default/"));
+        assert!(!subject.contains("/r/default/"));
     }
 
     #[test]

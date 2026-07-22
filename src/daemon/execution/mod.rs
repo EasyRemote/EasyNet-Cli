@@ -47,5 +47,6 @@ pub mod mcp;
 pub mod mission;
 pub mod permission;
 pub mod pty;
+pub mod runtime_identity;
 pub mod schedule;
 pub mod session;

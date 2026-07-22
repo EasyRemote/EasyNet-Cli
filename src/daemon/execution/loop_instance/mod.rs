@@ -21,8 +21,9 @@ use serde_json::{json, Value};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::core::domain::{AgentId, LoopId, LoopInstance, LoopState, NodeId, TenantId};
+use crate::core::domain::{AgentId, LoopId, LoopInstance, LoopState, TenantId};
 use crate::daemon::boot::kernel::api::KernelApi;
+use crate::daemon::execution::runtime_identity::LocalRuntimeInvocationIdentity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopInvocationKind {
@@ -52,12 +53,26 @@ pub trait LoopInvocationDriver: Send + Sync {
 
 pub struct KernelLoopInvocationDriver {
     kernel: Arc<dyn KernelApi>,
-    local_node: NodeId,
+    identity: LocalRuntimeInvocationIdentity,
 }
 
 impl KernelLoopInvocationDriver {
-    pub fn new(kernel: Arc<dyn KernelApi>, local_node: NodeId) -> Self {
-        Self { kernel, local_node }
+    pub fn new(kernel: Arc<dyn KernelApi>, identity: LocalRuntimeInvocationIdentity) -> Self {
+        Self { kernel, identity }
+    }
+
+    fn invocation_uras(
+        &self,
+        loop_id: &LoopId,
+        iter: u32,
+        kind: LoopInvocationKind,
+    ) -> (String, String) {
+        let local_device_ura = self.identity.local_device_ura();
+        let loop_subject_ura = self.identity.resource_subject_ura(
+            &format!("loop.{}", loop_id.as_str()),
+            &format!("{}/{}", kind.as_str(), iter),
+        );
+        (local_device_ura, loop_subject_ura)
     }
 }
 
@@ -70,12 +85,7 @@ impl LoopInvocationDriver for KernelLoopInvocationDriver {
         prompt: &str,
         kind: LoopInvocationKind,
     ) -> anyhow::Result<String> {
-        let local_device_ura = crate::core::ura::device_ura("default", self.local_node.as_str());
-        let loop_subject_ura = crate::core::ura::resource_dot_ura(
-            "default",
-            &format!("loop.{}", loop_id.as_str()),
-            &format!("{}/{}", kind.as_str(), iter),
-        );
+        let (local_device_ura, loop_subject_ura) = self.invocation_uras(loop_id, iter, kind);
         let payload = serde_json::to_vec(&json!({ "prompt": prompt }))
             .context("encode loop chat invocation payload")?;
         let request = self.kernel.prepare_local_system_rpc(
@@ -767,6 +777,10 @@ impl std::fmt::Debug for LoopService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::domain::{
+        DiscussRoom, NodeId, PermissionDecision, PermissionId, PermissionRequest, RoomId,
+        ScheduleEntry, ScheduleId, Session, SessionId,
+    };
     use std::collections::VecDeque;
 
     #[derive(Clone)]
@@ -981,6 +995,101 @@ mod tests {
             format!("{err:#}").contains("LoopService cache lock poisoned"),
             "{err:#}"
         );
+    }
+
+    #[test]
+    fn kernel_loop_driver_projects_configured_realm_into_invocation_tuple() {
+        struct UnusedKernel;
+
+        impl KernelApi for UnusedKernel {
+            fn prepare_local_system_rpc(
+                &self,
+                _callee_ura: &str,
+                _ability: &str,
+                _subject_ura: &str,
+                _payload: Vec<u8>,
+            ) -> anyhow::Result<axon_sdk::invocation::DescriptorBoundInvocationRequest>
+            {
+                unreachable!("projection test must not enter KernelApi")
+            }
+
+            fn invoke(
+                &self,
+                _request: axon_sdk::invocation::DescriptorBoundInvocationRequest,
+            ) -> anyhow::Result<axon_sdk::invocation::FinalizedInvocation> {
+                unreachable!("projection test must not enter KernelApi")
+            }
+
+            fn list_active_sessions(&self) -> anyhow::Result<Vec<Session>> {
+                unreachable!("projection test must not enter KernelApi")
+            }
+
+            fn get_session(&self, _id: &SessionId) -> anyhow::Result<Option<Session>> {
+                unreachable!("projection test must not enter KernelApi")
+            }
+
+            fn pending_permission_requests(&self) -> anyhow::Result<Vec<PermissionRequest>> {
+                unreachable!("projection test must not enter KernelApi")
+            }
+
+            fn decide_permission(
+                &self,
+                _id: &PermissionId,
+                _decision: PermissionDecision,
+            ) -> anyhow::Result<()> {
+                unreachable!("projection test must not enter KernelApi")
+            }
+
+            fn list_schedules(&self) -> anyhow::Result<Vec<ScheduleEntry>> {
+                unreachable!("projection test must not enter KernelApi")
+            }
+
+            fn add_schedule(&self, _entry: ScheduleEntry) -> anyhow::Result<ScheduleId> {
+                unreachable!("projection test must not enter KernelApi")
+            }
+
+            fn remove_schedule(&self, _id: &ScheduleId) -> anyhow::Result<()> {
+                unreachable!("projection test must not enter KernelApi")
+            }
+
+            fn enable_schedule(&self, _id: &ScheduleId, _enabled: bool) -> anyhow::Result<()> {
+                unreachable!("projection test must not enter KernelApi")
+            }
+
+            fn create_discuss_room(
+                &self,
+                _participants: Vec<String>,
+                _topic: Option<String>,
+            ) -> anyhow::Result<RoomId> {
+                unreachable!("projection test must not enter KernelApi")
+            }
+
+            fn list_discuss_rooms(&self) -> anyhow::Result<Vec<DiscussRoom>> {
+                unreachable!("projection test must not enter KernelApi")
+            }
+
+            fn loop_status(&self, _id: &LoopId) -> anyhow::Result<Option<LoopInstance>> {
+                unreachable!("projection test must not enter KernelApi")
+            }
+
+            fn cancel_loop(&self, _id: &LoopId) -> anyhow::Result<()> {
+                unreachable!("projection test must not enter KernelApi")
+            }
+        }
+
+        let identity =
+            LocalRuntimeInvocationIdentity::new("tenant-a", NodeId::new("node-a")).unwrap();
+        let driver = KernelLoopInvocationDriver::new(Arc::new(UnusedKernel), identity);
+        let (callee, subject) =
+            driver.invocation_uras(&LoopId::new("loop-a"), 7, LoopInvocationKind::Verify);
+
+        assert_eq!(callee, "easynet:///r/tenant-a/device/node-a");
+        assert_eq!(
+            subject,
+            "easynet:///r/tenant-a/resource/loop.loop-a/verify/7"
+        );
+        assert!(!callee.contains("/r/default/"));
+        assert!(!subject.contains("/r/default/"));
     }
 
     #[test]

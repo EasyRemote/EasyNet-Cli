@@ -1777,6 +1777,74 @@ check_daemon_runtime_route_inventory_contract() {
   bash "$ROOT/tools/scripts/check-architecture-convergence.sh" >/dev/null
 }
 
+check_daemon_local_runtime_identity_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local daemon="$cli_root/src/bin/easynet-daemon.rs"
+  local loop_instance="$cli_root/src/daemon/execution/loop_instance/mod.rs"
+  local identity="$cli_root/src/daemon/execution/runtime_identity.rs"
+  [[ -f "$daemon" ]] || fail "daemon entrypoint is missing: $daemon"
+  [[ -f "$loop_instance" ]] || fail "loop invocation producer is missing: $loop_instance"
+  [[ -f "$identity" ]] || fail "local runtime invocation identity object is missing: $identity"
+
+  "$PYTHON_BIN" - "$daemon" "$loop_instance" "$identity" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+daemon = Path(sys.argv[1]).read_text()
+loop_instance = Path(sys.argv[2]).read_text()
+identity = Path(sys.argv[3]).read_text()
+daemon_prod = daemon.split("#[cfg(test)]", 1)[0]
+loop_prod = loop_instance.split("#[cfg(test)]", 1)[0]
+
+for source_name, text in (("daemon", daemon_prod), ("loop_instance", loop_prod)):
+    for retired in (
+        'device_ura("default"',
+        'device_ura( "default"',
+        'resource_dot_ura("default"',
+        'resource_dot_ura( "default"',
+        'std::env::var("EASYNET_NODE_ID")',
+        'NodeId::new("self")',
+    ):
+        if retired in text:
+            raise SystemExit(f"local_runtime_identity_retired_fork:{source_name}:{retired}")
+
+for required in (
+    "pub struct LocalRuntimeInvocationIdentity",
+    "pub fn new(realm: impl Into<String>, local_node: NodeId) -> anyhow::Result<Self>",
+    "pub fn local_device_ura(&self) -> String",
+    "pub fn device_ura_for_node(&self, node_id: &str) -> String",
+    "pub fn resource_subject_ura(&self, resource_name: &str, resource_path: &str) -> String",
+    "projects_device_and_resource_uras_from_configured_realm",
+):
+    if required not in identity:
+        raise SystemExit(f"local_runtime_identity_object_missing:{required}")
+
+for required in (
+    "identity: LocalRuntimeInvocationIdentity",
+    "fn invocation_uras(",
+    "self.identity.local_device_ura()",
+    "kernel_loop_driver_projects_configured_realm_into_invocation_tuple",
+):
+    if required not in loop_instance:
+        raise SystemExit(f"loop_runtime_identity_cutover_missing:{required}")
+
+for required in (
+    "fn local_runtime_invocation_identity(",
+    "let identity = ready_daemon_identity(config)?;",
+    "return Ok(None);",
+    "LocalRuntimeInvocationIdentity::new(identity.realm, NodeId::new(node_id)).map(Some)",
+    "spawn_schedule_tick(kernel_for_tick, schedule_for_tick, identity)",
+    "boot_bus.emit_skipped(\"schedule-tick\")",
+    "schedule_tick_invocation_uras(&identity, &entry.target_node, &fire.schedule_id)",
+    "schedule_tick_invocation_uras_use_runtime_realm",
+    "local_runtime_invocation_identity_uses_paired_credentials_not_env",
+):
+    if required not in daemon:
+        raise SystemExit(f"daemon_runtime_identity_cutover_missing:{required}")
+PY
+}
+
 check_retired_federation_directory_v1_stream_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   "$PYTHON_BIN" - "$cli_root/src" "$cli_root/tests" <<'PY'
@@ -5025,6 +5093,18 @@ EOF
   if ( CLI_ROOT="$tmp/cli-browser-mock"; check_retired_browser_mock_surface_contract ) >/dev/null 2>&1; then
     fail "self-test expected retired browser placeholder ability gate to fail"
   fi
+  mkdir -p "$tmp/cli-local-runtime-identity/src/bin" \
+    "$tmp/cli-local-runtime-identity/src/daemon/execution/loop_instance" \
+    "$tmp/cli-local-runtime-identity/src/daemon/execution"
+  printf 'fn spawn_schedule_tick() { let _ = easynet_cli::core::ura::device_ura("default", "self"); }\n' \
+    > "$tmp/cli-local-runtime-identity/src/bin/easynet-daemon.rs"
+  printf 'pub struct KernelLoopInvocationDriver; impl KernelLoopInvocationDriver { fn invoke(&self) { let _ = crate::core::ura::resource_dot_ura("default", "loop.x", "body/1"); } }\n' \
+    > "$tmp/cli-local-runtime-identity/src/daemon/execution/loop_instance/mod.rs"
+  printf 'pub struct LocalRuntimeInvocationIdentity;\n' \
+    > "$tmp/cli-local-runtime-identity/src/daemon/execution/runtime_identity.rs"
+  if ( CLI_ROOT="$tmp/cli-local-runtime-identity"; check_daemon_local_runtime_identity_contract ) >/dev/null 2>&1; then
+    fail "self-test expected local runtime identity default-URA gate to fail"
+  fi
   mkdir -p "$tmp/cli-directory-fallback/sdk/go" \
     "$tmp/cli-directory-fallback/sdk/python/easynet_sdk" \
     "$tmp/cli-directory-fallback/sdk/python/tests"
@@ -5790,6 +5870,7 @@ EOF
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
   check_daemon_runtime_route_inventory_contract
+  check_daemon_local_runtime_identity_contract
   check_route_resolver_descriptor_ref_selector_contract
   check_namespace_resolver_authority_projection_contract
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
@@ -5861,6 +5942,7 @@ check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
 check_daemon_runtime_route_inventory_contract
+check_daemon_local_runtime_identity_contract
 check_retired_federation_directory_v1_stream_contract
 check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract
