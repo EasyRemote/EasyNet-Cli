@@ -6409,7 +6409,6 @@
         "ControlDiscovery",
         "ControlDiscoveryReader",
         "ControlDiscoveryRuntimeConnector",
-        "DeviceNodeIDInRealm",
         "DirectRuntimeConnector",
         "DirectRuntimeConnectorOptions",
         "DirectRuntimeTransport",
@@ -6421,8 +6420,7 @@
         "NewDirectRuntimeConnector",
         "NewDirectRuntimeConnectorWithOptions",
         "OpenCABIDiscoveryTransport",
-        "OpenCABIRuntimeLifecycleTransport",
-        "RealmDevicePrefix"
+        "OpenCABIRuntimeLifecycleTransport"
       ],
       "python": [
         "ControlDiscovery",
@@ -7143,14 +7141,6 @@
           "removal_phase": "quarantined",
           "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
         },
-        "DeviceNodeIDInRealm": {
-          "canonical_replacement": [
-            "capability_inventory.canonical_addressing"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device identifiers outside URA grammar expose a product deployment model instead of generic runtime addressing."
-        },
         "DirectRuntimeConnector": {
           "canonical_replacement": [
             "capability_inventory.native_runtime"
@@ -7246,14 +7236,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "RealmDevicePrefix": {
-          "canonical_replacement": [
-            "capability_inventory.canonical_addressing"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
         }
       },
       "python": {
@@ -18260,7 +18242,6 @@
       "DescriptorUnavailable": "d53698d43151ecbb2cd64b88eba6b9abf8898cc9f765fb80c37fb12f35deea7a",
       "DeviceAbilityURA": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
       "DeviceAgentURA": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
-      "DeviceNodeIDInRealm": "0bcc3c83ffc6e84eb25f94db9876a027a1fe3e755214f820a106892e76d68251",
       "DeviceURA": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
       "DiagnosticCheck": "19f022e66781e1d3b02f7e63f9c1a5b997b0d6329dc7891170edaf896287188f",
       "DiagnosticCheck.Message": "3e89801b52bf7f986e27b0847ce327c565bb14b7f0d9f560eaeb856b3cb4cab5",
@@ -18955,7 +18936,6 @@
       "ReadRuntimeIdentityProjection": "98e58569f662abff04b0b594a7adea926f44f838c8368960bb9864965b49d35d",
       "RealmAbilityPrefix": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
       "RealmAgentPrefix": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
-      "RealmDevicePrefix": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
       "RealmResourcePrefix": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
       "RealmUserPrefix": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
       "ReceiptClient": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",

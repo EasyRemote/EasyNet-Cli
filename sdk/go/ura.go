@@ -191,10 +191,6 @@ func RealmUserPrefix(realm string) string {
 	return axonsdk.RealmUserPrefix(realm)
 }
 
-func RealmDevicePrefix(realm string) string {
-	return axonsdk.RealmDevicePrefix(realm)
-}
-
 func RealmAgentPrefix(realm string) string {
 	return axonsdk.RealmAgentPrefix(realm)
 }
@@ -209,17 +205,6 @@ func RealmAbilityPrefix(realm string) string {
 
 func RealmResourcePrefix(realm string) string {
 	return axonsdk.RealmResourcePrefix(realm)
-}
-
-func DeviceNodeIDInRealm(raw, realm string) (string, bool) {
-	if raw == "" || realm == "" {
-		return "", false
-	}
-	parts, err := axonsdk.ParseURAParts(raw)
-	if err != nil || parts.Realm != realm || parts.Kind != axonsdk.URAKindDevice {
-		return "", false
-	}
-	return parts.DeviceID, parts.DeviceID != ""
 }
 
 func DisplayID(raw string) string {
