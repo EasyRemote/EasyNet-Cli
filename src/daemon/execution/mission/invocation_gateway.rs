@@ -318,7 +318,7 @@ impl MissionChildTargetResolver for PersistedMissionChildTargetResolver {
     fn callee_ura(&self, request: &MissionInvocationRequest) -> anyhow::Result<String> {
         let agent_name = match &request.target {
             MissionInvocationTarget::LocalDevice => {
-                return Ok(crate::daemon::identity::local_invocation::local_device_ura());
+                return crate::daemon::identity::local_invocation::local_device_ura();
             }
             MissionInvocationTarget::RemoteNode(target) => return Ok(target.clone()),
             MissionInvocationTarget::HostedAgent(agent_name) => agent_name,

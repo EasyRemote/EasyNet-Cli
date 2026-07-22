@@ -148,7 +148,10 @@ impl TargetGate {
         {
             return true;
         }
-        if crate::daemon::identity::local_invocation::local_device_ura() == target_ura {
+        if crate::daemon::identity::local_invocation::local_device_ura()
+            .ok()
+            .is_some_and(|local_device_ura| local_device_ura == target_ura)
+        {
             return true;
         }
         if let Some(agent_target) = HostedAgentTarget::parse(target_ura) {
@@ -480,15 +483,18 @@ fn local_runtime_authority_ura(
                 (parsed.kind == crate::core::ura::URAKind::Authority).then_some(parsed.realm)
             })
         {
-            let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();
-            if crate::core::ura::parse_ura(&local_device_ura)
-                .ok()
-                .is_some_and(|parsed| {
-                    parsed.realm == hub_realm
-                        && session_realm.is_none_or(|realm| realm == parsed.realm)
-                })
+            if let Ok(local_device_ura) =
+                crate::daemon::identity::local_invocation::local_device_ura()
             {
-                return Some(local_device_ura);
+                if crate::core::ura::parse_ura(&local_device_ura)
+                    .ok()
+                    .is_some_and(|parsed| {
+                        parsed.realm == hub_realm
+                            && session_realm.is_none_or(|realm| realm == parsed.realm)
+                    })
+                {
+                    return Some(local_device_ura);
+                }
             }
         }
         return Some(daemon_ura.to_string());
@@ -746,7 +752,21 @@ mod tests {
 
     #[test]
     fn local_runtime_authority_executes_same_realm_hub_through_local_device() {
-        let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "local".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "axon://hub.example:50051".to_string(),
+                realm: "test-realm".to_string(),
+                username: Some("alice".to_string()),
+                user_id: Some("user-alice".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("write local device credentials");
+        let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura()
+            .expect("credentials-backed local device URA");
         let local_realm = crate::core::ura::parse_ura(&local_device_ura)
             .expect("local device URA parses")
             .realm;
@@ -762,7 +782,21 @@ mod tests {
 
     #[test]
     fn local_runtime_authority_keeps_cross_realm_hub_as_callee_authority() {
-        let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "local".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "axon://hub.example:50051".to_string(),
+                realm: "test-realm".to_string(),
+                username: Some("alice".to_string()),
+                user_id: Some("user-alice".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("write local device credentials");
+        let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura()
+            .expect("credentials-backed local device URA");
         let local_realm = crate::core::ura::parse_ura(&local_device_ura)
             .expect("local device URA parses")
             .realm;

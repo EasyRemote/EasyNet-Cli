@@ -1946,7 +1946,7 @@ This skill does X.\n";
         let replies: Arc<Vec<String>> = Arc::new(replies.into_iter().map(String::from).collect());
         let authority_context =
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
-                crate::daemon::identity::local_invocation::local_device_ura(),
+                crate::core::ura::device_ura("test", "local"),
             )
             .expect("test device authority root is canonical");
         let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(

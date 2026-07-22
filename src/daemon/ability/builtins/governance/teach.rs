@@ -2191,11 +2191,10 @@ mod tests {
         assert_eq!(resp["runtime_sync"]["failed"], 0, "response={resp}");
         assert_eq!(resp["descriptor_transaction_status"], "committed");
         assert_eq!(resp["runtime_sync"]["status"], "committed");
-        let runtime_key = crate::core::ura::owner_ability_ura(
-            &crate::daemon::identity::local_invocation::local_device_ura(),
-            "apprentice.quote",
-        )
-        .expect("runtime key");
+        let fixture_device_ura = crate::core::ura::device_ura("default", "local");
+        let runtime_key =
+            crate::core::ura::owner_ability_ura(&fixture_device_ura, "apprentice.quote")
+                .expect("runtime key");
         let live = crate::support::async_bridge::run_blocking(
             runtime.has_ability(&runtime_key),
             crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
@@ -2237,11 +2236,10 @@ mod tests {
                 .exists(),
             "precondition: acquire persisted the descriptor-import ledger row"
         );
-        let runtime_key = crate::core::ura::owner_ability_ura(
-            &crate::daemon::identity::local_invocation::local_device_ura(),
-            "apprentice.quote",
-        )
-        .expect("runtime key");
+        let fixture_device_ura = crate::core::ura::device_ura("default", "local");
+        let runtime_key =
+            crate::core::ura::owner_ability_ura(&fixture_device_ura, "apprentice.quote")
+                .expect("runtime key");
         assert!(
             !crate::support::async_bridge::run_blocking(
                 runtime.has_ability(&runtime_key),

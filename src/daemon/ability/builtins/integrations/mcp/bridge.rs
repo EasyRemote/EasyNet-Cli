@@ -284,7 +284,7 @@ mod tests {
     fn d(name: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(
             name.to_string(),
-            crate::daemon::identity::local_invocation::local_device_ura(),
+            crate::core::ura::device_ura("test", "local"),
             Visibility::Public,
             AdmissionAction::Invoke,
         )

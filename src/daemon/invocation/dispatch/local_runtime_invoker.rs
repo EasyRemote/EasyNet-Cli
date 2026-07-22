@@ -37,12 +37,12 @@ pub struct RuntimeBidiSource {
     pub from_client: BidiOutputReceiver,
 }
 
-fn local_invocation_callee_ura(target: &InvocationTarget) -> String {
+fn local_invocation_callee_ura(target: &InvocationTarget) -> Result<String, String> {
     if let Ok(selector) = crate::core::ura::AbilitySelector::parse(&target.ability) {
-        return selector.owner_ura().to_string();
+        return Ok(selector.owner_ura().to_string());
     }
 
-    local_device_ura()
+    local_device_ura().map_err(|err| err.to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -68,7 +68,7 @@ async fn local_system_request(
     target: &InvocationTarget,
     payload: Vec<u8>,
 ) -> Result<DescriptorBoundInvocationRequest, String> {
-    let callee_ura = local_invocation_callee_ura(target);
+    let callee_ura = local_invocation_callee_ura(target)?;
     let invocation_policy = LocalRuntimeInvocationPolicy::from_target(target, &callee_ura)?;
     let runtime_ability =
         ability_ura_for_wire(&callee_ura, &target.ability).map_err(|err| format!("{err}"))?;
@@ -314,6 +314,25 @@ mod tests {
         }
     }
 
+    fn provision_test_local_device_ura() -> (crate::cli::commands::test_support::HomeGuard, String)
+    {
+        let home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "dev-a".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "axon://hub.example:50051".to_string(),
+                realm: "acme".to_string(),
+                username: Some("alice".to_string()),
+                user_id: Some("user-alice".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("write local device credentials");
+        let local_device_ura = local_device_ura().expect("credentials-backed local device URA");
+        (home, local_device_ura)
+    }
+
     async fn runtime_with_descriptor_bound_ability(
         callee_ura: &str,
         ability: &str,
@@ -367,9 +386,10 @@ mod tests {
 
     #[tokio::test]
     async fn resource_subject_does_not_become_callee() {
+        let (_home, local_device_ura) = provision_test_local_device_ura();
         let subject =
             crate::core::ura::resource_dot_ura("acme", "device.dev-a.files", "tmp/report.txt");
-        let runtime = runtime_with_descriptor_bound_ability(&local_device_ura(), "fs.read").await;
+        let runtime = runtime_with_descriptor_bound_ability(&local_device_ura, "fs.read").await;
         let request = local_system_request(
             &runtime,
             AxonInvocationCallMode::Rpc,
@@ -379,21 +399,22 @@ mod tests {
         .await
         .expect("descriptor-bound request");
 
-        assert_eq!(request.envelope().envelope().callee.ura, local_device_ura());
+        assert_eq!(request.envelope().envelope().callee.ura, local_device_ura);
         assert_eq!(request.envelope().envelope().subject.ura, subject);
         assert_eq!(
             request.envelope().envelope().ability,
             expected_descriptor_ref(
-                &crate::core::ura::owner_ability_ura(&local_device_ura(), "fs.read").unwrap()
+                &crate::core::ura::owner_ability_ura(&local_device_ura, "fs.read").unwrap()
             )
         );
     }
 
     #[tokio::test]
     async fn explicit_device_subject_is_not_reclassified_as_callee() {
+        let (_home, local_device_ura) = provision_test_local_device_ura();
         let subject = crate::core::ura::device_ura("acme", "dev-b");
         let runtime =
-            runtime_with_descriptor_bound_ability(&local_device_ura(), "device.inspect").await;
+            runtime_with_descriptor_bound_ability(&local_device_ura, "device.inspect").await;
         let request = local_system_request(
             &runtime,
             AxonInvocationCallMode::Rpc,
@@ -403,21 +424,21 @@ mod tests {
         .await
         .expect("descriptor-bound request");
 
-        assert_eq!(request.envelope().envelope().callee.ura, local_device_ura());
+        assert_eq!(request.envelope().envelope().callee.ura, local_device_ura);
         assert_eq!(request.envelope().envelope().subject.ura, subject);
         assert_eq!(
             request.envelope().envelope().ability,
             expected_descriptor_ref(
-                &crate::core::ura::owner_ability_ura(&local_device_ura(), "device.inspect")
-                    .unwrap()
+                &crate::core::ura::owner_ability_ura(&local_device_ura, "device.inspect").unwrap()
             )
         );
     }
 
     #[tokio::test]
     async fn local_rpc_projects_finalized_output() {
+        let (_home, local_device_ura) = provision_test_local_device_ura();
         let ability = "device.inspect".to_string();
-        let runtime = runtime_with_descriptor_bound_ability(&local_device_ura(), &ability).await;
+        let runtime = runtime_with_descriptor_bound_ability(&local_device_ura, &ability).await;
         let args = json!({"ok": true, "source": "finalized"});
 
         let output = invoke_local_rpc(runtime, target_with_args(ability, None, args.clone()))

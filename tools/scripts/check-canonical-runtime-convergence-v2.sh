@@ -2090,6 +2090,53 @@ check_daemon_runtime_route_inventory_contract() {
   bash "$ROOT/tools/scripts/check-architecture-convergence.sh" >/dev/null
 }
 
+check_daemon_local_device_identity_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local identity="$cli_root/src/daemon/identity/local_invocation.rs"
+  [[ -f "$identity" ]] || fail "daemon local invocation identity source is missing: $identity"
+
+  "$PYTHON_BIN" - "$identity" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+if "pub(crate) fn local_device_ura() -> anyhow::Result<String>" not in text:
+    raise SystemExit("local_device_identity:local_device_ura_not_fallible")
+
+start = text.find("pub(crate) fn local_device_ura()")
+end = text.find("/// Product URA owned by the local daemon process", start)
+if start < 0 or end < 0:
+    raise SystemExit("local_device_identity:local_device_ura_section_missing")
+body = text[start:end]
+
+for retired in (
+    "unwrap_or_else",
+    "UNPAIRED_LOCAL_REALM",
+    "UNPAIRED_LOCAL_DEVICE_ID",
+    'device_ura("default"',
+    'device_ura( "default"',
+):
+    if retired in body:
+        raise SystemExit(f"local_device_identity:default_local_fallback_retired:{retired}")
+
+for required in (
+    "persisted_local_device_ura()",
+    "crate::daemon::persistence::config::load_credentials()",
+    "local device identity unavailable",
+):
+    if required not in body:
+        raise SystemExit(f"local_device_identity:projection_or_error_missing:{required}")
+
+for required_test in (
+    "local_device_ura_rejects_missing_identity_instead_of_synthesizing_default_local",
+    "local_device_ura_projects_credentials_when_hosted_identity_is_absent",
+):
+    if required_test not in text:
+        raise SystemExit(f"local_device_identity:test_missing:{required_test}")
+PY
+}
+
 check_daemon_local_runtime_identity_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local daemon="$cli_root/src/bin/easynet-daemon.rs"
@@ -6872,6 +6919,28 @@ EOF
   if ( check_target_gate_credential_state_contract "$tmp/target-gate-credential-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected target gate credential state gate to fail"
   fi
+  mkdir -p "$tmp/local-device-identity-legacy/src/daemon/identity"
+  cat >"$tmp/local-device-identity-legacy/src/daemon/identity/local_invocation.rs" <<'EOF'
+pub(crate) const UNPAIRED_LOCAL_REALM: &str = "default";
+pub(crate) const UNPAIRED_LOCAL_DEVICE_ID: &str = "local";
+
+pub(crate) fn local_device_ura() -> String {
+    if let Some(ura) = persisted_local_device_ura() {
+        return ura;
+    }
+    crate::daemon::persistence::config::load_credentials()
+        .ok()
+        .map(|creds| crate::core::ura::device_ura(&creds.realm, &creds.node_id))
+        .unwrap_or_else(|| {
+            crate::core::ura::device_ura(UNPAIRED_LOCAL_REALM, UNPAIRED_LOCAL_DEVICE_ID)
+        })
+}
+
+fn persisted_local_device_ura() -> Option<String> { None }
+EOF
+  if ( check_daemon_local_device_identity_contract "$tmp/local-device-identity-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected local device identity default/local fallback gate to fail"
+  fi
   mkdir -p "$tmp/cli-discover-candidate-legacy/src/cli/commands" \
     "$tmp/cli-discover-candidate-legacy/tests"
   cat >"$tmp/cli-discover-candidate-legacy/src/cli/commands/discover.rs" <<'EOF'
@@ -6929,6 +6998,7 @@ EOF
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
   check_daemon_runtime_route_inventory_contract
+  check_daemon_local_device_identity_contract
   check_daemon_local_runtime_identity_contract
   check_kernel_runtime_session_read_model_contract
   check_daemon_runtime_session_binding_contract
@@ -7012,6 +7082,7 @@ check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
 check_daemon_runtime_route_inventory_contract
+check_daemon_local_device_identity_contract
 check_daemon_local_runtime_identity_contract
 check_kernel_runtime_session_read_model_contract
 check_daemon_runtime_session_binding_contract

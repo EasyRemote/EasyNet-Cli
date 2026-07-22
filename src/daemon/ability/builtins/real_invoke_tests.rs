@@ -358,7 +358,7 @@ fn terminal_followup_target(
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock after epoch")
         .as_millis() as i64;
-    let callee = crate::daemon::identity::local_invocation::local_device_ura();
+    let callee = crate::core::ura::device_ura("default", "local");
     let payload = json!({
         "issuer_ura": crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
         "session_id": session_id,

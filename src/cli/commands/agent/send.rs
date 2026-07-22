@@ -261,13 +261,14 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     let eal_source =
         build_agent_send_eal_source(&args.name, &composed_prompt, resolved_session_id.as_deref())?;
 
+    let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura()?;
     let value = crate::support::platform::local_invoke::invoke_local_ability_with_subject_timeout(
         crate::daemon::ability::builtins::automation::mission::ABILITY_RUN,
         serde_json::json!({
             "source": eal_source,
             "label": format!("agent send {}", args.name),
         }),
-        &crate::daemon::identity::local_invocation::local_device_ura(),
+        &local_device_ura,
         std::time::Duration::from_secs(3600),
     )?;
     let result: crate::daemon::ability::builtins::automation::mission::MissionRunResponse =

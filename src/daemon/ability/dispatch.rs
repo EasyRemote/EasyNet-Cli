@@ -1952,8 +1952,10 @@ impl Default for AbilityAuthorityContext {
 
 impl AbilityAuthorityContext {
     pub fn from_local_environment() -> Self {
-        let device = CanonicalDeviceAuthority::parse(local_device_authority_root())
-            .expect("local Device authority helper must return a canonical Device URA");
+        let device = CanonicalDeviceAuthority::parse(
+            local_device_authority_root().expect("local Device authority must be available"),
+        )
+        .expect("local Device authority helper must return a canonical Device URA");
         let roots = crate::daemon::persistence::hosted_agent_authority_roots().expect(
             "local hosted-Agent lifecycle state must be readable when building authority context",
         );
@@ -1972,8 +1974,10 @@ impl AbilityAuthorityContext {
 
     #[cfg(not(test))]
     fn for_local_combined_environment() -> Self {
-        let device = CanonicalDeviceAuthority::parse(local_device_authority_root())
-            .expect("local Device authority helper must return a canonical Device URA");
+        let device = CanonicalDeviceAuthority::parse(
+            local_device_authority_root().expect("local Device authority must be available"),
+        )
+        .expect("local Device authority helper must return a canonical Device URA");
         let hub = CanonicalHubAuthority::for_realm(&device.realm);
         let roots = crate::daemon::persistence::hosted_agent_authority_roots().expect(
             "local hosted-Agent lifecycle state must be readable when building authority context",
@@ -2332,7 +2336,7 @@ fn hosted_agent_roots_for_device(
     Ok(roots)
 }
 
-fn local_device_authority_root() -> String {
+fn local_device_authority_root() -> anyhow::Result<String> {
     crate::daemon::identity::local_invocation::local_device_ura()
 }
 
@@ -3593,9 +3597,10 @@ impl std::fmt::Debug for AxonAbilityCatalog {
 impl AxonAbilityCatalog {
     pub fn new() -> Self {
         #[cfg(test)]
-        let authority_context =
-            AbilityAuthorityContext::for_combined_authority_roots(local_device_authority_root())
-                .expect("test Device authority root must be canonical");
+        let authority_context = AbilityAuthorityContext::for_combined_authority_roots(
+            local_device_authority_root().expect("test Device authority must be available"),
+        )
+        .expect("test Device authority root must be canonical");
         #[cfg(not(test))]
         let authority_context = AbilityAuthorityContext::for_local_combined_environment();
 
@@ -3626,7 +3631,9 @@ impl AxonAbilityCatalog {
         {
             Self::new_with_runtime_and_authority_context(
                 runtime,
-                AbilityAuthorityContext::for_combined_authority_roots(local_device_authority_root())
+                AbilityAuthorityContext::for_combined_authority_roots(
+                    local_device_authority_root().expect("test Device authority must be available"),
+                )
                 .expect("test Device authority root must be canonical"),
             )
         }

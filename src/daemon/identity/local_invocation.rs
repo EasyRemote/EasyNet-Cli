@@ -134,18 +134,18 @@ pub(crate) fn system_verifying_key() -> Result<VerifyingKey, super::self_identit
     Ok(process_local_system_identity()?.verifying_key())
 }
 
-/// Device URA used by local daemon clients when no more specific loopback
-/// caller has been supplied.
-pub(crate) fn local_device_ura() -> String {
+/// Device URA used by local daemon clients when a real local device identity
+/// has been provisioned.
+pub(crate) fn local_device_ura() -> anyhow::Result<String> {
     if let Some(ura) = persisted_local_device_ura() {
-        return ura;
+        return Ok(ura);
     }
-    crate::daemon::persistence::config::load_credentials()
-        .ok()
-        .map(|creds| crate::core::ura::device_ura(&creds.realm, &creds.node_id))
-        .unwrap_or_else(|| {
-            crate::core::ura::device_ura(UNPAIRED_LOCAL_REALM, UNPAIRED_LOCAL_DEVICE_ID)
-        })
+    let creds = crate::daemon::persistence::config::load_credentials().map_err(|error| {
+        anyhow::anyhow!(
+            "local device identity unavailable: no hosted device projection and credentials are unavailable: {error}"
+        )
+    })?;
+    Ok(crate::core::ura::device_ura(&creds.realm, &creds.node_id))
 }
 
 /// Product URA owned by the local daemon process advertised in control.json.
@@ -316,7 +316,7 @@ mod tests {
     use ed25519_dalek::{Verifier as _, VerifyingKey};
 
     use super::{
-        local_daemon_ura, sign_system_canonical, system_verifying_key,
+        local_daemon_ura, local_device_ura, sign_system_canonical, system_verifying_key,
         CanonicalAdmissionKeyResolver,
     };
     use crate::daemon::axon_bridge::runtime_admin::{
@@ -420,6 +420,45 @@ mod tests {
             .expect("test key-service state machine projects daemon-local public key")
             .verify(canonical, &signature)
             .expect("daemon-local signature verifies against its shared public projection");
+    }
+
+    #[test]
+    fn local_device_ura_rejects_missing_identity_instead_of_synthesizing_default_local() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+
+        let error = local_device_ura().expect_err("missing device identity must fail closed");
+
+        let message = format!("{error}");
+        assert!(
+            message.contains("local device identity unavailable"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("easynet:///r/default/device/local"),
+            "error must not expose a synthetic device fallback: {message}"
+        );
+    }
+
+    #[test]
+    fn local_device_ura_projects_credentials_when_hosted_identity_is_absent() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "dev-a".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "axon://hub.example:50051".to_string(),
+                realm: "acme".to_string(),
+                username: Some("alice".to_string()),
+                user_id: Some("user-alice".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("write local device credentials");
+
+        assert_eq!(
+            local_device_ura().expect("credentials-backed local device URA"),
+            crate::core::ura::device_ura("acme", "dev-a")
+        );
     }
 
     #[test]

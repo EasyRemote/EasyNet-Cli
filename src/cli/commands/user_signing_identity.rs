@@ -76,11 +76,10 @@ impl UserPublicKeyRegistry for LocalUserPublicKeyRegistry {
     }
 
     fn register(&self, user_ura: &str, public_key_b64: &str) -> anyhow::Result<()> {
-        let register_subject = crate::core::ura::owner_ability_ura(
-            &crate::daemon::identity::local_invocation::local_device_ura(),
-            "identity.register_pubkey",
-        )
-        .ok_or_else(|| anyhow!("derive identity.register_pubkey descriptor subject"))?;
+        let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura()?;
+        let register_subject =
+            crate::core::ura::owner_ability_ura(&local_device_ura, "identity.register_pubkey")
+                .ok_or_else(|| anyhow!("derive identity.register_pubkey descriptor subject"))?;
         crate::support::platform::local_invoke::invoke_local_ability_with_subject(
             "identity.register_pubkey",
             serde_json::json!({
