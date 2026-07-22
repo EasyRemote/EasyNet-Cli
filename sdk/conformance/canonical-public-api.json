@@ -6399,8 +6399,6 @@
         "easynet_string_free"
       ],
       "go": [
-        "AbilityOwnerDevice",
-        "AbilityOwnerHub",
         "AccessControlPrincipalDevice",
         "AccessControlPrincipalHub",
         "CABIDiscoveryTransport",
@@ -7061,22 +7059,6 @@
         }
       },
       "go": {
-        "AbilityOwnerDevice": {
-          "canonical_replacement": [
-            "capability_inventory.canonical_addressing"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
-        "AbilityOwnerHub": {
-          "canonical_replacement": [
-            "capability_inventory.canonical_addressing"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
         "AccessControlPrincipalDevice": {
           "canonical_replacement": [
             "capability_inventory.access_control"
@@ -17571,8 +17553,6 @@
       "AbilityOwner.Kind": "cd943d7f31b9f3b619b87d161aedae0a4e937bf92cd11b79074977389baad950",
       "AbilityOwner.UserID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityOwnerAgent": "80b522b139b62ee74889d7f936b63bdc2e3535985f89a867394ea9a2c7d1e9b7",
-      "AbilityOwnerDevice": "a02475d619a1ede10ca619d8de5d933aa80773a7ca0b846fa69987dff5cff07b",
-      "AbilityOwnerHub": "a4c3d46bdd459f25510f132f21f4a72fc7e92e835df9c95627b871c52fe84e15",
       "AbilityOwnerKind": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityRef": "9ab7cb039be48e7fb06c95682bab70355fa0689b643e6160f3addac6b3670c33",
       "AbilityRef.Name": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",

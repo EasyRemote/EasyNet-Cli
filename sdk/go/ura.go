@@ -72,9 +72,9 @@ type ParsedAbility struct {
 }
 
 const (
-	AbilityOwnerHub    AbilityOwnerKind = "hub"
+	abilityOwnerHub    AbilityOwnerKind = "hub"
 	AbilityOwnerAgent  AbilityOwnerKind = "agent"
-	AbilityOwnerDevice AbilityOwnerKind = "device"
+	abilityOwnerDevice AbilityOwnerKind = "device"
 )
 
 func IsResourceNamespace(namespace string) bool {
@@ -265,7 +265,7 @@ func parsedAbilityFromAxon(ability axonsdk.ParsedAbility) ParsedAbility {
 func abilityOwnerFromAxon(owner axonsdk.AbilityOwner) AbilityOwner {
 	kind := AbilityOwnerKind(string(owner.Kind))
 	if owner.Kind == axonsdk.AbilityOwnerAuthority {
-		kind = AbilityOwnerHub
+		kind = abilityOwnerHub
 	}
 	return AbilityOwner{
 		Kind:     kind,
