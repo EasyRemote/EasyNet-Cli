@@ -3782,6 +3782,7 @@ check_daemon_mission_eal_boundary_contract() {
 
 check_product_plugin_control_boundary_contract() {
   bash "$ROOT/tools/scripts/check-plugin-control-subject-boundary.sh" >/dev/null
+  bash "$ROOT/tools/scripts/check-current-realm-hub-context-boundary.sh" >/dev/null
 }
 
 check_axon_product_protocol_boundary_contract() {

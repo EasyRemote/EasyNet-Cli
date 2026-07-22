@@ -50,19 +50,13 @@ pub(crate) fn invoke_current_realm_hub_system_ability(
     selector: &str,
     args: Value,
 ) -> anyhow::Result<Option<Value>> {
-    let Ok(creds) = crate::daemon::persistence::config::load_credentials() else {
-        return Ok(None);
+    let context = match CurrentRealmHubInvocationContext::resolve()? {
+        CurrentRealmHubInvocationContext::Ready(context) => context,
+        CurrentRealmHubInvocationContext::Unpaired => return Ok(None),
     };
-    let realm = creds.realm_str().trim();
-    let node_id = creds.node_id.trim();
-    if realm.is_empty() || node_id.is_empty() {
-        return Ok(None);
-    }
-
-    let hub_ura = crate::core::ura::hub_ura(realm);
-    let caller_ura = crate::core::ura::device_ura(realm, node_id);
-    let value = invoke_target_owned_system_ability(&hub_ura, selector, args, &caller_ura)
-        .with_context(|| format!("invoke {selector} against realm hub"))?;
+    let value =
+        invoke_target_owned_system_ability(&context.hub_ura, selector, args, &context.caller_ura)
+            .with_context(|| format!("invoke {selector} against realm hub"))?;
     Ok(Some(value))
 }
 
@@ -72,6 +66,36 @@ pub(crate) fn invoke_current_realm_hub_system_ability(
     _args: Value,
 ) -> anyhow::Result<Option<Value>> {
     Ok(None)
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CurrentRealmHubInvocationContext {
+    Ready(ResolvedCurrentRealmHubInvocationContext),
+    Unpaired,
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedCurrentRealmHubInvocationContext {
+    hub_ura: String,
+    caller_ura: String,
+}
+
+#[cfg(feature = "axon-pb")]
+impl CurrentRealmHubInvocationContext {
+    fn resolve() -> anyhow::Result<Self> {
+        let Some(creds) = crate::daemon::persistence::config::load_credentials_optional()? else {
+            return Ok(Self::Unpaired);
+        };
+        let realm = creds.realm_str().trim();
+        let node_id = creds.node_id.trim();
+        let context = ResolvedCurrentRealmHubInvocationContext {
+            hub_ura: crate::core::ura::hub_ura(realm),
+            caller_ura: crate::core::ura::device_ura(realm, node_id),
+        };
+        Ok(Self::Ready(context))
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -107,5 +131,93 @@ fn target_owned_system_subject_ura(
         other => anyhow::bail!(
             "target-owned remote system ability requires Device or Hub callee, got {other}"
         ),
+    }
+}
+
+#[cfg(all(test, feature = "axon-pb"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_realm_hub_context_is_unpaired_when_credentials_are_absent() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+
+        assert_eq!(
+            CurrentRealmHubInvocationContext::resolve().unwrap(),
+            CurrentRealmHubInvocationContext::Unpaired
+        );
+    }
+
+    #[test]
+    fn current_realm_hub_context_derives_hub_and_caller_from_valid_credentials() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "dev-a".to_string(),
+                credential_token: "token".to_string(),
+                realm: "acme".to_string(),
+                hub_endpoint: "axon://hub.example:50051".to_string(),
+                username: Some("alice".to_string()),
+                user_id: Some("user-alice".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("write test credentials");
+
+        assert_eq!(
+            CurrentRealmHubInvocationContext::resolve().unwrap(),
+            CurrentRealmHubInvocationContext::Ready(ResolvedCurrentRealmHubInvocationContext {
+                hub_ura: "easynet:///r/acme/authority".to_string(),
+                caller_ura: "easynet:///r/acme/device/dev-a".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn current_realm_hub_context_rejects_malformed_credentials() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(crate::daemon::persistence::config::state_dir())
+            .expect("state dir");
+        std::fs::write(
+            crate::daemon::persistence::config::state_dir().join("credentials.json"),
+            b"{",
+        )
+        .expect("write malformed credentials");
+
+        let error = CurrentRealmHubInvocationContext::resolve()
+            .expect_err("malformed credentials must not collapse to unpaired");
+
+        assert!(
+            error.to_string().contains("parse credentials"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn current_realm_hub_context_rejects_incomplete_credentials() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(crate::daemon::persistence::config::state_dir())
+            .expect("state dir");
+        std::fs::write(
+            crate::daemon::persistence::config::state_dir().join("credentials.json"),
+            r#"{
+  "node_id": "",
+  "credential_token": "token",
+  "hub_endpoint": "axon://hub.example:7700",
+  "realm": "acme",
+  "username": "alice",
+  "user_id": "user-alice"
+}
+"#,
+        )
+        .expect("write incomplete credentials");
+
+        let error = CurrentRealmHubInvocationContext::resolve()
+            .expect_err("incomplete credentials must not collapse to unpaired");
+
+        assert!(
+            error.to_string().contains("validate credentials"),
+            "wrong error: {error}"
+        );
     }
 }
