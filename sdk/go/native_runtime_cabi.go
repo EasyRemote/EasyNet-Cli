@@ -14,7 +14,7 @@ func OpenNativeRuntime(ctx context.Context, options NativeRuntimeOptions) (*Nati
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
 	}
-	transport, err := OpenCABIRuntimeLifecycleTransport(options.LibraryPath)
+	transport, err := openCABIRuntimeLifecycleTransport(options.LibraryPath)
 	if err != nil {
 		return nil, err
 	}

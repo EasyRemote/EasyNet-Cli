@@ -276,7 +276,7 @@
     {
       "language": "go",
       "case_id": "error/retry_hint",
-      "selector": "TestDecodeDaemonErrorJSONPreservesRuntimeRefsAndRetryability",
+      "selector": "TestDecodeTransportErrorJSONPreservesRuntimeRefsAndRetryability",
       "evidence": [
         "sdk/go/errors_test.go"
       ]
@@ -284,7 +284,7 @@
     {
       "language": "go",
       "case_id": "error/typed_json",
-      "selector": "TestDecodeDaemonErrorJSONDecodesFixtureShape",
+      "selector": "TestDecodeTransportErrorJSONDecodesFixtureShape",
       "evidence": [
         "sdk/go/errors_test.go"
       ]

@@ -15,18 +15,18 @@ import (
 	"time"
 )
 
-var _ RuntimeLifecycleTransport = (*CABIRuntimeLifecycleTransport)(nil)
-var _ RuntimeTransport = (*CABIRuntimeTransport)(nil)
-var _ HealthTransport = (*CABIRuntimeTransport)(nil)
+var _ RuntimeLifecycleTransport = (*cabiRuntimeLifecycleTransport)(nil)
+var _ RuntimeTransport = (*cabiRuntimeTransport)(nil)
+var _ HealthTransport = (*cabiRuntimeTransport)(nil)
 
-func TestCABIRuntimeLifecycleTransportReportsMissingLibrary(t *testing.T) {
+func TestCABIProviderReportsMissingLibrary(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "libeasynet_cli_missing.dylib")
 
-	transport, err := OpenCABIRuntimeLifecycleTransport(missing)
+	transport, err := openCABIRuntimeLifecycleTransport(missing)
 
 	if err == nil {
 		_ = transport.Close(context.Background())
-		t.Fatal("OpenCABIRuntimeLifecycleTransport succeeded for missing library")
+		t.Fatal("openCABIRuntimeLifecycleTransport succeeded for missing library")
 	}
 	if !IsCode(err, ErrTransport) {
 		t.Fatalf("missing C ABI daemon library error = %v, want %s", err, ErrTransport)
@@ -409,7 +409,7 @@ func TestCABIPreparedHandleRegistryClaimLifecycle(t *testing.T) {
 	}
 }
 
-func TestCABIRuntimeTransportClosedStateRejectsRuntimeCalls(t *testing.T) {
+func TestCABIProviderClosedStateRejectsRuntimeCalls(t *testing.T) {
 	runtime := newCABIRuntimeTransport(cabiRuntimeSymbols{}, 99, false)
 
 	if err := runtime.Close(context.Background()); err != nil {
@@ -842,9 +842,9 @@ func TestCABIRuntimeProviderRejectsMissingBidiFrameZero(t *testing.T) {
 
 func openFakeCABIRuntime(t *testing.T) *RuntimeClient {
 	t.Helper()
-	transport, err := OpenCABIRuntimeLifecycleTransport(buildFakeCABIStreamLibrary(t))
+	transport, err := openCABIRuntimeLifecycleTransport(buildFakeCABIStreamLibrary(t))
 	if err != nil {
-		t.Fatalf("OpenCABIRuntimeLifecycleTransport: %v", err)
+		t.Fatalf("openCABIRuntimeLifecycleTransport: %v", err)
 	}
 	control, err := NewRuntimeHost(transport)
 	if err != nil {

@@ -865,8 +865,20 @@ def run_self_test(policy: dict[str, Any], manifest: dict[str, Any]) -> None:
     )
 
     changed_legacy_shape = copy.deepcopy(manifest)
-    legacy_item = changed_legacy_shape["non_canonical"]["languages"]["go"][0]
-    changed_legacy_shape["shape_sha256"]["go"][legacy_item] = "0" * 64
+    legacy_language = None
+    legacy_item = None
+    for section in SECTIONS:
+        for language in LANGUAGES:
+            values = changed_legacy_shape["non_canonical"][section][language]
+            if values:
+                legacy_language = language
+                legacy_item = values[0]
+                break
+        if legacy_item is not None:
+            break
+    if legacy_item is None:
+        fail("self_test_requires_non_canonical_shape")
+    changed_legacy_shape["shape_sha256"][legacy_language][legacy_item] = "0" * 64
     expect_policy_error(
         "non_canonical_shape_change",
         lambda: validate_policy(

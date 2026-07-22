@@ -983,10 +983,24 @@ def self_test(tmp: Path) -> None:
     expect(unapproved_quarantine, "unapproved_legacy_quarantine")
 
     mismatched_quarantine = copy.deepcopy(concepts)
-    quarantined_value = mismatched_quarantine["non_canonical"]["languages"]["go"][0]
-    mismatched_quarantine["legacy_quarantine"]["languages"]["go"][quarantined_value][
-        "reason"
-    ] = "test-only mismatched quarantine reason"
+    quarantined_section = None
+    quarantined_language = None
+    quarantined_value = None
+    for section in ("languages", "members"):
+        for language in PUBLIC_LANGUAGES:
+            values = mismatched_quarantine["non_canonical"][section][language]
+            if values:
+                quarantined_section = section
+                quarantined_language = language
+                quarantined_value = values[0]
+                break
+        if quarantined_value is not None:
+            break
+    if quarantined_value is None:
+        fail("self_test_requires_quarantined_item")
+    mismatched_quarantine["legacy_quarantine"][quarantined_section][quarantined_language][
+        quarantined_value
+    ]["reason"] = "test-only mismatched quarantine reason"
     expect(mismatched_quarantine, "legacy_quarantine_reason_mismatch")
 
     invented = copy.deepcopy(concepts)

@@ -646,8 +646,8 @@ def main() -> int:
             "cabi_runtime_provider",
             "sdk/go/",
             "sdk/go/cabi_runtime.go",
-            "CABIRuntimeTransport",
-            "sdk/go/cabi_runtime.go",
+            "RuntimeTransport",
+            "sdk/go/runtime.go",
             stream_provider_capabilities,
         ),
         (

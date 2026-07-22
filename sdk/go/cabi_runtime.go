@@ -229,21 +229,21 @@ type cabiRuntimeSymbols struct {
 	bidiCancel         unsafe.Pointer
 }
 
-// CABIRuntimeLifecycleTransport is an optional runtime lifecycle transport over
-// libeasynet_cli. It keeps C ABI handles private and exposes only SDK facade
-// DTOs to product code.
-type CABIRuntimeLifecycleTransport struct {
+// cabiRuntimeLifecycleTransport is the package-private native provider binding
+// over libeasynet_cli. It keeps C ABI handles private and exposes only generic
+// runtime lifecycle DTOs through RuntimeLifecycleTransport.
+type cabiRuntimeLifecycleTransport struct {
 	mu       sync.Mutex
 	library  unsafe.Pointer
 	symbols  cabiRuntimeSymbols
 	handles  map[string]uint64
-	runtimes map[*CABIRuntimeTransport]struct{}
+	runtimes map[*cabiRuntimeTransport]struct{}
 	closed   bool
 }
 
-// OpenCABIRuntimeLifecycleTransport loads libeasynet_cli and exposes runtime
-// lifecycle operations through the existing Go SDK facade interfaces.
-func OpenCABIRuntimeLifecycleTransport(path string) (*CABIRuntimeLifecycleTransport, error) {
+// openCABIRuntimeLifecycleTransport loads libeasynet_cli and assembles the
+// package-private native provider transport.
+func openCABIRuntimeLifecycleTransport(path string) (*cabiRuntimeLifecycleTransport, error) {
 	library, resolved, err := openCABIDynamicLibrary(path)
 	if err != nil {
 		return nil, err
@@ -263,31 +263,15 @@ func OpenCABIRuntimeLifecycleTransport(path string) (*CABIRuntimeLifecycleTransp
 			Message:   fmt.Sprintf("libeasynet_cli ABI version %d does not match expected %d", actual, expectedCABIABIVersion),
 		}
 	}
-	return &CABIRuntimeLifecycleTransport{
+	return &cabiRuntimeLifecycleTransport{
 		library:  library,
 		symbols:  symbols,
 		handles:  map[string]uint64{},
-		runtimes: map[*CABIRuntimeTransport]struct{}{},
+		runtimes: map[*cabiRuntimeTransport]struct{}{},
 	}, nil
 }
 
-// NewCABIRuntimeHost creates a runtime host facade over libeasynet_cli.
-// The returned transport owns the dynamic library and C ABI handles; callers
-// must close it when the facade is no longer needed.
-func NewCABIRuntimeHost(path string) (*RuntimeHost, *CABIRuntimeLifecycleTransport, error) {
-	transport, err := OpenCABIRuntimeLifecycleTransport(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	host, err := NewRuntimeHost(transport)
-	if err != nil {
-		_ = transport.Close(context.Background())
-		return nil, nil, err
-	}
-	return host, transport, nil
-}
-
-func (t *CABIRuntimeLifecycleTransport) Discover(ctx context.Context, optionsJSON []byte) ([]byte, error) {
+func (t *cabiRuntimeLifecycleTransport) Discover(ctx context.Context, optionsJSON []byte) ([]byte, error) {
 	if err := t.requireOpen(ctx); err != nil {
 		return nil, err
 	}
@@ -302,7 +286,7 @@ func (t *CABIRuntimeLifecycleTransport) Discover(ctx context.Context, optionsJSO
 	return json.Marshal(status["endpoints"])
 }
 
-func (t *CABIRuntimeLifecycleTransport) Start(ctx context.Context, configJSON []byte) ([]byte, error) {
+func (t *cabiRuntimeLifecycleTransport) Start(ctx context.Context, configJSON []byte) ([]byte, error) {
 	if err := t.requireOpen(ctx); err != nil {
 		return nil, err
 	}
@@ -336,7 +320,7 @@ func (t *CABIRuntimeLifecycleTransport) Start(ctx context.Context, configJSON []
 	return raw, nil
 }
 
-func (t *CABIRuntimeLifecycleTransport) Attach(ctx context.Context, optionsJSON []byte) ([]byte, error) {
+func (t *cabiRuntimeLifecycleTransport) Attach(ctx context.Context, optionsJSON []byte) ([]byte, error) {
 	if err := t.requireOpen(ctx); err != nil {
 		return nil, err
 	}
@@ -366,7 +350,7 @@ func (t *CABIRuntimeLifecycleTransport) Attach(ctx context.Context, optionsJSON 
 	return raw, nil
 }
 
-func (t *CABIRuntimeLifecycleTransport) Status(ctx context.Context, handleID string) ([]byte, error) {
+func (t *cabiRuntimeLifecycleTransport) Status(ctx context.Context, handleID string) ([]byte, error) {
 	if err := t.requireOpen(ctx); err != nil {
 		return nil, err
 	}
@@ -377,7 +361,7 @@ func (t *CABIRuntimeLifecycleTransport) Status(ctx context.Context, handleID str
 	return t.statusForHandle(handleID, handle)
 }
 
-func (t *CABIRuntimeLifecycleTransport) OpenRuntime(ctx context.Context, handleID string, optionsJSON []byte) (RuntimeTransport, []byte, error) {
+func (t *cabiRuntimeLifecycleTransport) OpenRuntime(ctx context.Context, handleID string, optionsJSON []byte) (RuntimeTransport, []byte, error) {
 	if err := t.requireOpen(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -397,7 +381,7 @@ func (t *CABIRuntimeLifecycleTransport) OpenRuntime(ctx context.Context, handleI
 	return runtime, []byte(fmt.Sprintf(`{"ready":true,"abi_version":%d,"transport":"c_abi"}`, expectedCABIABIVersion)), nil
 }
 
-func (t *CABIRuntimeLifecycleTransport) Stop(ctx context.Context, handleID string, optionsJSON []byte) ([]byte, error) {
+func (t *cabiRuntimeLifecycleTransport) Stop(ctx context.Context, handleID string, optionsJSON []byte) ([]byte, error) {
 	if err := t.requireOpen(ctx); err != nil {
 		return nil, err
 	}
@@ -416,7 +400,7 @@ func (t *CABIRuntimeLifecycleTransport) Stop(ctx context.Context, handleID strin
 	return []byte(fmt.Sprintf(`{"handle_id":%q,"state":"Stopped","diagnostics":[]}`, handleID)), nil
 }
 
-func (t *CABIRuntimeLifecycleTransport) Detach(ctx context.Context, handleID string) error {
+func (t *cabiRuntimeLifecycleTransport) Detach(ctx context.Context, handleID string) error {
 	if err := t.requireOpen(ctx); err != nil {
 		return err
 	}
@@ -433,7 +417,7 @@ func (t *CABIRuntimeLifecycleTransport) Detach(ctx context.Context, handleID str
 	return nil
 }
 
-func (t *CABIRuntimeLifecycleTransport) Close(ctx context.Context) error {
+func (t *cabiRuntimeLifecycleTransport) Close(ctx context.Context) error {
 	if ctx == nil {
 		return invalidRuntimeClient("context is required")
 	}
@@ -443,7 +427,7 @@ func (t *CABIRuntimeLifecycleTransport) Close(ctx context.Context) error {
 		return nil
 	}
 	t.closed = true
-	runtimes := make([]*CABIRuntimeTransport, 0, len(t.runtimes))
+	runtimes := make([]*cabiRuntimeTransport, 0, len(t.runtimes))
 	for runtime := range t.runtimes {
 		runtimes = append(runtimes, runtime)
 	}
@@ -451,7 +435,7 @@ func (t *CABIRuntimeLifecycleTransport) Close(ctx context.Context) error {
 	for _, handle := range t.handles {
 		handles = append(handles, handle)
 	}
-	t.runtimes = map[*CABIRuntimeTransport]struct{}{}
+	t.runtimes = map[*cabiRuntimeTransport]struct{}{}
 	t.handles = map[string]uint64{}
 	library := t.library
 	t.library = nil
@@ -474,7 +458,7 @@ func (t *CABIRuntimeLifecycleTransport) Close(ctx context.Context) error {
 	return first
 }
 
-func (t *CABIRuntimeLifecycleTransport) requireOpen(ctx context.Context) error {
+func (t *cabiRuntimeLifecycleTransport) requireOpen(ctx context.Context) error {
 	if ctx == nil {
 		return invalidRuntimeClient("context is required")
 	}
@@ -486,7 +470,7 @@ func (t *CABIRuntimeLifecycleTransport) requireOpen(ctx context.Context) error {
 	return nil
 }
 
-func (t *CABIRuntimeLifecycleTransport) requireRuntimeHostHandle(handleID string) (uint64, error) {
+func (t *cabiRuntimeLifecycleTransport) requireRuntimeHostHandle(handleID string) (uint64, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	handle := t.handles[handleID]
@@ -502,7 +486,7 @@ func (t *CABIRuntimeLifecycleTransport) requireRuntimeHostHandle(handleID string
 	return handle, nil
 }
 
-func (t *CABIRuntimeLifecycleTransport) statusForHandle(handleID string, handle uint64) ([]byte, error) {
+func (t *cabiRuntimeLifecycleTransport) statusForHandle(handleID string, handle uint64) ([]byte, error) {
 	var out *C.char
 	code := int32(C.easynet_runtime_call_daemon_status(t.symbols.daemonStatus, C.uint64_t(handle), &out))
 	if code != 0 {
@@ -516,7 +500,7 @@ func (t *CABIRuntimeLifecycleTransport) statusForHandle(handleID string, handle 
 	return json.Marshal(status)
 }
 
-func (t *CABIRuntimeLifecycleTransport) callRuntimeHostDiscover(optionsJSON []byte) ([]byte, error) {
+func (t *cabiRuntimeLifecycleTransport) callRuntimeHostDiscover(optionsJSON []byte) ([]byte, error) {
 	var out *C.char
 	code := int32(cabiWithCString(optionsJSON, func(cOptions *C.char) C.int32_t {
 		return C.easynet_runtime_call_daemon_discover(t.symbols.daemonDiscover, cOptions, &out)
@@ -527,7 +511,7 @@ func (t *CABIRuntimeLifecycleTransport) callRuntimeHostDiscover(optionsJSON []by
 	return cabiTakeCString(t.symbols.stringFree, out), nil
 }
 
-func (t *CABIRuntimeLifecycleTransport) detachCHandle(handle uint64) error {
+func (t *cabiRuntimeLifecycleTransport) detachCHandle(handle uint64) error {
 	code := int32(C.easynet_runtime_call_daemon_detach(t.symbols.daemonDetach, C.uint64_t(handle)))
 	if code != 0 {
 		return t.lastErrorOrCode(code, "C ABI daemon detach failed")
@@ -535,11 +519,11 @@ func (t *CABIRuntimeLifecycleTransport) detachCHandle(handle uint64) error {
 	return nil
 }
 
-func (t *CABIRuntimeLifecycleTransport) lastErrorOrCode(code int32, fallback string) error {
+func (t *cabiRuntimeLifecycleTransport) lastErrorOrCode(code int32, fallback string) error {
 	return cabiRuntimeLastErrorOrCode(t.symbols, code, fallback)
 }
 
-func (t *CABIRuntimeLifecycleTransport) openClientHandle(runtimeHostHandle uint64, profile string) (uint64, error) {
+func (t *cabiRuntimeLifecycleTransport) openClientHandle(runtimeHostHandle uint64, profile string) (uint64, error) {
 	var out C.uint64_t
 	code := int32(C.easynet_runtime_call_daemon_open_client(t.symbols.daemonOpenClient, C.uint64_t(runtimeHostHandle), &out))
 	if code != 0 {
@@ -552,8 +536,9 @@ func (t *CABIRuntimeLifecycleTransport) openClientHandle(runtimeHostHandle uint6
 	return clientHandle, nil
 }
 
-// CABIRuntimeTransport is an optional Runtime Core transport over libeasynet_cli.
-type CABIRuntimeTransport struct {
+// cabiRuntimeTransport is the package-private native provider implementation of
+// RuntimeTransport and HealthTransport over libeasynet_cli.
+type cabiRuntimeTransport struct {
 	mu              sync.Mutex
 	symbols         cabiRuntimeSymbols
 	handle          uint64
@@ -564,8 +549,8 @@ type CABIRuntimeTransport struct {
 	closed          bool
 }
 
-func newCABIRuntimeTransport(symbols cabiRuntimeSymbols, handle uint64, ownsHandle bool) *CABIRuntimeTransport {
-	return &CABIRuntimeTransport{
+func newCABIRuntimeTransport(symbols cabiRuntimeSymbols, handle uint64, ownsHandle bool) *cabiRuntimeTransport {
+	return &cabiRuntimeTransport{
 		symbols:         symbols,
 		handle:          handle,
 		ownsHandle:      ownsHandle,
@@ -673,7 +658,7 @@ func (r *cabiPreparedHandleRegistry) drain() []uint64 {
 	return preparedIDs
 }
 
-func (t *CABIRuntimeTransport) RuntimeHealth(ctx context.Context) ([]byte, error) {
+func (t *cabiRuntimeTransport) RuntimeHealth(ctx context.Context) ([]byte, error) {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, err
@@ -686,7 +671,7 @@ func (t *CABIRuntimeTransport) RuntimeHealth(ctx context.Context) ([]byte, error
 	return cabiTakeCString(t.symbols.stringFree, out), nil
 }
 
-func (t *CABIRuntimeTransport) RuntimeDiagnostics(ctx context.Context) ([]byte, error) {
+func (t *cabiRuntimeTransport) RuntimeDiagnostics(ctx context.Context) ([]byte, error) {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, err
@@ -699,7 +684,7 @@ func (t *CABIRuntimeTransport) RuntimeDiagnostics(ctx context.Context) ([]byte, 
 	return cabiTakeCString(t.symbols.stringFree, out), nil
 }
 
-func (t *CABIRuntimeTransport) ResolveDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
+func (t *cabiRuntimeTransport) ResolveDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, err
@@ -719,7 +704,7 @@ func (t *CABIRuntimeTransport) ResolveDescriptorRef(ctx context.Context, request
 	return cabiTakeCString(t.symbols.stringFree, out), nil
 }
 
-func (t *CABIRuntimeTransport) Invoke(ctx context.Context, draftJSON []byte) ([]byte, error) {
+func (t *cabiRuntimeTransport) Invoke(ctx context.Context, draftJSON []byte) ([]byte, error) {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, err
@@ -734,7 +719,7 @@ func (t *CABIRuntimeTransport) Invoke(ctx context.Context, draftJSON []byte) ([]
 	return cabiTakeCString(t.symbols.stringFree, out), nil
 }
 
-func (t *CABIRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
+func (t *cabiRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -770,7 +755,7 @@ func (t *CABIRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte)
 	return stream, []byte(fmt.Sprintf(`{"stream_id":%q,"state":"Open","max_buffered_events":%d}`, strconv.FormatUint(streamID, 10), MaxStreamBufferedEvents)), nil
 }
 
-func (t *CABIRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
+func (t *cabiRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -815,7 +800,7 @@ func (t *CABIRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte, s
 	return bidi, openJSON, nil
 }
 
-func (t *CABIRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
+func (t *cabiRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, err
@@ -857,7 +842,7 @@ func (t *CABIRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, op
 	return raw, nil
 }
 
-func (t *CABIRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error) {
+func (t *cabiRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error) {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, err
@@ -906,7 +891,7 @@ func (t *CABIRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []by
 	return cabiTakeCString(t.symbols.stringFree, out), nil
 }
 
-func (t *CABIRuntimeTransport) AwaitHandle(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
+func (t *cabiRuntimeTransport) AwaitHandle(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, err
@@ -920,7 +905,7 @@ func (t *CABIRuntimeTransport) AwaitHandle(ctx context.Context, control Invocati
 	return cabiTakeCString(t.symbols.stringFree, out), nil
 }
 
-func (t *CABIRuntimeTransport) CancelHandle(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error) {
+func (t *cabiRuntimeTransport) CancelHandle(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error) {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, err
@@ -936,7 +921,7 @@ func (t *CABIRuntimeTransport) CancelHandle(ctx context.Context, control Invocat
 	return cabiTakeCString(t.symbols.stringFree, out), nil
 }
 
-func (t *CABIRuntimeTransport) HandleEvents(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
+func (t *cabiRuntimeTransport) HandleEvents(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, err
@@ -950,7 +935,7 @@ func (t *CABIRuntimeTransport) HandleEvents(ctx context.Context, control Invocat
 	return cabiTakeCString(t.symbols.stringFree, out), nil
 }
 
-func (t *CABIRuntimeTransport) FreeHandle(ctx context.Context, control InvocationControlCapability) error {
+func (t *cabiRuntimeTransport) FreeHandle(ctx context.Context, control InvocationControlCapability) error {
 	handle, err := t.requireOpen(ctx)
 	if err != nil {
 		return err
@@ -963,7 +948,7 @@ func (t *CABIRuntimeTransport) FreeHandle(ctx context.Context, control Invocatio
 	return nil
 }
 
-func (t *CABIRuntimeTransport) Close(ctx context.Context) error {
+func (t *cabiRuntimeTransport) Close(ctx context.Context) error {
 	if ctx == nil {
 		return invalidRuntimeClient("context is required")
 	}
@@ -1014,7 +999,7 @@ func (t *CABIRuntimeTransport) Close(ctx context.Context) error {
 	return first
 }
 
-func (t *CABIRuntimeTransport) requireOpen(ctx context.Context) (uint64, error) {
+func (t *cabiRuntimeTransport) requireOpen(ctx context.Context) (uint64, error) {
 	if ctx == nil {
 		return 0, invalidRuntimeClient("context is required")
 	}
@@ -1029,7 +1014,7 @@ func (t *CABIRuntimeTransport) requireOpen(ctx context.Context) (uint64, error) 
 	return t.handle, nil
 }
 
-func (t *CABIRuntimeTransport) freePreparedID(id uint64) error {
+func (t *cabiRuntimeTransport) freePreparedID(id uint64) error {
 	code := int32(C.easynet_runtime_call_prepared_free(t.symbols.preparedFree, C.uint64_t(id)))
 	if code != 0 {
 		return t.lastErrorOrCode(code, "C ABI prepared invocation free failed")
@@ -1037,7 +1022,7 @@ func (t *CABIRuntimeTransport) freePreparedID(id uint64) error {
 	return nil
 }
 
-func (t *CABIRuntimeTransport) freeSignedID(id uint64) error {
+func (t *cabiRuntimeTransport) freeSignedID(id uint64) error {
 	code := int32(C.easynet_runtime_call_signed_free(t.symbols.signedFree, C.uint64_t(id)))
 	if code != 0 {
 		return t.lastErrorOrCode(code, "C ABI signed invocation free failed")
@@ -1045,25 +1030,25 @@ func (t *CABIRuntimeTransport) freeSignedID(id uint64) error {
 	return nil
 }
 
-func (t *CABIRuntimeTransport) removeStream(stream *cabiStreamTransport) {
+func (t *cabiRuntimeTransport) removeStream(stream *cabiStreamTransport) {
 	t.mu.Lock()
 	delete(t.streams, stream)
 	t.mu.Unlock()
 }
 
-func (t *CABIRuntimeTransport) removeBidi(bidi *cabiBidiTransport) {
+func (t *cabiRuntimeTransport) removeBidi(bidi *cabiBidiTransport) {
 	t.mu.Lock()
 	delete(t.bidis, bidi)
 	t.mu.Unlock()
 }
 
-func (t *CABIRuntimeTransport) lastErrorOrCode(code int32, fallback string) error {
+func (t *cabiRuntimeTransport) lastErrorOrCode(code int32, fallback string) error {
 	return cabiRuntimeLastErrorOrCode(t.symbols, code, fallback)
 }
 
 type cabiStreamTransport struct {
 	mu           sync.Mutex
-	owner        *CABIRuntimeTransport
+	owner        *cabiRuntimeTransport
 	streamID     uint64
 	registration *cabiCallbackRegistration
 	inbox        *cabiCallbackInbox
@@ -1159,7 +1144,7 @@ func (s *cabiStreamTransport) closeWithHandle(handle uint64) error {
 
 type cabiBidiTransport struct {
 	mu           sync.Mutex
-	owner        *CABIRuntimeTransport
+	owner        *cabiRuntimeTransport
 	bidiID       uint64
 	registration *cabiCallbackRegistration
 	inbox        *cabiCallbackInbox

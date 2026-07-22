@@ -37,9 +37,9 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	t.Setenv("EASYNET_REALM_TRUST_PATH", trustPath)
 	t.Setenv("EASYNET_PAGES_PORT", strconv.Itoa(19000+os.Getpid()%1000))
 
-	transport, err := OpenCABIRuntimeLifecycleTransport(libPath)
+	transport, err := openCABIRuntimeLifecycleTransport(libPath)
 	if err != nil {
-		t.Fatalf("OpenCABIRuntimeLifecycleTransport: %v", err)
+		t.Fatalf("openCABIRuntimeLifecycleTransport: %v", err)
 	}
 	defer func() {
 		if err := transport.Close(context.Background()); err != nil {

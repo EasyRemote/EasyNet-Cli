@@ -6402,12 +6402,7 @@
         "easynet_signed_invocation_free",
         "easynet_string_free"
       ],
-      "go": [
-        "CABIRuntimeLifecycleTransport",
-        "CABIRuntimeTransport",
-        "NewCABIRuntimeHost",
-        "OpenCABIRuntimeLifecycleTransport"
-      ],
+      "go": [],
       "python": [
         "ControlDiscovery",
         "ControlDiscoveryRuntimeConnector",
@@ -6422,27 +6417,6 @@
       "rust": [],
       "c_abi": [],
       "go": [
-        "CABIRuntimeLifecycleTransport.Attach",
-        "CABIRuntimeLifecycleTransport.Close",
-        "CABIRuntimeLifecycleTransport.Detach",
-        "CABIRuntimeLifecycleTransport.Discover",
-        "CABIRuntimeLifecycleTransport.OpenRuntime",
-        "CABIRuntimeLifecycleTransport.Start",
-        "CABIRuntimeLifecycleTransport.Status",
-        "CABIRuntimeLifecycleTransport.Stop",
-        "CABIRuntimeTransport.AwaitHandle",
-        "CABIRuntimeTransport.CancelHandle",
-        "CABIRuntimeTransport.Close",
-        "CABIRuntimeTransport.FreeHandle",
-        "CABIRuntimeTransport.HandleEvents",
-        "CABIRuntimeTransport.Invoke",
-        "CABIRuntimeTransport.OpenBidi",
-        "CABIRuntimeTransport.OpenStream",
-        "CABIRuntimeTransport.Prepare",
-        "CABIRuntimeTransport.ResolveDescriptorRef",
-        "CABIRuntimeTransport.RuntimeDiagnostics",
-        "CABIRuntimeTransport.RuntimeHealth",
-        "CABIRuntimeTransport.SubmitSigned",
         "PrepareOptions.LocalDaemonSigning"
       ],
       "python": [
@@ -7009,40 +6983,7 @@
           "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
         }
       },
-      "go": {
-        "CABIRuntimeLifecycleTransport": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeTransport": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "NewCABIRuntimeHost": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "OpenCABIRuntimeLifecycleTransport": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        }
-      },
+      "go": {},
       "python": {
         "ControlDiscovery": {
           "canonical_replacement": [
@@ -7085,174 +7026,6 @@
       "rust": {},
       "c_abi": {},
       "go": {
-        "CABIRuntimeLifecycleTransport.Attach": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeLifecycleTransport.Close": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeLifecycleTransport.Detach": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeLifecycleTransport.Discover": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeLifecycleTransport.OpenRuntime": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeLifecycleTransport.Start": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeLifecycleTransport.Status": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeLifecycleTransport.Stop": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeTransport.AwaitHandle": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeTransport.CancelHandle": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeTransport.Close": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeTransport.FreeHandle": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeTransport.HandleEvents": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeTransport.Invoke": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeTransport.OpenBidi": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeTransport.OpenStream": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeTransport.Prepare": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeTransport.ResolveDescriptorRef": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeTransport.RuntimeDiagnostics": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeTransport.RuntimeHealth": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
-        "CABIRuntimeTransport.SubmitSigned": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "C ABI transport/provider compatibility surface; canonical SDK runtime concepts must not encode provider binding names."
-        },
         "PrepareOptions.LocalDaemonSigning": {
           "canonical_replacement": [
             "capability_inventory.prepare_sign_submit"
@@ -15496,8 +15269,8 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/cabi_runtime.go",
-          "sha256": "aaf523c832c9f8b66b02b345fe6b5d3b21824a122617512789f88d017b1d5885",
-          "interface": "CABIRuntimeTransport",
+          "sha256": "34de34046ebf6d93d3f69e9d4265a2c9fba277cbebaa5d1123c4051f9e3d4d96",
+          "interface": "RuntimeTransport",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
         "step_evidence": [
@@ -15848,8 +15621,8 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/cabi_runtime.go",
-          "sha256": "aaf523c832c9f8b66b02b345fe6b5d3b21824a122617512789f88d017b1d5885",
-          "interface": "CABIRuntimeTransport",
+          "sha256": "34de34046ebf6d93d3f69e9d4265a2c9fba277cbebaa5d1123c4051f9e3d4d96",
+          "interface": "RuntimeTransport",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
         "step_evidence": [
@@ -17544,29 +17317,6 @@
       "BindPrincipalKeyRequest.KeyID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "BindPrincipalKeyRequest.PrincipalURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "BindPrincipalKeyRequest.PublicKey": "8362cdd056364a14979a467f7cc7f44bec858bebde78561b8d7fe26b2940ec0e",
-      "CABIRuntimeLifecycleTransport": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
-      "CABIRuntimeLifecycleTransport.Attach": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86",
-      "CABIRuntimeLifecycleTransport.Close": "0d464a887ccc7c5ec145a263e02280f50af96ec1b1fd7e770a900867d4a8ba14",
-      "CABIRuntimeLifecycleTransport.Detach": "e2e633c45c854b30fb1d8621f0bd206f8712dda991abe8fd17b8b45b7a3956d7",
-      "CABIRuntimeLifecycleTransport.Discover": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86",
-      "CABIRuntimeLifecycleTransport.OpenRuntime": "f3eba1fa8b1c5c70e0af074624877104cfc9b73fa42f379ce8fec44bfb8a6600",
-      "CABIRuntimeLifecycleTransport.Start": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86",
-      "CABIRuntimeLifecycleTransport.Status": "21ecb4edeb6151bc52d794a5976d506296c414412a84691151a68fef4c235f03",
-      "CABIRuntimeLifecycleTransport.Stop": "229ca570364556950a3a27b838ff262ebc7ac2b108b4a46c3b5a9cd5b8166bac",
-      "CABIRuntimeTransport": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
-      "CABIRuntimeTransport.AwaitHandle": "40f76e3162e9942e3466c99ac797aad7aa2ca4a5cb712891e1a2a45a201ebf19",
-      "CABIRuntimeTransport.CancelHandle": "11eefa42c1cf877a03870312221675ef6a3076251fe0e133e06a562ec0c95940",
-      "CABIRuntimeTransport.Close": "0d464a887ccc7c5ec145a263e02280f50af96ec1b1fd7e770a900867d4a8ba14",
-      "CABIRuntimeTransport.FreeHandle": "6ceb10851dfa6981e555b182376c6cf189b1e1b4e3c1515ad3286a3dec822ad9",
-      "CABIRuntimeTransport.HandleEvents": "40f76e3162e9942e3466c99ac797aad7aa2ca4a5cb712891e1a2a45a201ebf19",
-      "CABIRuntimeTransport.Invoke": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86",
-      "CABIRuntimeTransport.OpenBidi": "9f494fd852dcc6c2a59e60af690fb35f59383441163c23ef72cb9374d65e193b",
-      "CABIRuntimeTransport.OpenStream": "e3808a6360bf985210fb5fff95f9bef9b44733c06e632da36c9c3d7c855fe63d",
-      "CABIRuntimeTransport.Prepare": "e4bbb8ed76b6ae456e37cd1ce00bba458edb141de2e8c877451096a06715d01c",
-      "CABIRuntimeTransport.ResolveDescriptorRef": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86",
-      "CABIRuntimeTransport.RuntimeDiagnostics": "acd209fa37ca173b020bc9532b22f94fcd3aed9f54a27bf9e858889adf95fdbf",
-      "CABIRuntimeTransport.RuntimeHealth": "acd209fa37ca173b020bc9532b22f94fcd3aed9f54a27bf9e858889adf95fdbf",
-      "CABIRuntimeTransport.SubmitSigned": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86",
       "CallerIdentityRef": "9a45be2ffd30770cb5de14f40d4dbfd0212bf18aa180f331354a8d8bfac0cbd2",
       "CallerIdentityRef.Principal": "a7b76e00c0e272526360458dadb15b3c69baf2d115c39fae19b93dabc9b873d0",
       "CanonicalAddressing": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
@@ -18187,7 +17937,6 @@
       "NewBidiOutcomeFromJSON": "447cde8832588946ef29577210af5a3ad26189692bf4239f34098574d3c2f3aa",
       "NewBidiSessionFromJSON": "8884bdbf8dc41cb0fccbd889617df21eb22e57108240b34f5f32afed7a543701",
       "NewBidiTerminalFrame": "d8138489677192af88d7d17e1820f9c618e40e4fd05160743fcae94557c07e54",
-      "NewCABIRuntimeHost": "1ac9157f5a12f450921972589411ff8354770acf5d53108f5112523ee0484789",
       "NewCanonicalAddressing": "c7e90d7d6cced84f257083408db41fcb15df345342aabbed33fdd83fd2e0362d",
       "NewCanonicalAuthorityClient": "f19b1dbdb1444807ce2fa497d54bcc63aab002d28bbcf2950a6fcf1182a53c03",
       "NewCanonicalAuthorityTransport": "a74f4651ebf27a3b550d79a185ee182e08ba736ee253b45ff77fdaf23daace21",
@@ -18240,7 +17989,6 @@
       "NewStreamEventFromJSON": "4c54c62ac78806093bca14693b8e11fcf855d9f58f52247e972f0f5e54b3af1a",
       "NewStreamHandleFromJSON": "5d111e089079420987ad96c0288626edc25ce2194b4f72af5e1887270a737644",
       "NewStreamTerminalEvent": "3ff95303f595f98d1d45f53610298f5fe6291baf1db63e3298dd2a50c9cb2e44",
-      "OpenCABIRuntimeLifecycleTransport": "f26ae57fd66e4e8fc64b7d0303cd313ade6025ec0178d4cd5ed47850aa201bd4",
       "OpenNativeRuntime": "42e6c1e95ebd4b435ec7ef49932688aee53de1559cb3d4f84a217c1e359a1154",
       "OwnerAbilityURA": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
       "ParseAbilityDescriptorRef": "5c5c029c8aab1e120b7717f341e2bf1f3f748e317d8630549be9a9b6e2f4f40b",
@@ -23361,10 +23109,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/cabi_runtime.go",
-      "sha256": "aaf523c832c9f8b66b02b345fe6b5d3b21824a122617512789f88d017b1d5885",
-      "interface": "CABIRuntimeTransport",
-      "interface_path": "sdk/go/cabi_runtime.go",
-      "interface_sha256": "aaf523c832c9f8b66b02b345fe6b5d3b21824a122617512789f88d017b1d5885",
+      "sha256": "34de34046ebf6d93d3f69e9d4265a2c9fba277cbebaa5d1123c4051f9e3d4d96",
+      "interface": "RuntimeTransport",
+      "interface_path": "sdk/go/runtime.go",
+      "interface_sha256": "cb65c251fefe0839c717cf5835400dc214f129a790d3d12cc1c54b79c6b36b27",
       "capability_ids": [
         "stream",
         "bidi"
