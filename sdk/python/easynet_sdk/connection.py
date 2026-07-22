@@ -60,15 +60,12 @@ class ConnectOptions:
 
 @dataclass(frozen=True)
 class RuntimeEndpoint:
-    """Resolved daemon invocation endpoint projection."""
+    """Resolved runtime invocation endpoint projection."""
 
     endpoint: str
     control_path: str = ""
-    control_endpoint: str = ""
     protocol_version: str = ""
     abi_version: int = 0
-    daemon_version: str = ""
-    capability_flags: tuple[str, ...] = ()
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "RuntimeEndpoint":
@@ -84,23 +81,12 @@ class RuntimeEndpoint:
             endpoint=endpoint,
             control_path=_optional_string(decoded.get("control_path"), "control_path")
             or "",
-            control_endpoint=_optional_string(
-                decoded.get("control_endpoint"), "control_endpoint"
-            )
-            or "",
             protocol_version=_optional_string(
                 decoded.get("protocol_version"), "protocol_version"
             )
             or "",
             abi_version=_optional_non_negative_int(
                 decoded.get("abi_version"), "abi_version"
-            ),
-            daemon_version=_optional_string(
-                decoded.get("daemon_version"), "daemon_version"
-            )
-            or "",
-            capability_flags=_string_tuple(
-                decoded.get("capability_flags", []), "capability_flags"
             ),
         )
 
@@ -166,9 +152,6 @@ class _ControlDiscoveryRuntimeConnector:
             {
                 "endpoint": discovery.invocation_endpoint,
                 "control_path": control_path,
-                "control_endpoint": discovery.socket_path,
-                "daemon_version": discovery.daemon_version,
-                "capability_flags": list(discovery.capability_flags),
             }
         )
 
@@ -368,16 +351,6 @@ def _optional_non_negative_int(value: object, field_name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise _invalid_connection(f"{field_name} must be a non-negative integer")
     return value
-
-
-def _string_tuple(value: object, field_name: str) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, list) or not all(
-        isinstance(item, str) for item in value
-    ):
-        raise _invalid_connection(f"{field_name} must be an array of strings")
-    return tuple(value)
 
 
 def _invalid_connection(

@@ -133,9 +133,6 @@ class DirectRuntimeConnector:
         facts.update(
             {
                 "endpoint": discovery.invocation_endpoint,
-                "control_endpoint": discovery.socket_path,
-                "daemon_version": discovery.daemon_version,
-                "capability_flags": list(discovery.capability_flags),
             }
         )
         return _json_bytes(facts)

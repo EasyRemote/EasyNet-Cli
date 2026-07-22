@@ -323,12 +323,9 @@ class DirectRuntimeTests(unittest.TestCase):
 
         self.assertEqual(resolved["endpoint"], "/tmp/invoke.sock")
         self.assertEqual(resolved["control_path"], "/tmp/control.json")
-        self.assertEqual(resolved["control_endpoint"], "/tmp/control.sock")
-        self.assertEqual(resolved["daemon_version"], "1.2.3")
-        self.assertEqual(
-            resolved["capability_flags"],
-            ["runtime.invoke", "direct.grpc"],
-        )
+        self.assertNotIn("control_endpoint", resolved)
+        self.assertNotIn("daemon_version", resolved)
+        self.assertNotIn("capability_flags", resolved)
         self.assertEqual(resolved["dial_timeout_ms"], 500)
 
     def test_direct_connector_reports_control_only_without_invocation_endpoint(

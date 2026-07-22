@@ -140,9 +140,9 @@ class _ControlDiscoveryRuntimeConnectorTests(unittest.TestCase):
         endpoint = json.loads(raw.decode("utf-8"))
         self.assertEqual(endpoint["endpoint"], "unix:///tmp/invocation.sock")
         self.assertEqual(endpoint["control_path"], "/tmp/default-control.json")
-        self.assertEqual(endpoint["control_endpoint"], "/tmp/control.sock")
-        self.assertEqual(endpoint["daemon_version"], "1.2.3")
-        self.assertEqual(endpoint["capability_flags"], ["runtime"])
+        self.assertNotIn("control_endpoint", endpoint)
+        self.assertNotIn("daemon_version", endpoint)
+        self.assertNotIn("capability_flags", endpoint)
 
     def test_resolve_control_only_when_discovery_has_no_invocation_endpoint(self) -> None:
         connector = _ControlDiscoveryRuntimeConnector(
@@ -173,9 +173,6 @@ class _ControlDiscoveryRuntimeConnectorTests(unittest.TestCase):
         self.assertEqual(connection.state, ConnectionState.READY)
         assert connection.endpoint is not None
         self.assertEqual(connection.endpoint.endpoint, "unix:///tmp/invocation.sock")
-        self.assertEqual(connection.endpoint.control_endpoint, "/tmp/control.sock")
-        self.assertEqual(connection.endpoint.daemon_version, "1.2.3")
-        self.assertEqual(connection.endpoint.capability_flags, ("runtime",))
         self.assertEqual(
             inner.handshake_endpoint["endpoint"], "unix:///tmp/invocation.sock"
         )

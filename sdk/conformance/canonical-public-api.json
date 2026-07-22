@@ -4577,8 +4577,6 @@
       "RuntimeConnector.handshake",
       "RuntimeConnector.resolve",
       "RuntimeEndpoint.abi_version",
-      "RuntimeEndpoint.capability_flags",
-      "RuntimeEndpoint.control_endpoint",
       "RuntimeEndpoint.control_path",
       "RuntimeEndpoint.endpoint",
       "RuntimeEndpoint.from_json",
@@ -6404,8 +6402,7 @@
         "PrepareOptions.LocalDaemonSigning"
       ],
       "python": [
-        "PrepareOptions.local_daemon_signing",
-        "RuntimeEndpoint.daemon_version"
+        "PrepareOptions.local_daemon_signing"
       ],
       "node": [],
       "java": [],
@@ -6960,14 +6957,6 @@
         "PrepareOptions.local_daemon_signing": {
           "canonical_replacement": [
             "capability_inventory.prepare_sign_submit"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "RuntimeEndpoint.daemon_version": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_connection"
           ],
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
@@ -12057,8 +12046,6 @@
           "RuntimeConnector.handshake",
           "RuntimeConnector.resolve",
           "RuntimeEndpoint.abi_version",
-          "RuntimeEndpoint.capability_flags",
-          "RuntimeEndpoint.control_endpoint",
           "RuntimeEndpoint.control_path",
           "RuntimeEndpoint.endpoint",
           "RuntimeEndpoint.protocol_version"
@@ -14501,7 +14488,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "73c47faacf0b863c2514799614f214eae09406c3bc66ab55b0dec0df74d6daf3",
+          "sha256": "2f77e53d2765c5848149a148ebb9545a7b5700ae873483f5e3e41f498a282b80",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14597,7 +14584,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "73c47faacf0b863c2514799614f214eae09406c3bc66ab55b0dec0df74d6daf3",
+          "sha256": "2f77e53d2765c5848149a148ebb9545a7b5700ae873483f5e3e41f498a282b80",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14693,7 +14680,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "73c47faacf0b863c2514799614f214eae09406c3bc66ab55b0dec0df74d6daf3",
+          "sha256": "2f77e53d2765c5848149a148ebb9545a7b5700ae873483f5e3e41f498a282b80",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14824,7 +14811,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "73c47faacf0b863c2514799614f214eae09406c3bc66ab55b0dec0df74d6daf3",
+          "sha256": "2f77e53d2765c5848149a148ebb9545a7b5700ae873483f5e3e41f498a282b80",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15176,7 +15163,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "73c47faacf0b863c2514799614f214eae09406c3bc66ab55b0dec0df74d6daf3",
+          "sha256": "2f77e53d2765c5848149a148ebb9545a7b5700ae873483f5e3e41f498a282b80",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15799,7 +15786,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "73c47faacf0b863c2514799614f214eae09406c3bc66ab55b0dec0df74d6daf3",
+          "sha256": "2f77e53d2765c5848149a148ebb9545a7b5700ae873483f5e3e41f498a282b80",
           "interface": "RuntimeConnector",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -20085,14 +20072,11 @@
       "RuntimeConnector.close": "d9010a8907ca26c80bff5cf9680aecb1d68a0786897cf2f722e0c5132ad31faa",
       "RuntimeConnector.handshake": "376e21b22efc4e3288a5154148b7185c3d9ab245d289e4d4aae1eb0a49e51020",
       "RuntimeConnector.resolve": "cfa4d6e6d8e66927c497aad2363716c743ae0a314c77e317ee1e03811e44b1e5",
-      "RuntimeEndpoint": "167acf7e512f42d8f5b13976c74f10502cf1c10a3e50c632c307f3196603538c",
+      "RuntimeEndpoint": "54cb1972df332a34f3e5704750db8f550ad6389e59e0d4b9807a614f18481c2c",
       "RuntimeEndpoint.abi_version": "81712fa611c58e1af2b7382bb63ebdbbb793bd85b6c5eca728a174d537341cad",
-      "RuntimeEndpoint.capability_flags": "d8738c5d2b8110f4d7ea70bc077c99f0ad865660b67131f5c7937ed29e3d9109",
-      "RuntimeEndpoint.control_endpoint": "381451626c1ef403bbd12dd4928693f36e56f0efc0796690870193ebaeab3544",
       "RuntimeEndpoint.control_path": "a8d3140bdabc6ed6cadf524fa80b7b5f399776465c825b9b3b9a2149aa270bd5",
-      "RuntimeEndpoint.daemon_version": "b3cb2cc61758d65df9151014ba497217dd98995a9d9d09f18488fa84abd7dad0",
       "RuntimeEndpoint.endpoint": "510e5f782ffadee42512d6280d9c648f9dddbf859196ef84a4e578bf6f6020ff",
-      "RuntimeEndpoint.from_json": "912d2ed122295dc9c1f0ba42dff422376c5822a74baea10d24f904b9bf8becb8",
+      "RuntimeEndpoint.from_json": "b3f85cc38ecab85691e75612dfc0c166b312b920a024fc58b776322cf788cd65",
       "RuntimeEndpoint.protocol_version": "25fa0e03e0ae732a95d1305c89f28a88eb72ff79c547d29c523b6d500ec67b90",
       "RuntimeError": "56e40db780bbbba296a613caeeba3ae65510cb806aed52b4d2eec3e6ee90af66",
       "RuntimeEvent": "fd11421240bb631847b55a53b3a8d88ac4eb4e855c2cc4500cf541ee3071925a",
@@ -22437,7 +22421,7 @@
       "item": "RuntimeEndpoint.from_json",
       "parent_capability": "runtime_connection",
       "role": "serialization_projection",
-      "shape_sha256": "912d2ed122295dc9c1f0ba42dff422376c5822a74baea10d24f904b9bf8becb8",
+      "shape_sha256": "b3f85cc38ecab85691e75612dfc0c166b312b920a024fc58b776322cf788cd65",
       "shape_group": "serialization_projection:runtimeendpoint.deserializejson"
     },
     {
@@ -22669,10 +22653,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/direct_runtime.py",
-      "sha256": "73c47faacf0b863c2514799614f214eae09406c3bc66ab55b0dec0df74d6daf3",
+      "sha256": "2f77e53d2765c5848149a148ebb9545a7b5700ae873483f5e3e41f498a282b80",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/python/easynet_sdk/connection.py",
-      "interface_sha256": "c0de867cd88f1718cc8715c963d878a381b2eede19af9d200813e7e4c73c255b",
+      "interface_sha256": "7c9d13dce459987d37f7dd271975bd291ad4a8158a384f80490038906c06f6af",
       "capability_ids": [
         "native_runtime",
         "runtime_environment",
@@ -23635,7 +23619,7 @@
           "language": "python",
           "section": "members",
           "item": "RuntimeEndpoint.from_json",
-          "shape_sha256": "912d2ed122295dc9c1f0ba42dff422376c5822a74baea10d24f904b9bf8becb8"
+          "shape_sha256": "b3f85cc38ecab85691e75612dfc0c166b312b920a024fc58b776322cf788cd65"
         }
       ],
       "present_languages": [
