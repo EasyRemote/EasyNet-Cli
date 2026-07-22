@@ -5,19 +5,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Mapping
+from typing import Mapping
 
-from ...connection import ConnectOptions
 from ...errors import ErrorCode, RetryHint, SDKError
-
-if TYPE_CHECKING:
-    from ...runtime_lifecycle import (
-        AttachOptions,
-        Endpoints,
-        RuntimeHandle,
-        RuntimeLifecycleTransport,
-    )
-    from ...runtime import RuntimeClient
 
 
 class DaemonMode(StrEnum):
@@ -105,41 +95,6 @@ class DiscoverOptions:
                 "home_dir": self.home_dir,
             }
         )
-
-
-def start_daemon(
-    transport: "RuntimeLifecycleTransport", config: StartConfig
-) -> "RuntimeHandle":
-    from ...runtime_lifecycle import start_runtime_host
-
-    return start_runtime_host(transport, config)
-
-
-def attach_daemon(
-    transport: "RuntimeLifecycleTransport",
-    options: "AttachOptions | None" = None,
-) -> "RuntimeHandle":
-    from ...runtime_lifecycle import AttachOptions, attach_runtime_host
-
-    return attach_runtime_host(transport, options or AttachOptions())
-
-
-def discover_daemon(
-    transport: "RuntimeLifecycleTransport",
-    options: DiscoverOptions = DiscoverOptions(),
-) -> "Endpoints":
-    from ...runtime_lifecycle import discover_runtime_host
-
-    return discover_runtime_host(transport, options)
-
-
-def connect_local(
-    transport: "RuntimeLifecycleTransport",
-    options: ConnectOptions = ConnectOptions(),
-) -> "RuntimeClient":
-    from ...runtime_lifecycle import connect_runtime_local
-
-    return connect_runtime_local(transport, options)
 
 
 def _invalid_lifecycle(message: str) -> SDKError:

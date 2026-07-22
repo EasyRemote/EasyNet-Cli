@@ -38,7 +38,7 @@ development_loader_violations() {
 }
 
 provider_profile_projection_violations() {
-  rg -n '\b(DaemonStartProjection|RuntimeHostStartProjection|from_profile|def\s+(hub|device)\s*\(|func\s+(Hub|Device)StartProjection)\b' "$@"
+  rg -n '\b(DaemonStartProjection|RuntimeHostStartProjection|from_profile|def\s+(hub|device|start_daemon|attach_daemon|discover_daemon|connect_local)\s*\(|func\s+(Hub|Device)StartProjection)\b' "$@"
 }
 
 retired_product_sdk_modules() {
@@ -158,7 +158,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   rm -f "$injected"
   injected="$tmp/sdk/python/easynet_sdk/providers/easynet/lifecycle.py"
   mkdir -p "$(dirname "$injected")"
-  printf 'class DaemonStartProjection:\n    @classmethod\n    def hub(cls):\n        return cls.from_profile(mode="hub")\n' >"$injected"
+  printf 'class DaemonStartProjection:\n    @classmethod\n    def hub(cls):\n        return cls.from_profile(mode="hub")\ndef start_daemon(transport, config):\n    return None\n' >"$injected"
   if ! provider_profile_projection_violations "$injected" >/dev/null; then
     fail "self-test failed to detect provider product start projection"
   fi
