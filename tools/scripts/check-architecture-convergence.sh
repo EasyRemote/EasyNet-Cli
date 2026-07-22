@@ -7369,6 +7369,48 @@ if session_prelude.exists():
                     line_number(text, offset),
                     "paired user trust sync must propagate resolve_key response schema failures",
                 )
+            for pattern, detail in (
+                (
+                    "let Ok(creds)",
+                    "paired user trust sync must not classify credential load errors as NotRequired",
+                ),
+                (
+                    "let Ok(user_ura)",
+                    "paired user trust sync must not classify invalid paired user identity as NotRequired",
+                ),
+                (
+                    "load_credentials().ok()",
+                    "paired user trust sync must not swallow credential load failures",
+                ),
+                (
+                    "user_ura().ok()",
+                    "paired user trust sync must not swallow paired user URA projection failures",
+                ),
+            ):
+                if pattern in body:
+                    add(
+                        "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                        session_prelude,
+                        line_number(text, offset + body.find(pattern)),
+                        detail,
+                    )
+            for token, detail in (
+                (
+                    "load_credentials_optional()",
+                    "paired user trust sync must distinguish missing credentials from corrupt credentials",
+                ),
+                (
+                    "UserTrustBootstrapError::CredentialsUnavailable",
+                    "paired user trust sync must expose corrupt credentials as a prelude failure state",
+                ),
+            ):
+                if token not in text:
+                    add(
+                        "R93_SESSION_PRELUDE_RESOLVE_KEY_SCHEMA",
+                        session_prelude,
+                        line_number(text, offset),
+                        detail,
+                    )
 
 
 # Rule 74: Pages serve adapter must consume page.fetch output as

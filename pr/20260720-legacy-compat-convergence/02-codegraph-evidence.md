@@ -2323,3 +2323,23 @@ Evidence will be appended after indexing and focused impact queries.
 - Boundary decision: Node now classifies session authority subject semantics at
   the SDK facade boundary using the same canonical subject cases as daemon
   admission: user subject or user-owned session resource.
+
+## 2026-07-22 Session prelude paired-user credential audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore load_runtime_caller_signer
+  key service credentials user_ura caller signer` tied the reported
+  caller-signer failures to daemon self-identity/key-service state and session
+  prelude identity setup.
+- `rg -n "let Ok\\([^)]*user_ura|user_ura\\(\\)\\.ok\\(\\)|load_credentials\\(\\)\\.ok\\(\\)"
+  src/daemon src/cli src/bin sdk -S --glob '!**/*test*' --glob '!**/tests/**'
+  --glob '!sdk/node/node_modules/**'` surfaced
+  `sync_paired_user_trust_prelude` swallowing credential load and user URA
+  projection failures into `NotRequired`.
+- Root abstraction problem: paired-user trust bootstrap represented both
+  "daemon is unpaired" and "paired identity is corrupt" as the same
+  `NotRequired` outcome, allowing session open/ready state to proceed before
+  canonical remote invocation failed on missing caller signer or authority
+  state.
+- Boundary decision: session prelude now uses the same optional-credential
+  classifier pattern as admission: absent file is optional absence; existing
+  invalid paired identity is a prelude failure.

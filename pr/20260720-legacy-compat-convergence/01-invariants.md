@@ -334,3 +334,7 @@
   not a daemon-only admission concern. Each SDK must reject session authority
   whose subject is not a canonical user subject or canonical user-owned session
   resource bound to the same `session_owner_user_id` and `session_id`.
+- Session preludes must distinguish absent paired-user state from unavailable
+  paired-user identity. Missing credentials may skip paired-user trust sync;
+  unreadable, malformed, schema-invalid, or all-zero paired credentials must
+  fail the prelude before `session.open` can expose a ready route.

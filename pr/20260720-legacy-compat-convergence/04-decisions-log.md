@@ -833,3 +833,15 @@ Decisions will be appended as root-fork choices are made.
   `SessionAuthorityRequest` with the existing fields.
 - Add a SPEC v2 guard and focused Node test so the SDK cannot regress to
   all-zero-only authority validation.
+
+## 2026-07-22 Session prelude paired-user credentials
+
+- Treat paired-user trust bootstrap as part of session readiness. A corrupt
+  paired identity source now fails before `session.open`, rather than being
+  projected as "not required" and leaving later remote invocation to discover
+  missing user signer/trust state.
+- Preserve the unpaired daemon case. `credentials.json` absence still means no
+  paired-user trust sync is required; only existing invalid credentials become
+  `CredentialsUnavailable`.
+- Add SPEC v2 and architecture gates so prelude credential classification
+  cannot regress to `let Ok(...) else NotRequired` fallback semantics.

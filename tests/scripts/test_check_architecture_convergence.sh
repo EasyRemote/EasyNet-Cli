@@ -993,7 +993,19 @@ fn paired_user_resolve_key_args(user_ura: &str, presented_pubkey_b64: Option<&st
     Ok(Vec::new())
 }
 
+enum UserTrustBootstrapError {
+    CredentialsUnavailable,
+}
+
 async fn sync_paired_user_trust_prelude() -> anyhow::Result<()> {
+    let Some(creds) = crate::daemon::persistence::config::load_credentials_optional()
+        .map_err(|_| UserTrustBootstrapError::CredentialsUnavailable)?
+    else {
+        return Ok(());
+    };
+    let user_ura = creds
+        .user_ura()
+        .map_err(|_| UserTrustBootstrapError::CredentialsUnavailable)?;
     for presented_pubkey_b64 in local_public_keys {
         let args = paired_user_resolve_key_args(&user_ura, presented_pubkey_b64)?;
         let response = invoke_prelude_unary(args).await?;

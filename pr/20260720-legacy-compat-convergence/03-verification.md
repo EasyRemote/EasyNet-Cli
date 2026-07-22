@@ -2599,3 +2599,20 @@ Commands and outcomes will be appended after implementation.
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS; synced
   Node SDK/test changes and left the index up to date.
 - `git diff --check` — PASS.
+
+## 2026-07-22 Session prelude paired-user credentials
+
+- `cargo test -q paired_user_trust_bootstrap --lib --features axon-pb`
+  — PASS (`2 passed`); covers missing credentials as the only `NotRequired`
+  local state and malformed credentials as `CredentialsUnavailable`.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative fixture for the retired `let Ok(...) else
+  NotRequired` credential fallback.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.

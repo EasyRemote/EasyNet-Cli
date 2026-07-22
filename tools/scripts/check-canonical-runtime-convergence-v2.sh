@@ -816,6 +816,55 @@ for required_test in (
 PY
 }
 
+check_session_prelude_credentials_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local prelude="$cli_root/src/daemon/invocation/bidi/session_initiator/prelude.rs"
+  [[ -f "$prelude" ]] || return 0
+
+  "$PYTHON_BIN" - "$prelude" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+start = text.find("async fn sync_paired_user_trust_prelude(")
+if start < 0:
+    raise SystemExit("session_prelude_user_trust_sync_missing")
+end = text.find("\nfn resolved_public_keys", start)
+body = text[start : end if end >= 0 else len(text)]
+
+for retired in (
+    "let Ok(creds)",
+    "let Ok(user_ura)",
+    "load_credentials().ok()",
+    "load_credentials().ok()?",
+    "user_ura().ok()",
+):
+    if retired in body:
+        raise SystemExit(f"session_prelude_credentials_retired_fallback:{retired}")
+
+required = (
+    "load_credentials_optional()",
+    "UserTrustBootstrapError::CredentialsUnavailable",
+    "load paired credentials",
+    "project paired user URA",
+)
+for token in required:
+    if token not in body:
+        raise SystemExit(f"session_prelude_credentials_missing_fail_closed_path:{token}")
+
+not_required_count = body.count("return Ok(UserTrustBootstrapOutcome::NotRequired);")
+if not_required_count != 2:
+    raise SystemExit(f"session_prelude_credentials_not_required_count:{not_required_count}")
+
+for test in (
+    "paired_user_trust_bootstrap_ignores_missing_credentials_only",
+    "paired_user_trust_bootstrap_rejects_malformed_credentials",
+):
+    if test not in text:
+        raise SystemExit(f"missing_session_prelude_credentials_test:{test}")
+PY
+}
+
 check_device_settings_loader_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local config="$cli_root/src/daemon/persistence/config.rs"
@@ -3042,6 +3091,22 @@ EOF
   if ( check_node_session_authority_subject_contract "$tmp/node-session-authority-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected Node session authority subject-binding gate to fail"
   fi
+  mkdir -p "$tmp/session-prelude-credentials-legacy/src/daemon/invocation/bidi/session_initiator"
+  printf '%s\n' \
+    'async fn sync_paired_user_trust_prelude(client: &mut InvocationClient<Channel>, signer: &dyn CanonicalSigner, sync: &UserTrustSync) -> Result<UserTrustBootstrapOutcome, UserTrustBootstrapError> {' \
+    '  let Ok(creds) = crate::daemon::persistence::config::load_credentials() else {' \
+    '    return Ok(UserTrustBootstrapOutcome::NotRequired);' \
+    '  };' \
+    '  let Ok(user_ura) = creds.user_ura() else {' \
+    '    return Ok(UserTrustBootstrapOutcome::NotRequired);' \
+    '  };' \
+    '  Ok(UserTrustBootstrapOutcome::NotRequired)' \
+    '}' \
+    'fn resolved_public_keys(result: &[u8]) -> anyhow::Result<Vec<String>> { Ok(Vec::new()) }' \
+    > "$tmp/session-prelude-credentials-legacy/src/daemon/invocation/bidi/session_initiator/prelude.rs"
+  if ( check_session_prelude_credentials_contract "$tmp/session-prelude-credentials-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected session prelude credential fallback gate to fail"
+  fi
   mkdir -p "$tmp/device-settings-legacy/src/daemon/persistence" \
     "$tmp/device-settings-legacy/src/cli/commands"
   printf '%s\n' \
@@ -3093,6 +3158,7 @@ EOF
   check_admission_owner_credentials_contract
   check_shared_local_device_owner_projection_contract
   check_node_session_authority_subject_contract
+  check_session_prelude_credentials_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_edge_adapter_policy_contract
@@ -3138,6 +3204,7 @@ check_runtime_trust_revoke_credentials_contract
 check_admission_owner_credentials_contract
 check_shared_local_device_owner_projection_contract
 check_node_session_authority_subject_contract
+check_session_prelude_credentials_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_edge_adapter_policy_contract

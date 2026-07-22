@@ -718,6 +718,9 @@ pub struct UserTrustSync {
 
 #[derive(Debug, thiserror::Error)]
 pub enum UserTrustBootstrapError {
+    #[error("paired user credentials are unavailable for trust bootstrap: {message}")]
+    CredentialsUnavailable { message: String },
+
     #[error("publishing paired user key for `{user_ura}` failed: {status}")]
     PublishFailed {
         user_ura: String,
@@ -887,12 +890,21 @@ async fn sync_paired_user_trust_prelude(
     signer: &dyn CanonicalSigner,
     sync: &UserTrustSync,
 ) -> Result<UserTrustBootstrapOutcome, UserTrustBootstrapError> {
-    let Ok(creds) = crate::daemon::persistence::config::load_credentials() else {
+    let Some(creds) =
+        crate::daemon::persistence::config::load_credentials_optional().map_err(|error| {
+            UserTrustBootstrapError::CredentialsUnavailable {
+                message: format!("load paired credentials: {error:#}"),
+            }
+        })?
+    else {
         return Ok(UserTrustBootstrapOutcome::NotRequired);
     };
-    let Ok(user_ura) = creds.user_ura() else {
-        return Ok(UserTrustBootstrapOutcome::NotRequired);
-    };
+    let user_ura =
+        creds
+            .user_ura()
+            .map_err(|error| UserTrustBootstrapError::CredentialsUnavailable {
+                message: format!("project paired user URA: {error:#}"),
+            })?;
     let realm = creds.realm.trim();
     if realm != sync.daemon_realm {
         return Ok(UserTrustBootstrapOutcome::NotRequired);
@@ -1186,12 +1198,17 @@ pub(super) fn committed_owner_ability_descriptors(
 mod tests {
     use super::{
         paired_user_resolve_key_args, paired_user_trust_present, resolved_public_keys,
-        HostedAgentPreludePublicationPlan, UserTrustSync,
+        sync_paired_user_trust_prelude, HostedAgentPreludePublicationPlan, UserTrustBootstrapError,
+        UserTrustBootstrapOutcome, UserTrustSync,
     };
     use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
+    use crate::daemon::identity::self_identity::TestCanonicalSigner;
+    use crate::daemon::persistence::config::state_dir;
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
     use crate::daemon::trust::cell::SharedTrustAnchor;
+    use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
     use std::sync::Arc;
+    use tonic::transport::Channel;
 
     #[test]
     fn resolved_public_keys_prefers_array_response() {
@@ -1279,6 +1296,43 @@ mod tests {
             &sync,
             "easynet:///r/realm/user/other"
         ));
+    }
+
+    #[tokio::test]
+    async fn paired_user_trust_bootstrap_ignores_missing_credentials_only() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let sync = user_trust_sync_with_key("easynet:///r/realm/user/user-dev");
+        let mut client =
+            InvocationClient::new(Channel::from_static("http://127.0.0.1:1").connect_lazy());
+        let signer = TestCanonicalSigner::new("easynet:///r/realm/device/n1", [0x11; 32]);
+
+        let outcome = sync_paired_user_trust_prelude(&mut client, &signer, &sync)
+            .await
+            .expect("missing credentials are the only not-required local state");
+        assert_eq!(outcome, UserTrustBootstrapOutcome::NotRequired);
+    }
+
+    #[tokio::test]
+    async fn paired_user_trust_bootstrap_rejects_malformed_credentials() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(state_dir()).expect("create state dir");
+        std::fs::write(state_dir().join("credentials.json"), "{")
+            .expect("write malformed credentials");
+        let sync = user_trust_sync_with_key("easynet:///r/realm/user/user-dev");
+        let mut client =
+            InvocationClient::new(Channel::from_static("http://127.0.0.1:1").connect_lazy());
+        let signer = TestCanonicalSigner::new("easynet:///r/realm/device/n1", [0x11; 32]);
+
+        let err = sync_paired_user_trust_prelude(&mut client, &signer, &sync)
+            .await
+            .expect_err("malformed credentials must fail prelude, not project NotRequired");
+        match err {
+            UserTrustBootstrapError::CredentialsUnavailable { message } => {
+                assert!(message.contains("load paired credentials"), "{message}");
+                assert!(message.contains("parse credentials"), "{message}");
+            }
+            other => panic!("expected credential unavailable state, got {other:?}"),
+        }
     }
 
     #[test]
