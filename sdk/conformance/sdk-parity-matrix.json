@@ -590,7 +590,7 @@
         },
         {
           "item": "Version",
-          "sha256": "af285a92a8ad907810461058103011a340ffab3716eab6bb71019113a9fe93ed"
+          "sha256": "3444a9f5aec4072a77ab7641b8a60b1384b16a8204c5031116894583d3ac9c20"
         },
         {
           "item": "Client.close",
@@ -665,7 +665,7 @@
             },
             {
               "item": "Version",
-              "sha256": "af285a92a8ad907810461058103011a340ffab3716eab6bb71019113a9fe93ed"
+              "sha256": "3444a9f5aec4072a77ab7641b8a60b1384b16a8204c5031116894583d3ac9c20"
             },
             {
               "item": "Client.close",
@@ -740,7 +740,7 @@
             },
             {
               "item": "Version",
-              "sha256": "af285a92a8ad907810461058103011a340ffab3716eab6bb71019113a9fe93ed"
+              "sha256": "3444a9f5aec4072a77ab7641b8a60b1384b16a8204c5031116894583d3ac9c20"
             },
             {
               "item": "Client.close",
@@ -815,7 +815,7 @@
             },
             {
               "item": "Version",
-              "sha256": "af285a92a8ad907810461058103011a340ffab3716eab6bb71019113a9fe93ed"
+              "sha256": "3444a9f5aec4072a77ab7641b8a60b1384b16a8204c5031116894583d3ac9c20"
             },
             {
               "item": "Client.close",
@@ -890,7 +890,7 @@
             },
             {
               "item": "Version",
-              "sha256": "af285a92a8ad907810461058103011a340ffab3716eab6bb71019113a9fe93ed"
+              "sha256": "3444a9f5aec4072a77ab7641b8a60b1384b16a8204c5031116894583d3ac9c20"
             },
             {
               "item": "Client.close",

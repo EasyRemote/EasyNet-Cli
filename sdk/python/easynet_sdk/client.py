@@ -22,7 +22,7 @@ class DiscoveryTransport(Protocol):
 
 @dataclass(frozen=True)
 class Version:
-    """Runtime Core version compatibility DTO."""
+    """Negotiated Runtime Core version DTO."""
 
     abi_version: int
     sdk_version: str

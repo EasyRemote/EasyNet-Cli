@@ -108,7 +108,7 @@ func (f FeatureSet) Version() Version {
 	}
 }
 
-// Version is the Runtime Core version compatibility DTO.
+// Version is the negotiated Runtime Core version DTO.
 type Version struct {
 	ABIVersion uint32
 	SDKVersion string

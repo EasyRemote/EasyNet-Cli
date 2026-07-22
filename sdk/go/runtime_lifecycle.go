@@ -197,7 +197,7 @@ func NewRuntimeHost(transport RuntimeLifecycleTransport) (*RuntimeHost, error) {
 	return &RuntimeHost{transport: transport}, nil
 }
 
-// DiscoverRuntime returns provider-advertised endpoints without hard-coded fallbacks.
+// DiscoverRuntime returns provider-advertised endpoints without implicit synthesis.
 func (h *RuntimeHost) DiscoverRuntime(ctx context.Context, request RuntimeHostDiscoverRequest) (Endpoints, error) {
 	if h == nil || h.transport == nil {
 		return Endpoints{}, invalidRuntimeClient("daemon control is not initialized")

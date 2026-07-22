@@ -1,4 +1,4 @@
-"""EasyNet provider lifecycle policy and source-compatible daemon DTOs."""
+"""EasyNet provider lifecycle policy and stable daemon DTOs."""
 
 from __future__ import annotations
 
