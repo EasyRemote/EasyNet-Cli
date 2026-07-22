@@ -4418,6 +4418,20 @@ for governance_status_surface, surface_label in governance_status_surfaces:
         if token in production_text:
             add("R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK", governance_status_surface, 1, detail)
     if surface_label == "invocation history":
+        if "ledger_governance_owner()" not in production_text:
+            add(
+                "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+                governance_status_surface,
+                1,
+                "invocation history must register through the single ledger governance owner",
+            )
+        if "local_runtime_owners()" in production_text:
+            add(
+                "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+                governance_status_surface,
+                1,
+                "invocation history must not fan out one daemon ledger across all runtime owners",
+            )
         ledger_body = rust_method_body(production_text, "ledger_resource_ura")
         if ledger_body is None:
             add(

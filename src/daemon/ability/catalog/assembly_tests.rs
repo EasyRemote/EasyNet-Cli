@@ -789,6 +789,46 @@ fn combined_registry_binds_local_introspection_to_distinct_device_and_hub_roots(
 }
 
 #[test]
+fn combined_registry_exposes_invocation_history_through_one_ledger_governance_owner() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let agents = AgentRegistry::default();
+    let device_ura = crate::core::ura::device_ura("history-fixture", "dev-b");
+    let hub_ura = crate::core::ura::hub_ura("history-fixture");
+    let mut config = registry_config_for_agents(&agents);
+    config.authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+            device_ura.clone(),
+        )
+        .expect("combined authority context");
+    let registry = build_registry_with_services_result(config)
+        .expect("assemble registry")
+        .catalog;
+
+    let device_record = registry
+        .control_plane_record_for_authority_mode(
+            &device_ura,
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect("Device history authority lookup");
+    let hub_record = registry
+        .control_plane_record_for_authority_mode(
+            &hub_ura,
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect("Hub history authority lookup");
+
+    let record = device_record.expect("history list must remain visible on the host device");
+    assert_eq!(record.descriptor().owner_ura, device_ura);
+    assert_eq!(record.authority().scope().authority_root(), device_ura);
+    assert!(
+        hub_record.is_none(),
+        "one daemon ledger must not publish a duplicate hub-governance history route"
+    );
+}
+
+#[test]
 fn explicit_voice_repository_registers_only_hub_call_aggregate_routes() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let agents = AgentRegistry::default();

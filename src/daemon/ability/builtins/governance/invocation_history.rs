@@ -2,7 +2,7 @@
 // ========================================
 //
 // File: src/daemon/ability/builtins/governance/invocation_history.rs
-// Description: Device-owned read-only surfaces over the Axon
+// Description: Daemon-local read-only governance surfaces over the Axon
 //              invocation ledger. The daemon writes the ledger at
 //              invoke time; these abilities expose that durable
 //              history without requiring frontend/backend code to
@@ -66,9 +66,7 @@ const MAX_HISTORY_CURSOR_LEN: usize = 4096;
 
 pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedger>>) {
     let reader = Arc::new(InvocationLedgerReader::new(ledger));
-    for owner in reg.local_runtime_owners() {
-        register_for_owner(reg, owner, Arc::clone(&reader));
-    }
+    register_for_owner(reg, reg.ledger_governance_owner(), reader);
 }
 
 fn register_for_owner(
@@ -1141,7 +1139,7 @@ mod tests {
     }
 
     #[test]
-    fn combined_runtime_registers_observation_routes_for_device_and_hub() {
+    fn combined_runtime_registers_observation_routes_through_one_ledger_governance_owner() {
         let device_ura = crate::core::ura::device_ura("history-test", "device-a");
         let authority =
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
@@ -1163,9 +1161,12 @@ mod tests {
                 .into_iter()
                 .filter(|row| row.name == ability)
                 .collect::<Vec<_>>();
-            assert_eq!(rows.len(), 2, "{ability} must exist on both local planes");
-            assert!(rows.iter().any(|row| row.owner == OwnerKind::Device));
-            assert!(rows.iter().any(|row| row.owner == OwnerKind::Hub));
+            assert_eq!(
+                rows.len(),
+                1,
+                "{ability} must publish exactly one daemon-local governance route"
+            );
+            assert_eq!(rows[0].owner, OwnerKind::Device);
         }
     }
 

@@ -2119,6 +2119,15 @@ impl AbilityAuthorityContext {
         }
     }
 
+    pub(crate) fn ledger_governance_owner(&self) -> OwnerKind {
+        match &self.authorities {
+            AbilityAuthoritySet::Device { .. } | AbilityAuthoritySet::Both { .. } => {
+                OwnerKind::Device
+            }
+            AbilityAuthoritySet::Hub { .. } => OwnerKind::Hub,
+        }
+    }
+
     pub(crate) fn hosts_device_authority(&self) -> bool {
         self.authorities.device().is_some()
     }
@@ -5568,13 +5577,14 @@ impl AxonAbilityCatalog {
             .collect()
     }
 
-    /// Authority planes hosted by this catalogue's runtime.
+    /// Single authority plane for daemon-local ledger governance.
     ///
-    /// Registration modules use this projection when one generic daemon
-    /// ability must exist on every local runtime authority. The underlying
-    /// authority-set state remains owned by `AbilityAuthorityContext`.
-    pub(crate) fn local_runtime_owners(&self) -> Vec<OwnerKind> {
-        self.authority_context.local_runtime_owners()
+    /// The invocation ledger is one daemon-process fact source. Unlike generic
+    /// local runtime introspection, it must not be duplicated under every
+    /// hosted authority root in combined mode because that creates a second
+    /// governance route to the same mutable audit state.
+    pub(crate) fn ledger_governance_owner(&self) -> OwnerKind {
+        self.authority_context.ledger_governance_owner()
     }
 
     /// Resolve the unique descriptor for a protocol-visible ability identity.
@@ -6429,6 +6439,7 @@ mod tests {
             .expect("Hub owner scope");
         assert_eq!(hub_scope.authority_root(), hub_ura);
         assert_eq!(context.local_runtime_owners(), vec![OwnerKind::Hub]);
+        assert_eq!(context.ledger_governance_owner(), OwnerKind::Hub);
 
         let err =
             AbilityAuthorityContext::for_hub_authority_root("easynet:///r/realm-b/device/dev-b")
@@ -6461,6 +6472,8 @@ mod tests {
         let device_ura = crate::core::ura::device_ura("realm-b", "dev-b");
         let context = AbilityAuthorityContext::for_device_authority_root(&device_ura)
             .expect("fixed Device authority context");
+
+        assert_eq!(context.ledger_governance_owner(), OwnerKind::Device);
 
         let agent_scope = OwnerKind::Agent("worker".to_string())
             .authority_scope(&context)
@@ -6606,6 +6619,7 @@ mod tests {
             context.local_runtime_owners(),
             vec![OwnerKind::Device, OwnerKind::Hub]
         );
+        assert_eq!(context.ledger_governance_owner(), OwnerKind::Device);
         assert_eq!(
             OwnerKind::Device
                 .authority_scope(&context)
