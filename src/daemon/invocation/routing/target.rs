@@ -360,7 +360,7 @@ impl InvocationTarget {
     /// Construct a local daemon-system dispatch that acts on an explicit
     /// subject while still using the named root-causal system policy.
     #[must_use]
-    fn local_daemon_system_with_subject(
+    fn local_daemon_system_for_subject(
         ability: impl Into<String>,
         normalized_args: Value,
         call_mode: CallMode,
@@ -495,7 +495,7 @@ impl SystemInvocationTargetIssuer {
         call_mode: CallMode,
         subject: impl Into<String>,
     ) -> InvocationTarget {
-        InvocationTarget::local_daemon_system_with_subject(
+        InvocationTarget::local_daemon_system_for_subject(
             ability,
             normalized_args,
             call_mode,

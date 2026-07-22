@@ -323,6 +323,21 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "InvocationTarget retired tuple mutation API should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+python3 - "$SB/src/daemon/invocation/routing/target.rs" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+text = text.replace("local_daemon_system_for_subject", "local_daemon_system_with_subject")
+path.write_text(text, encoding="utf-8")
+PY
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "InvocationTarget retired local_daemon_system_with_subject name should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 python3 - "$SB/src/support/platform/local_invoke.rs" "$SB/src/support/platform/local_daemon_grpc.rs" <<'PY'
 from pathlib import Path
 import sys
@@ -390,6 +405,22 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "production daemon-system target constructor should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+cat >"$SB/src/__target_constructor_subject_probe.rs" <<'RS'
+pub fn probe() {
+    let _ = crate::daemon::invocation::routing::target::InvocationTarget::local_daemon_system_for_subject(
+        "observe.health",
+        serde_json::Value::Null,
+        crate::daemon::invocation::routing::target::CallMode::Rpc,
+        "easynet:///r/acme/device/dev-a",
+    );
+}
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "production daemon-system subject target constructor should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 cat >"$SB/src/cli/commands/__subject_only_local_ingress_probe.rs" <<'RS'

@@ -302,10 +302,11 @@ for token, detail in (
 for token in (
     "pub fn with_subject(",
     "pub fn with_causal_context(",
+    "local_daemon_system_with_subject",
 ):
     if token in production_source(target_text):
         violations.append(
-            f"{target}: retired post-resolution tuple mutation API remains exposed: {token}"
+            f"{target}: retired post-resolution subject vocabulary remains exposed: {token}"
         )
 
 for token in (
@@ -330,7 +331,7 @@ for path in sorted((root / "src").rglob("*.rs")):
         )
     if rel != "src/daemon/invocation/routing/target.rs":
         for match in re.finditer(
-            r"InvocationTarget::(?:local_daemon_system(?:_with_subject)?|remote_daemon_system)\s*\(",
+            r"InvocationTarget::(?:local_daemon_system(?:_for_subject)?|remote_daemon_system)\s*\(",
             production,
         ):
             violations.append(
