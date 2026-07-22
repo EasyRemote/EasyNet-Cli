@@ -1551,6 +1551,18 @@ for required in (
 ):
     if required not in ready_body:
         raise SystemExit(f"start_attach_user_signer_readiness:ready_discovery_missing:{required}")
+if 'std::env::var("EASYNET_NODE_ID")' in ready_body:
+    raise SystemExit("start_attach_user_signer_readiness:ready_identity_uses_env_node_id")
+if "ready_daemon_identity(&config)" not in ready_body:
+    raise SystemExit("start_attach_user_signer_readiness:ready_identity_not_credentials_owned")
+if "fn ready_daemon_identity(" not in daemon_bin or "config::load_credentials()" not in daemon_bin:
+    raise SystemExit("start_attach_user_signer_readiness:ready_identity_credentials_helper_missing")
+for required_test in (
+    "ready_discovery_uses_paired_credentials_node_id_not_env",
+    "ready_discovery_rejects_credentials_realm_mismatch",
+):
+    if required_test not in daemon_bin:
+        raise SystemExit(f"start_attach_user_signer_readiness:missing_ready_identity_test:{required_test}")
 
 if "pub fn has_capability_flag(&self, flag: &str) -> bool" not in lifecycle_discovery:
     raise SystemExit("start_attach_user_signer_readiness:daemon_snapshot_flag_query_missing")
@@ -5593,6 +5605,58 @@ EOF
     > "$tmp/start-attach-user-signer-legacy/src/daemon/boot/lifecycle/start.rs"
   if ( check_start_attach_user_signer_readiness_contract "$tmp/start-attach-user-signer-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected start attach user signer readiness gate to fail"
+  fi
+  mkdir -p "$tmp/start-ready-env-node-legacy/src/daemon/control" \
+    "$tmp/start-ready-env-node-legacy/src/bin" \
+    "$tmp/start-ready-env-node-legacy/src/daemon/boot/lifecycle"
+  printf '%s\n' \
+    'pub mod flags {' \
+    '  pub const BOOT_STATUS: &str = "boot_status";' \
+    '  pub const CONTROL_DIAGNOSTICS: &str = "control_diagnostics";' \
+    '  pub const PAIRED_USER_RUNTIME_SIGNER: &str = "paired_user_runtime_signer";' \
+    '}' \
+    > "$tmp/start-ready-env-node-legacy/src/daemon/control/discovery.rs"
+  printf '%s\n' \
+    'pub struct ControlRuntimeDiscovery { pub invocation_endpoint: std::path::PathBuf, pub daemon_identity: DaemonIdentity, pub capability_flags: Vec<String> }' \
+    'fn write_discovery_for(runtime: Option<ControlRuntimeDiscovery>) {' \
+    '  let runtime = runtime.unwrap();' \
+    '  let capability_flags = discovery_capability_flags(runtime.capability_flags);' \
+    '}' \
+    'fn discovery_capability_flags(runtime_flags: Vec<String>) -> Vec<String> {' \
+    '  let _ = flags::BOOT_STATUS; let _ = flags::CONTROL_DIAGNOSTICS; runtime_flags' \
+    '}' \
+    > "$tmp/start-ready-env-node-legacy/src/daemon/control/server.rs"
+  printf '%s\n' \
+    'fn ready_runtime_discovery() -> anyhow::Result<server::ControlRuntimeDiscovery> {' \
+    '  let config = DaemonConfig::load(&default_config_path())?;' \
+    '  let node_id = std::env::var("EASYNET_NODE_ID").ok();' \
+    '  let mut capability_flags = Vec::new();' \
+    '  if matches!(config.mode(), DaemonMode::Device | DaemonMode::Both) {' \
+    '    capability_flags.push(flags::PAIRED_USER_RUNTIME_SIGNER.to_string());' \
+    '  }' \
+    '  Ok(server::ControlRuntimeDiscovery { invocation_endpoint: resolved_local_uds_path_with_env_override(), daemon_identity: DaemonIdentity { mode: config.mode().as_str().to_string(), realm: config.realm().to_string(), node_id }, capability_flags })' \
+    '}' \
+    'fn ready_discovery_uses_paired_credentials_node_id_not_env() {}' \
+    'fn ready_discovery_rejects_credentials_realm_mismatch() {}' \
+    > "$tmp/start-ready-env-node-legacy/src/bin/easynet-daemon.rs"
+  printf '%s\n' \
+    'impl DaemonDiscoverySnapshot {' \
+    '  pub fn identity(&self) -> Option<&DaemonIdentity> { None }' \
+    '  pub fn has_capability_flag(&self, flag: &str) -> bool { false }' \
+    '}' \
+    > "$tmp/start-ready-env-node-legacy/src/daemon/boot/lifecycle/discovery.rs"
+  printf '%s\n' \
+    'pub enum RuntimeLifecycleError { StartRefusedIdentityMismatch, StartRefusedMissingDaemonIdentity, StartRefusedMissingRuntimeCapability }' \
+    > "$tmp/start-ready-env-node-legacy/src/daemon/boot/lifecycle/errors.rs"
+  printf '%s\n' \
+    'fn validate_attach_capabilities(request: &RuntimeStartRequest, report: &RuntimeStatusReport) -> Result<(), RuntimeLifecycleError> {' \
+    '  if report.daemon().has_capability_flag(crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER) { return Ok(()); }' \
+    '  Err(RuntimeLifecycleError::StartRefusedMissingRuntimeCapability { mode: "device", capability: crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER })' \
+    '}' \
+    '#[cfg(test)] mod tests { fn start_preflight_refuses_device_attach_without_paired_user_signer_readiness() {} }' \
+    > "$tmp/start-ready-env-node-legacy/src/daemon/boot/lifecycle/start.rs"
+  if ( check_start_attach_user_signer_readiness_contract "$tmp/start-ready-env-node-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected ready discovery env-node fallback gate to fail"
   fi
   mkdir -p "$tmp/session-prelude-receipt-legacy/src/daemon/invocation/bidi/session_initiator"
   printf '%s\n' \

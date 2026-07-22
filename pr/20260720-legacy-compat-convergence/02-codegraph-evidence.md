@@ -3129,3 +3129,35 @@ Evidence will be appended after indexing and focused impact queries.
   135,723 edges. `codegraph query ... "optionalReceipt terminal_receipt
   InvocationResult"` no longer reports a Java `optionalReceipt` production
   symbol after re-indexing.
+
+## 2026-07-22 Daemon ready identity credential ownership audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore --max-files 20
+  "ensure_user_runtime_signing_identity paired_user_runtime_signer control
+  discovery daemon ready capability_flags"` confirmed that daemon boot already
+  provisions and registers the paired User runtime signer before publishing
+  Invocation readiness.
+- Source inspection found `ready_runtime_discovery()` still deriving
+  `daemon_identity.node_id` from the process `EASYNET_NODE_ID` environment
+  variable. That preserved a second identity authority at Ready publication:
+  key-service/user signer custody came from paired credentials, while the
+  attach/readiness identity could come from process environment.
+- Root abstraction problem: daemon Ready was not a single projection over the
+  same credential/source-of-truth that boot used for signer custody. A stale or
+  missing environment value could make attach/readiness identity diverge from
+  the actual paired device identity.
+- Boundary decision: Device/Both ready discovery is now credentials-owned.
+  `ready_daemon_identity()` loads paired credentials, rejects realm mismatch or
+  empty node id, and only then emits the ready `DaemonIdentity`. Hub mode
+  remains credential-free and emits no node id.
+- Added daemon-bin tests proving `EASYNET_NODE_ID` cannot override paired
+  credentials at Ready publication and that credentials/config realm mismatch
+  fails before ready discovery is written.
+- Extended `check-canonical-runtime-convergence-v2.sh` and its self-test with
+  an env-node fallback fixture so future ready discovery cannot reintroduce an
+  environment-owned Device identity.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync .` synced the changed
+  daemon source; `/Users/macbook.silan.tech/.local/bin/codegraph status .`
+  reported an up-to-date graph with 1,018 files, 35,365 nodes, and 135,760
+  edges. Follow-up codegraph exploration showed `ready_runtime_discovery →
+  ready_daemon_identity → config::load_credentials`.

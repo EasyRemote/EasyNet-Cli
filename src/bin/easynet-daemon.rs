@@ -702,10 +702,7 @@ fn resolve_pages_start_port() -> anyhow::Result<u16> {
 
 fn ready_runtime_discovery() -> anyhow::Result<server::ControlRuntimeDiscovery> {
     let config = DaemonConfig::load(&default_config_path())?;
-    let node_id = std::env::var("EASYNET_NODE_ID")
-        .ok()
-        .map(|raw| raw.trim().to_string())
-        .filter(|raw| !raw.is_empty());
+    let daemon_identity = ready_daemon_identity(&config)?;
     let mut capability_flags = Vec::new();
     if matches!(config.mode(), DaemonMode::Device | DaemonMode::Both) {
         capability_flags.push(
@@ -714,12 +711,39 @@ fn ready_runtime_discovery() -> anyhow::Result<server::ControlRuntimeDiscovery> 
     }
     Ok(server::ControlRuntimeDiscovery {
         invocation_endpoint: resolved_local_uds_path_with_env_override(),
-        daemon_identity: DaemonIdentity {
-            mode: config.mode().as_str().to_string(),
-            realm: config.realm().to_string(),
-            node_id,
-        },
+        daemon_identity,
         capability_flags,
+    })
+}
+
+fn ready_daemon_identity(config: &DaemonConfig) -> anyhow::Result<DaemonIdentity> {
+    let node_id = match config.mode() {
+        DaemonMode::Hub => None,
+        DaemonMode::Device | DaemonMode::Both => {
+            let credentials = config::load_credentials().with_context(|| {
+                format!(
+                    "{} daemon ready discovery requires paired credentials",
+                    config.mode().as_str()
+                )
+            })?;
+            if credentials.realm_str() != config.realm() {
+                anyhow::bail!(
+                    "daemon ready discovery credentials realm `{}` does not match configured realm `{}`",
+                    credentials.realm_str(),
+                    config.realm()
+                );
+            }
+            let node_id = credentials.node_id.trim();
+            if node_id.is_empty() {
+                anyhow::bail!("daemon ready discovery paired credentials node_id is empty");
+            }
+            Some(node_id.to_string())
+        }
+    };
+    Ok(DaemonIdentity {
+        mode: config.mode().as_str().to_string(),
+        realm: config.realm().to_string(),
+        node_id,
     })
 }
 
@@ -936,6 +960,74 @@ mod tests {
     use easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::{
         ReplayOutcome, ReplayOutcomeStatus, ReplayReport,
     };
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    struct TestHomeGuard {
+        _lock: MutexGuard<'static, ()>,
+        temp: tempfile::TempDir,
+        previous_home: Option<String>,
+        previous_node_id: Option<String>,
+    }
+
+    impl TestHomeGuard {
+        fn new() -> Self {
+            static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+            let lock = LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let temp = tempfile::tempdir().expect("temp home");
+            let previous_home = std::env::var("HOME").ok();
+            let previous_node_id = std::env::var("EASYNET_NODE_ID").ok();
+            std::env::set_var("HOME", temp.path());
+            std::env::remove_var("EASYNET_NODE_ID");
+            Self {
+                _lock: lock,
+                temp,
+                previous_home,
+                previous_node_id,
+            }
+        }
+    }
+
+    impl Drop for TestHomeGuard {
+        fn drop(&mut self) {
+            match &self.previous_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match &self.previous_node_id {
+                Some(value) => std::env::set_var("EASYNET_NODE_ID", value),
+                None => std::env::remove_var("EASYNET_NODE_ID"),
+            }
+            let _ = self.temp.path();
+        }
+    }
+
+    fn write_daemon_config(raw: &str) {
+        let path = default_config_path();
+        std::fs::create_dir_all(path.parent().expect("daemon config parent")).expect("mkdir");
+        std::fs::write(path, raw).expect("write daemon config");
+    }
+
+    fn paired_credentials(
+        realm: &str,
+        node_id: &str,
+    ) -> easynet_cli::daemon::persistence::config::Credentials {
+        easynet_cli::daemon::persistence::config::Credentials {
+            node_id: node_id.into(),
+            credential_token: "token".into(),
+            hub_endpoint: "https://hub.example:50443".into(),
+            realm: realm.into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        }
+    }
 
     #[test]
     fn device_replay_boot_policy_rejects_stale_rows() {
@@ -982,6 +1074,55 @@ mod tests {
         assert!(
             message.contains("explicit authority scope rejected"),
             "{message}"
+        );
+    }
+
+    #[test]
+    fn ready_discovery_uses_paired_credentials_node_id_not_env() {
+        let _home = TestHomeGuard::new();
+        std::env::set_var("EASYNET_NODE_ID", "stale-env-node");
+        write_daemon_config(
+            r#"[daemon]
+mode = "device"
+realm = "tenant-a"
+hub_endpoint = "https://hub.example:50443"
+"#,
+        );
+        config::save_credentials(&paired_credentials("tenant-a", "credential-node"))
+            .expect("save paired credentials");
+
+        let discovery = ready_runtime_discovery().expect("ready discovery");
+
+        assert_eq!(
+            discovery.daemon_identity.node_id.as_deref(),
+            Some("credential-node")
+        );
+        assert!(
+            discovery.capability_flags.iter().any(|flag| {
+                flag == easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
+            }),
+            "device ready discovery must advertise paired user signer readiness"
+        );
+    }
+
+    #[test]
+    fn ready_discovery_rejects_credentials_realm_mismatch() {
+        let _home = TestHomeGuard::new();
+        write_daemon_config(
+            r#"[daemon]
+mode = "device"
+realm = "tenant-a"
+hub_endpoint = "https://hub.example:50443"
+"#,
+        );
+        config::save_credentials(&paired_credentials("tenant-b", "credential-node"))
+            .expect("save paired credentials");
+
+        let err = ready_runtime_discovery().expect_err("realm mismatch must not publish ready");
+
+        assert!(
+            err.to_string().contains("does not match configured realm"),
+            "error should name the ready identity split: {err:#}"
         );
     }
 }
