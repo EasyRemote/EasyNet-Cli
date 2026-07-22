@@ -3,7 +3,6 @@ package easynet
 
 const (
 	runtimeAdminProfile             = "runtime_admin"
-	runtimeAdminRouteManifestSHA256 = "71c67fa97b2645662acfbc511de0219c3d0e92112ecf0485e8bb336952e0a937"
+	runtimeAdminRouteManifestSHA256 = "193ba5b5a28180af5d5d936930e880f7d40153963f85c6d0425c54febb214d6a"
 	runtimeAdminSessionListAbility  = "session.list"
-	runtimeAdminDeviceRevokeAbility = "federation.revoke"
 )

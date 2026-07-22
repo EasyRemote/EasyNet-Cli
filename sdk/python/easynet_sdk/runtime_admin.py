@@ -23,7 +23,6 @@ from .health import DiagnosticsReport, HealthClient, RuntimeHealth
 from .runtime import RuntimeClient
 from ._runtime_admin_routes import (
     _PROFILE as _RUNTIME_ADMIN_PROFILE,
-    _RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY,
     _RUNTIME_ADMIN_SESSION_LIST_ABILITY,
 )
 from .runtime_ability import RuntimeAbilityClient, RuntimeCallContext
@@ -86,27 +85,6 @@ class RuntimeSessionPage:
     state: str = ""
     sessions: tuple[RuntimeSession, ...] = ()
     next_cursor: object | None = None
-    raw: Mapping[str, object] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class RuntimeDeviceRevokeRequest:
-    """Runtime administration request for revoking a device membership."""
-
-    call: RuntimeCallContext
-    device_ura: str
-    reason: str
-
-
-@dataclass(frozen=True)
-class RuntimeDeviceRevokeResult:
-    """Runtime administration result for device revocation."""
-
-    system_ability: str = ""
-    device_ura: str = ""
-    ack: bool = False
-    runtime_not_ready: bool = False
-    runtime_catalog_not_ready: bool = False
     raw: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -209,32 +187,6 @@ class RuntimeAdminAbilityClient:
             args,
         )
         return _runtime_session_page(output)
-
-    def revoke_device(
-        self, request: RuntimeDeviceRevokeRequest
-    ) -> RuntimeDeviceRevokeResult:
-        if not isinstance(request, RuntimeDeviceRevokeRequest):
-            raise _invalid_admin("RuntimeDeviceRevokeRequest is required")
-        device_ura = request.device_ura.strip()
-        reason = request.reason.strip()
-        if not device_ura or not reason:
-            raise _invalid_admin("device_ura and reason are required")
-        output = self._ability.invoke(
-            _runtime_admin_call(request.call, _RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY),
-            _RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY,
-            {"agent_ura": device_ura, "reason": reason},
-        )
-        return RuntimeDeviceRevokeResult(
-            system_ability=_RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY,
-            device_ura=device_ura,
-            ack=_required_admin_bool(output, "ack"),
-            runtime_not_ready=_optional_admin_bool(output, "runtime_not_ready"),
-            runtime_catalog_not_ready=_optional_admin_bool(
-                output, "runtime_catalog_not_ready"
-            ),
-            raw=dict(output),
-        )
-
 
 def _runtime_ready(state: RuntimeLifecycleState) -> bool:
     return state in {

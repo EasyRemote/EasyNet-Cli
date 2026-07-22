@@ -12,14 +12,12 @@ from easynet_sdk import (
     RuntimeAdminAbilityClient,
     RuntimeCallContext,
     RuntimeClient,
-    RuntimeDeviceRevokeRequest,
     RuntimeSessionListRequest,
     SDKError,
 )
 from easynet_sdk.providers.easynet.lifecycle import DaemonMode, StartConfig
 from easynet_sdk._runtime_admin_routes import (
     _PROFILE as _RUNTIME_ADMIN_PROFILE,
-    _RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY,
     _RUNTIME_ADMIN_ROUTE_MANIFEST_SHA256,
     _RUNTIME_ADMIN_SESSION_LIST_ABILITY,
 )
@@ -236,82 +234,13 @@ def test_runtime_admin_ability_client_rejects_malformed_session_rows() -> None:
         raise AssertionError("list_sessions ignored malformed session row")
 
 
-def test_runtime_admin_ability_client_revokes_device() -> None:
-    client, transport = _ability_client()
-    transport.output_json = {"ack": False, "runtime_not_ready": True}
+def test_runtime_admin_ability_client_does_not_expose_device_revoke_surface() -> None:
+    import easynet_sdk
 
-    result = client.revoke_device(
-        RuntimeDeviceRevokeRequest(
-            call=_call(),
-            device_ura="easynet:///r/example/device/laptop",
-            reason="owner_removed_device",
-        )
-    )
-
-    assert result.ack is False
-    assert result.runtime_not_ready is True
-    assert transport.seen["descriptor_ref"] == (
-        "easynet:///r/example/ability/authority.federation.revoke@1.0.0"
-    )
-    assert result.system_ability == _RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY
-    assert transport.seen["args"] == {
-        "agent_ura": "easynet:///r/example/device/laptop",
-        "reason": "owner_removed_device",
-    }
-
-
-def test_runtime_admin_ability_client_rejects_missing_revoke_ack() -> None:
-    client, transport = _ability_client()
-    transport.output_json = {"runtime_not_ready": False}
-
-    try:
-        client.revoke_device(
-            RuntimeDeviceRevokeRequest(
-                call=_call(),
-                device_ura="easynet:///r/example/device/laptop",
-                reason="owner_removed_device",
-            )
-        )
-    except SDKError as exc:
-        assert "ack must be a boolean" in exc.message
-    else:
-        raise AssertionError("revoke_device fabricated success without ack")
-
-
-def test_runtime_admin_ability_client_rejects_malformed_revoke_flags() -> None:
-    client, transport = _ability_client()
-    transport.output_json = {"ack": True, "runtime_not_ready": "false"}
-
-    try:
-        client.revoke_device(
-            RuntimeDeviceRevokeRequest(
-                call=_call(),
-                device_ura="easynet:///r/example/device/laptop",
-                reason="owner_removed_device",
-            )
-        )
-    except SDKError as exc:
-        assert "runtime_not_ready must be a boolean" in exc.message
-    else:
-        raise AssertionError("revoke_device accepted malformed readiness flag")
-
-
-def test_runtime_admin_ability_client_rejects_invalid_revoke_before_invoke() -> None:
-    client, transport = _ability_client()
-
-    try:
-        client.revoke_device(
-            RuntimeDeviceRevokeRequest(
-                call=_call(),
-                device_ura="easynet:///r/example/device/laptop",
-                reason="",
-            )
-        )
-    except SDKError as exc:
-        assert "device_ura and reason are required" in exc.message
-    else:
-        raise AssertionError("revoke_device accepted missing reason")
-    assert transport.seen == {}
+    client, _transport = _ability_client()
+    assert not hasattr(client, "revoke_device")
+    for retired in ("RuntimeDeviceRevokeRequest", "RuntimeDeviceRevokeResult"):
+        assert not hasattr(easynet_sdk, retired), retired
 
 
 def _ability_client() -> tuple[RuntimeAdminAbilityClient, RuntimeAdminTransportFake]:

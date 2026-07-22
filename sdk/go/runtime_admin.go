@@ -53,21 +53,6 @@ type RuntimeSessionPage struct {
 	Raw           map[string]any   `json:"raw,omitempty"`
 }
 
-type RuntimeDeviceRevokeRequest struct {
-	Call      RuntimeCallContext `json:"call"`
-	DeviceURA string             `json:"device_ura"`
-	Reason    string             `json:"reason"`
-}
-
-type RuntimeDeviceRevokeResult struct {
-	SystemAbility          string         `json:"system_ability,omitempty"`
-	DeviceURA              string         `json:"device_ura,omitempty"`
-	Ack                    bool           `json:"ack"`
-	RuntimeNotReady        bool           `json:"runtime_not_ready,omitempty"`
-	RuntimeCatalogNotReady bool           `json:"runtime_catalog_not_ready,omitempty"`
-	Raw                    map[string]any `json:"raw,omitempty"`
-}
-
 type RuntimeAdminAbilityClient struct {
 	ability *RuntimeAbilityClient
 }
@@ -92,44 +77,6 @@ func (c *RuntimeAdminAbilityClient) ListSessions(ctx context.Context, request Ru
 		return RuntimeSessionPage{}, err
 	}
 	return runtimeSessionPage(output)
-}
-
-func (c *RuntimeAdminAbilityClient) RevokeDevice(ctx context.Context, request RuntimeDeviceRevokeRequest) (RuntimeDeviceRevokeResult, error) {
-	if c == nil || c.ability == nil {
-		return RuntimeDeviceRevokeResult{}, invalidRuntimeClient("runtime admin ability client is not initialized")
-	}
-	deviceURA := strings.TrimSpace(request.DeviceURA)
-	reason := strings.TrimSpace(request.Reason)
-	if deviceURA == "" || reason == "" {
-		return RuntimeDeviceRevokeResult{}, invalidRuntimePayload("device_ura and reason are required", nil)
-	}
-	output, err := c.ability.Invoke(ctx, runtimeAdminCall(request.Call, runtimeAdminDeviceRevokeAbility), runtimeAdminDeviceRevokeAbility, map[string]any{
-		"agent_ura": deviceURA,
-		"reason":    reason,
-	})
-	if err != nil {
-		return RuntimeDeviceRevokeResult{}, err
-	}
-	ack, err := requiredRuntimeAdminBool(output, "ack")
-	if err != nil {
-		return RuntimeDeviceRevokeResult{}, err
-	}
-	runtimeNotReady, err := optionalRuntimeAdminBool(output, "runtime_not_ready")
-	if err != nil {
-		return RuntimeDeviceRevokeResult{}, err
-	}
-	runtimeCatalogNotReady, err := optionalRuntimeAdminBool(output, "runtime_catalog_not_ready")
-	if err != nil {
-		return RuntimeDeviceRevokeResult{}, err
-	}
-	return RuntimeDeviceRevokeResult{
-		SystemAbility:          runtimeAdminDeviceRevokeAbility,
-		DeviceURA:              deviceURA,
-		Ack:                    ack,
-		RuntimeNotReady:        runtimeNotReady,
-		RuntimeCatalogNotReady: runtimeCatalogNotReady,
-		Raw:                    cloneRuntimeAdminMap(output),
-	}, nil
 }
 
 type RuntimeAdminClient struct {

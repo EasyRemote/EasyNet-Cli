@@ -49,6 +49,10 @@ daemon_error_decoder_violations() {
   rg -n '\bfunc\s+DecodeDaemonErrorJSON\s*\(' "$@"
 }
 
+runtime_device_revoke_violations() {
+  rg -n '\b(RuntimeDeviceRevoke(Request|Result)|RevokeDevice|revoke_device)\b' "$@"
+}
+
 retired_product_sdk_modules() {
   cat <<'EOF'
 sdk/go/profiles.go
@@ -174,6 +178,18 @@ if [[ "${1:-}" == "--self-test" ]]; then
   printf 'package neutralitynegative\nfunc DecodeDaemonErrorJSON(raw []byte) any { return nil }\n' >"$injected"
   if ! daemon_error_decoder_violations "$injected" >/dev/null; then
     fail "self-test failed to detect exported daemon error decoder"
+  fi
+  rm -f "$injected"
+  injected="$tmp/sdk/go/__runtime_device_revoke_negative.go"
+  printf 'package neutralitynegative\ntype RuntimeDeviceRevokeRequest struct{}\nfunc (c RuntimeAdminAbilityClient) RevokeDevice() {}\n' >"$injected"
+  if ! runtime_device_revoke_violations "$injected" >/dev/null; then
+    fail "self-test failed to detect runtime device revoke surface"
+  fi
+  rm -f "$injected"
+  injected="$tmp/sdk/python/easynet_sdk/__runtime_device_revoke_negative.py"
+  printf 'class RuntimeDeviceRevokeRequest:\n    pass\ndef revoke_device(request):\n    return None\n' >"$injected"
+  if ! runtime_device_revoke_violations "$injected" >/dev/null; then
+    fail "self-test failed to detect Python runtime device revoke surface"
   fi
   rm -f "$injected"
   injected="$tmp/sdk/python/easynet_sdk/providers/easynet/lifecycle.py"
@@ -304,6 +320,10 @@ fi
 
 if daemon_error_decoder_violations "${production_sources[@]}"; then
   fail "exported daemon error decoder leaked into runtime SDK production source"
+fi
+
+if runtime_device_revoke_violations "${production_sources[@]}"; then
+  fail "runtime device revoke surface leaked into runtime SDK production source"
 fi
 
 for path in sdk/go/runtime_events.go sdk/python/easynet_sdk/runtime_events.py; do

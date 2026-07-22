@@ -16,6 +16,7 @@ def load_manifest(
     route_const_keys: set[str],
     route_label: str,
     ability_allowed: Callable[[str], bool],
+    optional_route_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
     if data.get("schema_version") != 1:
@@ -33,10 +34,11 @@ def load_manifest(
     seen_ids: set[str] = set()
     seen_abilities: set[str] = set()
     required = {"id", "ability", *route_const_keys}
+    allowed = required | (optional_route_keys or set())
     for route in routes:
         if not isinstance(route, dict):
             raise ValueError(f"{route_label} route entry must be an object")
-        if set(route) != required:
+        if not required.issubset(route) or not set(route).issubset(allowed):
             raise ValueError(f"{route_label} route entry has invalid keys: {route!r}")
         route_id = require_text(route["id"], "route id")
         ability = require_text(route["ability"], "route ability")

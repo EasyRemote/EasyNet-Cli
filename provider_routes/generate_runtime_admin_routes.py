@@ -23,14 +23,44 @@ ALLOWED_ABILITIES = {"session.list", "federation.revoke"}
 
 
 def runtime_admin_manifest() -> dict[str, object]:
-    return load_manifest(
+    manifest = load_manifest(
         MANIFEST,
         expected_provider="easynet",
         expected_capability="runtime_admin",
-        route_const_keys={"go_const", "python_const", "daemon_const"},
+        route_const_keys={"daemon_const"},
         route_label="runtime-admin",
         ability_allowed=lambda ability: ability in ALLOWED_ABILITIES,
+        optional_route_keys={"go_const", "python_const", "sdk_surface"},
     )
+    for route in manifest["routes"]:
+        if not isinstance(route, dict):
+            continue
+        sdk_surface = route.get("sdk_surface", True)
+        if not isinstance(sdk_surface, bool):
+            raise ValueError("runtime-admin sdk_surface must be a boolean")
+        if sdk_surface:
+            for key in ("go_const", "python_const"):
+                value = route.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(f"runtime-admin SDK route requires {key}")
+        else:
+            for key in ("go_const", "python_const"):
+                if key in route:
+                    raise ValueError(
+                        f"runtime-admin non-SDK route must not declare {key}"
+                    )
+    return manifest
+
+
+def sdk_manifest(manifest: dict[str, object]) -> dict[str, object]:
+    return {
+        **manifest,
+        "routes": [
+            route
+            for route in manifest["routes"]
+            if isinstance(route, dict) and route.get("sdk_surface", True) is True
+        ],
+    }
 
 
 def main() -> None:
@@ -39,13 +69,14 @@ def main() -> None:
     args = parser.parse_args()
 
     manifest = runtime_admin_manifest()
+    sdk_routes = sdk_manifest(manifest)
     digest = manifest_sha(MANIFEST)
     changed = [
         write_if_changed(
             GO_OUTPUT,
             go_source(
                 script_name=Path(__file__).name,
-                manifest=manifest,
+                manifest=sdk_routes,
                 digest=digest,
                 profile_const="runtimeAdminProfile",
                 digest_const="runtimeAdminRouteManifestSHA256",
@@ -57,7 +88,7 @@ def main() -> None:
             PY_OUTPUT,
             python_source(
                 script_name=Path(__file__).name,
-                manifest=manifest,
+                manifest=sdk_routes,
                 digest=digest,
                 digest_const="_RUNTIME_ADMIN_ROUTE_MANIFEST_SHA256",
                 route_const_key="python_const",

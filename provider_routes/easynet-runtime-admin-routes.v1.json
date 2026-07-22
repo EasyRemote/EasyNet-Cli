@@ -9,14 +9,14 @@
       "go_const": "runtimeAdminSessionListAbility",
       "python_const": "_RUNTIME_ADMIN_SESSION_LIST_ABILITY",
       "daemon_const": "SESSION_LIST",
-      "ability": "session.list"
+      "ability": "session.list",
+      "sdk_surface": true
     },
     {
       "id": "device_revoke",
-      "go_const": "runtimeAdminDeviceRevokeAbility",
-      "python_const": "_RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY",
       "daemon_const": "FEDERATION_REVOKE",
-      "ability": "federation.revoke"
+      "ability": "federation.revoke",
+      "sdk_surface": false
     }
   ]
 }

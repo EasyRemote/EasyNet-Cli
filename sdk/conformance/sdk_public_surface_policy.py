@@ -107,11 +107,6 @@ def canonical_quarantine_reason(item: str) -> str | None:
     }:
         return "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
     if root in {
-        "RuntimeDeviceRevokeRequest",
-        "RuntimeDeviceRevokeResult",
-    }:
-        return "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-    if root in {
         "DirectRuntimeConnector",
         "DirectRuntimeConnectorOptions",
         "DirectRuntimeOptions",

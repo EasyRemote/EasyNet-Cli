@@ -6431,17 +6431,13 @@
         "OpenCABIRuntimeLifecycleTransport",
         "OpenDirectRuntimeTransport",
         "RealmDevicePrefix",
-        "ResolveControlDiscoveryPath",
-        "RuntimeDeviceRevokeRequest",
-        "RuntimeDeviceRevokeResult"
+        "ResolveControlDiscoveryPath"
       ],
       "python": [
         "ControlDiscovery",
         "ControlDiscoveryRuntimeConnector",
         "ControlFrame",
-        "ControlIpcClient",
-        "RuntimeDeviceRevokeRequest",
-        "RuntimeDeviceRevokeResult"
+        "ControlIpcClient"
       ],
       "node": [],
       "java": [],
@@ -6522,17 +6518,7 @@
         "DirectRuntimeTransport.SubmitSigned",
         "FileControlDiscoveryReader.ReadControlDiscovery",
         "NativeRuntimeOptions.StopDaemonOnClose",
-        "PrepareOptions.LocalDaemonSigning",
-        "RuntimeAdminAbilityClient.RevokeDevice",
-        "RuntimeDeviceRevokeRequest.Call",
-        "RuntimeDeviceRevokeRequest.DeviceURA",
-        "RuntimeDeviceRevokeRequest.Reason",
-        "RuntimeDeviceRevokeResult.Ack",
-        "RuntimeDeviceRevokeResult.DeviceURA",
-        "RuntimeDeviceRevokeResult.Raw",
-        "RuntimeDeviceRevokeResult.RuntimeCatalogNotReady",
-        "RuntimeDeviceRevokeResult.RuntimeNotReady",
-        "RuntimeDeviceRevokeResult.SystemAbility"
+        "PrepareOptions.LocalDaemonSigning"
       ],
       "python": [
         "AccessControlPrincipalKind.DEVICE",
@@ -6569,16 +6555,6 @@
         "ControlIpcClient.subscribe",
         "ErrorCode.DAEMON_OFFLINE",
         "PrepareOptions.local_daemon_signing",
-        "RuntimeAdminAbilityClient.revoke_device",
-        "RuntimeDeviceRevokeRequest.call",
-        "RuntimeDeviceRevokeRequest.device_ura",
-        "RuntimeDeviceRevokeRequest.reason",
-        "RuntimeDeviceRevokeResult.ack",
-        "RuntimeDeviceRevokeResult.device_ura",
-        "RuntimeDeviceRevokeResult.raw",
-        "RuntimeDeviceRevokeResult.runtime_catalog_not_ready",
-        "RuntimeDeviceRevokeResult.runtime_not_ready",
-        "RuntimeDeviceRevokeResult.system_ability",
         "RuntimeEndpoint.daemon_version"
       ],
       "node": [],
@@ -7375,22 +7351,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "RuntimeDeviceRevokeRequest": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeResult": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
         }
       },
       "python": {
@@ -7425,22 +7385,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Control discovery and raw control IPC are EasyNet provider boot/status surfaces, not canonical runtime SDK concepts."
-        },
-        "RuntimeDeviceRevokeRequest": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeResult": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
         }
       },
       "node": {},
@@ -8026,86 +7970,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "RuntimeAdminAbilityClient.RevokeDevice": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_administration"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
-        "RuntimeDeviceRevokeRequest.Call": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeRequest.DeviceURA": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeRequest.Reason": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeResult.Ack": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeResult.DeviceURA": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeResult.Raw": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeResult.RuntimeCatalogNotReady": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeResult.RuntimeNotReady": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeResult.SystemAbility": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
         }
       },
       "python": {
@@ -8380,86 +8244,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
-        },
-        "RuntimeAdminAbilityClient.revoke_device": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_administration"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
-        "RuntimeDeviceRevokeRequest.call": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeRequest.device_ura": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeRequest.reason": {
-          "canonical_replacement": [
-            "capability_inventory.native_runtime"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeResult.ack": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeResult.device_ura": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeResult.raw": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeResult.runtime_catalog_not_ready": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeResult.runtime_not_ready": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
-        },
-        "RuntimeDeviceRevokeResult.system_ability": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
         },
         "RuntimeEndpoint.daemon_version": {
           "canonical_replacement": [
@@ -19547,7 +19331,6 @@
       "RuntimeAccessControlProvider.Revoke": "eac21d6cf322ad8a640e126ab51ecb6b3051213c6cce673538fc2e13d8a353a8",
       "RuntimeAdminAbilityClient": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "RuntimeAdminAbilityClient.ListSessions": "98ed45bec51813346f596d434dcc4f81182b5cf4dc777cd359bc19af89b2e045",
-      "RuntimeAdminAbilityClient.RevokeDevice": "483350fa28854689aa8ab2e435ba2a1d0e67453066101f97d41e21337ee2e339",
       "RuntimeAdminAttach": "f105da24ec7eb28bfd661a9040d9e8790c329a38517d25c373aaf6010f634986",
       "RuntimeAdminClient": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "RuntimeAdminClient.Attach": "b7d66019d700c507b433f179b63eed242c3e0f48bdc52c70dc47aebd06a07a85",
@@ -19634,17 +19417,6 @@
       "RuntimeDescriptorRefRequest.CalleeURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RuntimeDescriptorRefRequest.CallerURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RuntimeDescriptorRefRequest.SubjectURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "RuntimeDeviceRevokeRequest": "08a02c80e572f523720f9e4fead41093dbdc54b769e36437b936d99ff2697220",
-      "RuntimeDeviceRevokeRequest.Call": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972",
-      "RuntimeDeviceRevokeRequest.DeviceURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "RuntimeDeviceRevokeRequest.Reason": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "RuntimeDeviceRevokeResult": "2e046a6664f81814cc9ec660dfba1eecbd1b20796edfb5b1b9334bedde811725",
-      "RuntimeDeviceRevokeResult.Ack": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903",
-      "RuntimeDeviceRevokeResult.DeviceURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "RuntimeDeviceRevokeResult.Raw": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415",
-      "RuntimeDeviceRevokeResult.RuntimeCatalogNotReady": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903",
-      "RuntimeDeviceRevokeResult.RuntimeNotReady": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903",
-      "RuntimeDeviceRevokeResult.SystemAbility": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RuntimeDiscovered": "1c7b7df1fa726057245026466270d00b432dd9ef1e20d89bf379f7b4aa4068b1",
       "RuntimeEndpoint": "f620093a7f005689eb98f9de2ed4ff8cc040490fe2886b4c6eff008a429ce943",
       "RuntimeEndpoint.ABIVersion": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91",
@@ -21699,9 +21471,8 @@
       "RuntimeAccessControlProvider.list_requests": "001c7d0aa5dbe66cd5880454a527ee5368882b589590cd1301f51246bc27ef7d",
       "RuntimeAccessControlProvider.resolve_request": "33ea43e1fc735828413f25899ad092f8030eac98b58e36aa5685de71e4957855",
       "RuntimeAccessControlProvider.revoke": "efb62499a9f6dee6488ea1a9251b711b733b0d623f99ef52b1d22983a6e47abb",
-      "RuntimeAdminAbilityClient": "7dbd2ec5291a67d0e137d49f5c2892e51f608cf9a15e80bd36ce5c467f74bdf4",
+      "RuntimeAdminAbilityClient": "1858f6759d3075e21152f7fa1417f096010c55b9fdc4971971654aaceb67fa7c",
       "RuntimeAdminAbilityClient.list_sessions": "a4cc3ec50bac4b0e704b5faee56b44504e760ac050f8d7377890b9ad48df79de",
-      "RuntimeAdminAbilityClient.revoke_device": "02789740957f813e87abd4169320d60a5e1588922afe970a6f2ac8e6f15d6174",
       "RuntimeAdminClient": "f34f4710196f733f34f6f82e2922326e3496118ec1cc9d4b8e2eb9b2a68fe350",
       "RuntimeAdminClient.attach": "d68cfa64569bea42382e4af25163846325d613365871bf5a868cadf73e84735b",
       "RuntimeAdminClient.detach": "b68d38fb4f67a654619995d2e3553f9f0b3a620d7613b6860aac6e83c37ad41b",
@@ -21782,17 +21553,6 @@
       "RuntimeConnector.close": "d9010a8907ca26c80bff5cf9680aecb1d68a0786897cf2f722e0c5132ad31faa",
       "RuntimeConnector.handshake": "376e21b22efc4e3288a5154148b7185c3d9ab245d289e4d4aae1eb0a49e51020",
       "RuntimeConnector.resolve": "cfa4d6e6d8e66927c497aad2363716c743ae0a314c77e317ee1e03811e44b1e5",
-      "RuntimeDeviceRevokeRequest": "e240bf8834c52aaf0c97afa955c7b4e541c9099b37d54d89a6caeb0dddac73cd",
-      "RuntimeDeviceRevokeRequest.call": "59fdb6f46ebc6a27fcc21407b38ed16820cdfe06fe94c74dc75357f128ffd767",
-      "RuntimeDeviceRevokeRequest.device_ura": "7eaad2982bda176a2b4d0e3d6c76b87979607ddc2f66562b10d10e5081aca6f5",
-      "RuntimeDeviceRevokeRequest.reason": "736bb8eb941614edbc4cc042f5179c71ba8498c430ddb593b9efa838486a73ee",
-      "RuntimeDeviceRevokeResult": "1013a37b5470dfd6dc388e1189554dc6502ddb37857fa59795585f287c79f299",
-      "RuntimeDeviceRevokeResult.ack": "e1e01b38b3311a01edd291d79a89e08b25b6607ce3e5d56af359bf338eadb037",
-      "RuntimeDeviceRevokeResult.device_ura": "cd57fa27f36faaa15f273c76e3335935fb0bcf8dbe91e33beecfca9acc87250a",
-      "RuntimeDeviceRevokeResult.raw": "b1274a87e018df673f5c16da2f48cdc111d8eb3ab33c99e7fbdd7d007cbf7830",
-      "RuntimeDeviceRevokeResult.runtime_catalog_not_ready": "81ff97da93e8cf51c3e681ac59bc9fb01e5f4e53280ea996cd71be4c844a0188",
-      "RuntimeDeviceRevokeResult.runtime_not_ready": "4a8f5317be0e5f7a693515f27539cda6c68d20e03ac8377278d56f375916d6a6",
-      "RuntimeDeviceRevokeResult.system_ability": "54c13a9bfaf0af63898a00f6ee27b96af227601a1d6c5237789e53e4d5a23c16",
       "RuntimeEndpoint": "167acf7e512f42d8f5b13976c74f10502cf1c10a3e50c632c307f3196603538c",
       "RuntimeEndpoint.abi_version": "81712fa611c58e1af2b7382bb63ebdbbb793bd85b6c5eca728a174d537341cad",
       "RuntimeEndpoint.capability_flags": "d8738c5d2b8110f4d7ea70bc077c99f0ad865660b67131f5c7937ed29e3d9109",
