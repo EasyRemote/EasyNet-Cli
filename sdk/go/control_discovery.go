@@ -96,30 +96,30 @@ func newControlDiscoveryFromJSON(raw []byte) (ControlDiscovery, error) {
 	return discovery, nil
 }
 
-// ControlDiscoveryRuntimeConnector resolves RuntimeEndpoint from daemon
+// controlDiscoveryRuntimeConnector resolves RuntimeEndpoint from daemon
 // control discovery and delegates handshake to an inner connector.
-type ControlDiscoveryRuntimeConnector struct {
+type controlDiscoveryRuntimeConnector struct {
 	inner       RuntimeConnector
 	controlPath string
 	reader      ControlDiscoveryReader
 	closed      bool
 }
 
-func newControlDiscoveryRuntimeConnector(inner RuntimeConnector, controlPath string, reader ControlDiscoveryReader) (*ControlDiscoveryRuntimeConnector, error) {
+func newControlDiscoveryRuntimeConnector(inner RuntimeConnector, controlPath string, reader ControlDiscoveryReader) (*controlDiscoveryRuntimeConnector, error) {
 	if inner == nil {
 		return nil, invalidRuntimeClient("inner runtime connector is required")
 	}
 	if reader == nil {
 		reader = fileControlDiscoveryReader{}
 	}
-	return &ControlDiscoveryRuntimeConnector{
+	return &controlDiscoveryRuntimeConnector{
 		inner:       inner,
 		controlPath: controlPath,
 		reader:      reader,
 	}, nil
 }
 
-func (c *ControlDiscoveryRuntimeConnector) Resolve(ctx context.Context, optionsJSON []byte) ([]byte, error) {
+func (c *controlDiscoveryRuntimeConnector) Resolve(ctx context.Context, optionsJSON []byte) ([]byte, error) {
 	if err := c.requireOpen(ctx); err != nil {
 		return nil, err
 	}
@@ -159,14 +159,14 @@ func (c *ControlDiscoveryRuntimeConnector) Resolve(ctx context.Context, optionsJ
 	})
 }
 
-func (c *ControlDiscoveryRuntimeConnector) Handshake(ctx context.Context, endpointJSON []byte) (RuntimeTransport, []byte, error) {
+func (c *controlDiscoveryRuntimeConnector) Handshake(ctx context.Context, endpointJSON []byte) (RuntimeTransport, []byte, error) {
 	if err := c.requireOpen(ctx); err != nil {
 		return nil, nil, err
 	}
 	return c.inner.Handshake(ctx, endpointJSON)
 }
 
-func (c *ControlDiscoveryRuntimeConnector) Close(ctx context.Context) error {
+func (c *controlDiscoveryRuntimeConnector) Close(ctx context.Context) error {
 	if c == nil {
 		return invalidRuntimeClient("runtime connector is not initialized")
 	}
@@ -180,7 +180,7 @@ func (c *ControlDiscoveryRuntimeConnector) Close(ctx context.Context) error {
 	return c.inner.Close(ctx)
 }
 
-func (c *ControlDiscoveryRuntimeConnector) requireOpen(ctx context.Context) error {
+func (c *controlDiscoveryRuntimeConnector) requireOpen(ctx context.Context) error {
 	if c == nil || c.inner == nil || c.reader == nil {
 		return invalidRuntimeClient("runtime connector is not initialized")
 	}
