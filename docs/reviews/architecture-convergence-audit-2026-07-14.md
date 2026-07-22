@@ -1162,7 +1162,7 @@ Passed:
 - `python3 sdk/conformance/sdk_concepts.py --validate-schema`
 - `python3 sdk/conformance/sdk_concepts.py --self-test --tmp target/sdk-concepts-self-test`
 - `PYTHONPATH=sdk/python python3 -m pytest sdk/python/tests/test_direct_runtime.py sdk/python/tests/test_import_boundary.py -q`
-- `(cd sdk/go && go test -tags easynet_direct_runtime ./...)`
+- `(cd sdk/go && go test -tags runtime_direct ./...)`
 - `bash tools/scripts/check-sdk-conformance-reports.sh`
 
 Known verification caveat:
@@ -1306,7 +1306,7 @@ Passed:
 - `bash tools/scripts/check-sdk-conformance-reports.sh --self-test`
 - `env CARGO_TARGET_DIR=target/sdk-conformance-runner-test cargo test -p sdk-conformance-runner`
 - `PYTHONPATH=sdk/python python3 -m pytest sdk/python/tests/test_direct_runtime.py sdk/python/tests/test_import_boundary.py -q`
-- `(cd sdk/go && go test -tags easynet_direct_runtime ./...)`
+- `(cd sdk/go && go test -tags runtime_direct ./...)`
 - `bash tools/scripts/check-sdk-conformance-reports.sh`
 - `bash tools/scripts/check-sdk-parity-matrix.sh` with the matching live-result directory
 

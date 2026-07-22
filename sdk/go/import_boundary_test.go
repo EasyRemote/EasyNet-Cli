@@ -60,6 +60,31 @@ func TestPublicGoSDKDoesNotImportForbiddenRuntimeBoundaries(t *testing.T) {
 	}
 }
 
+func TestGoSDKBuildTagsAreRuntimeNeutral(t *testing.T) {
+	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(string(body), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "//go:build ") && strings.Contains(line, "easynet_") {
+				t.Fatalf("%s uses product-prefixed Go build tag: %s", path, line)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk SDK package: %v", err)
+	}
+}
+
 func TestPublicGoSDKDoesNotHandParseDescriptorRefs(t *testing.T) {
 	err := filepath.WalkDir(".", func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -204,7 +229,7 @@ func gitRepositoryRoot(t *testing.T) string {
 
 func allowedTaggedDirectRuntimeProvider(path, text string) bool {
 	base := filepath.Base(path)
-	if !strings.Contains(text, "//go:build easynet_direct_runtime") {
+	if !strings.Contains(text, "//go:build runtime_direct") {
 		return false
 	}
 	switch base {

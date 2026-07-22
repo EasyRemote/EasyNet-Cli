@@ -27,7 +27,7 @@ LIB_PATH="$REPO_ROOT/target/debug/libeasynet_cli.${LIB_EXT}"
 if [[ "${1:-}" == "--self-test" ]]; then
   bash -n "$0"
   grep -q "TestGoSDKLiveDaemonSmoke" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
-  grep -q "easynet_live_smoke" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "runtime_live_smoke" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   grep -q "generic C ABI v6" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   grep -q "typed terminal failure decoded" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   grep -q "RuntimeEventClient read live daemon handle events" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
@@ -61,7 +61,7 @@ echo "[go-sdk-live-smoke] running Go SDK live daemon smoke..."
   EASYNET_GO_LIVE_SMOKE_DAEMON="$DAEMON_BIN" \
   EASYNET_GO_LIVE_SMOKE_REPO_ROOT="$REPO_ROOT" \
   EASYNET_GO_LIVE_SMOKE_HOME="$SMOKE_HOME" \
-  go test -tags "runtime_cabi easynet_live_smoke" -run '^TestGoSDKLiveDaemonSmoke$' -count=1 -v
+  go test -tags "runtime_cabi runtime_live_smoke" -run '^TestGoSDKLiveDaemonSmoke$' -count=1 -v
 )
 
 echo "[go-sdk-live-smoke] PASS"

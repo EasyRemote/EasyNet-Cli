@@ -118,6 +118,6 @@ authority interfaces. Inline samples may remain as focused unit tests, but they
 do not replace the shared case-aware parity gate.
 
 The Go adapter collects and executes its fixed suite with the
-`easynet_direct_runtime` build tag because that downstream provider is an
+`runtime_direct` build tag because that downstream provider is an
 explicit part of the Go runtime evidence set. The tag is applied identically to
 collection and execution and is included in each command attestation.

@@ -1,4 +1,4 @@
-//go:build easynet_direct_runtime
+//go:build runtime_direct
 
 package easynet
 

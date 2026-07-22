@@ -1,4 +1,4 @@
-//go:build easynet_live_smoke && runtime_cabi && cgo && !windows
+//go:build runtime_live_smoke && runtime_cabi && cgo && !windows
 
 package easynet
 
