@@ -505,6 +505,8 @@ impl Credentials {
         if self.join_receipt_hash().is_none() {
             self.username_slug()?;
             self.user_id()?;
+        } else if self.user_id.is_some() {
+            self.user_id()?;
         }
         Ok(())
     }
@@ -997,6 +999,30 @@ mod tests {
     }
 
     #[test]
+    fn save_credentials_rejects_join_receipt_with_all_zero_user_id() {
+        let _g = HomeGuard::new();
+        let creds = Credentials {
+            node_id: "node".into(),
+            credential_token: String::new(),
+            hub_endpoint: "https://hub.example:50443".into(),
+            realm: "tenant".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: None,
+            user_id: Some("00000000-0000-0000-0000-000000000000".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: Some("a".repeat(64)),
+        };
+
+        let err = save_credentials(&creds).expect_err("all-zero user_id must not persist");
+        assert!(
+            err.to_string().contains("all-zero user_id"),
+            "error should name the all-zero user_id contract: {err}"
+        );
+    }
+
+    #[test]
     fn save_credentials_writes_realm_field() {
         let _g = HomeGuard::new();
         let creds = Credentials {
@@ -1114,6 +1140,32 @@ mod tests {
 "#,
         )
         .expect("write placeholder credentials");
+
+        let err = load_credentials().expect_err("all-zero user_id must fail on load");
+        assert!(
+            err.to_string().contains("all-zero user_id"),
+            "error should name the all-zero user_id contract: {err}"
+        );
+    }
+
+    #[test]
+    fn load_credentials_rejects_join_receipt_with_all_zero_user_id() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(
+            credentials_path(),
+            r#"{
+  "node_id": "node",
+  "credential_token": "",
+  "hub_endpoint": "https://hub.example:50443",
+  "realm": "tenant",
+  "deploy_signature": "",
+  "user_id": "00000000-0000-0000-0000-000000000000",
+  "join_receipt_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
+"#,
+        )
+        .expect("write receipt credentials with placeholder user id");
 
         let err = load_credentials().expect_err("all-zero user_id must fail on load");
         assert!(

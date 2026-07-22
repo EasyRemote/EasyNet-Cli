@@ -1127,6 +1127,43 @@ if violations:
 PY
 }
 
+check_credentials_user_binding_validation_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local config="$cli_root/src/daemon/persistence/config.rs"
+  [[ -f "$config" ]] || return 0
+
+  "$PYTHON_BIN" - "$config" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+fn = re.search(
+    r"fn validate_complete\(&self\) -> anyhow::Result<\(\)> \{(?P<body>.*?)\n    \}",
+    text,
+    re.DOTALL,
+)
+if fn is None:
+    raise SystemExit("credentials_validate_complete_missing")
+body = fn.group("body")
+for required in (
+    "self.join_receipt_hash().is_none()",
+    "self.username_slug()?",
+    "self.user_id()?",
+    "else if self.user_id.is_some()",
+):
+    if required not in body:
+        raise SystemExit(f"credentials_user_binding_validation_missing:{required}")
+for test in (
+    "save_credentials_accepts_federation_join_receipt_without_user_binding",
+    "save_credentials_rejects_join_receipt_with_all_zero_user_id",
+    "load_credentials_rejects_join_receipt_with_all_zero_user_id",
+):
+    if test not in text:
+        raise SystemExit(f"credentials_user_binding_validation_missing_test:{test}")
+PY
+}
+
 check_runtime_trust_revoke_credentials_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local invalidator="$cli_root/src/daemon/invocation/admission/runtime_trust_invalidator.rs"
@@ -6638,6 +6675,26 @@ EOF
   if ( check_cli_credentials_optional_read_contract "$tmp/cli-credentials-ok-fallback" ) >/dev/null 2>&1; then
     fail "self-test expected credentials .ok fallback gate to fail"
   fi
+  mkdir -p "$tmp/credentials-user-binding-legacy/src/daemon/persistence"
+  cat >"$tmp/credentials-user-binding-legacy/src/daemon/persistence/config.rs" <<'EOF'
+struct Credentials { user_id: Option<String> }
+impl Credentials {
+  fn join_receipt_hash(&self) -> Option<&str> { Some("hash") }
+  fn username_slug(&self) -> anyhow::Result<&str> { Ok("alice") }
+  fn user_id(&self) -> anyhow::Result<&str> { Ok("00000000-0000-0000-0000-000000000000") }
+  fn validate_complete(&self) -> anyhow::Result<()> {
+    if self.join_receipt_hash().is_none() {
+      self.username_slug()?;
+      self.user_id()?;
+    }
+    Ok(())
+  }
+}
+#[test] fn save_credentials_accepts_federation_join_receipt_without_user_binding() {}
+EOF
+  if ( check_credentials_user_binding_validation_contract "$tmp/credentials-user-binding-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected credentials user-binding validation gate to fail"
+  fi
   check_mcp_reflection_async_bridge_contract
   check_active_source_contract
   check_sdk_root_runtime_description_contract
@@ -6654,6 +6711,7 @@ EOF
   check_auth_agents_backend_shape_contract
   check_pages_identity_credentials_contract
   check_cli_credentials_optional_read_contract
+  check_credentials_user_binding_validation_contract
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
   check_runtime_trust_user_key_inventory_scope_contract
@@ -6733,6 +6791,7 @@ check_principal_lifecycle_cli_schema_contract
 check_auth_agents_backend_shape_contract
 check_pages_identity_credentials_contract
 check_cli_credentials_optional_read_contract
+check_credentials_user_binding_validation_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_runtime_trust_user_key_inventory_scope_contract
