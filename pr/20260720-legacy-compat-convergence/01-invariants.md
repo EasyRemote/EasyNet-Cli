@@ -364,3 +364,12 @@
   unreadable hosted-identity state or malformed `host_device_agent_ura` must
   fail the history response before the product treats an unbound ledger as
   canonical evidence.
+- Realm ability discovery is a canonical descriptor projection, not an opaque
+  hub JSON cache. Hub-published ability rows may cross the federation wire as
+  JSON, but they must parse into `AbilityDescriptor` before entering the
+  runtime read-model; products must never see ability list rows without
+  canonical `ability_ura` and `descriptor_ref`.
+- FFI descriptor catalog dedupe is an integrity gate, not a lossy filter.
+  Schema-incomplete descriptor rows must fail closed at the catalog boundary
+  instead of being silently dropped and later reported as descriptor misses,
+  route invisibility, or remote timeout.

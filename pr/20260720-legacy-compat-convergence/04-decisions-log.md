@@ -917,3 +917,19 @@ Decisions will be appended as root-fork choices are made.
 - Extend SPEC v2 and architecture gates to reject
   `ledger_resource_ura() -> Option<String>` and
   `load_hosted_identity_status().ok()?` fallback.
+
+## 2026-07-22 Canonical ability catalog projection
+
+- Treat hub-published ability state as a federation wire input, not a second
+  runtime catalog. `HubPublishedAbilityStore` now stores validated
+  `AbilityDescriptor` values rather than opaque `HubAbilityEntry` JSON.
+- Reject malformed hub catalog snapshots and diffs before mutation. Diff
+  application validates all added rows first, so a bad row cannot partially
+  remove or replace good projection state.
+- Keep `meta.list_abilities(scope=realm)` on the same public descriptor wire as
+  local registry rows by serializing canonical descriptors and only stamping an
+  empty `source` field as `hub:broadcast`.
+- Treat FFI descriptor catalog dedupe as a schema boundary. Missing
+  `descriptor_ref` or other identity fields now returns a catalog integrity
+  error instead of silently filtering the row and manufacturing later
+  descriptor-not-found diagnostics.

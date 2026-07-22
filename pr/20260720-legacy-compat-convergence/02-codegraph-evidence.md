@@ -2468,3 +2468,28 @@ Evidence will be appended after indexing and focused impact queries.
 - Boundary decision: unjoined state remains `Ok(None)`, but unreadable aggregate
   projection and malformed `host_device_agent_ura` are now typed history
   response failures.
+
+## 2026-07-22 Canonical ability catalog projection audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  descriptor_catalog_entry_from_value descriptor_catalog_resolution_from_entries
+  dedupe_descriptor_catalog_entries runtime_descriptor_catalog_entries` showed
+  the FFI descriptor resolver blast radius is concentrated in
+  `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/src/ffi/invocation/mod.rs`.
+- The same codegraph output showed `dedupe_descriptor_catalog_entries` as the
+  only dedupe owner and exposed its legacy `continue` branches for rows missing
+  `owner_ura`, `ability_ura`, `call_mode`, or `descriptor_ref`.
+- `rg -n "HubAbilityEntry|hub_published_abilities|entry.descriptor|descriptor_ref"
+  src/daemon/federation src/daemon/ability/builtins/governance/meta.rs -S`
+  identified the realm catalog seam: `HubPublishedAbilityStore` cached
+  `HubAbilityEntry { descriptor: Value }` and `meta.list_abilities` appended
+  that descriptor verbatim.
+- Root abstraction problem: the runtime exposed two ability catalog models —
+  local canonical `AbilityDescriptor` rows and hub-broadcast opaque JSON rows.
+  Products using the SDK could therefore receive list entries that were visible
+  enough to render but not canonical enough to resolve into descriptor-bound
+  routes.
+- Boundary decision: `HubPublishedAbilityStore` is now the schema gate from
+  federation wire JSON into canonical `AbilityDescriptor` projections. FFI
+  descriptor catalog dedupe now rejects schema-incomplete rows instead of
+  silently dropping them.

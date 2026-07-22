@@ -509,10 +509,16 @@ async fn send_federation_join_prelude(
                     crate::daemon::federation::client::ability_contract::JoinReceipt,
                 >(&body_bytes)
                 {
-                    hub_published_abilities.seed_from_snapshot(
-                        body.hub_abilities_revision,
-                        body.hub_published_abilities,
-                    );
+                    hub_published_abilities
+                        .seed_from_snapshot(
+                            body.hub_abilities_revision,
+                            body.hub_published_abilities,
+                        )
+                        .map_err(|error| {
+                            tonic::Status::failed_precondition(format!(
+                                "federation.join hub ability catalog invalid: {error}"
+                            ))
+                        })?;
                     if !hub_published_abilities.is_empty() {
                         let ability_count = hub_published_abilities.len();
                         let hub_abilities_revision = body.hub_abilities_revision;

@@ -280,25 +280,29 @@ fn list_abilities_handler(
         })
         .collect();
 
-    // Phase 3: hub-published abilities. Only when the caller asked
-    // for realm scope — the default-local path stays byte-identical
-    // to pre-v4.1.7. Each entry's `descriptor` is whatever shape
-    // the hub published; we surface it verbatim so the
-    // hub schema can evolve without forcing a Cli release.
+    // Phase 3: hub-published abilities. Only when the caller asked for realm
+    // scope — the default-local path stays owner-local. The federation read
+    // model has already validated every cached hub entry as a canonical
+    // `AbilityDescriptor`, so the merged catalog always exposes the same
+    // `ability_ura` / `descriptor_ref` facts as local registry rows.
     if scope.include_realm {
-        for entry in hub_published_abilities.snapshot() {
-            let mut desc = entry.descriptor;
-            // Stamp the canonical name on top — hub deployments
-            // sometimes omit it inside the descriptor body
-            // (relying on the outer key). The merged catalogue's
-            // consumers expect a `name` field.
-            if let Value::Object(ref mut map) = desc {
-                map.entry("name".to_string())
-                    .or_insert(Value::String(entry.name.clone()));
-                map.entry("source".to_string())
-                    .or_insert(Value::String("hub:broadcast".to_string()));
+        for descriptor in hub_published_abilities.snapshot() {
+            let mut row = serde_json::to_value(descriptor)?;
+            if let Value::Object(ref mut map) = row {
+                let source_is_empty = map
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .is_empty();
+                if source_is_empty {
+                    map.insert(
+                        "source".to_string(),
+                        Value::String("hub:broadcast".to_string()),
+                    );
+                }
             }
-            merged.push(desc);
+            merged.push(row);
         }
     }
 
@@ -1057,19 +1061,28 @@ mod tests {
             empty_registry_handle(),
             Arc::clone(&hub_published_abilities),
         );
-        hub_published_abilities.apply_diff(
-            crate::daemon::federation::client::ability_contract::HubAbilitiesDiff {
-                revision: 99,
-                added: vec![HubAbilityEntry {
-                    name: "hub.test.scope".to_string(),
-                    descriptor: serde_json::json!({
-                        "name": "hub.test.scope",
-                        "description": "smoke entry"
-                    }),
-                }],
-                removed: vec![],
-            },
-        );
+        hub_published_abilities
+            .apply_diff(
+                crate::daemon::federation::client::ability_contract::HubAbilitiesDiff {
+                    revision: 99,
+                    added: vec![HubAbilityEntry {
+                        name: "test.scope".to_string(),
+                        descriptor: serde_json::to_value(
+                            AbilityDescriptor::new(
+                                "test.scope",
+                                &crate::core::ura::hub_ura("test"),
+                                Visibility::Public,
+                                AdmissionAction::Read,
+                            )
+                            .expect("canonical hub descriptor")
+                            .with_description("smoke entry"),
+                        )
+                        .expect("hub descriptor json"),
+                    }],
+                    removed: vec![],
+                },
+            )
+            .expect("canonical hub ability diff");
 
         // Default scope: hub entry must NOT appear.
         let local_resp = invoke_list(&reg, "easynet:///r/test/device/01DEV", json!({})).unwrap();
@@ -1081,7 +1094,7 @@ mod tests {
             .collect();
         assert!(local_names.contains(&"observe.health".to_string()));
         assert!(
-            !local_names.contains(&"hub.test.scope".to_string()),
+            !local_names.contains(&"test.scope".to_string()),
             "default scope must not leak hub-broadcast entries"
         );
 
@@ -1095,9 +1108,16 @@ mod tests {
         let abilities = realm_resp["abilities"].as_array().unwrap();
         let hub_entry = abilities
             .iter()
-            .find(|a| a["name"] == "hub.test.scope")
-            .expect("hub.test.scope must be in realm-scope output");
+            .find(|a| a["name"] == "test.scope")
+            .expect("test.scope must be in realm-scope output");
         assert_eq!(hub_entry["source"], "hub:broadcast");
+        assert!(
+            hub_entry["descriptor_ref"]
+                .as_str()
+                .is_some_and(|descriptor_ref| descriptor_ref
+                    .starts_with("easynet:///r/test/ability/authority.test.scope@")),
+            "hub-published row must stay canonical: {hub_entry}"
+        );
     }
 
     #[test]

@@ -145,7 +145,11 @@ async fn send_federation_heartbeat(
         {
             let diff = receipt.hub_abilities_diff;
             if !diff.added.is_empty() || !diff.removed.is_empty() {
-                hub_published_abilities.apply_diff(diff);
+                hub_published_abilities.apply_diff(diff).map_err(|error| {
+                    tonic::Status::failed_precondition(format!(
+                        "federation.heartbeat hub ability catalog invalid: {error}"
+                    ))
+                })?;
             }
         }
     }

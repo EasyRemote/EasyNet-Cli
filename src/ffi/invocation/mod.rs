@@ -1899,9 +1899,18 @@ fn runtime_descriptor_catalog_entries(
         Ok(mut meta_entries) => entries.append(&mut meta_entries),
         Err(error) => diagnostics.push(error),
     }
-    RuntimeDescriptorCatalog {
-        entries: dedupe_descriptor_catalog_entries(entries),
-        diagnostics,
+    match dedupe_descriptor_catalog_entries(entries) {
+        Ok(entries) => RuntimeDescriptorCatalog {
+            entries,
+            diagnostics,
+        },
+        Err(error) => {
+            diagnostics.push(error);
+            RuntimeDescriptorCatalog {
+                entries: Vec::new(),
+                diagnostics,
+            }
+        }
     }
 }
 
@@ -2290,34 +2299,39 @@ fn descriptor_catalog_required_string<'a>(
 }
 
 #[cfg(feature = "axon-pb")]
-fn dedupe_descriptor_catalog_entries(entries: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+fn dedupe_descriptor_catalog_entries(
+    entries: Vec<serde_json::Value>,
+) -> std::result::Result<Vec<serde_json::Value>, String> {
     let mut catalog = std::collections::BTreeMap::new();
-    for entry in entries {
-        let Some(owner_ura) = entry.get("owner_ura").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let Some(ability_ura) = entry.get("ability_ura").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let Some(call_mode) = entry.get("call_mode").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let Some(descriptor_ref) = entry
-            .get("descriptor_ref")
-            .and_then(serde_json::Value::as_str)
-        else {
-            continue;
-        };
-        catalog
-            .entry((
-                owner_ura.to_string(),
-                ability_ura.to_string(),
-                call_mode.to_string(),
-                descriptor_ref.to_string(),
-            ))
-            .or_insert(entry);
+    for (index, entry) in entries.into_iter().enumerate() {
+        let owner_ura = descriptor_catalog_dedupe_required_string(&entry, "owner_ura", index)?;
+        let ability_ura = descriptor_catalog_dedupe_required_string(&entry, "ability_ura", index)?;
+        let call_mode = descriptor_catalog_dedupe_required_string(&entry, "call_mode", index)?;
+        let descriptor_ref =
+            descriptor_catalog_dedupe_required_string(&entry, "descriptor_ref", index)?;
+        let key = (
+            owner_ura.to_string(),
+            ability_ura.to_string(),
+            call_mode.to_string(),
+            descriptor_ref.to_string(),
+        );
+        catalog.entry(key).or_insert(entry);
     }
-    catalog.into_values().collect()
+    Ok(catalog.into_values().collect())
+}
+
+#[cfg(feature = "axon-pb")]
+fn descriptor_catalog_dedupe_required_string<'a>(
+    entry: &'a serde_json::Value,
+    field: &'static str,
+    index: usize,
+) -> std::result::Result<&'a str, String> {
+    entry
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("descriptor catalog row {index} missing {field} before dedupe"))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -9152,6 +9166,24 @@ mod tests {
                 "descriptor catalog row 4 from test_provider_catalog missing admission_action"
             ),
             "unexpected descriptor catalog ingestion error: {error}"
+        );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn descriptor_catalog_dedupe_rejects_schema_incomplete_rows() {
+        let entries = vec![serde_json::json!({
+            "ability_ura": "easynet:///r/localhost/ability/device.dev-a.observe.health",
+            "owner_ura": "easynet:///r/localhost/device/dev-a",
+            "call_mode": "rpc"
+        })];
+
+        let error = dedupe_descriptor_catalog_entries(entries)
+            .expect_err("dedupe must not silently drop schema-incomplete descriptor rows");
+
+        assert!(
+            error.contains("missing descriptor_ref before dedupe"),
+            "unexpected descriptor catalog dedupe error: {error}"
         );
     }
 

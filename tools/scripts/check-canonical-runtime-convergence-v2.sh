@@ -1235,6 +1235,74 @@ for required_test in (
 PY
 }
 
+check_canonical_ability_catalog_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local store="$cli_root/src/daemon/federation/read_model/hub_published_abilities.rs"
+  local meta="$cli_root/src/daemon/ability/builtins/governance/meta.rs"
+  local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+  [[ -f "$store" ]] || fail "hub-published ability store is missing: $store"
+  [[ -f "$meta" ]] || fail "meta.list_abilities source is missing: $meta"
+  [[ -f "$ffi_invocation" ]] || fail "FFI invocation source is missing: $ffi_invocation"
+
+  "$PYTHON_BIN" - "$store" "$meta" "$ffi_invocation" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+store = Path(sys.argv[1]).read_text(encoding="utf-8")
+meta = Path(sys.argv[2]).read_text(encoding="utf-8")
+ffi = Path(sys.argv[3]).read_text(encoding="utf-8")
+
+production_store = store.split("\n#[cfg(test)]\nmod tests", 1)[0]
+if "entries: BTreeMap<String, AbilityDescriptor>" not in production_store:
+    raise SystemExit("hub_published_store:entries_not_canonical_descriptor")
+if "entries: BTreeMap<String, HubAbilityEntry>" in production_store:
+    raise SystemExit("hub_published_store:opaque_entry_cache")
+if "fn validate_hub_ability_entry" not in production_store:
+    raise SystemExit("hub_published_store:validation_boundary_missing")
+if "serde_json::from_value(entry.descriptor)" not in production_store:
+    raise SystemExit("hub_published_store:descriptor_parse_missing")
+if "descriptor.descriptor_ref().is_none()" not in production_store:
+    raise SystemExit("hub_published_store:descriptor_ref_gate_missing")
+if "pub fn seed_from_snapshot" not in production_store or "-> Result<(), String>" not in production_store:
+    raise SystemExit("hub_published_store:seed_not_fallible")
+if "pub fn apply_diff" not in production_store or "-> Result<(), String>" not in production_store:
+    raise SystemExit("hub_published_store:diff_not_fallible")
+for test_name in (
+    "seed_rejects_noncanonical_descriptor_rows",
+    "apply_diff_is_atomic_when_added_row_is_noncanonical",
+):
+    if test_name not in store:
+        raise SystemExit(f"hub_published_store:missing_test:{test_name}")
+
+realm_split = meta.split("if scope.include_realm", 1)
+if len(realm_split) != 2:
+    raise SystemExit("meta_list_abilities:realm_merge_missing")
+realm_body = realm_split[1].split("scope.apply", 1)[0]
+if "entry.descriptor" in realm_body:
+    raise SystemExit("meta_list_abilities:realm_opaque_descriptor_passthrough")
+if "serde_json::to_value(descriptor)" not in realm_body:
+    raise SystemExit("meta_list_abilities:realm_canonical_descriptor_projection_missing")
+if 'Value::String("hub:broadcast".to_string())' not in realm_body:
+    raise SystemExit("meta_list_abilities:realm_source_projection_missing")
+
+dedupe = re.search(
+    r"fn dedupe_descriptor_catalog_entries\([^)]*\)\s*->\s*std::result::Result<Vec<serde_json::Value>, String>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn descriptor_catalog_dedupe_required_string",
+    ffi,
+    re.S,
+)
+if dedupe is None:
+    raise SystemExit("ffi_descriptor_catalog:dedupe_not_fallible")
+dedupe_body = dedupe.group("body")
+if re.search(r"\bcontinue\s*;", dedupe_body):
+    raise SystemExit("ffi_descriptor_catalog:dedupe_silent_drop")
+if "descriptor_catalog_dedupe_required_string" not in dedupe_body:
+    raise SystemExit("ffi_descriptor_catalog:dedupe_required_fields_missing")
+if "descriptor_catalog_dedupe_rejects_schema_incomplete_rows" not in ffi:
+    raise SystemExit("ffi_descriptor_catalog:missing_schema_incomplete_dedupe_test")
+PY
+}
+
 check_daemon_runtime_assembly_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local runtime_binding="$cli_root/src/daemon/invocation/dispatch/deps.rs"
@@ -3023,6 +3091,47 @@ EOF
   if ( CLI_ROOT="$tmp/cli-ffi-descriptor-owner-legacy"; check_ffi_descriptor_runtime_owner_contract ) >/dev/null 2>&1; then
     fail "self-test expected FFI descriptor runtime owner fallback gate to fail"
   fi
+  mkdir -p "$tmp/cli-opaque-hub-catalog/src/daemon/federation/read_model"
+  mkdir -p "$tmp/cli-opaque-hub-catalog/src/daemon/ability/builtins/governance"
+  mkdir -p "$tmp/cli-opaque-hub-catalog/src/ffi/invocation"
+  cat >"$tmp/cli-opaque-hub-catalog/src/daemon/federation/read_model/hub_published_abilities.rs" <<'EOF'
+use std::collections::BTreeMap;
+use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
+
+pub struct HubPublishedAbilityStore {
+    entries: BTreeMap<String, HubAbilityEntry>,
+}
+
+impl HubPublishedAbilityStore {
+    pub fn seed_from_snapshot(&self) {}
+    pub fn apply_diff(&self) {}
+}
+EOF
+  cat >"$tmp/cli-opaque-hub-catalog/src/daemon/ability/builtins/governance/meta.rs" <<'EOF'
+fn list_abilities_handler() {
+    if scope.include_realm {
+        for entry in hub_published_abilities.snapshot() {
+            merged.push(entry.descriptor);
+        }
+    }
+    scope.apply(&mut merged);
+}
+EOF
+  cat >"$tmp/cli-opaque-hub-catalog/src/ffi/invocation/mod.rs" <<'EOF'
+fn dedupe_descriptor_catalog_entries(entries: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for entry in entries {
+        if entry.get("descriptor_ref").is_none() {
+            continue;
+        }
+        out.push(entry);
+    }
+    out
+}
+EOF
+  if ( CLI_ROOT="$tmp/cli-opaque-hub-catalog"; check_canonical_ability_catalog_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected opaque hub ability catalog gate to fail"
+  fi
   cp -R "$tmp/axon" "$tmp/axon-python-private-plain-proof"
   printf 'def _canonical_invocation_bytes(env):\n  return b""\n' \
     > "$tmp/axon-python-private-plain-proof/sdk/python/axon_sdk/invocation/axiom.py"
@@ -3600,6 +3709,7 @@ EOF
   check_daemon_runtime_route_inventory_contract
   check_route_resolver_descriptor_ref_selector_contract
   check_ffi_descriptor_runtime_owner_contract
+  check_canonical_ability_catalog_projection_contract
   check_daemon_runtime_assembly_contract
   check_plugin_sidecar_helper_matrix_contract
   check_runtime_owner_signer_custody_contract
@@ -3651,6 +3761,7 @@ check_daemon_tuple_route_contract
 check_daemon_runtime_route_inventory_contract
 check_route_resolver_descriptor_ref_selector_contract
 check_ffi_descriptor_runtime_owner_contract
+check_canonical_ability_catalog_projection_contract
 check_daemon_runtime_assembly_contract
 check_plugin_sidecar_helper_matrix_contract
 check_runtime_owner_signer_custody_contract

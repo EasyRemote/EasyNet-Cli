@@ -2684,6 +2684,34 @@ Commands and outcomes will be appended after implementation.
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
   codegraph `status` reports `Index is up to date`.
 
+## 2026-07-22 Canonical ability catalog projection
+
+- `cargo test -q -p easynet --lib
+  daemon::federation::read_model::hub_published_abilities` — PASS (`8
+  passed`); covers canonical hub descriptor storage, noncanonical snapshot
+  rejection, and atomic diff rejection.
+- `cargo test -q -p easynet --lib
+  daemon::ability::builtins::governance::meta::tests::list_abilities_realm_scope_includes_hub_published_entries`
+  — PASS; verifies realm-scope hub entries are serialized as canonical
+  descriptor rows with `descriptor_ref`.
+- `cargo test -q -p easynet --lib
+  ffi::invocation::tests::descriptor_catalog_dedupe_rejects_schema_incomplete_rows`
+  — PASS; verifies FFI descriptor catalog dedupe no longer silently drops
+  schema-incomplete rows.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative fixture for the retired opaque hub catalog and
+  silent descriptor-catalog dedupe fallback.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
+  codegraph `status` reports `Index is up to date` with 35,260 nodes and
+  135,317 edges.
+
 ## 2026-07-22 FFI descriptor runtime owner precondition
 
 - `cargo test -q runtime_descriptor --lib --features axon-pb` — PASS (`7

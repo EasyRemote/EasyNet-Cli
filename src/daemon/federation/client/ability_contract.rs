@@ -124,9 +124,10 @@ pub struct JoinReceipt {
     pub advertise_contract: AdvertiseContract,
 }
 
-/// One hub-owned ability descriptor as broadcast by the hub. The
-/// `descriptor` field is opaque (`Value`) — the hub-side schema
-/// can evolve without forcing a Cli release.
+/// One hub-owned ability descriptor as broadcast by the hub. The wire field is
+/// JSON so older transport envelopes can carry it, but consumers must validate
+/// it into the canonical `AbilityDescriptor` before it enters any runtime
+/// read-model.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct HubAbilityEntry {
     pub name: String,
