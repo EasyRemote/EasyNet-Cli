@@ -74,7 +74,7 @@ event presentation belong in EasyNet backend, EasyRemote or another downstream
 product. Those projections must not introduce another transport, URA grammar,
 principal lifecycle, trust store or canonical model.
 
-The current native surface is generic C ABI v5 with an exact 54-symbol
+The current native surface is generic C ABI v6 with an exact 55-symbol
 allowlist. Go and Python expose the same product-neutral capability-state
 matrix. Node, Java and Swift expose supported subsets; they do not publish
 placeholder product clients. Product-specific profiles are removed only after
@@ -94,7 +94,7 @@ No other document is a current SDK architecture ledger.
 - `tools/scripts/check-invocation-unity.sh`
 - `tools/scripts/check-dispatch-boundary.sh`
 - `tools/scripts/check-subservice-isolation.sh`
-- `tools/scripts/check-ffi-abi-v5-header.sh`
+- `tools/scripts/check-ffi-abi-v6-header.sh`
 - `tools/scripts/check-ability-model-convergence.sh`
 - `tools/scripts/check-sdk-parity-matrix.sh`
 - `tools/scripts/check-sdk-product-neutrality.sh`

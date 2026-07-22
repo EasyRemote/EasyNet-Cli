@@ -83,7 +83,7 @@ package is not canonical merely because it is public.
 The EasyNet provider binds the canonical model to `easynet-daemon`. It owns:
 
 - daemon discovery, start, attach, status, stop and endpoint projection;
-- loading and calling the `easynet_*` C ABI v5 symbol set;
+- loading and calling the `easynet_*` C ABI v6 symbol set;
 - EasyNet runtime-event and Directory route catalogs;
 - adaptation from provider responses into canonical runtime objects.
 
@@ -95,7 +95,7 @@ cores. The neutrality closure is recursive: every Go directory named
 `internal/runtimeevents` and `runtimeevents`) and every Python source under
 `sdk/python/easynet_sdk/core` are canonical runtime roots. The EasyNet
 provider ABI is the separate lowering layer under `sdk/go/provider/easynet`
-and `sdk/python/easynet_sdk/providers/easynet`, plus the generic C ABI v5. It
+and `sdk/python/easynet_sdk/providers/easynet`, plus the generic C ABI v6. It
 may contain daemon route names but may only return canonical runtime types.
 
 ### 2.5 Products
@@ -354,42 +354,37 @@ Python gate tool. CI installs those exact versions and verifies them before
 running conformance. The Axon sibling checkout additionally verifies the exact
 commit and Rust/Python package versions described in section 2.1.
 
-## 11. EasyNet provider C ABI v5
+## 11. Runtime C ABI v6
 
-The `easynet_*` C ABI is the major-versioned EasyNet provider ABI for
-`easynet-daemon`. It is not the canonical runtime model. "Generic" at this
-boundary means that Invocation, stream and lifecycle operations are expressed
-through stable operation families rather than one C symbol per product/domain
-ability.
+The `runtime_*` C ABI is the major-versioned native runtime ABI packaged by `libeasynet_cli`. It is the lowest shared SDK seam for native providers. Invocation, stream and lifecycle operations are expressed through stable runtime operation families rather than one C symbol per product/domain ability.
 
 Allowed symbol families:
 
 - version/feature and typed-error discovery;
-- environment, daemon and runtime lifecycle;
+- environment, runtime host and runtime lifecycle;
 - generic Invocation build/prepare/invoke/submit/handle;
 - stream and bidi;
 - runtime health/diagnostics and required Addressing projection;
 - opaque handle and owned-buffer release.
 
-REQ-ABI-1: Domain operations do not receive C symbols. Daemon lifecycle symbols
-are allowed because this ABI is the EasyNet provider binding.
+REQ-ABI-1: Domain operations do not receive C symbols. Runtime host lifecycle symbols are allowed because this ABI owns generic runtime host control.
 
 REQ-ABI-2: Removed v4 domain symbols have no aliases, weak exports, fallback
 lookups or permanent dual track.
 
-REQ-ABI-3: Go/Python native providers resolve only the v5 export list.
+REQ-ABI-3: Go/Python native providers resolve only the v6 export list.
 
 REQ-ABI-4: The header, export list, loader symbol table, release packaging and
 ABI conformance test agree exactly.
 
 REQ-ABI-5: Provider child resources created by the C ABI are bound to one live
-client-session incarnation, not merely to the numeric `EasynetHandle` value.
+client-session incarnation, not merely to the numeric `RuntimeHandle` value.
 The internal lifecycle is `Active -> Closing -> Released`. Submit/open paths
 must perform "session is Active + child resource insertion" as one lifecycle
 transaction; shutdown must mark the session Closing before draining resources
 for that exact binding.
 
-REQ-ABI-6: v5 submitted-invocation handles are one-shot provider resources.
+REQ-ABI-6: v6 submitted-invocation handles are one-shot provider resources.
 Unknown, stale, cross-session or post-free submitted handles return
 `ERR_INVALID_HANDLE` for `await`, `cancel`, `events` and `free`. This is the
 v5 public behavior; bindings must not preserve an idempotent-free compatibility
@@ -720,7 +715,7 @@ The release gate includes:
 3. descriptor schema/authority/call-mode single-source projection;
 4. Axon Addressing accepted/rejected vectors in Go and Python;
 5. explicit lifecycle transition and rollback tests;
-6. exact ABI v5 symbol/header/package checks;
+6. exact ABI v6 symbol/header/package checks;
 7. public-export/import gates rejecting product SDK modules and parallel URA,
    Invocation or call-mode models;
 8. downstream backend and EasyRemote tests proving product-local ownership;

@@ -6,7 +6,7 @@ languages consume this surface.
 
 ## 1. Versioning
 
-`easynet_abi_version() -> u32` is the runtime source of truth.
+`runtime_abi_version() -> u32` is the runtime source of truth.
 Every breaking change to a function signature, struct shape, exported
 symbol set, or return-code semantic increments this version. The
 checked-in `include/easynet_cli.h` header is the binding-facing
@@ -22,36 +22,36 @@ ABI v3 is the complete Invocation-only ABI. The historical
 ### 2.1 Lifecycle
 
 ```c
-uint32_t easynet_abi_version(void);
+uint32_t runtime_abi_version(void);
 const char* easynet_last_error(void);
-void easynet_string_free(char* s);
+void runtime_string_free(char* s);
 ```
 
 Returns the ABI version number. Callers SHOULD assert the value
 matches what they were built against.
 
 ```c
-int32_t  easynet_init(const char* control_json_path, EasynetHandle* out);
-int32_t  easynet_shutdown(EasynetHandle handle);
+int32_t  runtime_init(const char* control_json_path, RuntimeHandle* out);
+int32_t  runtime_shutdown(RuntimeHandle handle);
 ```
 
-`easynet_init` resolves the daemon control descriptor, validates IPC
+`runtime_init` resolves the daemon control descriptor, validates IPC
 version overlap, and returns a client-session handle. This handle names
 a daemon IPC session; it is not a daemon process lifecycle handle.
 
 ```c
-int32_t easynet_daemon_start(const char* config_json, uint64_t* out_daemon_handle);
-int32_t easynet_daemon_stop(uint64_t daemon_handle);
-int32_t easynet_daemon_status(uint64_t daemon_handle, char** out_status_json);
-int32_t easynet_daemon_invocation_endpoint(uint64_t daemon_handle, char** out_endpoint);
-int32_t easynet_daemon_open_client(uint64_t daemon_handle, EasynetHandle* out);
+int32_t runtime_host_start(const char* config_json, uint64_t* out_daemon_handle);
+int32_t runtime_host_stop(uint64_t daemon_handle);
+int32_t runtime_host_status(uint64_t daemon_handle, char** out_status_json);
+int32_t runtime_host_invocation_endpoint(uint64_t daemon_handle, char** out_endpoint);
+int32_t runtime_host_open_client(uint64_t daemon_handle, RuntimeHandle* out);
 ```
 
 Daemon lifecycle handles are process/status handles. They are separate
-from `EasynetHandle` values returned by `easynet_init`. Bindings that
-start or attach to a daemon through `easynet_daemon_start` should call
-`easynet_daemon_open_client` to get an Invocation-capable
-`EasynetHandle` for `easynet_invocation_*`; they do not need to guess
+from `RuntimeHandle` values returned by `runtime_init`. Bindings that
+start or attach to a daemon through `runtime_host_start` should call
+`runtime_host_open_client` to get an Invocation-capable
+`RuntimeHandle` for `runtime_invocation_*`; they do not need to guess
 or rediscover a control descriptor path.
 
 `config_json` is an explicit object:
@@ -72,30 +72,30 @@ the Invocation endpoint must accept connections. A control-only daemon
 is reported as down for lifecycle attach purposes because product calls
 cannot succeed through that process.
 
-`easynet_daemon_start` returns success only after both `control.sock`
+`runtime_host_start` returns success only after both `control.sock`
 and `daemon.sock` are accepting connections, or after attaching to an
 already-live daemon with both endpoints accepting. A returned daemon
 handle is therefore immediately usable with
-`easynet_daemon_open_client`.
+`runtime_host_open_client`.
 
 ### 2.2 Complete Invocation Dispatch
 
 ```c
-int32_t easynet_invocation_invoke(
-    EasynetHandle handle,
+int32_t runtime_invocation_invoke(
+    RuntimeHandle handle,
     const char* invocation_json,
     char** out_receipt_json
 );
 
-int32_t easynet_invocation_stream_open(
-    EasynetHandle handle,
+int32_t runtime_invocation_stream_open(
+    RuntimeHandle handle,
     const char* invocation_json,
-    EasynetInvocationStreamCallback on_chunk,
+    RuntimeInvocationStreamCallback on_chunk,
     void* user_data,
     uint64_t* out_stream_id
 );
 
-int32_t easynet_invocation_stream_cancel(EasynetHandle handle, uint64_t stream_id);
+int32_t runtime_invocation_stream_cancel(RuntimeHandle handle, uint64_t stream_id);
 ```
 
 `invocation_json` carries the complete Axon Invocation tuple:
@@ -126,25 +126,25 @@ transport.
 ### 2.3 InvokeBidi Dispatch
 
 ```c
-int32_t easynet_invocation_bidi_open(
-    EasynetHandle handle,
+int32_t runtime_invocation_bidi_open(
+    RuntimeHandle handle,
     const char* invocation_json,
-    EasynetInvocationBidiCallback on_frame,
+    RuntimeInvocationBidiCallback on_frame,
     void* user_data,
     uint64_t* out_bidi_id
 );
 
-int32_t easynet_invocation_bidi_send(
-    EasynetHandle handle,
+int32_t runtime_invocation_bidi_send(
+    RuntimeHandle handle,
     uint64_t bidi_id,
     const char* frame_json
 );
 
-int32_t easynet_invocation_bidi_close(EasynetHandle handle, uint64_t bidi_id);
-int32_t easynet_invocation_bidi_cancel(EasynetHandle handle, uint64_t bidi_id);
+int32_t runtime_invocation_bidi_close(RuntimeHandle handle, uint64_t bidi_id);
+int32_t runtime_invocation_bidi_cancel(RuntimeHandle handle, uint64_t bidi_id);
 ```
 
-`easynet_invocation_bidi_open` uses the same complete Invocation JSON
+`runtime_invocation_bidi_open` uses the same complete Invocation JSON
 and additionally requires:
 
 ```json
@@ -153,7 +153,7 @@ and additionally requires:
 ]
 ```
 
-Stream and bidi ids are scoped to the `EasynetHandle` that opened them.
+Stream and bidi ids are scoped to the `RuntimeHandle` that opened them.
 A different handle cannot send, close, or cancel another handle's active
 stream/session.
 
@@ -161,7 +161,7 @@ stream/session.
 
 | code | name                       | meaning                                          |
 |------|----------------------------|--------------------------------------------------|
-| 0    | `EASYNET_OK`               | success                                          |
+| 0    | `RUNTIME_OK`               | success                                          |
 | 1    | `ERR_GENERIC`              | generic / unclassified failure                   |
 | 2    | `ERR_NULL_POINTER`         | required pointer argument was null               |
 | 3    | `ERR_INVALID_UTF8`         | C string argument was not valid UTF-8            |
@@ -200,18 +200,18 @@ Daemon gRPC status is preserved at the FFI boundary:
   avoid blocking indefinitely; copy the frame and signal the consumer
   through a queue.
 - All handles are process-local integers. A stream/bidi id is valid
-  only with the `EasynetHandle` that opened it.
+  only with the `RuntimeHandle` that opened it.
 
 ## 5. Conformance Checklist
 
 A new Client binding must:
 
-- [ ] Call `easynet_abi_version()` at startup; abort if it does not
+- [ ] Call `runtime_abi_version()` at startup; abort if it does not
       match the expected value.
 - [ ] Free every `char*` returned by an `easynet_*` function via
-      `easynet_string_free`.
+      `runtime_string_free`.
 - [ ] Cancel or close every active stream/bidi session before calling
-      `easynet_shutdown`.
+      `runtime_shutdown`.
 - [ ] Treat any non-zero return code from a wrapper as a hard error;
       consult `easynet_last_error` for diagnostics.
 

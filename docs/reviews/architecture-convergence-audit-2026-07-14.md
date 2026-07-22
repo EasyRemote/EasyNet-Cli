@@ -303,7 +303,7 @@ provider prefix existed on main and was expanded by this branch.
 | Conformance canonical public API registers daemon names | `sdk/conformance/canonical-public-api.json` lists `CABIDaemonTransport`, `DaemonHandle`, `DaemonControl`, `DaemonInvocationTransport`, `DirectDaemonRuntimeTransport`, and method members such as `DaemonControl.Start`. | The conformance suite turns provider/legacy names into canonical SDK truth, so future refactors will be judged against the wrong model. | **Branch-new** | Replace flat canonical-name inventory with concept records: canonical neutral names, capability state, legacy public aliases, and provider bindings. |
 | Java public package and artifact | `sdk/java/pom.xml` uses `groupId=run.easynet`, `artifactId=easynet-daemon-sdk`; sources use `package run.easynet.daemon`. | Java package identity permanently encodes EasyNet + daemon even when classes are named `Runtime*`. | **Branch-new** | Create a runtime-neutral package/artifact target. Record `run.easynet.daemon` only as a migration/adapter package if public compatibility is required. |
 | Swift public module | `sdk/swift/Package.swift` and source/test paths use `EasyNetDaemonSDK`. | Swift module import surface encodes product/provider naming. | **Branch-new** | Create a runtime-neutral Swift module; old module can only be a SPEC-bound compatibility product. |
-| C ABI symbol prefix | `include/easynet_cli.h` and `src/ffi/**/*.rs` export `easynet_*` and `easynet_daemon_*` symbols. | The ABI is product/provider-branded, but it is already a stable transport ABI and cannot be renamed as a local cleanup. | **Main-existing; branch-expanded** | Treat as versioned provider binding. Do not expose it as canonical SDK model; rename only through an explicit ABI bump and downstream migration. |
+| C ABI symbol prefix | `include/easynet_cli.h` and `src/ffi/**/*.rs` export `easynet_*` and `runtime_host_*` symbols. | The ABI is product/provider-branded, but it is already a stable transport ABI and cannot be renamed as a local cleanup. | **Main-existing; branch-expanded** | Treat as versioned provider binding. Do not expose it as canonical SDK model; rename only through an explicit ABI bump and downstream migration. |
 
 ### 10.2 Redundant code and compatibility inventory from the second pass
 
@@ -366,7 +366,7 @@ files / 20,789 nodes / 66,835 edges**.
 | A16 | P1 | open | Branch-new SDK; main docs | URA spelling is mostly corrected, but Go silently defaults missing Agent `owner_kind` while Python rejects it; normative pre-URA identity prose remains. |
 | A17 | P1 | fixed | Worktree placement defect | MCP stdio implementation is owned by `daemon/execution/mcp`; the generic support owner was removed. |
 | A18 | P1 | open | Mostly main-existing | `dispatch.rs`, FFI invocation, admission and lifecycle modules remain procedural responsibility accumulators spanning multiple aggregates. |
-| A19 | P1 | partial | Main ABI plus branch amplification | Neutral facade names exist, but canonical packages load `libeasynet_cli`, call `easynet_daemon_*`, and expose product aliases. |
+| A19 | P1 | partial | Main ABI plus branch amplification | Neutral facade names exist, but canonical packages load `libeasynet_cli`, call `runtime_host_*`, and expose product aliases. |
 | A20 | P1 | partial | Main-existing | Purge has a transaction owner; catalog, MCP and dispatch still directly load/save the shared mutable `AgentRegistry`. |
 | A21 | P0 | open | Main-existing | Thirty-one exact daemon routes execute outside `LocalRuntime`, return no canonical receipts and can mutate before a strict client rejects the response. |
 | A22 | P1 | fixed | Main-existing | MCP publication is geometry-aware and excludes Stream/Bidi abilities from the unary tool provider. |
@@ -648,7 +648,7 @@ integer.
 
 | Surface | Evidence | Architecture defect | Branch-relative status |
 |---|---|---|---|
-| Rust C ABI | `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/src/ffi/invocation/mod.rs` exports `pub type InvocationHandleId = u64` and public `easynet_invocation_handle_await/cancel/events/free(handle, invocation_handle_id, ...)`. | FFI treats process-local registry id as the public control credential. | New on this branch |
+| Rust C ABI | `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/src/ffi/invocation/mod.rs` exports `pub type InvocationHandleId = u64` and public `runtime_invocation_handle_await/cancel/events/free(handle, invocation_handle_id, ...)`. | FFI treats process-local registry id as the public control credential. | New on this branch |
 | Go SDK transport | `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/go/runtime.go` declares `AwaitHandle(ctx, handleID uint64)`, `CancelHandle(ctx, handleID uint64, ...)`, `HandleEvents(ctx, handleID uint64)`, `FreeHandle(ctx, handleID uint64)`. | The canonical transport seam is ID-oriented instead of capability-oriented. | New on this branch |
 | Go SDK model | `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/go/runtime.go` exposes `InvocationHandle.HandleID() uint64` and `InvocationCancel.HandleID() uint64`. | Public SDK consumers can extract and replay raw control ids. | New on this branch |
 | Python SDK transport | `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python/easynet_sdk/runtime.py` defines `await_handle(handle_id: int)`, `cancel_handle(handle_id: int, ...)`, `handle_events(handle_id: int)`, `free_handle(handle_id: int)`. | Python repeats the Go raw-ID architecture rather than converging on a shared capability model. | New on this branch |
@@ -787,7 +787,7 @@ CodeGraph status for EasyNet-Cli after sync:
 |---|---|---|---|---|---|
 | C01 | Canonical SDK public identity is still EasyNet/daemon-shaped, not product-neutral runtime-shaped. | `codegraph query EasyNet` and SDK product-symbol SQL find `sdk/go/daemon.go`, `sdk/python/easynet_sdk/daemon.py`, Java package `run.easynet.daemon`, C ABI `Easynet*` aliases and provider packages. | Branch-new SDK surface over main-existing product ABI debt | Open | Split neutral runtime SDK from EasyNet provider packages. Product names remain only in downstream provider/distribution layers. |
 | C02 | A78 raw submitted-control ids were promoted into the SDK runtime model. | Historical Section 13 evidence; current CodeGraph now finds `InvocationControlCapability` across five languages after repair. | Branch-new | Closed for Go/Python/Node/Java/Swift SDK seams; C ABI/provider lifecycle remains open | Keep numeric ids adapter-private; move C ABI/process-local lifecycle behind provider binding and add replay/generation tests. |
-| C03 | C ABI still uses EasyNet product names and raw submitted handle ids as public provider tokens. | `include/easynet_cli.h` contains `EasynetInvocationHandleId`; Rust FFI exports `easynet_invocation_handle_await/cancel/events/free`. | Main-existing ABI name, branch-new SDK canonicalization pressure | Open | Treat C ABI as EasyNet provider ABI, not canonical SDK model. A neutral ABI needs an explicit SPEC and version bump. |
+| C03 | C ABI still uses EasyNet product names and raw submitted handle ids as public provider tokens. | `include/easynet_cli.h` contains `RuntimeInvocationHandleId`; Rust FFI exports `runtime_invocation_handle_await/cancel/events/free`. | Main-existing ABI name, branch-new SDK canonicalization pressure | Open | Treat C ABI as EasyNet provider ABI, not canonical SDK model. A neutral ABI needs an explicit SPEC and version bump. |
 | C04 | Submitted lifecycle ownership is still provider registry-local rather than daemon/runtime aggregate-owned. | SDK adapters extract adapter ids from capabilities; FFI registry remains the owner that awaits/cancels/events/frees. | Branch-new exposure over main-existing FFI behavior | Open | Runtime aggregate owns submitted lifecycle state; provider registry only stores transport resources. |
 | C05 | SDK product-neutrality gates are too shallow. | Product-neutrality script passes, but CodeGraph still counts product symbols led by `sdk/go/daemon.go`, `_cabi.py`, `direct_runtime.go`, `ura.go`, Java package names and provider packages. | Branch-new | Open | Gate canonical SDK exports by owner class: generic runtime vs EasyNet provider vs generated Axon protobuf. |
 | C06 | Go/Python/Node/Java/Swift A78 seam is now aligned, but the seven-language matrix still has provider/ABI and product-neutrality gaps. | CodeGraph finds five language implementations; regenerated public API inventory and `sdk_concepts --validate-actual` now pass for this slice; C ABI/Rust provider remains raw and product-named. | Branch-new | Improved but incomplete | Keep generated public inventory current and require every capability row to declare state, owner and provider evidence. |
@@ -887,7 +887,7 @@ claim runtime-owned lifecycle completion.
 
 | Area | Previous defect | Current state | Remaining gap |
 |---|---|---|---|
-| C ABI submitted handle allocation | `EasynetInvocationHandleId` values were predictable monotonic registry ids. | Rust FFI now mints collision-checked OsRng provider tokens in `[2^52, 2^53 - 1]`, preserving `uint64_t` ABI and exact JSON numeric representation. | Token freshness remains provider-local; runtime-owned generation/session incarnation is still open. |
+| C ABI submitted handle allocation | `RuntimeInvocationHandleId` values were predictable monotonic registry ids. | Rust FFI now mints collision-checked OsRng provider tokens in `[2^52, 2^53 - 1]`, preserving `uint64_t` ABI and exact JSON numeric representation. | Token freshness remains provider-local; runtime-owned generation/session incarnation is still open. |
 | Post-free lifecycle control | `free` accepted unknown handles as OK, preserving replay-compatible semantics. | Post-free `await`, `cancel`, `events` and repeated `free` now return `ERR_INVALID_HANDLE`. | Runtime aggregate still does not own submitted lifecycle truth. |
 | Public-surface product quarantine | CamelCase `Device`/`Hub` and `CABI` replacement classification had false negatives/weak mapping. | Token-aware policy quarantines `ModeDevice`, `ModeHub`, `RuntimeModeHub`, `RuntimeAdminAbilityClient.RevokeDevice`; `ParsedURA.DeviceID` remains allowed URA grammar; C ABI maps to `native_runtime`. | Physical package/product naming extraction remains open. |
 
@@ -961,7 +961,7 @@ invocation lifecycle completion.
 
 | Area | Previous defect | Current state | Remaining gap |
 |---|---|---|---|
-| FFI client-session identity | Invocation resources were owned by naked `EasynetHandle` numeric equality. | `ClientSession` now mints a private incarnation and exposes internal `ClientSessionBinding { handle, incarnation }`. | Binding is process-local provider identity, not runtime aggregate lifecycle identity. |
+| FFI client-session identity | Invocation resources were owned by naked `RuntimeHandle` numeric equality. | `ClientSession` now mints a private incarnation and exposes internal `ClientSessionBinding { handle, incarnation }`. | Binding is process-local provider identity, not runtime aggregate lifecycle identity. |
 | Submitted invocation resource ownership | Submitted handles could only prove they belonged to a numeric handle value. | Submitted handle registry stores `ClientSessionBinding`; stale same-handle/different-incarnation access is rejected. | Await/events still read FFI projection state rather than a runtime-owned aggregate. |
 | Stream/bidi resource ownership | Stream and bidi registries used a parallel naked-handle owner check. | Server-stream and bidi registries now share the same `ClientSessionBinding` owner model. | Stream/bidi terminal closure still needs the canonical receipt gate and runtime-owned finalization. |
 | Shutdown cleanup | Shutdown cleanup matched resources by naked handle. | Cleanup first transitions the session `Active -> Closing`, drains resources by exact `ClientSessionBinding`, releases the handle and marks the session Released. | Crash/restart recovery and daemon-side lifecycle query remain outside this provider-local registry. |
@@ -996,7 +996,7 @@ Initial rejection:
 
 - Lifecycle validation and child-resource insertion were not atomic, leaving a
   shutdown/open zombie-resource race.
-- Public JSON behavior changes needed an explicit v5 ABI decision rather than
+- Public JSON behavior changes needed an explicit v6 ABI decision rather than
   an implicit drift from earlier slices.
 
 Corrected:
@@ -1027,7 +1027,7 @@ Remaining production blockers:
 2. Remaining work: runtime-owned lifecycle, canonical receipt verification
    gate, deterministic terminal ownership, cross-geometry finalization and
    product-neutral SDK extraction.
-3. Architectural decisions made: `EasynetHandle` remains public ABI; child
+3. Architectural decisions made: `RuntimeHandle` remains public ABI; child
    resources store internal `ClientSessionBinding`; session incarnation is
    provider-local authority hardening, not canonical runtime lifecycle truth.
 4. Refactoring completed: `ClientSession` incarnation minting, binding lookup,

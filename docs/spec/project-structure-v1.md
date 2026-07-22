@@ -37,7 +37,7 @@ EasyNet-Cli/
 ├─ build.rs
 ├─ include/
 │  ├─ easynet_cli.h
-│  └─ easynet_cli.exports.v5
+│  └─ easynet_cli.exports.v6
 ├─ src/
 │  ├─ lib.rs
 │  ├─ bin/
@@ -334,7 +334,7 @@ Rust/C ABI projection over daemon control and generic Invocation submission:
 - `strings/`: allocation and string ownership ABI.
 
 The stable model is the exact generic daemon/Invocation boundary in
-`include/easynet_cli.exports.v5`. Identity, Directory, Receipt, Publication,
+`include/easynet_cli.exports.v6`. Identity, Directory, Receipt, Publication,
 Host Binding, Mission, Events, Admin/Gateway, Surface, Compatibility, Wrappers,
 and companion control remain language-SDK provider responsibilities and must
 not grow corresponding FFI directories or exports.

@@ -297,7 +297,7 @@ func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
 	prepared, material, err := client.Prepare(context.Background(), completeDraftForRuntimeTest(t), PrepareOptions{
 		ExpiresInMS: 60000,
 		SignerID:    "signer-alice-key-1",
-		PolicyRef:  "daemon-key-inventory:sha256:test-policy",
+		PolicyRef:   "daemon-key-inventory:sha256:test-policy",
 	})
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)

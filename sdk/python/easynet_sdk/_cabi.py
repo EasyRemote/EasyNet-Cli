@@ -1,4 +1,4 @@
-"""Private generic C ABI v5 transport adapter.
+"""Private generic C ABI v6 transport adapter.
 
 This module is intentionally the only Python SDK file that imports ``ctypes``.
 Public facade modules depend on narrow transport protocols and never expose
@@ -19,8 +19,8 @@ from typing import Any, Callable
 from .errors import ErrorCode, RetryHint, SDKError, retryable_for_hint
 from .runtime import InvocationControlCapability
 
-EXPECTED_ABI_VERSION = 5
-EASYNET_OK = 0
+EXPECTED_ABI_VERSION = 6
+RUNTIME_OK = 0
 MAX_CABI_CALLBACK_QUEUE = 1024
 
 _StreamCallback = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
@@ -31,7 +31,7 @@ _NEXT_CALLBACK_TOKEN = 1
 
 
 class CLILibrary:
-    """Typed binding for the generic EasyNet-Cli C ABI v5 surface."""
+    """Typed binding for the generic EasyNet-Cli C ABI v6 surface."""
 
     def __init__(self, raw: Any) -> None:
         self._raw = raw
@@ -70,11 +70,11 @@ class CLILibrary:
                     ) from exc
                 errors.append(f"{candidate}: {exc}")
         raise _transport_error(
-            "no usable libeasynet_cli C ABI v5 library found: " + "; ".join(errors)
+            "no usable libeasynet_cli C ABI v6 library found: " + "; ".join(errors)
         )
 
     def require_abi(self, expected: int = EXPECTED_ABI_VERSION) -> None:
-        actual = int(self._raw.easynet_abi_version())
+        actual = int(self._raw.runtime_abi_version())
         if actual != expected:
             raise SDKError(
                 code=ErrorCode.VERSION_MISMATCH,
@@ -84,23 +84,23 @@ class CLILibrary:
             )
 
     def feature_discovery(self) -> bytes:
-        return self._call_output(self._raw.easynet_feature_discovery)
+        return self._call_output(self._raw.runtime_feature_discovery)
 
     def init(self, control_path: str = "") -> int:
         out_handle = ctypes.c_uint64(0)
         raw_path = _optional_c_string(control_path)
-        code = int(self._raw.easynet_init(raw_path, ctypes.byref(out_handle)))
+        code = int(self._raw.runtime_init(raw_path, ctypes.byref(out_handle)))
         self._raise_for_code(code)
         return int(out_handle.value)
 
     def shutdown(self, handle: int) -> None:
-        code = int(self._raw.easynet_shutdown(ctypes.c_uint64(handle)))
+        code = int(self._raw.runtime_shutdown(ctypes.c_uint64(handle)))
         self._raise_for_code(code)
 
     def daemon_start(self, config_json: bytes) -> int:
         out_handle = ctypes.c_uint64(0)
         code = int(
-            self._raw.easynet_daemon_start(
+            self._raw.runtime_host_start(
                 ctypes.c_char_p(config_json), ctypes.byref(out_handle)
             )
         )
@@ -110,7 +110,7 @@ class CLILibrary:
     def daemon_attach(self, options_json: bytes) -> int:
         out_handle = ctypes.c_uint64(0)
         code = int(
-            self._raw.easynet_daemon_attach(
+            self._raw.runtime_host_attach(
                 ctypes.c_char_p(options_json), ctypes.byref(out_handle)
             )
         )
@@ -119,33 +119,33 @@ class CLILibrary:
 
     def daemon_discover(self, options_json: bytes) -> bytes:
         return self._call_output(
-            self._raw.easynet_daemon_discover,
+            self._raw.runtime_host_discover,
             ctypes.c_char_p(options_json),
         )
 
     def daemon_stop(self, daemon_handle: int) -> None:
-        code = int(self._raw.easynet_daemon_stop(ctypes.c_uint64(daemon_handle)))
+        code = int(self._raw.runtime_host_stop(ctypes.c_uint64(daemon_handle)))
         self._raise_for_code(code)
 
     def daemon_detach(self, daemon_handle: int) -> None:
-        code = int(self._raw.easynet_daemon_detach(ctypes.c_uint64(daemon_handle)))
+        code = int(self._raw.runtime_host_detach(ctypes.c_uint64(daemon_handle)))
         self._raise_for_code(code)
 
     def daemon_status(self, daemon_handle: int) -> bytes:
         return self._call_output(
-            self._raw.easynet_daemon_status,
+            self._raw.runtime_host_status,
             ctypes.c_uint64(daemon_handle),
         )
 
     def daemon_endpoints(self, daemon_handle: int) -> bytes:
         return self._call_output(
-            self._raw.easynet_daemon_endpoints,
+            self._raw.runtime_host_endpoints,
             ctypes.c_uint64(daemon_handle),
         )
 
     def daemon_invocation_endpoint(self, daemon_handle: int) -> str:
         raw = self._call_output(
-            self._raw.easynet_daemon_invocation_endpoint,
+            self._raw.runtime_host_invocation_endpoint,
             ctypes.c_uint64(daemon_handle),
         )
         endpoint = raw.decode("utf-8")
@@ -162,7 +162,7 @@ class CLILibrary:
     def daemon_open_client(self, daemon_handle: int) -> int:
         out_handle = ctypes.c_uint64(0)
         code = int(
-            self._raw.easynet_daemon_open_client(
+            self._raw.runtime_host_open_client(
                 ctypes.c_uint64(daemon_handle), ctypes.byref(out_handle)
             )
         )
@@ -171,13 +171,13 @@ class CLILibrary:
 
     def runtime_health(self, handle: int) -> bytes:
         return self._call_output(
-            self._raw.easynet_runtime_health,
+            self._raw.runtime_health,
             ctypes.c_uint64(handle),
         )
 
     def runtime_diagnostics(self, handle: int) -> bytes:
         return self._call_output(
-            self._raw.easynet_runtime_diagnostics,
+            self._raw.runtime_diagnostics,
             ctypes.c_uint64(handle),
         )
 
@@ -185,14 +185,14 @@ class CLILibrary:
         self, handle: int, request_json: bytes
     ) -> bytes:
         return self._call_output(
-            self._raw.easynet_runtime_resolve_descriptor_ref,
+            self._raw.runtime_resolve_descriptor_ref,
             ctypes.c_uint64(handle),
             ctypes.c_char_p(request_json),
         )
 
     def invocation_invoke(self, handle: int, invocation_json: bytes) -> bytes:
         return self._call_output(
-            self._raw.easynet_invocation_invoke,
+            self._raw.runtime_invocation_invoke,
             ctypes.c_uint64(handle),
             ctypes.c_char_p(invocation_json),
         )
@@ -201,7 +201,7 @@ class CLILibrary:
         self, handle: int, invocation_json: bytes, options_json: bytes
     ) -> tuple[int, bytes]:
         return self._call_output_with_id(
-            self._raw.easynet_invocation_prepare,
+            self._raw.runtime_invocation_prepare,
             ctypes.c_uint64(handle),
             ctypes.c_char_p(invocation_json),
             ctypes.c_char_p(options_json),
@@ -211,14 +211,14 @@ class CLILibrary:
         self, prepared_id: int, signature_json: bytes
     ) -> tuple[int, bytes]:
         return self._call_output_with_id(
-            self._raw.easynet_invocation_sign_prepared,
+            self._raw.runtime_invocation_sign_prepared,
             ctypes.c_uint64(prepared_id),
             ctypes.c_char_p(signature_json),
         )
 
     def invocation_sign_prepared_local(self, prepared_id: int) -> tuple[int, bytes]:
         return self._call_output_with_id(
-            self._raw.easynet_invocation_sign_prepared_local,
+            self._raw.runtime_invocation_sign_prepared_local,
             ctypes.c_uint64(prepared_id),
         )
 
@@ -226,14 +226,14 @@ class CLILibrary:
         self, handle: int, signed_id: int
     ) -> tuple[int, bytes]:
         return self._call_output_with_id(
-            self._raw.easynet_invocation_submit_signed_handle,
+            self._raw.runtime_invocation_submit_signed_handle,
             ctypes.c_uint64(handle),
             ctypes.c_uint64(signed_id),
         )
 
     def invocation_handle_await(self, handle: int, invocation_handle_id: int) -> bytes:
         return self._call_output(
-            self._raw.easynet_invocation_handle_await,
+            self._raw.runtime_invocation_handle_await,
             ctypes.c_uint64(handle),
             ctypes.c_uint64(invocation_handle_id),
         )
@@ -242,7 +242,7 @@ class CLILibrary:
         self, handle: int, invocation_handle_id: int, reason: str
     ) -> bytes:
         return self._call_output(
-            self._raw.easynet_invocation_handle_cancel,
+            self._raw.runtime_invocation_handle_cancel,
             ctypes.c_uint64(handle),
             ctypes.c_uint64(invocation_handle_id),
             ctypes.c_char_p(_optional_c_string(reason)),
@@ -250,14 +250,14 @@ class CLILibrary:
 
     def invocation_handle_events(self, handle: int, invocation_handle_id: int) -> bytes:
         return self._call_output(
-            self._raw.easynet_invocation_handle_events,
+            self._raw.runtime_invocation_handle_events,
             ctypes.c_uint64(handle),
             ctypes.c_uint64(invocation_handle_id),
         )
 
     def invocation_handle_free(self, handle: int, invocation_handle_id: int) -> None:
         code = int(
-            self._raw.easynet_invocation_handle_free(
+            self._raw.runtime_invocation_handle_free(
                 ctypes.c_uint64(handle), ctypes.c_uint64(invocation_handle_id)
             )
         )
@@ -265,12 +265,12 @@ class CLILibrary:
 
     def prepared_invocation_free(self, prepared_id: int) -> None:
         code = int(
-            self._raw.easynet_prepared_invocation_free(ctypes.c_uint64(prepared_id))
+            self._raw.runtime_prepared_invocation_free(ctypes.c_uint64(prepared_id))
         )
         self._raise_for_code(code)
 
     def signed_invocation_free(self, signed_id: int) -> None:
-        code = int(self._raw.easynet_signed_invocation_free(ctypes.c_uint64(signed_id)))
+        code = int(self._raw.runtime_signed_invocation_free(ctypes.c_uint64(signed_id)))
         self._raise_for_code(code)
 
     def invocation_stream_open(
@@ -278,7 +278,7 @@ class CLILibrary:
     ) -> int:
         out_stream_id = ctypes.c_uint64(0)
         code = int(
-            self._raw.easynet_invocation_stream_open(
+            self._raw.runtime_invocation_stream_open(
                 ctypes.c_uint64(handle),
                 ctypes.c_char_p(invocation_json),
                 _STREAM_CALLBACK_HANDLE,
@@ -291,7 +291,7 @@ class CLILibrary:
 
     def invocation_stream_cancel(self, handle: int, stream_id: int) -> None:
         code = int(
-            self._raw.easynet_invocation_stream_cancel(
+            self._raw.runtime_invocation_stream_cancel(
                 ctypes.c_uint64(handle), ctypes.c_uint64(stream_id)
             )
         )
@@ -299,7 +299,7 @@ class CLILibrary:
 
     def invocation_stream_close(self, handle: int, stream_id: int) -> None:
         code = int(
-            self._raw.easynet_invocation_stream_close(
+            self._raw.runtime_invocation_stream_close(
                 ctypes.c_uint64(handle), ctypes.c_uint64(stream_id)
             )
         )
@@ -310,7 +310,7 @@ class CLILibrary:
     ) -> int:
         out_bidi_id = ctypes.c_uint64(0)
         code = int(
-            self._raw.easynet_invocation_bidi_open(
+            self._raw.runtime_invocation_bidi_open(
                 ctypes.c_uint64(handle),
                 ctypes.c_char_p(invocation_json),
                 _BIDI_CALLBACK_HANDLE,
@@ -325,7 +325,7 @@ class CLILibrary:
         self, handle: int, bidi_id: int, frame_json: bytes
     ) -> None:
         code = int(
-            self._raw.easynet_invocation_bidi_send(
+            self._raw.runtime_invocation_bidi_send(
                 ctypes.c_uint64(handle),
                 ctypes.c_uint64(bidi_id),
                 ctypes.c_char_p(frame_json),
@@ -335,7 +335,7 @@ class CLILibrary:
 
     def invocation_bidi_close_send(self, handle: int, bidi_id: int) -> None:
         code = int(
-            self._raw.easynet_invocation_bidi_close_send(
+            self._raw.runtime_invocation_bidi_close_send(
                 ctypes.c_uint64(handle), ctypes.c_uint64(bidi_id)
             )
         )
@@ -343,7 +343,7 @@ class CLILibrary:
 
     def invocation_bidi_close(self, handle: int, bidi_id: int) -> None:
         code = int(
-            self._raw.easynet_invocation_bidi_close(
+            self._raw.runtime_invocation_bidi_close(
                 ctypes.c_uint64(handle), ctypes.c_uint64(bidi_id)
             )
         )
@@ -351,198 +351,198 @@ class CLILibrary:
 
     def invocation_bidi_cancel(self, handle: int, bidi_id: int) -> None:
         code = int(
-            self._raw.easynet_invocation_bidi_cancel(
+            self._raw.runtime_invocation_bidi_cancel(
                 ctypes.c_uint64(handle), ctypes.c_uint64(bidi_id)
             )
         )
         self._raise_for_code(code)
 
     def _bind_symbols(self) -> None:
-        self._raw.easynet_abi_version.argtypes = []
-        self._raw.easynet_abi_version.restype = ctypes.c_uint32
-        self._raw.easynet_feature_discovery.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
-        self._raw.easynet_feature_discovery.restype = ctypes.c_int32
-        self._raw.easynet_last_error_json.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
-        self._raw.easynet_last_error_json.restype = ctypes.c_int32
-        self._raw.easynet_error_json.argtypes = [
+        self._raw.runtime_abi_version.argtypes = []
+        self._raw.runtime_abi_version.restype = ctypes.c_uint32
+        self._raw.runtime_feature_discovery.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        self._raw.runtime_feature_discovery.restype = ctypes.c_int32
+        self._raw.runtime_last_error_json.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        self._raw.runtime_last_error_json.restype = ctypes.c_int32
+        self._raw.runtime_error_json.argtypes = [
             ctypes.c_int32,
             ctypes.c_char_p,
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_error_json.restype = ctypes.c_int32
-        self._raw.easynet_string_free.argtypes = [ctypes.c_void_p]
-        self._raw.easynet_string_free.restype = None
-        self._raw.easynet_init.argtypes = [
+        self._raw.runtime_error_json.restype = ctypes.c_int32
+        self._raw.runtime_string_free.argtypes = [ctypes.c_void_p]
+        self._raw.runtime_string_free.restype = None
+        self._raw.runtime_init.argtypes = [
             ctypes.c_char_p,
             ctypes.POINTER(ctypes.c_uint64),
         ]
-        self._raw.easynet_init.restype = ctypes.c_int32
-        self._raw.easynet_shutdown.argtypes = [ctypes.c_uint64]
-        self._raw.easynet_shutdown.restype = ctypes.c_int32
-        self._raw.easynet_daemon_start.argtypes = [
+        self._raw.runtime_init.restype = ctypes.c_int32
+        self._raw.runtime_shutdown.argtypes = [ctypes.c_uint64]
+        self._raw.runtime_shutdown.restype = ctypes.c_int32
+        self._raw.runtime_host_start.argtypes = [
             ctypes.c_char_p,
             ctypes.POINTER(ctypes.c_uint64),
         ]
-        self._raw.easynet_daemon_start.restype = ctypes.c_int32
-        self._raw.easynet_daemon_attach.argtypes = [
+        self._raw.runtime_host_start.restype = ctypes.c_int32
+        self._raw.runtime_host_attach.argtypes = [
             ctypes.c_char_p,
             ctypes.POINTER(ctypes.c_uint64),
         ]
-        self._raw.easynet_daemon_attach.restype = ctypes.c_int32
-        self._raw.easynet_daemon_discover.argtypes = [
+        self._raw.runtime_host_attach.restype = ctypes.c_int32
+        self._raw.runtime_host_discover.argtypes = [
             ctypes.c_char_p,
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_daemon_discover.restype = ctypes.c_int32
-        self._raw.easynet_daemon_stop.argtypes = [ctypes.c_uint64]
-        self._raw.easynet_daemon_stop.restype = ctypes.c_int32
-        self._raw.easynet_daemon_detach.argtypes = [ctypes.c_uint64]
-        self._raw.easynet_daemon_detach.restype = ctypes.c_int32
-        self._raw.easynet_daemon_status.argtypes = [
+        self._raw.runtime_host_discover.restype = ctypes.c_int32
+        self._raw.runtime_host_stop.argtypes = [ctypes.c_uint64]
+        self._raw.runtime_host_stop.restype = ctypes.c_int32
+        self._raw.runtime_host_detach.argtypes = [ctypes.c_uint64]
+        self._raw.runtime_host_detach.restype = ctypes.c_int32
+        self._raw.runtime_host_status.argtypes = [
             ctypes.c_uint64,
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_daemon_status.restype = ctypes.c_int32
-        self._raw.easynet_daemon_endpoints.argtypes = [
+        self._raw.runtime_host_status.restype = ctypes.c_int32
+        self._raw.runtime_host_endpoints.argtypes = [
             ctypes.c_uint64,
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_daemon_endpoints.restype = ctypes.c_int32
-        self._raw.easynet_daemon_invocation_endpoint.argtypes = [
+        self._raw.runtime_host_endpoints.restype = ctypes.c_int32
+        self._raw.runtime_host_invocation_endpoint.argtypes = [
             ctypes.c_uint64,
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_daemon_invocation_endpoint.restype = ctypes.c_int32
-        self._raw.easynet_daemon_open_client.argtypes = [
+        self._raw.runtime_host_invocation_endpoint.restype = ctypes.c_int32
+        self._raw.runtime_host_open_client.argtypes = [
             ctypes.c_uint64,
             ctypes.POINTER(ctypes.c_uint64),
         ]
-        self._raw.easynet_daemon_open_client.restype = ctypes.c_int32
-        self._raw.easynet_runtime_health.argtypes = [
+        self._raw.runtime_host_open_client.restype = ctypes.c_int32
+        self._raw.runtime_health.argtypes = [
             ctypes.c_uint64,
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_runtime_health.restype = ctypes.c_int32
-        self._raw.easynet_runtime_diagnostics.argtypes = [
+        self._raw.runtime_health.restype = ctypes.c_int32
+        self._raw.runtime_diagnostics.argtypes = [
             ctypes.c_uint64,
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_runtime_diagnostics.restype = ctypes.c_int32
-        self._raw.easynet_runtime_resolve_descriptor_ref.argtypes = [
+        self._raw.runtime_diagnostics.restype = ctypes.c_int32
+        self._raw.runtime_resolve_descriptor_ref.argtypes = [
             ctypes.c_uint64,
             ctypes.c_char_p,
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_runtime_resolve_descriptor_ref.restype = ctypes.c_int32
-        self._raw.easynet_invocation_invoke.argtypes = [
+        self._raw.runtime_resolve_descriptor_ref.restype = ctypes.c_int32
+        self._raw.runtime_invocation_invoke.argtypes = [
             ctypes.c_uint64,
             ctypes.c_char_p,
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_invocation_invoke.restype = ctypes.c_int32
-        self._raw.easynet_invocation_prepare.argtypes = [
+        self._raw.runtime_invocation_invoke.restype = ctypes.c_int32
+        self._raw.runtime_invocation_prepare.argtypes = [
             ctypes.c_uint64,
             ctypes.c_char_p,
-            ctypes.c_char_p,
-            ctypes.POINTER(ctypes.c_uint64),
-            ctypes.POINTER(ctypes.c_void_p),
-        ]
-        self._raw.easynet_invocation_prepare.restype = ctypes.c_int32
-        self._raw.easynet_invocation_sign_prepared.argtypes = [
-            ctypes.c_uint64,
             ctypes.c_char_p,
             ctypes.POINTER(ctypes.c_uint64),
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_invocation_sign_prepared.restype = ctypes.c_int32
-        self._raw.easynet_invocation_sign_prepared_local.argtypes = [
+        self._raw.runtime_invocation_prepare.restype = ctypes.c_int32
+        self._raw.runtime_invocation_sign_prepared.argtypes = [
+            ctypes.c_uint64,
+            ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_uint64),
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._raw.runtime_invocation_sign_prepared.restype = ctypes.c_int32
+        self._raw.runtime_invocation_sign_prepared_local.argtypes = [
             ctypes.c_uint64,
             ctypes.POINTER(ctypes.c_uint64),
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_invocation_sign_prepared_local.restype = ctypes.c_int32
-        self._raw.easynet_invocation_submit_signed_handle.argtypes = [
+        self._raw.runtime_invocation_sign_prepared_local.restype = ctypes.c_int32
+        self._raw.runtime_invocation_submit_signed_handle.argtypes = [
             ctypes.c_uint64,
             ctypes.c_uint64,
             ctypes.POINTER(ctypes.c_uint64),
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_invocation_submit_signed_handle.restype = ctypes.c_int32
-        self._raw.easynet_invocation_handle_await.argtypes = [
+        self._raw.runtime_invocation_submit_signed_handle.restype = ctypes.c_int32
+        self._raw.runtime_invocation_handle_await.argtypes = [
             ctypes.c_uint64,
             ctypes.c_uint64,
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_invocation_handle_await.restype = ctypes.c_int32
-        self._raw.easynet_invocation_handle_cancel.argtypes = [
+        self._raw.runtime_invocation_handle_await.restype = ctypes.c_int32
+        self._raw.runtime_invocation_handle_cancel.argtypes = [
             ctypes.c_uint64,
             ctypes.c_uint64,
             ctypes.c_char_p,
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_invocation_handle_cancel.restype = ctypes.c_int32
-        self._raw.easynet_invocation_handle_events.argtypes = [
+        self._raw.runtime_invocation_handle_cancel.restype = ctypes.c_int32
+        self._raw.runtime_invocation_handle_events.argtypes = [
             ctypes.c_uint64,
             ctypes.c_uint64,
             ctypes.POINTER(ctypes.c_void_p),
         ]
-        self._raw.easynet_invocation_handle_events.restype = ctypes.c_int32
-        self._raw.easynet_invocation_handle_free.argtypes = [
+        self._raw.runtime_invocation_handle_events.restype = ctypes.c_int32
+        self._raw.runtime_invocation_handle_free.argtypes = [
             ctypes.c_uint64,
             ctypes.c_uint64,
         ]
-        self._raw.easynet_invocation_handle_free.restype = ctypes.c_int32
-        self._raw.easynet_prepared_invocation_free.argtypes = [ctypes.c_uint64]
-        self._raw.easynet_prepared_invocation_free.restype = ctypes.c_int32
-        self._raw.easynet_signed_invocation_free.argtypes = [ctypes.c_uint64]
-        self._raw.easynet_signed_invocation_free.restype = ctypes.c_int32
-        self._raw.easynet_invocation_stream_open.argtypes = [
+        self._raw.runtime_invocation_handle_free.restype = ctypes.c_int32
+        self._raw.runtime_prepared_invocation_free.argtypes = [ctypes.c_uint64]
+        self._raw.runtime_prepared_invocation_free.restype = ctypes.c_int32
+        self._raw.runtime_signed_invocation_free.argtypes = [ctypes.c_uint64]
+        self._raw.runtime_signed_invocation_free.restype = ctypes.c_int32
+        self._raw.runtime_invocation_stream_open.argtypes = [
             ctypes.c_uint64,
             ctypes.c_char_p,
             _StreamCallback,
             ctypes.c_void_p,
             ctypes.POINTER(ctypes.c_uint64),
         ]
-        self._raw.easynet_invocation_stream_open.restype = ctypes.c_int32
-        self._raw.easynet_invocation_stream_cancel.argtypes = [
+        self._raw.runtime_invocation_stream_open.restype = ctypes.c_int32
+        self._raw.runtime_invocation_stream_cancel.argtypes = [
             ctypes.c_uint64,
             ctypes.c_uint64,
         ]
-        self._raw.easynet_invocation_stream_cancel.restype = ctypes.c_int32
-        self._raw.easynet_invocation_stream_close.argtypes = [
+        self._raw.runtime_invocation_stream_cancel.restype = ctypes.c_int32
+        self._raw.runtime_invocation_stream_close.argtypes = [
             ctypes.c_uint64,
             ctypes.c_uint64,
         ]
-        self._raw.easynet_invocation_stream_close.restype = ctypes.c_int32
-        self._raw.easynet_invocation_bidi_open.argtypes = [
+        self._raw.runtime_invocation_stream_close.restype = ctypes.c_int32
+        self._raw.runtime_invocation_bidi_open.argtypes = [
             ctypes.c_uint64,
             ctypes.c_char_p,
             _BidiCallback,
             ctypes.c_void_p,
             ctypes.POINTER(ctypes.c_uint64),
         ]
-        self._raw.easynet_invocation_bidi_open.restype = ctypes.c_int32
-        self._raw.easynet_invocation_bidi_send.argtypes = [
+        self._raw.runtime_invocation_bidi_open.restype = ctypes.c_int32
+        self._raw.runtime_invocation_bidi_send.argtypes = [
             ctypes.c_uint64,
             ctypes.c_uint64,
             ctypes.c_char_p,
         ]
-        self._raw.easynet_invocation_bidi_send.restype = ctypes.c_int32
-        self._raw.easynet_invocation_bidi_close_send.argtypes = [
+        self._raw.runtime_invocation_bidi_send.restype = ctypes.c_int32
+        self._raw.runtime_invocation_bidi_close_send.argtypes = [
             ctypes.c_uint64,
             ctypes.c_uint64,
         ]
-        self._raw.easynet_invocation_bidi_close_send.restype = ctypes.c_int32
-        self._raw.easynet_invocation_bidi_close.argtypes = [
+        self._raw.runtime_invocation_bidi_close_send.restype = ctypes.c_int32
+        self._raw.runtime_invocation_bidi_close.argtypes = [
             ctypes.c_uint64,
             ctypes.c_uint64,
         ]
-        self._raw.easynet_invocation_bidi_close.restype = ctypes.c_int32
-        self._raw.easynet_invocation_bidi_cancel.argtypes = [
+        self._raw.runtime_invocation_bidi_close.restype = ctypes.c_int32
+        self._raw.runtime_invocation_bidi_cancel.argtypes = [
             ctypes.c_uint64,
             ctypes.c_uint64,
         ]
-        self._raw.easynet_invocation_bidi_cancel.restype = ctypes.c_int32
+        self._raw.runtime_invocation_bidi_cancel.restype = ctypes.c_int32
 
     def _call_output(self, function: Any, *args: Any) -> bytes:
         out = ctypes.c_void_p()
@@ -553,7 +553,7 @@ class CLILibrary:
         try:
             return ctypes.string_at(out.value)
         finally:
-            self._raw.easynet_string_free(out)
+            self._raw.runtime_string_free(out)
 
     def _call_output_with_id(self, function: Any, *args: Any) -> tuple[int, bytes]:
         out_id = ctypes.c_uint64(0)
@@ -565,10 +565,10 @@ class CLILibrary:
         try:
             return int(out_id.value), ctypes.string_at(out.value)
         finally:
-            self._raw.easynet_string_free(out)
+            self._raw.runtime_string_free(out)
 
     def _raise_for_code(self, code: int) -> None:
-        if code == EASYNET_OK:
+        if code == RUNTIME_OK:
             return
         error = self._last_error_json()
         if error is not None:
@@ -583,18 +583,18 @@ class CLILibrary:
 
     def _last_error_json(self) -> SDKError | None:
         out = ctypes.c_void_p()
-        code = int(self._raw.easynet_last_error_json(ctypes.byref(out)))
-        if code != EASYNET_OK or not out.value:
+        code = int(self._raw.runtime_last_error_json(ctypes.byref(out)))
+        if code != RUNTIME_OK or not out.value:
             return None
         try:
             return SDKError.from_json(ctypes.string_at(out.value))
         finally:
-            self._raw.easynet_string_free(out)
+            self._raw.runtime_string_free(out)
 
 
 @dataclass
 class CABIDiscoveryTransport:
-    """Feature discovery transport backed by C ABI v5."""
+    """Feature discovery transport backed by C ABI v6."""
 
     lib: CLILibrary
     _closed: bool = False
@@ -610,7 +610,7 @@ class CABIDiscoveryTransport:
 
 @dataclass
 class CABIRuntimeLifecycleTransport:
-    """Runtime host lifecycle transport backed by generic C ABI v5."""
+    """Runtime host lifecycle transport backed by generic C ABI v6."""
 
     lib: CLILibrary
     _handles: dict[str, int] = field(default_factory=dict)
@@ -692,7 +692,7 @@ class CABIRuntimeLifecycleTransport:
         )
 
     def open_profile(self, handle_id: str, profile: str, options_json: bytes) -> object:
-        """Open only the generic Runtime profile exposed by C ABI v5."""
+        """Open only the generic Runtime profile exposed by C ABI v6."""
 
         if profile == "runtime":
             return self.open_runtime_transport(handle_id, options_json)
@@ -859,7 +859,7 @@ class _CABIPreparedHandleRegistry:
 
 @dataclass
 class CABIRuntimeTransport:
-    """Runtime Core and Health transport backed by C ABI v5."""
+    """Runtime Core and Health transport backed by C ABI v6."""
 
     lib: CLILibrary
     handle: int
@@ -1507,7 +1507,7 @@ def open_cabi_runtime_transport(
     control_path: str = "",
     library_path: str | None = None,
 ) -> CABIRuntimeTransport:
-    """Open an owned C ABI runtime transport using ``easynet_init``."""
+    """Open an owned C ABI runtime transport using ``runtime_init``."""
 
     lib = CLILibrary.load(library_path)
     handle = lib.init(control_path)

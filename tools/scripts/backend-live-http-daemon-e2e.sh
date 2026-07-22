@@ -33,7 +33,7 @@ echo "[backend-live-http-daemon-e2e] running browser HTTP → live daemon E2E...
   CGO_ENABLED=1 \
   EASYNET_BACKEND_LIVE_DAEMON_LIB="$LIB_PATH" \
   EASYNET_BACKEND_LIVE_DAEMON_BIN="$DAEMON_BIN" \
-  go test -tags "easynet_cabi backend_live_daemon" ./internal/handler \
+  go test -tags "runtime_cabi backend_live_daemon" ./internal/handler \
     -run '^TestBridgeHTTP_E2E_RegisteredBrowserInvokesHubAbilityThroughLiveDaemon$' \
     -count=1 -v
 )

@@ -215,64 +215,64 @@ class FakeRawCABI:
         self.daemon_invocation_endpoint_calls: list[int] = []
         self.next_prepared_id = 1001
 
-        self.easynet_abi_version = FakeSymbol(lambda: EXPECTED_ABI_VERSION)
-        self.easynet_feature_discovery = FakeSymbol(self._feature_discovery)
-        self.easynet_last_error_json = FakeSymbol(self._last_error_json)
-        self.easynet_error_json = FakeSymbol(self._error_json)
-        self.easynet_string_free = FakeSymbol(self._free)
-        self.easynet_init = FakeSymbol(self._init)
-        self.easynet_shutdown = FakeSymbol(self._shutdown)
-        self.easynet_daemon_start = FakeSymbol(self._daemon_start)
-        self.easynet_daemon_attach = FakeSymbol(self._daemon_attach)
-        self.easynet_daemon_discover = FakeSymbol(self._daemon_discover)
-        self.easynet_daemon_stop = FakeSymbol(self._daemon_stop)
-        self.easynet_daemon_detach = FakeSymbol(self._daemon_detach)
-        self.easynet_daemon_status = FakeSymbol(self._daemon_status)
-        self.easynet_daemon_endpoints = FakeSymbol(self._daemon_endpoints)
-        self.easynet_daemon_invocation_endpoint = FakeSymbol(
+        self.runtime_abi_version = FakeSymbol(lambda: EXPECTED_ABI_VERSION)
+        self.runtime_feature_discovery = FakeSymbol(self._feature_discovery)
+        self.runtime_last_error_json = FakeSymbol(self._last_error_json)
+        self.runtime_error_json = FakeSymbol(self._error_json)
+        self.runtime_string_free = FakeSymbol(self._free)
+        self.runtime_init = FakeSymbol(self._init)
+        self.runtime_shutdown = FakeSymbol(self._shutdown)
+        self.runtime_host_start = FakeSymbol(self._daemon_start)
+        self.runtime_host_attach = FakeSymbol(self._daemon_attach)
+        self.runtime_host_discover = FakeSymbol(self._daemon_discover)
+        self.runtime_host_stop = FakeSymbol(self._daemon_stop)
+        self.runtime_host_detach = FakeSymbol(self._daemon_detach)
+        self.runtime_host_status = FakeSymbol(self._daemon_status)
+        self.runtime_host_endpoints = FakeSymbol(self._daemon_endpoints)
+        self.runtime_host_invocation_endpoint = FakeSymbol(
             self._daemon_invocation_endpoint
         )
-        self.easynet_daemon_open_client = FakeSymbol(self._daemon_open_client)
-        self.easynet_runtime_health = FakeSymbol(self._runtime_health)
-        self.easynet_runtime_diagnostics = FakeSymbol(self._runtime_diagnostics)
-        self.easynet_runtime_resolve_descriptor_ref = FakeSymbol(
+        self.runtime_host_open_client = FakeSymbol(self._daemon_open_client)
+        self.runtime_health = FakeSymbol(self._runtime_health)
+        self.runtime_diagnostics = FakeSymbol(self._runtime_diagnostics)
+        self.runtime_resolve_descriptor_ref = FakeSymbol(
             self._runtime_resolve_descriptor_ref
         )
-        self.easynet_invocation_invoke = FakeSymbol(self._invocation_invoke)
-        self.easynet_invocation_prepare = FakeSymbol(self._invocation_prepare)
-        self.easynet_invocation_sign_prepared = FakeSymbol(
+        self.runtime_invocation_invoke = FakeSymbol(self._invocation_invoke)
+        self.runtime_invocation_prepare = FakeSymbol(self._invocation_prepare)
+        self.runtime_invocation_sign_prepared = FakeSymbol(
             self._invocation_sign_prepared
         )
-        self.easynet_invocation_sign_prepared_local = FakeSymbol(
+        self.runtime_invocation_sign_prepared_local = FakeSymbol(
             self._invocation_sign_prepared_local
         )
-        self.easynet_invocation_submit_signed_handle = FakeSymbol(
+        self.runtime_invocation_submit_signed_handle = FakeSymbol(
             self._invocation_submit_signed_handle
         )
-        self.easynet_invocation_handle_await = FakeSymbol(self._invocation_handle_await)
-        self.easynet_invocation_handle_cancel = FakeSymbol(
+        self.runtime_invocation_handle_await = FakeSymbol(self._invocation_handle_await)
+        self.runtime_invocation_handle_cancel = FakeSymbol(
             self._invocation_handle_cancel
         )
-        self.easynet_invocation_handle_events = FakeSymbol(
+        self.runtime_invocation_handle_events = FakeSymbol(
             self._invocation_handle_events
         )
-        self.easynet_invocation_handle_free = FakeSymbol(self._invocation_handle_free)
-        self.easynet_prepared_invocation_free = FakeSymbol(
+        self.runtime_invocation_handle_free = FakeSymbol(self._invocation_handle_free)
+        self.runtime_prepared_invocation_free = FakeSymbol(
             self._prepared_invocation_free
         )
-        self.easynet_signed_invocation_free = FakeSymbol(self._signed_invocation_free)
-        self.easynet_invocation_stream_open = FakeSymbol(self._invocation_stream_open)
-        self.easynet_invocation_stream_cancel = FakeSymbol(
+        self.runtime_signed_invocation_free = FakeSymbol(self._signed_invocation_free)
+        self.runtime_invocation_stream_open = FakeSymbol(self._invocation_stream_open)
+        self.runtime_invocation_stream_cancel = FakeSymbol(
             self._invocation_stream_cancel
         )
-        self.easynet_invocation_stream_close = FakeSymbol(self._invocation_stream_close)
-        self.easynet_invocation_bidi_open = FakeSymbol(self._invocation_bidi_open)
-        self.easynet_invocation_bidi_send = FakeSymbol(self._invocation_bidi_send)
-        self.easynet_invocation_bidi_close_send = FakeSymbol(
+        self.runtime_invocation_stream_close = FakeSymbol(self._invocation_stream_close)
+        self.runtime_invocation_bidi_open = FakeSymbol(self._invocation_bidi_open)
+        self.runtime_invocation_bidi_send = FakeSymbol(self._invocation_bidi_send)
+        self.runtime_invocation_bidi_close_send = FakeSymbol(
             self._invocation_bidi_close_send
         )
-        self.easynet_invocation_bidi_close = FakeSymbol(self._invocation_bidi_close)
-        self.easynet_invocation_bidi_cancel = FakeSymbol(self._invocation_bidi_cancel)
+        self.runtime_invocation_bidi_close = FakeSymbol(self._invocation_bidi_close)
+        self.runtime_invocation_bidi_cancel = FakeSymbol(self._invocation_bidi_cancel)
 
     def _write(self, out_ptr, payload: bytes) -> int:
         buffer = ctypes.create_string_buffer(payload)
@@ -288,9 +288,16 @@ class FakeRawCABI:
     def _feature_discovery(self, out_ptr) -> int:
         return self._write(
             out_ptr,
-            b'{"abi_version":5,"sdk_version":"0.91.30",'
-            b'"profiles":{"runtime_core":"provider-backed"},'
-            b'"symbols":{"generic_invocation":true},"axon_pb":true}',
+            json.dumps(
+                {
+                    "abi_version": EXPECTED_ABI_VERSION,
+                    "sdk_version": "0.91.30",
+                    "profiles": {"runtime_core": "provider-backed"},
+                    "symbols": {"generic_invocation": True},
+                    "axon_pb": True,
+                },
+                separators=(",", ":"),
+            ).encode("utf-8"),
         )
 
     def _last_error_json(self, out_ptr) -> int:
@@ -382,9 +389,18 @@ class FakeRawCABI:
         self.runtime_requests.append(("diagnostics", int(handle.value)))
         return self._write(
             out_ptr,
-            b'{"profile":"health","kind":"diagnostics_report",'
-            b'"state":"Running","ready":true,"abi_version":5,'
-            b'"checks":[],"diagnostics":[]}',
+            json.dumps(
+                {
+                    "profile": "health",
+                    "kind": "diagnostics_report",
+                    "state": "Running",
+                    "ready": True,
+                    "abi_version": EXPECTED_ABI_VERSION,
+                    "checks": [],
+                    "diagnostics": [],
+                },
+                separators=(",", ":"),
+            ).encode("utf-8"),
         )
 
     def _runtime_resolve_descriptor_ref(self, handle, request_json, out_ptr) -> int:
@@ -647,15 +663,15 @@ class CABITransportTests(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         self.assertFalse(any("target/" in candidate for candidate in candidates))
 
-    def test_library_binds_only_generic_v5_symbols(self) -> None:
+    def test_library_binds_only_generic_v6_symbols(self) -> None:
         raw = FakeRawCABI()
         library = CLILibrary(raw)
 
         library.require_abi()
         features = json.loads(library.feature_discovery())
 
-        self.assertEqual(EXPECTED_ABI_VERSION, 5)
-        self.assertEqual(features["abi_version"], 5)
+        self.assertEqual(EXPECTED_ABI_VERSION, 6)
+        self.assertEqual(features["abi_version"], 6)
         self.assertEqual(features["profiles"], {"runtime_core": "provider-backed"})
 
     def test_daemon_runtime_uses_generic_invocation(self) -> None:

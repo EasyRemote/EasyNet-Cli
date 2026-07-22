@@ -232,7 +232,7 @@ func allowedDelegatedAxonFacade(path string) bool {
 
 func allowedPrivateCABIAdapter(path, text string) bool {
 	base := filepath.Base(path)
-	if !strings.Contains(text, "easynet_cabi") || !strings.Contains(text, "cgo") {
+	if !strings.Contains(text, "runtime_cabi") || !strings.Contains(text, "cgo") {
 		return false
 	}
 	return (base == "cabi_dynamic.go" && strings.Contains(text, "func openCABIDynamicLibrary(")) ||

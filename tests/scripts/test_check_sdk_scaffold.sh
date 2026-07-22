@@ -54,7 +54,7 @@ make_sandbox() {
     "$dir/tools/sdk-conformance-runner/src" \
     "$dir/tools/scripts"
   cp "$ROOT/include/easynet_cli.h" "$dir/include/easynet_cli.h"
-  cp "$ROOT/include/easynet_cli.exports.v5" "$dir/include/easynet_cli.exports.v5"
+  cp "$ROOT/include/easynet_cli.exports.v6" "$dir/include/easynet_cli.exports.v6"
   cp "$ROOT/tools/sdk-conformance-runner/Cargo.toml" "$dir/tools/sdk-conformance-runner/Cargo.toml"
   cp "$ROOT/tools/sdk-conformance-runner/src/main.rs" "$dir/tools/sdk-conformance-runner/src/main.rs"
   mkdir -p "$dir/src/ffi/features"

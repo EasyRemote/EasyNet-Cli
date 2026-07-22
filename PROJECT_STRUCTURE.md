@@ -34,8 +34,8 @@ The current SDK stage contains:
 Rust product behavior and product-specific projections live with their semantic
 owners under `src/daemon/`; generic C ABI projection lives under `src/ffi/`.
 The C binding contract lives in `include/easynet_cli.h` and
-`docs/spec/ffi-abi-v5.md` and the exact export allowlist
-`include/easynet_cli.exports.v5`.
+`docs/spec/ffi-abi-v6.md` and the exact export allowlist
+`include/easynet_cli.exports.v6`.
 
 ## Structural Rules
 

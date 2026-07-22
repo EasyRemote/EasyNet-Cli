@@ -2909,7 +2909,7 @@ if voice_handler.exists():
 # original reader until a canonical terminal receipt is observed. Language SDK
 # adapters may expose the request state, but must not synthesize lifecycle
 # terminality for local stream or bidi cancellation.
-ffi_v5_spec = cli_root / "docs/spec/ffi-abi-v5.md"
+ffi_v5_spec = cli_root / "docs/spec/ffi-abi-v6.md"
 ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
 go_cabi_runtime = cli_root / "sdk/go/cabi_runtime.go"
 python_cabi_runtime = cli_root / "sdk/python/easynet_sdk/_cabi.py"
@@ -2934,28 +2934,28 @@ if ffi_v5_spec.exists():
             "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
             ffi_v5_spec,
             1,
-            "ABI v5 contract must name stream/bidi cancel as request state, not terminal proof",
+            "ABI v6 contract must name stream/bidi cancel as request state, not terminal proof",
         )
     if not re.search(r"must\s+not\s+claim\s+lifecycle\s+terminality", text):
         add(
             "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
             ffi_v5_spec,
             1,
-            "ABI v5 contract must forbid local cancel from claiming runtime terminality",
+            "ABI v6 contract must forbid local cancel from claiming runtime terminality",
         )
     if not re.search(r"submits\s+at\s+most\s+one\s+independently\s+signed", text):
         add(
             "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
             ffi_v5_spec,
             1,
-            "ABI v5 contract must require one-shot independently signed canonical cancellation",
+            "ABI v6 contract must require one-shot independently signed canonical cancellation",
         )
     if not re.search(r"keeps\s+the\s+callback/reader\s+path\s+draining", text):
         add(
             "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
             ffi_v5_spec,
             1,
-            "ABI v5 contract must preserve the original terminal drain path",
+            "ABI v6 contract must preserve the original terminal drain path",
         )
     legacy_terminal_claim = re.search(
         r"stream\s+cancel/close\s+and\s+bidi\s+cancel/close\s+are\s+terminal",
@@ -2967,14 +2967,14 @@ if ffi_v5_spec.exists():
             "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
             ffi_v5_spec,
             line_number(text, legacy_terminal_claim.start()),
-            "ABI v5 must not define local stream/bidi cancel or close as lifecycle terminal",
+            "ABI v6 must not define local stream/bidi cancel or close as lifecycle terminal",
         )
 else:
     add(
         "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
         ffi_v5_spec,
         1,
-        "ABI v5 contract is required for stream/bidi cancellation terminal authority",
+        "ABI v6 contract is required for stream/bidi cancellation terminal authority",
     )
 
 if ffi_invocation.exists():
@@ -3007,7 +3007,7 @@ if ffi_invocation.exists():
             )
 
     stream_cancel = re.search(
-        r"fn\s+easynet_invocation_stream_cancel\b.*?\n}\n",
+        r"fn\s+runtime_invocation_stream_cancel\b.*?\n}\n",
         text,
         flags=re.S,
     )
@@ -3026,7 +3026,7 @@ if ffi_invocation.exists():
             "C ABI stream cancel must not release the terminal drain path",
         )
     bidi_cancel = re.search(
-        r"fn\s+easynet_invocation_bidi_cancel\b.*?\n}\n",
+        r"fn\s+runtime_invocation_bidi_cancel\b.*?\n}\n",
         text,
         flags=re.S,
     )

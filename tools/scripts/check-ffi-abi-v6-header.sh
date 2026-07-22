@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Exact contract gate for the generic libeasynet_cli C ABI v5 surface.
+# Exact contract gate for the generic libeasynet_cli C ABI v6 surface.
 
 set -euo pipefail
 
-ROOT="${CHECK_FFI_ABI_V5_HEADER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+ROOT="${CHECK_FFI_ABI_V6_HEADER_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$ROOT"
 
 HEADER="include/easynet_cli.h"
-ALLOWLIST="include/easynet_cli.exports.v5"
-SPEC="docs/spec/ffi-abi-v5.md"
+ALLOWLIST="include/easynet_cli.exports.v6"
+SPEC="docs/spec/ffi-abi-v6.md"
 EXPECTED_COUNT=55
 violations=0
 tmp="$(mktemp -d)"
@@ -42,12 +42,49 @@ from pathlib import Path
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
 text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
 text = re.sub(r"//[^\n]*", "", text)
+for symbol in re.findall(r"\b(runtime_[A-Za-z0-9_]+)\s*\(", text):
+    print(symbol)
+PY
+}
+
+extract_product_prefixed_header_symbols() {
+    python3 - "$1" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+text = re.sub(r"//[^\n]*", "", text)
 for symbol in re.findall(r"\b(easynet_[A-Za-z0-9_]+)\s*\(", text):
     print(symbol)
 PY
 }
 
 extract_source_symbols() {
+    python3 - "src/ffi" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+text = "\n".join(
+    path.read_text(encoding="utf-8") for path in sorted(root.rglob("*.rs"))
+)
+explicit = re.findall(
+    r'#\[no_mangle\]\s*pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+(runtime_[A-Za-z0-9_]+)',
+    text,
+)
+generated = re.findall(
+    r'builder_string_setter!\s*\(\s*(runtime_[A-Za-z0-9_]+)',
+    text,
+)
+for symbol in explicit + generated:
+    print(symbol)
+PY
+}
+
+extract_product_prefixed_source_symbols() {
     python3 - "src/ffi" <<'PY'
 import re
 import sys
@@ -74,11 +111,26 @@ compare_exact() {
     local label="$1"
     local actual="$2"
     if ! diff -u "$ALLOWLIST" "$actual" >"$tmp/$label.diff"; then
-        record_violation "$label differs from exact v5 allowlist" "$(cat "$tmp/$label.diff")"
+        record_violation "$label differs from exact v6 allowlist" "$(cat "$tmp/$label.diff")"
     fi
 }
 
 exported_symbols() {
+    local lib="$1"
+    case "$(uname -s)" in
+        Darwin)
+            nm -gU "$lib" 2>/dev/null | awk '{print $NF}' | sed 's/^_//' | grep '^runtime_' || true
+            ;;
+        Linux)
+            nm -D --defined-only "$lib" 2>/dev/null | awk '{print $NF}' | sed 's/^_//' | grep '^runtime_' || true
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+product_prefixed_exported_symbols() {
     local lib="$1"
     case "$(uname -s)" in
         Darwin)
@@ -95,40 +147,51 @@ exported_symbols() {
 
 if require_file "$ALLOWLIST"; then
     if ! LC_ALL=C sort -c "$ALLOWLIST" 2>/dev/null; then
-        record_violation "v5 allowlist must be sorted" "$ALLOWLIST"
+        record_violation "v6 allowlist must be sorted" "$ALLOWLIST"
     fi
     allowlist_count="$(wc -l <"$ALLOWLIST" | tr -d ' ')"
     unique_count="$(sort -u "$ALLOWLIST" | wc -l | tr -d ' ')"
     if [[ "$allowlist_count" != "$EXPECTED_COUNT" || "$unique_count" != "$EXPECTED_COUNT" ]]; then
-        record_violation "v5 allowlist must contain exactly $EXPECTED_COUNT unique symbols" \
+        record_violation "v6 allowlist must contain exactly $EXPECTED_COUNT unique symbols" \
             "lines=$allowlist_count unique=$unique_count"
     fi
-    if grep -Ev '^easynet_[a-z0-9_]+$' "$ALLOWLIST" >"$tmp/invalid-allowlist"; then
-        record_violation "v5 allowlist contains invalid symbol names" "$(cat "$tmp/invalid-allowlist")"
+    if grep -Ev '^runtime_[a-z0-9_]+$' "$ALLOWLIST" >"$tmp/invalid-allowlist"; then
+        record_violation "v6 allowlist contains invalid symbol names" "$(cat "$tmp/invalid-allowlist")"
+    fi
+    if grep -E '^easynet_' "$ALLOWLIST" >"$tmp/product-allowlist"; then
+        record_violation "v6 allowlist must not contain product-prefixed symbols" "$(cat "$tmp/product-allowlist")"
     fi
 fi
 
 if require_file "$HEADER"; then
-    require_literal "$HEADER" "#define EASYNET_ABI_VERSION 5u"
+    require_literal "$HEADER" "#define RUNTIME_ABI_VERSION 6u"
     if command -v cc >/dev/null 2>&1; then
         if ! printf '#include "include/easynet_cli.h"\n' | cc -I. -x c -fsyntax-only - >/dev/null 2>&1; then
-            record_violation "C compiler rejects v5 header" "$HEADER"
+            record_violation "C compiler rejects v6 header" "$HEADER"
         fi
     else
         record_violation "C compiler unavailable" "cc is required"
     fi
     extract_header_symbols "$HEADER" | LC_ALL=C sort >"$tmp/header.symbols"
     compare_exact "header declarations" "$tmp/header.symbols"
+    extract_product_prefixed_header_symbols "$HEADER" | LC_ALL=C sort >"$tmp/header.product-symbols"
+    if [[ -s "$tmp/header.product-symbols" ]]; then
+        record_violation "v6 header must not declare product-prefixed C ABI symbols" "$(cat "$tmp/header.product-symbols")"
+    fi
 fi
 
 if require_file "src/ffi/mod.rs"; then
-    require_literal "src/ffi/mod.rs" "pub const EASYNET_ABI_VERSION: u32 = 5;"
+    require_literal "src/ffi/mod.rs" "pub const RUNTIME_ABI_VERSION: u32 = 6;"
     extract_source_symbols | LC_ALL=C sort >"$tmp/source.symbols"
     compare_exact "Rust exported source symbols" "$tmp/source.symbols"
+    extract_product_prefixed_source_symbols | LC_ALL=C sort >"$tmp/source.product-symbols"
+    if [[ -s "$tmp/source.product-symbols" ]]; then
+        record_violation "v6 Rust exports must not include product-prefixed C ABI symbols" "$(cat "$tmp/source.product-symbols")"
+    fi
 fi
 
 for error_pair in \
-    "EASYNET_OK 0" "ERR_GENERIC 1" "ERR_NULL_POINTER 2" \
+    "RUNTIME_OK 0" "ERR_GENERIC 1" "ERR_NULL_POINTER 2" \
     "ERR_INVALID_UTF8 3" "ERR_INVALID_HANDLE 4" "ERR_NOT_INITIALIZED 5" \
     "ERR_ALREADY_INIT 6" "ERR_DAEMON_DOWN 7" "ERR_VERSION_INCOMPATIBLE 8" \
     "ERR_ABILITY_FAILED 9" "ERR_NOT_IMPLEMENTED 10" "ERR_INVALID_ARG 11" \
@@ -152,9 +215,9 @@ done
 
 if require_file "$SPEC"; then
     require_literal "$SPEC" "include/easynet_cli.h"
-    require_literal "$SPEC" "include/easynet_cli.exports.v5"
+    require_literal "$SPEC" "include/easynet_cli.exports.v6"
     require_literal "$SPEC" 'exactly `55`'
-    require_literal "$SPEC" 'ABI version: `5`'
+    require_literal "$SPEC" 'ABI version: `6`'
 fi
 
 lib="${EASYNET_FFI_DYLIB:-}"
@@ -171,14 +234,18 @@ if [[ -n "$lib" && -f "$lib" ]]; then
     else
         exported_symbols "$lib" | LC_ALL=C sort >"$tmp/dylib.symbols"
         compare_exact "dynamic-library exports" "$tmp/dylib.symbols"
+        product_prefixed_exported_symbols "$lib" | LC_ALL=C sort >"$tmp/dylib.product-symbols"
+        if [[ -s "$tmp/dylib.product-symbols" ]]; then
+            record_violation "dynamic library must not export product-prefixed C ABI symbols" "$(cat "$tmp/dylib.product-symbols")"
+        fi
     fi
 elif [[ "${EASYNET_FFI_REQUIRE_DYLIB:-0}" == "1" ]]; then
     record_violation "dynamic library required but missing" "${lib:-unsupported platform}"
 fi
 
 if [[ "$violations" -ne 0 ]]; then
-    echo "FAILED: $violations v5 ABI contract violation(s)." >&2
+    echo "FAILED: $violations v6 ABI contract violation(s)." >&2
     exit 1
 fi
 
-echo "ok (generic C ABI v5: exactly $EXPECTED_COUNT symbols)"
+echo "ok (generic C ABI v6: exactly $EXPECTED_COUNT symbols)"

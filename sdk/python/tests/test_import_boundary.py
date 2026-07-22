@@ -75,7 +75,7 @@ class ImportBoundaryTests(unittest.TestCase):
         self.assertTrue(private_cabi.exists())
         body = private_cabi.read_text()
         self.assertIn("import ctypes", body)
-        self.assertIn("easynet_abi_version", body)
+        self.assertIn("runtime_abi_version", body)
 
     def test_python_sdk_root_exports_only_runtime_concepts(self) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"

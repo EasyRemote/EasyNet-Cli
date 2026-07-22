@@ -4,7 +4,7 @@
 #
 # Builds `libeasynet_cli` and the complete daemon process set, then runs the tagged Go SDK
 # live smoke against a hermetic daemon. The test exercises daemon lifecycle,
-# generic C ABI v5 Runtime Core health, unary, stream, and typed terminal
+# generic C ABI v6 Runtime Core health, unary, stream, and typed terminal
 # failure through public Go SDK objects.
 
 set -euo pipefail
@@ -28,7 +28,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   bash -n "$0"
   grep -q "TestGoSDKLiveDaemonSmoke" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   grep -q "easynet_live_smoke" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
-  grep -q "generic C ABI v5" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "generic C ABI v6" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   grep -q "typed terminal failure decoded" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   grep -q "RuntimeEventClient read live daemon handle events" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   echo "go-sdk-live-smoke self-test ok"
@@ -61,7 +61,7 @@ echo "[go-sdk-live-smoke] running Go SDK live daemon smoke..."
   EASYNET_GO_LIVE_SMOKE_DAEMON="$DAEMON_BIN" \
   EASYNET_GO_LIVE_SMOKE_REPO_ROOT="$REPO_ROOT" \
   EASYNET_GO_LIVE_SMOKE_HOME="$SMOKE_HOME" \
-  go test -tags "easynet_cabi easynet_live_smoke" -run '^TestGoSDKLiveDaemonSmoke$' -count=1 -v
+  go test -tags "runtime_cabi easynet_live_smoke" -run '^TestGoSDKLiveDaemonSmoke$' -count=1 -v
 )
 
 echo "[go-sdk-live-smoke] PASS"

@@ -1,8 +1,8 @@
-# EasyNet Generic C ABI v5
+# EasyNet Generic C ABI v6
 
 Status: current release contract.
 
-The v5 ABI is a capability-neutral runtime boundary. It exposes daemon
+The v6 ABI is a capability-neutral runtime boundary. It exposes daemon
 lifecycle, complete generic Invocation lifecycle, stream/bidi control, and
 stable runtime/error JSON DTOs. Authority, Identity, Directory, Receipt,
 Publication, Host Binding, Mission, Events, Admin/Gateway, Surface,
@@ -12,8 +12,8 @@ must not be exported from `libeasynet_cli`.
 ## Canonical surface
 
 - Header: `include/easynet_cli.h`
-- Exact export allowlist: `include/easynet_cli.exports.v5`
-- ABI version: `5`
+- Exact export allowlist: `include/easynet_cli.exports.v6`
+- ABI version: `6`
 - Export count: exactly `55`
 
 Release and CI checks compare both header declarations and normalized dynamic
@@ -22,16 +22,16 @@ failures. Earlier ABI documentation is historical and is not a release input.
 
 ## Ownership state machines
 
-- `easynet_init` returns an `EasynetHandle`; `easynet_shutdown` is its terminal
+- `runtime_init` returns an `RuntimeHandle`; `runtime_shutdown` is its terminal
   release operation.
-- daemon start/attach return `EasynetDaemonHandle`; stop/detach are terminal.
-- builder new returns `EasynetInvocationBuilderId`; build/prepare consume on
+- daemon start/attach return `RuntimeHostHandle`; stop/detach are terminal.
+- builder new returns `RuntimeInvocationBuilderId`; build/prepare consume on
   success, while builder free is the explicit release path.
-- prepare returns `EasynetPreparedInvocationId`; signing consumes it on
+- prepare returns `RuntimePreparedInvocationId`; signing consumes it on
   success, while prepared free is the explicit release path.
-- signing returns `EasynetSignedInvocationId`; submit-handle consumes it on
+- signing returns `RuntimeSignedInvocationId`; submit-handle consumes it on
   success, while signed free is the explicit release path.
-- submit-handle returns `EasynetInvocationHandleId`; await/cancel/events observe
+- submit-handle returns `RuntimeInvocationHandleId`; await/cancel/events observe
   it and handle-free releases it.
 - stream cancel and bidi cancel are cancel-request operations at this provider
   boundary. Each registered resource submits at most one independently signed
@@ -44,16 +44,16 @@ failures. Earlier ABI documentation is historical and is not a release input.
   close-send is a non-terminal local half-close.
 
 Every returned `char *` is caller-owned and must be released exactly once with
-`easynet_string_free`. Callback JSON pointers are borrowed only for the callback
+`runtime_string_free`. Callback JSON pointers are borrowed only for the callback
 duration.
 
 ## Errors and capability discovery
 
 All fallible operations return an integer error code. Bindings use
-`easynet_last_error_json` or `easynet_error_json`; the legacy borrowed
-`easynet_last_error` pointer is not part of v5.
+`runtime_last_error_json` or `runtime_error_json`; the legacy borrowed
+`runtime_last_error` pointer is not part of v6.
 
-`easynet_feature_discovery` advertises only the `runtime_core` C profile and
+`runtime_feature_discovery` advertises only the `runtime_core` C profile and
 generic runtime symbols. Language SDK capability state is maintained separately
 in `sdk/conformance/sdk-parity-matrix.json`; an absent high-level provider must
 produce an explicit typed `NotImplemented` result and must never trigger a

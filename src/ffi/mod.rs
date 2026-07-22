@@ -13,7 +13,7 @@
 // Every symbol exported from this module with `#[no_mangle]` and
 // `extern "C"` is part of the ABI stability contract. Breaking a
 // symbol (rename / signature change) requires bumping
-// `easynet_abi_version()`. Downstream Client bindings refuse to
+// `runtime_abi_version()`. Downstream Client bindings refuse to
 // initialise when the lib's reported ABI version does not match the
 // one they were compiled against.
 //
@@ -51,10 +51,10 @@ use std::os::raw::c_char;
 
 use crate::daemon::control::discovery;
 use crate::ffi::client as ipc_client;
-use crate::ffi::client::handle::{alloc, get, lib_runtime, release, ClientSession, EasynetHandle};
+use crate::ffi::client::handle::{alloc, get, lib_runtime, release, ClientSession, RuntimeHandle};
 use crate::ffi::errors::{
-    clear_last_error, set_last_error_code, EASYNET_OK, ERR_DAEMON_DOWN, ERR_GENERIC,
-    ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER, ERR_VERSION_INCOMPATIBLE,
+    clear_last_error, set_last_error_code, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE,
+    ERR_INVALID_UTF8, ERR_NULL_POINTER, ERR_VERSION_INCOMPATIBLE, RUNTIME_OK,
 };
 use crate::ffi::strings::{alloc_output_cstring, read_cstr};
 
@@ -73,7 +73,7 @@ use crate::ffi::strings::{alloc_output_cstring, read_cstr};
 /// health, and prepare/sign/submit handles.
 /// v5 = 5. Generic-only C surface: daemon lifecycle, Runtime/Invocation,
 /// stream/bidi, and stable runtime/error DTOs. Domain profile exports removed.
-pub const EASYNET_ABI_VERSION: u32 = 5;
+pub const RUNTIME_ABI_VERSION: u32 = 6;
 
 /// Report the ABI version of this library build. Client bindings
 /// call this first thing at dlopen time and refuse to proceed when
@@ -82,23 +82,23 @@ pub const EASYNET_ABI_VERSION: u32 = 5;
 /// # Safety
 /// No pointer parameters; no preconditions; always safe to call.
 #[no_mangle]
-pub extern "C" fn easynet_abi_version() -> u32 {
-    EASYNET_ABI_VERSION
+pub extern "C" fn runtime_abi_version() -> u32 {
+    RUNTIME_ABI_VERSION
 }
 
 /// Return ABI and SDK feature discovery as JSON.
 ///
 /// The returned string is caller-owned and must be freed with
-/// `easynet_string_free`.
+/// `runtime_string_free`.
 ///
 /// # Safety
 /// `out_features_json` must be a non-null caller-owned pointer.
 #[no_mangle]
-pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut c_char) -> i32 {
+pub unsafe extern "C" fn runtime_feature_discovery(out_features_json: *mut *mut c_char) -> i32 {
     if out_features_json.is_null() {
         set_last_error_code(
             ERR_NULL_POINTER,
-            "easynet_feature_discovery: out_features_json pointer is null",
+            "runtime_feature_discovery: out_features_json pointer is null",
         );
         return ERR_NULL_POINTER;
     }
@@ -107,13 +107,13 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
     if ptr.is_null() {
         set_last_error_code(
             ERR_GENERIC,
-            "easynet_feature_discovery: out-of-memory allocating features string",
+            "runtime_feature_discovery: out-of-memory allocating features string",
         );
         return ERR_GENERIC;
     }
     unsafe { *out_features_json = ptr };
     clear_last_error();
-    EASYNET_OK
+    RUNTIME_OK
 }
 
 /// Open an IPC connection to the local daemon and return a handle.
@@ -124,7 +124,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
 /// `daemon::control::server::run` boots.
 ///
 /// On success: writes the new handle to `*out_handle`, returns
-/// `EASYNET_OK`, clears the last-error slot.
+/// `RUNTIME_OK`, clears the last-error slot.
 ///
 /// On failure: writes 0 to `*out_handle`, returns one of:
 ///   - `ERR_NULL_POINTER`         — `out_handle` is null.
@@ -140,12 +140,12 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
 /// - `out_handle` must be a non-null pointer to a `u64` the caller
 ///   owns.
 #[no_mangle]
-pub unsafe extern "C" fn easynet_init(
+pub unsafe extern "C" fn runtime_init(
     control_path: *const c_char,
-    out_handle: *mut EasynetHandle,
+    out_handle: *mut RuntimeHandle,
 ) -> i32 {
     if out_handle.is_null() {
-        set_last_error_code(ERR_NULL_POINTER, "easynet_init: out_handle pointer is null");
+        set_last_error_code(ERR_NULL_POINTER, "runtime_init: out_handle pointer is null");
         return ERR_NULL_POINTER;
     }
     // Initialise the out value first so the caller can safely read it
@@ -161,7 +161,7 @@ pub unsafe extern "C" fn easynet_init(
             Err(_) => {
                 set_last_error_code(
                     ERR_INVALID_UTF8,
-                    "easynet_init: control_path is not a valid UTF-8 C string",
+                    "runtime_init: control_path is not a valid UTF-8 C string",
                 );
                 return ERR_INVALID_UTF8;
             }
@@ -173,13 +173,13 @@ pub unsafe extern "C" fn easynet_init(
     let rt = match lib_runtime() {
         Ok(rt) => rt,
         Err(e) => {
-            set_last_error_code(ERR_GENERIC, format!("easynet_init: {e}"));
+            set_last_error_code(ERR_GENERIC, format!("runtime_init: {e}"));
             return ERR_GENERIC;
         }
     };
 
     // Block on the connect; the runtime is single-thread so this is
-    // a serial dial, which is what we want — `easynet_init` is a
+    // a serial dial, which is what we want — `runtime_init` is a
     // setup call, not on the hot path.
     let connect_result = rt.block_on(ipc_client::connect(&path));
     let client = match connect_result {
@@ -191,10 +191,10 @@ pub unsafe extern "C" fn easynet_init(
             // ERR_DAEMON_DOWN for everything else (refused connect,
             // missing control.json, IO error).
             if msg.contains("version negotiation failed") {
-                set_last_error_code(ERR_VERSION_INCOMPATIBLE, format!("easynet_init: {msg}"));
+                set_last_error_code(ERR_VERSION_INCOMPATIBLE, format!("runtime_init: {msg}"));
                 return ERR_VERSION_INCOMPATIBLE;
             }
-            set_last_error_code(ERR_DAEMON_DOWN, format!("easynet_init: {msg}"));
+            set_last_error_code(ERR_DAEMON_DOWN, format!("runtime_init: {msg}"));
             return ERR_DAEMON_DOWN;
         }
     };
@@ -203,14 +203,14 @@ pub unsafe extern "C" fn easynet_init(
     let (id, _arc) = alloc(session);
     unsafe { *out_handle = id };
     clear_last_error();
-    EASYNET_OK
+    RUNTIME_OK
 }
 
-/// Release a handle previously returned from `easynet_init`. The
+/// Release a handle previously returned from `runtime_init`. The
 /// IPC connection inside the session is closed when the registry
 /// drops the last `Arc<ClientSession>`.
 ///
-/// Returns `EASYNET_OK` if the handle was known and removed,
+/// Returns `RUNTIME_OK` if the handle was known and removed,
 /// `ERR_INVALID_HANDLE` if it was not (or had already been freed —
 /// double-shutdown is a programmer error, not a retriable
 /// condition, but it does not crash).
@@ -219,13 +219,13 @@ pub unsafe extern "C" fn easynet_init(
 /// `handle` may be any value, including 0; the function does not
 /// dereference any pointers.
 #[no_mangle]
-pub extern "C" fn easynet_shutdown(handle: EasynetHandle) -> i32 {
+pub extern "C" fn runtime_shutdown(handle: RuntimeHandle) -> i32 {
     let session = match get(handle) {
         Some(session) => session,
         None => {
             set_last_error_code(
                 ERR_INVALID_HANDLE,
-                format!("easynet_shutdown: handle {handle} is not registered (already shut down?)"),
+                format!("runtime_shutdown: handle {handle} is not registered (already shut down?)"),
             );
             return ERR_INVALID_HANDLE;
         }
@@ -235,7 +235,7 @@ pub extern "C" fn easynet_shutdown(handle: EasynetHandle) -> i32 {
         Err(_) => {
             set_last_error_code(
                 ERR_INVALID_HANDLE,
-                format!("easynet_shutdown: handle {handle} is already closing or released"),
+                format!("runtime_shutdown: handle {handle} is already closing or released"),
             );
             return ERR_INVALID_HANDLE;
         }
@@ -245,7 +245,7 @@ pub extern "C" fn easynet_shutdown(handle: EasynetHandle) -> i32 {
     let _ = release(handle);
     session.mark_released();
     clear_last_error();
-    EASYNET_OK
+    RUNTIME_OK
 }
 
 #[cfg(test)]
@@ -258,7 +258,7 @@ mod tests {
         // logic, no environment-based branching. A regression that
         // returned a runtime value would silently break every
         // Client's version-match check.
-        assert_eq!(easynet_abi_version(), EASYNET_ABI_VERSION);
+        assert_eq!(runtime_abi_version(), RUNTIME_ABI_VERSION);
     }
 
     #[test]
@@ -266,26 +266,26 @@ mod tests {
         // Client bindings sometimes check `ver != 0` as a cheap
         // "did the symbol load?" test. If the ABI version ever
         // became 0, that idiom would silently pass; this pins it.
-        const { assert!(EASYNET_ABI_VERSION >= 1) };
+        const { assert!(RUNTIME_ABI_VERSION >= 1) };
     }
 
     #[test]
     fn feature_discovery_rejects_null_output_pointer() {
-        let code = unsafe { easynet_feature_discovery(std::ptr::null_mut()) };
+        let code = unsafe { runtime_feature_discovery(std::ptr::null_mut()) };
         assert_eq!(code, ERR_NULL_POINTER);
     }
 
     #[test]
     fn feature_discovery_reports_stream_bidi_lifecycle_symbol() {
         let mut out: *mut c_char = std::ptr::null_mut();
-        let code = unsafe { easynet_feature_discovery(&mut out) };
-        assert_eq!(code, EASYNET_OK);
+        let code = unsafe { runtime_feature_discovery(&mut out) };
+        assert_eq!(code, RUNTIME_OK);
         assert!(!out.is_null());
         let json: serde_json::Value = unsafe {
             serde_json::from_str(std::ffi::CStr::from_ptr(out).to_str().unwrap()).unwrap()
         };
-        unsafe { strings::easynet_string_free(out) };
-        assert_eq!(json["abi_version"], EASYNET_ABI_VERSION);
+        unsafe { strings::runtime_string_free(out) };
+        assert_eq!(json["abi_version"], RUNTIME_ABI_VERSION);
         for (profile, status) in features::PROFILES {
             assert_eq!(json["profiles"][*profile], *status);
         }
@@ -304,7 +304,7 @@ mod tests {
         // regression that started I/O before validating the output
         // pointer would attempt to write into memory the caller did
         // not provide; pin the early return here.
-        let code = unsafe { easynet_init(std::ptr::null(), std::ptr::null_mut()) };
+        let code = unsafe { runtime_init(std::ptr::null(), std::ptr::null_mut()) };
         assert_eq!(code, ERR_NULL_POINTER);
     }
 
@@ -315,8 +315,8 @@ mod tests {
         // ERR_DAEMON_DOWN. This pins the operator-visible message
         // for that path.
         let bogus = std::ffi::CString::new("/tmp/eznt-no-such-file.json").unwrap();
-        let mut h: EasynetHandle = 999;
-        let code = unsafe { easynet_init(bogus.as_ptr(), &mut h) };
+        let mut h: RuntimeHandle = 999;
+        let code = unsafe { runtime_init(bogus.as_ptr(), &mut h) };
         assert_eq!(code, ERR_DAEMON_DOWN);
         assert_eq!(h, 0, "out_handle must be zeroed on the failure path");
     }
@@ -325,7 +325,7 @@ mod tests {
     fn shutdown_with_unknown_handle_returns_invalid_handle() {
         // The handle 9_999_999 was never issued; shutdown must report
         // it as invalid rather than silently succeeding.
-        let code = easynet_shutdown(9_999_999);
+        let code = runtime_shutdown(9_999_999);
         assert_eq!(code, ERR_INVALID_HANDLE);
 
         let error = read_last_error_json();
@@ -340,19 +340,19 @@ mod tests {
         // is a programming error and must surface as
         // ERR_INVALID_HANDLE — silently returning OK would mask
         // double-shutdown bugs in Client code.
-        let code = easynet_shutdown(0);
+        let code = runtime_shutdown(0);
         assert_eq!(code, ERR_INVALID_HANDLE);
     }
 
     fn read_last_error_json() -> serde_json::Value {
         let mut out: *mut c_char = std::ptr::null_mut();
-        let code = unsafe { errors::easynet_last_error_json(&mut out) };
-        assert_eq!(code, EASYNET_OK);
+        let code = unsafe { errors::runtime_last_error_json(&mut out) };
+        assert_eq!(code, RUNTIME_OK);
         assert!(!out.is_null());
         let value = unsafe {
             serde_json::from_str(std::ffi::CStr::from_ptr(out).to_str().unwrap()).unwrap()
         };
-        unsafe { strings::easynet_string_free(out) };
+        unsafe { strings::runtime_string_free(out) };
         value
     }
 }

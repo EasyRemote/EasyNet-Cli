@@ -1,4 +1,4 @@
-//go:build easynet_cabi && cgo && !windows
+//go:build runtime_cabi && cgo && !windows
 
 package easynet
 
@@ -988,96 +988,96 @@ static char *dup_json(const char *s) {
 	return out;
 }
 
-uint32_t easynet_abi_version(void) { return 5u; }
-void easynet_string_free(char *s) { free(s); }
-int32_t easynet_last_error_json(char **out_error_json) {
+uint32_t runtime_abi_version(void) { return 6u; }
+void runtime_string_free(char *s) { free(s); }
+int32_t runtime_last_error_json(char **out_error_json) {
 	*out_error_json = dup_json("{\"code\":\"INVALID_ARGUMENT\",\"stage\":\"fake\",\"message\":\"invalid fake C ABI request\",\"retry\":\"never\",\"details\":{}}");
 	return 0;
 }
 
-int32_t easynet_daemon_start(const char *config_json, uint64_t *out_daemon_handle) {
+int32_t runtime_host_start(const char *config_json, uint64_t *out_daemon_handle) {
 	(void)config_json;
 	*out_daemon_handle = 606;
 	return 0;
 }
-int32_t easynet_daemon_attach(const char *options_json, uint64_t *out_daemon_handle) {
+int32_t runtime_host_attach(const char *options_json, uint64_t *out_daemon_handle) {
 	(void)options_json;
 	*out_daemon_handle = 707;
 	return 0;
 }
-int32_t easynet_daemon_discover(const char *options_json, char **out_discovery_json) {
+int32_t runtime_host_discover(const char *options_json, char **out_discovery_json) {
 	(void)options_json;
 	*out_discovery_json = dup_json("{\"control_endpoint\":\"unix:///tmp/control.sock\",\"invocation_endpoint\":\"unix:///tmp/daemon.sock\",\"invocation_accepting\":true,\"diagnostics\":[]}");
 	return 0;
 }
-int32_t easynet_daemon_stop(uint64_t handle) { (void)handle; return 0; }
-int32_t easynet_daemon_detach(uint64_t handle) { (void)handle; return 0; }
-int32_t easynet_daemon_status(uint64_t handle, char **out_status_json) {
+int32_t runtime_host_stop(uint64_t handle) { (void)handle; return 0; }
+int32_t runtime_host_detach(uint64_t handle) { (void)handle; return 0; }
+int32_t runtime_host_status(uint64_t handle, char **out_status_json) {
 	(void)handle;
 	*out_status_json = dup_json("{\"state\":\"Running\",\"mode\":\"device\",\"endpoints\":{\"control_endpoint\":\"unix:///tmp/control.sock\",\"invocation_endpoint\":\"unix:///tmp/daemon.sock\"},\"diagnostics\":[]}");
 	return 0;
 }
-int32_t easynet_daemon_open_client(uint64_t daemon_handle, uint64_t *out_handle) {
+int32_t runtime_host_open_client(uint64_t daemon_handle, uint64_t *out_handle) {
 	(void)daemon_handle;
 	*out_handle = 808;
 	return 0;
 }
-int32_t easynet_shutdown(uint64_t handle) { (void)handle; return 0; }
-int32_t easynet_runtime_health(uint64_t handle, char **out_health_json) {
+int32_t runtime_shutdown(uint64_t handle) { (void)handle; return 0; }
+int32_t runtime_health(uint64_t handle, char **out_health_json) {
 	(void)handle;
 	*out_health_json = dup_json("{\"api_ready\":true,\"invocation_ready\":true,\"directory_ready\":true,\"trust_ready\":true,\"runtime_ready\":true,\"diagnostics\":[]}");
 	return 0;
 }
-int32_t easynet_runtime_diagnostics(uint64_t handle, char **out_diagnostics_json) {
+int32_t runtime_diagnostics(uint64_t handle, char **out_diagnostics_json) {
 	(void)handle;
 	*out_diagnostics_json = dup_json("{\"profile\":\"health\",\"kind\":\"diagnostics_report\",\"state\":\"Running\",\"ready\":true,\"version\":\"0.91.30\",\"abi_version\":5,\"control_endpoint\":\"/tmp/easynet/control.json\",\"invocation_endpoint\":\"/tmp/easynet/daemon.sock\",\"checks\":[{\"name\":\"api\",\"ready\":true,\"message\":null},{\"name\":\"daemon\",\"ready\":true,\"message\":null},{\"name\":\"invocation\",\"ready\":true,\"message\":null},{\"name\":\"directory\",\"ready\":true,\"message\":null},{\"name\":\"trust\",\"ready\":true,\"message\":null},{\"name\":\"runtime\",\"ready\":true,\"message\":null}],\"diagnostics\":[]}");
 	return 0;
 }
-int32_t easynet_runtime_resolve_descriptor_ref(uint64_t handle, const char *request_json, char **out_descriptor_json) {
+int32_t runtime_resolve_descriptor_ref(uint64_t handle, const char *request_json, char **out_descriptor_json) {
 	(void)handle; (void)request_json;
 	*out_descriptor_json = dup_json("{\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read\",\"ability_ura\":\"easynet:///r/example/ability/device.dev-a.meta.list_resources\",\"owner_ura\":\"easynet:///r/example/device/dev-a\",\"name\":\"meta.list_resources\",\"call_mode\":\"rpc\",\"source\":\"fake_native_provider\"}");
 	return 0;
 }
-int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, char **out_result_json) {
+int32_t runtime_invocation_invoke(uint64_t handle, const char *invocation_json, char **out_result_json) {
 	(void)handle; (void)invocation_json; (void)out_result_json;
 	return 10;
 }
-int32_t easynet_invocation_prepare(uint64_t handle, const char *invocation_json, const char *options_json, uint64_t *out_prepared_id, char **out_prepared_json) {
+int32_t runtime_invocation_prepare(uint64_t handle, const char *invocation_json, const char *options_json, uint64_t *out_prepared_id, char **out_prepared_json) {
 	(void)handle; (void)invocation_json; (void)options_json; (void)out_prepared_id; (void)out_prepared_json;
 	return 10;
 }
-int32_t easynet_invocation_sign_prepared(uint64_t prepared_id, const char *signature_json, uint64_t *out_signed_id, char **out_signed_json) {
+int32_t runtime_invocation_sign_prepared(uint64_t prepared_id, const char *signature_json, uint64_t *out_signed_id, char **out_signed_json) {
 	(void)prepared_id; (void)signature_json; (void)out_signed_id; (void)out_signed_json;
 	return 10;
 }
-int32_t easynet_invocation_sign_prepared_local(uint64_t prepared_id, uint64_t *out_signed_id, char **out_signed_json) {
+int32_t runtime_invocation_sign_prepared_local(uint64_t prepared_id, uint64_t *out_signed_id, char **out_signed_json) {
 	(void)prepared_id; (void)out_signed_id; (void)out_signed_json;
 	return 10;
 }
-int32_t easynet_invocation_submit_signed_handle(uint64_t handle, uint64_t signed_id, uint64_t *out_invocation_handle_id, char **out_submitted_json) {
+int32_t runtime_invocation_submit_signed_handle(uint64_t handle, uint64_t signed_id, uint64_t *out_invocation_handle_id, char **out_submitted_json) {
 	(void)handle; (void)signed_id; (void)out_invocation_handle_id; (void)out_submitted_json;
 	return 10;
 }
-int32_t easynet_invocation_handle_await(uint64_t handle, uint64_t invocation_handle_id, char **out_result_json) {
+int32_t runtime_invocation_handle_await(uint64_t handle, uint64_t invocation_handle_id, char **out_result_json) {
 	(void)handle; (void)invocation_handle_id; (void)out_result_json;
 	return 10;
 }
-int32_t easynet_invocation_handle_cancel(uint64_t handle, uint64_t invocation_handle_id, const char *reason_json, char **out_cancel_json) {
+int32_t runtime_invocation_handle_cancel(uint64_t handle, uint64_t invocation_handle_id, const char *reason_json, char **out_cancel_json) {
 	(void)handle; (void)invocation_handle_id; (void)reason_json; (void)out_cancel_json;
 	return 10;
 }
-int32_t easynet_invocation_handle_events(uint64_t handle, uint64_t invocation_handle_id, char **out_events_json) {
+int32_t runtime_invocation_handle_events(uint64_t handle, uint64_t invocation_handle_id, char **out_events_json) {
 	(void)handle; (void)invocation_handle_id; (void)out_events_json;
 	return 10;
 }
-int32_t easynet_invocation_handle_free(uint64_t handle, uint64_t invocation_handle_id) {
+int32_t runtime_invocation_handle_free(uint64_t handle, uint64_t invocation_handle_id) {
 	(void)handle; (void)invocation_handle_id;
 	return 0;
 }
-int32_t easynet_prepared_invocation_free(uint64_t prepared_id) { (void)prepared_id; return 0; }
-int32_t easynet_signed_invocation_free(uint64_t signed_id) { (void)signed_id; return 0; }
+int32_t runtime_prepared_invocation_free(uint64_t prepared_id) { (void)prepared_id; return 0; }
+int32_t runtime_signed_invocation_free(uint64_t signed_id) { (void)signed_id; return 0; }
 
-int32_t easynet_invocation_stream_open(uint64_t handle, const char *invocation_json, stream_callback_t on_chunk, void *user_data, uint64_t *out_stream_id) {
+int32_t runtime_invocation_stream_open(uint64_t handle, const char *invocation_json, stream_callback_t on_chunk, void *user_data, uint64_t *out_stream_id) {
 	(void)handle;
 	*out_stream_id = 404;
 	active_stream_callback = on_chunk;
@@ -1094,7 +1094,7 @@ int32_t easynet_invocation_stream_open(uint64_t handle, const char *invocation_j
 	}
 	return 0;
 }
-int32_t easynet_invocation_stream_cancel(uint64_t handle, uint64_t stream_id) {
+int32_t runtime_invocation_stream_cancel(uint64_t handle, uint64_t stream_id) {
 	(void)handle;
 	active_stream_cancel_calls += 1;
 	if (active_stream_cancel_calls > 1) return 1;
@@ -1103,13 +1103,13 @@ int32_t easynet_invocation_stream_cancel(uint64_t handle, uint64_t stream_id) {
 	}
 	return stream_id == 404 ? 0 : 4;
 }
-int32_t easynet_invocation_stream_close(uint64_t handle, uint64_t stream_id) {
+int32_t runtime_invocation_stream_close(uint64_t handle, uint64_t stream_id) {
 	(void)handle;
 	active_stream_callback = 0;
 	active_stream_user_data = 0;
 	return stream_id == 404 ? 0 : 4;
 }
-int32_t easynet_invocation_bidi_open(uint64_t handle, const char *invocation_json, bidi_callback_t on_frame, void *user_data, uint64_t *out_bidi_id) {
+int32_t runtime_invocation_bidi_open(uint64_t handle, const char *invocation_json, bidi_callback_t on_frame, void *user_data, uint64_t *out_bidi_id) {
 	(void)handle;
 	if (strstr(invocation_json, "\"bidi_streams\":[]") != 0) return 1;
 	*out_bidi_id = 505;
@@ -1127,21 +1127,21 @@ int32_t easynet_invocation_bidi_open(uint64_t handle, const char *invocation_jso
 	}
 	return 0;
 }
-int32_t easynet_invocation_bidi_send(uint64_t handle, uint64_t bidi_id, const char *frame_json) {
+int32_t runtime_invocation_bidi_send(uint64_t handle, uint64_t bidi_id, const char *frame_json) {
 	(void)handle; (void)frame_json;
 	return bidi_id == 505 ? 0 : 4;
 }
-int32_t easynet_invocation_bidi_close_send(uint64_t handle, uint64_t bidi_id) {
+int32_t runtime_invocation_bidi_close_send(uint64_t handle, uint64_t bidi_id) {
 	(void)handle;
 	return bidi_id == 505 ? 0 : 4;
 }
-int32_t easynet_invocation_bidi_close(uint64_t handle, uint64_t bidi_id) {
+int32_t runtime_invocation_bidi_close(uint64_t handle, uint64_t bidi_id) {
 	(void)handle;
 	active_bidi_callback = 0;
 	active_bidi_user_data = 0;
 	return bidi_id == 505 ? 0 : 4;
 }
-int32_t easynet_invocation_bidi_cancel(uint64_t handle, uint64_t bidi_id) {
+int32_t runtime_invocation_bidi_cancel(uint64_t handle, uint64_t bidi_id) {
 	(void)handle;
 	active_bidi_cancel_calls += 1;
 	if (active_bidi_cancel_calls > 1) return 1;

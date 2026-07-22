@@ -3,7 +3,7 @@
 # ==================================================================
 #
 # Boots `easynet-daemon`, then loads `libeasynet_cli` via Python
-# ctypes and exercises the generic ABI v5 surface: init/shutdown, daemon
+# ctypes and exercises the generic ABI v6 surface: init/shutdown, daemon
 # lifecycle preflight, and complete Invocation unary/stream/bidi
 # argument validation.
 #
@@ -77,39 +77,39 @@ lib = ctypes.CDLL(lib_path)
 # Signatures match include/easynet_cli.h. ctypes declarations stay
 # local to this smoke so it can prove the checked-in header contract
 # and dynamic library agree on the same exported ABI.
-lib.easynet_abi_version.restype = ctypes.c_uint32
-lib.easynet_abi_version.argtypes = []
+lib.runtime_abi_version.restype = ctypes.c_uint32
+lib.runtime_abi_version.argtypes = []
 
-lib.easynet_init.restype = ctypes.c_int32
-lib.easynet_init.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint64)]
+lib.runtime_init.restype = ctypes.c_int32
+lib.runtime_init.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint64)]
 
-lib.easynet_shutdown.restype = ctypes.c_int32
-lib.easynet_shutdown.argtypes = [ctypes.c_uint64]
+lib.runtime_shutdown.restype = ctypes.c_int32
+lib.runtime_shutdown.argtypes = [ctypes.c_uint64]
 
-lib.easynet_daemon_start.restype = ctypes.c_int32
-lib.easynet_daemon_start.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint64)]
+lib.runtime_host_start.restype = ctypes.c_int32
+lib.runtime_host_start.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint64)]
 
-lib.easynet_daemon_stop.restype = ctypes.c_int32
-lib.easynet_daemon_stop.argtypes = [ctypes.c_uint64]
+lib.runtime_host_stop.restype = ctypes.c_int32
+lib.runtime_host_stop.argtypes = [ctypes.c_uint64]
 
-lib.easynet_daemon_status.restype = ctypes.c_int32
-lib.easynet_daemon_status.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_char_p)]
+lib.runtime_host_status.restype = ctypes.c_int32
+lib.runtime_host_status.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_char_p)]
 
-lib.easynet_daemon_invocation_endpoint.restype = ctypes.c_int32
-lib.easynet_daemon_invocation_endpoint.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_char_p)]
+lib.runtime_host_invocation_endpoint.restype = ctypes.c_int32
+lib.runtime_host_invocation_endpoint.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_char_p)]
 
-lib.easynet_daemon_open_client.restype = ctypes.c_int32
-lib.easynet_daemon_open_client.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint64)]
+lib.runtime_host_open_client.restype = ctypes.c_int32
+lib.runtime_host_open_client.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint64)]
 
-lib.easynet_invocation_invoke.restype = ctypes.c_int32
-lib.easynet_invocation_invoke.argtypes = [
+lib.runtime_invocation_invoke.restype = ctypes.c_int32
+lib.runtime_invocation_invoke.argtypes = [
     ctypes.c_uint64,
     ctypes.c_char_p,
     ctypes.POINTER(ctypes.c_char_p),
 ]
 
-lib.easynet_invocation_stream_open.restype = ctypes.c_int32
-lib.easynet_invocation_stream_open.argtypes = [
+lib.runtime_invocation_stream_open.restype = ctypes.c_int32
+lib.runtime_invocation_stream_open.argtypes = [
     ctypes.c_uint64,
     ctypes.c_char_p,
     ctypes.c_void_p,
@@ -117,14 +117,14 @@ lib.easynet_invocation_stream_open.argtypes = [
     ctypes.POINTER(ctypes.c_uint64),
 ]
 
-lib.easynet_invocation_stream_cancel.restype = ctypes.c_int32
-lib.easynet_invocation_stream_cancel.argtypes = [
+lib.runtime_invocation_stream_cancel.restype = ctypes.c_int32
+lib.runtime_invocation_stream_cancel.argtypes = [
     ctypes.c_uint64,
     ctypes.c_uint64,
 ]
 
-lib.easynet_invocation_bidi_open.restype = ctypes.c_int32
-lib.easynet_invocation_bidi_open.argtypes = [
+lib.runtime_invocation_bidi_open.restype = ctypes.c_int32
+lib.runtime_invocation_bidi_open.argtypes = [
     ctypes.c_uint64,
     ctypes.c_char_p,
     ctypes.c_void_p,
@@ -132,30 +132,30 @@ lib.easynet_invocation_bidi_open.argtypes = [
     ctypes.POINTER(ctypes.c_uint64),
 ]
 
-lib.easynet_invocation_bidi_send.restype = ctypes.c_int32
-lib.easynet_invocation_bidi_send.argtypes = [
+lib.runtime_invocation_bidi_send.restype = ctypes.c_int32
+lib.runtime_invocation_bidi_send.argtypes = [
     ctypes.c_uint64,
     ctypes.c_uint64,
     ctypes.c_char_p,
 ]
 
-lib.easynet_invocation_bidi_close.restype = ctypes.c_int32
-lib.easynet_invocation_bidi_close.argtypes = [
+lib.runtime_invocation_bidi_close.restype = ctypes.c_int32
+lib.runtime_invocation_bidi_close.argtypes = [
     ctypes.c_uint64,
     ctypes.c_uint64,
 ]
 
-lib.easynet_invocation_bidi_cancel.restype = ctypes.c_int32
-lib.easynet_invocation_bidi_cancel.argtypes = [
+lib.runtime_invocation_bidi_cancel.restype = ctypes.c_int32
+lib.runtime_invocation_bidi_cancel.argtypes = [
     ctypes.c_uint64,
     ctypes.c_uint64,
 ]
 
-lib.easynet_last_error_json.restype = ctypes.c_int32
-lib.easynet_last_error_json.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+lib.runtime_last_error_json.restype = ctypes.c_int32
+lib.runtime_last_error_json.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
 
-lib.easynet_string_free.restype = None
-lib.easynet_string_free.argtypes = [ctypes.c_void_p]
+lib.runtime_string_free.restype = None
+lib.runtime_string_free.argtypes = [ctypes.c_void_p]
 
 daemon_handle = ctypes.c_uint64(0)
 client_from_daemon = ctypes.c_uint64(0)
@@ -166,13 +166,13 @@ BIDI_CALLBACK = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_char_p)
 
 def last_error():
     out = ctypes.c_void_p()
-    rc = lib.easynet_last_error_json(ctypes.byref(out))
+    rc = lib.runtime_last_error_json(ctypes.byref(out))
     if rc != 0 or not out.value:
         return ""
     try:
         return ctypes.string_at(out.value).decode("utf-8", "replace")
     finally:
-        lib.easynet_string_free(out)
+        lib.runtime_string_free(out)
 
 def cstr_value(ptr):
     if not ptr.value:
@@ -243,28 +243,28 @@ added_at_unix_ms = 0
 
 try:
     # 1. ABI version sanity.
-    ver = lib.easynet_abi_version()
+    ver = lib.runtime_abi_version()
     assert ver == 5, f"unexpected ABI version: {ver}"
     print(f"[ffi-smoke] ABI version: {ver}")
 
     # 2. Daemon lifecycle ABI preflight. Malformed config fails
     # before process spawn and must leave the daemon handle zero.
     daemon_handle = ctypes.c_uint64(42)
-    rc = lib.easynet_daemon_start(b"{not-json", ctypes.byref(daemon_handle))
+    rc = lib.runtime_host_start(b"{not-json", ctypes.byref(daemon_handle))
     assert rc == 11, f"daemon start malformed JSON should be ERR_INVALID_ARG (11), got {rc}"
     assert daemon_handle.value == 0, "daemon start must zero out_daemon_handle on failure"
     status_out = ctypes.c_char_p()
-    rc = lib.easynet_daemon_status(9_999_999, ctypes.byref(status_out))
+    rc = lib.runtime_host_status(9_999_999, ctypes.byref(status_out))
     assert rc == 4, f"daemon status invalid handle should be ERR_INVALID_HANDLE (4), got {rc}"
     assert not status_out.value, "daemon status must leave output NULL on invalid handle"
     endpoint_out = ctypes.c_char_p()
-    rc = lib.easynet_daemon_invocation_endpoint(9_999_999, ctypes.byref(endpoint_out))
+    rc = lib.runtime_host_invocation_endpoint(9_999_999, ctypes.byref(endpoint_out))
     assert rc == 4, f"daemon endpoint invalid handle should be ERR_INVALID_HANDLE (4), got {rc}"
     assert not endpoint_out.value, "daemon endpoint must leave output NULL on invalid handle"
-    rc = lib.easynet_daemon_stop(9_999_999)
+    rc = lib.runtime_host_stop(9_999_999)
     assert rc == 4, f"daemon stop invalid handle should be ERR_INVALID_HANDLE (4), got {rc}"
     client_from_daemon = ctypes.c_uint64(42)
-    rc = lib.easynet_daemon_open_client(9_999_999, ctypes.byref(client_from_daemon))
+    rc = lib.runtime_host_open_client(9_999_999, ctypes.byref(client_from_daemon))
     assert rc == 4, f"daemon open client invalid handle should be ERR_INVALID_HANDLE (4), got {rc}"
     assert client_from_daemon.value == 0, "daemon open client must zero out_handle on failure"
     print("[ffi-smoke] daemon lifecycle preflight rejects malformed config and invalid handles")
@@ -286,35 +286,35 @@ try:
             "EASYNET_PAGES_PORT": os.environ["EASYNET_PAGES_PORT"],
         },
     }
-    rc = lib.easynet_daemon_start(json.dumps(config).encode("utf-8"), ctypes.byref(daemon_handle))
-    assert_ok(rc, "easynet_daemon_start")
+    rc = lib.runtime_host_start(json.dumps(config).encode("utf-8"), ctypes.byref(daemon_handle))
+    assert_ok(rc, "runtime_host_start")
     assert daemon_handle.value != 0, "daemon start returned OK but handle is 0"
     print(f"[ffi-smoke] daemon_start OK; daemon_handle={daemon_handle.value}")
 
     status_json = ctypes.c_char_p()
-    assert_ok(lib.easynet_daemon_status(daemon_handle.value, ctypes.byref(status_json)), "easynet_daemon_status")
+    assert_ok(lib.runtime_host_status(daemon_handle.value, ctypes.byref(status_json)), "runtime_host_status")
     status = json.loads(cstr_value(status_json))
     assert status["control_accepting"] is True, status
     assert status["invocation_accepting"] is True, status
     print("[ffi-smoke] daemon status reports control + invocation accepting")
 
     # 4. Open an Invocation-capable client directly from the daemon
-    # lifecycle handle, then also prove normal easynet_init still
+    # lifecycle handle, then also prove normal runtime_init still
     # works once the daemon is ready.
     assert_ok(
-        lib.easynet_daemon_open_client(daemon_handle.value, ctypes.byref(client_from_daemon)),
-        "easynet_daemon_open_client",
+        lib.runtime_host_open_client(daemon_handle.value, ctypes.byref(client_from_daemon)),
+        "runtime_host_open_client",
     )
     assert client_from_daemon.value != 0, "daemon open client returned OK but handle is 0"
     print(f"[ffi-smoke] daemon_open_client OK; handle={client_from_daemon.value}")
 
-    assert_ok(lib.easynet_init(None, ctypes.byref(init_handle)), "easynet_init")
+    assert_ok(lib.runtime_init(None, ctypes.byref(init_handle)), "runtime_init")
     assert init_handle.value != 0, "init returned OK but handle is 0"
     print(f"[ffi-smoke] init OK; handle={init_handle.value}")
 
     # 5. Complete Invocation happy path: daemon_start -> open_client
-    # -> easynet_invocation_invoke -> receipt/result JSON, then the
-    # same call through an easynet_init handle. The daemon config uses
+    # -> runtime_invocation_invoke -> receipt/result JSON, then the
+    # same call through an runtime_init handle. The daemon config uses
     # a non-default uds_path, so init must consume the advertised
     # Invocation endpoint from control.json instead of guessing
     # parent/daemon.sock.
@@ -353,7 +353,7 @@ try:
         request["descriptor_ref"] = descriptor_ref("observe.health")
         request["nonce_base64"] = base64.b64encode(bytes(range(nonce_start, nonce_start + 16))).decode("ascii")
         out_ptr = ctypes.c_char_p()
-        rc = lib.easynet_invocation_invoke(
+        rc = lib.runtime_invocation_invoke(
             handle,
             json.dumps(request).encode("utf-8"),
             ctypes.byref(out_ptr),
@@ -373,7 +373,7 @@ try:
         request["nonce_base64"] = base64.b64encode(bytes(range(nonce_start, nonce_start + 16))).decode("ascii")
         request["args"] = args
         out_ptr = ctypes.c_char_p()
-        rc = lib.easynet_invocation_invoke(
+        rc = lib.runtime_invocation_invoke(
             handle,
             json.dumps(request).encode("utf-8"),
             ctypes.byref(out_ptr),
@@ -386,8 +386,8 @@ try:
         assert response["output_content_type"] == "application/json", response
         return response["output_json"]
 
-    invoke_health(client_from_daemon.value, "easynet_invocation_invoke daemon-open-client", 1)
-    invoke_health(init_handle.value, "easynet_invocation_invoke init-handle", 17)
+    invoke_health(client_from_daemon.value, "runtime_invocation_invoke daemon-open-client", 1)
+    invoke_health(init_handle.value, "runtime_invocation_invoke init-handle", 17)
     print("[ffi-smoke] complete Invocation happy path works through daemon and init handles")
 
     # 6. Stream happy path through real daemon InvokeStream. A
@@ -408,14 +408,14 @@ try:
     stream_invocation["args"] = {"session_id": "ffi-smoke-no-such-session"}
     stream_id = ctypes.c_uint64(0)
     assert_ok(
-        lib.easynet_invocation_stream_open(
+        lib.runtime_invocation_stream_open(
             client_from_daemon.value,
             json.dumps(stream_invocation).encode("utf-8"),
             ctypes.cast(on_stream_chunk, ctypes.c_void_p),
             None,
             ctypes.byref(stream_id),
         ),
-        "easynet_invocation_stream_open happy path",
+        "runtime_invocation_stream_open happy path",
     )
     assert stream_id.value != 0, "stream open returned OK but stream id is 0"
     wait_until("stream callback terminal frame", lambda: any(frame.get("kind") == "terminal" for frame in stream_frames))
@@ -452,23 +452,23 @@ try:
     ]
     bidi_id = ctypes.c_uint64(0)
     assert_ok(
-        lib.easynet_invocation_bidi_open(
+        lib.runtime_invocation_bidi_open(
             client_from_daemon.value,
             json.dumps(bidi_invocation).encode("utf-8"),
             ctypes.cast(on_bidi_frame, ctypes.c_void_p),
             None,
             ctypes.byref(bidi_id),
         ),
-        "easynet_invocation_bidi_open happy path",
+        "runtime_invocation_bidi_open happy path",
     )
     assert bidi_id.value != 0, "bidi open returned OK but bidi id is 0"
     assert_ok(
-        lib.easynet_invocation_bidi_send(
+        lib.runtime_invocation_bidi_send(
             client_from_daemon.value,
             bidi_id.value,
             json.dumps({"type": "control", "eof": True}).encode("utf-8"),
         ),
-        "easynet_invocation_bidi_send download ready/eof hint",
+        "runtime_invocation_bidi_send download ready/eof hint",
     )
     wait_until(
         "bidi business frames",
@@ -507,7 +507,7 @@ try:
     # before daemon Invocation I/O and must leave the output pointer
     # null.
     out_ptr = ctypes.c_char_p()
-    rc = lib.easynet_invocation_invoke(client_from_daemon.value, b"{not-json", ctypes.byref(out_ptr))
+    rc = lib.runtime_invocation_invoke(client_from_daemon.value, b"{not-json", ctypes.byref(out_ptr))
     assert rc == 11, f"expected ERR_INVALID_ARG (11), got {rc}; last_error={last_error()}"
     assert not out_ptr.value, "out_receipt_json must stay NULL on parse failure"
     print("[ffi-smoke] invocation invoke preflight rejects malformed JSON")
@@ -515,7 +515,7 @@ try:
     # 9. Stream and bidi open must reject a NULL callback before
     # daemon I/O while zeroing their local handle outputs.
     stream_id = ctypes.c_uint64(42)
-    rc = lib.easynet_invocation_stream_open(
+    rc = lib.runtime_invocation_stream_open(
         client_from_daemon.value, b"{not-json", None, None, ctypes.byref(stream_id)
     )
     assert rc == 2, f"stream open NULL callback should be ERR_NULL_POINTER (2), got {rc}"
@@ -523,29 +523,29 @@ try:
     print("[ffi-smoke] invocation stream open preflight zeros stream id")
 
     bidi_id = ctypes.c_uint64(42)
-    rc = lib.easynet_invocation_bidi_open(
+    rc = lib.runtime_invocation_bidi_open(
         client_from_daemon.value, b"{not-json", None, None, ctypes.byref(bidi_id)
     )
     assert rc == 2, f"bidi open NULL callback should be ERR_NULL_POINTER (2), got {rc}"
     assert bidi_id.value == 0, "bidi open must zero out_bidi_id on failure"
     print("[ffi-smoke] invocation bidi open preflight zeros bidi id")
 
-    # 10. easynet_shutdown and idempotency.
-    assert_ok(lib.easynet_shutdown(init_handle.value), "easynet_shutdown(init)")
-    rc = lib.easynet_shutdown(init_handle.value)
+    # 10. runtime_shutdown and idempotency.
+    assert_ok(lib.runtime_shutdown(init_handle.value), "runtime_shutdown(init)")
+    rc = lib.runtime_shutdown(init_handle.value)
     assert rc == 4, f"second shutdown should be ERR_INVALID_HANDLE (4), got {rc}"
     print("[ffi-smoke] init double-shutdown returns ERR_INVALID_HANDLE as expected")
 
-    assert_ok(lib.easynet_shutdown(client_from_daemon.value), "easynet_shutdown(open_client)")
+    assert_ok(lib.runtime_shutdown(client_from_daemon.value), "runtime_shutdown(open_client)")
     client_from_daemon.value = 0
     init_handle.value = 0
 finally:
     if init_handle.value:
-        lib.easynet_shutdown(init_handle.value)
+        lib.runtime_shutdown(init_handle.value)
     if client_from_daemon.value:
-        lib.easynet_shutdown(client_from_daemon.value)
+        lib.runtime_shutdown(client_from_daemon.value)
     if daemon_handle.value:
-        lib.easynet_daemon_stop(daemon_handle.value)
+        lib.runtime_host_stop(daemon_handle.value)
 
 print("[ffi-smoke] PASS")
 PY

@@ -46,9 +46,9 @@ Retired raw discriminators such as `{"type":"invoke"}` are rejected by serde as 
 
 | Category | Caller | Transport | Product ability caller | Status |
 |---|---|---|---|---|
-| FFI unary | `easynet_invocation_invoke` in `src/ffi/invocation.rs` | daemon Invocation over `daemon.sock` | Yes | Migrated; requires complete Invocation JSON with `subject_ura`. |
-| FFI stream | `easynet_invocation_stream_open/cancel` in `src/ffi/invocation.rs` | daemon `InvokeStream` over `daemon.sock` | Yes | Migrated; `scripts/ffi-smoke.sh` proves callback frame delivery through a real daemon. Cancellation drops local gRPC stream handle. |
-| FFI bidi | `easynet_invocation_bidi_open/send/close/cancel` in `src/ffi/invocation.rs` | daemon `InvokeBidi` over `daemon.sock` | Yes | Migrated; `scripts/ffi-smoke.sh` proves frame-0 admission callback, typed send, business binary data, and terminal cleanup receipt through a real local-bidi ability. |
+| FFI unary | `runtime_invocation_invoke` in `src/ffi/invocation.rs` | daemon Invocation over `daemon.sock` | Yes | Migrated; requires complete Invocation JSON with `subject_ura`. |
+| FFI stream | `runtime_invocation_stream_open/cancel` in `src/ffi/invocation.rs` | daemon `InvokeStream` over `daemon.sock` | Yes | Migrated; `scripts/ffi-smoke.sh` proves callback frame delivery through a real daemon. Cancellation drops local gRPC stream handle. |
+| FFI bidi | `runtime_invocation_bidi_open/send/close/cancel` in `src/ffi/invocation.rs` | daemon `InvokeBidi` over `daemon.sock` | Yes | Migrated; `scripts/ffi-smoke.sh` proves frame-0 admission callback, typed send, business binary data, and terminal cleanup receipt through a real local-bidi ability. |
 | FFI legacy ability+args | Removed from ABI v3 | None | No | `src/ffi/ability.rs` and the `easynet_ability_*` / `easynet_subscription_cancel` exports are deleted; no JSON control construction. |
 | CLI plugin | `src/cli/groups/plugin.rs` | `DaemonClient::invoke(DaemonInvocation)` | Yes | Migrated; supplies subject from paired device credentials or loopback CLI device URA. |
 | CLI boot watcher | `src/cli/start_boot_watcher.rs` | JSON control `Subscribe` | No | Retained lifecycle/status caller for `system.watch_boot`. |

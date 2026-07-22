@@ -14,9 +14,9 @@
 //
 // What this module is NOT
 // -----------------------
-// - It is not the `easynet_init` client-session registry. A daemon
+// - It is not the `runtime_init` client-session registry. A daemon
 //   lifecycle handle names a process/status object, while
-//   `EasynetHandle` names an IPC client session.
+//   `RuntimeHandle` names an IPC client session.
 // - It is not an Axon runtime lifecycle API. Starting
 //   `axon-runtime` belongs to Axon SDK reference-runtime surfaces,
 //   not to `libeasynet_cli`.
@@ -28,10 +28,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crate::daemon::{DaemonHandle, DaemonStartConfig};
-use crate::ffi::client::handle::{alloc, ClientSession, EasynetHandle};
+use crate::ffi::client::handle::{alloc, ClientSession, RuntimeHandle};
 use crate::ffi::errors::{
-    clear_last_error, set_last_error_code, EASYNET_OK, ERR_DAEMON_DOWN, ERR_GENERIC,
-    ERR_INVALID_ARG, ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER,
+    clear_last_error, set_last_error_code, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_ARG,
+    ERR_INVALID_HANDLE, ERR_INVALID_UTF8, ERR_NULL_POINTER, RUNTIME_OK,
 };
 use crate::ffi::strings::{alloc_output_cstring, read_cstr, StringError};
 
@@ -39,9 +39,9 @@ use crate::ffi::strings::{alloc_output_cstring, read_cstr, StringError};
 ///
 /// A value of 0 means "no daemon lifecycle handle allocated".
 /// The handle is process-local and must not be persisted. It is
-/// intentionally separate from `EasynetHandle`, which names an IPC
-/// client session returned by `easynet_init`.
-pub type EasynetDaemonHandle = u64;
+/// intentionally separate from `RuntimeHandle`, which names an IPC
+/// client session returned by `runtime_init`.
+pub type RuntimeHostHandle = u64;
 
 /// Start or attach to `easynet-daemon`.
 ///
@@ -58,40 +58,40 @@ pub type EasynetDaemonHandle = u64;
 /// }
 /// ```
 ///
-/// On success, `*out_daemon_handle` receives a daemon lifecycle
-/// handle that can be passed to `easynet_daemon_status`,
-/// `easynet_daemon_invocation_endpoint`, and `easynet_daemon_stop`.
+/// On success, `*out_host_handle` receives a daemon lifecycle
+/// handle that can be passed to `runtime_host_status`,
+/// `runtime_host_invocation_endpoint`, and `runtime_host_stop`.
 ///
 /// # Safety
 /// - `config_json` must point to a valid UTF-8 C string.
-/// - `out_daemon_handle` must be a non-null caller-owned pointer.
+/// - `out_host_handle` must be a non-null caller-owned pointer.
 #[no_mangle]
-pub unsafe extern "C" fn easynet_daemon_start(
+pub unsafe extern "C" fn runtime_host_start(
     config_json: *const c_char,
-    out_daemon_handle: *mut EasynetDaemonHandle,
+    out_host_handle: *mut RuntimeHostHandle,
 ) -> i32 {
-    if out_daemon_handle.is_null() {
+    if out_host_handle.is_null() {
         set_last_error_code(
             ERR_NULL_POINTER,
-            "easynet_daemon_start: out_daemon_handle pointer is null",
+            "runtime_host_start: out_host_handle pointer is null",
         );
         return ERR_NULL_POINTER;
     }
-    unsafe { *out_daemon_handle = 0 };
+    unsafe { *out_host_handle = 0 };
 
     let raw = match read_cstr(config_json) {
         Ok(value) => value,
         Err(StringError::Null) => {
             set_last_error_code(
                 ERR_NULL_POINTER,
-                "easynet_daemon_start: config_json pointer is null",
+                "runtime_host_start: config_json pointer is null",
             );
             return ERR_NULL_POINTER;
         }
         Err(StringError::NotUtf8) => {
             set_last_error_code(
                 ERR_INVALID_UTF8,
-                "easynet_daemon_start: config_json is not valid UTF-8",
+                "runtime_host_start: config_json is not valid UTF-8",
             );
             return ERR_INVALID_UTF8;
         }
@@ -100,7 +100,7 @@ pub unsafe extern "C" fn easynet_daemon_start(
     let config = match DaemonStartConfigJson::parse(raw).and_then(DaemonStartConfigJson::build) {
         Ok(config) => config,
         Err(err) => {
-            set_last_error_code(ERR_INVALID_ARG, format!("easynet_daemon_start: {err}"));
+            set_last_error_code(ERR_INVALID_ARG, format!("runtime_host_start: {err}"));
             return ERR_INVALID_ARG;
         }
     };
@@ -108,15 +108,15 @@ pub unsafe extern "C" fn easynet_daemon_start(
     let handle = match crate::daemon::start_daemon(&config) {
         Ok(handle) => handle,
         Err(err) => {
-            set_last_error_code(ERR_DAEMON_DOWN, format!("easynet_daemon_start: {err}"));
+            set_last_error_code(ERR_DAEMON_DOWN, format!("runtime_host_start: {err}"));
             return ERR_DAEMON_DOWN;
         }
     };
 
-    let id = insert_daemon_handle(handle);
-    unsafe { *out_daemon_handle = id };
+    let id = insert_host_handle(handle);
+    unsafe { *out_host_handle = id };
     clear_last_error();
-    EASYNET_OK
+    RUNTIME_OK
 }
 
 /// Attach to an already-running daemon without spawning it.
@@ -127,32 +127,32 @@ pub unsafe extern "C" fn easynet_daemon_start(
 ///
 /// # Safety
 /// - `options_json` may be null; if non-null it must be valid UTF-8.
-/// - `out_daemon_handle` must be a non-null caller-owned pointer.
+/// - `out_host_handle` must be a non-null caller-owned pointer.
 #[no_mangle]
-pub unsafe extern "C" fn easynet_daemon_attach(
+pub unsafe extern "C" fn runtime_host_attach(
     options_json: *const c_char,
-    out_daemon_handle: *mut EasynetDaemonHandle,
+    out_host_handle: *mut RuntimeHostHandle,
 ) -> i32 {
-    if out_daemon_handle.is_null() {
+    if out_host_handle.is_null() {
         set_last_error_code(
             ERR_NULL_POINTER,
-            "easynet_daemon_attach: out_daemon_handle pointer is null",
+            "runtime_host_attach: out_host_handle pointer is null",
         );
         return ERR_NULL_POINTER;
     }
-    unsafe { *out_daemon_handle = 0 };
+    unsafe { *out_host_handle = 0 };
     if !options_json.is_null() {
         match read_cstr(options_json) {
             Ok(raw) => {
                 if let Err(err) = validate_attach_options(raw) {
-                    set_last_error_code(ERR_INVALID_ARG, format!("easynet_daemon_attach: {err}"));
+                    set_last_error_code(ERR_INVALID_ARG, format!("runtime_host_attach: {err}"));
                     return ERR_INVALID_ARG;
                 }
             }
             Err(StringError::NotUtf8) => {
                 set_last_error_code(
                     ERR_INVALID_UTF8,
-                    "easynet_daemon_attach: options_json is not valid UTF-8",
+                    "runtime_host_attach: options_json is not valid UTF-8",
                 );
                 return ERR_INVALID_UTF8;
             }
@@ -162,34 +162,34 @@ pub unsafe extern "C" fn easynet_daemon_attach(
     let handle = match DaemonHandle::attach_current() {
         Ok(handle) => handle,
         Err(err) => {
-            set_last_error_code(ERR_DAEMON_DOWN, format!("easynet_daemon_attach: {err}"));
+            set_last_error_code(ERR_DAEMON_DOWN, format!("runtime_host_attach: {err}"));
             return ERR_DAEMON_DOWN;
         }
     };
-    let id = insert_daemon_handle(handle);
-    unsafe { *out_daemon_handle = id };
+    let id = insert_host_handle(handle);
+    unsafe { *out_host_handle = id };
     clear_last_error();
-    EASYNET_OK
+    RUNTIME_OK
 }
 
 /// Discover current daemon endpoints and readiness without allocating
 /// a lifecycle handle.
 ///
 /// The returned string is caller-owned and must be freed with
-/// `easynet_string_free`.
+/// `runtime_string_free`.
 ///
 /// # Safety
 /// - `options_json` may be null; if non-null it must be valid UTF-8.
 /// - `out_discovery_json` must be a non-null caller-owned pointer.
 #[no_mangle]
-pub unsafe extern "C" fn easynet_daemon_discover(
+pub unsafe extern "C" fn runtime_host_discover(
     options_json: *const c_char,
     out_discovery_json: *mut *mut c_char,
 ) -> i32 {
     if out_discovery_json.is_null() {
         set_last_error_code(
             ERR_NULL_POINTER,
-            "easynet_daemon_discover: out_discovery_json pointer is null",
+            "runtime_host_discover: out_discovery_json pointer is null",
         );
         return ERR_NULL_POINTER;
     }
@@ -198,14 +198,14 @@ pub unsafe extern "C" fn easynet_daemon_discover(
         match read_cstr(options_json) {
             Ok(raw) => {
                 if let Err(err) = validate_attach_options(raw) {
-                    set_last_error_code(ERR_INVALID_ARG, format!("easynet_daemon_discover: {err}"));
+                    set_last_error_code(ERR_INVALID_ARG, format!("runtime_host_discover: {err}"));
                     return ERR_INVALID_ARG;
                 }
             }
             Err(StringError::NotUtf8) => {
                 set_last_error_code(
                     ERR_INVALID_UTF8,
-                    "easynet_daemon_discover: options_json is not valid UTF-8",
+                    "runtime_host_discover: options_json is not valid UTF-8",
                 );
                 return ERR_INVALID_UTF8;
             }
@@ -217,13 +217,13 @@ pub unsafe extern "C" fn easynet_daemon_discover(
     if ptr.is_null() {
         set_last_error_code(
             ERR_GENERIC,
-            "easynet_daemon_discover: out-of-memory allocating discovery string",
+            "runtime_host_discover: out-of-memory allocating discovery string",
         );
         return ERR_GENERIC;
     }
     unsafe { *out_discovery_json = ptr };
     clear_last_error();
-    EASYNET_OK
+    RUNTIME_OK
 }
 
 /// Stop a daemon lifecycle handle.
@@ -231,11 +231,11 @@ pub unsafe extern "C" fn easynet_daemon_discover(
 /// The handle is removed only after the stop operation succeeds.
 /// Unknown handles return `ERR_INVALID_HANDLE`.
 #[no_mangle]
-pub extern "C" fn easynet_daemon_stop(handle: EasynetDaemonHandle) -> i32 {
-    let Some(daemon) = get_daemon_handle(handle) else {
+pub extern "C" fn runtime_host_stop(handle: RuntimeHostHandle) -> i32 {
+    let Some(daemon) = get_host_handle(handle) else {
         set_last_error_code(
             ERR_INVALID_HANDLE,
-            format!("easynet_daemon_stop: daemon handle {handle} is not registered"),
+            format!("runtime_host_stop: daemon handle {handle} is not registered"),
         );
         return ERR_INVALID_HANDLE;
     };
@@ -245,21 +245,21 @@ pub extern "C" fn easynet_daemon_stop(handle: EasynetDaemonHandle) -> i32 {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .stop();
     if let Err(err) = stop_result {
-        set_last_error_code(ERR_DAEMON_DOWN, format!("easynet_daemon_stop: {err}"));
+        set_last_error_code(ERR_DAEMON_DOWN, format!("runtime_host_stop: {err}"));
         return ERR_DAEMON_DOWN;
     }
-    let _ = remove_daemon_handle(handle);
+    let _ = remove_host_handle(handle);
     clear_last_error();
-    EASYNET_OK
+    RUNTIME_OK
 }
 
 /// Detach a daemon lifecycle handle without stopping the daemon.
 #[no_mangle]
-pub extern "C" fn easynet_daemon_detach(handle: EasynetDaemonHandle) -> i32 {
-    let Some(daemon) = remove_daemon_handle(handle) else {
+pub extern "C" fn runtime_host_detach(handle: RuntimeHostHandle) -> i32 {
+    let Some(daemon) = remove_host_handle(handle) else {
         set_last_error_code(
             ERR_INVALID_HANDLE,
-            format!("easynet_daemon_detach: daemon handle {handle} is not registered"),
+            format!("runtime_host_detach: daemon handle {handle} is not registered"),
         );
         return ERR_INVALID_HANDLE;
     };
@@ -269,34 +269,34 @@ pub extern "C" fn easynet_daemon_detach(handle: EasynetDaemonHandle) -> i32 {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .detach();
     clear_last_error();
-    EASYNET_OK
+    RUNTIME_OK
 }
 
 /// Return daemon liveness and endpoint status as JSON.
 ///
 /// The returned string is caller-owned and must be freed with
-/// `easynet_string_free`.
+/// `runtime_string_free`.
 ///
 /// # Safety
 /// `out_status_json` must be a non-null caller-owned pointer.
 #[no_mangle]
-pub unsafe extern "C" fn easynet_daemon_status(
-    handle: EasynetDaemonHandle,
+pub unsafe extern "C" fn runtime_host_status(
+    handle: RuntimeHostHandle,
     out_status_json: *mut *mut c_char,
 ) -> i32 {
     if out_status_json.is_null() {
         set_last_error_code(
             ERR_NULL_POINTER,
-            "easynet_daemon_status: out_status_json pointer is null",
+            "runtime_host_status: out_status_json pointer is null",
         );
         return ERR_NULL_POINTER;
     }
     unsafe { *out_status_json = std::ptr::null_mut() };
 
-    let Some(daemon) = get_daemon_handle(handle) else {
+    let Some(daemon) = get_host_handle(handle) else {
         set_last_error_code(
             ERR_INVALID_HANDLE,
-            format!("easynet_daemon_status: daemon handle {handle} is not registered"),
+            format!("runtime_host_status: daemon handle {handle} is not registered"),
         );
         return ERR_INVALID_HANDLE;
     };
@@ -310,40 +310,40 @@ pub unsafe extern "C" fn easynet_daemon_status(
     if ptr.is_null() {
         set_last_error_code(
             ERR_GENERIC,
-            "easynet_daemon_status: out-of-memory allocating status string",
+            "runtime_host_status: out-of-memory allocating status string",
         );
         return ERR_GENERIC;
     }
     unsafe { *out_status_json = ptr };
     clear_last_error();
-    EASYNET_OK
+    RUNTIME_OK
 }
 
 /// Return the daemon Axon Invocation endpoint path.
 ///
 /// The returned string is caller-owned and must be freed with
-/// `easynet_string_free`.
+/// `runtime_string_free`.
 ///
 /// # Safety
 /// `out_endpoint` must be a non-null caller-owned pointer.
 #[no_mangle]
-pub unsafe extern "C" fn easynet_daemon_invocation_endpoint(
-    handle: EasynetDaemonHandle,
+pub unsafe extern "C" fn runtime_host_invocation_endpoint(
+    handle: RuntimeHostHandle,
     out_endpoint: *mut *mut c_char,
 ) -> i32 {
     if out_endpoint.is_null() {
         set_last_error_code(
             ERR_NULL_POINTER,
-            "easynet_daemon_invocation_endpoint: out_endpoint pointer is null",
+            "runtime_host_invocation_endpoint: out_endpoint pointer is null",
         );
         return ERR_NULL_POINTER;
     }
     unsafe { *out_endpoint = std::ptr::null_mut() };
 
-    let Some(daemon) = get_daemon_handle(handle) else {
+    let Some(daemon) = get_host_handle(handle) else {
         set_last_error_code(
             ERR_INVALID_HANDLE,
-            format!("easynet_daemon_invocation_endpoint: daemon handle {handle} is not registered"),
+            format!("runtime_host_invocation_endpoint: daemon handle {handle} is not registered"),
         );
         return ERR_INVALID_HANDLE;
     };
@@ -358,13 +358,13 @@ pub unsafe extern "C" fn easynet_daemon_invocation_endpoint(
     if ptr.is_null() {
         set_last_error_code(
             ERR_GENERIC,
-            "easynet_daemon_invocation_endpoint: out-of-memory allocating endpoint",
+            "runtime_host_invocation_endpoint: out-of-memory allocating endpoint",
         );
         return ERR_GENERIC;
     }
     unsafe { *out_endpoint = ptr };
     clear_last_error();
-    EASYNET_OK
+    RUNTIME_OK
 }
 
 /// Return all daemon endpoints as JSON.
@@ -372,23 +372,23 @@ pub unsafe extern "C" fn easynet_daemon_invocation_endpoint(
 /// # Safety
 /// `out_endpoints_json` must be a non-null caller-owned pointer.
 #[no_mangle]
-pub unsafe extern "C" fn easynet_daemon_endpoints(
-    handle: EasynetDaemonHandle,
+pub unsafe extern "C" fn runtime_host_endpoints(
+    handle: RuntimeHostHandle,
     out_endpoints_json: *mut *mut c_char,
 ) -> i32 {
     if out_endpoints_json.is_null() {
         set_last_error_code(
             ERR_NULL_POINTER,
-            "easynet_daemon_endpoints: out_endpoints_json pointer is null",
+            "runtime_host_endpoints: out_endpoints_json pointer is null",
         );
         return ERR_NULL_POINTER;
     }
     unsafe { *out_endpoints_json = std::ptr::null_mut() };
 
-    let Some(daemon) = get_daemon_handle(handle) else {
+    let Some(daemon) = get_host_handle(handle) else {
         set_last_error_code(
             ERR_INVALID_HANDLE,
-            format!("easynet_daemon_endpoints: daemon handle {handle} is not registered"),
+            format!("runtime_host_endpoints: daemon handle {handle} is not registered"),
         );
         return ERR_INVALID_HANDLE;
     };
@@ -401,13 +401,13 @@ pub unsafe extern "C" fn easynet_daemon_endpoints(
     if ptr.is_null() {
         set_last_error_code(
             ERR_GENERIC,
-            "easynet_daemon_endpoints: out-of-memory allocating endpoints string",
+            "runtime_host_endpoints: out-of-memory allocating endpoints string",
         );
         return ERR_GENERIC;
     }
     unsafe { *out_endpoints_json = ptr };
     clear_last_error();
-    EASYNET_OK
+    RUNTIME_OK
 }
 
 /// Open an Invocation-capable client handle from a daemon lifecycle
@@ -415,30 +415,30 @@ pub unsafe extern "C" fn easynet_daemon_endpoints(
 ///
 /// This is the binding-friendly bridge between the process lifecycle
 /// ABI and the Invocation ABI: callers may start or attach to a daemon,
-/// then call this function and pass the returned `EasynetHandle` to
-/// `easynet_invocation_*`. The returned handle is released with
-/// `easynet_shutdown`.
+/// then call this function and pass the returned `RuntimeHandle` to
+/// `runtime_invocation_*`. The returned handle is released with
+/// `runtime_shutdown`.
 ///
 /// # Safety
 /// `out_handle` must be a non-null caller-owned pointer.
 #[no_mangle]
-pub unsafe extern "C" fn easynet_daemon_open_client(
-    daemon_handle: EasynetDaemonHandle,
-    out_handle: *mut EasynetHandle,
+pub unsafe extern "C" fn runtime_host_open_client(
+    host_handle: RuntimeHostHandle,
+    out_handle: *mut RuntimeHandle,
 ) -> i32 {
     if out_handle.is_null() {
         set_last_error_code(
             ERR_NULL_POINTER,
-            "easynet_daemon_open_client: out_handle pointer is null",
+            "runtime_host_open_client: out_handle pointer is null",
         );
         return ERR_NULL_POINTER;
     }
     unsafe { *out_handle = 0 };
 
-    let Some(daemon) = get_daemon_handle(daemon_handle) else {
+    let Some(daemon) = get_host_handle(host_handle) else {
         set_last_error_code(
             ERR_INVALID_HANDLE,
-            format!("easynet_daemon_open_client: daemon handle {daemon_handle} is not registered"),
+            format!("runtime_host_open_client: daemon handle {host_handle} is not registered"),
         );
         return ERR_INVALID_HANDLE;
     };
@@ -452,7 +452,7 @@ pub unsafe extern "C" fn easynet_daemon_open_client(
         set_last_error_code(
             ERR_DAEMON_DOWN,
             format!(
-                "easynet_daemon_open_client: daemon is not ready; control_accepting={}, invocation_accepting={}",
+                "runtime_host_open_client: daemon is not ready; control_accepting={}, invocation_accepting={}",
                 status.control_accepting(),
                 status.invocation_accepting()
             ),
@@ -468,7 +468,7 @@ pub unsafe extern "C" fn easynet_daemon_open_client(
     ));
     unsafe { *out_handle = handle };
     clear_last_error();
-    EASYNET_OK
+    RUNTIME_OK
 }
 
 #[derive(Debug)]
@@ -479,10 +479,10 @@ struct ActiveDaemonHandle {
 #[derive(Debug)]
 struct DaemonHandleRegistry {
     next: AtomicU64,
-    entries: Mutex<std::collections::HashMap<EasynetDaemonHandle, Arc<ActiveDaemonHandle>>>,
+    entries: Mutex<std::collections::HashMap<RuntimeHostHandle, Arc<ActiveDaemonHandle>>>,
 }
 
-fn daemon_handle_registry() -> &'static DaemonHandleRegistry {
+fn host_handle_registry() -> &'static DaemonHandleRegistry {
     static REGISTRY: OnceLock<DaemonHandleRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| DaemonHandleRegistry {
         next: AtomicU64::new(1),
@@ -492,15 +492,15 @@ fn daemon_handle_registry() -> &'static DaemonHandleRegistry {
 
 fn lock_daemon_entries(
     registry: &DaemonHandleRegistry,
-) -> MutexGuard<'_, std::collections::HashMap<EasynetDaemonHandle, Arc<ActiveDaemonHandle>>> {
+) -> MutexGuard<'_, std::collections::HashMap<RuntimeHostHandle, Arc<ActiveDaemonHandle>>> {
     registry
         .entries
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn insert_daemon_handle(handle: DaemonHandle) -> EasynetDaemonHandle {
-    let registry = daemon_handle_registry();
+fn insert_host_handle(handle: DaemonHandle) -> RuntimeHostHandle {
+    let registry = host_handle_registry();
     let id = registry.next.fetch_add(1, Ordering::Relaxed);
     lock_daemon_entries(registry).insert(
         id,
@@ -511,20 +511,20 @@ fn insert_daemon_handle(handle: DaemonHandle) -> EasynetDaemonHandle {
     id
 }
 
-fn get_daemon_handle(handle: EasynetDaemonHandle) -> Option<Arc<ActiveDaemonHandle>> {
+fn get_host_handle(handle: RuntimeHostHandle) -> Option<Arc<ActiveDaemonHandle>> {
     if handle == 0 {
         return None;
     }
-    lock_daemon_entries(daemon_handle_registry())
+    lock_daemon_entries(host_handle_registry())
         .get(&handle)
         .cloned()
 }
 
-fn remove_daemon_handle(handle: EasynetDaemonHandle) -> Option<Arc<ActiveDaemonHandle>> {
+fn remove_host_handle(handle: RuntimeHostHandle) -> Option<Arc<ActiveDaemonHandle>> {
     if handle == 0 {
         return None;
     }
-    lock_daemon_entries(daemon_handle_registry()).remove(&handle)
+    lock_daemon_entries(host_handle_registry()).remove(&handle)
 }
 
 #[derive(Debug)]
@@ -773,15 +773,15 @@ mod tests {
     #[test]
     fn daemon_start_rejects_null_out_handle_before_io() {
         let raw = CString::new(r#"{"mode":"hub"}"#).unwrap();
-        let code = unsafe { easynet_daemon_start(raw.as_ptr(), std::ptr::null_mut()) };
+        let code = unsafe { runtime_host_start(raw.as_ptr(), std::ptr::null_mut()) };
         assert_eq!(code, ERR_NULL_POINTER);
     }
 
     #[test]
     fn daemon_start_rejects_malformed_json_after_zeroing_handle() {
         let raw = CString::new("{not-json").unwrap();
-        let mut handle: EasynetDaemonHandle = 42;
-        let code = unsafe { easynet_daemon_start(raw.as_ptr(), &mut handle) };
+        let mut handle: RuntimeHostHandle = 42;
+        let code = unsafe { runtime_host_start(raw.as_ptr(), &mut handle) };
         assert_eq!(code, ERR_INVALID_ARG);
         assert_eq!(handle, 0);
     }
@@ -789,22 +789,22 @@ mod tests {
     #[test]
     fn daemon_attach_rejects_malformed_options_after_zeroing_handle() {
         let raw = CString::new("{not-json").unwrap();
-        let mut handle: EasynetDaemonHandle = 42;
-        let code = unsafe { easynet_daemon_attach(raw.as_ptr(), &mut handle) };
+        let mut handle: RuntimeHostHandle = 42;
+        let code = unsafe { runtime_host_attach(raw.as_ptr(), &mut handle) };
         assert_eq!(code, ERR_INVALID_ARG);
         assert_eq!(handle, 0);
     }
 
     #[test]
     fn daemon_discover_rejects_null_output() {
-        let code = unsafe { easynet_daemon_discover(std::ptr::null(), std::ptr::null_mut()) };
+        let code = unsafe { runtime_host_discover(std::ptr::null(), std::ptr::null_mut()) };
         assert_eq!(code, ERR_NULL_POINTER);
     }
 
     #[test]
     fn daemon_status_rejects_invalid_handle_after_zeroing_output() {
         let mut out: *mut c_char = std::ptr::dangling_mut();
-        let code = unsafe { easynet_daemon_status(9_999_999, &mut out) };
+        let code = unsafe { runtime_host_status(9_999_999, &mut out) };
         assert_eq!(code, ERR_INVALID_HANDLE);
         assert!(out.is_null());
 
@@ -817,7 +817,7 @@ mod tests {
     #[test]
     fn daemon_invocation_endpoint_rejects_invalid_handle_after_zeroing_output() {
         let mut out: *mut c_char = std::ptr::dangling_mut();
-        let code = unsafe { easynet_daemon_invocation_endpoint(9_999_999, &mut out) };
+        let code = unsafe { runtime_host_invocation_endpoint(9_999_999, &mut out) };
         assert_eq!(code, ERR_INVALID_HANDLE);
         assert!(out.is_null());
     }
@@ -825,44 +825,44 @@ mod tests {
     #[test]
     fn daemon_endpoints_rejects_invalid_handle_after_zeroing_output() {
         let mut out: *mut c_char = std::ptr::dangling_mut();
-        let code = unsafe { easynet_daemon_endpoints(9_999_999, &mut out) };
+        let code = unsafe { runtime_host_endpoints(9_999_999, &mut out) };
         assert_eq!(code, ERR_INVALID_HANDLE);
         assert!(out.is_null());
     }
 
     #[test]
     fn daemon_detach_rejects_invalid_handle() {
-        let code = easynet_daemon_detach(9_999_999);
+        let code = runtime_host_detach(9_999_999);
         assert_eq!(code, ERR_INVALID_HANDLE);
     }
 
     #[test]
     fn daemon_open_client_rejects_null_out_handle_before_registry_lookup() {
-        let code = unsafe { easynet_daemon_open_client(9_999_999, std::ptr::null_mut()) };
+        let code = unsafe { runtime_host_open_client(9_999_999, std::ptr::null_mut()) };
         assert_eq!(code, ERR_NULL_POINTER);
     }
 
     #[test]
     fn daemon_open_client_rejects_invalid_handle_after_zeroing_output() {
-        let mut out: EasynetHandle = 42;
-        let code = unsafe { easynet_daemon_open_client(9_999_999, &mut out) };
+        let mut out: RuntimeHandle = 42;
+        let code = unsafe { runtime_host_open_client(9_999_999, &mut out) };
         assert_eq!(code, ERR_INVALID_HANDLE);
         assert_eq!(out, 0);
     }
 
     #[test]
     fn daemon_stop_rejects_invalid_handle() {
-        let code = easynet_daemon_stop(9_999_999);
+        let code = runtime_host_stop(9_999_999);
         assert_eq!(code, ERR_INVALID_HANDLE);
     }
 
     fn read_last_error_json() -> serde_json::Value {
         let mut out: *mut c_char = std::ptr::null_mut();
-        let code = unsafe { crate::ffi::errors::easynet_last_error_json(&mut out) };
-        assert_eq!(code, EASYNET_OK);
+        let code = unsafe { crate::ffi::errors::runtime_last_error_json(&mut out) };
+        assert_eq!(code, RUNTIME_OK);
         assert!(!out.is_null());
         let value = unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
-        unsafe { crate::ffi::strings::easynet_string_free(out) };
+        unsafe { crate::ffi::strings::runtime_string_free(out) };
         value
     }
 }

@@ -3020,11 +3020,11 @@ for required in (
 ):
     if required not in text:
         raise SystemExit(f"ffi_descriptor_runtime_owner:typed_projection_missing:{required}")
-entry = text[text.find("pub unsafe extern \"C\" fn easynet_runtime_resolve_descriptor_ref("):]
+entry = text[text.find("pub unsafe extern \"C\" fn runtime_resolve_descriptor_ref("):]
 entry = entry[: entry.find("/// Allocate a mutable Invocation builder handle.") if "/// Allocate a mutable Invocation builder handle." in entry else len(entry)]
 if "descriptor_resolution_error_projection(&message)" in entry:
     raise SystemExit("ffi_descriptor_runtime_owner:ffi_entry_uses_message_classifier")
-if "format!(\"easynet_runtime_resolve_descriptor_ref: {error:#}\")" in entry:
+if "format!(\"runtime_resolve_descriptor_ref: {error:#}\")" in entry:
     raise SystemExit("ffi_descriptor_runtime_owner:ffi_entry_formats_error_before_projection")
 
 for required_test in (
@@ -5767,7 +5767,7 @@ fn typed_error_json(code: Option<i32>, message: &str) -> serde_json::Value {
     })
 }
 
-fn easynet_error_json() {
+fn runtime_error_json() {
     let message = last_error_message().unwrap_or_default();
 }
 

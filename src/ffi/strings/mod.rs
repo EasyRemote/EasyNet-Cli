@@ -13,20 +13,20 @@
 // Allocation contract for *output* strings
 // ----------------------------------------
 // When an exported function returns a `*mut c_char`, the caller
-// owns the buffer and MUST call `easynet_string_free()` to release
+// owns the buffer and MUST call `runtime_string_free()` to release
 // it. The buffer is a standalone heap allocation produced by
 // `CString::into_raw`; the caller must not `free()` it directly
 // (that would skip Rust's `Vec` allocator metadata cleanup).
 //
 // `CString::into_raw` and `CString::from_raw` are inverse operations;
-// `easynet_string_free` performs the latter and drops the resulting
+// `runtime_string_free` performs the latter and drops the resulting
 // `CString`, which frees the heap storage.
 //
 // Why one dedicated free function, not two
 // ----------------------------------------
 // Every output string — whether it came from an invocation result, a
 // `last_error` copy, or a future diagnostic blob — is
-// produced the same way. Having one `easynet_string_free` means
+// produced the same way. Having one `runtime_string_free` means
 // Client bindings can register one cleanup function and use it for
 // every output pointer.
 //
@@ -48,7 +48,7 @@ pub(crate) fn read_cstr<'a>(ptr: *const c_char) -> Result<&'a str, StringError> 
 }
 
 /// Produce an owned heap-allocated C string the caller will free
-/// via `easynet_string_free`. Returns NULL on allocation failure
+/// via `runtime_string_free`. Returns NULL on allocation failure
 /// (extremely rare; an OOM at that point is already unrecoverable,
 /// but we do not want to panic across the ABI).
 pub(crate) fn alloc_output_cstring(s: impl Into<String>) -> *mut c_char {
@@ -64,11 +64,11 @@ pub(crate) fn alloc_output_cstring(s: impl Into<String>) -> *mut c_char {
 ///
 /// # Safety
 /// `ptr` must be a pointer previously returned from an exported
-/// function documented as "caller frees via easynet_string_free",
+/// function documented as "caller frees via runtime_string_free",
 /// or NULL. Double-free is undefined behaviour; the caller is
 /// responsible for not reusing the pointer after freeing.
 #[no_mangle]
-pub unsafe extern "C" fn easynet_string_free(ptr: *mut c_char) {
+pub unsafe extern "C" fn runtime_string_free(ptr: *mut c_char) {
     if ptr.is_null() {
         return;
     }
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn alloc_output_cstring_allocates_standalone_buffer() {
         // The returned pointer must be freeable via
-        // `easynet_string_free` without borrowing anything from the
+        // `runtime_string_free` without borrowing anything from the
         // input source. Round-trip tests that property by
         // constructing from a String, reading the pointer, freeing,
         // and confirming the function is sound.
@@ -117,14 +117,14 @@ mod tests {
         assert!(!p.is_null());
         let back = unsafe { CStr::from_ptr(p) }.to_str().unwrap();
         assert_eq!(back, "hello");
-        unsafe { easynet_string_free(p) };
+        unsafe { runtime_string_free(p) };
     }
 
     #[test]
-    fn easynet_string_free_accepts_null_without_crashing() {
+    fn runtime_string_free_accepts_null_without_crashing() {
         // The C convention for `free(NULL)` is "no-op". The ABI
         // cleanup function honours that convention so clients do
         // not have to branch before every call.
-        unsafe { easynet_string_free(std::ptr::null_mut()) };
+        unsafe { runtime_string_free(std::ptr::null_mut()) };
     }
 }

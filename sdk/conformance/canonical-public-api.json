@@ -6322,73 +6322,7 @@
   "non_canonical": {
     "languages": {
       "rust": [],
-      "c_abi": [
-        "EasynetDaemonHandle",
-        "EasynetHandle",
-        "EasynetInvocationBidiCallback",
-        "EasynetInvocationBidiId",
-        "EasynetInvocationBuilderId",
-        "EasynetInvocationHandleId",
-        "EasynetInvocationStreamCallback",
-        "EasynetInvocationStreamId",
-        "EasynetPreparedInvocationId",
-        "EasynetSignedInvocationId",
-        "easynet_abi_version",
-        "easynet_daemon_attach",
-        "easynet_daemon_detach",
-        "easynet_daemon_discover",
-        "easynet_daemon_endpoints",
-        "easynet_daemon_invocation_endpoint",
-        "easynet_daemon_open_client",
-        "easynet_daemon_start",
-        "easynet_daemon_status",
-        "easynet_daemon_stop",
-        "easynet_error_json",
-        "easynet_feature_discovery",
-        "easynet_init",
-        "easynet_invocation_bidi_cancel",
-        "easynet_invocation_bidi_close",
-        "easynet_invocation_bidi_close_send",
-        "easynet_invocation_bidi_open",
-        "easynet_invocation_bidi_send",
-        "easynet_invocation_builder_build",
-        "easynet_invocation_builder_free",
-        "easynet_invocation_builder_inspect",
-        "easynet_invocation_builder_new",
-        "easynet_invocation_builder_prepare",
-        "easynet_invocation_builder_set_args_json",
-        "easynet_invocation_builder_set_arguments_base64",
-        "easynet_invocation_builder_set_callee",
-        "easynet_invocation_builder_set_caller",
-        "easynet_invocation_builder_set_caller_signature_json",
-        "easynet_invocation_builder_set_causal_context_json",
-        "easynet_invocation_builder_set_descriptor_ref",
-        "easynet_invocation_builder_set_idempotency_key",
-        "easynet_invocation_builder_set_metadata_json",
-        "easynet_invocation_builder_set_nonce_base64",
-        "easynet_invocation_builder_set_subject",
-        "easynet_invocation_builder_set_timeout_seconds",
-        "easynet_invocation_handle_await",
-        "easynet_invocation_handle_cancel",
-        "easynet_invocation_handle_events",
-        "easynet_invocation_handle_free",
-        "easynet_invocation_invoke",
-        "easynet_invocation_prepare",
-        "easynet_invocation_sign_prepared",
-        "easynet_invocation_sign_prepared_local",
-        "easynet_invocation_stream_cancel",
-        "easynet_invocation_stream_close",
-        "easynet_invocation_stream_open",
-        "easynet_invocation_submit_signed_handle",
-        "easynet_last_error_json",
-        "easynet_prepared_invocation_free",
-        "easynet_runtime_diagnostics",
-        "easynet_runtime_health",
-        "easynet_runtime_resolve_descriptor_ref",
-        "easynet_shutdown",
-        "easynet_signed_invocation_free",
-        "easynet_string_free"
-      ],
+      "c_abi": [],
       "go": [],
       "python": [],
       "node": [],
@@ -6408,528 +6342,7 @@
   "legacy_quarantine": {
     "languages": {
       "rust": {},
-      "c_abi": {
-        "EasynetDaemonHandle": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "EasynetHandle": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "EasynetInvocationBidiCallback": {
-          "canonical_replacement": [
-            "capability_inventory.bidi"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "EasynetInvocationBidiId": {
-          "canonical_replacement": [
-            "capability_inventory.bidi"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "EasynetInvocationBuilderId": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "EasynetInvocationHandleId": {
-          "canonical_replacement": [
-            "capability_inventory.unary_invoke"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "EasynetInvocationStreamCallback": {
-          "canonical_replacement": [
-            "capability_inventory.stream"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "EasynetInvocationStreamId": {
-          "canonical_replacement": [
-            "capability_inventory.stream"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "EasynetPreparedInvocationId": {
-          "canonical_replacement": [
-            "capability_inventory.prepare_sign_submit"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "EasynetSignedInvocationId": {
-          "canonical_replacement": [
-            "capability_inventory.prepare_sign_submit"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_abi_version": {
-          "canonical_replacement": [
-            "capability_inventory.abi_version_discovery"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_daemon_attach": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_daemon_detach": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_daemon_discover": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_daemon_endpoints": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_daemon_invocation_endpoint": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_daemon_open_client": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_daemon_start": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_daemon_status": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_daemon_stop": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_error_json": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_feature_discovery": {
-          "canonical_replacement": [
-            "capability_inventory.abi_version_discovery"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_init": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_bidi_cancel": {
-          "canonical_replacement": [
-            "capability_inventory.bidi"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_bidi_close": {
-          "canonical_replacement": [
-            "capability_inventory.bidi"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_bidi_close_send": {
-          "canonical_replacement": [
-            "capability_inventory.bidi"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_bidi_open": {
-          "canonical_replacement": [
-            "capability_inventory.bidi"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_bidi_send": {
-          "canonical_replacement": [
-            "capability_inventory.bidi"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_build": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_free": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_inspect": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_new": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_prepare": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_set_args_json": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_set_arguments_base64": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_set_callee": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_set_caller": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_set_caller_signature_json": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_set_causal_context_json": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_set_descriptor_ref": {
-          "canonical_replacement": [
-            "capability_inventory.ability_descriptor_projection"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_set_idempotency_key": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_set_metadata_json": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_set_nonce_base64": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_set_subject": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_builder_set_timeout_seconds": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_handle_await": {
-          "canonical_replacement": [
-            "capability_inventory.unary_invoke"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_handle_cancel": {
-          "canonical_replacement": [
-            "capability_inventory.unary_invoke"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_handle_events": {
-          "canonical_replacement": [
-            "capability_inventory.unary_invoke"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_handle_free": {
-          "canonical_replacement": [
-            "capability_inventory.unary_invoke"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_invoke": {
-          "canonical_replacement": [
-            "capability_inventory.unary_invoke"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_prepare": {
-          "canonical_replacement": [
-            "capability_inventory.prepare_sign_submit"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_sign_prepared": {
-          "canonical_replacement": [
-            "capability_inventory.prepare_sign_submit"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_sign_prepared_local": {
-          "canonical_replacement": [
-            "capability_inventory.prepare_sign_submit"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_stream_cancel": {
-          "canonical_replacement": [
-            "capability_inventory.stream"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_stream_close": {
-          "canonical_replacement": [
-            "capability_inventory.stream"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_stream_open": {
-          "canonical_replacement": [
-            "capability_inventory.stream"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_invocation_submit_signed_handle": {
-          "canonical_replacement": [
-            "capability_inventory.unary_invoke"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_last_error_json": {
-          "canonical_replacement": [
-            "capability_inventory.typed_errors"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_prepared_invocation_free": {
-          "canonical_replacement": [
-            "capability_inventory.prepare_sign_submit"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_runtime_diagnostics": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_health"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_runtime_health": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_health"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_runtime_resolve_descriptor_ref": {
-          "canonical_replacement": [
-            "capability_inventory.ability_descriptor_projection"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_shutdown": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_signed_invocation_free": {
-          "canonical_replacement": [
-            "capability_inventory.prepare_sign_submit"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        },
-        "easynet_string_free": {
-          "canonical_replacement": [
-            "capability_inventory.runtime_lifecycle"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
-        }
-      },
+      "c_abi": {},
       "go": {},
       "python": {},
       "node": {},
@@ -14868,7 +14281,7 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/cabi_runtime.go",
-          "sha256": "34de34046ebf6d93d3f69e9d4265a2c9fba277cbebaa5d1123c4051f9e3d4d96",
+          "sha256": "9c31cea6d19fdd6652bb4344b3079886438bf6d30b42b2bd6fc0a6c9efd959aa",
           "interface": "RuntimeTransport",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -14965,7 +14378,7 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/_cabi.py",
-          "sha256": "d4530a720b7fdee0f48e3e29160a04bca86e314ae31baacbe21ba89292e63326",
+          "sha256": "4fd1ddd8125ec5b2e90f5dbd7a1b53396b2230baa7458c47e57c76a053248cb7",
           "interface": "CABIRuntimeTransport",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15220,7 +14633,7 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/cabi_runtime.go",
-          "sha256": "34de34046ebf6d93d3f69e9d4265a2c9fba277cbebaa5d1123c4051f9e3d4d96",
+          "sha256": "9c31cea6d19fdd6652bb4344b3079886438bf6d30b42b2bd6fc0a6c9efd959aa",
           "interface": "RuntimeTransport",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -15342,7 +14755,7 @@
           "identity": "cabi_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/_cabi.py",
-          "sha256": "d4530a720b7fdee0f48e3e29160a04bca86e314ae31baacbe21ba89292e63326",
+          "sha256": "4fd1ddd8125ec5b2e90f5dbd7a1b53396b2230baa7458c47e57c76a053248cb7",
           "interface": "CABIRuntimeTransport",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -16329,73 +15742,7 @@
       "verify_receipt_signature": "e74428e999b8301bb2136bd9a09048731873d7ab780ec3ed078863f5519de3de",
       "verify_receipt_signature_with_hosted": "c2af63c92e3ae6d186c41e3418f4c75f26a68e9f6ce5560b061f36a5d39228d0"
     },
-    "c_abi": {
-      "EasynetDaemonHandle": "b42fdc33bbdd2035243bc4c514ae8859266d8944ba502990f53bf9616b5e1680",
-      "EasynetHandle": "acd7020dcc4545a8005f93a61bfbbe74bea2ccfffee453ddbfc82959d399c6a0",
-      "EasynetInvocationBidiCallback": "f5f4d421741e2797ae29a65e1e3a499a6a15d4dbd0147f48bd724ef16aa8d0d6",
-      "EasynetInvocationBidiId": "3318765f31fadcfaf98cd2c19b1952bd6e17d69fffb9686750175cbc88cd7fa7",
-      "EasynetInvocationBuilderId": "066bbb6973d78fd14566d00cfc3a9a07085e5be88701c283d5a06a8774d3e6dd",
-      "EasynetInvocationHandleId": "17c6d4df83d72630c4a8871df681a8a086f3e616334b0338d29ac2982e5d1c9a",
-      "EasynetInvocationStreamCallback": "bdca0a54e4bcf9e7f054e78ba51f6447b1ac9a8ff72f2c3faf9ffa57775ddd78",
-      "EasynetInvocationStreamId": "0397733f1beb61a2e336747cd8b35afaefb77bf12a9b2ce4c2f1c4eedf23aed2",
-      "EasynetPreparedInvocationId": "e266a170dca92f1d202a348184f173607eb2d21d83c9f63552e0c70064ac5a9b",
-      "EasynetSignedInvocationId": "d9b78d404eddde34b04bb8a8472cf845d94b62b8230a0219e9ea0cf42abf970c",
-      "easynet_abi_version": "a4e895d8e74b1f92e2ed2243bc9d233ec3fe7b8c2fc2783238200472f37ea8f2",
-      "easynet_daemon_attach": "7fadd26f289d1feae63f6a17175d4a9bea94830f11e21efb5591ae04cee3dabb",
-      "easynet_daemon_detach": "b4f886eea1f41860efc215943c9724731f197003f6a7e45eeac709634a81ab92",
-      "easynet_daemon_discover": "b6ce6a339fef75349f4412f9b1e05c9d9ee9a6beab7e0299555e2adb4f9db605",
-      "easynet_daemon_endpoints": "d41c70b215e2d27856a439638d13bfb9ff9bd8db3c46a8ba8f1155fb6d7cb471",
-      "easynet_daemon_invocation_endpoint": "0793da18c424637dcdebc0b46c1d32ef91f381b77238454e9c1ebf6e28862946",
-      "easynet_daemon_open_client": "780fd55422a090ca9d16b728d03c41271b0a6d6bb83bb0b51be46e0a9ddeccd0",
-      "easynet_daemon_start": "3e00d7c261d65dcb9eef923e1f54108575a94fc8d4afd81213f98301bcabba3d",
-      "easynet_daemon_status": "b5e3b421c3b0aebb443e4c0f4d15ebabf844921eb696c4acf6d1adea1bdf77b5",
-      "easynet_daemon_stop": "ce7d0833e7b3d7456c429a5a3a920ff500b6086fc973ae307b33fe9ba605f779",
-      "easynet_error_json": "6a5286cb78009d32e7dd7b251a05519aab7480678bd7787c8d20096b61fd2730",
-      "easynet_feature_discovery": "e4d51b4f4a3971652c3186489ce8678762f3bd3c19b5e24835bdbd0a9bcdb8ad",
-      "easynet_init": "01b2a36305fb2049d443e5b68e324f937f9e846805ad3eb3bcdc59784a9e3578",
-      "easynet_invocation_bidi_cancel": "0d9680923d99d622e508d763e863684001f7ce0723be84e8c7945cc2a95b2703",
-      "easynet_invocation_bidi_close": "6e4bfae1940d8c3551737d27749cf9df4f6cc1ca10e3b28aec5d6df914e586fc",
-      "easynet_invocation_bidi_close_send": "190a987ac876d474704dd23e5ebd66d3f4dbbcfece68f2bdd3d481f03b2a8efd",
-      "easynet_invocation_bidi_open": "1b6f4ce3a651494f6c812c500ad120118ffe7f83022b98bc89ef335bc960d8e4",
-      "easynet_invocation_bidi_send": "4cf76cd615a43eb4a8603f3f62bdbbf20cf80d95d960c8028890c1cd5c7af672",
-      "easynet_invocation_builder_build": "05f7ccb7cd3a43a138990e643bbbf5ee7b1cda2006f153509e55c354e7bfc42a",
-      "easynet_invocation_builder_free": "ef4e1765c3fa32acc1790a1f0d9de1b43b783f21a5f5e156f46cbcf7525cdd6f",
-      "easynet_invocation_builder_inspect": "00ae2bdee42621e1375b67ec0ec83a3d4fc18808bc51933dd3c86959f95454b6",
-      "easynet_invocation_builder_new": "63aed352036391bd335b6ac5b7f1bd3fa9722307b43107ee8df77ec190b0af79",
-      "easynet_invocation_builder_prepare": "866296c74bcff26c5c99fb479aafd16740ad7b361fe9d5b76c9db46002955143",
-      "easynet_invocation_builder_set_args_json": "edf7ed3af4e97b1cc759cf9a33ce7ef5824d4e710951bed8306bb9d76ec6fe66",
-      "easynet_invocation_builder_set_arguments_base64": "3bbf3189214785e7f7e4b3eb6d089fea45fa6890ed2eb30c5b5eb71ca6d3c2fb",
-      "easynet_invocation_builder_set_callee": "86623c495cb97fd9422ac515dc5fcf5c00d56c6b7e2e4747aadddb0832141104",
-      "easynet_invocation_builder_set_caller": "ad154c59072d321c85c409b229a1b70fc6e32d6c5703c385b3554ab5a13e1078",
-      "easynet_invocation_builder_set_caller_signature_json": "bc2dde975b8fee75c824a8c486bcd2783c29c340e524ff8753cdd06d0ff91d71",
-      "easynet_invocation_builder_set_causal_context_json": "95ccb81c5d2e1749d796bee74c5d0e179b3d579096f836918c74c8ae063127ef",
-      "easynet_invocation_builder_set_descriptor_ref": "d115306586323d1b2b70b7bb0df7ccb2f3c80819ba5e0e558560f54de1bc772d",
-      "easynet_invocation_builder_set_idempotency_key": "535a560491d85e646641b7fb1836f5cd3b4f1bc03509a5e9e68fd300a6033807",
-      "easynet_invocation_builder_set_metadata_json": "741ea46f8bca8ed6b9e135fcd52e4e3e6040706c8445033c5cf8bc7949ebfbd9",
-      "easynet_invocation_builder_set_nonce_base64": "ad068245f7096a494591d8184e83fa397921a7c67a76befb02c814172a32f9d9",
-      "easynet_invocation_builder_set_subject": "fbc0d8c8f9f0e59815219856c9746c0209612c47a677e72d8be7036b4584671b",
-      "easynet_invocation_builder_set_timeout_seconds": "e27234ce08171263e77c1771713d9b85a4962eb579c3dce969da0a9720c70744",
-      "easynet_invocation_handle_await": "b6e933c4bfdf191d7243b5957941ecb87ccf1f8901cb48dd256dcdf34019f2a8",
-      "easynet_invocation_handle_cancel": "436f9c807ee535cf64ec4fb3cd8e84cac1add1ea56f470c24ccc2e459277f528",
-      "easynet_invocation_handle_events": "f8c123e31b42b59dbae3897d236fe3c00847d90fd9df0b5019d5c30123e3ae83",
-      "easynet_invocation_handle_free": "cf134d97f8084945b002e4577b288743e37ac28ca68c46c49e2c93919b4e5a16",
-      "easynet_invocation_invoke": "7a74b8bbd13e5c3de75f255a208e3a453301371d204099a402b91393d2a3f163",
-      "easynet_invocation_prepare": "db9e27614d2c9f905bc830152ee93e0b32da033ec83dc607c3cb76c840b1ffe2",
-      "easynet_invocation_sign_prepared": "1c706c8bcc7291eac52b4f085af4148e880d5bc5f40ffee76a7ac52022346507",
-      "easynet_invocation_sign_prepared_local": "f33c84c8c63cbe23a0977c95d2183fed2164f424dd26b6bd2056b2f4c65d4851",
-      "easynet_invocation_stream_cancel": "06b8e70a450ccbf2c526b6b37ccc7089e6ecd0630142cff6c21f3b8734a9dfe5",
-      "easynet_invocation_stream_close": "4ee451738cd6e87eb979e2764793ff58838d6c071fb8ed409be67681da692b49",
-      "easynet_invocation_stream_open": "8a9b34e3f74082a600103ac6a6f3e249a76bbf0cb89ac89e805d82fdb1fd7b53",
-      "easynet_invocation_submit_signed_handle": "1c6cf1909e615c6f0ece7a41cd3651ea2631826751c11959520a3264f7f07f99",
-      "easynet_last_error_json": "f6d26490324acf09f7244c74067b741553e9ac389e759c4879caa04a17a1c907",
-      "easynet_prepared_invocation_free": "b9a3bd12538bfcb62af0731cc9f05abf2a4c5d42de803649407ca789df87fe4c",
-      "easynet_runtime_diagnostics": "8034faeaae6c3c7fc61cf4816f5c638f13d1c59c1891740df99b42b3bd060370",
-      "easynet_runtime_health": "8428a99a34175fcb71e5ba231331f07adf5233c101668fafcb422bab8364452c",
-      "easynet_runtime_resolve_descriptor_ref": "a97368b0be1401cfe8e0f9d6f9e0897398e11adb1349e1254ae2a8b7add0327b",
-      "easynet_shutdown": "b267334430dc79fef26944247d2a760f4ffe0d8615ae79d1ecfdd8aec726cb59",
-      "easynet_signed_invocation_free": "33739c10646a95b7cf39761c892f35369dadb0a5438fe357e49f9326e901872f",
-      "easynet_string_free": "04fc5eb79513f4ebea1bef700938d84722ba20a39ec2e123baeb7f0cb401d5c5"
-    },
+    "c_abi": {},
     "go": {
       "AbilityChildContext": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "AbilityChildContext.Build": "bf7a86d3460ece5b504beac68cc2ae0f4ed5d3ade3b5264e8c1ab5c543a7adf9",
@@ -17022,7 +16369,7 @@
       "DefaultDirectoryPageLimit": "4bdfbcc03de0e1be3f60c602ba79892450166e1ffe081579cf06515f0e98a273",
       "DefaultReceiptHistoryLimit": "4bdfbcc03de0e1be3f60c602ba79892450166e1ffe081579cf06515f0e98a273",
       "DefaultRuntimeEventPageLimit": "4bdfbcc03de0e1be3f60c602ba79892450166e1ffe081579cf06515f0e98a273",
-      "DelegationMetadataKey": "56696799396929ef16b64b09ee25ef286e203c3f4193bc1de230aa61ee4761b6",
+      "DelegationMetadataKey": "5af1421c1f8e8145d59daa13925b0837b7c72b70f2f40ecbe6fb99bab7a202fe",
       "DelegationProof": "1cee37f3cdb4a0d2dd00cb52274a04ccab30ba358c6d0339e3165292fe2e81f4",
       "DelegationProof.Audience": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "DelegationProof.CallerURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
@@ -18384,7 +17731,7 @@
       "SessionAuthority.Signature": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e",
       "SessionAuthority.SubjectURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "SessionAuthority.Verify": "2725e6ac509463b049f6d233891b7a85016b42c9849bb8480571c84ee0390847",
-      "SessionAuthorityMetadataKey": "3dbe60a0054675d04db7c3f2213d1246e29328c502878d6f11b033e80571b702",
+      "SessionAuthorityMetadataKey": "8adadb8e5f57e9dd9f6dd526c693fc4e486860100451ce3923d2e64097126770",
       "SessionAuthorityRaw": "40e5fcf9d2a4c532cd897f246d669975952bbc6cdf22203ed971d8b212c591bc",
       "SessionAuthorityRaw.Payload": "9afc99b407b6769c8fc25d7766a7a87672ac2e4d8eae91b8c5c20cb72d2fabc5",
       "SessionAuthorityRaw.Signature": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
@@ -19207,7 +18554,7 @@
       "DEFAULT_MANAGED_SIGNING_PAGE_SIZE": "70ee095f42f86d287f11d67e5a93d21043a6dd3f206e16553ec50f60e674e4df",
       "DEFAULT_RECEIPT_PAGE_LIMIT": "0e11690c5c394caebd07f901e29680a74fbc71d246e5fa76d920e2811eb67f8b",
       "DEFAULT_RUNTIME_EVENT_PAGE_LIMIT": "67fb2dac53fb06059464ebe40c3823b16f7f029aa3423f77a7fe23559cc18ea8",
-      "DELEGATION_METADATA_KEY": "348c8f844a10a79d62a51f2d20e1f651a1ff21b9419efc9fdb67cdffa055d78f",
+      "DELEGATION_METADATA_KEY": "3dce8356cc482fe998280258b909dc4b5f56ef48be451681b2afb8d4c01858fb",
       "DelegationProof": "e020481a85bac43516bd98faebacd7561fedfd188217733a87a0c079e4cdcc14",
       "DelegationProof.audience": "599aa5a3cafb5a6f602db11a9b9c3dd2de7c5787b510ee07d381c48b4ddab27c",
       "DelegationProof.caller_ura": "46347163b5a459d94f56ac8377a53b414125d0ef5fa30493101ce749a713a4c7",
@@ -19739,7 +19086,7 @@
       "ManagedSigningStatus.ACTIVE": "802aeefed026a472b61a600a181eb1d6588759a8511b6abb384f38981b01fe96",
       "ManagedSigningStatus.RETIRED": "f61443635dc2185a4b636dc8e4e99a9c2e19787eec22aa696f27da1a51c05eb0",
       "ManagedSigningStatus.REVOKED": "6cc71dd5a06ac8f514e7207845939fad7bcd725482da21b652888e93f076fc76",
-      "NativeRuntimeHandle": "7e1a79c8c10992a2c01aa78f497131e45060e1af42c00cf9fe49c5ad27137b22",
+      "NativeRuntimeHandle": "0ec2d4222eab4de1f5407776dcea04b0b73f7dce28e879e26d7408bcd28134ae",
       "NativeRuntimeHandle.ability_client": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0",
       "NativeRuntimeHandle.addressing": "fb557bf3087230dfc317e3696f60449a7d04ac5b706de8e4cec08d1239f9abcf",
       "NativeRuntimeHandle.client": "1efdf56bf9d9847ad3f9b64e41bfdc33a08c2778e6596e576d9e73fcb9b3d04b",
@@ -20389,7 +19736,7 @@
       "SDKError.source": "78346bd08261a7a97905d14c3818bdfd2e368a586a6630dbfeb54950f3b63e9c",
       "SDKError.source_ref": "fa58a379b962fc590c976789c8fb8cbb968f0a1305b24f6623f16567984e9bd1",
       "SDKError.stage": "8de6c67a6a5fce1debb9a33593857a48da49a61b26d4a3e08b61d3d4f5621cd7",
-      "SESSION_AUTHORITY_METADATA_KEY": "4ce3faa583613d281a069f8e9a73eb688a4c34fdb8eb8bae5e7f36bb2e893155",
+      "SESSION_AUTHORITY_METADATA_KEY": "68e4a16e5b13c9e5bfae50b1e42182d6b777a5e96474049841f2d15c736ada6e",
       "SdkEnvironment": "c8f5a4280aa5764f2506332aec44cedd8370dbba6cf3e6868262d4d8c9132b61",
       "SdkEnvironment.ability_invocation_client": "f47b3671b4b8b8e41b688b74212a584bc462f52d9696c21e12fd3de3524a2afb",
       "SdkEnvironment.addressing_client": "a0c9cf052c5d9c91d2f52045681ae7e54e155492d263dd68fed3c585e2a5d046",
@@ -20650,8 +19997,8 @@
       "AuthorityMetadata.new": "978ddc3a69a766c785fb1415141f4319dec3a9374a8f4e0a32d6fc449f005823",
       "AuthorityMetadata.toMetadata": "bc918882ec53d2bab6b0c283f7d2a7af587c213019f4ccd73b654a96129154de",
       "AuthorityMetadata.value": "dc0dd316c721a4c64189d923e71432f4e99fc9b651c0e0efda52b5e7be0cb312",
-      "AuthorityMetadataFields": "18f3feb5f038ded0b8b8bfce83570583216eaaaaf3613a1657e50393dc01e278",
-      "AuthorityMetadataFields.key": "c569a74c6331117e6c5223597f34f199db98cf1ea825cda36daa5f3a9b077954",
+      "AuthorityMetadataFields": "1a4496c019db49b43ad642850f7af42ec56f48c25faa5bc3c656611b373870d3",
+      "AuthorityMetadataFields.key": "72245345bfe90a426845c780ab4b996bad57bb5f699ec735ba6d93a6db55e013",
       "AuthorityMetadataFields.kind": "cc67c1bcd77e615263de767eb3fd484a58ccf347b5ce96355c92a451ca95320e",
       "AuthorityMetadataFields.value": "dc0dd316c721a4c64189d923e71432f4e99fc9b651c0e0efda52b5e7be0cb312",
       "AuthorityTransport": "6a4cd4dc4a4bbb4b62f2bff09188ad4e1da3d5aa91fcf0e21287b1b5d105a6a8",
@@ -20686,7 +20033,7 @@
       "Client.featureDiscovery": "7a28cabaff73e563587299b1ec2367b41f76dd06d4729cc90b0a7bc7540cf594",
       "Client.new": "77c74cf015b24c3cf3b63a594b3a038dbf1e8f2a4bdd96a4b2e3a30192bb7acd",
       "Client.requireABI": "084c3fab4346b54b7bdee85e4a69d91f17c9f2a784e934217991de9c07f0e986",
-      "DELEGATION_METADATA_KEY": "035d9276d2177e300ef19d03a768c7b0aef50d36a3a8e08e85afae18ffdf5867",
+      "DELEGATION_METADATA_KEY": "9139cdb061180d1bc59e4828abd5baa27d25eb951bb7464b30ddf18656b98d44",
       "DelegationProof": "50330e5b70736f78dd7aa668d2cd2e9f3081b1deb204eb24b6d804241cf85faf",
       "DelegationProof.audience": "3244d13eae1fd769d27620fd8ecaa687aa5a3f172daa4f5e4aee857e3ea85ca4",
       "DelegationProof.callerURA": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7",
@@ -21018,7 +20365,7 @@
       "SDKErrorOptions.retryable": "35a5c3f1082599586135a99fe492fcb1af6dcae420489a4b0b7c925ce684cb85",
       "SDKErrorOptions.source": "aed74d582c91e9437edbd68aeebcf5ddcbe3408ca7e648f9ba215b2fcd0ded17",
       "SDKErrorOptions.stage": "8070e01512bf44a51278f8e2d18102c67410530fda031b8305965b6ea958c125",
-      "SESSION_AUTHORITY_METADATA_KEY": "f978b602334a57754121ec559d57c7b7f127992945eae2a85175dd7afbbf1c06",
+      "SESSION_AUTHORITY_METADATA_KEY": "f5cfd217f06d2a0b6601328fa28d8a8269890c05a44e6c1c9c3adbc4a15a87d6",
       "SessionAuthority": "240cd9864755ec13d71e160289b365507a97b229bee7fd16a309dad0060309a2",
       "SessionAuthority.allowedActions": "50c5eac7408cae715bae7882632a27340e1408d8ff84066e2518bac9a076d365",
       "SessionAuthority.allowedFollowupAbilities": "7b69ce00f3c67a118ab4284439a1039979328d1a99ab27e181eb331a08fb1234",
@@ -22632,7 +21979,7 @@
       "sha256": "74761d1a786d008f1dd4c105dd0a93721fd5ab4257a4bc02f44c4ddba1bd3d80",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/python/easynet_sdk/connection.py",
-      "interface_sha256": "7c9d13dce459987d37f7dd271975bd291ad4a8158a384f80490038906c06f6af",
+      "interface_sha256": "1f7a3334ed01cd7e8a1f084cff2b68efdd49e1c805b840c8a11346dc7aef61ae",
       "capability_ids": [
         "native_runtime",
         "runtime_environment",
@@ -22649,7 +21996,7 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/cabi_runtime.go",
-      "sha256": "34de34046ebf6d93d3f69e9d4265a2c9fba277cbebaa5d1123c4051f9e3d4d96",
+      "sha256": "9c31cea6d19fdd6652bb4344b3079886438bf6d30b42b2bd6fc0a6c9efd959aa",
       "interface": "RuntimeTransport",
       "interface_path": "sdk/go/runtime.go",
       "interface_sha256": "11b892f93beecf7a260eac275ff33487011b64dd665fac76926ffbd04844ca3a",
@@ -22665,10 +22012,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/_cabi.py",
-      "sha256": "d4530a720b7fdee0f48e3e29160a04bca86e314ae31baacbe21ba89292e63326",
+      "sha256": "4fd1ddd8125ec5b2e90f5dbd7a1b53396b2230baa7458c47e57c76a053248cb7",
       "interface": "CABIRuntimeTransport",
       "interface_path": "sdk/python/easynet_sdk/_cabi.py",
-      "interface_sha256": "d4530a720b7fdee0f48e3e29160a04bca86e314ae31baacbe21ba89292e63326",
+      "interface_sha256": "4fd1ddd8125ec5b2e90f5dbd7a1b53396b2230baa7458c47e57c76a053248cb7",
       "capability_ids": [
         "stream",
         "bidi"

@@ -1,12 +1,12 @@
 //! ABI-root feature discovery catalog.
 //!
 //! This module owns the language-neutral Runtime Core feature matrix returned by
-//! `easynet_feature_discovery`. Language facades decode this DTO; they do not
+//! `runtime_feature_discovery`. Language facades decode this DTO; they do not
 //! maintain an independent capability list.
 
 use serde_json::{json, Value};
 
-use super::EASYNET_ABI_VERSION;
+use super::RUNTIME_ABI_VERSION;
 
 pub const PROFILES: &[(&str, &str)] = &[("runtime_core", "provider-backed")];
 
@@ -39,7 +39,7 @@ pub fn feature_discovery_value() -> Value {
     }
 
     json!({
-        "abi_version": EASYNET_ABI_VERSION,
+        "abi_version": RUNTIME_ABI_VERSION,
         "sdk_version": env!("CARGO_PKG_VERSION"),
         "profiles": profiles,
         "symbols": symbols,
@@ -58,7 +58,7 @@ mod tests {
     #[test]
     fn feature_catalog_reports_all_declared_profiles_and_symbols() {
         let value = feature_discovery_value();
-        assert_eq!(value["abi_version"], EASYNET_ABI_VERSION);
+        assert_eq!(value["abi_version"], RUNTIME_ABI_VERSION);
         assert_eq!(value["sdk_version"], env!("CARGO_PKG_VERSION"));
 
         for (profile, status) in PROFILES {
@@ -81,7 +81,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(fixture_path).expect("read feature fixture"))
                 .expect("decode feature fixture");
 
-        assert_eq!(fixture["abi_version"], EASYNET_ABI_VERSION);
+        assert_eq!(fixture["abi_version"], RUNTIME_ABI_VERSION);
         assert_eq!(fixture["sdk_version"], env!("CARGO_PKG_VERSION"));
         for (profile, status) in PROFILES {
             assert_eq!(fixture["profiles"][*profile], *status);

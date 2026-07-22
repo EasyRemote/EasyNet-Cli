@@ -133,7 +133,7 @@ backend_live_principal_main() {
     EASYNET_BACKEND_LIVE_DAEMON_LIB="$lib_path" \
     EASYNET_BACKEND_LIVE_DAEMON_BIN="$daemon_bin" \
     EASYNET_BACKEND_LIVE_DAEMON_HOME="$smoke_home" \
-    go test -tags "easynet_cabi backend_live_daemon" ./internal/logic/user -run '^TestRegisterUserSigningKey_BackendAccountFlowUsesLiveDaemonPrincipalLifecycle$' -count=1 -v
+    go test -tags "runtime_cabi backend_live_daemon" ./internal/logic/user -run '^TestRegisterUserSigningKey_BackendAccountFlowUsesLiveDaemonPrincipalLifecycle$' -count=1 -v
   )
 
   echo "[backend-live-principal-e2e] PASS"

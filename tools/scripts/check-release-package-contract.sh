@@ -7,7 +7,7 @@
 # packaging/release/build-release-tarball.sh, packaging/release/install.sh,
 # and packaging/release/e2e-release-install.sh must agree on every required
 # artefact. This catches drift before a release tarball reaches a real
-# installer or a language binding misses part of the generic ABI v5 contract.
+# installer or a language binding misses part of the generic ABI v6 contract.
 
 set -euo pipefail
 
@@ -55,8 +55,8 @@ if require_file "packaging/release/build-release-tarball.sh"; then
     for literal in \
         "--bin easynet-keyring" \
         "include/easynet_cli.h" \
-        "include/easynet_cli.exports.v5" \
-        "docs/spec/ffi-abi-v5.md" \
+        "include/easynet_cli.exports.v6" \
+        "docs/spec/ffi-abi-v6.md" \
         "easynet-keyring" \
         "libaxon_dendrite_bridge"
     do
@@ -70,8 +70,8 @@ if require_file "packaging/release/install.sh"; then
         "DOC_DIR=\"/usr/local/share/doc/easynet\"" \
         "easynet-keyring" \
         "include/easynet_cli.h" \
-        "easynet_cli.exports.v5" \
-        "ffi-abi-v5.md"
+        "easynet_cli.exports.v6" \
+        "ffi-abi-v6.md"
     do
         require_literal "packaging/release/install.sh" "$literal"
     done
@@ -92,9 +92,9 @@ if require_file "packaging/release/e2e-release-install.sh"; then
     for literal in \
         "easynet-keyring" \
         "include/easynet_cli.h" \
-        "include/easynet_cli.exports.v5" \
-        "docs/spec/ffi-abi-v5.md" \
-        "#define EASYNET_ABI_VERSION 5u" \
+        "include/easynet_cli.exports.v6" \
+        "docs/spec/ffi-abi-v6.md" \
+        "#define RUNTIME_ABI_VERSION 6u" \
         "c abi:"
     do
         require_literal "packaging/release/e2e-release-install.sh" "$literal"
@@ -107,19 +107,19 @@ if require_file "packaging/release/e2e-release-flow.sh"; then
 fi
 
 if require_file "include/easynet_cli.h"; then
-    require_literal "include/easynet_cli.h" "#define EASYNET_ABI_VERSION 5u"
+    require_literal "include/easynet_cli.h" "#define RUNTIME_ABI_VERSION 6u"
 fi
 
-if require_file "include/easynet_cli.exports.v5"; then
-    require_literal "include/easynet_cli.exports.v5" "easynet_abi_version"
-    if [[ "$(wc -l < include/easynet_cli.exports.v5 | tr -d ' ')" != "55" ]]; then
-        record_violation "v5 export allowlist must contain exactly 55 symbols" "include/easynet_cli.exports.v5"
+if require_file "include/easynet_cli.exports.v6"; then
+    require_literal "include/easynet_cli.exports.v6" "runtime_abi_version"
+    if [[ "$(wc -l < include/easynet_cli.exports.v6 | tr -d ' ')" != "55" ]]; then
+        record_violation "v6 export allowlist must contain exactly 55 symbols" "include/easynet_cli.exports.v6"
     fi
 fi
 
-if require_file "docs/spec/ffi-abi-v5.md"; then
-    require_literal "docs/spec/ffi-abi-v5.md" "include/easynet_cli.h"
-    require_literal "docs/spec/ffi-abi-v5.md" "include/easynet_cli.exports.v5"
+if require_file "docs/spec/ffi-abi-v6.md"; then
+    require_literal "docs/spec/ffi-abi-v6.md" "include/easynet_cli.h"
+    require_literal "docs/spec/ffi-abi-v6.md" "include/easynet_cli.exports.v6"
 fi
 
 if [[ "$violations" -eq 0 ]]; then

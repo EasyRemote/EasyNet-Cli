@@ -1,9 +1,9 @@
 #pragma once
 
 /*
- * EasyNet CLI generic C ABI v5.
+ * Runtime C ABI v6 packaged by libeasynet_cli.
  *
- * The stable C surface owns daemon lifecycle, generic Invocation lifecycle,
+ * The stable C surface owns runtime host lifecycle, generic Invocation lifecycle,
  * stream/bidi control, and runtime/error DTOs. Domain profile helpers belong
  * to language SDKs and are intentionally absent from this header.
  */
@@ -14,9 +14,9 @@
 extern "C" {
 #endif
 
-#define EASYNET_ABI_VERSION 5u
+#define RUNTIME_ABI_VERSION 6u
 
-#define EASYNET_OK 0
+#define RUNTIME_OK 0
 #define ERR_GENERIC 1
 #define ERR_NULL_POINTER 2
 #define ERR_INVALID_UTF8 3
@@ -34,258 +34,258 @@ extern "C" {
 #define ERR_PROTOCOL 15
 #define ERR_TIMEOUT 16
 
-typedef uint64_t EasynetHandle;
-typedef uint64_t EasynetDaemonHandle;
-typedef uint64_t EasynetInvocationStreamId;
-typedef uint64_t EasynetInvocationBidiId;
-typedef uint64_t EasynetInvocationBuilderId;
-typedef uint64_t EasynetPreparedInvocationId;
-typedef uint64_t EasynetSignedInvocationId;
-typedef uint64_t EasynetInvocationHandleId;
+typedef uint64_t RuntimeHandle;
+typedef uint64_t RuntimeHostHandle;
+typedef uint64_t RuntimeInvocationStreamId;
+typedef uint64_t RuntimeInvocationBidiId;
+typedef uint64_t RuntimeInvocationBuilderId;
+typedef uint64_t RuntimePreparedInvocationId;
+typedef uint64_t RuntimeSignedInvocationId;
+typedef uint64_t RuntimeInvocationHandleId;
 
 /*
  * Callbacks run on library-owned threads. JSON pointers are borrowed for the
  * duration of the call and must be copied by bindings that retain them.
  * `close_send` is a half-close; cancel/close/shutdown are terminal actions.
  */
-typedef void (*EasynetInvocationStreamCallback)(
+typedef void (*RuntimeInvocationStreamCallback)(
     void *user_data,
     const char *chunk_json
 );
 
-typedef void (*EasynetInvocationBidiCallback)(
+typedef void (*RuntimeInvocationBidiCallback)(
     void *user_data,
     const char *frame_json
 );
 
-uint32_t easynet_abi_version(void);
-int32_t easynet_feature_discovery(char **out_features_json);
-int32_t easynet_last_error_json(char **out_error_json);
-int32_t easynet_error_json(
+uint32_t runtime_abi_version(void);
+int32_t runtime_feature_discovery(char **out_features_json);
+int32_t runtime_last_error_json(char **out_error_json);
+int32_t runtime_error_json(
     int32_t code,
     const char *message,
     char **out_error_json
 );
-void easynet_string_free(char *s);
+void runtime_string_free(char *s);
 
-int32_t easynet_init(
+int32_t runtime_init(
     const char *control_json_path,
-    EasynetHandle *out_handle
+    RuntimeHandle *out_handle
 );
-int32_t easynet_shutdown(EasynetHandle handle);
+int32_t runtime_shutdown(RuntimeHandle handle);
 
-int32_t easynet_daemon_start(
+int32_t runtime_host_start(
     const char *config_json,
-    EasynetDaemonHandle *out_daemon_handle
+    RuntimeHostHandle *out_host_handle
 );
-int32_t easynet_daemon_attach(
+int32_t runtime_host_attach(
     const char *options_json,
-    EasynetDaemonHandle *out_daemon_handle
+    RuntimeHostHandle *out_host_handle
 );
-int32_t easynet_daemon_discover(
+int32_t runtime_host_discover(
     const char *options_json,
     char **out_discovery_json
 );
-int32_t easynet_daemon_stop(EasynetDaemonHandle handle);
-int32_t easynet_daemon_detach(EasynetDaemonHandle handle);
-int32_t easynet_daemon_status(
-    EasynetDaemonHandle handle,
+int32_t runtime_host_stop(RuntimeHostHandle handle);
+int32_t runtime_host_detach(RuntimeHostHandle handle);
+int32_t runtime_host_status(
+    RuntimeHostHandle handle,
     char **out_status_json
 );
-int32_t easynet_daemon_endpoints(
-    EasynetDaemonHandle handle,
+int32_t runtime_host_endpoints(
+    RuntimeHostHandle handle,
     char **out_endpoints_json
 );
-int32_t easynet_daemon_invocation_endpoint(
-    EasynetDaemonHandle handle,
+int32_t runtime_host_invocation_endpoint(
+    RuntimeHostHandle handle,
     char **out_endpoint
 );
-int32_t easynet_daemon_open_client(
-    EasynetDaemonHandle daemon_handle,
-    EasynetHandle *out_handle
+int32_t runtime_host_open_client(
+    RuntimeHostHandle host_handle,
+    RuntimeHandle *out_handle
 );
 
-int32_t easynet_runtime_health(
-    EasynetHandle handle,
+int32_t runtime_health(
+    RuntimeHandle handle,
     char **out_health_json
 );
-int32_t easynet_runtime_diagnostics(
-    EasynetHandle handle,
+int32_t runtime_diagnostics(
+    RuntimeHandle handle,
     char **out_diagnostics_json
 );
-int32_t easynet_runtime_resolve_descriptor_ref(
-    EasynetHandle handle,
+int32_t runtime_resolve_descriptor_ref(
+    RuntimeHandle handle,
     const char *request_json,
     char **out_descriptor_json
 );
 
-int32_t easynet_invocation_invoke(
-    EasynetHandle handle,
+int32_t runtime_invocation_invoke(
+    RuntimeHandle handle,
     const char *invocation_json,
     char **out_receipt_json
 );
 
-int32_t easynet_invocation_builder_new(
-    EasynetInvocationBuilderId *out_builder_id
+int32_t runtime_invocation_builder_new(
+    RuntimeInvocationBuilderId *out_builder_id
 );
-int32_t easynet_invocation_builder_set_caller(
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_set_caller(
+    RuntimeInvocationBuilderId builder_id,
     const char *caller_ura
 );
-int32_t easynet_invocation_builder_set_callee(
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_set_callee(
+    RuntimeInvocationBuilderId builder_id,
     const char *callee_ura
 );
-int32_t easynet_invocation_builder_set_descriptor_ref(
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_set_descriptor_ref(
+    RuntimeInvocationBuilderId builder_id,
     const char *descriptor_ref
 );
-int32_t easynet_invocation_builder_set_subject(
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_set_subject(
+    RuntimeInvocationBuilderId builder_id,
     const char *subject_ura
 );
-int32_t easynet_invocation_builder_set_nonce_base64(
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_set_nonce_base64(
+    RuntimeInvocationBuilderId builder_id,
     const char *nonce_base64
 );
-int32_t easynet_invocation_builder_set_causal_context_json(
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_set_causal_context_json(
+    RuntimeInvocationBuilderId builder_id,
     const char *causal_context_json
 );
-int32_t easynet_invocation_builder_set_args_json(
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_set_args_json(
+    RuntimeInvocationBuilderId builder_id,
     const char *args_json
 );
-int32_t easynet_invocation_builder_set_arguments_base64(
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_set_arguments_base64(
+    RuntimeInvocationBuilderId builder_id,
     const char *arguments_base64,
     const char *content_type
 );
-int32_t easynet_invocation_builder_set_metadata_json(
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_set_metadata_json(
+    RuntimeInvocationBuilderId builder_id,
     const char *metadata_json
 );
-int32_t easynet_invocation_builder_set_timeout_seconds(
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_set_timeout_seconds(
+    RuntimeInvocationBuilderId builder_id,
     uint32_t timeout_seconds
 );
-int32_t easynet_invocation_builder_set_idempotency_key(
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_set_idempotency_key(
+    RuntimeInvocationBuilderId builder_id,
     const char *idempotency_key
 );
-int32_t easynet_invocation_builder_set_caller_signature_json(
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_set_caller_signature_json(
+    RuntimeInvocationBuilderId builder_id,
     const char *signature_json
 );
-int32_t easynet_invocation_builder_inspect(
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_inspect(
+    RuntimeInvocationBuilderId builder_id,
     char **out_invocation_json
 );
-int32_t easynet_invocation_builder_build(
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_build(
+    RuntimeInvocationBuilderId builder_id,
     char **out_invocation_json
 );
-int32_t easynet_invocation_builder_prepare(
-    EasynetHandle handle,
-    EasynetInvocationBuilderId builder_id,
+int32_t runtime_invocation_builder_prepare(
+    RuntimeHandle handle,
+    RuntimeInvocationBuilderId builder_id,
     const char *options_json,
-    EasynetPreparedInvocationId *out_prepared_id,
+    RuntimePreparedInvocationId *out_prepared_id,
     char **out_prepared_json
 );
-int32_t easynet_invocation_builder_free(
-    EasynetInvocationBuilderId builder_id
+int32_t runtime_invocation_builder_free(
+    RuntimeInvocationBuilderId builder_id
 );
 
-int32_t easynet_invocation_prepare(
-    EasynetHandle handle,
+int32_t runtime_invocation_prepare(
+    RuntimeHandle handle,
     const char *invocation_json,
     const char *options_json,
-    EasynetPreparedInvocationId *out_prepared_id,
+    RuntimePreparedInvocationId *out_prepared_id,
     char **out_prepared_json
 );
-int32_t easynet_invocation_sign_prepared(
-    EasynetPreparedInvocationId prepared_id,
+int32_t runtime_invocation_sign_prepared(
+    RuntimePreparedInvocationId prepared_id,
     const char *signature_json,
-    EasynetSignedInvocationId *out_signed_id,
+    RuntimeSignedInvocationId *out_signed_id,
     char **out_signed_json
 );
-int32_t easynet_invocation_sign_prepared_local(
-    EasynetPreparedInvocationId prepared_id,
-    EasynetSignedInvocationId *out_signed_id,
+int32_t runtime_invocation_sign_prepared_local(
+    RuntimePreparedInvocationId prepared_id,
+    RuntimeSignedInvocationId *out_signed_id,
     char **out_signed_json
 );
-int32_t easynet_invocation_submit_signed_handle(
-    EasynetHandle handle,
-    EasynetSignedInvocationId signed_id,
-    EasynetInvocationHandleId *out_invocation_handle_id,
+int32_t runtime_invocation_submit_signed_handle(
+    RuntimeHandle handle,
+    RuntimeSignedInvocationId signed_id,
+    RuntimeInvocationHandleId *out_invocation_handle_id,
     char **out_submitted_json
 );
-int32_t easynet_invocation_handle_await(
-    EasynetHandle handle,
-    EasynetInvocationHandleId invocation_handle_id,
+int32_t runtime_invocation_handle_await(
+    RuntimeHandle handle,
+    RuntimeInvocationHandleId invocation_handle_id,
     char **out_result_json
 );
-int32_t easynet_invocation_handle_cancel(
-    EasynetHandle handle,
-    EasynetInvocationHandleId invocation_handle_id,
+int32_t runtime_invocation_handle_cancel(
+    RuntimeHandle handle,
+    RuntimeInvocationHandleId invocation_handle_id,
     const char *reason_json,
     char **out_cancel_json
 );
-int32_t easynet_invocation_handle_events(
-    EasynetHandle handle,
-    EasynetInvocationHandleId invocation_handle_id,
+int32_t runtime_invocation_handle_events(
+    RuntimeHandle handle,
+    RuntimeInvocationHandleId invocation_handle_id,
     char **out_events_json
 );
-int32_t easynet_invocation_handle_free(
-    EasynetHandle handle,
-    EasynetInvocationHandleId invocation_handle_id
+int32_t runtime_invocation_handle_free(
+    RuntimeHandle handle,
+    RuntimeInvocationHandleId invocation_handle_id
 );
-int32_t easynet_prepared_invocation_free(
-    EasynetPreparedInvocationId prepared_id
+int32_t runtime_prepared_invocation_free(
+    RuntimePreparedInvocationId prepared_id
 );
-int32_t easynet_signed_invocation_free(
-    EasynetSignedInvocationId signed_id
-);
-
-int32_t easynet_invocation_stream_open(
-    EasynetHandle handle,
-    const char *invocation_json,
-    EasynetInvocationStreamCallback on_chunk,
-    void *user_data,
-    EasynetInvocationStreamId *out_stream_id
-);
-int32_t easynet_invocation_stream_cancel(
-    EasynetHandle handle,
-    EasynetInvocationStreamId stream_id
-);
-int32_t easynet_invocation_stream_close(
-    EasynetHandle handle,
-    EasynetInvocationStreamId stream_id
+int32_t runtime_signed_invocation_free(
+    RuntimeSignedInvocationId signed_id
 );
 
-int32_t easynet_invocation_bidi_open(
-    EasynetHandle handle,
+int32_t runtime_invocation_stream_open(
+    RuntimeHandle handle,
     const char *invocation_json,
-    EasynetInvocationBidiCallback on_frame,
+    RuntimeInvocationStreamCallback on_chunk,
     void *user_data,
-    EasynetInvocationBidiId *out_bidi_id
+    RuntimeInvocationStreamId *out_stream_id
 );
-int32_t easynet_invocation_bidi_send(
-    EasynetHandle handle,
-    EasynetInvocationBidiId bidi_id,
+int32_t runtime_invocation_stream_cancel(
+    RuntimeHandle handle,
+    RuntimeInvocationStreamId stream_id
+);
+int32_t runtime_invocation_stream_close(
+    RuntimeHandle handle,
+    RuntimeInvocationStreamId stream_id
+);
+
+int32_t runtime_invocation_bidi_open(
+    RuntimeHandle handle,
+    const char *invocation_json,
+    RuntimeInvocationBidiCallback on_frame,
+    void *user_data,
+    RuntimeInvocationBidiId *out_bidi_id
+);
+int32_t runtime_invocation_bidi_send(
+    RuntimeHandle handle,
+    RuntimeInvocationBidiId bidi_id,
     const char *frame_json
 );
-int32_t easynet_invocation_bidi_close_send(
-    EasynetHandle handle,
-    EasynetInvocationBidiId bidi_id
+int32_t runtime_invocation_bidi_close_send(
+    RuntimeHandle handle,
+    RuntimeInvocationBidiId bidi_id
 );
-int32_t easynet_invocation_bidi_close(
-    EasynetHandle handle,
-    EasynetInvocationBidiId bidi_id
+int32_t runtime_invocation_bidi_close(
+    RuntimeHandle handle,
+    RuntimeInvocationBidiId bidi_id
 );
-int32_t easynet_invocation_bidi_cancel(
-    EasynetHandle handle,
-    EasynetInvocationBidiId bidi_id
+int32_t runtime_invocation_bidi_cancel(
+    RuntimeHandle handle,
+    RuntimeInvocationBidiId bidi_id
 );
 
 #ifdef __cplusplus

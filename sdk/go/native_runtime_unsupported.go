@@ -1,4 +1,4 @@
-//go:build !easynet_cabi || !cgo || windows
+//go:build !runtime_cabi || !cgo || windows
 
 package easynet
 

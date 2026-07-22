@@ -49,7 +49,7 @@ class NativeRuntimeHandle:
     """One SDK-owned native Runtime and Health provider lifecycle.
 
     Health borrows Runtime's transport. Addressing is an Axon-backed local
-    provider and never depends on a product profile exported by generic ABI v5.
+    provider and never depends on a product profile exported by generic ABI v6.
     """
 
     _runtime: RuntimeClient

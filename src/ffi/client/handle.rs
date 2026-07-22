@@ -47,18 +47,18 @@ const FALLBACK_FFI_WORKER_THREADS: usize = 4;
 
 /// Opaque handle exposed to the C ABI. A value of 0 is reserved as
 /// "null handle" / "not yet allocated".
-pub type EasynetHandle = u64;
+pub type RuntimeHandle = u64;
 
 /// Process-local identity of one live client session.
 ///
-/// `EasynetHandle` is the public C ABI token. `incarnation` is the
+/// `RuntimeHandle` is the public C ABI token. `incarnation` is the
 /// library-private session generation minted when a `ClientSession` is
 /// constructed. FFI sub-resources bind to this pair so they cannot be
 /// controlled by a later session that happens to present the same numeric
 /// handle value after release/reallocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ClientSessionBinding {
-    pub handle: EasynetHandle,
+    pub handle: RuntimeHandle,
     pub incarnation: u64,
 }
 
@@ -109,13 +109,13 @@ pub struct ClientSession {
     /// did this handle connect to".
     pub control_path: String,
     /// Optional direct daemon Invocation endpoint. Sessions created
-    /// from `easynet_daemon_open_client` already know the daemon
+    /// from `runtime_host_open_client` already know the daemon
     /// lifecycle handle's endpoint, so Invocation ABI calls should
     /// not re-derive `daemon.sock` from a control descriptor path.
     pub invocation_endpoint: Option<String>,
     /// The framed UDS connection. `None` for test sessions that
     /// only exercise the registry, `Some(...)` for sessions opened
-    /// via `easynet_init`. Behind a `Mutex` because the round-trip
+    /// via `runtime_init`. Behind a `Mutex` because the round-trip
     /// is one-frame-in / one-frame-out and concurrent calls on the
     /// same handle would interleave reads.
     pub client: Option<Mutex<IpcClient>>,
@@ -144,7 +144,7 @@ impl ClientSession {
     /// not hold a JSON-control IPC connection.
     ///
     /// This is used by daemon lifecycle C ABI helpers that only need
-    /// an `EasynetHandle` for daemon Invocation calls. The complete
+    /// an `RuntimeHandle` for daemon Invocation calls. The complete
     /// Invocation ABI prefers the explicit `invocation_endpoint` and
     /// does not use the JSON-control client.
     pub(crate) fn with_control_path_only(
@@ -163,7 +163,7 @@ impl ClientSession {
 
     /// Test-only constructor: a session with no IPC client. The
     /// registry tests use this to exercise alloc/get/release without
-    /// reaching for `easynet_init`.
+    /// reaching for `runtime_init`.
     #[cfg(test)]
     fn dummy(control_path: String) -> Self {
         Self {
@@ -176,7 +176,7 @@ impl ClientSession {
         }
     }
 
-    pub(crate) fn binding(&self, handle: EasynetHandle) -> ClientSessionBinding {
+    pub(crate) fn binding(&self, handle: RuntimeHandle) -> ClientSessionBinding {
         ClientSessionBinding {
             handle,
             incarnation: self.incarnation,
@@ -185,7 +185,7 @@ impl ClientSession {
 
     pub(crate) fn resource_registration_guard(
         &self,
-        handle: EasynetHandle,
+        handle: RuntimeHandle,
     ) -> Result<ClientSessionResourceGuard<'_>, ClientSessionClosed> {
         let guard = self
             .lifecycle
@@ -202,7 +202,7 @@ impl ClientSession {
 
     pub(crate) fn begin_closing(
         &self,
-        handle: EasynetHandle,
+        handle: RuntimeHandle,
     ) -> Result<ClientSessionBinding, ClientSessionClosed> {
         let mut guard = self
             .lifecycle
@@ -236,7 +236,7 @@ fn next_session_incarnation() -> u64 {
 /// it.
 struct Registry {
     next: AtomicU64,
-    entries: Mutex<std::collections::HashMap<EasynetHandle, Arc<ClientSession>>>,
+    entries: Mutex<std::collections::HashMap<RuntimeHandle, Arc<ClientSession>>>,
 }
 
 fn registry() -> &'static Registry {
@@ -251,7 +251,7 @@ fn registry() -> &'static Registry {
 /// Process-wide tokio runtime used by the FFI surface to drive
 /// async I/O against the daemon.
 ///
-/// Initialised lazily on first use (typically inside `easynet_init`).
+/// Initialised lazily on first use (typically inside `runtime_init`).
 /// Errors during runtime construction abort the call site with a
 /// recorded last-error message — the library is unusable without a
 /// runtime, so failing fast is the right outcome.
@@ -296,7 +296,7 @@ fn device_default_ffi_worker_threads() -> usize {
 /// Allocate a new handle for the given `ClientSession` and return
 /// both. The caller stores the handle in the Client; the Arc is
 /// retained by the registry.
-pub(crate) fn alloc(session: ClientSession) -> (EasynetHandle, Arc<ClientSession>) {
+pub(crate) fn alloc(session: ClientSession) -> (RuntimeHandle, Arc<ClientSession>) {
     let reg = registry();
     let id = reg.next.fetch_add(1, Ordering::Relaxed);
     let arc = Arc::new(session);
@@ -310,7 +310,7 @@ pub(crate) fn alloc(session: ClientSession) -> (EasynetHandle, Arc<ClientSession
 /// Look up a handle. Returns `None` when the handle is 0 (null) or
 /// not present (freed / never issued). Callers map `None` to
 /// `ERR_INVALID_HANDLE`.
-pub(crate) fn get(handle: EasynetHandle) -> Option<Arc<ClientSession>> {
+pub(crate) fn get(handle: RuntimeHandle) -> Option<Arc<ClientSession>> {
     if handle == 0 {
         return None;
     }
@@ -322,14 +322,14 @@ pub(crate) fn get(handle: EasynetHandle) -> Option<Arc<ClientSession>> {
         .cloned()
 }
 
-pub(crate) fn binding_for_handle(handle: EasynetHandle) -> Option<ClientSessionBinding> {
+pub(crate) fn binding_for_handle(handle: RuntimeHandle) -> Option<ClientSessionBinding> {
     get(handle).map(|session| session.binding(handle))
 }
 
 /// Release a handle. Returns `true` when the handle was present
 /// (and is now removed), `false` when the handle was unknown.
 /// Idempotent — a double-free returns `false` the second time.
-pub(crate) fn release(handle: EasynetHandle) -> bool {
+pub(crate) fn release(handle: RuntimeHandle) -> bool {
     if handle == 0 {
         return false;
     }
@@ -343,7 +343,7 @@ pub(crate) fn release(handle: EasynetHandle) -> bool {
 
 /// Test-only: create a session with a dummy control path so
 /// registry-level tests can exercise alloc/get/release without
-/// reaching for the real `easynet_init`.
+/// reaching for the real `runtime_init`.
 #[cfg(test)]
 pub(crate) fn test_session() -> ClientSession {
     ClientSession::dummy("/tmp/test-control.json".into())

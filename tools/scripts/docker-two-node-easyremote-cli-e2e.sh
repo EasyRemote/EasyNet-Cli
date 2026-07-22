@@ -1601,7 +1601,7 @@ report = {
             and ability_uras["add"] in json.dumps(cli_add_records[0])
         ),
         "cli_add_receipt_chain_projected": receipt_chains_verified,
-        "six_native_easynet_invocation_records": (
+        "six_native_runtime_invocation_records": (
             len(native_records) == 6
             and all(native_ability_ura in json.dumps(record) for record in native_records)
         ),
@@ -1617,7 +1617,7 @@ report = {
     "provider_user_plugin_invocation_records": user_plugin_records,
     "caller_cli_add_stream_frames": cli_stream,
     "provider_cli_add_invocation_records": cli_add_records,
-    "provider_native_easynet_invocation_records": native_records,
+    "provider_native_runtime_invocation_records": native_records,
 }
 print(json.dumps(report, indent=2, sort_keys=True))
 PY
@@ -1667,7 +1667,7 @@ jq -e '
   and .assertions.caller_remote_streamed_easynet_native_typed_stub
   and .assertions.one_cli_add_invocation_record
   and .assertions.cli_add_receipt_chain_projected
-  and .assertions.six_native_easynet_invocation_records
+  and .assertions.six_native_runtime_invocation_records
   and .assertions.native_easynet_one_daemon_record_per_easyremote_dispatch
   and .assertions.native_easynet_receipt_chains_projected
   and .assertions.caller_observed_provider_ability_removed

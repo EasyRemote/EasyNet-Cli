@@ -4,7 +4,7 @@
 // File: src/ffi/errors.rs
 // Description: Integer error codes returned across the C ABI,
 //              plus a thread-local "last error message" buffer the
-//              caller queries via `easynet_last_error_json()` when an
+//              caller queries via `runtime_last_error_json()` when an
 //              exported function returns a non-zero code.
 //
 // Why an i32 + TLS, not exceptions / Result
@@ -17,14 +17,14 @@
 //
 // Thread-local rather than handle-local: the last-error read must
 // succeed even when the error happened *before* a handle was
-// obtained (e.g. `easynet_init` failed), so a per-thread slot is
+// obtained (e.g. `runtime_init` failed), so a per-thread slot is
 // the right granularity. Every exported function that can fail
 // writes its error message here before returning a non-zero code.
 //
 // Stability
 // ---------
 // Error codes are part of the ABI. Renaming or renumbering any
-// `pub const ERR_*` requires a `EASYNET_ABI_VERSION` bump.
+// `pub const ERR_*` requires a `RUNTIME_ABI_VERSION` bump.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -34,7 +34,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
 /// Success. Exported function completed without error.
-pub const EASYNET_OK: i32 = 0;
+pub const RUNTIME_OK: i32 = 0;
 
 /// Generic / unclassified error. Prefer a more specific code when
 /// possible; this is the catch-all for programmer error paths.
@@ -52,7 +52,7 @@ pub const ERR_INVALID_UTF8: i32 = 3;
 pub const ERR_INVALID_HANDLE: i32 = 4;
 
 /// The library has not been initialised (or was shut down). Call
-/// `easynet_init()` first.
+/// `runtime_init()` first.
 pub const ERR_NOT_INITIALIZED: i32 = 5;
 
 /// The library was initialised twice from the same process. Use
@@ -130,7 +130,7 @@ pub(crate) fn set_last_error_code(code: i32, msg: impl Into<String>) {
 /// projection.
 ///
 /// The returned integer code remains ABI-stable for existing C callers.
-/// Newer bindings consume `easynet_last_error_json` and should receive the
+/// Newer bindings consume `runtime_last_error_json` and should receive the
 /// canonical runtime failure domain for the specific operation instead of a
 /// coarse ABI bucket.
 pub(crate) fn set_last_error_projection(
@@ -168,17 +168,17 @@ pub(crate) fn clear_last_error() {
 /// Return the current thread's typed last-error JSON.
 ///
 /// The returned string is caller-owned and must be released with
-/// `easynet_string_free`. When no error is recorded, this returns the
+/// `runtime_string_free`. When no error is recorded, this returns the
 /// JSON literal `null`.
 ///
 /// # Safety
 /// `out_error_json` must be a non-null caller-owned pointer.
 #[no_mangle]
-pub unsafe extern "C" fn easynet_last_error_json(out_error_json: *mut *mut c_char) -> i32 {
+pub unsafe extern "C" fn runtime_last_error_json(out_error_json: *mut *mut c_char) -> i32 {
     if out_error_json.is_null() {
         set_last_error_code(
             ERR_NULL_POINTER,
-            "easynet_last_error_json: out_error_json pointer is null",
+            "runtime_last_error_json: out_error_json pointer is null",
         );
         return ERR_NULL_POINTER;
     }
@@ -192,7 +192,7 @@ pub unsafe extern "C" fn easynet_last_error_json(out_error_json: *mut *mut c_cha
         ),
         None => serde_json::Value::Null,
     });
-    write_json_output("easynet_last_error_json", out_error_json, json)
+    write_json_output("runtime_last_error_json", out_error_json, json)
 }
 
 /// Project a stable C ABI error code and optional message into the
@@ -204,11 +204,11 @@ pub unsafe extern "C" fn easynet_last_error_json(out_error_json: *mut *mut c_cha
 /// # Safety
 /// `message` may be null; null means the caller has no message for this
 /// explicit code projection. It does not read the TLS last-error slot; callers
-/// that need the recorded last error must use `easynet_last_error_json`.
+/// that need the recorded last error must use `runtime_last_error_json`.
 /// If non-null it must be a valid UTF-8 C string.
 /// `out_error_json` must be a non-null caller-owned pointer.
 #[no_mangle]
-pub unsafe extern "C" fn easynet_error_json(
+pub unsafe extern "C" fn runtime_error_json(
     code: i32,
     message: *const c_char,
     out_error_json: *mut *mut c_char,
@@ -216,7 +216,7 @@ pub unsafe extern "C" fn easynet_error_json(
     if out_error_json.is_null() {
         set_last_error_code(
             ERR_NULL_POINTER,
-            "easynet_error_json: out_error_json pointer is null",
+            "runtime_error_json: out_error_json pointer is null",
         );
         return ERR_NULL_POINTER;
     }
@@ -230,19 +230,19 @@ pub unsafe extern "C" fn easynet_error_json(
             Err(_) => {
                 set_last_error_code(
                     ERR_INVALID_UTF8,
-                    "easynet_error_json: message is not valid UTF-8",
+                    "runtime_error_json: message is not valid UTF-8",
                 );
                 return ERR_INVALID_UTF8;
             }
         }
     };
 
-    let json = if code == EASYNET_OK {
+    let json = if code == RUNTIME_OK {
         serde_json::Value::Null
     } else {
         typed_error_json(code, &message)
     };
-    write_json_output("easynet_error_json", out_error_json, json)
+    write_json_output("runtime_error_json", out_error_json, json)
 }
 
 #[cfg(test)]
@@ -268,7 +268,7 @@ fn write_json_output(
         return ERR_GENERIC;
     }
     unsafe { *out_error_json = ptr };
-    EASYNET_OK
+    RUNTIME_OK
 }
 
 fn alloc_output_cstring(s: impl Into<String>) -> *mut c_char {
@@ -320,9 +320,9 @@ struct ErrorMetadata {
 
 fn error_metadata(code: i32) -> ErrorMetadata {
     match code {
-        EASYNET_OK => ErrorMetadata {
+        RUNTIME_OK => ErrorMetadata {
             code: "OK",
-            abi_symbol: "EASYNET_OK",
+            abi_symbol: "RUNTIME_OK",
             stage: "sdk",
             retry: "never",
         },
@@ -434,12 +434,12 @@ mod tests {
         std::thread::spawn(|| {
             clear_last_error();
             let mut out: *mut c_char = std::ptr::null_mut();
-            let code = unsafe { easynet_last_error_json(&mut out) };
-            assert_eq!(code, EASYNET_OK);
+            let code = unsafe { runtime_last_error_json(&mut out) };
+            assert_eq!(code, RUNTIME_OK);
             assert!(!out.is_null());
             let value: serde_json::Value =
                 unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
-            unsafe { crate::ffi::strings::easynet_string_free(out) };
+            unsafe { crate::ffi::strings::runtime_string_free(out) };
             assert_eq!(value, serde_json::Value::Null);
         })
         .join()
@@ -451,11 +451,11 @@ mod tests {
         std::thread::spawn(|| {
             set_last_error_code(ERR_INVALID_HANDLE, "bad handle");
             let mut out: *mut c_char = std::ptr::null_mut();
-            let code = unsafe { easynet_last_error_json(&mut out) };
-            assert_eq!(code, EASYNET_OK);
+            let code = unsafe { runtime_last_error_json(&mut out) };
+            assert_eq!(code, RUNTIME_OK);
             let value: serde_json::Value =
                 unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
-            unsafe { crate::ffi::strings::easynet_string_free(out) };
+            unsafe { crate::ffi::strings::runtime_string_free(out) };
             assert_eq!(value["code"], "INVALID_HANDLE");
             assert_eq!(value["stage"], "sdk");
             assert_eq!(value["retry"], "never");
@@ -480,11 +480,11 @@ mod tests {
                 "descriptor missing",
             );
             let mut out: *mut c_char = std::ptr::null_mut();
-            let code = unsafe { easynet_last_error_json(&mut out) };
-            assert_eq!(code, EASYNET_OK);
+            let code = unsafe { runtime_last_error_json(&mut out) };
+            assert_eq!(code, RUNTIME_OK);
             let value: serde_json::Value =
                 unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
-            unsafe { crate::ffi::strings::easynet_string_free(out) };
+            unsafe { crate::ffi::strings::runtime_string_free(out) };
             assert_eq!(value["code"], "DESCRIPTOR_NOT_FOUND");
             assert_eq!(value["stage"], "routing");
             assert_eq!(value["retry"], "never");
@@ -500,11 +500,11 @@ mod tests {
     fn error_json_maps_explicit_code_without_parsing_message() {
         let message = CString::new("deadline elapsed").unwrap();
         let mut out: *mut c_char = std::ptr::null_mut();
-        let code = unsafe { easynet_error_json(ERR_TIMEOUT, message.as_ptr(), &mut out) };
-        assert_eq!(code, EASYNET_OK);
+        let code = unsafe { runtime_error_json(ERR_TIMEOUT, message.as_ptr(), &mut out) };
+        assert_eq!(code, RUNTIME_OK);
         let value: serde_json::Value =
             unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
-        unsafe { crate::ffi::strings::easynet_string_free(out) };
+        unsafe { crate::ffi::strings::runtime_string_free(out) };
         assert_eq!(value["code"], "TIMEOUT");
         assert_eq!(value["stage"], "transport");
         assert_eq!(value["retry"], "safe");
@@ -517,11 +517,11 @@ mod tests {
         std::thread::spawn(|| {
             set_last_error_code(ERR_NOT_FOUND, "stale descriptor error");
             let mut out: *mut c_char = std::ptr::null_mut();
-            let code = unsafe { easynet_error_json(ERR_TIMEOUT, std::ptr::null(), &mut out) };
-            assert_eq!(code, EASYNET_OK);
+            let code = unsafe { runtime_error_json(ERR_TIMEOUT, std::ptr::null(), &mut out) };
+            assert_eq!(code, RUNTIME_OK);
             let value: serde_json::Value =
                 unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
-            unsafe { crate::ffi::strings::easynet_string_free(out) };
+            unsafe { crate::ffi::strings::runtime_string_free(out) };
             assert_eq!(value["code"], "TIMEOUT");
             assert_eq!(value["message"], "");
             assert_eq!(value["details"]["abi_code"], ERR_TIMEOUT);
@@ -546,11 +546,11 @@ mod tests {
         ] {
             let message = CString::new("typed projection").unwrap();
             let mut out: *mut c_char = std::ptr::null_mut();
-            let code = unsafe { easynet_error_json(abi_code, message.as_ptr(), &mut out) };
-            assert_eq!(code, EASYNET_OK);
+            let code = unsafe { runtime_error_json(abi_code, message.as_ptr(), &mut out) };
+            assert_eq!(code, RUNTIME_OK);
             let value: serde_json::Value =
                 unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
-            unsafe { crate::ffi::strings::easynet_string_free(out) };
+            unsafe { crate::ffi::strings::runtime_string_free(out) };
             assert_eq!(value["code"], expected_code);
             assert_eq!(value["details"]["abi_code"], abi_code);
             assert_eq!(value["details"]["abi_symbol"], expected_symbol);
@@ -560,15 +560,15 @@ mod tests {
     #[test]
     fn last_error_json_null_output_records_typed_null_pointer() {
         std::thread::spawn(|| {
-            let code = unsafe { easynet_last_error_json(std::ptr::null_mut()) };
+            let code = unsafe { runtime_last_error_json(std::ptr::null_mut()) };
             assert_eq!(code, ERR_NULL_POINTER);
 
             let mut out: *mut c_char = std::ptr::null_mut();
-            let code = unsafe { easynet_last_error_json(&mut out) };
-            assert_eq!(code, EASYNET_OK);
+            let code = unsafe { runtime_last_error_json(&mut out) };
+            assert_eq!(code, RUNTIME_OK);
             let value: serde_json::Value =
                 unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
-            unsafe { crate::ffi::strings::easynet_string_free(out) };
+            unsafe { crate::ffi::strings::runtime_string_free(out) };
             assert_eq!(value["code"], "NULL_POINTER");
             assert_eq!(value["details"]["abi_code"], ERR_NULL_POINTER);
         })
@@ -598,7 +598,7 @@ mod tests {
         // switch on these; duplicates would route an error to the
         // wrong branch.
         let codes = [
-            EASYNET_OK,
+            RUNTIME_OK,
             ERR_GENERIC,
             ERR_NULL_POINTER,
             ERR_INVALID_UTF8,

@@ -2,7 +2,7 @@
 # python-sdk-live-smoke.sh — live daemon smoke through the Python SDK facade
 # =========================================================================
 #
-# Builds generic C ABI v5 and the complete daemon process set, starts a hermetic daemon through
+# Builds generic C ABI v6 and the complete daemon process set, starts a hermetic daemon through
 # `easynet_sdk.CABIRuntimeLifecycleTransport`, then exercises Runtime Core unary, stream,
 # stream, prepare/sign/submit, and typed terminal failure paths through the Python SDK
 # object model.
@@ -14,13 +14,13 @@ REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 
 if [[ "${1:-}" == "--self-test" ]]; then
   bash -n "$0"
-  grep -q "generic C ABI v5" "$0"
+  grep -q "generic C ABI v6" "$0"
   grep -q "typed terminal failure decoded" "$0"
   grep -q "RuntimeEventClient read live daemon handle events" "$0"
   grep -q "select_python_bin" "$0"
   grep -q "using Python interpreter" "$0"
   grep -q "install uv/python3" "$0"
-  grep -q "EXPECTED_ABI_VERSION = 5" "$REPO_ROOT/sdk/python/easynet_sdk/_cabi.py"
+  grep -q "EXPECTED_ABI_VERSION = 6" "$REPO_ROOT/sdk/python/easynet_sdk/_cabi.py"
   grep -q "def open_cabi_runtime_lifecycle_transport" "$REPO_ROOT/sdk/python/easynet_sdk/_cabi.py"
   grep -q "class RuntimeClient" "$REPO_ROOT/sdk/python/easynet_sdk/runtime.py"
   echo "python-sdk-live-smoke self-test ok"

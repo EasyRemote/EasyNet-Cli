@@ -1,4 +1,4 @@
-//go:build easynet_cabi && cgo && !windows
+//go:build runtime_cabi && cgo && !windows
 
 package easynet
 
@@ -17,7 +17,7 @@ import (
 	"unsafe"
 )
 
-const expectedCABIABIVersion uint32 = 5
+const expectedCABIABIVersion uint32 = 6
 
 func openCABIDynamicLibrary(path string) (unsafe.Pointer, string, error) {
 	candidates := cabiLibraryCandidates(path)

@@ -983,24 +983,27 @@ def self_test(tmp: Path) -> None:
     expect(unapproved_quarantine, "unapproved_legacy_quarantine")
 
     mismatched_quarantine = copy.deepcopy(concepts)
-    quarantined_section = None
-    quarantined_language = None
-    quarantined_value = None
-    for section in ("languages", "members"):
-        for language in PUBLIC_LANGUAGES:
-            values = mismatched_quarantine["non_canonical"][section][language]
-            if values:
-                quarantined_section = section
-                quarantined_language = language
-                quarantined_value = values[0]
-                break
-        if quarantined_value is not None:
-            break
-    if quarantined_value is None:
-        fail("self_test_requires_quarantined_item")
-    mismatched_quarantine["legacy_quarantine"][quarantined_section][quarantined_language][
-        quarantined_value
-    ]["reason"] = "test-only mismatched quarantine reason"
+    quarantined_section = "languages"
+    quarantined_language = "go"
+    quarantined_value = "start_daemon"
+    if quarantined_value in mismatched_quarantine[quarantined_section][quarantined_language]:
+        mismatched_quarantine[quarantined_section][quarantined_language].remove(
+            quarantined_value
+        )
+    mismatched_quarantine["non_canonical"][quarantined_section][
+        quarantined_language
+    ].append(quarantined_value)
+    mismatched_quarantine["non_canonical"][quarantined_section][
+        quarantined_language
+    ].sort()
+    mismatched_quarantine["legacy_quarantine"][quarantined_section][
+        quarantined_language
+    ][quarantined_value] = {
+        "canonical_replacement": ["capability_inventory.runtime_lifecycle"],
+        "consumer_cutover_ref": PRODUCT_NEUTRAL_CUTOVER_REF,
+        "removal_phase": "quarantined",
+        "reason": "test-only mismatched quarantine reason",
+    }
     expect(mismatched_quarantine, "legacy_quarantine_reason_mismatch")
 
     invented = copy.deepcopy(concepts)

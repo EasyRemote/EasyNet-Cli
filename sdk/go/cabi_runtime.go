@@ -1,4 +1,4 @@
-//go:build easynet_cabi && cgo && !windows
+//go:build runtime_cabi && cgo && !windows
 
 package easynet
 
@@ -8,175 +8,175 @@ package easynet
 #include <stdint.h>
 #include <stdlib.h>
 
-typedef uint32_t (*easynet_runtime_abi_version_fn)(void);
-typedef int32_t (*easynet_runtime_last_error_json_fn)(char **out_error_json);
-typedef void (*easynet_runtime_string_free_fn)(char *s);
-typedef int32_t (*easynet_daemon_start_fn)(const char *config_json, uint64_t *out_daemon_handle);
-typedef int32_t (*easynet_daemon_attach_fn)(const char *options_json, uint64_t *out_daemon_handle);
-typedef int32_t (*easynet_daemon_discover_fn)(const char *options_json, char **out_discovery_json);
-typedef int32_t (*easynet_daemon_stop_fn)(uint64_t handle);
-typedef int32_t (*easynet_daemon_detach_fn)(uint64_t handle);
-typedef int32_t (*easynet_daemon_status_fn)(uint64_t handle, char **out_status_json);
-typedef int32_t (*easynet_daemon_open_client_fn)(uint64_t daemon_handle, uint64_t *out_handle);
-typedef int32_t (*easynet_shutdown_fn)(uint64_t handle);
-typedef int32_t (*easynet_runtime_health_fn)(uint64_t handle, char **out_health_json);
-typedef int32_t (*easynet_runtime_diagnostics_fn)(uint64_t handle, char **out_diagnostics_json);
-typedef int32_t (*easynet_runtime_resolve_descriptor_ref_fn)(uint64_t handle, const char *request_json, char **out_descriptor_json);
-typedef int32_t (*easynet_invocation_invoke_fn)(uint64_t handle, const char *invocation_json, char **out_result_json);
-typedef int32_t (*easynet_invocation_prepare_fn)(uint64_t handle, const char *invocation_json, const char *options_json, uint64_t *out_prepared_id, char **out_prepared_json);
-typedef int32_t (*easynet_invocation_sign_prepared_fn)(uint64_t prepared_id, const char *signature_json, uint64_t *out_signed_id, char **out_signed_json);
-typedef int32_t (*easynet_invocation_sign_prepared_local_fn)(uint64_t prepared_id, uint64_t *out_signed_id, char **out_signed_json);
-typedef int32_t (*easynet_invocation_submit_signed_handle_fn)(uint64_t handle, uint64_t signed_id, uint64_t *out_invocation_handle_id, char **out_submitted_json);
-typedef int32_t (*easynet_invocation_handle_await_fn)(uint64_t handle, uint64_t invocation_handle_id, char **out_result_json);
-typedef int32_t (*easynet_invocation_handle_cancel_fn)(uint64_t handle, uint64_t invocation_handle_id, const char *reason_json, char **out_cancel_json);
-typedef int32_t (*easynet_invocation_handle_events_fn)(uint64_t handle, uint64_t invocation_handle_id, char **out_events_json);
-typedef int32_t (*easynet_invocation_handle_free_fn)(uint64_t handle, uint64_t invocation_handle_id);
-typedef int32_t (*easynet_prepared_invocation_free_fn)(uint64_t prepared_id);
-typedef int32_t (*easynet_signed_invocation_free_fn)(uint64_t signed_id);
-typedef void (*easynet_stream_callback_fn)(void *user_data, const char *chunk_json);
-typedef void (*easynet_bidi_callback_fn)(void *user_data, const char *frame_json);
-typedef int32_t (*easynet_invocation_stream_open_fn)(uint64_t handle, const char *invocation_json, easynet_stream_callback_fn on_chunk, void *user_data, uint64_t *out_stream_id);
-typedef int32_t (*easynet_invocation_stream_cancel_fn)(uint64_t handle, uint64_t stream_id);
-typedef int32_t (*easynet_invocation_stream_close_fn)(uint64_t handle, uint64_t stream_id);
-typedef int32_t (*easynet_invocation_bidi_open_fn)(uint64_t handle, const char *invocation_json, easynet_bidi_callback_fn on_frame, void *user_data, uint64_t *out_bidi_id);
-typedef int32_t (*easynet_invocation_bidi_send_fn)(uint64_t handle, uint64_t bidi_id, const char *frame_json);
-typedef int32_t (*easynet_invocation_bidi_close_send_fn)(uint64_t handle, uint64_t bidi_id);
-typedef int32_t (*easynet_invocation_bidi_close_fn)(uint64_t handle, uint64_t bidi_id);
-typedef int32_t (*easynet_invocation_bidi_cancel_fn)(uint64_t handle, uint64_t bidi_id);
+typedef uint32_t (*runtime_cabi_abi_version_fn)(void);
+typedef int32_t (*runtime_cabi_last_error_json_fn)(char **out_error_json);
+typedef void (*runtime_cabi_string_free_fn)(char *s);
+typedef int32_t (*runtime_host_start_fn)(const char *config_json, uint64_t *out_host_handle);
+typedef int32_t (*runtime_host_attach_fn)(const char *options_json, uint64_t *out_host_handle);
+typedef int32_t (*runtime_host_discover_fn)(const char *options_json, char **out_discovery_json);
+typedef int32_t (*runtime_host_stop_fn)(uint64_t handle);
+typedef int32_t (*runtime_host_detach_fn)(uint64_t handle);
+typedef int32_t (*runtime_host_status_fn)(uint64_t handle, char **out_status_json);
+typedef int32_t (*runtime_host_open_client_fn)(uint64_t host_handle, uint64_t *out_handle);
+typedef int32_t (*runtime_shutdown_fn)(uint64_t handle);
+typedef int32_t (*runtime_health_fn)(uint64_t handle, char **out_health_json);
+typedef int32_t (*runtime_diagnostics_fn)(uint64_t handle, char **out_diagnostics_json);
+typedef int32_t (*runtime_resolve_descriptor_ref_fn)(uint64_t handle, const char *request_json, char **out_descriptor_json);
+typedef int32_t (*runtime_invocation_invoke_fn)(uint64_t handle, const char *invocation_json, char **out_result_json);
+typedef int32_t (*runtime_invocation_prepare_fn)(uint64_t handle, const char *invocation_json, const char *options_json, uint64_t *out_prepared_id, char **out_prepared_json);
+typedef int32_t (*runtime_invocation_sign_prepared_fn)(uint64_t prepared_id, const char *signature_json, uint64_t *out_signed_id, char **out_signed_json);
+typedef int32_t (*runtime_invocation_sign_prepared_local_fn)(uint64_t prepared_id, uint64_t *out_signed_id, char **out_signed_json);
+typedef int32_t (*runtime_invocation_submit_signed_handle_fn)(uint64_t handle, uint64_t signed_id, uint64_t *out_invocation_handle_id, char **out_submitted_json);
+typedef int32_t (*runtime_invocation_handle_await_fn)(uint64_t handle, uint64_t invocation_handle_id, char **out_result_json);
+typedef int32_t (*runtime_invocation_handle_cancel_fn)(uint64_t handle, uint64_t invocation_handle_id, const char *reason_json, char **out_cancel_json);
+typedef int32_t (*runtime_invocation_handle_events_fn)(uint64_t handle, uint64_t invocation_handle_id, char **out_events_json);
+typedef int32_t (*runtime_invocation_handle_free_fn)(uint64_t handle, uint64_t invocation_handle_id);
+typedef int32_t (*runtime_prepared_invocation_free_fn)(uint64_t prepared_id);
+typedef int32_t (*runtime_signed_invocation_free_fn)(uint64_t signed_id);
+typedef void (*runtime_stream_callback_fn)(void *user_data, const char *chunk_json);
+typedef void (*runtime_bidi_callback_fn)(void *user_data, const char *frame_json);
+typedef int32_t (*runtime_invocation_stream_open_fn)(uint64_t handle, const char *invocation_json, runtime_stream_callback_fn on_chunk, void *user_data, uint64_t *out_stream_id);
+typedef int32_t (*runtime_invocation_stream_cancel_fn)(uint64_t handle, uint64_t stream_id);
+typedef int32_t (*runtime_invocation_stream_close_fn)(uint64_t handle, uint64_t stream_id);
+typedef int32_t (*runtime_invocation_bidi_open_fn)(uint64_t handle, const char *invocation_json, runtime_bidi_callback_fn on_frame, void *user_data, uint64_t *out_bidi_id);
+typedef int32_t (*runtime_invocation_bidi_send_fn)(uint64_t handle, uint64_t bidi_id, const char *frame_json);
+typedef int32_t (*runtime_invocation_bidi_close_send_fn)(uint64_t handle, uint64_t bidi_id);
+typedef int32_t (*runtime_invocation_bidi_close_fn)(uint64_t handle, uint64_t bidi_id);
+typedef int32_t (*runtime_invocation_bidi_cancel_fn)(uint64_t handle, uint64_t bidi_id);
 
 extern void easynetGoStreamCallback(void *user_data, const char *chunk_json);
 extern void easynetGoBidiCallback(void *user_data, const char *frame_json);
 
-static uint32_t easynet_runtime_call_abi_version(void *fn) {
-	return ((easynet_runtime_abi_version_fn)fn)();
+static uint32_t runtime_cabi_call_abi_version(void *fn) {
+	return ((runtime_cabi_abi_version_fn)fn)();
 }
 
-static int32_t easynet_runtime_call_last_error_json(void *fn, char **out_error_json) {
-	return ((easynet_runtime_last_error_json_fn)fn)(out_error_json);
+static int32_t runtime_cabi_call_last_error_json(void *fn, char **out_error_json) {
+	return ((runtime_cabi_last_error_json_fn)fn)(out_error_json);
 }
 
-static void easynet_runtime_call_string_free(void *fn, char *s) {
-	((easynet_runtime_string_free_fn)fn)(s);
+static void runtime_cabi_call_string_free(void *fn, char *s) {
+	((runtime_cabi_string_free_fn)fn)(s);
 }
 
-static int32_t easynet_runtime_call_daemon_start(void *fn, const char *config_json, uint64_t *out_daemon_handle) {
-	return ((easynet_daemon_start_fn)fn)(config_json, out_daemon_handle);
+static int32_t runtime_cabi_call_host_start(void *fn, const char *config_json, uint64_t *out_host_handle) {
+	return ((runtime_host_start_fn)fn)(config_json, out_host_handle);
 }
 
-static int32_t easynet_runtime_call_daemon_attach(void *fn, const char *options_json, uint64_t *out_daemon_handle) {
-	return ((easynet_daemon_attach_fn)fn)(options_json, out_daemon_handle);
+static int32_t runtime_cabi_call_host_attach(void *fn, const char *options_json, uint64_t *out_host_handle) {
+	return ((runtime_host_attach_fn)fn)(options_json, out_host_handle);
 }
 
-static int32_t easynet_runtime_call_daemon_discover(void *fn, const char *options_json, char **out_discovery_json) {
-	return ((easynet_daemon_discover_fn)fn)(options_json, out_discovery_json);
+static int32_t runtime_cabi_call_host_discover(void *fn, const char *options_json, char **out_discovery_json) {
+	return ((runtime_host_discover_fn)fn)(options_json, out_discovery_json);
 }
 
-static int32_t easynet_runtime_call_daemon_stop(void *fn, uint64_t handle) {
-	return ((easynet_daemon_stop_fn)fn)(handle);
+static int32_t runtime_cabi_call_host_stop(void *fn, uint64_t handle) {
+	return ((runtime_host_stop_fn)fn)(handle);
 }
 
-static int32_t easynet_runtime_call_daemon_detach(void *fn, uint64_t handle) {
-	return ((easynet_daemon_detach_fn)fn)(handle);
+static int32_t runtime_cabi_call_host_detach(void *fn, uint64_t handle) {
+	return ((runtime_host_detach_fn)fn)(handle);
 }
 
-static int32_t easynet_runtime_call_daemon_status(void *fn, uint64_t handle, char **out_status_json) {
-	return ((easynet_daemon_status_fn)fn)(handle, out_status_json);
+static int32_t runtime_cabi_call_host_status(void *fn, uint64_t handle, char **out_status_json) {
+	return ((runtime_host_status_fn)fn)(handle, out_status_json);
 }
 
-static int32_t easynet_runtime_call_daemon_open_client(void *fn, uint64_t daemon_handle, uint64_t *out_handle) {
-	return ((easynet_daemon_open_client_fn)fn)(daemon_handle, out_handle);
+static int32_t runtime_cabi_call_host_open_client(void *fn, uint64_t host_handle, uint64_t *out_handle) {
+	return ((runtime_host_open_client_fn)fn)(host_handle, out_handle);
 }
 
-static int32_t easynet_runtime_call_shutdown(void *fn, uint64_t handle) {
-	return ((easynet_shutdown_fn)fn)(handle);
+static int32_t runtime_cabi_call_shutdown(void *fn, uint64_t handle) {
+	return ((runtime_shutdown_fn)fn)(handle);
 }
 
-static int32_t easynet_runtime_call_health(void *fn, uint64_t handle, char **out_health_json) {
-	return ((easynet_runtime_health_fn)fn)(handle, out_health_json);
+static int32_t runtime_cabi_call_health(void *fn, uint64_t handle, char **out_health_json) {
+	return ((runtime_health_fn)fn)(handle, out_health_json);
 }
 
-static int32_t easynet_runtime_call_diagnostics(void *fn, uint64_t handle, char **out_diagnostics_json) {
-	return ((easynet_runtime_diagnostics_fn)fn)(handle, out_diagnostics_json);
+static int32_t runtime_cabi_call_diagnostics(void *fn, uint64_t handle, char **out_diagnostics_json) {
+	return ((runtime_diagnostics_fn)fn)(handle, out_diagnostics_json);
 }
 
-static int32_t easynet_runtime_call_resolve_descriptor_ref(void *fn, uint64_t handle, const char *request_json, char **out_descriptor_json) {
-	return ((easynet_runtime_resolve_descriptor_ref_fn)fn)(handle, request_json, out_descriptor_json);
+static int32_t runtime_cabi_call_resolve_descriptor_ref(void *fn, uint64_t handle, const char *request_json, char **out_descriptor_json) {
+	return ((runtime_resolve_descriptor_ref_fn)fn)(handle, request_json, out_descriptor_json);
 }
 
-static int32_t easynet_runtime_call_invoke(void *fn, uint64_t handle, const char *invocation_json, char **out_result_json) {
-	return ((easynet_invocation_invoke_fn)fn)(handle, invocation_json, out_result_json);
+static int32_t runtime_cabi_call_invoke(void *fn, uint64_t handle, const char *invocation_json, char **out_result_json) {
+	return ((runtime_invocation_invoke_fn)fn)(handle, invocation_json, out_result_json);
 }
 
-static int32_t easynet_runtime_call_prepare(void *fn, uint64_t handle, const char *invocation_json, const char *options_json, uint64_t *out_prepared_id, char **out_prepared_json) {
-	return ((easynet_invocation_prepare_fn)fn)(handle, invocation_json, options_json, out_prepared_id, out_prepared_json);
+static int32_t runtime_cabi_call_prepare(void *fn, uint64_t handle, const char *invocation_json, const char *options_json, uint64_t *out_prepared_id, char **out_prepared_json) {
+	return ((runtime_invocation_prepare_fn)fn)(handle, invocation_json, options_json, out_prepared_id, out_prepared_json);
 }
 
-static int32_t easynet_runtime_call_sign_prepared(void *fn, uint64_t prepared_id, const char *signature_json, uint64_t *out_signed_id, char **out_signed_json) {
-	return ((easynet_invocation_sign_prepared_fn)fn)(prepared_id, signature_json, out_signed_id, out_signed_json);
+static int32_t runtime_cabi_call_sign_prepared(void *fn, uint64_t prepared_id, const char *signature_json, uint64_t *out_signed_id, char **out_signed_json) {
+	return ((runtime_invocation_sign_prepared_fn)fn)(prepared_id, signature_json, out_signed_id, out_signed_json);
 }
 
-static int32_t easynet_runtime_call_sign_prepared_local(void *fn, uint64_t prepared_id, uint64_t *out_signed_id, char **out_signed_json) {
-	return ((easynet_invocation_sign_prepared_local_fn)fn)(prepared_id, out_signed_id, out_signed_json);
+static int32_t runtime_cabi_call_sign_prepared_local(void *fn, uint64_t prepared_id, uint64_t *out_signed_id, char **out_signed_json) {
+	return ((runtime_invocation_sign_prepared_local_fn)fn)(prepared_id, out_signed_id, out_signed_json);
 }
 
-static int32_t easynet_runtime_call_submit_signed_handle(void *fn, uint64_t handle, uint64_t signed_id, uint64_t *out_invocation_handle_id, char **out_submitted_json) {
-	return ((easynet_invocation_submit_signed_handle_fn)fn)(handle, signed_id, out_invocation_handle_id, out_submitted_json);
+static int32_t runtime_cabi_call_submit_signed_handle(void *fn, uint64_t handle, uint64_t signed_id, uint64_t *out_invocation_handle_id, char **out_submitted_json) {
+	return ((runtime_invocation_submit_signed_handle_fn)fn)(handle, signed_id, out_invocation_handle_id, out_submitted_json);
 }
 
-static int32_t easynet_runtime_call_handle_await(void *fn, uint64_t handle, uint64_t invocation_handle_id, char **out_result_json) {
-	return ((easynet_invocation_handle_await_fn)fn)(handle, invocation_handle_id, out_result_json);
+static int32_t runtime_cabi_call_handle_await(void *fn, uint64_t handle, uint64_t invocation_handle_id, char **out_result_json) {
+	return ((runtime_invocation_handle_await_fn)fn)(handle, invocation_handle_id, out_result_json);
 }
 
-static int32_t easynet_runtime_call_handle_cancel(void *fn, uint64_t handle, uint64_t invocation_handle_id, const char *reason_json, char **out_cancel_json) {
-	return ((easynet_invocation_handle_cancel_fn)fn)(handle, invocation_handle_id, reason_json, out_cancel_json);
+static int32_t runtime_cabi_call_handle_cancel(void *fn, uint64_t handle, uint64_t invocation_handle_id, const char *reason_json, char **out_cancel_json) {
+	return ((runtime_invocation_handle_cancel_fn)fn)(handle, invocation_handle_id, reason_json, out_cancel_json);
 }
 
-static int32_t easynet_runtime_call_handle_events(void *fn, uint64_t handle, uint64_t invocation_handle_id, char **out_events_json) {
-	return ((easynet_invocation_handle_events_fn)fn)(handle, invocation_handle_id, out_events_json);
+static int32_t runtime_cabi_call_handle_events(void *fn, uint64_t handle, uint64_t invocation_handle_id, char **out_events_json) {
+	return ((runtime_invocation_handle_events_fn)fn)(handle, invocation_handle_id, out_events_json);
 }
 
-static int32_t easynet_runtime_call_handle_free(void *fn, uint64_t handle, uint64_t invocation_handle_id) {
-	return ((easynet_invocation_handle_free_fn)fn)(handle, invocation_handle_id);
+static int32_t runtime_cabi_call_handle_free(void *fn, uint64_t handle, uint64_t invocation_handle_id) {
+	return ((runtime_invocation_handle_free_fn)fn)(handle, invocation_handle_id);
 }
 
-static int32_t easynet_runtime_call_prepared_free(void *fn, uint64_t prepared_id) {
-	return ((easynet_prepared_invocation_free_fn)fn)(prepared_id);
+static int32_t runtime_cabi_call_prepared_free(void *fn, uint64_t prepared_id) {
+	return ((runtime_prepared_invocation_free_fn)fn)(prepared_id);
 }
 
-static int32_t easynet_runtime_call_signed_free(void *fn, uint64_t signed_id) {
-	return ((easynet_signed_invocation_free_fn)fn)(signed_id);
+static int32_t runtime_cabi_call_signed_free(void *fn, uint64_t signed_id) {
+	return ((runtime_signed_invocation_free_fn)fn)(signed_id);
 }
 
-static int32_t easynet_runtime_call_stream_open(void *fn, uint64_t handle, const char *invocation_json, void *user_data, uint64_t *out_stream_id) {
-	return ((easynet_invocation_stream_open_fn)fn)(handle, invocation_json, easynetGoStreamCallback, user_data, out_stream_id);
+static int32_t runtime_cabi_call_stream_open(void *fn, uint64_t handle, const char *invocation_json, void *user_data, uint64_t *out_stream_id) {
+	return ((runtime_invocation_stream_open_fn)fn)(handle, invocation_json, easynetGoStreamCallback, user_data, out_stream_id);
 }
 
-static int32_t easynet_runtime_call_stream_cancel(void *fn, uint64_t handle, uint64_t stream_id) {
-	return ((easynet_invocation_stream_cancel_fn)fn)(handle, stream_id);
+static int32_t runtime_cabi_call_stream_cancel(void *fn, uint64_t handle, uint64_t stream_id) {
+	return ((runtime_invocation_stream_cancel_fn)fn)(handle, stream_id);
 }
 
-static int32_t easynet_runtime_call_stream_close(void *fn, uint64_t handle, uint64_t stream_id) {
-	return ((easynet_invocation_stream_close_fn)fn)(handle, stream_id);
+static int32_t runtime_cabi_call_stream_close(void *fn, uint64_t handle, uint64_t stream_id) {
+	return ((runtime_invocation_stream_close_fn)fn)(handle, stream_id);
 }
 
-static int32_t easynet_runtime_call_bidi_open(void *fn, uint64_t handle, const char *invocation_json, void *user_data, uint64_t *out_bidi_id) {
-	return ((easynet_invocation_bidi_open_fn)fn)(handle, invocation_json, easynetGoBidiCallback, user_data, out_bidi_id);
+static int32_t runtime_cabi_call_bidi_open(void *fn, uint64_t handle, const char *invocation_json, void *user_data, uint64_t *out_bidi_id) {
+	return ((runtime_invocation_bidi_open_fn)fn)(handle, invocation_json, easynetGoBidiCallback, user_data, out_bidi_id);
 }
 
-static int32_t easynet_runtime_call_bidi_send(void *fn, uint64_t handle, uint64_t bidi_id, const char *frame_json) {
-	return ((easynet_invocation_bidi_send_fn)fn)(handle, bidi_id, frame_json);
+static int32_t runtime_cabi_call_bidi_send(void *fn, uint64_t handle, uint64_t bidi_id, const char *frame_json) {
+	return ((runtime_invocation_bidi_send_fn)fn)(handle, bidi_id, frame_json);
 }
 
-static int32_t easynet_runtime_call_bidi_close_send(void *fn, uint64_t handle, uint64_t bidi_id) {
-	return ((easynet_invocation_bidi_close_send_fn)fn)(handle, bidi_id);
+static int32_t runtime_cabi_call_bidi_close_send(void *fn, uint64_t handle, uint64_t bidi_id) {
+	return ((runtime_invocation_bidi_close_send_fn)fn)(handle, bidi_id);
 }
 
-static int32_t easynet_runtime_call_bidi_close(void *fn, uint64_t handle, uint64_t bidi_id) {
-	return ((easynet_invocation_bidi_close_fn)fn)(handle, bidi_id);
+static int32_t runtime_cabi_call_bidi_close(void *fn, uint64_t handle, uint64_t bidi_id) {
+	return ((runtime_invocation_bidi_close_fn)fn)(handle, bidi_id);
 }
 
-static int32_t easynet_runtime_call_bidi_cancel(void *fn, uint64_t handle, uint64_t bidi_id) {
-	return ((easynet_invocation_bidi_cancel_fn)fn)(handle, bidi_id);
+static int32_t runtime_cabi_call_bidi_cancel(void *fn, uint64_t handle, uint64_t bidi_id) {
+	return ((runtime_invocation_bidi_cancel_fn)fn)(handle, bidi_id);
 }
 */
 import "C"
@@ -253,7 +253,7 @@ func openCABIRuntimeLifecycleTransport(path string) (*cabiRuntimeLifecycleTransp
 		C.dlclose(library)
 		return nil, fmt.Errorf("bind %s: %w", resolved, err)
 	}
-	if actual := C.easynet_runtime_call_abi_version(symbols.abiVersion); uint32(actual) != expectedCABIABIVersion {
+	if actual := C.runtime_cabi_call_abi_version(symbols.abiVersion); uint32(actual) != expectedCABIABIVersion {
 		C.dlclose(library)
 		return nil, &SDKError{
 			Code:      ErrVersionMismatch,
@@ -296,7 +296,7 @@ func (t *cabiRuntimeLifecycleTransport) Start(ctx context.Context, configJSON []
 	}
 	var out C.uint64_t
 	code := int32(cabiWithCString(projected, func(cConfig *C.char) C.int32_t {
-		return C.easynet_runtime_call_daemon_start(t.symbols.daemonStart, cConfig, &out)
+		return C.runtime_cabi_call_host_start(t.symbols.daemonStart, cConfig, &out)
 	}))
 	if code != 0 {
 		return nil, t.lastErrorOrCode(code, "C ABI daemon start failed")
@@ -326,7 +326,7 @@ func (t *cabiRuntimeLifecycleTransport) Attach(ctx context.Context, optionsJSON 
 	}
 	var out C.uint64_t
 	code := int32(cabiWithCString(optionsJSON, func(cOptions *C.char) C.int32_t {
-		return C.easynet_runtime_call_daemon_attach(t.symbols.daemonAttach, cOptions, &out)
+		return C.runtime_cabi_call_host_attach(t.symbols.daemonAttach, cOptions, &out)
 	}))
 	if code != 0 {
 		return nil, t.lastErrorOrCode(code, "C ABI daemon attach failed")
@@ -390,7 +390,7 @@ func (t *cabiRuntimeLifecycleTransport) Stop(ctx context.Context, handleID strin
 	if err != nil {
 		return nil, err
 	}
-	code := int32(C.easynet_runtime_call_daemon_stop(t.symbols.daemonStop, C.uint64_t(handle)))
+	code := int32(C.runtime_cabi_call_host_stop(t.symbols.daemonStop, C.uint64_t(handle)))
 	if code != 0 {
 		return nil, t.lastErrorOrCode(code, "C ABI daemon stop failed")
 	}
@@ -488,7 +488,7 @@ func (t *cabiRuntimeLifecycleTransport) requireRuntimeHostHandle(handleID string
 
 func (t *cabiRuntimeLifecycleTransport) statusForHandle(handleID string, handle uint64) ([]byte, error) {
 	var out *C.char
-	code := int32(C.easynet_runtime_call_daemon_status(t.symbols.daemonStatus, C.uint64_t(handle), &out))
+	code := int32(C.runtime_cabi_call_host_status(t.symbols.daemonStatus, C.uint64_t(handle), &out))
 	if code != 0 {
 		return nil, t.lastErrorOrCode(code, "C ABI daemon status failed")
 	}
@@ -503,7 +503,7 @@ func (t *cabiRuntimeLifecycleTransport) statusForHandle(handleID string, handle 
 func (t *cabiRuntimeLifecycleTransport) callRuntimeHostDiscover(optionsJSON []byte) ([]byte, error) {
 	var out *C.char
 	code := int32(cabiWithCString(optionsJSON, func(cOptions *C.char) C.int32_t {
-		return C.easynet_runtime_call_daemon_discover(t.symbols.daemonDiscover, cOptions, &out)
+		return C.runtime_cabi_call_host_discover(t.symbols.daemonDiscover, cOptions, &out)
 	}))
 	if code != 0 {
 		return nil, t.lastErrorOrCode(code, "C ABI daemon discover failed")
@@ -512,7 +512,7 @@ func (t *cabiRuntimeLifecycleTransport) callRuntimeHostDiscover(optionsJSON []by
 }
 
 func (t *cabiRuntimeLifecycleTransport) detachCHandle(handle uint64) error {
-	code := int32(C.easynet_runtime_call_daemon_detach(t.symbols.daemonDetach, C.uint64_t(handle)))
+	code := int32(C.runtime_cabi_call_host_detach(t.symbols.daemonDetach, C.uint64_t(handle)))
 	if code != 0 {
 		return t.lastErrorOrCode(code, "C ABI daemon detach failed")
 	}
@@ -525,7 +525,7 @@ func (t *cabiRuntimeLifecycleTransport) lastErrorOrCode(code int32, fallback str
 
 func (t *cabiRuntimeLifecycleTransport) openClientHandle(runtimeHostHandle uint64, profile string) (uint64, error) {
 	var out C.uint64_t
-	code := int32(C.easynet_runtime_call_daemon_open_client(t.symbols.daemonOpenClient, C.uint64_t(runtimeHostHandle), &out))
+	code := int32(C.runtime_cabi_call_host_open_client(t.symbols.daemonOpenClient, C.uint64_t(runtimeHostHandle), &out))
 	if code != 0 {
 		return 0, t.lastErrorOrCode(code, "C ABI daemon open "+profile+" client failed")
 	}
@@ -664,7 +664,7 @@ func (t *cabiRuntimeTransport) RuntimeHealth(ctx context.Context) ([]byte, error
 		return nil, err
 	}
 	var out *C.char
-	code := int32(C.easynet_runtime_call_health(t.symbols.runtimeHealth, C.uint64_t(handle), &out))
+	code := int32(C.runtime_cabi_call_health(t.symbols.runtimeHealth, C.uint64_t(handle), &out))
 	if code != 0 {
 		return nil, t.lastErrorOrCode(code, "C ABI runtime health failed")
 	}
@@ -677,7 +677,7 @@ func (t *cabiRuntimeTransport) RuntimeDiagnostics(ctx context.Context) ([]byte, 
 		return nil, err
 	}
 	var out *C.char
-	code := int32(C.easynet_runtime_call_diagnostics(t.symbols.runtimeDiagnostics, C.uint64_t(handle), &out))
+	code := int32(C.runtime_cabi_call_diagnostics(t.symbols.runtimeDiagnostics, C.uint64_t(handle), &out))
 	if code != 0 {
 		return nil, t.lastErrorOrCode(code, "C ABI runtime diagnostics failed")
 	}
@@ -691,7 +691,7 @@ func (t *cabiRuntimeTransport) ResolveDescriptorRef(ctx context.Context, request
 	}
 	var out *C.char
 	code := int32(cabiWithCString(requestJSON, func(cRequest *C.char) C.int32_t {
-		return C.easynet_runtime_call_resolve_descriptor_ref(
+		return C.runtime_cabi_call_resolve_descriptor_ref(
 			t.symbols.resolveDescriptor,
 			C.uint64_t(handle),
 			cRequest,
@@ -711,7 +711,7 @@ func (t *cabiRuntimeTransport) Invoke(ctx context.Context, draftJSON []byte) ([]
 	}
 	var out *C.char
 	code := int32(cabiWithCString(draftJSON, func(cDraft *C.char) C.int32_t {
-		return C.easynet_runtime_call_invoke(t.symbols.invocationInvoke, C.uint64_t(handle), cDraft, &out)
+		return C.runtime_cabi_call_invoke(t.symbols.invocationInvoke, C.uint64_t(handle), cDraft, &out)
 	}))
 	if code != 0 {
 		return nil, t.lastErrorOrCode(code, "C ABI invocation invoke failed")
@@ -731,7 +731,7 @@ func (t *cabiRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte)
 	}
 	var out C.uint64_t
 	code := int32(cabiWithCString(draftJSON, func(cDraft *C.char) C.int32_t {
-		return C.easynet_runtime_call_stream_open(t.symbols.streamOpen, C.uint64_t(handle), cDraft, registration.userData, &out)
+		return C.runtime_cabi_call_stream_open(t.symbols.streamOpen, C.uint64_t(handle), cDraft, registration.userData, &out)
 	}))
 	if code != 0 {
 		releaseCABICallbackInbox(registration)
@@ -771,7 +771,7 @@ func (t *cabiRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte, s
 	}
 	var out C.uint64_t
 	code := int32(cabiWithCString(invocationJSON, func(cDraft *C.char) C.int32_t {
-		return C.easynet_runtime_call_bidi_open(t.symbols.bidiOpen, C.uint64_t(handle), cDraft, registration.userData, &out)
+		return C.runtime_cabi_call_bidi_open(t.symbols.bidiOpen, C.uint64_t(handle), cDraft, registration.userData, &out)
 	}))
 	if code != 0 {
 		releaseCABICallbackInbox(registration)
@@ -808,7 +808,7 @@ func (t *cabiRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, op
 	var outID C.uint64_t
 	var out *C.char
 	code := int32(cabiWithCStringPair(draftJSON, optionsJSON, func(cDraft *C.char, cOptions *C.char) C.int32_t {
-		return C.easynet_runtime_call_prepare(t.symbols.invocationPrepare, C.uint64_t(handle), cDraft, cOptions, &outID, &out)
+		return C.runtime_cabi_call_prepare(t.symbols.invocationPrepare, C.uint64_t(handle), cDraft, cOptions, &outID, &out)
 	}))
 	if code != 0 {
 		return nil, t.lastErrorOrCode(code, "C ABI invocation prepare failed")
@@ -859,10 +859,10 @@ func (t *cabiRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []by
 	var ignored *C.char
 	var code int32
 	if fields.localDaemonSigning {
-		code = int32(C.easynet_runtime_call_sign_prepared_local(t.symbols.signPreparedLocal, C.uint64_t(preparedID), &signedID, &ignored))
+		code = int32(C.runtime_cabi_call_sign_prepared_local(t.symbols.signPreparedLocal, C.uint64_t(preparedID), &signedID, &ignored))
 	} else {
 		code = int32(cabiWithCString(fields.signatureJSON, func(cSignature *C.char) C.int32_t {
-			return C.easynet_runtime_call_sign_prepared(t.symbols.signPrepared, C.uint64_t(preparedID), cSignature, &signedID, &ignored)
+			return C.runtime_cabi_call_sign_prepared(t.symbols.signPrepared, C.uint64_t(preparedID), cSignature, &signedID, &ignored)
 		}))
 	}
 	if ignored != nil {
@@ -879,7 +879,7 @@ func (t *cabiRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []by
 	t.preparedHandles.consumeSigningClaim(fields.key, preparedID)
 	var outHandle C.uint64_t
 	var out *C.char
-	code = int32(C.easynet_runtime_call_submit_signed_handle(t.symbols.submitSignedHandle, C.uint64_t(handle), signedID, &outHandle, &out))
+	code = int32(C.runtime_cabi_call_submit_signed_handle(t.symbols.submitSignedHandle, C.uint64_t(handle), signedID, &outHandle, &out))
 	if code != 0 {
 		_ = t.freeSignedID(uint64(signedID))
 		return nil, t.lastErrorOrCode(code, "C ABI invocation submit signed failed")
@@ -898,7 +898,7 @@ func (t *cabiRuntimeTransport) AwaitHandle(ctx context.Context, control Invocati
 	}
 	handleID := control.adapterHandleID()
 	var out *C.char
-	code := int32(C.easynet_runtime_call_handle_await(t.symbols.handleAwait, C.uint64_t(handle), C.uint64_t(handleID), &out))
+	code := int32(C.runtime_cabi_call_handle_await(t.symbols.handleAwait, C.uint64_t(handle), C.uint64_t(handleID), &out))
 	if code != 0 {
 		return nil, t.lastErrorOrCode(code, "C ABI invocation handle await failed")
 	}
@@ -913,7 +913,7 @@ func (t *cabiRuntimeTransport) CancelHandle(ctx context.Context, control Invocat
 	handleID := control.adapterHandleID()
 	var out *C.char
 	code := int32(cabiWithCString([]byte(reason), func(cReason *C.char) C.int32_t {
-		return C.easynet_runtime_call_handle_cancel(t.symbols.handleCancel, C.uint64_t(handle), C.uint64_t(handleID), cReason, &out)
+		return C.runtime_cabi_call_handle_cancel(t.symbols.handleCancel, C.uint64_t(handle), C.uint64_t(handleID), cReason, &out)
 	}))
 	if code != 0 {
 		return nil, t.lastErrorOrCode(code, "C ABI invocation handle cancel failed")
@@ -928,7 +928,7 @@ func (t *cabiRuntimeTransport) HandleEvents(ctx context.Context, control Invocat
 	}
 	handleID := control.adapterHandleID()
 	var out *C.char
-	code := int32(C.easynet_runtime_call_handle_events(t.symbols.handleEvents, C.uint64_t(handle), C.uint64_t(handleID), &out))
+	code := int32(C.runtime_cabi_call_handle_events(t.symbols.handleEvents, C.uint64_t(handle), C.uint64_t(handleID), &out))
 	if code != 0 {
 		return nil, t.lastErrorOrCode(code, "C ABI invocation handle events failed")
 	}
@@ -941,7 +941,7 @@ func (t *cabiRuntimeTransport) FreeHandle(ctx context.Context, control Invocatio
 		return err
 	}
 	handleID := control.adapterHandleID()
-	code := int32(C.easynet_runtime_call_handle_free(t.symbols.handleFree, C.uint64_t(handle), C.uint64_t(handleID)))
+	code := int32(C.runtime_cabi_call_handle_free(t.symbols.handleFree, C.uint64_t(handle), C.uint64_t(handleID)))
 	if code != 0 {
 		return t.lastErrorOrCode(code, "C ABI invocation handle free failed")
 	}
@@ -991,7 +991,7 @@ func (t *cabiRuntimeTransport) Close(ctx context.Context) error {
 		}
 	}
 	if ownsHandle && handle != 0 {
-		code := int32(C.easynet_runtime_call_shutdown(t.symbols.shutdown, C.uint64_t(handle)))
+		code := int32(C.runtime_cabi_call_shutdown(t.symbols.shutdown, C.uint64_t(handle)))
 		if code != 0 && first == nil {
 			first = t.lastErrorOrCode(code, "C ABI runtime shutdown failed")
 		}
@@ -1015,7 +1015,7 @@ func (t *cabiRuntimeTransport) requireOpen(ctx context.Context) (uint64, error) 
 }
 
 func (t *cabiRuntimeTransport) freePreparedID(id uint64) error {
-	code := int32(C.easynet_runtime_call_prepared_free(t.symbols.preparedFree, C.uint64_t(id)))
+	code := int32(C.runtime_cabi_call_prepared_free(t.symbols.preparedFree, C.uint64_t(id)))
 	if code != 0 {
 		return t.lastErrorOrCode(code, "C ABI prepared invocation free failed")
 	}
@@ -1023,7 +1023,7 @@ func (t *cabiRuntimeTransport) freePreparedID(id uint64) error {
 }
 
 func (t *cabiRuntimeTransport) freeSignedID(id uint64) error {
-	code := int32(C.easynet_runtime_call_signed_free(t.symbols.signedFree, C.uint64_t(id)))
+	code := int32(C.runtime_cabi_call_signed_free(t.symbols.signedFree, C.uint64_t(id)))
 	if code != 0 {
 		return t.lastErrorOrCode(code, "C ABI signed invocation free failed")
 	}
@@ -1110,7 +1110,7 @@ func (s *cabiStreamTransport) cancelWithHandle(handle uint64) error {
 	}
 	streamID := s.streamID
 
-	code := int32(C.easynet_runtime_call_stream_cancel(s.owner.symbols.streamCancel, C.uint64_t(handle), C.uint64_t(streamID)))
+	code := int32(C.runtime_cabi_call_stream_cancel(s.owner.symbols.streamCancel, C.uint64_t(handle), C.uint64_t(streamID)))
 	s.cancelSent = true
 	if code != 0 {
 		s.cancelErr = s.owner.lastErrorOrCode(code, "C ABI invocation stream cancel failed")
@@ -1133,7 +1133,7 @@ func (s *cabiStreamTransport) closeWithHandle(handle uint64) error {
 	registration := s.registration
 	s.mu.Unlock()
 
-	code := int32(C.easynet_runtime_call_stream_close(s.owner.symbols.streamClose, C.uint64_t(handle), C.uint64_t(streamID)))
+	code := int32(C.runtime_cabi_call_stream_close(s.owner.symbols.streamClose, C.uint64_t(handle), C.uint64_t(streamID)))
 	releaseCABICallbackInbox(registration)
 	s.owner.removeStream(s)
 	if code != 0 {
@@ -1167,7 +1167,7 @@ func (b *cabiBidiTransport) Send(ctx context.Context, frameJSON []byte) ([]byte,
 		return nil, err
 	}
 	code := int32(cabiWithCString(wireJSON, func(cFrame *C.char) C.int32_t {
-		return C.easynet_runtime_call_bidi_send(b.owner.symbols.bidiSend, C.uint64_t(handle), C.uint64_t(b.bidiID), cFrame)
+		return C.runtime_cabi_call_bidi_send(b.owner.symbols.bidiSend, C.uint64_t(handle), C.uint64_t(b.bidiID), cFrame)
 	}))
 	if code != 0 {
 		return nil, b.owner.lastErrorOrCode(code, "C ABI invocation bidi send failed")
@@ -1239,7 +1239,7 @@ func (b *cabiBidiTransport) CloseSend(ctx context.Context) ([]byte, error) {
 	if err := b.requireOpen(); err != nil {
 		return nil, err
 	}
-	code := int32(C.easynet_runtime_call_bidi_close_send(b.owner.symbols.bidiCloseSend, C.uint64_t(handle), C.uint64_t(b.bidiID)))
+	code := int32(C.runtime_cabi_call_bidi_close_send(b.owner.symbols.bidiCloseSend, C.uint64_t(handle), C.uint64_t(b.bidiID)))
 	if code != 0 {
 		return nil, b.owner.lastErrorOrCode(code, "C ABI invocation bidi close-send failed")
 	}
@@ -1284,7 +1284,7 @@ func (b *cabiBidiTransport) closeWithHandle(handle uint64) error {
 	registration := b.registration
 	b.mu.Unlock()
 
-	code := int32(C.easynet_runtime_call_bidi_close(b.owner.symbols.bidiClose, C.uint64_t(handle), C.uint64_t(bidiID)))
+	code := int32(C.runtime_cabi_call_bidi_close(b.owner.symbols.bidiClose, C.uint64_t(handle), C.uint64_t(bidiID)))
 	releaseCABICallbackInbox(registration)
 	b.owner.removeBidi(b)
 	if code != 0 {
@@ -1307,7 +1307,7 @@ func (b *cabiBidiTransport) cancelWithHandle(handle uint64) error {
 	}
 	bidiID := b.bidiID
 
-	code := int32(C.easynet_runtime_call_bidi_cancel(b.owner.symbols.bidiCancel, C.uint64_t(handle), C.uint64_t(bidiID)))
+	code := int32(C.runtime_cabi_call_bidi_cancel(b.owner.symbols.bidiCancel, C.uint64_t(handle), C.uint64_t(bidiID)))
 	b.cancelSent = true
 	if code != 0 {
 		b.cancelErr = b.owner.lastErrorOrCode(code, "C ABI invocation bidi cancel failed")
@@ -1584,39 +1584,39 @@ func bindCABIRuntimeSymbols(library unsafe.Pointer) (cabiRuntimeSymbols, error) 
 		name string
 		out  *unsafe.Pointer
 	}{
-		{"easynet_abi_version", &symbols.abiVersion},
-		{"easynet_last_error_json", &symbols.lastErrorJSON},
-		{"easynet_string_free", &symbols.stringFree},
-		{"easynet_daemon_start", &symbols.daemonStart},
-		{"easynet_daemon_attach", &symbols.daemonAttach},
-		{"easynet_daemon_discover", &symbols.daemonDiscover},
-		{"easynet_daemon_stop", &symbols.daemonStop},
-		{"easynet_daemon_detach", &symbols.daemonDetach},
-		{"easynet_daemon_status", &symbols.daemonStatus},
-		{"easynet_daemon_open_client", &symbols.daemonOpenClient},
-		{"easynet_shutdown", &symbols.shutdown},
-		{"easynet_runtime_health", &symbols.runtimeHealth},
-		{"easynet_runtime_diagnostics", &symbols.runtimeDiagnostics},
-		{"easynet_runtime_resolve_descriptor_ref", &symbols.resolveDescriptor},
-		{"easynet_invocation_invoke", &symbols.invocationInvoke},
-		{"easynet_invocation_prepare", &symbols.invocationPrepare},
-		{"easynet_invocation_sign_prepared", &symbols.signPrepared},
-		{"easynet_invocation_sign_prepared_local", &symbols.signPreparedLocal},
-		{"easynet_invocation_submit_signed_handle", &symbols.submitSignedHandle},
-		{"easynet_invocation_handle_await", &symbols.handleAwait},
-		{"easynet_invocation_handle_cancel", &symbols.handleCancel},
-		{"easynet_invocation_handle_events", &symbols.handleEvents},
-		{"easynet_invocation_handle_free", &symbols.handleFree},
-		{"easynet_prepared_invocation_free", &symbols.preparedFree},
-		{"easynet_signed_invocation_free", &symbols.signedFree},
-		{"easynet_invocation_stream_open", &symbols.streamOpen},
-		{"easynet_invocation_stream_cancel", &symbols.streamCancel},
-		{"easynet_invocation_stream_close", &symbols.streamClose},
-		{"easynet_invocation_bidi_open", &symbols.bidiOpen},
-		{"easynet_invocation_bidi_send", &symbols.bidiSend},
-		{"easynet_invocation_bidi_close_send", &symbols.bidiCloseSend},
-		{"easynet_invocation_bidi_close", &symbols.bidiClose},
-		{"easynet_invocation_bidi_cancel", &symbols.bidiCancel},
+		{"runtime_abi_version", &symbols.abiVersion},
+		{"runtime_last_error_json", &symbols.lastErrorJSON},
+		{"runtime_string_free", &symbols.stringFree},
+		{"runtime_host_start", &symbols.daemonStart},
+		{"runtime_host_attach", &symbols.daemonAttach},
+		{"runtime_host_discover", &symbols.daemonDiscover},
+		{"runtime_host_stop", &symbols.daemonStop},
+		{"runtime_host_detach", &symbols.daemonDetach},
+		{"runtime_host_status", &symbols.daemonStatus},
+		{"runtime_host_open_client", &symbols.daemonOpenClient},
+		{"runtime_shutdown", &symbols.shutdown},
+		{"runtime_health", &symbols.runtimeHealth},
+		{"runtime_diagnostics", &symbols.runtimeDiagnostics},
+		{"runtime_resolve_descriptor_ref", &symbols.resolveDescriptor},
+		{"runtime_invocation_invoke", &symbols.invocationInvoke},
+		{"runtime_invocation_prepare", &symbols.invocationPrepare},
+		{"runtime_invocation_sign_prepared", &symbols.signPrepared},
+		{"runtime_invocation_sign_prepared_local", &symbols.signPreparedLocal},
+		{"runtime_invocation_submit_signed_handle", &symbols.submitSignedHandle},
+		{"runtime_invocation_handle_await", &symbols.handleAwait},
+		{"runtime_invocation_handle_cancel", &symbols.handleCancel},
+		{"runtime_invocation_handle_events", &symbols.handleEvents},
+		{"runtime_invocation_handle_free", &symbols.handleFree},
+		{"runtime_prepared_invocation_free", &symbols.preparedFree},
+		{"runtime_signed_invocation_free", &symbols.signedFree},
+		{"runtime_invocation_stream_open", &symbols.streamOpen},
+		{"runtime_invocation_stream_cancel", &symbols.streamCancel},
+		{"runtime_invocation_stream_close", &symbols.streamClose},
+		{"runtime_invocation_bidi_open", &symbols.bidiOpen},
+		{"runtime_invocation_bidi_send", &symbols.bidiSend},
+		{"runtime_invocation_bidi_close_send", &symbols.bidiCloseSend},
+		{"runtime_invocation_bidi_close", &symbols.bidiClose},
+		{"runtime_invocation_bidi_cancel", &symbols.bidiCancel},
 	}
 	for _, binding := range bindings {
 		ptr, err := requireCABISymbol(library, binding.name)
@@ -1630,7 +1630,7 @@ func bindCABIRuntimeSymbols(library unsafe.Pointer) (cabiRuntimeSymbols, error) 
 
 func cabiRuntimeLastErrorOrCode(symbols cabiRuntimeSymbols, code int32, fallback string) error {
 	var out *C.char
-	errCode := int32(C.easynet_runtime_call_last_error_json(symbols.lastErrorJSON, &out))
+	errCode := int32(C.runtime_cabi_call_last_error_json(symbols.lastErrorJSON, &out))
 	if errCode == 0 && out != nil {
 		raw := cabiTakeCString(symbols.stringFree, out)
 		return cabiErrorFromLastErrorJSON(raw, true, code, fallback)
@@ -1656,7 +1656,7 @@ func cabiTakeCString(stringFree unsafe.Pointer, value *C.char) []byte {
 	if value == nil {
 		return []byte{}
 	}
-	defer C.easynet_runtime_call_string_free(stringFree, value)
+	defer C.runtime_cabi_call_string_free(stringFree, value)
 	return []byte(C.GoString(value))
 }
 

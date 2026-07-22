@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="$REPO_ROOT/tools/scripts/check-ffi-abi-v5-header.sh"
+SCRIPT="$REPO_ROOT/tools/scripts/check-ffi-abi-v6-header.sh"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -12,9 +12,9 @@ make_sandbox() {
     sandbox="$(mktemp -d)"
     mkdir -p "$sandbox/include" "$sandbox/src" "$sandbox/docs/spec"
     cp "$REPO_ROOT/include/easynet_cli.h" "$sandbox/include/easynet_cli.h"
-    cp "$REPO_ROOT/include/easynet_cli.exports.v5" "$sandbox/include/easynet_cli.exports.v5"
+    cp "$REPO_ROOT/include/easynet_cli.exports.v6" "$sandbox/include/easynet_cli.exports.v6"
     cp -R "$REPO_ROOT/src/ffi" "$sandbox/src/ffi"
-    cp "$REPO_ROOT/docs/spec/ffi-abi-v5.md" "$sandbox/docs/spec/ffi-abi-v5.md"
+    cp "$REPO_ROOT/docs/spec/ffi-abi-v6.md" "$sandbox/docs/spec/ffi-abi-v6.md"
     echo "$sandbox"
 }
 
@@ -23,7 +23,7 @@ run_check() {
     shift
     (
         cd "$sandbox"
-        CHECK_FFI_ABI_V5_HEADER_ROOT="$sandbox" \
+        CHECK_FFI_ABI_V6_HEADER_ROOT="$sandbox" \
         EASYNET_FFI_DYLIB="${EASYNET_FFI_DYLIB:-$sandbox/not-built}" \
         bash "$SCRIPT" "$@"
     )
@@ -38,17 +38,17 @@ expect_failure() {
 }
 
 SB="$(make_sandbox)"
-run_check "$SB" >/dev/null || fail "clean v5 contract should pass"
+run_check "$SB" >/dev/null || fail "clean v6 contract should pass"
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/#define EASYNET_ABI_VERSION 5u/#define EASYNET_ABI_VERSION 4u/' \
+perl -0pi -e 's/#define RUNTIME_ABI_VERSION 6u/#define RUNTIME_ABI_VERSION 4u/' \
     "$SB/include/easynet_cli.h"
 expect_failure "ABI version drift" "$SB"
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/int32_t easynet_runtime_health/int32_t easynet_runtime_health_missing/' \
+perl -0pi -e 's/int32_t runtime_health/int32_t runtime_health_missing/' \
     "$SB/include/easynet_cli.h"
 expect_failure "missing header declaration" "$SB"
 rm -rf "$SB"
@@ -67,13 +67,13 @@ expect_failure "unexpected Rust export" "$SB"
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/fn easynet_invocation_bidi_open/fn easynet_invocation_bidi_start/' \
+perl -0pi -e 's/fn runtime_invocation_bidi_open/fn runtime_invocation_bidi_start/' \
     "$SB/src/ffi/invocation/mod.rs"
 expect_failure "renamed Rust export" "$SB"
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-printf 'easynet_string_free\n' >>"$SB/include/easynet_cli.exports.v5"
+printf 'runtime_string_free\n' >>"$SB/include/easynet_cli.exports.v6"
 expect_failure "duplicate allowlist entry" "$SB"
 rm -rf "$SB"
 
@@ -87,7 +87,7 @@ if command -v cc >/dev/null 2>&1 && command -v nm >/dev/null 2>&1; then
     {
         while IFS= read -r symbol; do
             printf 'void %s(void) {}\n' "$symbol"
-        done <"$SB/include/easynet_cli.exports.v5"
+        done <"$SB/include/easynet_cli.exports.v6"
     } >"$C_SOURCE"
     if [[ "$(uname -s)" == "Darwin" ]]; then
         cc -dynamiclib -o "$LIB" "$C_SOURCE"
@@ -109,4 +109,4 @@ if command -v cc >/dev/null 2>&1 && command -v nm >/dev/null 2>&1; then
     rm -rf "$SB"
 fi
 
-echo "test_check_ffi_abi_v5_header.sh: all cases passed"
+echo "test_check_ffi_abi_v6_header.sh: all cases passed"

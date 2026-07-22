@@ -19,8 +19,8 @@ make_sandbox() {
     cp "$REPO_ROOT/packaging/release/install.sh" "$sandbox/packaging/release/install.sh"
     cp "$REPO_ROOT/packaging/release/dev-install-local.sh" "$sandbox/packaging/release/dev-install-local.sh"
     cp "$REPO_ROOT/include/easynet_cli.h" "$sandbox/include/easynet_cli.h"
-    cp "$REPO_ROOT/include/easynet_cli.exports.v5" "$sandbox/include/easynet_cli.exports.v5"
-    cp "$REPO_ROOT/docs/spec/ffi-abi-v5.md" "$sandbox/docs/spec/ffi-abi-v5.md"
+    cp "$REPO_ROOT/include/easynet_cli.exports.v6" "$sandbox/include/easynet_cli.exports.v6"
+    cp "$REPO_ROOT/docs/spec/ffi-abi-v6.md" "$sandbox/docs/spec/ffi-abi-v6.md"
     echo "$sandbox"
 }
 
@@ -63,15 +63,15 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "installer missing include dir should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/#define EASYNET_ABI_VERSION 5u/#define EASYNET_ABI_VERSION 2u/' \
+perl -0pi -e 's/#define RUNTIME_ABI_VERSION 6u/#define RUNTIME_ABI_VERSION 2u/' \
     "$SB/packaging/release/e2e-release-install.sh"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "e2e install missing ABI v5 assertion should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "e2e install missing ABI v6 assertion should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's#include/easynet_cli\.exports\.v5#include/missing_exports.v5#g' \
+perl -0pi -e 's#include/easynet_cli\.exports\.v6#include/missing_exports.v6#g' \
     "$SB/packaging/release/build-release-tarball.sh"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
