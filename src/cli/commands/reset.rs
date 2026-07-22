@@ -62,6 +62,7 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
             "runtime is currently running — run 'easynet runtime stop' first, or use 'easynet reset --force'"
         );
     }
+    let credential_state = ResetCredentialState::load();
 
     // Guard 2: interactive confirmation before destroying credentials.
     //
@@ -76,10 +77,7 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     // confirmation vs. ignore the running-runtime guard) cannot be
     // conflated by either readers or accidental invocations.
     if !args.yes {
-        let node_id = config::load_credentials()
-            .ok()
-            .map(|c| c.node_id)
-            .unwrap_or_else(|| "<no credentials on disk>".to_string());
+        let node_id = credential_state.prompt_subject_label();
         let prompt = format!(
             "This will delete local credentials for node '{node_id}'. \
              Re-pairing requires a fresh token from the Hub. Continue?"
@@ -107,13 +105,19 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     // `device list` from any peer hub shows the device gone the
     // instant `device reset --force` returns.
     if lifecycle_report.daemon().has_daemon_fact() {
-        if let Ok(creds) = config::load_credentials() {
-            let device_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
-            match invoke_federation_revoke_for_reset(&device_ura) {
-                Ok(_) => output::info("Device deregistered with hub (federation.revoke)"),
-                Err(e) => output::warn(&format!(
-                    "federation.revoke failed (continuing local reset): {e}"
-                )),
+        match credential_state.device_ura_for_revoke() {
+            ResetRevokeCredential::Ready(device_ura) => {
+                match invoke_federation_revoke_for_reset(&device_ura) {
+                    Ok(_) => output::info("Device deregistered with hub (federation.revoke)"),
+                    Err(e) => output::warn(&format!(
+                        "federation.revoke failed (continuing local reset): {e}"
+                    )),
+                }
+            }
+            ResetRevokeCredential::Unavailable(reason) => {
+                output::warn(&format!(
+                    "federation.revoke skipped (continuing local reset): {reason}"
+                ));
             }
         }
     }
@@ -129,6 +133,64 @@ pub fn run(args: ResetArgs) -> anyhow::Result<()> {
     config::delete_credentials()?;
     output::success("Device credentials removed");
     Ok(())
+}
+
+#[derive(Debug)]
+enum ResetCredentialState {
+    Paired(config::Credentials),
+    Missing,
+    Invalid { reason: String },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ResetRevokeCredential {
+    Ready(String),
+    Unavailable(String),
+}
+
+impl ResetCredentialState {
+    fn load() -> Self {
+        Self::from_credentials_result(config::load_credentials_optional())
+    }
+
+    fn from_credentials_result(result: anyhow::Result<Option<config::Credentials>>) -> Self {
+        match result {
+            Ok(Some(credentials)) => Self::Paired(credentials),
+            Ok(None) => Self::Missing,
+            Err(error) => Self::Invalid {
+                reason: format!("{error:#}"),
+            },
+        }
+    }
+
+    fn prompt_subject_label(&self) -> String {
+        match self {
+            Self::Paired(credentials) => credentials.node_id.clone(),
+            Self::Missing => "<no credentials on disk>".to_string(),
+            Self::Invalid { reason } => format!("<invalid credentials: {reason}>"),
+        }
+    }
+
+    fn device_ura_for_revoke(&self) -> ResetRevokeCredential {
+        match self {
+            Self::Paired(credentials) => ResetRevokeCredential::Ready(
+                crate::core::ura::device_ura(&credentials.realm, &credentials.node_id),
+            ),
+            Self::Missing => ResetRevokeCredential::Unavailable("no credentials".to_string()),
+            Self::Invalid { reason } => ResetRevokeCredential::Unavailable(format!(
+                "invalid credentials; cannot derive device URA: {reason}"
+            )),
+        }
+    }
+
+    #[cfg(test)]
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Paired(_) => "paired",
+            Self::Missing => "missing",
+            Self::Invalid { .. } => "invalid",
+        }
+    }
 }
 
 fn reset_runtime_is_active(status: RuntimeLifecycleStatus) -> bool {
@@ -192,6 +254,57 @@ mod tests {
     }
 
     #[test]
+    fn reset_credential_state_reports_paired_credentials() {
+        let state = ResetCredentialState::from_credentials_result(Ok(Some(paired_credentials())));
+
+        assert_eq!(state.label(), "paired");
+        assert_eq!(
+            state.prompt_subject_label(),
+            "node-reset-test",
+            "paired reset prompt should name the node id"
+        );
+        assert_eq!(
+            state.device_ura_for_revoke(),
+            ResetRevokeCredential::Ready(
+                "easynet:///r/tenant-reset-test/device/node-reset-test".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn reset_credential_state_reports_missing_only_for_absent_credentials() {
+        let state = ResetCredentialState::from_credentials_result(Ok(None));
+
+        assert_eq!(state.label(), "missing");
+        assert_eq!(state.prompt_subject_label(), "<no credentials on disk>");
+        assert_eq!(
+            state.device_ura_for_revoke(),
+            ResetRevokeCredential::Unavailable("no credentials".to_string())
+        );
+    }
+
+    #[test]
+    fn reset_credential_state_reports_invalid_existing_credentials() {
+        let state = ResetCredentialState::from_credentials_result(Err(anyhow::anyhow!(
+            "parse credentials from /tmp/credentials.json: expected value"
+        )));
+
+        assert_eq!(state.label(), "invalid");
+        let prompt = state.prompt_subject_label();
+        assert!(
+            prompt.contains("<invalid credentials: parse credentials"),
+            "invalid prompt must not look like missing credentials: {prompt}"
+        );
+        match state.device_ura_for_revoke() {
+            ResetRevokeCredential::Unavailable(reason) => assert!(
+                reason.contains("invalid credentials; cannot derive device URA"),
+                "invalid revoke state must preserve reason: {reason}"
+            ),
+            other => panic!("invalid credentials must not produce revoke URA: {other:?}"),
+        }
+    }
+
+    #[test]
     fn reset_rejects_malformed_runtime_projection_before_deleting_credentials() {
         let _home = HomeGuard::new();
         config::save_credentials(&paired_credentials()).expect("credentials");
@@ -209,6 +322,34 @@ mod tests {
             "wrong error: {error:#}"
         );
         config::load_credentials().expect("credentials must remain after failed reset");
+    }
+
+    #[test]
+    fn reset_deletes_malformed_credentials_without_classifying_as_missing() {
+        let _home = HomeGuard::new();
+        std::fs::create_dir_all(config::state_dir()).expect("state dir");
+        let credentials_path = config::state_dir().join("credentials.json");
+        std::fs::write(&credentials_path, "{ not json").expect("malformed credentials");
+
+        let state = ResetCredentialState::load();
+        assert_eq!(state.label(), "invalid");
+        assert!(
+            state
+                .prompt_subject_label()
+                .contains("<invalid credentials:"),
+            "malformed credentials should be visible before reset cleanup"
+        );
+
+        run(ResetArgs {
+            force: false,
+            yes: true,
+        })
+        .expect("reset should remove malformed local credentials");
+
+        assert!(
+            !credentials_path.exists(),
+            "reset must delete malformed credentials after explicit --yes"
+        );
     }
 
     #[test]

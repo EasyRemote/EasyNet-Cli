@@ -346,6 +346,13 @@ fn start_credential_readiness_boundary_script_holds() {
 }
 
 #[test]
+fn reset_credential_state_boundary_script_holds() {
+    // Pins reset cleanup to explicit paired/missing/invalid credential states.
+    // Invalid local credentials may be deleted, but must not look absent.
+    run_bash_script("tests/scripts/test_check_reset_credential_state_boundary.sh");
+}
+
+#[test]
 fn runtime_abilities_manifest_boundary_script_holds() {
     // Pins per-agent ability discovery to authored manifests under
     // AgentDirectory. Missing roots must not synthesize chat abilities.
