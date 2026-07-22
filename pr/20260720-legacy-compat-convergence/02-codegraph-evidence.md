@@ -2368,3 +2368,29 @@ Evidence will be appended after indexing and focused impact queries.
   canonicalization, ability extraction, and selector parsing failures remain
   typed `ResolveRouteFailure` states; descriptor owner mismatch is refused
   before any route lookup.
+
+## 2026-07-22 FFI descriptor runtime-owner fallback audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  runtime_owner_ura_from_session easynet_runtime_resolve_descriptor_ref caller
+  signer descriptor_ref` produced the call flow
+  `easynet_runtime_resolve_descriptor_ref ->
+  runtime_resolve_descriptor_ref_json -> runtime_owner_ura_from_session`.
+- The same codegraph output reported `runtime_owner_ura_from_session` has three
+  callers in `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/src/ffi/invocation/mod.rs`
+  and no direct covering tests, making the FFI descriptor resolver a high-risk
+  compatibility seam.
+- `rg -n "runtime_owner_ura_from_session\\(session\\)\\.ok\\(\\)|requires a
+  caller signer|descriptor_ref not found|meta.list_abilities" src/ffi
+  src/daemon sdk -S` showed `runtime_resolve_descriptor_ref_json` was the only
+  descriptor-resolution path collapsing native runtime owner resolution into an
+  optional value before remote probing.
+- Root abstraction problem: FFI descriptor resolution treated native runtime
+  owner identity as a best-effort catalog optimization. If `control.json` or
+  daemon identity was unavailable, the resolver continued into remote
+  discovery and could surface unrelated signer, owner-offline, or timeout
+  failures.
+- Boundary decision: runtime owner identity is a precondition for FFI
+  descriptor resolution. Missing/invalid control discovery now returns a
+  caller-identity error before local catalog lookup or remote
+  `meta.list_abilities` probing.

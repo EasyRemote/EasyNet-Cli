@@ -344,3 +344,8 @@
   descriptor-specific `ResolveRouteFailure` values before catalog lookup; they
   must not collapse into `None`, public-name fallback, NXDOMAIN-style misses,
   or timeout-driven discovery failures.
+- FFI descriptor resolution requires a known native runtime owner before it can
+  inspect local catalogs or issue a remote `meta.list_abilities` probe. A
+  missing or invalid `control.json` daemon identity is caller identity
+  unavailable state; it must not collapse into `Option::None`, descriptor-not-
+  found, caller-signer failure, owner-offline routing, or transport timeout.

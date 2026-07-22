@@ -435,6 +435,16 @@ fn descriptor_resolution_error_projection(message: &str) -> (i32, ErrorProjectio
             },
         );
     }
+    if lowered.contains("resolve descriptor_ref runtime owner") {
+        return (
+            ERR_PERMISSION_DENIED,
+            ErrorProjection {
+                code: "CALLER_IDENTITY_UNAVAILABLE",
+                stage: "caller_identity",
+                retry: "never",
+            },
+        );
+    }
     if lowered.contains("daemon not running") || lowered.contains("listener unreachable") {
         return (
             ERR_DAEMON_DOWN,
@@ -1932,8 +1942,9 @@ fn runtime_resolve_descriptor_ref_json(
         Err(_) => crate::core::ura::owner_ability_ura(callee_ura, ability)
             .ok_or_else(|| anyhow::anyhow!("derive ability URA for `{callee_ura}` `{ability}`"))?,
     };
-    let runtime_owner_ura = runtime_owner_ura_from_session(session).ok();
-    if runtime_owner_ura.as_deref() == Some(callee_ura) {
+    let runtime_owner_ura = runtime_owner_ura_from_session(session)
+        .map_err(|error| anyhow::anyhow!("resolve descriptor_ref runtime owner: {error}"))?;
+    if runtime_owner_ura == callee_ura {
         let catalog = runtime_descriptor_catalog_entries(session, callee_ura);
         if let Some(resolution) = descriptor_catalog_resolution_from_entries(
             &catalog.entries,
@@ -1947,16 +1958,14 @@ fn runtime_resolve_descriptor_ref_json(
             "descriptor_ref not found in local runtime catalog for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
         );
     }
-    if let Some(owner_ura) = runtime_owner_ura.as_deref() {
-        let catalog = runtime_descriptor_catalog_entries(session, owner_ura);
-        if let Some(resolution) = descriptor_catalog_resolution_from_entries(
-            &catalog.entries,
-            &ability_ura,
-            call_mode,
-            "runtime_realm_descriptor_catalog",
-        )? {
-            return Ok(resolution);
-        }
+    let catalog = runtime_descriptor_catalog_entries(session, &runtime_owner_ura);
+    if let Some(resolution) = descriptor_catalog_resolution_from_entries(
+        &catalog.entries,
+        &ability_ura,
+        call_mode,
+        "runtime_realm_descriptor_catalog",
+    )? {
+        return Ok(resolution);
     }
 
     let caller_ura = descriptor_ref_request_required_string(object, "caller_ura")?.to_string();
@@ -9212,6 +9221,49 @@ mod tests {
 
     #[cfg(feature = "axon-pb")]
     #[test]
+    fn runtime_descriptor_remote_probe_requires_runtime_owner_identity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing_control_path = dir.path().join("missing-control.json");
+        let remote_node_id = "remote-runtime-node";
+        let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        let caller_ura = crate::core::ura::device_ura("localhost", "local-runtime-node");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            missing_control_path.display().to_string(),
+            Some(dir.path().join("offline-daemon.sock").display().to_string()),
+        );
+
+        let error = runtime_resolve_descriptor_ref_json(
+            &session,
+            &serde_json::json!({
+                "callee_ura": remote_device_ura,
+                "caller_ura": caller_ura,
+                "subject_ura": remote_device_ura,
+                "ability": format!(
+                    "easynet:///r/localhost/ability/device.{remote_node_id}.custom.not.system"
+                ),
+                "call_mode": "rpc",
+            })
+            .to_string(),
+        )
+        .expect_err("descriptor resolver must fail before remote probe without runtime owner");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("resolve descriptor_ref runtime owner"),
+            "unexpected descriptor resolver error: {message}"
+        );
+        assert!(
+            !message.contains("requires a caller signer"),
+            "runtime owner failure must not be reclassified as caller signer failure: {message}"
+        );
+        assert!(
+            !message.contains("offline-daemon.sock"),
+            "runtime owner failure must happen before daemon IO: {message}"
+        );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
     fn descriptor_resolution_errors_project_canonical_runtime_codes() {
         let (abi_code, projection) = descriptor_resolution_error_projection(
             "easynet_runtime_resolve_descriptor_ref: descriptor_ref not found in local runtime catalog",
@@ -9225,6 +9277,13 @@ mod tests {
         );
         assert_eq!(abi_code, ERR_PERMISSION_DENIED);
         assert_eq!(projection.code, "CALLER_SIGNER_UNAVAILABLE");
+        assert_eq!(projection.stage, "caller_identity");
+
+        let (abi_code, projection) = descriptor_resolution_error_projection(
+            "easynet_runtime_resolve_descriptor_ref: resolve descriptor_ref runtime owner: control discovery /tmp/control.json does not exist",
+        );
+        assert_eq!(abi_code, ERR_PERMISSION_DENIED);
+        assert_eq!(projection.code, "CALLER_IDENTITY_UNAVAILABLE");
         assert_eq!(projection.stage, "caller_identity");
 
         let (abi_code, projection) = descriptor_resolution_error_projection(

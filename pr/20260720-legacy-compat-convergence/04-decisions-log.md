@@ -858,3 +858,17 @@ Decisions will be appended as root-fork choices are made.
 - Extend architecture and SPEC v2 gates with negative fixtures for the retired
   `Option`/`.ok()?` descriptor selector path so future route work cannot
   reintroduce silent fallback semantics.
+
+## 2026-07-22 FFI descriptor runtime owner precondition
+
+- Treat native runtime owner identity as a descriptor-resolution precondition,
+  not a cache optimization. `runtime_resolve_descriptor_ref_json` now fails
+  with `CALLER_IDENTITY_UNAVAILABLE` when the session's control discovery
+  cannot produce a daemon owner URA.
+- Preserve explicit tuple semantics. Remote descriptor probes still require
+  `caller_ura` from the SDK request; this change only removes the independent
+  fallback that let missing local runtime identity be discovered later as
+  signer/route/timeout noise.
+- Add SPEC v2 and architecture guards against
+  `runtime_owner_ura_from_session(session).ok()` inside the FFI descriptor
+  resolver.

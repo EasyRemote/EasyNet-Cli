@@ -8092,6 +8092,10 @@ if ffi_invocation.exists():
         offset, body = resolve_body
         for token, detail in (
             (
+                "runtime_owner_ura_from_session(session).ok()",
+                "descriptor resolver must not collapse runtime owner resolution failure into remote probe fallback",
+            ),
+            (
                 "runtime owner URA is unavailable",
                 "descriptor resolver must not use runtime-owner fallback diagnostics for missing caller_ura",
             ),

@@ -1058,6 +1058,56 @@ for required_test in (
 PY
 }
 
+check_ffi_descriptor_runtime_owner_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+  [[ -f "$ffi_invocation" ]] || return 0
+
+  "$PYTHON_BIN" - "$ffi_invocation" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+
+resolve = re.search(
+    r"fn runtime_resolve_descriptor_ref_json\([^)]*\)\s*->\s*anyhow::Result<serde_json::Value>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn descriptor_ref_request_required_string",
+    text,
+    re.S,
+)
+if resolve is None:
+    raise SystemExit("ffi_descriptor_runtime_owner:resolve_function_missing")
+resolve_body = resolve.group("body")
+if "runtime_owner_ura_from_session(session).ok()" in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:runtime_owner_error_collapsed")
+if "resolve descriptor_ref runtime owner" not in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:runtime_owner_error_context_missing")
+if 'descriptor_ref_request_required_string(object, "caller_ura")' not in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:explicit_caller_required_missing")
+
+projection = re.search(
+    r"fn descriptor_resolution_error_projection\(message: &str\) -> \(i32, ErrorProjection\) \{(?P<body>.*?)\n\}\n\n/// Allocate a mutable Invocation builder handle.",
+    text,
+    re.S,
+)
+if projection is None:
+    raise SystemExit("ffi_descriptor_runtime_owner:projection_function_missing")
+projection_body = projection.group("body")
+if "resolve descriptor_ref runtime owner" not in projection_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:projection_context_missing")
+if 'code: "CALLER_IDENTITY_UNAVAILABLE"' not in projection_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:caller_identity_projection_missing")
+
+for required_test in (
+    "runtime_descriptor_remote_probe_requires_runtime_owner_identity",
+    "descriptor_resolution_errors_project_canonical_runtime_codes",
+):
+    if required_test not in text:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:missing_test:{required_test}")
+PY
+}
+
 check_daemon_runtime_assembly_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local runtime_binding="$cli_root/src/daemon/invocation/dispatch/deps.rs"
@@ -2770,6 +2820,48 @@ EOF
   if ( CLI_ROOT="$tmp/cli-route-selector-legacy"; check_route_resolver_descriptor_ref_selector_contract ) >/dev/null 2>&1; then
     fail "self-test expected route descriptor-ref selector fallback gate to fail"
   fi
+  mkdir -p "$tmp/cli-ffi-descriptor-owner-legacy/src/ffi/invocation"
+  cat >"$tmp/cli-ffi-descriptor-owner-legacy/src/ffi/invocation/mod.rs" <<'EOF'
+fn descriptor_resolution_error_projection(message: &str) -> (i32, ErrorProjection) {
+    (
+        ERR_NOT_FOUND,
+        ErrorProjection {
+            code: "DESCRIPTOR_NOT_FOUND",
+            stage: "routing",
+            retry: "never",
+        },
+    )
+}
+
+/// Allocate a mutable Invocation builder handle.
+fn runtime_resolve_descriptor_ref_json(
+    session: &crate::ffi::client::handle::ClientSession,
+    request_json: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let request: serde_json::Value = serde_json::from_str(request_json)?;
+    let object = request.as_object().unwrap();
+    let callee_ura = object.get("callee_ura").and_then(serde_json::Value::as_str).unwrap();
+    let ability = object.get("ability").and_then(serde_json::Value::as_str).unwrap();
+    let call_mode = object.get("call_mode").and_then(serde_json::Value::as_str).unwrap();
+    let ability_ura = crate::core::ura::owner_ability_ura(callee_ura, ability).unwrap();
+    let runtime_owner_ura = runtime_owner_ura_from_session(session).ok();
+    if let Some(owner_ura) = runtime_owner_ura.as_deref() {
+        let catalog = runtime_descriptor_catalog_entries(session, owner_ura);
+    }
+    let caller_ura = descriptor_ref_request_required_string(object, "caller_ura")?.to_string();
+    RemoteSystemInvocationIssuer::root_plan(&target_call, caller_ura, subject, args, timeout)?;
+    Ok(serde_json::Value::Null)
+}
+
+#[cfg(feature = "axon-pb")]
+fn descriptor_ref_request_required_string() {}
+
+#[test]
+fn descriptor_resolution_errors_project_canonical_runtime_codes() {}
+EOF
+  if ( CLI_ROOT="$tmp/cli-ffi-descriptor-owner-legacy"; check_ffi_descriptor_runtime_owner_contract ) >/dev/null 2>&1; then
+    fail "self-test expected FFI descriptor runtime owner fallback gate to fail"
+  fi
   cp -R "$tmp/axon" "$tmp/axon-python-private-plain-proof"
   printf 'def _canonical_invocation_bytes(env):\n  return b""\n' \
     > "$tmp/axon-python-private-plain-proof/sdk/python/axon_sdk/invocation/axiom.py"
@@ -3280,6 +3372,7 @@ EOF
   check_daemon_tuple_route_contract
   check_daemon_runtime_route_inventory_contract
   check_route_resolver_descriptor_ref_selector_contract
+  check_ffi_descriptor_runtime_owner_contract
   check_daemon_runtime_assembly_contract
   check_plugin_sidecar_helper_matrix_contract
   check_key_custody_boundary_contract
@@ -3327,6 +3420,7 @@ check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
 check_daemon_runtime_route_inventory_contract
 check_route_resolver_descriptor_ref_selector_contract
+check_ffi_descriptor_runtime_owner_contract
 check_daemon_runtime_assembly_contract
 check_plugin_sidecar_helper_matrix_contract
 check_key_custody_boundary_contract
