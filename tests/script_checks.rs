@@ -318,6 +318,13 @@ fn current_realm_hub_context_boundary_script_holds() {
 }
 
 #[test]
+fn call_create_participant_identity_boundary_script_holds() {
+    // Pins call-create participant identity to typed credential absence.
+    // Existing malformed credentials must not become hostname participants.
+    run_bash_script("tests/scripts/test_check_call_create_participant_identity_boundary.sh");
+}
+
+#[test]
 fn runtime_abilities_manifest_boundary_script_holds() {
     // Pins per-agent ability discovery to authored manifests under
     // AgentDirectory. Missing roots must not synthesize chat abilities.

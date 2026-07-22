@@ -3780,9 +3780,10 @@ check_daemon_mission_eal_boundary_contract() {
   bash "$ROOT/tools/scripts/check-orchestration-service-boundary.sh" >/dev/null
 }
 
-check_product_plugin_control_boundary_contract() {
+check_product_identity_boundary_contract() {
   bash "$ROOT/tools/scripts/check-plugin-control-subject-boundary.sh" >/dev/null
   bash "$ROOT/tools/scripts/check-current-realm-hub-context-boundary.sh" >/dev/null
+  bash "$ROOT/tools/scripts/check-call-create-participant-identity-boundary.sh" >/dev/null
 }
 
 check_axon_product_protocol_boundary_contract() {
@@ -7192,7 +7193,7 @@ EOF
   check_runtime_owner_signer_custody_contract
   check_key_custody_boundary_contract
   check_daemon_mission_eal_boundary_contract
-  check_product_plugin_control_boundary_contract
+  check_product_identity_boundary_contract
   check_ura_vocabulary_contract
   check_axon_protocol_pack_ura_vector_contract
   check_axon_normative_ura_document_contract
@@ -7280,7 +7281,7 @@ check_sdk_principal_projection_fail_closed_contract
 check_runtime_owner_signer_custody_contract
 check_key_custody_boundary_contract
 check_daemon_mission_eal_boundary_contract
-check_product_plugin_control_boundary_contract
+check_product_identity_boundary_contract
 check_ura_vocabulary_contract
 check_axon_protocol_pack_ura_vector_contract
 check_axon_normative_ura_document_contract

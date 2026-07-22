@@ -178,11 +178,8 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
     if !args.call_id.is_empty() {
         body["call_id"] = json!(args.call_id);
     }
-    let participant_id = crate::daemon::persistence::config::load_credentials()
-        .ok()
-        .map(|creds| creds.node_id)
-        .filter(|node_id| !node_id.trim().is_empty())
-        .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string());
+    let participant_identity = CallCreateParticipantIdentity::resolve()?;
+    let participant_id = participant_identity.participant_id();
     body["participant_id"] = json!(participant_id);
     let result = invoke_call_signaling("voice.create_call", body)?;
     if args.format == OutputFormat::Json {
@@ -200,6 +197,139 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CallCreateParticipantIdentity {
+    DeviceNode(String),
+    UnpairedHostname(String),
+}
+
+impl CallCreateParticipantIdentity {
+    fn resolve() -> anyhow::Result<Self> {
+        let Some(credentials) = crate::daemon::persistence::config::load_credentials_optional()?
+        else {
+            return Self::from_unpaired_hostname(gethostname::gethostname().to_string_lossy());
+        };
+        Ok(Self::DeviceNode(credentials.node_id.trim().to_string()))
+    }
+
+    fn from_unpaired_hostname(hostname: impl AsRef<str>) -> anyhow::Result<Self> {
+        let hostname = hostname.as_ref().trim();
+        if hostname.is_empty() {
+            anyhow::bail!("call create unpaired participant hostname must not be empty");
+        }
+        Ok(Self::UnpairedHostname(hostname.to_string()))
+    }
+
+    fn participant_id(&self) -> &str {
+        match self {
+            Self::DeviceNode(node_id) | Self::UnpairedHostname(node_id) => node_id,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn call_create_participant_uses_hostname_when_unpaired() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+
+        let identity = CallCreateParticipantIdentity::resolve().expect("unpaired hostname");
+
+        match identity {
+            CallCreateParticipantIdentity::UnpairedHostname(hostname) => {
+                assert!(!hostname.trim().is_empty());
+            }
+            other => panic!("expected unpaired hostname identity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn call_create_participant_uses_valid_credential_node_id() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "dev-a".to_string(),
+                credential_token: "token".to_string(),
+                realm: "acme".to_string(),
+                hub_endpoint: "axon://hub.example:50051".to_string(),
+                username: Some("alice".to_string()),
+                user_id: Some("user-alice".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("write test credentials");
+
+        let identity = CallCreateParticipantIdentity::resolve().expect("credential identity");
+
+        assert_eq!(
+            identity,
+            CallCreateParticipantIdentity::DeviceNode("dev-a".to_string())
+        );
+        assert_eq!(identity.participant_id(), "dev-a");
+    }
+
+    #[test]
+    fn call_create_participant_rejects_malformed_credentials() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(crate::daemon::persistence::config::state_dir())
+            .expect("state dir");
+        std::fs::write(
+            crate::daemon::persistence::config::state_dir().join("credentials.json"),
+            b"{",
+        )
+        .expect("write malformed credentials");
+
+        let error = CallCreateParticipantIdentity::resolve()
+            .expect_err("malformed credentials must not become hostname identity");
+
+        assert!(
+            error.to_string().contains("parse credentials"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn call_create_participant_rejects_incomplete_credentials() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(crate::daemon::persistence::config::state_dir())
+            .expect("state dir");
+        std::fs::write(
+            crate::daemon::persistence::config::state_dir().join("credentials.json"),
+            r#"{
+  "node_id": "",
+  "credential_token": "token",
+  "hub_endpoint": "axon://hub.example:7700",
+  "realm": "acme",
+  "username": "alice",
+  "user_id": "user-alice"
+}
+"#,
+        )
+        .expect("write incomplete credentials");
+
+        let error = CallCreateParticipantIdentity::resolve()
+            .expect_err("incomplete credentials must not become hostname identity");
+
+        assert!(
+            error.to_string().contains("validate credentials"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn call_create_participant_rejects_empty_unpaired_hostname() {
+        let error = CallCreateParticipantIdentity::from_unpaired_hostname(" ")
+            .expect_err("empty hostname must fail");
+
+        assert!(
+            error.to_string().contains("hostname must not be empty"),
+            "wrong error: {error}"
+        );
+    }
 }
 
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
