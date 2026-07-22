@@ -217,6 +217,11 @@
   before either canonical ledger records or pre-runtime attempt records are
   read/projected. Malformed filter scope must not widen to "all history" or
   collapse into an empty/no-match result.
+- `invocation.history.list` session authority must be bound to the exact
+  receipt query subject. The broader owner-aware runtime session admission
+  rule may remain valid for descriptor-bound invocation, but receipt history
+  observation must not expand from one user-owned session/resource subject to
+  another same-owner subject before the receipt provider is called.
 - Remote-desktop session creation arguments are descriptor-bound product
   ingress, not best-effort UI preferences. Absent optional fields may select
   documented defaults, but present `mode`, TTL, `session_id`, `video`, and

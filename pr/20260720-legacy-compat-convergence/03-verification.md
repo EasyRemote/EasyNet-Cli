@@ -2,6 +2,31 @@
 
 Commands and outcomes will be appended after implementation.
 
+## 2026-07-22 SDK history authority subject exact binding
+
+- `go test . -run
+  'TestAuthorizedRuntimeSessionHistoryRejects(AuthoritySubjectMismatch|OwnerEquivalentSubjectExpansion|FilterSubjectExpansion)'`
+  from `sdk/go` — PASS; focused history tests reject device-subject mismatch,
+  same-owner different-session subject expansion, and filter subject expansion
+  before receipt provider dispatch.
+- `go test .` from `sdk/go` — PASS.
+- `PYTHONPATH=sdk/python:../EasyNet-Axon/sdk/python python3 -m unittest
+  sdk.python.tests.test_authorized_runtime_session` — PASS (`7` tests);
+  includes same-owner different-session subject expansion rejection before the
+  Python receipt provider is called.
+- `python3 -m py_compile
+  sdk/python/easynet_sdk/authorized_runtime_session.py` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative SDK history authority fixture that reuses
+  owner-expanding subject admission and must fail.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; covers
+  architecture gate negative fixtures after adding exact history authority
+  subject checks.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+
 ## 2026-07-21 Ability discovery candidate projection
 
 - `/Users/macbook.silan.tech/.cargo/bin/cargo test -q

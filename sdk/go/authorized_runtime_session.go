@@ -946,13 +946,20 @@ func validateSessionHistorySessionBinding(
 	if !authority.MatchesAudience(calleeURA) {
 		return v3SessionError(ErrAuthorityDenied, "history", "session authority audience does not admit receipt query callee_ura", details, nil)
 	}
-	if !runtimeSessionAuthorityAdmitsSubject(authority, subjectURA) {
+	if !sessionHistoryAuthoritySubjectMatches(authority, subjectURA) {
 		return v3SessionError(ErrAuthoritySubjectMismatch, "history", "session authority subject does not admit receipt query subject_ura", details, nil)
 	}
 	if !authority.MatchesScope(receiptHistoryListAbility) {
 		return v3SessionError(ErrAuthorityDenied, "history", "session authority scopes do not admit invocation.history.list", details, nil)
 	}
 	return nil
+}
+
+func sessionHistoryAuthoritySubjectMatches(
+	authority *SessionAuthority,
+	subjectURA string,
+) bool {
+	return authority != nil && strings.TrimSpace(authority.SubjectURA) == strings.TrimSpace(subjectURA)
 }
 
 func runtimeCallDetails(call RuntimeCallContext) map[string]any {

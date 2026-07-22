@@ -8177,13 +8177,27 @@ if ffi_invocation.exists():
 # same tuple validated by the session authority. Otherwise products can submit
 # an authorized envelope for one subject/callee/caller while querying another
 # history scope through filter arguments.
-for path, list_name, request_validator, filter_validator, subject_token in (
+for (
+    path,
+    list_name,
+    request_validator,
+    filter_validator,
+    subject_token,
+    history_subject_validator,
+    history_owner_expansion,
+    history_test,
+    history_test_name,
+) in (
     (
         cli_root / "sdk/go/authorized_runtime_session.go",
         "List",
         "validateSessionHistoryRequest(request)",
         "validateSessionHistoryFilterBinding(request.Call, request.Filter)",
         "receipt filter subject_uras must be bound to receipt query subject_ura",
+        "sessionHistoryAuthoritySubjectMatches(authority, subjectURA)",
+        "runtimeSessionAuthorityAdmitsSubject(authority, subjectURA)",
+        cli_root / "sdk/go/authorized_runtime_session_test.go",
+        "TestAuthorizedRuntimeSessionHistoryRejectsOwnerEquivalentSubjectExpansionBeforeReceiptProvider",
     ),
     (
         cli_root / "sdk/python/easynet_sdk/authorized_runtime_session.py",
@@ -8191,6 +8205,10 @@ for path, list_name, request_validator, filter_validator, subject_token in (
         "_validate_session_history_request(request)",
         "_validate_session_history_filter_binding(request.call, request.filter)",
         "receipt filter subject_uras must be bound to receipt query subject_ura",
+        "_session_history_authority_subject_matches(authority, subject_ura)",
+        "_session_authority_admits_subject(authority, subject_ura)",
+        cli_root / "sdk/python/tests/test_authorized_runtime_session.py",
+        "test_history_rejects_owner_equivalent_subject_expansion_before_receipt_provider",
     ),
 ):
     if not path.exists():
@@ -8234,6 +8252,27 @@ for path, list_name, request_validator, filter_validator, subject_token in (
             path,
             1,
             "Session history request validation must call filter tuple binding",
+        )
+    if history_subject_validator not in text:
+        add(
+            "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
+            path,
+            1,
+            "Session history authority subject must use exact receipt query subject binding",
+        )
+    if history_owner_expansion in text:
+        add(
+            "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
+            path,
+            1,
+            "Session history authority subject must not reuse owner-expanding runtime session admission",
+        )
+    if history_test.exists() and history_test_name not in source(history_test):
+        add(
+            "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
+            history_test,
+            1,
+            "Session history tests must reject owner-equivalent subject expansion before provider dispatch",
         )
     for token, detail in (
         (

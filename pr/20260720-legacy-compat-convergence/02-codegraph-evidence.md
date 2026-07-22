@@ -2,6 +2,34 @@
 
 Evidence will be appended after indexing and focused impact queries.
 
+## 2026-07-22 SDK history authority subject expansion audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index is up
+  to date for 1,017 files, 35,242 nodes, and 135,288 edges.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  validateSessionHistoryRequest validateSessionHistoryFilterBinding
+  _validate_session_history_request _validate_session_history_filter_binding
+  sessionAuthorityAdmitsSubject _session_authority_admits_subject` identified
+  `sdk/go/authorized_runtime_session.go::validateSessionHistorySessionBinding`
+  and
+  `sdk/python/easynet_sdk/authorized_runtime_session.py::_validate_session_history_authority_binding`
+  as history-specific validators reusing the ordinary owner-aware session
+  subject admission helper.
+- The same query confirmed the blast radius is limited to authorized runtime
+  session history validation plus ordinary runtime ability validation. The
+  ordinary runtime ability path still needs owner-aware admission for
+  descriptor-bound user resources; the receipt history path needs exact tuple
+  binding before provider dispatch.
+- Source inspection found the Python authorized-session helper still used
+  substring owner checks over `subject_ura`, while Node/Rust already parse
+  owner shape for ordinary invocation. The root issue for history was not URA
+  parsing alone; it was using an invocation admission predicate for an
+  observation capability.
+- After the change, Go and Python authorized runtime sessions route
+  `invocation.history.list` session authority checks through dedicated
+  exact-subject helpers and retain the broader owner-aware helper only for
+  non-history runtime invocation/authorization.
+
 ## 2026-07-22 Banner runtime projection fallback audit
 
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` reports the checkout

@@ -875,7 +875,7 @@ def _validate_session_history_authority_binding(
             "session authority audience does not admit receipt query callee_ura",
             details,
         )
-    if not _session_authority_admits_subject(authority, subject_ura):
+    if not _session_history_authority_subject_matches(authority, subject_ura):
         raise _session_error(
             ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
             "history",
@@ -889,6 +889,13 @@ def _validate_session_history_authority_binding(
             "session authority scopes do not admit invocation.history.list",
             details,
         )
+
+
+def _session_history_authority_subject_matches(
+    authority: SessionAuthority,
+    subject_ura: str,
+) -> bool:
+    return authority.subject_ura.strip() == subject_ura.strip()
 
 
 def _validate_runtime_call_required(value: str, field_name: str) -> None:

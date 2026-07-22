@@ -373,6 +373,79 @@ if "ledger_resource_ura_projection_distinguishes_unjoined_from_invalid_identity"
 PY
 }
 
+check_sdk_history_authority_subject_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go="$cli_root/sdk/go/authorized_runtime_session.go"
+  local go_test="$cli_root/sdk/go/authorized_runtime_session_test.go"
+  local py="$cli_root/sdk/python/easynet_sdk/authorized_runtime_session.py"
+  local py_test="$cli_root/sdk/python/tests/test_authorized_runtime_session.py"
+
+  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" <<'PY'
+import sys
+from pathlib import Path
+
+go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    return path.read_text() if path.exists() else ""
+
+def require(path: Path, token: str, code: str) -> None:
+    if token not in read(path):
+        raise SystemExit(f"{code}:{path}:{token}")
+
+def section(text: str, start: str, end: str) -> str:
+    offset = text.find(start)
+    if offset < 0:
+        raise SystemExit(f"sdk_history_authority_subject_missing_section:{start}")
+    stop = text.find(end, offset + len(start))
+    return text[offset : stop if stop >= 0 else len(text)]
+
+go = read(go_path)
+if go:
+    require(
+        go_path,
+        "func sessionHistoryAuthoritySubjectMatches(",
+        "sdk_go_history_authority_exact_subject_helper_missing",
+    )
+    body = section(
+        go,
+        "func validateSessionHistorySessionBinding(",
+        "func sessionHistoryAuthoritySubjectMatches(",
+    )
+    if "sessionHistoryAuthoritySubjectMatches(authority, subjectURA)" not in body:
+        raise SystemExit("sdk_go_history_authority_subject_not_exact_bound")
+    if "runtimeSessionAuthorityAdmitsSubject(authority, subjectURA)" in body:
+        raise SystemExit("sdk_go_history_authority_uses_owner_expansion")
+    require(
+        go_test_path,
+        "TestAuthorizedRuntimeSessionHistoryRejectsOwnerEquivalentSubjectExpansionBeforeReceiptProvider",
+        "sdk_go_history_authority_owner_expansion_test_missing",
+    )
+
+py = read(py_path)
+if py:
+    require(
+        py_path,
+        "def _session_history_authority_subject_matches(",
+        "sdk_python_history_authority_exact_subject_helper_missing",
+    )
+    body = section(
+        py,
+        "def _validate_session_history_authority_binding(",
+        "def _session_history_authority_subject_matches(",
+    )
+    if "_session_history_authority_subject_matches(authority, subject_ura)" not in body:
+        raise SystemExit("sdk_python_history_authority_subject_not_exact_bound")
+    if "_session_authority_admits_subject(authority, subject_ura)" in body:
+        raise SystemExit("sdk_python_history_authority_uses_owner_expansion")
+    require(
+        py_test_path,
+        "test_history_rejects_owner_equivalent_subject_expansion_before_receipt_provider",
+        "sdk_python_history_authority_owner_expansion_test_missing",
+    )
+PY
+}
+
 check_principal_lifecycle_cli_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local principal="$cli_root/src/cli/commands/groups/principal.rs"
@@ -3209,6 +3282,32 @@ EOF
   if ( check_invocation_history_ledger_ura_contract "$tmp/invocation-history-ledger-ura-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected invocation.history ledger_ura projection fallback gate to fail"
   fi
+  mkdir -p "$tmp/sdk-history-authority-legacy/sdk/go" \
+    "$tmp/sdk-history-authority-legacy/sdk/python/easynet_sdk" \
+    "$tmp/sdk-history-authority-legacy/sdk/python/tests"
+  printf '%s\n' \
+    'func validateSessionHistorySessionBinding(authority *SessionAuthority, subjectURA string) error {' \
+    '  if !runtimeSessionAuthorityAdmitsSubject(authority, subjectURA) { return nil }' \
+    '  return nil' \
+    '}' \
+    'func validateSessionHistoryFilterBinding() {}' \
+    > "$tmp/sdk-history-authority-legacy/sdk/go/authorized_runtime_session.go"
+  printf '%s\n' \
+    'func TestAuthorizedRuntimeSessionHistoryRejectsAuthoritySubjectMismatchBeforeReceiptProvider() {}' \
+    > "$tmp/sdk-history-authority-legacy/sdk/go/authorized_runtime_session_test.go"
+  printf '%s\n' \
+    'def _validate_session_history_authority_binding(authority, subject_ura):' \
+    '    if not _session_authority_admits_subject(authority, subject_ura):' \
+    '        return None' \
+    'def _validate_session_history_filter_binding():' \
+    '    return None' \
+    > "$tmp/sdk-history-authority-legacy/sdk/python/easynet_sdk/authorized_runtime_session.py"
+  printf '%s\n' \
+    'def test_history_rejects_authority_subject_mismatch_before_receipt_provider(): pass' \
+    > "$tmp/sdk-history-authority-legacy/sdk/python/tests/test_authorized_runtime_session.py"
+  if ( check_sdk_history_authority_subject_contract "$tmp/sdk-history-authority-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK history authority subject owner-expansion gate to fail"
+  fi
   mkdir -p "$tmp/principal-lifecycle-fallback/src/cli/commands/groups"
   printf '%s\n' \
     'fn principal_ability_realm_source(args: &Value) -> anyhow::Result<&str> {' \
@@ -3431,6 +3530,7 @@ EOF
   check_agent_start_model_intent_contract
   check_invocation_history_get_key_contract
   check_invocation_history_ledger_ura_contract
+  check_sdk_history_authority_subject_contract
   check_principal_lifecycle_cli_schema_contract
   check_auth_agents_backend_shape_contract
   check_pages_identity_credentials_contract
@@ -3480,6 +3580,7 @@ check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract
 check_invocation_history_ledger_ura_contract
+check_sdk_history_authority_subject_contract
 check_principal_lifecycle_cli_schema_contract
 check_auth_agents_backend_shape_contract
 check_pages_identity_credentials_contract

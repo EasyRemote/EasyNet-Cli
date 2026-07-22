@@ -2,6 +2,22 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-22 SDK history authority subject binding
+
+- Treat `invocation.history.list` as an authority-bearing observation
+  capability, not as a normal owner-scoped invocation capability. Session
+  authority for history must match the receipt query `subject_ura` exactly
+  before the receipt provider is called.
+- Preserve owner-aware session admission for ordinary descriptor-bound
+  invocation. Removing that globally would narrow the canonical runtime model
+  incorrectly; the defect was history reusing the wrong predicate.
+- Add dedicated Go/Python exact-subject helpers for history instead of adding
+  product-specific checks at CLI/UI call sites. This keeps the SDK as the
+  canonical runtime model and prevents EasyNet/EasyRemote consumers from
+  implementing their own history authority rules.
+- Upgrade both convergence gates so a future reintroduction of
+  owner-equivalent history subject expansion fails before product smoke tests.
+
 ## 2026-07-21 ability discovery candidate projection
 
 - Treat minted discovery candidates as schema-bound runtime read-model rows.
