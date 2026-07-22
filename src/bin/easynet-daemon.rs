@@ -588,6 +588,10 @@ async fn main() -> anyhow::Result<()> {
     {
         boot_bus.emit_skipped("daemon-invocation-transport");
     }
+    #[cfg(feature = "axon-pb")]
+    let invocation_capability_flags = session_shutdown.capability_flags().to_vec();
+    #[cfg(not(feature = "axon-pb"))]
+    let invocation_capability_flags = Vec::new();
 
     // Clipboard tracker (Context surface). Always spawned; the thread
     // is inert (config-stat + sleep) until `easynet context clipboard
@@ -663,7 +667,7 @@ async fn main() -> anyhow::Result<()> {
                 return Err(err);
             }
         };
-    let runtime_discovery = match ready_runtime_discovery() {
+    let runtime_discovery = match ready_runtime_discovery(invocation_capability_flags) {
         Ok(snapshot) => snapshot,
         Err(err) => {
             boot_bus.emit_failed("control-discovery", err.to_string());
@@ -719,15 +723,11 @@ fn resolve_pages_start_port() -> anyhow::Result<u16> {
     }
 }
 
-fn ready_runtime_discovery() -> anyhow::Result<server::ControlRuntimeDiscovery> {
+fn ready_runtime_discovery(
+    capability_flags: Vec<String>,
+) -> anyhow::Result<server::ControlRuntimeDiscovery> {
     let config = DaemonConfig::load(&default_config_path())?;
     let daemon_identity = ready_daemon_identity(&config)?;
-    let mut capability_flags = Vec::new();
-    if matches!(config.mode(), DaemonMode::Device | DaemonMode::Both) {
-        capability_flags.push(
-            easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string(),
-        );
-    }
     Ok(server::ControlRuntimeDiscovery {
         invocation_endpoint: resolved_local_uds_path_with_env_override(),
         daemon_identity,
@@ -1130,7 +1130,10 @@ hub_endpoint = "https://hub.example:50443"
         config::save_credentials(&paired_credentials("tenant-a", "credential-node"))
             .expect("save paired credentials");
 
-        let discovery = ready_runtime_discovery().expect("ready discovery");
+        let discovery = ready_runtime_discovery(vec![
+            easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string(),
+        ])
+        .expect("ready discovery");
 
         assert_eq!(
             discovery.daemon_identity.node_id.as_deref(),
@@ -1140,7 +1143,30 @@ hub_endpoint = "https://hub.example:50443"
             discovery.capability_flags.iter().any(|flag| {
                 flag == easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
             }),
-            "device ready discovery must advertise paired user signer readiness"
+            "device ready discovery must advertise signer readiness when boot proved it"
+        );
+    }
+
+    #[test]
+    fn ready_discovery_does_not_infer_signer_readiness_from_device_mode() {
+        let _home = TestHomeGuard::new();
+        write_daemon_config(
+            r#"[daemon]
+mode = "device"
+realm = "tenant-a"
+hub_endpoint = "https://hub.example:50443"
+"#,
+        );
+        config::save_credentials(&paired_credentials("tenant-a", "credential-node"))
+            .expect("save paired credentials");
+
+        let discovery = ready_runtime_discovery(Vec::new()).expect("ready discovery");
+
+        assert!(
+            !discovery.capability_flags.iter().any(|flag| {
+                flag == easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
+            }),
+            "ready discovery must publish capability flags from invocation boot proof, not daemon mode"
         );
     }
 
@@ -1219,7 +1245,8 @@ hub_endpoint = "https://hub.example:50443"
         config::save_credentials(&paired_credentials("tenant-b", "credential-node"))
             .expect("save paired credentials");
 
-        let err = ready_runtime_discovery().expect_err("realm mismatch must not publish ready");
+        let err =
+            ready_runtime_discovery(Vec::new()).expect_err("realm mismatch must not publish ready");
 
         assert!(
             err.to_string().contains("does not match configured realm"),

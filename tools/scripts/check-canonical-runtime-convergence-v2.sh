@@ -1853,25 +1853,31 @@ for required in ("flags::BOOT_STATUS", "flags::CONTROL_DIAGNOSTICS"):
     if required not in server:
         raise SystemExit(f"start_attach_user_signer_readiness:base_flag_missing:{required}")
 
-ready = re.search(r"fn ready_runtime_discovery\(\) -> anyhow::Result<server::ControlRuntimeDiscovery> \{(?P<body>.*?)\n\}", daemon_bin, re.DOTALL)
+ready = re.search(r"fn ready_runtime_discovery\(\s*capability_flags: Vec<String>,\s*\) -> anyhow::Result<server::ControlRuntimeDiscovery> \{(?P<body>.*?)\n\}", daemon_bin, re.DOTALL)
 if ready is None:
     raise SystemExit("start_attach_user_signer_readiness:ready_discovery_missing")
 ready_body = ready.group("body")
 for required in (
-    "DaemonMode::Device | DaemonMode::Both",
-    "flags::PAIRED_USER_RUNTIME_SIGNER",
     "capability_flags",
+    "ready_daemon_identity(&config)",
 ):
     if required not in ready_body:
         raise SystemExit(f"start_attach_user_signer_readiness:ready_discovery_missing:{required}")
+for retired in (
+    "DaemonMode::Device",
+    "DaemonMode::Both",
+    "PAIRED_USER_RUNTIME_SIGNER.to_string()",
+    "capability_flags.push(",
+):
+    if retired in ready_body:
+        raise SystemExit(f"start_attach_user_signer_readiness:mode_derived_ready_flag:{retired}")
 if 'std::env::var("EASYNET_NODE_ID")' in ready_body:
     raise SystemExit("start_attach_user_signer_readiness:ready_identity_uses_env_node_id")
-if "ready_daemon_identity(&config)" not in ready_body:
-    raise SystemExit("start_attach_user_signer_readiness:ready_identity_not_credentials_owned")
 if "fn ready_daemon_identity(" not in daemon_bin or "config::load_credentials()" not in daemon_bin:
     raise SystemExit("start_attach_user_signer_readiness:ready_identity_credentials_helper_missing")
 for required_test in (
     "ready_discovery_uses_paired_credentials_node_id_not_env",
+    "ready_discovery_does_not_infer_signer_readiness_from_device_mode",
     "ready_discovery_rejects_credentials_realm_mismatch",
 ):
     if required_test not in daemon_bin:
@@ -2185,6 +2191,67 @@ for required_test in (
 ):
     if required_test not in text:
         raise SystemExit(f"filesystem_resource_owner:test_missing:{required_test}")
+PY
+}
+
+check_ready_capability_proof_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local daemon="$cli_root/src/bin/easynet-daemon.rs"
+  local invocation="$cli_root/src/daemon/boot/invocation/mod.rs"
+  [[ -f "$daemon" ]] || fail "daemon entrypoint is missing: $daemon"
+  [[ -f "$invocation" ]] || fail "invocation boot source is missing: $invocation"
+
+  "$PYTHON_BIN" - "$daemon" "$invocation" <<'PY'
+import sys
+from pathlib import Path
+
+daemon = Path(sys.argv[1]).read_text(encoding="utf-8")
+invocation = Path(sys.argv[2]).read_text(encoding="utf-8")
+
+start = daemon.find("fn ready_runtime_discovery(")
+if start < 0:
+    raise SystemExit("ready_capability_proof:ready_runtime_discovery_missing")
+end = daemon.find("\nfn ready_daemon_identity", start)
+if end < 0:
+    raise SystemExit("ready_capability_proof:ready_runtime_discovery_section_missing")
+body = daemon[start:end]
+
+for retired in (
+    "DaemonMode::Device",
+    "DaemonMode::Both",
+    "PAIRED_USER_RUNTIME_SIGNER.to_string()",
+    "capability_flags.push(",
+):
+    if retired in body:
+        raise SystemExit(f"ready_capability_proof:mode_derived_flag_retired:{retired}")
+
+for required in (
+    "fn ready_runtime_discovery(",
+    "capability_flags: Vec<String>",
+    "capability_flags,",
+    "let invocation_capability_flags = session_shutdown.capability_flags().to_vec();",
+    "ready_runtime_discovery(invocation_capability_flags)",
+    "ready_discovery_does_not_infer_signer_readiness_from_device_mode",
+):
+    if required not in daemon:
+        raise SystemExit(f"ready_capability_proof:daemon_contract_missing:{required}")
+
+for required in (
+    "pub struct InvocationTransportReady",
+    "_session_shutdown: SessionShutdown",
+    "capability_flags: Vec<String>",
+    "pub fn capability_flags(&self) -> &[String]",
+    "ready_capability_flags",
+    "crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string()",
+    "Ok(InvocationTransportReady::new(",
+):
+    if required not in invocation:
+        raise SystemExit(f"ready_capability_proof:transport_contract_missing:{required}")
+
+register_pos = invocation.find("register_paired_user_runtime_signer(")
+flag_pos = invocation.find("PAIRED_USER_RUNTIME_SIGNER.to_string()", register_pos)
+if register_pos < 0 or flag_pos < 0 or flag_pos < register_pos:
+    raise SystemExit("ready_capability_proof:flag_not_after_signer_registration")
 PY
 }
 
@@ -7012,6 +7079,33 @@ EOF
   if ( check_filesystem_resource_owner_contract "$tmp/filesystem-resource-owner-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected filesystem ResourceRef default/local owner gate to fail"
   fi
+  mkdir -p "$tmp/ready-capability-mode-derived/src/bin" \
+    "$tmp/ready-capability-mode-derived/src/daemon/boot/invocation"
+  cat >"$tmp/ready-capability-mode-derived/src/bin/easynet-daemon.rs" <<'EOF'
+fn ready_runtime_discovery() -> anyhow::Result<server::ControlRuntimeDiscovery> {
+    let config = DaemonConfig::load(&default_config_path())?;
+    let daemon_identity = ready_daemon_identity(&config)?;
+    let mut capability_flags = Vec::new();
+    if matches!(config.mode(), DaemonMode::Device | DaemonMode::Both) {
+        capability_flags.push(flags::PAIRED_USER_RUNTIME_SIGNER.to_string());
+    }
+    Ok(server::ControlRuntimeDiscovery {
+        invocation_endpoint: resolved_local_uds_path_with_env_override(),
+        daemon_identity,
+        capability_flags,
+    })
+}
+EOF
+  cat >"$tmp/ready-capability-mode-derived/src/daemon/boot/invocation/mod.rs" <<'EOF'
+pub struct SessionShutdown;
+pub fn start_daemon_invocation_transport() -> anyhow::Result<SessionShutdown> {
+    register_paired_user_runtime_signer()?;
+    Ok(SessionShutdown)
+}
+EOF
+  if ( check_ready_capability_proof_contract "$tmp/ready-capability-mode-derived" ) >/dev/null 2>&1; then
+    fail "self-test expected mode-derived ready capability gate to fail"
+  fi
   mkdir -p "$tmp/cli-discover-candidate-legacy/src/cli/commands" \
     "$tmp/cli-discover-candidate-legacy/tests"
   cat >"$tmp/cli-discover-candidate-legacy/src/cli/commands/discover.rs" <<'EOF'
@@ -7071,6 +7165,7 @@ EOF
   check_daemon_runtime_route_inventory_contract
   check_daemon_local_device_identity_contract
   check_filesystem_resource_owner_contract
+  check_ready_capability_proof_contract
   check_daemon_local_runtime_identity_contract
   check_kernel_runtime_session_read_model_contract
   check_daemon_runtime_session_binding_contract
@@ -7156,6 +7251,7 @@ check_daemon_tuple_route_contract
 check_daemon_runtime_route_inventory_contract
 check_daemon_local_device_identity_contract
 check_filesystem_resource_owner_contract
+check_ready_capability_proof_contract
 check_daemon_local_runtime_identity_contract
 check_kernel_runtime_session_read_model_contract
 check_daemon_runtime_session_binding_contract

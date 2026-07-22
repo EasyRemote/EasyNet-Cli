@@ -333,6 +333,31 @@ impl SessionShutdown {
     }
 }
 
+/// Completed Invocation transport boot result.
+///
+/// This is the only object allowed to project Invocation runtime readiness
+/// capabilities into control discovery. Capabilities are populated by the boot
+/// transitions that actually proved them; discovery must not derive them from
+/// daemon mode.
+#[must_use = "hold for the daemon lifetime; dropping tears down any live session supervisor"]
+pub struct InvocationTransportReady {
+    _session_shutdown: SessionShutdown,
+    capability_flags: Vec<String>,
+}
+
+impl InvocationTransportReady {
+    fn new(session_shutdown: SessionShutdown, capability_flags: Vec<String>) -> Self {
+        Self {
+            _session_shutdown: session_shutdown,
+            capability_flags,
+        }
+    }
+
+    pub fn capability_flags(&self) -> &[String] {
+        &self.capability_flags
+    }
+}
+
 /// Runtime dependencies required to expose the daemon Invocation transport.
 ///
 /// This object is intentionally dependency-only: configuration, identity,
@@ -364,7 +389,7 @@ pub struct InvocationTransportDependencies {
 
 pub fn start_daemon_invocation_transport(
     dependencies: InvocationTransportDependencies,
-) -> anyhow::Result<SessionShutdown> {
+) -> anyhow::Result<InvocationTransportReady> {
     let InvocationTransportDependencies {
         daemon_runtime,
         federation_runtime,
@@ -425,8 +450,13 @@ pub fn start_daemon_invocation_transport(
     // restart.
     runtime_trust_anchor.replace(Arc::new(trust_anchor));
     let trust_anchor_cell = runtime_trust_anchor;
-    register_paired_user_runtime_signer(&config, &trust_anchor_path, &trust_anchor_cell)
-        .context("register paired User runtime signing identity")?;
+    let mut ready_capability_flags = Vec::new();
+    if capabilities.device_identity {
+        register_paired_user_runtime_signer(&config, &trust_anchor_path, &trust_anchor_cell)
+            .context("register paired User runtime signing identity")?;
+        ready_capability_flags
+            .push(crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string());
+    }
     let presence = Arc::new(PresenceRegistry::new());
     let advertised_agents = Arc::new(
         crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore::new(),
@@ -875,7 +905,10 @@ pub fn start_daemon_invocation_transport(
         }
     }
 
-    Ok(session_shutdown)
+    Ok(InvocationTransportReady::new(
+        session_shutdown,
+        ready_capability_flags,
+    ))
 }
 
 pub(crate) fn register_purge_recovery_on_outbox_ready(
@@ -1766,7 +1799,12 @@ mod tests {
             ),
             runtime_trust_anchor: trust_anchor,
             local_ability_catalog: Arc::new(
-                crate::daemon::ability::dispatch::AxonAbilityCatalog::new(),
+                crate::daemon::ability::dispatch::AxonAbilityCatalog::new_metadata_only_with_authority_context(
+                    crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+                        crate::core::ura::device_ura("test-realm", "test-device"),
+                    )
+                    .expect("test authority context"),
+                ),
             ),
             access_control_stores: Arc::new(
                 crate::daemon::persistence::access_control::AccessControlStoreRegistry::ephemeral(),
