@@ -23,10 +23,10 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::core::domain::{AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId};
+use crate::core::domain::{AgentId, MisfirePolicy, NodeId, ScheduleId};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
-use crate::daemon::execution::schedule::ScheduleService;
+use crate::daemon::execution::schedule::{ScheduleCreateSpec, ScheduleService};
 
 pub const ABILITY_ADD: &str = crate::daemon::ability::names::automation::SCHEDULE_ADD;
 pub const ABILITY_LIST: &str = crate::daemon::ability::names::automation::SCHEDULE_LIST;
@@ -78,18 +78,16 @@ fn add_handler(svc: &ScheduleService, args: Value) -> anyhow::Result<Value> {
     // Optional prompt template — see ScheduleEntry::prompt for
     // supported template variables.
     let prompt = args.get("prompt").and_then(Value::as_str).map(String::from);
-    let entry = ScheduleEntry {
-        id: ScheduleId::new(""),
-        tenant: TenantId::default_v1(),
-        target_node: NodeId::new(target_node),
-        target_agent: AgentId::new(target_agent),
-        cron_expr: cron_expr.into(),
+    let spec = ScheduleCreateSpec::new(
+        NodeId::new(target_node),
+        AgentId::new(target_agent),
+        cron_expr,
         misfire_policy,
-        catch_up_window_secs,
-        enabled,
-        prompt,
-    };
-    let id = svc.add(entry)?;
+    )
+    .with_catch_up_window_secs(catch_up_window_secs)
+    .with_enabled(enabled)
+    .with_prompt(prompt);
+    let id = svc.add_spec(spec)?;
     Ok(json!({ "schedule_id": id.as_str() }))
 }
 
@@ -192,9 +190,12 @@ pub fn enable_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::domain::TenantId;
 
     fn fresh() -> Arc<ScheduleService> {
-        Arc::new(ScheduleService::new())
+        let svc = Arc::new(ScheduleService::new());
+        svc.bind_memory_for_test(TenantId::new("tenant-a"));
+        svc
     }
 
     #[test]

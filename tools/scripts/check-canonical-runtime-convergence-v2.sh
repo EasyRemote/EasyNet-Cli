@@ -1892,6 +1892,84 @@ for required in (
 PY
 }
 
+check_daemon_runtime_tenant_store_binding_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local daemon="$cli_root/src/bin/easynet-daemon.rs"
+  local schedule="$cli_root/src/daemon/execution/schedule/mod.rs"
+  local loop_instance="$cli_root/src/daemon/execution/loop_instance/mod.rs"
+  local schedule_ability="$cli_root/src/daemon/ability/builtins/automation/schedule.rs"
+  [[ -f "$daemon" ]] || fail "daemon entrypoint is missing: $daemon"
+  [[ -f "$schedule" ]] || fail "schedule service source is missing: $schedule"
+  [[ -f "$loop_instance" ]] || fail "loop service source is missing: $loop_instance"
+  [[ -f "$schedule_ability" ]] || fail "schedule ability source is missing: $schedule_ability"
+
+  "$PYTHON_BIN" - "$daemon" "$schedule" "$loop_instance" "$schedule_ability" <<'PY'
+import sys
+from pathlib import Path
+
+daemon = Path(sys.argv[1]).read_text()
+schedule = Path(sys.argv[2]).read_text()
+loop_instance = Path(sys.argv[3]).read_text()
+schedule_ability = Path(sys.argv[4]).read_text()
+
+def production(text: str) -> str:
+    return text.split("#[cfg(test)]", 1)[0]
+
+daemon_prod = production(daemon)
+schedule_prod = production(schedule)
+loop_prod = production(loop_instance)
+schedule_ability_prod = production(schedule_ability)
+
+for source_name, text in (
+    ("daemon", daemon_prod),
+    ("schedule", schedule_prod),
+    ("loop_instance", loop_prod),
+    ("schedule_ability", schedule_ability_prod),
+):
+    if "TenantId::default_v1()" in text:
+        raise SystemExit(f"daemon_runtime_tenant_store_retired_default:{source_name}")
+
+for required in (
+    "TenantId::new(daemon_config.realm().to_string())",
+    "kernel.schedule_service().bind(&tenant)",
+    "kernel.loop_service().bind(&tenant)",
+):
+    if required not in daemon:
+        raise SystemExit(f"daemon_runtime_tenant_store_boot_binding_missing:{required}")
+
+for required in (
+    "pub struct ScheduleCreateSpec",
+    "tenant: RwLock<Option<TenantId>>",
+    "pub fn add_spec(&self, spec: ScheduleCreateSpec)",
+    "fn add_with_bound_tenant(",
+    "entry.tenant = tenant;",
+    "fn bound_tenant(&self) -> anyhow::Result<TenantId>",
+    "add_rejects_unbound_runtime_tenant",
+):
+    if required not in schedule:
+        raise SystemExit(f"schedule_runtime_tenant_binding_missing:{required}")
+
+for required in (
+    "tenant: RwLock<Option<TenantId>>",
+    "let tenant = self.bound_tenant()?;",
+    "fn bound_tenant(&self) -> anyhow::Result<TenantId>",
+    "create_rejects_unbound_runtime_tenant",
+):
+    if required not in loop_instance:
+        raise SystemExit(f"loop_runtime_tenant_binding_missing:{required}")
+
+for required in (
+    "ScheduleCreateSpec::new(",
+    ".with_catch_up_window_secs(catch_up_window_secs)",
+    ".with_enabled(enabled)",
+    ".with_prompt(prompt)",
+    "svc.add_spec(spec)?",
+):
+    if required not in schedule_ability:
+        raise SystemExit(f"schedule_ability_runtime_tenant_spec_missing:{required}")
+PY
+}
+
 check_retired_federation_directory_v1_stream_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   "$PYTHON_BIN" - "$cli_root/src" "$cli_root/tests" <<'PY'
@@ -5161,6 +5239,21 @@ EOF
   if ( CLI_ROOT="$tmp/cli-kernel-session-read-model"; check_kernel_runtime_session_read_model_contract ) >/dev/null 2>&1; then
     fail "self-test expected kernel session read-model default projection gate to fail"
   fi
+  mkdir -p "$tmp/cli-tenant-store-binding/src/bin" \
+    "$tmp/cli-tenant-store-binding/src/daemon/execution/schedule" \
+    "$tmp/cli-tenant-store-binding/src/daemon/execution/loop_instance" \
+    "$tmp/cli-tenant-store-binding/src/daemon/ability/builtins/automation"
+  printf 'fn main() { let tenant = TenantId::default_v1(); kernel.schedule_service().bind(&tenant); kernel.loop_service().bind(&tenant); }\n' \
+    > "$tmp/cli-tenant-store-binding/src/bin/easynet-daemon.rs"
+  printf 'pub struct ScheduleService; impl ScheduleService { pub fn add(&self, mut entry: ScheduleEntry) { entry.tenant = TenantId::default_v1(); } }\n' \
+    > "$tmp/cli-tenant-store-binding/src/daemon/execution/schedule/mod.rs"
+  printf 'pub struct LoopService; impl LoopService { pub fn create(&self) { let tenant = TenantId::default_v1(); } }\n' \
+    > "$tmp/cli-tenant-store-binding/src/daemon/execution/loop_instance/mod.rs"
+  printf 'fn add_handler(svc: &ScheduleService) { let entry = ScheduleEntry { tenant: TenantId::default_v1() }; svc.add(entry); }\n' \
+    > "$tmp/cli-tenant-store-binding/src/daemon/ability/builtins/automation/schedule.rs"
+  if ( CLI_ROOT="$tmp/cli-tenant-store-binding"; check_daemon_runtime_tenant_store_binding_contract ) >/dev/null 2>&1; then
+    fail "self-test expected daemon runtime tenant-store default gate to fail"
+  fi
   mkdir -p "$tmp/cli-directory-fallback/sdk/go" \
     "$tmp/cli-directory-fallback/sdk/python/easynet_sdk" \
     "$tmp/cli-directory-fallback/sdk/python/tests"
@@ -5928,6 +6021,7 @@ EOF
   check_daemon_runtime_route_inventory_contract
   check_daemon_local_runtime_identity_contract
   check_kernel_runtime_session_read_model_contract
+  check_daemon_runtime_tenant_store_binding_contract
   check_route_resolver_descriptor_ref_selector_contract
   check_namespace_resolver_authority_projection_contract
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
@@ -6001,6 +6095,7 @@ check_daemon_tuple_route_contract
 check_daemon_runtime_route_inventory_contract
 check_daemon_local_runtime_identity_contract
 check_kernel_runtime_session_read_model_contract
+check_daemon_runtime_tenant_store_binding_contract
 check_retired_federation_directory_v1_stream_contract
 check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract

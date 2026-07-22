@@ -177,6 +177,7 @@ impl LoopStreamState {
 #[derive(Default)]
 pub struct LoopService {
     cache: RwLock<BTreeMap<LoopId, LoopInstance>>,
+    tenant: RwLock<Option<TenantId>>,
     store: RwLock<Option<LoopStore>>,
     streams: RwLock<BTreeMap<LoopId, LoopStreamState>>,
     running: Mutex<BTreeSet<LoopId>>,
@@ -195,6 +196,11 @@ impl LoopService {
             .map_err(|_| anyhow::anyhow!("LoopService driver lock poisoned"))?;
         *guard = Some(driver);
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn bind_memory_for_test(&self, tenant: TenantId) {
+        *self.tenant.write().expect("loop tenant") = Some(tenant);
     }
 
     pub fn bind(&self, tenant: &TenantId) -> anyhow::Result<()> {
@@ -218,6 +224,11 @@ impl LoopService {
             .store
             .write()
             .map_err(|_| anyhow::anyhow!("LoopService store lock poisoned"))?;
+        let mut bound_tenant = self
+            .tenant
+            .write()
+            .map_err(|_| anyhow::anyhow!("LoopService tenant lock poisoned"))?;
+        *bound_tenant = Some(tenant.clone());
         *s = Some(store);
         Ok(())
     }
@@ -232,10 +243,11 @@ impl LoopService {
         if max_iters == 0 {
             anyhow::bail!("loop.create: max_iters must be ≥ 1");
         }
+        let tenant = self.bound_tenant()?;
         let id = LoopId::new(format!("loop-{}", Uuid::new_v4()));
         let instance = LoopInstance {
             id: id.clone(),
-            tenant: TenantId::default_v1(),
+            tenant,
             worker_agent,
             verify_expr,
             body_prompt,
@@ -253,6 +265,14 @@ impl LoopService {
             .insert(id.clone(), instance);
         self.start_controller(&id)?;
         Ok(id)
+    }
+
+    fn bound_tenant(&self) -> anyhow::Result<TenantId> {
+        self.tenant
+            .read()
+            .map_err(|_| anyhow::anyhow!("LoopService tenant lock poisoned"))?
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("LoopService is not bound to a runtime tenant"))
     }
 
     pub fn resume_inflight(self: &Arc<Self>) -> anyhow::Result<()> {
@@ -835,9 +855,15 @@ mod tests {
         panic!("loop {id} did not reach terminal state in time");
     }
 
+    fn bound_service() -> Arc<LoopService> {
+        let svc = Arc::new(LoopService::new());
+        svc.bind_memory_for_test(TenantId::new("tenant-a"));
+        svc
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn create_then_status_self_drives_to_done() {
-        let svc = Arc::new(LoopService::new());
+        let svc = bound_service();
         svc.install_driver(Arc::new(ScriptedDriver::new(
             vec![Ok("body ok")],
             vec![Ok(r#"{"done": true}"#)],
@@ -855,7 +881,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn verify_false_exhausts_after_max_iters() {
-        let svc = Arc::new(LoopService::new());
+        let svc = bound_service();
         svc.install_driver(Arc::new(ScriptedDriver::new(
             vec![Ok("body-1"), Ok("body-2")],
             vec![Ok(r#"{"done": false}"#), Ok(r#"{"done": false}"#)],
@@ -876,7 +902,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn malformed_verify_terminates_as_verify_malformed() {
-        let svc = Arc::new(LoopService::new());
+        let svc = bound_service();
         svc.install_driver(Arc::new(ScriptedDriver::new(
             vec![Ok("body-1")],
             vec![Ok("not-json")],
@@ -901,7 +927,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn subscribe_replays_history_and_terminal_snapshot() {
-        let svc = Arc::new(LoopService::new());
+        let svc = bound_service();
         svc.install_driver(Arc::new(ScriptedDriver::new(
             vec![Ok("body ok")],
             vec![Ok(r#"{"done": true}"#)],
@@ -926,6 +952,15 @@ mod tests {
             .create(AgentId::new("alice"), "true".into(), 0, "x".into())
             .unwrap_err();
         assert!(format!("{err}").contains("max_iters"));
+    }
+
+    #[test]
+    fn create_rejects_unbound_runtime_tenant() {
+        let svc = Arc::new(LoopService::new());
+        let err = svc
+            .create(AgentId::new("alice"), "true".into(), 1, "x".into())
+            .unwrap_err();
+        assert!(format!("{err}").contains("not bound to a runtime tenant"));
     }
 
     #[test]

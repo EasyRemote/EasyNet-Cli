@@ -46,11 +46,80 @@ use uuid::Uuid;
 
 use crate::core::domain::{AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId};
 
+/// Caller-neutral schedule creation request.
+///
+/// The spec intentionally excludes `tenant` and `id`: tenant is owned by the
+/// bound runtime service and id is assigned by the service. Public ingress
+/// should pass this object instead of fabricating a partially canonical
+/// `ScheduleEntry`.
+#[derive(Debug, Clone)]
+pub struct ScheduleCreateSpec {
+    pub target_node: NodeId,
+    pub target_agent: AgentId,
+    pub cron_expr: String,
+    pub misfire_policy: MisfirePolicy,
+    pub catch_up_window_secs: Option<u64>,
+    pub enabled: bool,
+    pub prompt: Option<String>,
+}
+
+impl ScheduleCreateSpec {
+    pub fn new(
+        target_node: NodeId,
+        target_agent: AgentId,
+        cron_expr: impl Into<String>,
+        misfire_policy: MisfirePolicy,
+    ) -> Self {
+        Self {
+            target_node,
+            target_agent,
+            cron_expr: cron_expr.into(),
+            misfire_policy,
+            catch_up_window_secs: None,
+            enabled: true,
+            prompt: None,
+        }
+    }
+
+    pub fn with_catch_up_window_secs(mut self, catch_up_window_secs: Option<u64>) -> Self {
+        self.catch_up_window_secs = catch_up_window_secs;
+        self
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    pub fn with_prompt(mut self, prompt: Option<String>) -> Self {
+        self.prompt = prompt;
+        self
+    }
+
+    fn into_entry(self, tenant: TenantId) -> ScheduleEntry {
+        ScheduleEntry {
+            id: ScheduleId::new(""),
+            tenant,
+            target_node: self.target_node,
+            target_agent: self.target_agent,
+            cron_expr: self.cron_expr,
+            misfire_policy: self.misfire_policy,
+            catch_up_window_secs: self.catch_up_window_secs,
+            enabled: self.enabled,
+            prompt: self.prompt,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct ScheduleService {
     /// In-memory cache of every schedule on disk. Kept hot so the
     /// tick runner does not re-read the filesystem every minute.
     cache: RwLock<BTreeMap<ScheduleId, ScheduleEntry>>,
+    /// Canonical tenant this service is currently bound to. Create paths use
+    /// this as the only row-tenant authority instead of accepting caller-chosen
+    /// tenant fields.
+    tenant: RwLock<Option<TenantId>>,
     /// Disk-backed store. Set to `Some(...)` after `bind` is
     /// called with a tenant id; tests construct the service
     /// without a store and operate on the in-memory cache only.
@@ -70,6 +139,11 @@ impl ScheduleService {
             .insert(entry.id.clone(), entry);
     }
 
+    #[cfg(test)]
+    pub fn bind_memory_for_test(&self, tenant: TenantId) {
+        *self.tenant.write().expect("schedule tenant") = Some(tenant);
+    }
+
     /// Bind the service to a tenant-scoped disk store. Loads any
     /// existing schedules into the in-memory cache. Daemon bin
     /// calls this at boot.
@@ -87,6 +161,11 @@ impl ScheduleService {
             .store
             .write()
             .map_err(|_| anyhow::anyhow!("ScheduleService store lock poisoned"))?;
+        let mut bound_tenant = self
+            .tenant
+            .write()
+            .map_err(|_| anyhow::anyhow!("ScheduleService tenant lock poisoned"))?;
+        *bound_tenant = Some(tenant.clone());
         *s = Some(store);
         Ok(())
     }
@@ -98,10 +177,25 @@ impl ScheduleService {
     /// Validation rejects:
     ///   * empty / unparseable cron expressions
     ///   * unbounded MisfirePolicy values (none in v1)
-    pub fn add(&self, mut entry: ScheduleEntry) -> anyhow::Result<ScheduleId> {
+    pub fn add(&self, entry: ScheduleEntry) -> anyhow::Result<ScheduleId> {
+        let tenant = self.bound_tenant()?;
+        self.add_with_bound_tenant(entry, tenant)
+    }
+
+    pub fn add_spec(&self, spec: ScheduleCreateSpec) -> anyhow::Result<ScheduleId> {
+        let tenant = self.bound_tenant()?;
+        self.add_with_bound_tenant(spec.into_entry(tenant.clone()), tenant)
+    }
+
+    fn add_with_bound_tenant(
+        &self,
+        mut entry: ScheduleEntry,
+        tenant: TenantId,
+    ) -> anyhow::Result<ScheduleId> {
         // Validate cron BEFORE assigning id so the caller's id is
         // not consumed by a malformed entry.
         validate_cron(&entry.cron_expr)?;
+        entry.tenant = tenant;
         if entry.id.as_str().is_empty() {
             entry.id = ScheduleId::new(format!("sched-{}", Uuid::new_v4()));
         }
@@ -121,6 +215,14 @@ impl ScheduleService {
             .map_err(|_| anyhow::anyhow!("cache lock poisoned"))?;
         cache.insert(id.clone(), entry);
         Ok(id)
+    }
+
+    fn bound_tenant(&self) -> anyhow::Result<TenantId> {
+        self.tenant
+            .read()
+            .map_err(|_| anyhow::anyhow!("ScheduleService tenant lock poisoned"))?
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("ScheduleService is not bound to a runtime tenant"))
     }
 
     /// Remove a schedule by id. Errors when the id does not exist.
@@ -343,9 +445,8 @@ impl std::fmt::Debug for ScheduleService {
     }
 }
 
-/// Convenience constructor for tests + the daemon bin's setup
-/// path: build a fully-formed `ScheduleEntry` from the args
-/// `schedule.add` accepts.
+/// Convenience constructor for tests.
+#[cfg(test)]
 pub fn make_entry(
     target_node: &str,
     target_agent: &str,
@@ -396,13 +497,20 @@ mod tests {
         make_entry("self", "alice", cron_expr, policy)
     }
 
+    fn bound_service() -> ScheduleService {
+        let svc = ScheduleService::new();
+        svc.bind_memory_for_test(TenantId::new("tenant-a"));
+        svc
+    }
+
     #[test]
     fn add_then_list_returns_entry_with_assigned_id() {
-        let svc = ScheduleService::new();
+        let svc = bound_service();
         let id = svc.add(entry("0 9 * * *", MisfirePolicy::Skip)).unwrap();
         let listed = svc.list().expect("list");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, id);
+        assert_eq!(listed[0].tenant, TenantId::new("tenant-a"));
         assert!(listed[0].enabled);
     }
 
@@ -412,11 +520,20 @@ mod tests {
         // silently accepted and never fire. Pin the message so
         // operators can grep "invalid cron" to find their bad
         // schedule line.
-        let svc = ScheduleService::new();
+        let svc = bound_service();
         let err = svc
             .add(entry("totally not cron", MisfirePolicy::Skip))
             .unwrap_err();
         assert!(format!("{err}").contains("invalid cron"));
+    }
+
+    #[test]
+    fn add_rejects_unbound_runtime_tenant() {
+        let svc = ScheduleService::new();
+        let err = svc
+            .add(entry("0 9 * * *", MisfirePolicy::Skip))
+            .unwrap_err();
+        assert!(format!("{err}").contains("not bound to a runtime tenant"));
     }
 
     #[test]
@@ -430,7 +547,7 @@ mod tests {
 
     #[test]
     fn enable_toggles_field_in_cache() {
-        let svc = ScheduleService::new();
+        let svc = bound_service();
         let id = svc.add(entry("0 9 * * *", MisfirePolicy::Skip)).unwrap();
         svc.enable(&id, false).unwrap();
         let listed = svc.list().expect("list");
@@ -439,7 +556,7 @@ mod tests {
 
     #[test]
     fn remove_drops_entry_and_returns_error_for_unknown() {
-        let svc = ScheduleService::new();
+        let svc = bound_service();
         let id = svc.add(entry("0 9 * * *", MisfirePolicy::Skip)).unwrap();
         svc.remove(&id).unwrap();
         assert!(svc.list().expect("list").is_empty());
@@ -464,7 +581,7 @@ mod tests {
         // "Skip" semantics: a daemon down for 6 hours past a
         // every-minute schedule must fire only ONE invocation on
         // resume — the most recent.
-        let svc = ScheduleService::new();
+        let svc = bound_service();
         let id = svc.add(entry("* * * * *", MisfirePolicy::Skip)).unwrap();
         // Anchor "last fire" to 6 hours ago.
         let now = Utc.with_ymd_and_hms(2026, 4, 25, 12, 0, 0).unwrap();
@@ -481,7 +598,7 @@ mod tests {
 
     #[test]
     fn due_fire_once_policy_emits_exactly_one_fire() {
-        let svc = ScheduleService::new();
+        let svc = bound_service();
         let id = svc
             .add(entry("* * * * *", MisfirePolicy::FireOnce))
             .unwrap();
@@ -506,7 +623,7 @@ mod tests {
 
     #[test]
     fn due_catch_up_windowed_emits_within_window_only() {
-        let svc = ScheduleService::new();
+        let svc = bound_service();
         let mut e = entry("0 * * * *", MisfirePolicy::CatchUpWindowed);
         e.catch_up_window_secs = Some(2 * 3600); // 2-hour window
         let id = svc.add(e).unwrap();
@@ -536,7 +653,7 @@ mod tests {
 
     #[test]
     fn due_disabled_schedule_does_not_fire() {
-        let svc = ScheduleService::new();
+        let svc = bound_service();
         let id = svc.add(entry("* * * * *", MisfirePolicy::Skip)).unwrap();
         svc.enable(&id, false).unwrap();
         let now = Utc.with_ymd_and_hms(2026, 4, 25, 12, 0, 0).unwrap();
@@ -579,7 +696,7 @@ mod tests {
 
     #[test]
     fn next_fire_after_returns_first_match() {
-        let svc = ScheduleService::new();
+        let svc = bound_service();
         let id = svc.add(entry("0 9 * * *", MisfirePolicy::Skip)).unwrap();
         let now = Utc.with_ymd_and_hms(2026, 4, 25, 8, 0, 0).unwrap();
         let next = svc.next_fire_after(&id, now).unwrap().unwrap();

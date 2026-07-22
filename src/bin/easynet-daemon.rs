@@ -258,9 +258,7 @@ async fn main() -> anyhow::Result<()> {
     // operate on an in-memory cache only — schedules and loops
     // vanish on every reboot.
     //
-    // v1 single-tenant: hardcode `TenantId::default_v1()`. v2 will
-    // route this from credentials.json via IPC handshake.
-    let tenant = TenantId::default_v1();
+    let tenant = TenantId::new(daemon_config.realm().to_string());
     boot_bus.emit_started("tenant-stores");
     if let Err(e) = kernel.schedule_service().bind(&tenant) {
         eprintln!("[daemon] schedule store bind failed: {e:#}");

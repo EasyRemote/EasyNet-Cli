@@ -169,16 +169,22 @@ mod tests {
         }
     }
 
+    fn bound_service() -> Arc<ScheduleService> {
+        let svc = Arc::new(ScheduleService::new());
+        svc.bind_memory_for_test(TenantId::new("tenant-a"));
+        svc
+    }
+
     #[test]
     fn loader_returns_none_when_no_schedules_for_agent() {
-        let svc = Arc::new(ScheduleService::new());
+        let svc = bound_service();
         let loader = ScheduleLoader::new(svc);
         assert!(loader.load("alice", "s-1").unwrap().is_none());
     }
 
     #[test]
     fn loader_returns_none_when_only_other_agents_have_schedules() {
-        let svc = Arc::new(ScheduleService::new());
+        let svc = bound_service();
         svc.add(make_entry("s1", "bob", "0 * * * *", true)).unwrap();
         let loader = ScheduleLoader::new(svc);
         assert!(loader.load("alice", "s-1").unwrap().is_none());
@@ -186,7 +192,7 @@ mod tests {
 
     #[test]
     fn loader_returns_none_when_disabled_schedules_only() {
-        let svc = Arc::new(ScheduleService::new());
+        let svc = bound_service();
         svc.add(make_entry("s1", "alice", "0 * * * *", false))
             .unwrap();
         let loader = ScheduleLoader::new(svc);
@@ -195,7 +201,7 @@ mod tests {
 
     #[test]
     fn loader_renders_upcoming_schedule_block() {
-        let svc = Arc::new(ScheduleService::new());
+        let svc = bound_service();
         svc.add(make_entry("s1", "alice", "0 * * * *", true))
             .unwrap();
         let loader = ScheduleLoader::new(svc);
@@ -207,7 +213,7 @@ mod tests {
 
     #[test]
     fn loader_rejects_corrupt_schedule_instead_of_empty_context() {
-        let svc = Arc::new(ScheduleService::new());
+        let svc = bound_service();
         svc.insert_cached_for_test(make_entry("s1", "alice", "not a cron", true));
         let loader = ScheduleLoader::new(svc);
 
@@ -221,7 +227,7 @@ mod tests {
 
     #[test]
     fn loader_caps_at_max_entries_and_notes_truncation() {
-        let svc = Arc::new(ScheduleService::new());
+        let svc = bound_service();
         // Add more than the cap so truncation kicks in.
         for i in 0..(MAX_ENTRIES_RENDERED + 3) {
             svc.add(make_entry(&format!("s{i}"), "alice", "0 * * * *", true))
