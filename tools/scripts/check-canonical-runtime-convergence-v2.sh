@@ -3323,8 +3323,65 @@ control_plane = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
 
 if "fn control_plane_authority_root" in dispatch:
     raise SystemExit("catalog_runtime_key:ability_level_authority_root_helper_present")
+if "fn handlers_for_ability" in dispatch:
+    raise SystemExit("catalog_runtime_key:ability_level_handler_merge_present")
+if "fn fill_missing_from" in dispatch:
+    raise SystemExit("catalog_runtime_key:missing_slot_handler_fallback_present")
 if "authority_roots_for_ability" in control_plane:
     raise SystemExit("catalog_runtime_key:ability_level_authority_root_query_present")
+
+for token, code in (
+    ("fn unique_handler_slot", "unique_handler_slot_projection_missing"),
+    ("fn unique_mode_registered", "unique_mode_projection_missing"),
+    ("fn runtime_handlers_for_key", "authority_keyed_runtime_handler_read_missing"),
+):
+    if token not in dispatch:
+        raise SystemExit(f"catalog_runtime_key:{code}")
+
+for token, code in (
+    (
+        "self.unique_handler_slot(ability, RuntimeHandlerSet::resolve_rpc)",
+        "resolve_rpc_unique_projection_missing",
+    ),
+    (
+        "self.unique_handler_slot(ability, RuntimeHandlerSet::resolve_stream)",
+        "resolve_stream_unique_projection_missing",
+    ),
+    (
+        "self.unique_handler_slot(ability, RuntimeHandlerSet::resolve_stream_with_env)",
+        "resolve_stream_with_env_unique_projection_missing",
+    ),
+    (
+        "self.unique_handler_slot(ability, RuntimeHandlerSet::resolve_bidi)",
+        "resolve_bidi_unique_projection_missing",
+    ),
+    (
+        "self.unique_handler_slot(ability, RuntimeHandlerSet::resolve_bidi_with_env)",
+        "resolve_bidi_with_env_unique_projection_missing",
+    ),
+    (
+        "self.unique_handler_slot(ability, RuntimeHandlerSet::resolve_rpc_with_env)",
+        "resolve_rpc_with_env_unique_projection_missing",
+    ),
+):
+    if token not in dispatch:
+        raise SystemExit(f"catalog_runtime_key:{code}")
+
+sync_match = re.search(
+    r"fn\s+sync_runtime_ability\s*\([^)]*\)\s*->\s*anyhow::Result<\(\)>\s*\{(?P<body>.*?)\n    \}",
+    dispatch,
+    re.S,
+)
+if not sync_match:
+    raise SystemExit("catalog_runtime_key:sync_runtime_ability_missing")
+sync_body = sync_match.group("body")
+for token, code in (
+    ("handler_control_plane_key", "sync_exact_key_lookup_missing"),
+    ("runtime_handlers_for_key", "sync_authority_keyed_handler_read_missing"),
+    ("sync_runtime_ability_from_handlers", "sync_shared_runtime_writer_missing"),
+):
+    if token not in sync_body:
+        raise SystemExit(f"catalog_runtime_key:{code}")
 
 match = re.search(
     r"fn\s+verify_execution_key_control_plane_modes\s*\([^)]*\)\s*->\s*anyhow::Result<\(\)>\s*\{(?P<body>.*?)\n    \}",
@@ -3373,6 +3430,14 @@ for token, code in (
     (
         "dynamic_runtime_key_validates_exact_authority_mode_record",
         "dynamic_positive_test_missing",
+    ),
+    (
+        "ability_name_handler_projection_rejects_multi_authority_same_slot",
+        "same_slot_ambiguity_test_missing",
+    ),
+    (
+        "ability_name_handler_projection_does_not_synthesize_cross_authority_runtime_set",
+        "cross_authority_runtime_set_test_missing",
     ),
 ):
     if token not in dispatch:

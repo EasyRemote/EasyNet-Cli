@@ -803,27 +803,6 @@ impl RuntimeHandlerSet {
         }
     }
 
-    fn fill_missing_from(&mut self, other: &Self) {
-        if self.rpc.is_none() {
-            self.rpc = other.rpc.as_ref().map(Arc::clone);
-        }
-        if self.stream.is_none() {
-            self.stream = other.stream.as_ref().map(Arc::clone);
-        }
-        if self.bidi.is_none() {
-            self.bidi = other.bidi.as_ref().map(Arc::clone);
-        }
-        if self.rpc_with_env.is_none() {
-            self.rpc_with_env = other.rpc_with_env.as_ref().map(Arc::clone);
-        }
-        if self.stream_with_env.is_none() {
-            self.stream_with_env = other.stream_with_env.as_ref().map(Arc::clone);
-        }
-        if self.bidi_with_env.is_none() {
-            self.bidi_with_env = other.bidi_with_env.as_ref().map(Arc::clone);
-        }
-    }
-
     fn resolve_rpc(&self) -> Option<LocalRpcHandler> {
         self.rpc.as_ref().map(Arc::clone)
     }
@@ -2717,23 +2696,6 @@ impl ExecutionIndex {
         names.into_iter().collect()
     }
 
-    fn handlers_for_ability(&self, ability: &str) -> RuntimeHandlerSet {
-        let mut handlers = RuntimeHandlerSet::default();
-        for (key, entry) in self.entries.iter().filter(|(key, entry)| {
-            key.ability() == ability && entry.origin == ExecutionOrigin::Static
-        }) {
-            let _ = key;
-            handlers.fill_missing_from(&entry.handlers);
-        }
-        for (key, entry) in self.entries.iter().filter(|(key, entry)| {
-            key.ability() == ability && entry.origin == ExecutionOrigin::Dynamic
-        }) {
-            let _ = key;
-            handlers.fill_missing_from(&entry.handlers);
-        }
-        handlers
-    }
-
     fn static_rows_for_ability(
         &self,
         ability: &str,
@@ -2756,41 +2718,71 @@ impl ExecutionIndex {
             .unwrap_or_default()
     }
 
-    fn has_mode(&self, ability: &str, call_mode: DescriptorCallMode) -> bool {
-        let modes = self.handlers_for_ability(ability).modes();
-        match call_mode {
-            DescriptorCallMode::Rpc => modes.rpc,
-            DescriptorCallMode::Stream => modes.stream,
-            DescriptorCallMode::Bidi => modes.bidi,
+    fn unique_handler_slot<T>(
+        &self,
+        ability: &str,
+        extract: impl Fn(&RuntimeHandlerSet) -> Option<T>,
+    ) -> Option<T> {
+        let mut matches = self
+            .entries
+            .iter()
+            .filter(|(key, entry)| key.ability() == ability && !entry.handlers.is_empty())
+            .filter_map(|(_, entry)| extract(&entry.handlers));
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
         }
+        Some(first)
+    }
+
+    fn unique_mode_registered(&self, ability: &str, call_mode: DescriptorCallMode) -> bool {
+        let mut matches = self
+            .entries
+            .iter()
+            .filter(|(key, entry)| key.ability() == ability && !entry.handlers.is_empty())
+            .filter(|(_, entry)| {
+                let modes = entry.handlers.modes();
+                match call_mode {
+                    DescriptorCallMode::Rpc => modes.rpc,
+                    DescriptorCallMode::Stream => modes.stream,
+                    DescriptorCallMode::Bidi => modes.bidi,
+                }
+            });
+        matches.next().is_some() && matches.next().is_none()
+    }
+
+    fn has_mode(&self, ability: &str, call_mode: DescriptorCallMode) -> bool {
+        self.unique_mode_registered(ability, call_mode)
     }
 
     fn has_any_handler(&self, ability: &str) -> bool {
-        !self.handlers_for_ability(ability).is_empty()
+        self.entries
+            .iter()
+            .any(|(key, entry)| key.ability() == ability && !entry.handlers.is_empty())
     }
 
     fn resolve_rpc(&self, ability: &str) -> Option<LocalRpcHandler> {
-        self.handlers_for_ability(ability).resolve_rpc()
+        self.unique_handler_slot(ability, RuntimeHandlerSet::resolve_rpc)
     }
 
     fn resolve_stream(&self, ability: &str) -> Option<LocalStreamHandler> {
-        self.handlers_for_ability(ability).resolve_stream()
+        self.unique_handler_slot(ability, RuntimeHandlerSet::resolve_stream)
     }
 
     fn resolve_stream_with_env(&self, ability: &str) -> Option<LocalStreamHandlerWithEnvelope> {
-        self.handlers_for_ability(ability).resolve_stream_with_env()
+        self.unique_handler_slot(ability, RuntimeHandlerSet::resolve_stream_with_env)
     }
 
     fn resolve_bidi(&self, ability: &str) -> Option<LocalBidiHandler> {
-        self.handlers_for_ability(ability).resolve_bidi()
+        self.unique_handler_slot(ability, RuntimeHandlerSet::resolve_bidi)
     }
 
     fn resolve_bidi_with_env(&self, ability: &str) -> Option<LocalBidiHandlerWithEnvelope> {
-        self.handlers_for_ability(ability).resolve_bidi_with_env()
+        self.unique_handler_slot(ability, RuntimeHandlerSet::resolve_bidi_with_env)
     }
 
     fn resolve_rpc_with_env(&self, ability: &str) -> Option<LocalRpcHandlerWithEnvelope> {
-        self.handlers_for_ability(ability).resolve_rpc_with_env()
+        self.unique_handler_slot(ability, RuntimeHandlerSet::resolve_rpc_with_env)
     }
 }
 
@@ -4442,16 +4434,17 @@ impl AxonAbilityCatalog {
         Ok(())
     }
 
-    fn runtime_handlers_for(&self, name: &str) -> RuntimeHandlerSet {
+    fn runtime_handlers_for_key(&self, key: &ControlPlaneAbilityKey) -> RuntimeHandlerSet {
         self.execution_index
             .read()
             .expect("execution_index RwLock poisoned")
-            .handlers_for_ability(name)
+            .handlers_for_key(key)
     }
 
     fn sync_runtime_ability(&self, name: &str) -> anyhow::Result<()> {
-        let handlers = self.runtime_handlers_for(name);
-        self.sync_runtime_ability_from_handlers(name, handlers)
+        let control_plane_key = self.handler_control_plane_key(name)?;
+        let handlers = self.runtime_handlers_for_key(&control_plane_key);
+        self.sync_runtime_ability_from_handlers(name, &control_plane_key, handlers)
     }
 
     fn sync_static_runtime_ability_or_panic(&self, name: &str) {
@@ -4525,24 +4518,7 @@ impl AxonAbilityCatalog {
             return self.unregister_runtime_ability(name);
         }
         for (control_plane_key, handlers) in rows {
-            let modes = handlers.modes();
-            if modes.is_empty() {
-                continue;
-            }
-            let options = self.runtime_options_for(&control_plane_key, modes)?;
-            let Some(runtime) = self.runtime.as_ref().cloned() else {
-                continue;
-            };
-            self.replace_runtime_ability(
-                &control_plane_key,
-                runtime_handler_set_to_ability_fn(
-                    name.to_string(),
-                    handlers,
-                    runtime,
-                    Arc::clone(&self.derived_invocation_admission),
-                ),
-                options,
-            )?;
+            self.sync_runtime_ability_from_handlers(name, &control_plane_key, handlers)?;
         }
         Ok(())
     }
@@ -4550,19 +4526,23 @@ impl AxonAbilityCatalog {
     fn sync_runtime_ability_from_handlers(
         &self,
         name: &str,
+        control_plane_key: &ControlPlaneAbilityKey,
         handlers: RuntimeHandlerSet,
     ) -> anyhow::Result<()> {
         let modes = handlers.modes();
         if modes.is_empty() {
-            return self.unregister_runtime_ability(name);
+            let Some(runtime) = self.runtime.as_ref() else {
+                return Ok(());
+            };
+            let runtime_key = control_plane_key.runtime_key()?;
+            return self.unregister_runtime_ability_by_key(runtime, name, &runtime_key);
         }
-        let control_plane_key = self.handler_control_plane_key(name)?;
-        let options = self.runtime_options_for(&control_plane_key, modes)?;
+        let options = self.runtime_options_for(control_plane_key, modes)?;
         let Some(runtime) = self.runtime.as_ref().cloned() else {
             return Ok(());
         };
         self.replace_runtime_ability(
-            &control_plane_key,
+            control_plane_key,
             runtime_handler_set_to_ability_fn(
                 name.to_string(),
                 handlers,
@@ -7433,6 +7413,70 @@ mod tests {
             .expect("runtime key derivation must validate only the device RPC tuple");
 
         assert_eq!(got, device_key);
+    }
+
+    #[test]
+    fn ability_name_handler_projection_rejects_multi_authority_same_slot() {
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
+            "shared.rpc",
+            OwnerKind::Device,
+            Arc::new(|_| Ok(serde_json::json!({"owner": "device"}))),
+        );
+        register_test_rpc(
+            &mut reg,
+            "shared.rpc",
+            OwnerKind::Hub,
+            Arc::new(|_| Ok(serde_json::json!({"owner": "hub"}))),
+        );
+
+        assert!(
+            reg.has_registered_handler("shared.rpc"),
+            "execution index still records same-name handlers"
+        );
+        assert!(
+            !reg.has_rpc("shared.rpc"),
+            "same-name same-mode multi-authority handlers must not be routeable by bare ability name"
+        );
+        assert!(
+            reg.resolve_rpc("shared.rpc").is_none(),
+            "same-name same-slot handlers must fail closed instead of picking an arbitrary authority"
+        );
+    }
+
+    #[test]
+    fn ability_name_handler_projection_does_not_synthesize_cross_authority_runtime_set() {
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
+            "shared.modes",
+            OwnerKind::Device,
+            Arc::new(|_| Ok(serde_json::json!({"mode": "rpc"}))),
+        );
+        register_test_stream(
+            &mut reg,
+            "shared.modes",
+            OwnerKind::Hub,
+            Arc::new(|_| Ok(StreamSource::Snapshot(Vec::new()))),
+        );
+
+        assert!(
+            reg.has_rpc("shared.modes"),
+            "RPC projection is unique for the device authority"
+        );
+        assert!(
+            reg.has_stream("shared.modes"),
+            "Stream projection is unique for the hub authority"
+        );
+        let err = reg
+            .handler_control_plane_key("shared.modes")
+            .expect_err("cross-authority modes must not collapse into one runtime key");
+        assert!(
+            err.to_string()
+                .contains("multiple Static execution authority keys"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

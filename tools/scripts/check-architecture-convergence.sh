@@ -6004,6 +6004,45 @@ if ability_dispatch.exists():
             line_number(production_text, match.start() if match else 0),
             "retired runtime-key helper must not remain as a routeability fallback surface",
         )
+    for retired, detail in (
+        (
+            "fn handlers_for_ability",
+            "execution index must not synthesize handler sets by merging authority-scoped rows by ability name",
+        ),
+        (
+            "fn fill_missing_from",
+            "runtime handler sets must not be assembled through missing-slot fallback from another authority row",
+        ),
+    ):
+        if retired in production_text:
+            match = re.search(re.escape(retired), production_text)
+            add(
+                "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+                ability_dispatch,
+                line_number(production_text, match.start() if match else 0),
+                detail,
+            )
+    for required, detail in (
+        (
+            "fn unique_handler_slot",
+            "ability-name handler lookup must use a named unique slot projection",
+        ),
+        (
+            "fn unique_mode_registered",
+            "routeability must require a unique execution row for the requested mode",
+        ),
+        (
+            "fn runtime_handlers_for_key",
+            "runtime sync must read handlers by exact authority-scoped execution key",
+        ),
+    ):
+        if required not in production_text:
+            add(
+                "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+                ability_dispatch,
+                1,
+                detail,
+            )
     if "fn control_plane_authority_root" in production_text:
         match = re.search(r"fn\s+control_plane_authority_root", production_text)
         add(
@@ -6047,6 +6086,8 @@ if ability_dispatch.exists():
         "static_runtime_key_validates_exact_authority_mode_record",
         "static_runtime_key_rejects_unrelated_authority_record_as_rescue_path",
         "dynamic_runtime_key_validates_exact_authority_mode_record",
+        "ability_name_handler_projection_rejects_multi_authority_same_slot",
+        "ability_name_handler_projection_does_not_synthesize_cross_authority_runtime_set",
     ):
         if token not in raw_text:
             add(
