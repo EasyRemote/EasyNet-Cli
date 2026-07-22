@@ -43,6 +43,81 @@ struct SelectedRouteDescriptorRef {
     descriptor_ref: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WireAbilityTarget {
+    DescriptorRef {
+        wire_target: String,
+        ability_ura: String,
+    },
+    OwnerLocal {
+        wire_target: String,
+        ability_ura: String,
+    },
+}
+
+impl WireAbilityTarget {
+    fn parse(surface: &'static str, callee_ura: &str, wire_target: &str) -> Result<Self, Status> {
+        let wire_target = wire_target.trim();
+        if wire_target.is_empty() {
+            return Err(Status::invalid_argument(format!(
+                "{surface}: signed ability target is empty"
+            )));
+        }
+        if is_descriptor_bound_wire_target(wire_target) {
+            let ability_ura =
+                crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+                    wire_target,
+                )
+                .map_err(|err| {
+                    Status::invalid_argument(format!(
+                        "{surface}: descriptor-bound signed ability `{wire_target}` is invalid: {err}"
+                    ))
+                })?;
+            return Ok(Self::DescriptorRef {
+                wire_target: wire_target.to_string(),
+                ability_ura,
+            });
+        }
+        let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+            callee_ura,
+            wire_target,
+        )
+        .map_err(|err| {
+            Status::invalid_argument(format!(
+                "{surface}: owner-local signed ability `{wire_target}` is not valid for callee \
+                     `{callee_ura}`: {err}"
+            ))
+        })?;
+        Ok(Self::OwnerLocal {
+            wire_target: wire_target.to_string(),
+            ability_ura,
+        })
+    }
+
+    fn ability_ura(&self) -> &str {
+        match self {
+            Self::DescriptorRef { ability_ura, .. } | Self::OwnerLocal { ability_ura, .. } => {
+                ability_ura
+            }
+        }
+    }
+
+    fn wire_target(&self) -> &str {
+        match self {
+            Self::DescriptorRef { wire_target, .. } | Self::OwnerLocal { wire_target, .. } => {
+                wire_target
+            }
+        }
+    }
+}
+
+fn is_descriptor_bound_wire_target(wire_target: &str) -> bool {
+    wire_target.starts_with("easynet:///")
+        && wire_target.contains('@')
+        && wire_target.contains('#')
+        && wire_target.contains('!')
+}
+
 impl RuntimeBoundAbility {
     pub(crate) async fn from_selected_route(
         surface: &'static str,
@@ -187,14 +262,13 @@ impl RuntimeBoundAbility {
         Ok(DescriptorBoundAbilityRef { descriptor_ref })
     }
 
-    /// Normalize a request-supplied callable target and prove that it
-    /// names the same governed ability selected by the daemon resolver.
+    /// Normalize a request-supplied callable target into an explicit wire-target
+    /// state and prove that it names the same governed ability selected by the
+    /// daemon resolver.
     ///
-    /// `wire_target` is intentionally accepted in both historic forms:
-    /// an owner-local public ability name (`fs.read`, `chat`) or a
-    /// descriptor-bound ability ref (`easynet:///.../ability/...@1.0.0`).
-    /// The dispatcher may route on either form, but it must execute only
-    /// the runtime ability selected by the daemon resolver.
+    /// Descriptor-bound targets and owner-local selectors are distinct states
+    /// inside this boundary. Descriptor-like malformed input fails closed rather
+    /// than being reinterpreted as an owner-local selector.
     pub(crate) fn require_wire_target_matches(
         &self,
         surface: &'static str,
@@ -202,25 +276,16 @@ impl RuntimeBoundAbility {
         wire_target: &str,
         route_ura: &str,
     ) -> Result<String, Status> {
-        let signed_ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
-            callee_ura,
-            wire_target,
-        )
-        .map_err(|err| {
-            Status::invalid_argument(format!(
-                "{surface}: signed ability `{wire_target}` is not valid for callee \
-                     `{callee_ura}`: {err}"
-            ))
-        })?;
-        if signed_ability_ura != self.runtime_ability_ura {
+        let wire_target = WireAbilityTarget::parse(surface, callee_ura, wire_target)?;
+        if wire_target.ability_ura() != self.runtime_ability_ura {
             return Err(status_from_dispatch_key_mismatch(
                 surface,
-                wire_target,
+                wire_target.wire_target(),
                 &self.runtime_ability_ura,
                 route_ura,
             ));
         }
-        Ok(signed_ability_ura)
+        Ok(wire_target.ability_ura().to_string())
     }
 
     pub(crate) fn signed_descriptor_ref_from_target(
@@ -688,6 +753,59 @@ mod tests {
             err.message()
                 .contains("does not match live control-plane descriptor proof"),
             "unexpected error: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn wire_target_match_accepts_owner_local_selector_explicitly() {
+        let got = bound("terminal.list")
+            .require_wire_target_matches("test route match", CALLEE, "terminal.list", "route-ref")
+            .expect("owner-local target matches selected route");
+
+        assert_eq!(
+            got,
+            crate::core::ura::owner_ability_ura(CALLEE, "terminal.list").unwrap()
+        );
+    }
+
+    #[test]
+    fn wire_target_match_accepts_descriptor_bound_selector_explicitly() {
+        let descriptor_ref = format!(
+            "{}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+            crate::core::ura::owner_ability_ura(CALLEE, "terminal.list").unwrap()
+        );
+
+        let got = bound("terminal.list")
+            .require_wire_target_matches("test route match", CALLEE, &descriptor_ref, "route-ref")
+            .expect("descriptor-bound target matches selected route");
+
+        assert_eq!(
+            got,
+            crate::core::ura::owner_ability_ura(CALLEE, "terminal.list").unwrap()
+        );
+    }
+
+    #[test]
+    fn wire_target_match_rejects_malformed_descriptor_like_target_without_owner_local_reinterpretation(
+    ) {
+        let malformed = format!(
+            "{}@1.0.0#not-a-hash!invoke",
+            crate::core::ura::owner_ability_ura(CALLEE, "terminal.list").unwrap()
+        );
+
+        let err = bound("terminal.list")
+            .require_wire_target_matches("test route match", CALLEE, &malformed, "route-ref")
+            .expect_err("malformed descriptor-like target must not fall back to owner-local");
+
+        assert!(
+            err.message().contains("descriptor-bound signed ability"),
+            "unexpected error: {}",
+            err.message()
+        );
+        assert!(
+            !err.message().contains("owner-local signed ability"),
+            "malformed descriptor-like target must not be reparsed as owner-local: {}",
             err.message()
         );
     }

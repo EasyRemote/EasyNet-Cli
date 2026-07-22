@@ -6376,10 +6376,67 @@ if descriptor_binding.exists():
             1,
             "descriptor_ref_for_mode must return selected-route catalog proof before runtime fallback",
         )
+    wire_match = rust_method_body(text, "require_wire_target_matches")
+    if wire_match is None:
+        add(
+            "R29_SELECTED_ROUTE_DESCRIPTOR_PROOF_OWNER_FORK",
+            descriptor_binding,
+            1,
+            "RuntimeBoundAbility must verify request wire targets through a typed state boundary",
+        )
+    else:
+        offset, body = wire_match
+        for token, detail in (
+            (
+                "WireAbilityTarget::parse(surface, callee_ura, wire_target)?",
+                "wire-target matching must parse DescriptorRef and OwnerLocal as explicit states",
+            ),
+            (
+                "wire_target.ability_ura() != self.runtime_ability_ura",
+                "wire-target matching must compare the typed target ability with the selected runtime ability",
+            ),
+            (
+                "status_from_dispatch_key_mismatch",
+                "wire-target mismatch must preserve dispatch-key mismatch semantics",
+            ),
+        ):
+            if token not in body:
+                add(
+                    "R29_SELECTED_ROUTE_DESCRIPTOR_PROOF_OWNER_FORK",
+                    descriptor_binding,
+                    line_number(text, offset),
+                    detail,
+                )
+    for token, detail in (
+        ("enum WireAbilityTarget", "wire targets must be represented by an explicit state enum"),
+        ("DescriptorRef {", "wire targets must distinguish descriptor-bound refs"),
+        ("OwnerLocal {", "wire targets must distinguish owner-local public selectors"),
+        (
+            "fn is_descriptor_bound_wire_target(",
+            "descriptor-like targets must be classified before owner-local normalization",
+        ),
+    ):
+        if token not in text:
+            add(
+                "R29_SELECTED_ROUTE_DESCRIPTOR_PROOF_OWNER_FORK",
+                descriptor_binding,
+                1,
+                detail,
+            )
+    if "historic forms" in raw_text:
+        add(
+            "R29_SELECTED_ROUTE_DESCRIPTOR_PROOF_OWNER_FORK",
+            descriptor_binding,
+            1,
+            "runtime wire-target binding must not describe owner-local ingress as historic fallback forms",
+        )
     for token in (
         "selected_route_descriptor_ref_comes_from_live_catalog_for_all_modes",
         "selected_route_rejects_missing_catalog_descriptor_proof",
         "selected_route_rejects_runtime_proof_that_drifted_from_catalog",
+        "wire_target_match_accepts_owner_local_selector_explicitly",
+        "wire_target_match_accepts_descriptor_bound_selector_explicitly",
+        "wire_target_match_rejects_malformed_descriptor_like_target_without_owner_local_reinterpretation",
     ):
         if token not in raw_text:
             add(

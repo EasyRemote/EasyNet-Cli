@@ -3698,6 +3698,56 @@ for text, name in ((go_test, "go"), (py_test, "python")):
 PY
 }
 
+check_runtime_wire_target_state_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local descriptor_binding="$cli_root/src/daemon/invocation/dispatch/descriptor_binding.rs"
+  [[ -f "$descriptor_binding" ]] || fail "runtime wire-target descriptor binding source is missing"
+
+  "$PYTHON_BIN" - "$descriptor_binding" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+for token, code in (
+    ("enum WireAbilityTarget", "wire_target_state_enum_missing"),
+    ("DescriptorRef {", "wire_target_descriptor_state_missing"),
+    ("OwnerLocal {", "wire_target_owner_local_state_missing"),
+    (
+        "fn is_descriptor_bound_wire_target(",
+        "wire_target_descriptor_classification_missing",
+    ),
+    (
+        "WireAbilityTarget::parse(surface, callee_ura, wire_target)?",
+        "wire_target_typed_parse_missing",
+    ),
+    (
+        "wire_target.ability_ura() != self.runtime_ability_ura",
+        "wire_target_runtime_match_missing",
+    ),
+    (
+        "status_from_dispatch_key_mismatch",
+        "wire_target_mismatch_semantics_missing",
+    ),
+    (
+        "wire_target_match_accepts_owner_local_selector_explicitly",
+        "wire_target_owner_local_test_missing",
+    ),
+    (
+        "wire_target_match_accepts_descriptor_bound_selector_explicitly",
+        "wire_target_descriptor_ref_test_missing",
+    ),
+    (
+        "wire_target_match_rejects_malformed_descriptor_like_target_without_owner_local_reinterpretation",
+        "wire_target_malformed_descriptor_test_missing",
+    ),
+):
+    if token not in text:
+        raise SystemExit(code)
+if "historic forms" in text:
+    raise SystemExit("wire_target_historic_fallback_wording_present")
+PY
+}
+
 check_sdk_principal_projection_fail_closed_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local go_principal="$cli_root/sdk/go/principal.go"
@@ -7272,6 +7322,7 @@ EOF
   check_daemon_runtime_assembly_contract
   check_plugin_sidecar_helper_matrix_contract
   check_retired_browser_mock_surface_contract
+  check_runtime_wire_target_state_contract
   check_sdk_directory_projection_fail_closed_contract
   check_sdk_principal_projection_fail_closed_contract
   check_runtime_owner_signer_custody_contract
@@ -7360,6 +7411,7 @@ check_canonical_ability_catalog_projection_contract
 check_daemon_runtime_assembly_contract
 check_plugin_sidecar_helper_matrix_contract
 check_retired_browser_mock_surface_contract
+check_runtime_wire_target_state_contract
 check_sdk_directory_projection_fail_closed_contract
 check_sdk_principal_projection_fail_closed_contract
 check_runtime_owner_signer_custody_contract
