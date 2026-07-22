@@ -1457,7 +1457,10 @@ mod tests {
     fn invocation_builder_emits_complete_bidi_frame0() {
         use axon_sdk::pb::axon::v1::{invoke_bidi_up, CallerSignature, StreamDescriptor};
         let mut metadata = HashMap::new();
-        metadata.insert("x-easynet-delegation".to_string(), "producer".to_string());
+        metadata.insert(
+            "x-easynet-test-producer".to_string(),
+            "producer".to_string(),
+        );
         let hub = crate::core::ura::hub_ura("acme");
         let pty_ref = descriptor_ref(&hub, "device.pty.attach", "2.4.0");
 
@@ -1510,7 +1513,7 @@ mod tests {
         );
         assert_eq!(open.initial_args, br#"{"session_id":"pty-1"}"#);
         assert_eq!(open.args_content_type, "application/json");
-        assert_eq!(open.metadata["x-easynet-delegation"], "producer");
+        assert_eq!(open.metadata["x-easynet-test-producer"], "producer");
         assert_eq!(open.streams.len(), 1);
         assert_eq!(open.streams[0].stream_id, 1);
         assert_eq!(

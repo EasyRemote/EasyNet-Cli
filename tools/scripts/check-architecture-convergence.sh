@@ -773,6 +773,43 @@ for path, pattern in unary_result_alias_patterns:
         )
 
 
+# Rule 7b: FFI complete-invocation ingress validates public tuple authority
+# semantics before daemon I/O. The FFI may not rely on late daemon admission to
+# discover all-zero placeholders or contradictory session/delegation subjects.
+ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
+if ffi_invocation.exists():
+    raw_text = ffi_invocation.read_text(encoding="utf-8", errors="replace")
+    text = source(ffi_invocation)
+    production = text.split("\n#[cfg(all(test, feature = \"axon-pb\"))]\nmod tests", 1)[0]
+    required_ffi_tuple_gate_tokens = (
+        "fn validate_public_invocation_tuple(",
+        "validate_public_invocation_tuple(&caller_ura, &callee_ura, &subject_ura, &metadata)?",
+        "project_invocation_authority_metadata_shape(metadata)",
+        "session_authority_admits_subject(&payload, subject_ura)",
+        "AuthoritySubjectMismatch",
+        "AllZeroPrincipal",
+    )
+    for token in required_ffi_tuple_gate_tokens:
+        if token not in production:
+            add(
+                "R7B_FFI_PUBLIC_TUPLE_AUTHORITY_GATE_MISSING",
+                ffi_invocation,
+                1,
+                f"FFI public invocation ingress must reject invalid tuple/authority metadata before daemon I/O: missing {token}",
+            )
+    for test_name in (
+        "parse_invocation_json_rejects_all_zero_subject_before_daemon_io",
+        "parse_invocation_json_rejects_session_authority_subject_mismatch_before_daemon_io",
+    ):
+        if test_name not in raw_text:
+            add(
+                "R7B_FFI_PUBLIC_TUPLE_AUTHORITY_TEST_MISSING",
+                ffi_invocation,
+                1,
+                f"FFI public tuple authority gate must keep failure-path test {test_name}",
+            )
+
+
 # Rule 11: stream and bidi SDK facades must not revive the retired frame-level
 # receipt alias. Public accessors may project terminal_receipt for compatibility,
 # but wire decode/encode must use admission_receipt and terminal_receipt only.

@@ -5389,6 +5389,7 @@ impl InvocationJson {
         )?;
         let (args, content_type) = parse_arguments(obj)?;
         let metadata = parse_metadata(obj)?;
+        validate_public_invocation_tuple(&caller_ura, &callee_ura, &subject_ura, &metadata)?;
         let caller_signature = parse_caller_signature(obj)?;
         let bidi_streams = parse_bidi_streams(obj)?;
         let timeout_seconds = parse_timeout_seconds(obj)?;
@@ -5464,6 +5465,14 @@ enum InvocationJsonError {
     MissingField(&'static str),
     #[error("field `{0}` must be a non-empty string")]
     InvalidString(&'static str),
+    #[error("field `{field}` must be a canonical URA: {reason}")]
+    InvalidUra { field: &'static str, reason: String },
+    #[error("field `{0}` must not contain the all-zero principal placeholder")]
+    AllZeroPrincipal(&'static str),
+    #[error("authority metadata is invalid: {0}")]
+    AuthorityMetadata(String),
+    #[error("authority metadata subject does not admit invocation subject_ura: {0}")]
+    AuthoritySubjectMismatch(String),
     #[error("nonce_base64 is not valid base64: {0}")]
     InvalidNonceBase64(base64::DecodeError),
     #[error("nonce_base64 must decode to exactly 16 bytes, got {0}")]
@@ -5651,6 +5660,8 @@ impl InvocationBuilderState {
             .args
             .clone()
             .ok_or_else(|| missing_builder_field("args or arguments_base64"))?;
+        validate_public_invocation_tuple(&caller_ura, &callee_ura, &subject_ura, &self.metadata)
+            .map_err(|error| crate::daemon::DaemonError::InvalidInvocation(error.to_string()))?;
 
         let derivation_policy =
             axon_sdk::invocation::InvocationDerivationPolicy::try_explicit_from_wire_causal_context(
@@ -6109,6 +6120,108 @@ fn parse_metadata(
         out.insert(key.trim().to_string(), value);
     }
     Ok(out)
+}
+
+#[cfg(feature = "axon-pb")]
+const ALL_ZERO_PRINCIPAL_ID: &str = "00000000-0000-0000-0000-000000000000";
+
+#[cfg(feature = "axon-pb")]
+fn validate_public_invocation_tuple(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    metadata: &std::collections::HashMap<String, String>,
+) -> Result<(), InvocationJsonError> {
+    validate_public_tuple_ura("caller_ura", caller_ura)?;
+    validate_public_tuple_ura("callee_ura", callee_ura)?;
+    validate_public_tuple_ura("subject_ura", subject_ura)?;
+    validate_public_authority_binding(caller_ura, callee_ura, subject_ura, metadata)
+}
+
+#[cfg(feature = "axon-pb")]
+fn validate_public_tuple_ura(field: &'static str, value: &str) -> Result<(), InvocationJsonError> {
+    if value
+        .trim()
+        .to_ascii_lowercase()
+        .contains(ALL_ZERO_PRINCIPAL_ID)
+    {
+        return Err(InvocationJsonError::AllZeroPrincipal(field));
+    }
+    crate::core::ura::parse_ura(value.trim())
+        .map(|_| ())
+        .map_err(|error| InvocationJsonError::InvalidUra {
+            field,
+            reason: error.to_string(),
+        })
+}
+
+#[cfg(feature = "axon-pb")]
+fn validate_public_authority_binding(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    metadata: &std::collections::HashMap<String, String>,
+) -> Result<(), InvocationJsonError> {
+    let authority =
+        crate::daemon::invocation::admission::authority_metadata::project_invocation_authority_metadata_shape(metadata)
+            .map_err(|error| InvocationJsonError::AuthorityMetadata(error.to_string()))?;
+    match authority {
+        Some(
+            crate::daemon::invocation::admission::authority_metadata::InvocationAuthorityMetadata::Delegation(
+                payload,
+            ),
+        ) => {
+            if payload.caller_ura.trim() != caller_ura.trim() {
+                return Err(InvocationJsonError::AuthorityMetadata(
+                    "delegation authority caller_ura does not match invocation caller_ura"
+                        .to_string(),
+                ));
+            }
+            if payload.subject_ura.trim() != subject_ura.trim() {
+                return Err(InvocationJsonError::AuthoritySubjectMismatch(format!(
+                    "delegation subject `{}` != invocation subject `{subject_ura}`",
+                    payload.subject_ura
+                )));
+            }
+            if !crate::daemon::invocation::admission::authority_metadata::authority_audience_admits(&payload.audience, callee_ura) {
+                return Err(InvocationJsonError::AuthorityMetadata(
+                    "delegation authority audience does not admit invocation callee_ura"
+                        .to_string(),
+                ));
+            }
+        }
+        Some(
+            crate::daemon::invocation::admission::authority_metadata::InvocationAuthorityMetadata::Session(
+                payload,
+            ),
+        ) => {
+            if payload.issuer_ura.trim() != caller_ura.trim() {
+                return Err(InvocationJsonError::AuthorityMetadata(
+                    "session authority issuer_ura does not match invocation caller_ura"
+                        .to_string(),
+                ));
+            }
+            if payload.callee_ura.trim() != callee_ura.trim() {
+                return Err(InvocationJsonError::AuthorityMetadata(
+                    "session authority callee_ura does not match invocation callee_ura"
+                        .to_string(),
+                ));
+            }
+            if !crate::daemon::invocation::admission::authority_metadata::session_authority_admits_subject(&payload, subject_ura) {
+                return Err(InvocationJsonError::AuthoritySubjectMismatch(format!(
+                    "session subject `{}` owned by `{}` does not admit invocation subject `{subject_ura}`",
+                    payload.subject_ura, payload.session_owner_user_id
+                )));
+            }
+            if !crate::daemon::invocation::admission::authority_metadata::authority_audience_admits(&payload.audience, callee_ura) {
+                return Err(InvocationJsonError::AuthorityMetadata(
+                    "session authority audience does not admit invocation callee_ura".to_string(),
+                ));
+            }
+        }
+        None => {}
+    }
+    Ok(())
 }
 
 #[cfg(feature = "axon-pb")]
@@ -7002,7 +7115,7 @@ mod tests {
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_context": {"form": "none"},
                 "args": {"session_id": "pty-1"},
-                "metadata": {"x-easynet-delegation": "producer"},
+                "metadata": {"x-easynet-test-producer": "producer"},
                 "caller_signature": {
                     "algorithm": "ed25519",
                     "signature_base64": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==",
@@ -7039,6 +7152,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_invocation_json_rejects_all_zero_subject_before_daemon_io() {
+        let err = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
+            "subject_ura": "easynet:///r/acme/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history"
+        })))
+        .expect_err("all-zero placeholder subjects must fail at public FFI ingress");
+
+        assert!(
+            matches!(err, InvocationJsonError::AllZeroPrincipal("subject_ura")),
+            "unexpected all-zero rejection: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_invocation_json_rejects_session_authority_subject_mismatch_before_daemon_io() {
+        let session_authority = signed_authority_metadata_value(serde_json::json!({
+            "issuer_ura": "easynet:///r/acme/device/dev-a",
+            "session_id": "invocation_history",
+            "session_owner_user_id": "alice",
+            "creator_principal_id": "easynet:///r/acme/device/dev-a",
+            "callee_ura": "easynet:///r/acme/device/dev-a",
+            "subject_ura": "easynet:///r/acme/resource/user.alice/session/invocation_history",
+            "audience": "easynet:///r/acme/device/dev-a",
+            "scopes": ["invocation.history.list"],
+            "allowed_actions": ["invoke"],
+            "allowed_followup_abilities": ["invocation.history.list"],
+            "issued_at_ms": now_ms() - 1_000,
+            "expires_at_ms": now_ms() + 60_000
+        }));
+
+        let err = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
+            "metadata": {
+                crate::daemon::invocation::admission::authority_metadata::SESSION_AUTHORITY_METADATA_KEY: session_authority
+            }
+        })))
+        .expect_err("session authority must admit the public invocation subject");
+
+        assert!(
+            matches!(err, InvocationJsonError::AuthoritySubjectMismatch(_)),
+            "unexpected authority mismatch rejection: {err}"
+        );
+        assert!(
+            err.to_string()
+                .contains("does not admit invocation subject"),
+            "error should name subject-admission mismatch: {err}"
+        );
+    }
+
     /// Canonical URA invocation JSON for tests that go past parse into
     /// `into_daemon_invocation`.
     fn canonical_invocation_json(extra: serde_json::Value) -> String {
@@ -7058,6 +7219,25 @@ mod tests {
             }
         }
         obj.to_string()
+    }
+
+    fn now_ms() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("test clock after Unix epoch")
+            .as_millis() as i64
+    }
+
+    fn signed_authority_metadata_value(payload: serde_json::Value) -> String {
+        use base64::Engine as _;
+
+        base64::engine::general_purpose::STANDARD.encode(
+            serde_json::json!({
+                "payload": payload,
+                "signature": "c2lnbmF0dXJl"
+            })
+            .to_string(),
+        )
     }
 
     fn write_runtime_discovery(
@@ -8972,7 +9152,7 @@ mod tests {
                 "2.4.0"
             )
         );
-        assert_eq!(spec.metadata["x-easynet-delegation"], "producer");
+        assert_eq!(spec.metadata["x-easynet-test-producer"], "producer");
         let signature = spec.caller_signature.expect("caller signature required");
         assert_eq!(signature.algorithm, "ed25519");
         assert_eq!(signature.signature, vec![7; 64]);

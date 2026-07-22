@@ -2140,7 +2140,7 @@ fn verify_session_authority_bindings(
     }
 
     let subject = subject_ura_required(envelope)?;
-    if !session_authority_admits_subject(payload, subject) {
+    if !authority_metadata::session_authority_admits_subject(payload, subject) {
         return Err(Status::permission_denied(format!(
             "{REASON_AUTHORITY_SUBJECT_MISMATCH}: session subject `{}` owned by `{}` does not \
              admit envelope subject `{subject}`",
@@ -2156,7 +2156,7 @@ fn verify_session_authority_bindings(
             payload.callee_ura
         )));
     }
-    if !audience_admits(&payload.audience, callee) {
+    if !authority_metadata::authority_audience_admits(&payload.audience, callee) {
         return Err(Status::permission_denied(format!(
             "{REASON_AUTHORITY_AUDIENCE_VIOLATION}: session audience `{}` does not admit \
              envelope callee `{callee}`",
@@ -2262,36 +2262,6 @@ impl AuthorityAbilityView {
             || scope_matches(pattern, &self.ability_ura)
             || scope_matches(pattern, &self.wire)
     }
-}
-
-fn session_authority_admits_subject(payload: &SessionAuthorityPayload, subject: &str) -> bool {
-    if payload.subject_ura == subject {
-        return true;
-    }
-    let Ok(parsed) = parse_ura(subject) else {
-        return false;
-    };
-    if parsed.kind != URAKind::Resource {
-        return false;
-    }
-    let Some(owner_id) = parsed.resource_owner_id() else {
-        return false;
-    };
-    resource_owner_matches_session_owner(owner_id, &payload.session_owner_user_id)
-}
-
-fn resource_owner_matches_session_owner(owner_id: &str, session_owner_user_id: &str) -> bool {
-    let session_owner_user_id = session_owner_user_id.trim();
-    if session_owner_user_id.is_empty() {
-        return false;
-    }
-    if let Some(user_id) = owner_id.strip_prefix("user.") {
-        return user_id == session_owner_user_id;
-    }
-    owner_id
-        .strip_prefix("agent.")
-        .and_then(|rest| rest.split_once('.').map(|(user_id, _)| user_id))
-        .is_some_and(|user_id| user_id == session_owner_user_id)
 }
 
 fn verified_session_authority_id(payload: &SessionAuthorityPayload) -> String {
@@ -2446,7 +2416,7 @@ fn verify_delegation_bindings(
     }
 
     let callee = callee_ura_required(envelope)?;
-    if !audience_admits(&payload.audience, callee) {
+    if !authority_metadata::authority_audience_admits(&payload.audience, callee) {
         return Err(Status::permission_denied(format!(
             "{REASON_AUTHORITY_AUDIENCE_VIOLATION}: authority audience `{}` does not admit \
              envelope callee `{callee}`",
@@ -2467,10 +2437,6 @@ fn verify_delegation_bindings(
     }
 
     Ok(())
-}
-
-fn audience_admits(audience: &str, callee: &str) -> bool {
-    audience == "*" || audience == callee || audience.ends_with('/') && callee.starts_with(audience)
 }
 
 fn scope_matches(pattern: &str, ability: &str) -> bool {

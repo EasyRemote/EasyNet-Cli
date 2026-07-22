@@ -3093,9 +3093,21 @@ if "runtime_json_projection(&chunk.payload, &chunk.content_type, \"payload_json\
     raise SystemExit("ffi_invocation_json_projection:stream_projection_not_shared")
 if "runtime_json_projection(&result.output, &result.output_content_type, \"output_json\")?" not in production:
     raise SystemExit("ffi_invocation_json_projection:unary_projection_not_shared")
+for required in (
+    "fn validate_public_invocation_tuple(",
+    "validate_public_invocation_tuple(&caller_ura, &callee_ura, &subject_ura, &metadata)?",
+    "project_invocation_authority_metadata_shape(metadata)",
+    "session_authority_admits_subject(&payload, subject_ura)",
+    "AuthoritySubjectMismatch",
+    "AllZeroPrincipal",
+):
+    if required not in production:
+        raise SystemExit(f"ffi_invocation_json_projection:public_tuple_gate_missing:{required}")
 for required_test in (
     "unary_result_json_rejects_declared_json_output_that_is_not_json",
     "stream_chunk_json_rejects_declared_json_payload_that_is_not_json",
+    "parse_invocation_json_rejects_all_zero_subject_before_daemon_io",
+    "parse_invocation_json_rejects_session_authority_subject_mismatch_before_daemon_io",
 ):
     if required_test not in text:
         raise SystemExit(f"ffi_invocation_json_projection:missing_test:{required_test}")

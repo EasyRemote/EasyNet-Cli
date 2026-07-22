@@ -95,6 +95,103 @@ struct SignedSessionAuthorityWire {
     signature: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct SignedDelegationAuthorityWire {
+    payload: DelegationPayload,
+    signature: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InvocationAuthorityMetadata {
+    Delegation(DelegationPayload),
+    Session(SessionAuthorityPayload),
+}
+
+/// Project invocation authority metadata for pre-transport shape validation.
+///
+/// This deliberately validates only canonical payload shape, expiry, and
+/// signature presence. Cryptographic verification remains owned by admission;
+/// consumers use this projection only to reject contradictory public tuple
+/// facts before daemon I/O.
+pub(crate) fn project_invocation_authority_metadata_shape(
+    metadata: &HashMap<String, String>,
+) -> Result<Option<InvocationAuthorityMetadata>, AuthorityMetadataError> {
+    let delegation_raw = metadata
+        .get(DELEGATION_METADATA_KEY)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let session_raw = metadata
+        .get(SESSION_AUTHORITY_METADATA_KEY)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    match (delegation_raw, session_raw) {
+        (Some(_), Some(_)) => Err(AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            "invocation authority metadata is ambiguous",
+        )),
+        (Some(raw), None) => project_delegation_authority_shape(raw)
+            .map(|payload| Some(InvocationAuthorityMetadata::Delegation(payload))),
+        (None, Some(raw)) => project_session_authority_shape(raw)
+            .map(|payload| Some(InvocationAuthorityMetadata::Session(payload))),
+        (None, None) => Ok(None),
+    }
+}
+
+fn project_delegation_authority_shape(
+    raw: &str,
+) -> Result<DelegationPayload, AuthorityMetadataError> {
+    let wire_bytes = BASE64_STANDARD.decode(raw).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("delegation authority base64 decode failed: {err}"),
+        )
+    })?;
+    let wire: SignedDelegationAuthorityWire =
+        serde_json::from_slice(&wire_bytes).map_err(|err| {
+            AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                format!("delegation authority JSON parse failed: {err}"),
+            )
+        })?;
+    if wire.signature.trim().is_empty() {
+        return Err(AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            "delegation authority signature is empty",
+        ));
+    }
+    let now_ms = current_unix_epoch_millis()?;
+    validate_delegation_payload_shape(&wire.payload, Some(now_ms))?;
+    Ok(wire.payload)
+}
+
+fn project_session_authority_shape(
+    raw: &str,
+) -> Result<SessionAuthorityPayload, AuthorityMetadataError> {
+    let wire_bytes = BASE64_STANDARD.decode(raw).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("session authority base64 decode failed: {err}"),
+        )
+    })?;
+    let wire: SignedSessionAuthorityWire = serde_json::from_slice(&wire_bytes).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("session authority JSON parse failed: {err}"),
+        )
+    })?;
+    if wire.signature.trim().is_empty() {
+        return Err(AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            "session authority signature is empty",
+        ));
+    }
+    let now_ms = current_unix_epoch_millis()?;
+    validate_session_authority_payload_shape(&wire.payload, Some(now_ms))?;
+    Ok(wire.payload)
+}
+
 /// Project an authority that has already passed the transport admission gate
 /// into the generic runtime context. This function deliberately does not
 /// verify cryptography: the caller is the post-admission LocalRuntime
@@ -110,27 +207,7 @@ pub(crate) fn project_admitted_session_authority(
     else {
         return Ok(None);
     };
-    let wire_bytes = BASE64_STANDARD.decode(raw).map_err(|err| {
-        AuthorityMetadataError::new(
-            REASON_AUTHORITY_FORMAT_INVALID,
-            format!("admitted session authority base64 decode failed: {err}"),
-        )
-    })?;
-    let wire: SignedSessionAuthorityWire = serde_json::from_slice(&wire_bytes).map_err(|err| {
-        AuthorityMetadataError::new(
-            REASON_AUTHORITY_FORMAT_INVALID,
-            format!("admitted session authority JSON parse failed: {err}"),
-        )
-    })?;
-    if wire.signature.trim().is_empty() {
-        return Err(AuthorityMetadataError::new(
-            REASON_AUTHORITY_FORMAT_INVALID,
-            "admitted session authority signature is empty",
-        ));
-    }
-    let now_ms = current_unix_epoch_millis()?;
-    validate_session_authority_payload_shape(&wire.payload, Some(now_ms))?;
-    Ok(Some(wire.payload))
+    project_session_authority_shape(raw).map(Some)
 }
 
 pub(crate) fn canonical_authority_payload_bytes<T: Serialize>(
@@ -326,6 +403,45 @@ fn canonical_session_resource_parts(parsed: &crate::core::ura::ParsedURA) -> Opt
         .and_then(|path| path.strip_prefix("session/"))
         .filter(|session_id| !session_id.is_empty() && !session_id.contains('/'))?;
     Some((owner_user_id, session_id))
+}
+
+pub(crate) fn session_authority_admits_subject(
+    payload: &SessionAuthorityPayload,
+    subject: &str,
+) -> bool {
+    if payload.subject_ura == subject {
+        return true;
+    }
+    let Ok(parsed) = crate::core::ura::parse_ura(subject) else {
+        return false;
+    };
+    if parsed.kind != crate::core::ura::URAKind::Resource {
+        return false;
+    }
+    let Some(owner_id) = parsed.resource_owner_id() else {
+        return false;
+    };
+    resource_owner_matches_session_owner(owner_id, &payload.session_owner_user_id)
+}
+
+fn resource_owner_matches_session_owner(owner_id: &str, session_owner_user_id: &str) -> bool {
+    let session_owner_user_id = session_owner_user_id.trim();
+    if session_owner_user_id.is_empty() {
+        return false;
+    }
+    if let Some(user_id) = owner_id.strip_prefix("user.") {
+        return user_id == session_owner_user_id;
+    }
+    owner_id
+        .strip_prefix("agent.")
+        .and_then(|rest| rest.split_once('.').map(|(user_id, _)| user_id))
+        .is_some_and(|user_id| user_id == session_owner_user_id)
+}
+
+pub(crate) fn authority_audience_admits(audience: &str, callee: &str) -> bool {
+    let audience = audience.trim();
+    let callee = callee.trim();
+    audience == "*" || audience == callee || audience.ends_with('/') && callee.starts_with(audience)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
