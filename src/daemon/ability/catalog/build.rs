@@ -484,6 +484,10 @@ impl RegistryAssemblyMode {
     fn starts_runtime_services(self) -> bool {
         matches!(self, Self::DaemonRuntime)
     }
+
+    fn replays_hosted_agent_runtime(self) -> bool {
+        matches!(self, Self::DaemonRuntime)
+    }
 }
 
 fn build_plugin_runtime_manager(
@@ -542,6 +546,8 @@ fn build_registry_with_services_result_inner(
     let hosts_device_authority = authority_context.hosts_device_authority();
     let hosts_hub_authority = authority_context.hosts_hub_authority();
     let daemon_runtime_assembly = assembly_mode.starts_runtime_services();
+    let replay_hosted_agent_runtime =
+        hosts_device_authority && assembly_mode.replays_hosted_agent_runtime();
     let plugin_registry_mode = assembly_mode.plugin_registry_mode();
     let authority_context =
         declare_daemon_native_agent_authorities(authority_context, &pages_identity)?;
@@ -1129,7 +1135,7 @@ fn build_registry_with_services_result_inner(
         );
     }
 
-    if hosts_device_authority {
+    if replay_hosted_agent_runtime {
         if let Some(hot_registrar) = hot_agent_registrar_cell.get().cloned() {
             let recovered_purge =
                 agent_lifecycle_ability::recover_pending_purge_before_agent_replay(

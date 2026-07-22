@@ -221,6 +221,19 @@ fn discovery_hints_read_only_tracks_ability_layer() {
 }
 
 #[test]
+fn deterministic_registry_snapshot_does_not_replay_hosted_agent_runtime() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+
+    let reg = build_registry();
+    let h = discovery_hints_for(&reg, "agent.list");
+
+    assert!(
+        h.read_only && h.idempotent,
+        "deterministic registry snapshots must publish static Device abilities without replaying hosted-Agent runtimes: {h:?}"
+    );
+}
+
+#[test]
 fn ability_layer_classification_is_complete() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     // The audit story (RFC docs/AXON-RFC-001-ability-layers.md)

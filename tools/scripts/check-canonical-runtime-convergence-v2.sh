@@ -3047,11 +3047,46 @@ check_daemon_runtime_assembly_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local runtime_binding="$cli_root/src/daemon/invocation/dispatch/deps.rs"
   local invocation_service="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
+  local ability_catalog="$cli_root/src/daemon/ability/catalog/build.rs"
+  local ability_catalog_tests="$cli_root/src/daemon/ability/catalog/assembly_tests.rs"
 
   if rg -n 'CanonicalOnly|pub fn with_local_runtime\s*\(' \
     "$runtime_binding" "$invocation_service"; then
     fail "daemon Invocation transport retains a bare LocalRuntime construction path"
   fi
+
+  if [[ ! -f "$ability_catalog" || ! -f "$ability_catalog_tests" ]]; then
+    fail "daemon runtime assembly contract sources are missing"
+  fi
+
+  "$PYTHON_BIN" - "$ability_catalog" "$ability_catalog_tests" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+catalog = Path(sys.argv[1]).read_text(encoding="utf-8")
+tests = Path(sys.argv[2]).read_text(encoding="utf-8")
+
+if "fn replays_hosted_agent_runtime(self) -> bool" not in catalog:
+    raise SystemExit("daemon_runtime_assembly:hosted_agent_replay_mode_missing")
+
+if not re.search(
+    r"let\s+replay_hosted_agent_runtime\s*=\s*"
+    r"hosts_device_authority\s*&&\s*assembly_mode\.replays_hosted_agent_runtime\(\)\s*;",
+    catalog,
+    re.S,
+):
+    raise SystemExit("daemon_runtime_assembly:hosted_agent_replay_guard_missing")
+
+if not re.search(r"if\s+replay_hosted_agent_runtime\s*\{\s*if\s+let\s+Some\(hot_registrar\)", catalog, re.S):
+    raise SystemExit("daemon_runtime_assembly:hosted_agent_replay_not_bound_to_runtime_mode")
+
+if re.search(r"if\s+hosts_device_authority\s*\{\s*if\s+let\s+Some\(hot_registrar\)", catalog, re.S):
+    raise SystemExit("daemon_runtime_assembly:hosted_agent_replay_bound_to_device_authority_only")
+
+if "fn deterministic_registry_snapshot_does_not_replay_hosted_agent_runtime" not in tests:
+    raise SystemExit("daemon_runtime_assembly:deterministic_snapshot_replay_regression_test_missing")
+PY
 }
 
 check_plugin_sidecar_helper_matrix_contract() {
