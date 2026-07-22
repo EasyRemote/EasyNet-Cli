@@ -5513,27 +5513,17 @@ impl AxonAbilityCatalog {
         self.hot_unregister(ability)
     }
 
-    /// True iff the dynamic side currently holds an entry for
-    /// `ability` in any of its handler maps. Companion check for
-    /// hot-reload diagnostics; the boot-time `has_rpc`/`has_stream`/
-    /// `has_bidi` lookups already consult this internally via the
-    /// fall-through paths.
+    /// True iff the dynamic side currently holds an execution-index row for
+    /// `ability`.
+    ///
+    /// This is a diagnostic/collision predicate only. Discovery and routeability
+    /// read the committed control-plane plus exact mode projections; they must
+    /// not union static and dynamic execution rows as a publication source.
     pub fn has_dynamic(&self, ability: &str) -> bool {
         self.execution_index
             .read()
             .expect("execution_index RwLock poisoned")
             .contains_origin_handler_by_name(ability, ExecutionOrigin::Dynamic)
-    }
-
-    /// List the names currently held as dynamic execution rows.
-    /// Used by `list_abilities` to union dynamic with static
-    /// without exposing the lock guard; useful on its own for
-    /// hot-reload diagnostics.
-    pub fn list_dynamic_abilities(&self) -> Vec<String> {
-        self.execution_index
-            .read()
-            .expect("execution_index RwLock poisoned")
-            .names(ExecutionOrigin::Dynamic)
     }
 
     /// Lookup helper — exposed because PR-ATTACH onwards will need
@@ -8761,9 +8751,9 @@ mod tests {
                 .is_some(),
             "stream control-plane record must be present"
         );
-        assert_eq!(
-            reg.list_dynamic_abilities(),
-            vec!["plugin.mode_shift".to_string()]
+        assert!(
+            reg.has_dynamic("plugin.mode_shift"),
+            "dynamic execution row remains present after adding a second mode"
         );
     }
 

@@ -3327,6 +3327,12 @@ if "fn handlers_for_ability" in dispatch:
     raise SystemExit("catalog_runtime_key:ability_level_handler_merge_present")
 if "fn fill_missing_from" in dispatch:
     raise SystemExit("catalog_runtime_key:missing_slot_handler_fallback_present")
+if "fn list_dynamic_abilities" in dispatch:
+    raise SystemExit("catalog_runtime_key:dynamic_list_read_model_present")
+if "union dynamic with static" in dispatch:
+    raise SystemExit("catalog_runtime_key:dynamic_static_union_wording_present")
+if "fall-through paths" in dispatch:
+    raise SystemExit("catalog_runtime_key:fallthrough_handler_projection_wording_present")
 if "authority_roots_for_ability" in control_plane:
     raise SystemExit("catalog_runtime_key:ability_level_authority_root_query_present")
 
@@ -3366,6 +3372,9 @@ for token, code in (
 ):
     if token not in dispatch:
         raise SystemExit(f"catalog_runtime_key:{code}")
+
+if "dynamic execution row remains present after adding a second mode" not in dispatch:
+    raise SystemExit("catalog_runtime_key:dynamic_mode_preservation_diagnostic_test_missing")
 
 sync_match = re.search(
     r"fn\s+sync_runtime_ability\s*\([^)]*\)\s*->\s*anyhow::Result<\(\)>\s*\{(?P<body>.*?)\n    \}",

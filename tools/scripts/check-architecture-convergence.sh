@@ -6013,6 +6013,18 @@ if ability_dispatch.exists():
             "fn fill_missing_from",
             "runtime handler sets must not be assembled through missing-slot fallback from another authority row",
         ),
+        (
+            "fn list_dynamic_abilities",
+            "dynamic ability-name list read model must not remain as publication/diagnostic compatibility surface",
+        ),
+        (
+            "union dynamic with static",
+            "catalogue publication must not be documented as a dynamic/static execution-row union",
+        ),
+        (
+            "fall-through paths",
+            "routeability comments must not describe retired fall-through handler projection semantics",
+        ),
     ):
         if retired in production_text:
             match = re.search(re.escape(retired), production_text)
@@ -6088,6 +6100,7 @@ if ability_dispatch.exists():
         "dynamic_runtime_key_validates_exact_authority_mode_record",
         "ability_name_handler_projection_rejects_multi_authority_same_slot",
         "ability_name_handler_projection_does_not_synthesize_cross_authority_runtime_set",
+        "dynamic execution row remains present after adding a second mode",
     ):
         if token not in raw_text:
             add(
