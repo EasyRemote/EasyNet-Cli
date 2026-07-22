@@ -26,6 +26,7 @@ from .runtime import (
     RuntimeRecoveryRequest,
     RuntimeClient,
 )
+from ._session_authority_subjects import session_authority_admits_subject
 from .signing import SignedInvocation
 from .stream import StreamHandle
 
@@ -250,7 +251,7 @@ def _validate_runtime_authority_binding(
         raise _invalid("runtime session authority callee does not match callee_ura")
     if not authority.matches_audience(callee_ura):
         raise _invalid("runtime session authority audience does not admit callee_ura")
-    if not _session_authority_admits_subject(
+    if not session_authority_admits_subject(
         authority,
         envelope_subject_ura,
         envelope_subject,
@@ -260,27 +261,6 @@ def _validate_runtime_authority_binding(
         )
     if not authority.matches_scope(ability_name):
         raise _invalid("runtime session authority scopes do not admit ability")
-
-
-def _session_authority_admits_subject(
-    authority: SessionAuthority,
-    subject_ura: str,
-    subject: AddressingProjection,
-) -> bool:
-    if authority.subject_ura.strip() == subject_ura.strip():
-        return True
-    if subject.kind != "resource":
-        return False
-    owner_id = subject.components.get("owner_id")
-    if not isinstance(owner_id, str):
-        return False
-    owner_user_id = authority.session_owner_user_id.strip()
-    if owner_id == f"user.{owner_user_id}":
-        return True
-    if not owner_id.startswith("agent."):
-        return False
-    agent_owner = owner_id.removeprefix("agent.").split(".", 1)
-    return len(agent_owner) == 2 and agent_owner[0] == owner_user_id
 
 
 def _required_text(value: object, field_name: str) -> str:

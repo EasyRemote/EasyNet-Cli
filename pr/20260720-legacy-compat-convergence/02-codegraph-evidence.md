@@ -2534,3 +2534,28 @@ Evidence will be appended after indexing and focused impact queries.
   the heartbeat request builder. The helper preserves first-boot empty state but
   returns `FailedPrecondition` for corrupt/unavailable cursor state before the
   heartbeat is submitted.
+
+## 2026-07-22 Python SDK session-authority subject audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph query
+  _session_history_authority_subject_matches` and
+  `/Users/macbook.silan.tech/.local/bin/codegraph query
+  sessionHistoryAuthoritySubjectMatches` showed history authority binding was
+  already exact-bound in both Python and Go.
+- `/Users/macbook.silan.tech/.local/bin/codegraph callers
+  runtimeSessionAuthorityAdmitsSubject` showed Go has one structured helper
+  shared by `validateRuntimeSessionBinding` and
+  `validateSessionAuthorityForSession`.
+- `rg -n "resource/user\\.|resource/agent\\.|_session_authority_admits_subject"
+  sdk/python/easynet_sdk sdk/go` identified the Python divergence:
+  `runtime_ability.py` used structured `owner_id` projection while
+  `authorized_runtime_session.py` still used raw substring checks against
+  `subject_ura`.
+- Root abstraction problem: Python SDK had two session-authority subject
+  matchers. One matcher used canonical addressing projection facts; the other
+  treated path text as ownership, so a non-user-owned resource whose path
+  contained `resource/user.<owner>/...` could pass SDK-side authority binding.
+- Boundary decision: Python SDK now has one internal
+  `session_authority_admits_subject` helper. It accepts exact subject equality
+  and user/agent resource ownership only from parsed URA `owner_id`, matching
+  the Go SDK helper and rejecting path substring ownership.

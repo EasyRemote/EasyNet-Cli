@@ -957,3 +957,14 @@ Decisions will be appended as root-fork choices are made.
 - Keep filtering by caller owner at the request edge. A heartbeat only refreshes
   the caller's owner projection lease, while the cursor loader remains the
   shared read-model source of all active owner cursors.
+
+## 2026-07-22 Python SDK session-authority subject projection
+
+- Preserve the canonical session-authority capability: a user session authority
+  may admit exact user/session subjects and user-owned resources when ownership
+  is proven by URA projection facts.
+- Remove Python's duplicated substring matcher from
+  `authorized_runtime_session.py`. Path text is not an ownership proof and must
+  not make SDK-side authorization diverge from Go.
+- Add a shared internal Python helper so runtime ability calls and authorized
+  runtime sessions use the same subject-admission rule.

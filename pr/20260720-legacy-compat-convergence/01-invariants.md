@@ -386,3 +386,8 @@
   state, but unreadable, schema-less, unsupported, or corrupt
   `owner-projections.json` must fail closed before heartbeat submission instead
   of being collapsed to an empty `refresh_owner_uras` list.
+- Python SDK session-authority subject admission must be derived from the same
+  canonical URA projection facts as the Go SDK. Owner-equivalent resource
+  admission may only inspect the parsed `owner_id` component; path substring
+  matches such as nested `resource/user.<owner>/...` fragments are not
+  authority facts and must fail before descriptor resolution or dispatch.

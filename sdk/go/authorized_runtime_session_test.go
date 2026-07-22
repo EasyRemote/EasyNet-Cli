@@ -28,6 +28,26 @@ func TestAuthorizedRuntimeSessionRejectsAuthoritySubjectMismatchBeforeDispatch(t
 	}
 }
 
+func TestAuthorizedRuntimeSessionRejectsPathSubstringOwnerSubjectBeforeDispatch(t *testing.T) {
+	session := newAuthorizedRuntimeSessionFixture(t)
+	intent := canonicalSessionIntentFixture()
+	intent.Subject = IntentSubjectRef{
+		URA:            "easynet:///r/example/resource/device.dev-a/archive/resource/user.alice/session/session-1",
+		DerivationRule: "fixture",
+	}
+
+	_, err := session.sdk.Invoke().Submit(context.Background(), intent, PrepareOptions{})
+	if err == nil {
+		t.Fatalf("expected authority subject mismatch")
+	}
+	if !IsCode(err, ErrAuthoritySubjectMismatch) {
+		t.Fatalf("error = %v", err)
+	}
+	if session.runtime.prepareCalls != 0 || session.runtime.submitCalls != 0 {
+		t.Fatalf("remote path attempted after path-substring subject: prepare=%d submit=%d", session.runtime.prepareCalls, session.runtime.submitCalls)
+	}
+}
+
 func TestAuthorizedRuntimeSessionRejectsMissingCallerIdentityBeforeDescriptor(t *testing.T) {
 	session := newAuthorizedRuntimeSessionFixture(t)
 	session.identity.caller = CallerIdentityRef{}

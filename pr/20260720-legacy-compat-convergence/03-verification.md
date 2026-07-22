@@ -2707,6 +2707,23 @@ Commands and outcomes will be appended after implementation.
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
   codegraph `status` reports `Index is up to date`.
 
+## 2026-07-22 Python SDK session-authority subject projection
+
+- `go test . -run 'TestAuthorizedRuntimeSession|TestRuntimeAbilityClient'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/go` —
+  PASS.
+- `PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python:/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python
+  python -m pytest -q
+  sdk/python/tests/test_authorized_runtime_session.py
+  sdk/python/tests/test_runtime_ability.py` — PASS (`21 passed`).
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes the SDK history owner-expansion negative fixture and now
+  requires structured Python authority subject projection.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
+  codegraph `status` reports `Index is up to date` with 35,291 nodes and
+  135,427 edges.
+
 ## 2026-07-22 Canonical ability catalog projection
 
 - `cargo test -q -p easynet --lib

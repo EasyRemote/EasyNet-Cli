@@ -378,13 +378,14 @@ check_sdk_history_authority_subject_contract() {
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
   local go_test="$cli_root/sdk/go/authorized_runtime_session_test.go"
   local py="$cli_root/sdk/python/easynet_sdk/authorized_runtime_session.py"
+  local py_helper="$cli_root/sdk/python/easynet_sdk/_session_authority_subjects.py"
   local py_test="$cli_root/sdk/python/tests/test_authorized_runtime_session.py"
 
-  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" <<'PY'
+  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_helper" "$py_test" <<'PY'
 import sys
 from pathlib import Path
 
-go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+go_path, go_test_path, py_path, py_helper_path, py_test_path = map(Path, sys.argv[1:])
 
 def read(path: Path) -> str:
     return path.read_text() if path.exists() else ""
@@ -421,9 +422,41 @@ if go:
         "TestAuthorizedRuntimeSessionHistoryRejectsOwnerEquivalentSubjectExpansionBeforeReceiptProvider",
         "sdk_go_history_authority_owner_expansion_test_missing",
     )
+    require(
+        go_test_path,
+        "TestAuthorizedRuntimeSessionRejectsPathSubstringOwnerSubjectBeforeDispatch",
+        "sdk_go_authority_path_substring_regression_test_missing",
+    )
 
 py = read(py_path)
 if py:
+    py_helper = read(py_helper_path)
+    require(
+        py_path,
+        "from ._session_authority_subjects import session_authority_admits_subject",
+        "sdk_python_authority_subject_shared_helper_import_missing",
+    )
+    require(
+        py_helper_path,
+        "def session_authority_admits_subject(",
+        "sdk_python_authority_subject_shared_helper_missing",
+    )
+    for token in (
+        "subject.components.get(\"owner_id\")",
+        "parse_ura(subject_ura.strip())",
+        "owner_id == f\"user.{owner_user_id}\"",
+        "owner_id.startswith(\"agent.\")",
+    ):
+        if token not in py_helper:
+            raise SystemExit(f"sdk_python_authority_subject_structured_owner_missing:{token}")
+    for forbidden in (
+        "f\"resource/user.{owner_user_id}/\" in subject_ura",
+        "f\"resource/agent.{owner_user_id}.\" in subject_ura",
+        "'resource/user.' in subject_ura",
+        "'resource/agent.' in subject_ura",
+    ):
+        if forbidden in py or forbidden in py_helper:
+            raise SystemExit("sdk_python_authority_subject_substring_expansion")
     require(
         py_path,
         "def _session_history_authority_subject_matches(",
@@ -442,6 +475,11 @@ if py:
         py_test_path,
         "test_history_rejects_owner_equivalent_subject_expansion_before_receipt_provider",
         "sdk_python_history_authority_owner_expansion_test_missing",
+    )
+    require(
+        py_test_path,
+        "test_rejects_path_substring_owner_subject_before_dispatch",
+        "sdk_python_authority_path_substring_regression_test_missing",
     )
 PY
 }

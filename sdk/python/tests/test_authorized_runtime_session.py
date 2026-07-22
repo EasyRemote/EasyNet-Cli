@@ -1,6 +1,7 @@
 import base64
 import json
 import unittest
+from dataclasses import replace
 
 from easynet_sdk import (
     AbilityRef,
@@ -42,6 +43,23 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
 
         with self.assertRaises(SDKError) as caught:
             fixture.session.invoke.submit(_intent(), PrepareOptions())
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.AUTHORITY_SUBJECT_MISMATCH))
+        self.assertEqual(fixture.runtime.prepare_calls, 0)
+        self.assertEqual(fixture.runtime.submit_calls, 0)
+
+    def test_rejects_path_substring_owner_subject_before_dispatch(self) -> None:
+        fixture = _SessionFixture()
+        intent = replace(
+            _intent(),
+            subject=SubjectRef(
+                "easynet:///r/example/resource/device.dev-a/archive/resource/user.alice/session/session-1",
+                "fixture",
+            ),
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            fixture.session.invoke.submit(intent, PrepareOptions())
 
         self.assertTrue(is_code(caught.exception, ErrorCode.AUTHORITY_SUBJECT_MISMATCH))
         self.assertEqual(fixture.runtime.prepare_calls, 0)

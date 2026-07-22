@@ -40,6 +40,7 @@ from .runtime import (
     StreamHandle,
 )
 from .runtime_ability import RuntimeCallContext, RuntimeInvocationAuthority
+from ._session_authority_subjects import session_authority_admits_subject
 from .signing import PreparedInvocation, SignedInvocation, Signer, SigningMaterial
 
 
@@ -1111,13 +1112,7 @@ def _session_authority_admits_subject(
     authority: SessionAuthority,
     subject_ura: str,
 ) -> bool:
-    if authority.subject_ura.strip() == subject_ura.strip():
-        return True
-    owner_user_id = authority.session_owner_user_id.strip()
-    return bool(owner_user_id) and (
-        f"resource/user.{owner_user_id}/" in subject_ura
-        or f"resource/agent.{owner_user_id}." in subject_ura
-    )
+    return session_authority_admits_subject(authority, subject_ura)
 
 
 def _rebuild_draft_with_metadata(
