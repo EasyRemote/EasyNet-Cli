@@ -390,18 +390,11 @@ try:
     invoke_health(init_handle.value, "easynet_invocation_invoke init-handle", 17)
     print("[ffi-smoke] complete Invocation happy path works through daemon and init handles")
 
-    # 6. Stream happy path through real daemon InvokeStream. An
-    # opened browser mock session returns exactly one capture
-    # snapshot; the callback proves the C ABI reader/dispatcher path
-    # receives daemon frames.
-    browser_open = invoke_json(
-        client_from_daemon.value,
-        "easynet_invocation_invoke browser.open_session",
-        "browser.open_session",
-        {"url": "https://example.com"},
-        33,
-    )
-    session_ura = browser_open["session_ura"]
+    # 6. Stream happy path through real daemon InvokeStream. A
+    # missing session.attach id returns an empty stream payload and a
+    # receipt-backed terminal frame; this proves the C ABI
+    # reader/dispatcher path without relying on retired placeholder
+    # browser frames.
     stream_frames = []
     @STREAM_CALLBACK
     def on_stream_chunk(_user_data, frame_json):
@@ -410,9 +403,9 @@ try:
         stream_frames.append(json.loads(frame_json.decode("utf-8")))
 
     stream_invocation = dict(invocation)
-    stream_invocation["descriptor_ref"] = descriptor_ref("browser.capture_viewport")
+    stream_invocation["descriptor_ref"] = descriptor_ref("session.attach")
     stream_invocation["nonce_base64"] = base64.b64encode(bytes(range(49, 65))).decode("ascii")
-    stream_invocation["args"] = {"session_ura": session_ura}
+    stream_invocation["args"] = {"session_id": "ffi-smoke-no-such-session"}
     stream_id = ctypes.c_uint64(0)
     assert_ok(
         lib.easynet_invocation_stream_open(
@@ -425,22 +418,14 @@ try:
         "easynet_invocation_stream_open happy path",
     )
     assert stream_id.value != 0, "stream open returned OK but stream id is 0"
-    wait_until("stream callback frame", lambda: len(stream_frames) > 0)
-    assert any(
-        frame.get("payload_json", {}).get("is_placeholder") is True
-        for frame in stream_frames
-    ), stream_frames
+    wait_until("stream callback terminal frame", lambda: any(frame.get("kind") == "terminal" for frame in stream_frames))
     first_stream = stream_frames[0]
     assert first_stream["ok"] is True, first_stream
-    assert first_stream["kind"] == "chunk", first_stream
+    assert any(frame.get("kind") == "terminal" and frame.get("terminal") is True for frame in stream_frames), stream_frames
     assert first_stream["payload_content_type"] == "application/json", first_stream
     assert "event" not in first_stream, first_stream
     assert "content_type" not in first_stream, first_stream
-    assert_ok(
-        lib.easynet_invocation_stream_cancel(client_from_daemon.value, stream_id.value),
-        "easynet_invocation_stream_cancel after callback",
-    )
-    print("[ffi-smoke] complete Invocation stream happy path delivered callback frame")
+    print("[ffi-smoke] complete Invocation stream happy path delivered receipt-backed terminal frame")
 
     # 7. Bidi happy path through real daemon InvokeBidi. The
     # daemon must accept frame 0, deliver the admission callback

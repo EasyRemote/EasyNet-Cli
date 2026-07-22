@@ -482,3 +482,7 @@
 - Retired daemon route policy keys are invalid configuration. In particular,
   `allow_directory_auto_route` must fail at config parse time instead of being
   ignored or preserved as a dormant compatibility flag.
+- Unsupported product capabilities must not be published as Operational
+  runtime abilities with placeholder outputs. A capability without a real
+  provider-backed implementation stays absent from live registry, baseline,
+  descriptor metadata, wire classifiers, and SDK/FFI live smoke contracts.

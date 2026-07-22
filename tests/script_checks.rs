@@ -246,13 +246,6 @@ fn voice_call_product_contract_script_holds() {
 }
 
 #[test]
-fn browser_session_service_boundary_script_holds() {
-    // Pins browser.* session state to a registry-scoped service
-    // instead of a process-global OnceLock-backed store.
-    run_bash_script("tests/scripts/test_check_browser_session_service_boundary.sh");
-}
-
-#[test]
 fn orchestration_service_boundary_script_holds() {
     // Pins mission.discuss_round session continuity to a registry-
     // scoped service and keeps agent-cycle inputs grouped.

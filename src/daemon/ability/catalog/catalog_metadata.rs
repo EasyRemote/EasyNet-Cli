@@ -24,9 +24,9 @@ use crate::daemon::ability::builtins::{
     },
     device_control::{
         ability_management::{ops as device_ops_ability, publish as ability_publish_ability},
-        browser as browser_session_ability, file_edit as fs_edit_ability,
-        file_transfer as file_transfer_ability, files as fs_ability, http as http_request_ability,
-        process as process_exec_ability, session as session_ability, shell as shell_run_ability,
+        file_edit as fs_edit_ability, file_transfer as file_transfer_ability, files as fs_ability,
+        http as http_request_ability, process as process_exec_ability, session as session_ability,
+        shell as shell_run_ability,
         terminal::{
             attach as pty_attach_ability, io as pty_io_ability, lifecycle as pty_lifecycle_ability,
         },
@@ -548,16 +548,6 @@ pub fn description_for(name: &str) -> &'static str {
         resource_names::VOICE_WATCH_CALL => voice_call_ability::watch_call_description(),
         resource_names::VOICE_REPORT_METRICS => voice_call_ability::report_metrics_description(),
         resource_names::VOICE_LIST_CALLS => voice_call_ability::list_calls_description(),
-        // RFC-012 §RemoteWebSurface — browser.* family.
-        device_names::BROWSER_OPEN_SESSION => browser_session_ability::open_session_description(),
-        device_names::BROWSER_SEND_INPUT => browser_session_ability::send_input_description(),
-        device_names::BROWSER_CAPTURE_VIEWPORT => {
-            browser_session_ability::capture_viewport_description()
-        }
-        device_names::BROWSER_CLOSE_SESSION => browser_session_ability::close_session_description(),
-        device_names::BROWSER_ATTACH_SESSION => {
-            browser_session_ability::attach_session_description()
-        }
         governance_names::ADMIN_STATUS => admin_status_ability::description(),
         federation_names::ABILITY_PUBLISH => ability_publish_ability::publish_description(),
         federation_names::ABILITY_UNPUBLISH => ability_publish_ability::unpublish_description(),
@@ -786,18 +776,6 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         resource_names::VOICE_WATCH_CALL => voice_call_ability::watch_call_input_schema(),
         resource_names::VOICE_REPORT_METRICS => voice_call_ability::report_metrics_input_schema(),
         resource_names::VOICE_LIST_CALLS => voice_call_ability::list_calls_input_schema(),
-        // RFC-012 §RemoteWebSurface — browser.* family.
-        device_names::BROWSER_OPEN_SESSION => browser_session_ability::open_session_input_schema(),
-        device_names::BROWSER_SEND_INPUT => browser_session_ability::send_input_input_schema(),
-        device_names::BROWSER_CAPTURE_VIEWPORT => {
-            browser_session_ability::capture_viewport_input_schema()
-        }
-        device_names::BROWSER_CLOSE_SESSION => {
-            browser_session_ability::close_session_input_schema()
-        }
-        device_names::BROWSER_ATTACH_SESSION => {
-            browser_session_ability::attach_session_input_schema()
-        }
         governance_names::ADMIN_STATUS => admin_status_ability::input_schema(),
         federation_names::ABILITY_PUBLISH => ability_publish_ability::publish_input_schema(),
         federation_names::ABILITY_UNPUBLISH => ability_publish_ability::unpublish_input_schema(),
@@ -1267,17 +1245,6 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | integration_names::OPENAI_FILES_UPLOAD
         | integration_names::OPENAI_FILES_RETRIEVE
         | integration_names::OPENAI_FILES_DELETE
-        // RFC-012 §RemoteWebSurface — browser.* family.
-        // Operational by intent: opening a WebView session,
-        // streaming frames, injecting input, closing the
-        // session all drive an external surface (the user's
-        // system WebView) under the caller's identity. Same
-        // class as media/* verbs.
-        | device_names::BROWSER_OPEN_SESSION
-        | device_names::BROWSER_ATTACH_SESSION
-        | device_names::BROWSER_SEND_INPUT
-        | device_names::BROWSER_CAPTURE_VIEWPORT
-        | device_names::BROWSER_CLOSE_SESSION
         // Plugin lifecycle reload mutates the daemon's dynamic
         // ability registration table after an install/update/remove
         // transaction has already committed on disk.

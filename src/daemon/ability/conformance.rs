@@ -59,7 +59,6 @@ pub enum BaselineDomain {
     DeviceOrchestration,
     DeviceContext,
     DeviceMedia,
-    DeviceBrowser,
     DeviceRemoteDesktop,
     DeviceOpenAiCompat,
 }
@@ -474,10 +473,6 @@ const DEVICE_BASELINE: &[BaselineAbility] = &[
     local_stream!("screen.subscribe", DeviceMedia),
     local_rpc!("screen.snapshot", DeviceMedia),
     local_bidi!("speaker.publish", DeviceMedia),
-    local_rpc!("browser.open_session", DeviceBrowser),
-    local_rpc!("browser.send_input", DeviceBrowser),
-    local_stream!("browser.capture_viewport", DeviceBrowser),
-    local_rpc!("browser.close_session", DeviceBrowser),
     local_rpc!("openai.chat_completions", DeviceOpenAiCompat),
     local_rpc!("openai.list_models", DeviceOpenAiCompat),
     local_rpc!("openai.files.upload", DeviceOpenAiCompat),

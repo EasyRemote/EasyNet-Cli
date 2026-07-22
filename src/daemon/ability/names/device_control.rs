@@ -1,9 +1,3 @@
-pub const BROWSER_OPEN_SESSION: &str = "browser.open_session";
-pub const BROWSER_SEND_INPUT: &str = "browser.send_input";
-pub const BROWSER_CAPTURE_VIEWPORT: &str = "browser.capture_viewport";
-pub const BROWSER_CLOSE_SESSION: &str = "browser.close_session";
-pub const BROWSER_ATTACH_SESSION: &str = "browser.attach_session";
-
 pub const FS_READ: &str = "fs.read";
 pub const FS_WRITE: &str = "fs.write";
 pub const FS_STAT: &str = "fs.stat";

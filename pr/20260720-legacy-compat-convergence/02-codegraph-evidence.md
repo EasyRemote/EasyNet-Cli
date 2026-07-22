@@ -2976,3 +2976,32 @@ Evidence will be appended after indexing and focused impact queries.
   no longer accepts or emits directory fallback evidence; boot/config/service
   no longer carry the `allow_directory_auto_route` switch; config TOML
   containing that retired key fails closed under `deny_unknown_fields`.
+
+## 2026-07-22 browser placeholder ability retirement
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore --max-files 12
+  "BrowserSessionService PLACEHOLDER_WEBP V0 MOCK browser.open_session
+  register capture_viewport attach_session ability conformance catalog
+  metadata"` identified the active browser placeholder surface:
+  `src/daemon/ability/builtins/device_control/browser.rs`,
+  `src/daemon/ability/catalog/build.rs`,
+  `src/daemon/ability/catalog/catalog_metadata.rs`,
+  `src/daemon/ability/conformance.rs`, SDK live smokes, and the retired
+  browser boundary script.
+- Root abstraction problem: `browser.*` was published as a Device Operational
+  ability and used as SDK/FFI stream evidence even though it emitted a 1x1
+  placeholder frame and had no real WebView provider. That made products
+  discover and invoke an unfinished runtime surface, producing route,
+  descriptor, signer, authority, and timeout errors downstream.
+- Boundary decision: treat browser WebView as Unsupported until a real
+  provider-backed implementation lands. Remove the handler module, static
+  registration, baseline rows, descriptor metadata/path/name constants, bidi
+  wire special case, placeholder tests, and SDK/FFI live-smoke dependency on
+  browser frames.
+- Replacement smoke evidence uses `session.attach` with an unknown session id
+  to verify receipt-backed stream terminality through the same SDK/FFI
+  Invocation path without fabricating data frames.
+- `/Users/macbook.silan.tech/.local/bin/codegraph index` rebuilt the graph
+  after deletion; `/Users/macbook.silan.tech/.local/bin/codegraph status`
+  reports 1,018 indexed files, 35,338 nodes, 135,742 edges, and an up-to-date
+  index.

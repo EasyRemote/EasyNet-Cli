@@ -1773,18 +1773,6 @@ mod tests {
     const TEST_DEVICE_URA: &str = "easynet:///r/t/device/d1";
 
     #[test]
-    fn session_bidi_gate_recognizes_core_browser_attach_wire() {
-        let registry = crate::daemon::ability::wire::AbilityWireRegistry::core();
-        let ability =
-            crate::daemon::ability::builtins::device_control::browser::ABILITY_ATTACH_SESSION;
-
-        assert!(local_is_bidi_wire_ability(&registry, ability));
-        assert!(LocalAxonSessionDispatcher::is_json_frame_bidi_with(
-            &registry, ability
-        ));
-    }
-
-    #[test]
     fn carrier_v1_control_failure_is_not_lifecycle_terminal() {
         let result =
             carrier_v1_control_failure(9, "STREAM_OPEN_FAILED", "target rejected stream open");

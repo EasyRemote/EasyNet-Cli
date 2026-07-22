@@ -3185,3 +3185,39 @@ Commands and outcomes will be appended after implementation.
 - `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; self-test
   fixture proves a directory fallback resolver shape fails the gate.
 - `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+
+## 2026-07-22 browser placeholder ability retirement
+
+- `cargo fmt` — PASS; applied formatting after production and gate edits.
+- `cargo fmt --check` — PASS.
+- `git diff --check` — PASS.
+- `cargo check -q --lib --bins --features axon-pb` — PASS.
+- `cargo test -q --lib --features axon-pb
+  real_device_session_attach_returns_a_stream_source_for_unknown_id` — PASS.
+- `cargo test -q --lib --features axon-pb
+  real_consent_subscribe_returns_a_stream_source` — PASS.
+- `cargo test -q --lib --features axon-pb
+  core_registry_contains_builtin_bidi_wires` — PASS.
+- `cargo test -q --lib --features axon-pb
+  carrier_v1_control_failure_is_not_lifecycle_terminal` — PASS.
+- `cargo test -q --lib --features axon-pb
+  auth_agents_table_uses_canonical_backend_fields` — PASS.
+- `cargo test -q --test script_checks
+  canonical_runtime_convergence_v2_script_contract_holds` — PASS.
+- `cargo test -q --test script_checks
+  orchestration_service_boundary_script_holds` — PASS.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes the retired browser placeholder negative fixture.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS;
+  includes `check_retired_browser_mock_surface_contract`.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tools/scripts/python-sdk-live-smoke.sh --self-test` — PASS.
+- `bash -n tools/scripts/python-sdk-live-smoke.sh tools/scripts/ffi-smoke.sh`
+  — PASS.
+- `(cd sdk/go && go test ./...)` — PASS.
+- `(cd sdk/go && go test -tags 'easynet_live_smoke easynet_cabi' -run '^$'
+  ./...)` — PASS; compile-only coverage for live-smoke build tags.
+- `/Users/macbook.silan.tech/.local/bin/codegraph index` — PASS; rebuilt
+  graph after deleting the browser placeholder module.
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index is
+  up to date with 1,018 files, 35,338 nodes, and 135,742 edges.

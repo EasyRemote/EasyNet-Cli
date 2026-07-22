@@ -23,9 +23,9 @@ use crate::daemon::ability::builtins::{
             ops as device_ops_ability, publish as ability_publish_ability,
             registrar as device_ability_registrar,
         },
-        browser as browser_session_ability, file_edit as fs_edit_ability,
-        file_transfer as file_transfer_ability, files as fs_ability, http as http_request_ability,
-        process as process_exec_ability, session as session_ability, shell as shell_run_ability,
+        file_edit as fs_edit_ability, file_transfer as file_transfer_ability, files as fs_ability,
+        http as http_request_ability, process as process_exec_ability, session as session_ability,
+        shell as shell_run_ability,
         terminal::{
             attach as pty_attach_ability, io as pty_io_ability, lifecycle as pty_lifecycle_ability,
         },
@@ -718,10 +718,6 @@ fn build_registry_with_services_result_inner(
         Arc::clone(&local_registry_handle),
         Arc::clone(&discover_federation_resolver),
     );
-    // browser.* — RFC-012 §RemoteWebSurface; v0 mock
-    // handlers per RFC-013 plan. capture_viewport is a streaming
-    // verb; the other three are unary RPC.
-    browser_session_ability::register(&mut reg);
     // voice.* call signaling abilities — `easynet call …`
     // subcommand surface routes through these via the same
     // ability-only invocation path every other CLI surface uses.

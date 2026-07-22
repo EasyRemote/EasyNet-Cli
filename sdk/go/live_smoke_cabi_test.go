@@ -152,7 +152,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	t.Log("unary RuntimeClient.Invoke OK")
 
-	prepared, _, err := runtime.Prepare(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "browser.open_session", map[string]any{}, 65), PrepareOptions{})
+	prepared, _, err := runtime.Prepare(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "observe.health", map[string]any{"smoke": "go-sdk-terminal-failure"}, 65), PrepareOptions{})
 	if err != nil {
 		t.Fatalf("typed terminal failure prepare: %v", err)
 	}
@@ -211,21 +211,9 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	t.Log("RuntimeEventClient read live daemon handle events")
 
-	browser, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "browser.open_session", map[string]any{"url": "https://example.com"}, 17))
+	stream, err := runtime.InvokeStream(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "session.attach", map[string]any{"session_id": "go-sdk-live-smoke-no-such-session"}, 33, "stream"))
 	if err != nil {
-		t.Fatalf("browser.open_session: %v", err)
-	}
-	var browserOutput map[string]any
-	if err := json.Unmarshal(browser.OutputJSON(), &browserOutput); err != nil {
-		t.Fatalf("decode browser output: %v", err)
-	}
-	sessionURA, ok := browserOutput["session_ura"].(string)
-	if !ok || sessionURA == "" {
-		t.Fatalf("browser session_ura missing: %#v", browserOutput)
-	}
-	stream, err := runtime.InvokeStream(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "browser.capture_viewport", map[string]any{"session_ura": sessionURA}, 33, "stream"))
-	if err != nil {
-		t.Fatalf("browser.capture_viewport stream: %v", err)
+		t.Fatalf("session.attach stream: %v", err)
 	}
 	streamCtx, streamCancel := context.WithTimeout(ctx, 5*time.Second)
 	streamEvent, err := stream.Next(streamCtx)
@@ -233,16 +221,16 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stream next: %v", err)
 	}
-	if streamEvent.Kind() != "data" {
-		t.Fatalf("stream event kind = %q", streamEvent.Kind())
+	if streamEvent.Kind() != "terminal" || !streamEvent.Terminal() {
+		t.Fatalf("stream terminal event = kind:%q terminal:%v state:%q", streamEvent.Kind(), streamEvent.Terminal(), streamEvent.State())
 	}
-	if _, err := stream.Cancel(ctx, "go-sdk-live-smoke"); err != nil {
-		t.Fatalf("stream cancel: %v", err)
+	if streamEvent.TerminalReceiptJSON() == nil {
+		t.Fatalf("stream terminal event is missing terminal receipt")
 	}
 	if err := stream.Close(ctx); err != nil {
 		t.Fatalf("stream close: %v", err)
 	}
-	t.Log("StreamHandle received daemon frame")
+	t.Log("StreamHandle received receipt-backed daemon terminal frame")
 }
 
 func requireLiveSmokeEnv(t *testing.T, name string) string {

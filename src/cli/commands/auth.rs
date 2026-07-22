@@ -1108,7 +1108,7 @@ mod tests {
             "node_id": "device-1",
             "skills": [
                 { "name": "shell.run" },
-                { "name": "browser.open_session" }
+                { "name": "terminal.create" }
             ]
         }));
 

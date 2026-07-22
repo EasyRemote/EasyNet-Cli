@@ -80,12 +80,7 @@ impl SystemAbilityDescriptorGroup {
             | agents::CHAT_HISTORY_LIST
             | agents::CHAT_HISTORY_GET => Ok(Self::Agents),
 
-            device_control::BROWSER_OPEN_SESSION
-            | device_control::BROWSER_SEND_INPUT
-            | device_control::BROWSER_CAPTURE_VIEWPORT
-            | device_control::BROWSER_CLOSE_SESSION
-            | device_control::BROWSER_ATTACH_SESSION
-            | device_control::FS_READ
+            device_control::FS_READ
             | device_control::FS_WRITE
             | device_control::FS_STAT
             | device_control::FS_LIST

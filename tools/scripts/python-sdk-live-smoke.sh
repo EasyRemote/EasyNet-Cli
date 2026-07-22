@@ -260,7 +260,7 @@ try:
         draft(
             runtime,
             device_ura,
-            "browser.open_session",
+            "observe.health",
             {"smoke": "python-sdk-terminal-failure"},
             65,
         )
@@ -298,32 +298,22 @@ try:
     assert event_page.cursor.sequence == last_event.sequence, event_page
     print("[python-sdk-live-smoke] RuntimeEventClient read live daemon handle events")
 
-    browser = runtime.invoke(
-        draft(
-            runtime,
-            device_ura,
-            "browser.open_session",
-            {"url": "https://example.com"},
-            17,
-        )
-    )
-    assert browser.ok is True, browser
-    session_ura = browser.output_json["session_ura"]
     stream = runtime.invoke_stream(
         draft(
             runtime,
             device_ura,
-            "browser.capture_viewport",
-            {"session_ura": session_ura},
+            "session.attach",
+            {"session_id": "python-sdk-live-smoke-no-such-session"},
             33,
             call_mode="stream",
         )
     )
     stream_event = stream.next(timeout=5.0)
-    assert stream_event.kind == "data", stream_event
-    assert stream_event.payload_json["is_placeholder"] is True, stream_event.payload_json
-    stream.cancel("python-sdk-live-smoke")
-    print("[python-sdk-live-smoke] StreamHandle received daemon frame")
+    assert stream_event.kind == "terminal", stream_event
+    assert stream_event.terminal is True, stream_event
+    assert stream_event.terminal_receipt is not None, stream_event
+    stream.close()
+    print("[python-sdk-live-smoke] StreamHandle received receipt-backed daemon terminal frame")
 
 finally:
     if runtime is not None:

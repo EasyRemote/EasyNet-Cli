@@ -2526,6 +2526,42 @@ if "serveExecPlugin" not in text:
 PY
 }
 
+check_retired_browser_mock_surface_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local active_paths=(
+    "$cli_root/src/daemon/ability/builtins/device_control/mod.rs"
+    "$cli_root/src/daemon/ability/catalog/build.rs"
+    "$cli_root/src/daemon/ability/catalog/catalog_metadata.rs"
+    "$cli_root/src/daemon/ability/catalog/descriptor_paths.rs"
+    "$cli_root/src/daemon/ability/conformance.rs"
+    "$cli_root/src/daemon/ability/names/device_control.rs"
+    "$cli_root/src/daemon/ability/wire/mod.rs"
+    "$cli_root/src/daemon/invocation/dispatch/local_session_dispatcher.rs"
+    "$cli_root/sdk/go/live_smoke_cabi_test.go"
+    "$cli_root/tools/scripts/python-sdk-live-smoke.sh"
+    "$cli_root/tools/scripts/ffi-smoke.sh"
+    "$cli_root/tests/script_checks.rs"
+  )
+
+  if [[ -e "$cli_root/src/daemon/ability/builtins/device_control/browser.rs" ]]; then
+    fail "retired browser placeholder ability implementation is still present"
+  fi
+  if [[ -e "$cli_root/tools/scripts/check-browser-session-service-boundary.sh" ]]; then
+    fail "retired browser placeholder boundary gate is still present"
+  fi
+  if [[ -e "$cli_root/tests/scripts/test_check_browser_session_service_boundary.sh" ]]; then
+    fail "retired browser placeholder boundary self-test is still present"
+  fi
+  for path in "${active_paths[@]}"; do
+    [[ -f "$path" ]] || continue
+    if rg -n \
+      'browser_session_ability|DeviceBrowser|BrowserSessionService|PLACEHOLDER_WEBP|V0 MOCK|is_placeholder|check-browser-session-service-boundary|browser_session_service_boundary|device_control::browser|BROWSER_(OPEN_SESSION|SEND_INPUT|CAPTURE_VIEWPORT|CLOSE_SESSION|ATTACH_SESSION)|browser\.(open_session|send_input|capture_viewport|close_session|attach_session)' \
+      "$path"; then
+      fail "retired browser placeholder ability leaked into active runtime surface: ${path#$cli_root/}"
+    fi
+  done
+}
+
 check_runtime_owner_signer_custody_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local self_identity="$cli_root/src/daemon/identity/self_identity.rs"
@@ -4703,6 +4739,30 @@ EOF
   if ( CLI_ROOT="$tmp/cli-sidecar-template"; check_plugin_sidecar_helper_matrix_contract ) >/dev/null 2>&1; then
     fail "self-test expected naked sidecar frame template gate to fail"
   fi
+  mkdir -p "$tmp/cli-browser-mock/src/daemon/ability/builtins/device_control" \
+    "$tmp/cli-browser-mock/src/daemon/ability/catalog" \
+    "$tmp/cli-browser-mock/src/daemon/ability/names" \
+    "$tmp/cli-browser-mock/src/daemon/ability/wire" \
+    "$tmp/cli-browser-mock/src/daemon/invocation/dispatch" \
+    "$tmp/cli-browser-mock/sdk/go" \
+    "$tmp/cli-browser-mock/tools/scripts" \
+    "$tmp/cli-browser-mock/tests/scripts" \
+    "$tmp/cli-browser-mock/tests"
+  printf 'pub mod browser;\n' \
+    > "$tmp/cli-browser-mock/src/daemon/ability/builtins/device_control/mod.rs"
+  printf 'pub fn register() { browser_session_ability::register(&mut reg); }\n' \
+    > "$tmp/cli-browser-mock/src/daemon/ability/catalog/build.rs"
+  printf 'DeviceBrowser browser.open_session\n' \
+    > "$tmp/cli-browser-mock/src/daemon/ability/conformance.rs"
+  printf 'pub const BROWSER_OPEN_SESSION: &str = "browser.open_session";\n' \
+    > "$tmp/cli-browser-mock/src/daemon/ability/names/device_control.rs"
+  printf 'const PLACEHOLDER_WEBP: &[u8] = &[]; // is_placeholder V0 MOCK\n' \
+    > "$tmp/cli-browser-mock/src/daemon/ability/builtins/device_control/browser.rs"
+  printf '#!/usr/bin/env bash\n' \
+    > "$tmp/cli-browser-mock/tools/scripts/check-browser-session-service-boundary.sh"
+  if ( CLI_ROOT="$tmp/cli-browser-mock"; check_retired_browser_mock_surface_contract ) >/dev/null 2>&1; then
+    fail "self-test expected retired browser placeholder ability gate to fail"
+  fi
   mkdir -p "$tmp/runtime-owner-signer-legacy/src/daemon/identity"
   printf '%s\n' \
     'pub struct RuntimeSigningIdentity;' \
@@ -5389,6 +5449,7 @@ EOF
   check_canonical_ability_catalog_projection_contract
   check_daemon_runtime_assembly_contract
   check_plugin_sidecar_helper_matrix_contract
+  check_retired_browser_mock_surface_contract
   check_runtime_owner_signer_custody_contract
   check_key_custody_boundary_contract
   check_daemon_mission_eal_boundary_contract
@@ -5457,6 +5518,7 @@ check_ffi_last_error_typed_tls_contract
 check_canonical_ability_catalog_projection_contract
 check_daemon_runtime_assembly_contract
 check_plugin_sidecar_helper_matrix_contract
+check_retired_browser_mock_surface_contract
 check_runtime_owner_signer_custody_contract
 check_key_custody_boundary_contract
 check_daemon_mission_eal_boundary_contract
