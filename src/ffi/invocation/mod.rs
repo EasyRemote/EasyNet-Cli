@@ -440,22 +440,43 @@ impl DescriptorResolutionError {
         Self::DescriptorNotFound(message.into())
     }
 
-    fn from_remote_probe_failure(error: anyhow::Error) -> Self {
-        let message = format!("{error:#}");
-        let lowered = message.to_ascii_lowercase();
-        if lowered.contains("daemon not running") || lowered.contains("listener unreachable") {
-            return Self::RuntimeOffline(message);
+    fn from_remote_probe_rejection(
+        error: crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure,
+    ) -> Self {
+        match error {
+            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::RuntimeOffline {
+                ..
+            }
+            | crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::Transport(
+                _,
+            ) => Self::RuntimeOffline(error.to_string()),
+            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::DaemonRejected {
+                code: tonic::Code::NotFound,
+                ..
+            } => Self::OwnerOffline(error.to_string()),
+            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::InvocationRejected {
+                ref code,
+                ..
+            } if matches!(
+                code.as_str(),
+                "ROUTE_NEGATIVE" | "NOT_FOUND" | "DESCRIPTOR_OWNER_OFFLINE"
+            ) =>
+            {
+                Self::OwnerOffline(error.to_string())
+            }
+            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::RequestBuild(
+                _,
+            ) => Self::invalid_request(error.to_string()),
+            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::DaemonRejected {
+                ..
+            }
+            | crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::InvocationRejected {
+                ..
+            }
+            | crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::ResultDecode(
+                _,
+            ) => Self::DescriptorNotFound(error.to_string()),
         }
-        if lowered.contains("requires a caller signer") {
-            return Self::CallerSignerUnavailable(message);
-        }
-        if lowered.contains("owner is not online")
-            || message.contains("NEGATIVE_REASON_NXDOMAIN")
-            || message.contains("ROUTE_NEGATIVE")
-        {
-            return Self::OwnerOffline(message);
-        }
-        Self::DescriptorNotFound(message)
     }
 
     fn message(&self) -> &str {
@@ -2159,15 +2180,16 @@ impl RemoteDescriptorCatalogProbe {
             serde_json::json!({ "subject_ura": ability_ura }),
             std::time::Duration::from_secs(30),
         )
-        .map_err(DescriptorResolutionError::from_remote_probe_failure)?
+        .map_err(|error| DescriptorResolutionError::invalid_request(error.to_string()))?
         .into_request()
+        .map_err(|error| DescriptorResolutionError::invalid_request(error.to_string()))
         .and_then(|request| {
-            crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_with_caller_signer(
+            crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_with_caller_signer_typed(
                 request,
                 caller_signer,
             )
+            .map_err(DescriptorResolutionError::from_remote_probe_rejection)
         })
-        .map_err(DescriptorResolutionError::from_remote_probe_failure)
     }
 }
 
@@ -9639,11 +9661,16 @@ mod tests {
         assert_eq!(projection.code, "CALLER_IDENTITY_UNAVAILABLE");
         assert_eq!(projection.stage, "caller_identity");
 
-        let (abi_code, projection) =
-            DescriptorResolutionError::from_remote_probe_failure(anyhow::anyhow!(
-                "ROUTE_NEGATIVE: namespace.resolve negative: NEGATIVE_REASON_NXDOMAIN: owner is not online"
-            ))
-            .abi_projection();
+        let (abi_code, projection) = DescriptorResolutionError::from_remote_probe_rejection(
+            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::DaemonRejected {
+                target_ura: "easynet:///r/localhost/ability/device.dev-a.meta.list_abilities"
+                    .to_string(),
+                execution_target_ura: "easynet:///r/localhost/device/dev-a".to_string(),
+                code: tonic::Code::NotFound,
+                message: "namespace.resolve negative".to_string(),
+            },
+        )
+        .abi_projection();
         assert_eq!(abi_code, ERR_NOT_FOUND);
         assert_eq!(projection.code, "DESCRIPTOR_OWNER_OFFLINE");
         assert_eq!(projection.retry, "after_backoff");

@@ -2902,6 +2902,7 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
+production = text.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
 
 resolve = re.search(
     r"fn runtime_resolve_descriptor_ref_json\([^)]*\)\s*->\s*Result<serde_json::Value,\s*DescriptorResolutionError>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn descriptor_ref_request_required_string",
@@ -2944,13 +2945,23 @@ for required in (
     "load_remote_invocation_caller_signer(",
     "prepare remote descriptor catalog probe signer",
     "fn invoke(self)",
-    "invoke_remote_target_with_caller_signer(",
+    "invoke_remote_target_with_caller_signer_typed(",
 ):
     if required not in probe_body:
         raise SystemExit(f"ffi_descriptor_runtime_owner:remote_probe_state_missing:{required}")
 
-if "fn descriptor_resolution_error_projection(" in text:
+if "fn descriptor_resolution_error_projection(" in production:
     raise SystemExit("ffi_descriptor_runtime_owner:retired_message_projection_classifier")
+for retired in (
+    "from_remote_probe_failure",
+    "lowered.contains",
+    'contains("owner is not online")',
+    'contains("NEGATIVE_REASON_NXDOMAIN")',
+    'contains("ROUTE_NEGATIVE")',
+    'contains("requires a caller signer")',
+):
+    if retired in production:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:retired_remote_probe_classifier:{retired}")
 for required in (
     "enum DescriptorResolutionError",
     "RuntimeOwnerUnavailable(String)",
@@ -2963,6 +2974,9 @@ for required in (
     'code: "DESCRIPTOR_OWNER_OFFLINE"',
     'code: "DESCRIPTOR_NOT_FOUND"',
     "error.abi_projection()",
+    "from_remote_probe_rejection(",
+    "RemoteInvocationFailure::DaemonRejected",
+    "invoke_remote_target_with_caller_signer_typed(",
 ):
     if required not in text:
         raise SystemExit(f"ffi_descriptor_runtime_owner:typed_projection_missing:{required}")

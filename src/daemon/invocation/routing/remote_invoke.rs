@@ -46,6 +46,62 @@ use axon_sdk::pb::axon::v1::{InvocationState as WireInvocationState, InvokeRespo
 pub(crate) type RemoteInvocationCallerSigner =
     Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>;
 
+#[derive(Debug)]
+pub(crate) enum RemoteInvocationFailure {
+    RuntimeOffline {
+        socket_path: String,
+    },
+    RequestBuild(String),
+    Transport(String),
+    DaemonRejected {
+        target_ura: String,
+        execution_target_ura: String,
+        code: tonic::Code,
+        message: String,
+    },
+    InvocationRejected {
+        state: String,
+        code: String,
+        message: String,
+    },
+    ResultDecode(String),
+}
+
+impl std::fmt::Display for RemoteInvocationFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RuntimeOffline { socket_path } => write!(
+                f,
+                "daemon not running (local gRPC listener unreachable at {socket_path}). \
+                 Start it with `easynet runtime start`."
+            ),
+            Self::RequestBuild(message) => write!(f, "{message}"),
+            Self::Transport(message) => write!(f, "{message}"),
+            Self::DaemonRejected {
+                target_ura,
+                execution_target_ura,
+                code,
+                message,
+            } => write!(
+                f,
+                "daemon rejected canonical remote invocation `{target_ura}` for target \
+                 `{execution_target_ura}` (code={code:?}): {message}"
+            ),
+            Self::InvocationRejected {
+                state,
+                code,
+                message,
+            } => write!(
+                f,
+                "remote Invoke did not complete: state={state} code={code} message={message}"
+            ),
+            Self::ResultDecode(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for RemoteInvocationFailure {}
+
 /// Validate a `--node` argument as a canonical Axon Device or Hub URA.
 /// Returns the URA string when it parses; surfaces a typed error
 /// when it doesn't, with the exact wire-shape we expect quoted in
@@ -531,13 +587,13 @@ pub(crate) fn load_remote_invocation_caller_signer(
     )
 }
 
-pub(crate) fn invoke_remote_target_with_caller_signer(
+pub(crate) fn invoke_remote_target_with_caller_signer_typed(
     request: RemoteInvocationRequest<'_>,
     signer: RemoteInvocationCallerSigner,
-) -> anyhow::Result<Value> {
+) -> Result<Value, RemoteInvocationFailure> {
     let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
-    ensure_remote_invocation_daemon_accepting(&socket_path)?;
-    invoke_remote_target_on_ready_socket(request, signer, socket_path)
+    ensure_remote_invocation_daemon_accepting_typed(&socket_path)?;
+    invoke_remote_target_on_ready_socket_typed(request, signer, socket_path)
 }
 
 fn ensure_remote_invocation_daemon_accepting(socket_path: &std::path::Path) -> anyhow::Result<()> {
@@ -551,11 +607,31 @@ fn ensure_remote_invocation_daemon_accepting(socket_path: &std::path::Path) -> a
     Ok(())
 }
 
+fn ensure_remote_invocation_daemon_accepting_typed(
+    socket_path: &std::path::Path,
+) -> Result<(), RemoteInvocationFailure> {
+    if !crate::support::platform::local_daemon_grpc::probe_accepting(socket_path) {
+        return Err(RemoteInvocationFailure::RuntimeOffline {
+            socket_path: socket_path.display().to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn invoke_remote_target_on_ready_socket(
     request: RemoteInvocationRequest<'_>,
     signer: RemoteInvocationCallerSigner,
     socket_path: std::path::PathBuf,
 ) -> anyhow::Result<Value> {
+    invoke_remote_target_on_ready_socket_typed(request, signer, socket_path)
+        .map_err(anyhow::Error::new)
+}
+
+fn invoke_remote_target_on_ready_socket_typed(
+    request: RemoteInvocationRequest<'_>,
+    signer: RemoteInvocationCallerSigner,
+    socket_path: std::path::PathBuf,
+) -> Result<Value, RemoteInvocationFailure> {
     let RemoteInvocationRequest {
         target,
         caller_ura,
@@ -565,13 +641,21 @@ fn invoke_remote_target_on_ready_socket(
         args,
         timeout,
     } = request;
-    let arguments = serde_json::to_vec(&args).context("serialise remote invocation arguments")?;
+    let arguments = serde_json::to_vec(&args).map_err(|error| {
+        RemoteInvocationFailure::RequestBuild(format!(
+            "serialise remote invocation arguments: {error}"
+        ))
+    })?;
     let timeout_seconds = i32::try_from(timeout.as_secs().max(1)).unwrap_or(i32::MAX);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .context("build tokio runtime for canonical remote invoke")?;
+        .map_err(|error| {
+            RemoteInvocationFailure::Transport(format!(
+                "build tokio runtime for canonical remote invoke: {error}"
+            ))
+        })?;
 
     runtime.block_on(async move {
         let mut request = ProtoEnvelope::from_target(
@@ -582,14 +666,24 @@ fn invoke_remote_target_on_ready_socket(
                 invocation_nonce,
                 causal_context,
             },
-        )?
+        )
+        .map_err(|error| {
+            RemoteInvocationFailure::RequestBuild(format!(
+                "build remote invocation envelope: {error}"
+            ))
+        })?
         .signed_descriptor_ref_invoke_request_with_signer(
             target.route_function_name(),
             target.descriptor_ref(),
             arguments,
             signer.as_ref(),
         )
-        .await?;
+        .await
+        .map_err(|error| {
+            RemoteInvocationFailure::RequestBuild(format!(
+                "build signed descriptor-bound remote request: {error}"
+            ))
+        })?;
         request.content_type = "application/json".to_string();
         request.content_envelope = Some(axon_sdk::pb::axon::v1::ContentEnvelope {
             content_type: "application/json".to_string(),
@@ -603,18 +697,21 @@ fn invoke_remote_target_on_ready_socket(
             Duration::from_secs(10),
         )
         .await
-        .context("connect to local daemon gRPC endpoint")?;
+        .map_err(|error| {
+            RemoteInvocationFailure::Transport(format!(
+                "connect to local daemon gRPC endpoint at {}: {error:#}",
+                socket_path.display()
+            ))
+        })?;
 
         let mut client = InvocationClient::new(channel);
         let response = client.invoke(request).await.map_err(|status| {
-            anyhow!(
-                "daemon rejected canonical remote invocation `{}` for target `{}` \
-                 (code={:?}): {}",
-                target.as_str(),
-                target.execution_target_ura(),
-                status.code(),
-                status.message(),
-            )
+            RemoteInvocationFailure::DaemonRejected {
+                target_ura: target.as_str().to_string(),
+                execution_target_ura: target.execution_target_ura().to_string(),
+                code: status.code(),
+                message: status.message().to_string(),
+            }
         })?;
         let body = response.into_inner();
         // The local daemon owns remote dispatch and has already verified the
@@ -622,8 +719,9 @@ fn invoke_remote_target_on_ready_socket(
         // DeviceTrustSync-backed key resolver before returning this response.
         // Re-verifying here with a fresh static realm-trust.toml snapshot would
         // reintroduce a second, stale receipt authority.
-        ensure_completed_invoke_response("remote Invoke", &body)?;
+        ensure_completed_invoke_response_typed(&body)?;
         decode_invoke_result_bytes(&body.result)
+            .map_err(|error| RemoteInvocationFailure::ResultDecode(error.to_string()))
     })
 }
 
@@ -948,6 +1046,46 @@ pub(crate) fn ensure_completed_invoke_response(
             message.as_str()
         },
     )
+}
+
+fn ensure_completed_invoke_response_typed(
+    body: &InvokeResponse,
+) -> Result<(), RemoteInvocationFailure> {
+    let completed = axon_sdk::invocation::InvocationState::Completed.to_wire_i32();
+    if body.state == completed {
+        return Ok(());
+    }
+
+    let state = WireInvocationState::try_from(body.state)
+        .map(|state| state.as_str_name().to_string())
+        .unwrap_or_else(|_| format!("UNKNOWN_STATE_{}", body.state));
+    let error = body.error.as_ref();
+    let (code, message) = error
+        .map(|error| {
+            (
+                error.code.trim().to_string(),
+                error.message.trim().to_string(),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                "INVOKE_NOT_COMPLETED".to_string(),
+                "InvokeResponse did not carry a structured error".to_string(),
+            )
+        });
+    Err(RemoteInvocationFailure::InvocationRejected {
+        state,
+        code: if code.is_empty() {
+            "INVOKE_NOT_COMPLETED".to_string()
+        } else {
+            code
+        },
+        message: if message.is_empty() {
+            "InvokeResponse did not carry an error message".to_string()
+        } else {
+            message
+        },
+    })
 }
 
 fn decode_invoke_result_bytes(result_bytes: &[u8]) -> anyhow::Result<Value> {

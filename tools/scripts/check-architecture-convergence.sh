@@ -8399,13 +8399,47 @@ if ffi_invocation.exists():
 ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
 if ffi_invocation.exists():
     text = source(ffi_invocation)
-    if "fn descriptor_resolution_error_projection(" in text:
+    production = text.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
+    if "fn descriptor_resolution_error_projection(" in production:
         add(
             "R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER",
             ffi_invocation,
-            line_number(text, text.find("fn descriptor_resolution_error_projection(")),
+            line_number(text, production.find("fn descriptor_resolution_error_projection(")),
             "descriptor resolver FFI projection must use typed DescriptorResolutionError, not message-string classification",
         )
+    for token, detail in (
+        (
+            "from_remote_probe_failure",
+            "descriptor resolver must not classify remote probe failures from anyhow message text",
+        ),
+        (
+            "lowered.contains",
+            "descriptor resolver must not lowercase message text for state classification",
+        ),
+        (
+            'contains("owner is not online")',
+            "descriptor resolver must not depend on daemon owner-offline wording",
+        ),
+        (
+            'contains("NEGATIVE_REASON_NXDOMAIN")',
+            "descriptor resolver must not depend on daemon negative-route wording",
+        ),
+        (
+            'contains("ROUTE_NEGATIVE")',
+            "descriptor resolver must not depend on daemon route-negative wording",
+        ),
+        (
+            'contains("requires a caller signer")',
+            "descriptor resolver must not depend on signer error wording",
+        ),
+    ):
+        if token in production:
+            add(
+                "R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER",
+                ffi_invocation,
+                line_number(text, text.find(token)),
+                detail,
+            )
     for token, detail in (
         (
             "enum DescriptorResolutionError",
@@ -8418,6 +8452,14 @@ if ffi_invocation.exists():
         (
             "error.abi_projection()",
             "FFI descriptor resolver must project from typed error variants",
+        ),
+        (
+            "from_remote_probe_rejection(",
+            "descriptor resolver must map typed remote probe rejection states",
+        ),
+        (
+            "invoke_remote_target_with_caller_signer_typed(",
+            "descriptor resolver must invoke remote descriptor probes through typed submit",
         ),
     ):
         if token not in text:
