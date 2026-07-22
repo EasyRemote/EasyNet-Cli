@@ -3,26 +3,26 @@
 import PackageDescription
 
 let package = Package(
-    name: "EasyNetDaemonSDK",
+    name: "RuntimeSDK",
     platforms: [
         .macOS(.v14),
         .iOS(.v17)
     ],
     products: [
         .library(
-            name: "EasyNetDaemonSDK",
-            targets: ["EasyNetDaemonSDK"]
+            name: "RuntimeSDK",
+            targets: ["RuntimeSDK"]
         )
     ],
     targets: [
         .target(
-            name: "EasyNetDaemonSDK",
-            path: "Sources/EasyNetDaemonSDK"
+            name: "RuntimeSDK",
+            path: "Sources/RuntimeSDK"
         ),
         .testTarget(
-            name: "EasyNetDaemonSDKTests",
-            dependencies: ["EasyNetDaemonSDK"],
-            path: "Tests/EasyNetDaemonSDKTests"
+            name: "RuntimeSDKTests",
+            dependencies: ["RuntimeSDK"],
+            path: "Tests/RuntimeSDKTests"
         )
     ]
 )

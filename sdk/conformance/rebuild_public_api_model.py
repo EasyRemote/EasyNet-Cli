@@ -375,7 +375,7 @@ def package_manifest() -> dict[str, list[dict[str, str]]]:
         ],
         "swift": [
             {
-                "path": "sdk/swift/Sources/EasyNetDaemonSDK",
+                "path": "sdk/swift/Sources/RuntimeSDK",
                 "category": "easynet_provider",
             }
         ],

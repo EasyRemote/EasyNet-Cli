@@ -7,7 +7,7 @@ if [[ ! -f "$ROOT/sdk/swift/Package.swift" ]]; then
   echo "check-swift-sdk-seam: missing Swift Package manifest" >&2
   exit 1
 fi
-if [[ ! -d "$ROOT/sdk/swift/Sources/EasyNetDaemonSDK" || ! -d "$ROOT/sdk/swift/Tests/EasyNetDaemonSDKTests" ]]; then
+if [[ ! -d "$ROOT/sdk/swift/Sources/RuntimeSDK" || ! -d "$ROOT/sdk/swift/Tests/RuntimeSDKTests" ]]; then
   echo "check-swift-sdk-seam: missing Swift sources" >&2
   exit 1
 fi

@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import EasyNetDaemonSDK
+@testable import RuntimeSDK
 
 final class RuntimeCoreSeamTests: XCTestCase {
     private let caller = "easynet:///r/example/agent/alice.sdk"
@@ -13,7 +13,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        let sourceDirectory = packageRoot.appendingPathComponent("Sources/EasyNetDaemonSDK")
+        let sourceDirectory = packageRoot.appendingPathComponent("Sources/RuntimeSDK")
         let sourceNames = Set(
             try FileManager.default.contentsOfDirectory(atPath: sourceDirectory.path)
                 .filter { $0.hasSuffix(".swift") }

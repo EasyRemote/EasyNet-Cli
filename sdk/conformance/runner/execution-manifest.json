@@ -1414,7 +1414,7 @@
       "case_id": "authority/mutual_exclusion",
       "selector": "testAuthorityMetadataIsTypedAndMutuallyExclusive",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1422,7 +1422,7 @@
       "case_id": "bidi/close_send_not_cancel",
       "selector": "testStreamAndBidiStateMachinesAreBounded",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1430,7 +1430,7 @@
       "case_id": "bidi/frame0_required",
       "selector": "testBidiFrame0IsRequiredBeforeRuntimeSessionEntry",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1438,7 +1438,7 @@
       "case_id": "error/retry_hint",
       "selector": "testRetryHintsPreserveRetryability",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1446,7 +1446,7 @@
       "case_id": "error/typed_json",
       "selector": "testTypedErrorsPreserveStableCategories",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1454,7 +1454,7 @@
       "case_id": "health/api_vs_runtime",
       "selector": "testHealthSeparatesLivenessFromReadiness",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1462,7 +1462,7 @@
       "case_id": "invocation/canonical_material",
       "selector": "testCanonicalSigningMaterialComesFromPrepare",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1470,7 +1470,7 @@
       "case_id": "invocation/complete_tuple",
       "selector": "testCompleteTupleRejectsMissingCaller",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1478,7 +1478,7 @@
       "case_id": "invocation/prepared_not_submittable",
       "selector": "testPreparedInvocationCannotBeSubmitted",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1486,7 +1486,7 @@
       "case_id": "invocation/presigned_submit",
       "selector": "testInvocationPrepareSignSubmitPreservesCompleteTuple",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1494,7 +1494,7 @@
       "case_id": "invocation/terminal_receipt_facts",
       "selector": "testInvocationResultUsesTerminalReceipt",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1502,7 +1502,7 @@
       "case_id": "runtime_core/feature_discovery",
       "selector": "testDiscoveryAndLifecycleAreExplicit",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1510,7 +1510,7 @@
       "case_id": "stream/backpressure_bound",
       "selector": "testStreamAndBidiBackpressureAreBounded",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1518,7 +1518,7 @@
       "case_id": "stream/order_terminal",
       "selector": "testStreamOrderAndTerminalArePreserved",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1526,7 +1526,7 @@
       "case_id": "version/abi_compatible",
       "selector": "testABICompatibleAcceptsExactVersion",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     },
     {
@@ -1534,7 +1534,7 @@
       "case_id": "version/abi_incompatible",
       "selector": "testABIIncompatibleRejectsMismatch",
       "evidence": [
-        "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
       ]
     }
   ]

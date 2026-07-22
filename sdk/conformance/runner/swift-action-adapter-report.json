@@ -7,8 +7,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"
@@ -18,8 +18,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"
@@ -29,8 +29,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"
@@ -40,8 +40,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"
@@ -51,8 +51,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"
@@ -62,8 +62,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "health"
@@ -73,8 +73,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"
@@ -84,8 +84,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"
@@ -95,8 +95,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"
@@ -106,8 +106,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"
@@ -117,8 +117,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"
@@ -128,8 +128,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"
@@ -139,8 +139,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"
@@ -150,8 +150,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"
@@ -161,8 +161,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"
@@ -172,8 +172,8 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
-          "sha256": "a8c68d6a88bcc5d975a01f0cc00e5a9617014423a8a8548d123f94fc8231fb67"
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "81a7bd7ba0a5c13ca6ca2ad92719d334095dad667d27cc735cfbf35cb175ddaa"
         }
       ],
       "profile": "runtime_core"

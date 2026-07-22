@@ -414,7 +414,7 @@ def swift_inventory() -> dict[str, Any]:
                 "xcrun",
                 "swift-symbolgraph-extract",
                 "-module-name",
-                "EasyNetDaemonSDK",
+                "RuntimeSDK",
                 "-target",
                 target,
                 "-sdk",

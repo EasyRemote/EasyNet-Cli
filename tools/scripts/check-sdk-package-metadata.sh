@@ -122,13 +122,13 @@ if pom_path is not None:
         if prop("maven.compiler.release") != "17":
             fail("java:maven.compiler.release_must_be_17")
 
-swift_text = require_text("sdk/swift/Package.swift", 'name: "EasyNetDaemonSDK"', "swift")
+swift_text = require_text("sdk/swift/Package.swift", 'name: "RuntimeSDK"', "swift")
 if swift_text:
     for required in [
-        'name: "EasyNetDaemonSDK"',
-        'targets: ["EasyNetDaemonSDK"]',
-        'name: "EasyNetDaemonSDKTests"',
-        'dependencies: ["EasyNetDaemonSDK"]',
+        'name: "RuntimeSDK"',
+        'targets: ["RuntimeSDK"]',
+        'name: "RuntimeSDKTests"',
+        'dependencies: ["RuntimeSDK"]',
     ]:
         if required not in swift_text:
             fail(f"swift:missing:{required}")
