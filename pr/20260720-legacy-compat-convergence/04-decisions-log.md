@@ -999,3 +999,19 @@ Decisions will be appended as root-fork choices are made.
 - Keep diagnostic attempt states explicit. `failed` remains an aggregate query
   over failed attempt terminal states, but accepted state filter inputs are now
   closed over canonical ledger and attempt state names.
+
+## 2026-07-22 Namespace resolver authority projection
+
+- Treat resolver authority as evidence derived from canonical query identity,
+  not as local daemon decoration. Direct URAs, route refs, and descriptor refs
+  each have one typed projection path to a realm.
+- Remove the implicit `localhost` realm fallback from resolver authority
+  projection. A malformed query, malformed route ref, or malformed descriptor
+  ref is unavailable authority state and must be visible in resolver output.
+- Reuse `route_resolver::authority_for_query` from
+  `namespace_resolve_input_failure` so normal route answers and schema-failure
+  answers cannot drift into separate authority models.
+- Preserve the public JSON shape while changing the internal state:
+  malformed queries still return a negative resolver answer, but the authority
+  object now carries `query_name_unavailable` instead of fabricated hub
+  authority.

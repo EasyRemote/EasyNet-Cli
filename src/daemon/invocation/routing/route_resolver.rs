@@ -1847,19 +1847,49 @@ fn negative_answer_json(query_name: &str, reason: NegativeReason, detail: Option
     })
 }
 
-fn authority_for_query(query_name: &str) -> Value {
-    let realm = crate::core::ura::parse_ura(query_name)
+pub(crate) fn authority_for_query(query_name: &str) -> Value {
+    match authority_realm_for_query(query_name) {
+        Some(realm) => json!({
+            "authority_ura": crate::core::ura::hub_ura(&realm),
+            "zone_ref": format!("realm:{realm}"),
+            "algorithm": "daemon-local",
+            "signature": "",
+            "issued_unix_ms": 0,
+        }),
+        None => json!({
+            "authority_ura": "",
+            "zone_ref": "query_name_unavailable",
+            "algorithm": "daemon-local-unavailable",
+            "signature": "",
+            "issued_unix_ms": 0,
+            "unavailable": {
+                "reason": "query_name is not a canonical URA, route-ref, or descriptor ref"
+            }
+        }),
+    }
+}
+
+fn authority_realm_for_query(query_name: &str) -> Option<String> {
+    let query_name = query_name.trim();
+    let candidate = query_name
+        .strip_prefix("route-ref::")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(query_name);
+    if let Some(realm) = realm_from_ura(candidate) {
+        return Some(realm);
+    }
+    let ability_ura =
+        crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(candidate)
+            .ok()?;
+    realm_from_ura(&ability_ura)
+}
+
+fn realm_from_ura(value: &str) -> Option<String> {
+    crate::core::ura::parse_ura(value)
         .ok()
         .map(|parsed| parsed.realm)
         .filter(|realm| !realm.is_empty())
-        .unwrap_or_else(|| "localhost".to_string());
-    json!({
-        "authority_ura": crate::core::ura::hub_ura(&realm),
-        "zone_ref": format!("realm:{realm}"),
-        "algorithm": "daemon-local",
-        "signature": "",
-        "issued_unix_ms": 0,
-    })
 }
 
 fn cache_policy_json() -> Value {
@@ -2928,6 +2958,49 @@ mod tests {
             .expect_err("empty selector must be refused");
 
         assert_eq!(failure.reason, NegativeReason::Refused);
+    }
+
+    #[test]
+    fn authority_projection_uses_route_ref_embedded_ability_realm() {
+        let owner_ura = device_owner_ura();
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
+        let authority = authority_for_query(&format!("route-ref::{ability_ura}"));
+
+        assert_eq!(
+            authority["authority_ura"],
+            crate::core::ura::hub_ura("test-realm")
+        );
+        assert_eq!(authority["zone_ref"], "realm:test-realm");
+        assert!(authority.get("unavailable").is_none());
+    }
+
+    #[test]
+    fn authority_projection_uses_descriptor_ref_embedded_ability_realm() {
+        let owner_ura = device_owner_ura();
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
+        let descriptor_ref = descriptor_ref_for_test(&ability_ura);
+        let authority = authority_for_query(&descriptor_ref);
+
+        assert_eq!(
+            authority["authority_ura"],
+            crate::core::ura::hub_ura("test-realm")
+        );
+        assert_eq!(authority["zone_ref"], "realm:test-realm");
+        assert!(authority.get("unavailable").is_none());
+    }
+
+    #[test]
+    fn authority_projection_does_not_default_invalid_query_to_localhost() {
+        let authority = authority_for_query("not-a-ura");
+
+        assert_eq!(authority["authority_ura"], "");
+        assert_eq!(authority["zone_ref"], "query_name_unavailable");
+        assert_eq!(authority["algorithm"], "daemon-local-unavailable");
+        assert!(authority["unavailable"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("query_name")));
     }
 
     #[test]

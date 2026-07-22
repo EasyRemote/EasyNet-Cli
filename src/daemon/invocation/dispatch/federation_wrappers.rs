@@ -744,11 +744,6 @@ fn namespace_resolve_input_failure(query: &Value, detail: &str) -> Value {
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or_default();
-    let realm = crate::core::ura::parse_ura(query_name)
-        .ok()
-        .map(|parsed| parsed.realm)
-        .filter(|realm| !realm.is_empty())
-        .unwrap_or_else(|| "localhost".to_string());
     serde_json::json!({
         "answer_kind": ResolveAnswerKind::Negative.as_str_name(),
         "next_hop": {
@@ -756,13 +751,7 @@ fn namespace_resolve_input_failure(query: &Value, detail: &str) -> Value {
         },
         "records": [],
         "release_profile": ResolverReleaseProfile::AuthoritativeLocal.as_str_name(),
-        "authority": {
-            "authority_ura": crate::core::ura::hub_ura(&realm),
-            "zone_ref": format!("realm:{realm}"),
-            "algorithm": "daemon-local",
-            "signature": "",
-            "issued_unix_ms": 0,
-        },
+        "authority": crate::daemon::invocation::routing::route_resolver::authority_for_query(query_name),
         "cache_policy": {
             "ttl_ms": 0,
             "shared_cacheable": false,
@@ -2303,6 +2292,38 @@ mod tests {
             .as_str()
             .is_some_and(|detail| detail.contains("missing canonical qtype")));
         assert!(answer.get("ability_ura").is_none());
+    }
+
+    #[test]
+    fn namespace_resolve_input_failure_does_not_fabricate_localhost_authority() {
+        let registry = PresenceRegistry::new();
+        let catalog =
+            crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new();
+        let answer = handle_namespace_resolve_at(
+            &serde_json::json!({
+                "query_name": "not-a-ura",
+                "ability_name": "agent.list",
+            }),
+            &registry,
+            None,
+            &catalog,
+            1_714_493_100_000,
+        );
+
+        assert_eq!(
+            answer["answer_kind"],
+            ResolveAnswerKind::Negative.as_str_name()
+        );
+        assert_eq!(
+            answer["negative"]["reason"],
+            NegativeReason::Refused.as_str_name()
+        );
+        assert_eq!(answer["authority"]["authority_ura"], "");
+        assert_eq!(answer["authority"]["zone_ref"], "query_name_unavailable");
+        assert_ne!(
+            answer["authority"]["authority_ura"],
+            crate::core::ura::hub_ura("localhost")
+        );
     }
 
     #[test]

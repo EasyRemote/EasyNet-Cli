@@ -1380,6 +1380,89 @@ for required_test in (
 PY
 }
 
+check_namespace_resolver_authority_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local route_resolver="$cli_root/src/daemon/invocation/routing/route_resolver.rs"
+  local federation_wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
+  [[ -f "$route_resolver" ]] || fail "route resolver source is missing: $route_resolver"
+  [[ -f "$federation_wrappers" ]] || fail "federation wrappers source is missing: $federation_wrappers"
+
+  "$PYTHON_BIN" - "$route_resolver" "$federation_wrappers" <<'PY'
+import sys
+from pathlib import Path
+
+route_path, wrappers_path = map(Path, sys.argv[1:])
+route_text = route_path.read_text(encoding="utf-8")
+wrappers_text = wrappers_path.read_text(encoding="utf-8")
+route_production = route_text.split("\n#[cfg(test)]\nmod tests", 1)[0]
+wrappers_production = wrappers_text.split("\n#[cfg(test)]\nmod tests", 1)[0]
+
+def function_body(text: str, name: str) -> str:
+    marker = f"fn {name}"
+    start = text.find(marker)
+    if start < 0:
+        raise SystemExit(f"namespace_resolver_authority_projection:{name}:missing")
+    brace = text.find("{", start)
+    if brace < 0:
+        raise SystemExit(f"namespace_resolver_authority_projection:{name}:body_missing")
+    depth = 0
+    for index in range(brace, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[brace:index + 1]
+    raise SystemExit(f"namespace_resolver_authority_projection:{name}:unterminated")
+
+authority_body = function_body(route_production, "authority_for_query")
+realm_body = function_body(route_production, "authority_realm_for_query")
+wrapper_body = function_body(wrappers_production, "namespace_resolve_input_failure")
+combined_production = "\n".join((route_production, wrappers_production))
+
+required_route_fragments = {
+    "pub(crate) fn authority_for_query(": "authority_helper_not_shared",
+    "fn authority_realm_for_query(": "realm_projection_helper_missing",
+    'strip_prefix("route-ref::")': "route_ref_realm_projection_missing",
+    "ability_ura_from_descriptor_ref(candidate)": "descriptor_ref_realm_projection_missing",
+    '"query_name_unavailable"': "unavailable_authority_state_missing",
+    '"daemon-local-unavailable"': "unavailable_authority_algorithm_missing",
+}
+for fragment, label in required_route_fragments.items():
+    if fragment not in route_production:
+        raise SystemExit(f"namespace_resolver_authority_projection:{label}")
+
+legacy_authority_patterns = {
+    'unwrap_or_else(|| "localhost".to_string())': "localhost_string_fallback",
+    'unwrap_or_else(|| "localhost")': "localhost_str_fallback",
+    'unwrap_or("localhost")': "localhost_literal_fallback",
+}
+for pattern, label in legacy_authority_patterns.items():
+    if pattern in authority_body or pattern in realm_body:
+        raise SystemExit(f"namespace_resolver_authority_projection:route_resolver:{label}")
+    if pattern in wrapper_body:
+        raise SystemExit(f"namespace_resolver_authority_projection:federation_wrapper:{label}")
+
+if "route_resolver::authority_for_query(query_name)" not in wrapper_body:
+    raise SystemExit("namespace_resolver_authority_projection:wrapper_not_using_shared_authority_helper")
+for forbidden in ("parse_ura(query_name)", '"localhost"'):
+    if forbidden in wrapper_body:
+        raise SystemExit(f"namespace_resolver_authority_projection:wrapper_legacy_authority:{forbidden}")
+
+for required_test in (
+    "authority_projection_uses_route_ref_embedded_ability_realm",
+    "authority_projection_uses_descriptor_ref_embedded_ability_realm",
+    "authority_projection_does_not_default_invalid_query_to_localhost",
+    "namespace_resolve_input_failure_does_not_fabricate_localhost_authority",
+):
+    if required_test not in route_text and required_test not in wrappers_text:
+        raise SystemExit(f"namespace_resolver_authority_projection:missing_test:{required_test}")
+
+if '"query_name is not a canonical URA, route-ref, or descriptor ref"' not in combined_production:
+    raise SystemExit("namespace_resolver_authority_projection:unavailable_reason_not_explicit")
+PY
+}
+
 check_daemon_invocation_service_descriptor_ref_route_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local service="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
@@ -3341,6 +3424,68 @@ EOF
   if ( CLI_ROOT="$tmp/cli-route-selector-legacy"; check_route_resolver_descriptor_ref_selector_contract ) >/dev/null 2>&1; then
     fail "self-test expected route descriptor-ref selector fallback gate to fail"
   fi
+  mkdir -p "$tmp/cli-namespace-authority-legacy/src/daemon/invocation/routing" \
+    "$tmp/cli-namespace-authority-legacy/src/daemon/invocation/dispatch"
+  cat >"$tmp/cli-namespace-authority-legacy/src/daemon/invocation/routing/route_resolver.rs" <<'EOF'
+use serde_json::{json, Value};
+
+fn authority_for_query(query_name: &str) -> Value {
+    let realm = crate::core::ura::parse_ura(query_name)
+        .ok()
+        .map(|parsed| parsed.realm)
+        .filter(|realm| !realm.is_empty())
+        .unwrap_or_else(|| "localhost".to_string());
+    json!({
+        "authority_ura": crate::core::ura::hub_ura(&realm),
+        "zone_ref": format!("realm:{realm}"),
+        "algorithm": "daemon-local",
+        "signature": "",
+        "issued_unix_ms": 0,
+    })
+}
+
+fn authority_realm_for_query(query_name: &str) -> Option<String> {
+    crate::core::ura::parse_ura(query_name).ok().map(|parsed| parsed.realm)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn authority_projection_uses_route_ref_embedded_ability_realm() {}
+
+    #[test]
+    fn authority_projection_uses_descriptor_ref_embedded_ability_realm() {}
+
+    #[test]
+    fn authority_projection_does_not_default_invalid_query_to_localhost() {}
+}
+EOF
+  cat >"$tmp/cli-namespace-authority-legacy/src/daemon/invocation/dispatch/federation_wrappers.rs" <<'EOF'
+fn namespace_resolve_input_failure(query: &serde_json::Value, detail: &str) -> serde_json::Value {
+    let query_name = query.get("query_name").and_then(serde_json::Value::as_str).unwrap_or_default();
+    let realm = crate::core::ura::parse_ura(query_name)
+        .ok()
+        .map(|parsed| parsed.realm)
+        .filter(|realm| !realm.is_empty())
+        .unwrap_or_else(|| "localhost".to_string());
+    serde_json::json!({
+        "authority": {
+            "authority_ura": crate::core::ura::hub_ura(&realm),
+            "zone_ref": format!("realm:{realm}")
+        },
+        "negative": {"detail": detail}
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn namespace_resolve_input_failure_does_not_fabricate_localhost_authority() {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/cli-namespace-authority-legacy"; check_namespace_resolver_authority_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected namespace resolver authority projection fallback gate to fail"
+  fi
   mkdir -p "$tmp/cli-daemon-route-projection-legacy/src/daemon/invocation/dispatch" \
     "$tmp/cli-daemon-route-projection-legacy/src/daemon/axon_bridge"
   cat >"$tmp/cli-daemon-route-projection-legacy/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'EOF'
@@ -4081,6 +4226,7 @@ EOF
   check_daemon_tuple_route_contract
   check_daemon_runtime_route_inventory_contract
   check_route_resolver_descriptor_ref_selector_contract
+  check_namespace_resolver_authority_projection_contract
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
   check_ffi_descriptor_runtime_owner_contract
   check_canonical_ability_catalog_projection_contract
@@ -4136,6 +4282,7 @@ check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
 check_daemon_runtime_route_inventory_contract
 check_route_resolver_descriptor_ref_selector_contract
+check_namespace_resolver_authority_projection_contract
 check_daemon_invocation_service_descriptor_ref_route_projection_contract
 check_ffi_descriptor_runtime_owner_contract
 check_canonical_ability_catalog_projection_contract

@@ -405,3 +405,8 @@
   descriptor-ref route projection. A descriptor-like bidi frame-0 route token
   must fail before generic bidi dispatch when it cannot be projected to a
   public route name for the envelope callee.
+- Namespace resolver authority projection must be derived from canonical
+  runtime identity input: a direct URA, a `route-ref::<ability_ura>`, or a
+  descriptor ref that projects to an Ability URA. Malformed or unavailable
+  query identity must project explicit unavailable authority state; it must not
+  fabricate `localhost` hub authority or zone evidence.

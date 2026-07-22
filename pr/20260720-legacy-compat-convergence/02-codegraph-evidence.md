@@ -2621,3 +2621,27 @@ Evidence will be appended after indexing and focused impact queries.
 - Boundary decision: history filter projection now uses typed helpers for
   canonical URAs, principal URAs, Ability URAs, and supported ledger/attempt
   states before opening either ledger.
+
+## 2026-07-22 Namespace resolver authority projection audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` reported the current
+  checkout indexed and up to date before this slice.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "authority_for_query namespace_resolve_input_failure route-ref descriptor_ref
+  ability_ura_from_descriptor_ref localhost"` identified
+  `route_resolver::authority_for_query` as the shared authority projection
+  helper and `federation_wrappers::namespace_resolve_input_failure` as the
+  public `namespace.resolve` input-failure path that must reuse it.
+- The same query showed `ability_ura_from_descriptor_ref` is the canonical
+  descriptor-ref projection seam already shared by daemon routing, admission,
+  boot, and CLI tuple code. Authority projection should consume this seam
+  instead of independently reparsing descriptor strings or defaulting realms.
+- Source inspection found a root abstraction defect: resolver authority
+  projection treated query parse failure as a local realm observation by
+  defaulting to `localhost`. For route records, the `route-ref::<ability_ura>`
+  wrapper was also not unwrapped before realm projection, so valid selected
+  routes could carry fabricated localhost authority evidence.
+- Boundary decision: namespace authority projection now has a closed input
+  model. It derives realm from direct URA, route-ref embedded Ability URA, or
+  descriptor-ref embedded Ability URA. Invalid inputs return explicit
+  `query_name_unavailable` authority state with no hub URA.

@@ -2869,3 +2869,30 @@ Commands and outcomes will be appended after implementation.
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
   codegraph `status` reports `Index is up to date` with 35,305 nodes and
   135,492 edges.
+
+## 2026-07-22 Namespace resolver authority projection
+
+- `cargo test -q -p easynet --lib authority_projection_ --features axon-pb`
+  — PASS (`3 passed`); covers route-ref embedded realm projection,
+  descriptor-ref embedded realm projection, and invalid query unavailable
+  authority instead of localhost fallback.
+- `cargo test -q -p easynet --lib
+  namespace_resolve_input_failure_does_not_fabricate_localhost_authority
+  --features axon-pb` — PASS (`1 passed`); covers schema-failure
+  `namespace.resolve` output using explicit unavailable authority state.
+- `cargo test -q -p easynet --lib
+  namespace_resolve_rejects_missing_qtype_without_guessing_route_shape
+  --features axon-pb` — PASS (`1 passed`); preserves typed qtype ingress
+  rejection after authority projection refactor.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` —
+  PASS; includes a negative fixture for legacy resolver authority projection
+  that defaulted malformed query identity to localhost.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
+  codegraph `status` reports `Index is up to date` with 35,311 nodes and
+  135,509 edges.
