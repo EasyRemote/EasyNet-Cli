@@ -469,7 +469,7 @@ async fn local_system_descriptor_ref(
     ability_descriptor_ref_for_wire(callee_ura, ability, &descriptor_binding)
 }
 
-pub async fn open_stream_local_with_subject(
+pub async fn open_stream_local_explicit_subject(
     runtime: &Arc<LocalRuntime>,
     callee_ura: &str,
     subject_ura: &str,
@@ -520,7 +520,7 @@ async fn open_bidi(
     Ok(handle)
 }
 
-pub async fn open_bidi_local_with_subject(
+pub async fn open_bidi_local_explicit_subject(
     runtime: &Arc<LocalRuntime>,
     callee_ura: &str,
     subject_ura: &str,
@@ -548,7 +548,7 @@ pub async fn open_bidi_local_with_subject(
 /// Daemon-internal dispatch. The shim binds execution to an explicit callee
 /// and `EntityRef` subject, then signs with the synthetic `_system.local`
 /// caller before entering Axon's public admission path.
-pub async fn dispatch_rpc_local_with_subject(
+pub async fn dispatch_rpc_local_explicit_subject(
     runtime: &Arc<LocalRuntime>,
     callee_ura: &str,
     subject_ura: &str,
@@ -1136,7 +1136,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_rpc_local_with_subject_runs_handler_with_system_signature() {
+    async fn dispatch_rpc_local_explicit_subject_runs_handler_with_system_signature() {
         let (rt, ledger, _sk, _temp) = build_test_runtime();
         let callee_ura = "easynet:///r/t/device/host";
         let ability_ura =
@@ -1150,7 +1150,7 @@ mod tests {
         .unwrap();
 
         let payload = b"\"hello-from-daemon\"".to_vec();
-        let outcome = dispatch_rpc_local_with_subject(
+        let outcome = dispatch_rpc_local_explicit_subject(
             &rt,
             callee_ura,
             callee_ura,
@@ -1187,9 +1187,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_rpc_local_with_subject_unknown_ability_returns_in_band_error() {
+    async fn dispatch_rpc_local_explicit_subject_unknown_ability_returns_in_band_error() {
         let (rt, _ledger, _sk, _temp) = build_test_runtime();
-        let outcome = dispatch_rpc_local_with_subject(
+        let outcome = dispatch_rpc_local_explicit_subject(
             &rt,
             "easynet:///r/t/device/host",
             "easynet:///r/t/device/host",

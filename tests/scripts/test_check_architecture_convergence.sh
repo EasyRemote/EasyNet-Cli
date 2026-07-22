@@ -870,6 +870,10 @@ fn ledger_resource_ura() -> anyhow::Result<Option<String>> {
     ledger_resource_ura_from_host_device_agent_ura(hosted_identity.host_device_agent_ura())
 }
 
+fn ledger_governance_owner() -> &'static str {
+    "easynet:///r/default/device/dev-1"
+}
+
 fn ledger_resource_ura_from_host_device_agent_ura(host_device_agent_ura: Option<&str>) -> anyhow::Result<Option<String>> {
     let Some(host_device_agent_ura) = host_device_agent_ura else {
         return Ok(None);
@@ -2133,11 +2137,11 @@ fn request_for_wire_dispatch(local_system_authority: Option<LocalSystemAuthority
     local_system_authority.ok_or_else(|| "trusted-local authority required");
 }
 
-fn open_stream_local_with_subject() {
+fn open_stream_local_explicit_subject() {
     SystemInvocationIssuer::request_for_descriptor_ref();
 }
 
-fn open_bidi_local_with_subject() {
+fn open_bidi_local_explicit_subject() {
     SystemInvocationIssuer::request_for_descriptor_ref();
 }
 
@@ -2145,7 +2149,7 @@ pub async fn open_bidi_external_signed() {
     invoke_descriptor_bound_bidi_request_async(request).await;
 }
 
-fn dispatch_rpc_local_with_subject() {
+fn dispatch_rpc_local_explicit_subject() {
     SystemInvocationIssuer::request_for_descriptor_ref();
 }
 EOF
@@ -3549,7 +3553,7 @@ expect_fail \
 
 make_good_fixture
 cat >"$CLI/src/daemon/axon_bridge/dispatch_shim.rs" <<'EOF'
-fn dispatch_rpc_local_with_subject() {
+fn dispatch_rpc_local_explicit_subject() {
     let envelope = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
         caller: system_agent_identity(),
         causal_context: CausalContext::None,
@@ -3566,12 +3570,45 @@ pub fn local_system_from_wire_parts() {
     SystemInvocationIssuer::request_for_complete_envelope();
 }
 
-fn open_stream_local_with_subject() {
+fn open_stream_local_explicit_subject() {
     SystemInvocationIssuer::request_for_descriptor_ref();
 }
 EOF
 expect_fail \
   "public unsealed local-system wire ingress fork" \
+  "R16C_SYSTEM_INVOCATION_ISSUER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/axon_bridge/dispatch_shim.rs" <<'EOF'
+struct LocalSystemAuthority;
+
+struct WireDispatch {
+    local_system_authority: Option<LocalSystemAuthority>,
+}
+
+pub(crate) fn local_system_from_wire_parts() {
+    let local_system_authority = true.then_some(LocalSystemAuthority);
+    SystemInvocationIssuer::request_for_complete_envelope();
+}
+
+fn request_for_wire_dispatch(local_system_authority: Option<LocalSystemAuthority>) {
+    local_system_authority.ok_or_else(|| "trusted-local authority required");
+}
+
+fn open_stream_local_explicit_subject() {
+    SystemInvocationIssuer::request_for_descriptor_ref();
+}
+
+fn open_bidi_local_explicit_subject() {
+    SystemInvocationIssuer::request_for_descriptor_ref();
+}
+
+fn dispatch_rpc_local_with_subject() {
+    SystemInvocationIssuer::request_for_descriptor_ref();
+}
+EOF
+expect_fail \
+  "retired local-system with_subject dispatch vocabulary" \
   "R16C_SYSTEM_INVOCATION_ISSUER_FORK"
 
 make_good_fixture

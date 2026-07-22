@@ -1981,12 +1981,36 @@ if dispatch_shim.exists():
             "trusted local wire dispatch must delegate complete-envelope signing to SystemInvocationIssuer",
         ),
         (
+            "open_stream_local_explicit_subject",
+            "daemon local stream helper must name explicit subject issuer semantics",
+        ),
+        (
+            "open_bidi_local_explicit_subject",
+            "daemon local bidi helper must name explicit subject issuer semantics",
+        ),
+        (
+            "dispatch_rpc_local_explicit_subject",
+            "daemon local RPC helper must name explicit subject issuer semantics",
+        ),
+        (
             "DescriptorBoundEnvelopeParts",
             "dispatch shim production code must not construct local system envelope parts",
         ),
         (
             "system_agent_identity()",
             "dispatch shim production code must not mint the local system caller directly",
+        ),
+        (
+            "open_stream_local_with_subject",
+            "dispatch shim must not preserve retired with_subject stream vocabulary",
+        ),
+        (
+            "open_bidi_local_with_subject",
+            "dispatch shim must not preserve retired with_subject bidi vocabulary",
+        ),
+        (
+            "dispatch_rpc_local_with_subject",
+            "dispatch shim must not preserve retired with_subject RPC vocabulary",
         ),
     ):
         if token in (
@@ -1995,6 +2019,9 @@ if dispatch_shim.exists():
             "local_system_authority.ok_or_else",
             "SystemInvocationIssuer::request_for_descriptor_ref",
             "SystemInvocationIssuer::request_for_complete_envelope",
+            "open_stream_local_explicit_subject",
+            "open_bidi_local_explicit_subject",
+            "dispatch_rpc_local_explicit_subject",
         ):
             if token not in production_text:
                 add("R16C_SYSTEM_INVOCATION_ISSUER_FORK", dispatch_shim, 1, detail)
