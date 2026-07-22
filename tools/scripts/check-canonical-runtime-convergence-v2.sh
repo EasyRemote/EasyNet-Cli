@@ -721,6 +721,10 @@ if go_errors:
     go_direct = read(go_direct_path)
     if "runtimeFailureCode(errorValue.GetCode()," in go_direct:
         raise SystemExit("sdk_go_direct_runtime_failure_code_call_uses_fallback")
+    if re.search(r"func\s+directErrorStage\s*\([^)]*fallback\s+string", go_direct):
+        raise SystemExit("sdk_go_direct_runtime_error_stage_fallback_parameter")
+    if re.search(r"directErrorStage\s*\([^)]*,", go_direct):
+        raise SystemExit("sdk_go_direct_runtime_error_stage_call_uses_fallback")
     direct_body = section(go_direct, "func directAxonFailure(", "func directErrorStage(")
     if "code == \"\"" in direct_body or "code == \"\" ||" in direct_body:
         raise SystemExit("sdk_go_direct_runtime_failure_code_preserves_empty_branch")
@@ -729,6 +733,7 @@ if go_errors:
         'ErrProtocolMismatch',
         '"   ":',
         "TestDirectAxonFailureProjectsMissingErrorCodeToProtocolMismatch",
+        "TestDirectErrorStageUsesCanonicalProviderProjection",
     ):
         if token not in go_tests:
             raise SystemExit(f"sdk_go_runtime_failure_code_test_missing:{token}")
@@ -6393,6 +6398,59 @@ EOF
     "$tmp/sdk-runtime-failure-legacy/sdk/python/tests/test_direct_runtime.py"
   if ( check_sdk_runtime_failure_code_contract "$tmp/sdk-runtime-failure-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected SDK runtime failure code fallback gate to fail"
+  fi
+  mkdir -p "$tmp/sdk-runtime-stage-fallback/sdk/go" \
+    "$tmp/sdk-runtime-stage-fallback/sdk/python/easynet_sdk" \
+    "$tmp/sdk-runtime-stage-fallback/sdk/python/tests"
+  printf '%s\n' \
+    'func runtimeFailureCode(code string) ErrorCode {' \
+    '  if code == "" { return ErrProtocolMismatch }' \
+    '  return ErrProtocolMismatch' \
+    '}' \
+    'func isCanonicalExtensionErrorCode(code string) bool { return false }' \
+    > "$tmp/sdk-runtime-stage-fallback/sdk/go/errors.go"
+  printf '%s\n' \
+    'func directAxonFailure(errorValue *axonpb.Error, stage string) map[string]any {' \
+    '  code := runtimeFailureCode(errorValue.GetCode())' \
+    '  return map[string]any{"code": string(code), "stage": stage}' \
+    '}' \
+    'func directErrorStage(stage axonpb.ErrorStage, fallback string) string {' \
+    '  return fallback' \
+    '}' \
+    'func directResponseFailure(errorValue *axonpb.Error, terminalState string, stage string) map[string]any {' \
+    '  return directAxonFailure(errorValue, directErrorStage(errorValue.GetStage(), stage))' \
+    '}' \
+    > "$tmp/sdk-runtime-stage-fallback/sdk/go/direct_runtime.go"
+  printf '%s\n' \
+    'func TestRuntimeFailureCodePreservesDomainCodesAndRejectsLegacyAliases(t *testing.T) {' \
+    '  _ = ErrProtocolMismatch' \
+    '}' \
+    > "$tmp/sdk-runtime-stage-fallback/sdk/go/errors_test.go"
+  printf '%s\n' \
+    'func TestDirectAxonFailureProjectsMissingErrorCodeToProtocolMismatch(t *testing.T) {}' \
+    'func TestDirectErrorStageUsesCanonicalProviderProjection(t *testing.T) {}' \
+    > "$tmp/sdk-runtime-stage-fallback/sdk/go/direct_runtime_codec_test.go"
+  printf '%s\n' \
+    'def canonical_failure_code(code=None):' \
+    '    return ErrorCode.PROTOCOL_MISMATCH' \
+    '' \
+    'def canonical_terminal_state_code(state): pass' \
+    > "$tmp/sdk-runtime-stage-fallback/sdk/python/easynet_sdk/errors.py"
+  printf '%s\n' \
+    'def _response_error_code(code):' \
+    '    return canonical_failure_code(code)' \
+    '' \
+    'def _failure_code_value(code): pass' \
+    > "$tmp/sdk-runtime-stage-fallback/sdk/python/easynet_sdk/direct_runtime.py"
+  printf '%s\n' \
+    'def test_runtime_failure_code_preserves_domain_codes_and_rejects_legacy_aliases(): pass' \
+    '"   ": ErrorCode.PROTOCOL_MISMATCH' \
+    > "$tmp/sdk-runtime-stage-fallback/sdk/python/tests/test_errors.py"
+  printf '%s\n' \
+    'self.assertEqual(_response_error_code(""), ErrorCode.PROTOCOL_MISMATCH)' \
+    > "$tmp/sdk-runtime-stage-fallback/sdk/python/tests/test_direct_runtime.py"
+  if ( check_sdk_runtime_failure_code_contract "$tmp/sdk-runtime-stage-fallback" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK runtime error stage fallback gate to fail"
   fi
   mkdir -p "$tmp/sdk-root-product-named/sdk/go" \
     "$tmp/sdk-root-product-named/sdk/python/easynet_sdk"

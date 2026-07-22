@@ -891,12 +891,12 @@ func directInvokeResponseJSON(draft InvocationDraft, response *axonpb.InvokeResp
 	}
 	errorValue := directResponseFailure(response.GetError(), stateName, "direct_runtime.invoke")
 	if response.GetProofError() != nil {
-		errorValue = directAxonFailure(response.GetProofError(), directErrorStage(response.GetProofError().GetStage(), "direct_runtime.invoke"))
+		errorValue = directAxonFailure(response.GetProofError(), directErrorStage(response.GetProofError().GetStage()))
 	}
 	if errorValue == nil && response.GetTerminalReceipt() != nil && response.GetTerminalReceipt().GetFailure() != nil {
 		errorValue = directAxonFailure(
 			response.GetTerminalReceipt().GetFailure(),
-			directErrorStage(response.GetTerminalReceipt().GetFailure().GetStage(), "direct_runtime.invoke"),
+			directErrorStage(response.GetTerminalReceipt().GetFailure().GetStage()),
 		)
 	}
 	if response.GetTerminalReceipt() == nil {
@@ -951,7 +951,7 @@ func validateDirectReceiptFreeUnaryRejection(response *axonpb.InvokeResponse) er
 }
 
 func directPreAdmissionErrorStage(stage axonpb.ErrorStage) bool {
-	return isCanonicalPreAdmissionErrorStage(directErrorStage(stage, ""))
+	return isCanonicalPreAdmissionErrorStage(directErrorStage(stage))
 }
 
 func directStreamChunkJSON(chunk *axonpb.InvokeStreamChunk) ([]byte, error) {
@@ -1277,7 +1277,7 @@ func directBidiControlJSON(control *axonpb.BidiControl) map[string]any {
 
 func directResponseFailure(errorValue *axonpb.Error, terminalState string, stage string) map[string]any {
 	if errorValue != nil {
-		return directAxonFailure(errorValue, directErrorStage(errorValue.GetStage(), stage))
+		return directAxonFailure(errorValue, directErrorStage(errorValue.GetStage()))
 	}
 	switch terminalState {
 	case "Completed", "Accepted", "Admitted", "Dispatched", "Running":
@@ -1306,14 +1306,14 @@ func directAxonFailure(errorValue *axonpb.Error, stage string) map[string]any {
 	}
 }
 
-func directErrorStage(stage axonpb.ErrorStage, fallback string) string {
+func directErrorStage(stage axonpb.ErrorStage) string {
 	name := axonpb.ErrorStage_name[int32(stage)]
 	if name == "" {
-		return fallback
+		return "direct_runtime.invoke"
 	}
 	name = strings.TrimPrefix(name, "ERROR_STAGE_")
 	if name == "" {
-		return fallback
+		return "direct_runtime.invoke"
 	}
 	return strings.ToLower(name)
 }

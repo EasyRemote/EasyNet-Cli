@@ -203,6 +203,23 @@ func TestDirectAxonFailureProjectsMissingErrorCodeToProtocolMismatch(t *testing.
 	}
 }
 
+func TestDirectErrorStageUsesCanonicalProviderProjection(t *testing.T) {
+	cases := map[axonpb.ErrorStage]string{
+		axonpb.ErrorStage_ERROR_STAGE_GLOBAL_ADMISSION:      "global_admission",
+		axonpb.ErrorStage_ERROR_STAGE_CALLER_AUTHENTICATION: "caller_authentication",
+		axonpb.ErrorStage_ERROR_STAGE_UNSPECIFIED:           "unspecified",
+		axonpb.ErrorStage(9999):                             "direct_runtime.invoke",
+	}
+	for input, want := range cases {
+		if got := directErrorStage(input); got != want {
+			t.Fatalf("directErrorStage(%v) = %q, want %q", input, got, want)
+		}
+	}
+	if directPreAdmissionErrorStage(axonpb.ErrorStage_ERROR_STAGE_UNSPECIFIED) {
+		t.Fatalf("unspecified stage must not be accepted as pre-admission")
+	}
+}
+
 func TestDirectRuntimeUnaryRejectsReceiptFreeProofFailureAndPartialReceiptPairs(t *testing.T) {
 	draft := directRuntimeDraft(t)
 	_, err := directInvokeResponseJSON(draft, &axonpb.InvokeResponse{
