@@ -3078,3 +3078,25 @@ Evidence will be appended after indexing and focused impact queries.
   invalid-argument errors in both Go and Python.
 - Added cross-language malformed projection tests and SPEC v2 gate coverage so
   the old Principal fallback helpers cannot return.
+
+## 2026-07-22 SDK Directory nested-answer fail-closed audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore --max-files 20
+  "legacy compat fallback deprecated alias default repair best-effort
+  product-specific SDK runtime receipt directory principal lifecycle admission"`
+  re-surfaced the Directory SDK projection as an active cross-language
+  provider-output boundary after the Principal cleanup.
+- Source inspection found Go `ProjectDirectoryResolution` and Python
+  `_project_resolution` only switching into the nested `answer` object when it
+  was already a map. A present malformed `answer` value was silently ignored,
+  causing projection to continue against top-level fields.
+- Root abstraction problem: nested resolver answers are provider facts. Ignoring
+  a malformed present `answer` preserves a compatibility downgrade path and can
+  convert a bad provider envelope into an apparently valid top-level Directory
+  projection.
+- Boundary decision: treat `answer` exactly like other present provider facts.
+  Missing/null remains absent; present non-object `answer` now fails closed in
+  both Go and Python.
+- Added cross-language malformed `answer` tests and extended the SPEC v2
+  Directory projection gate plus self-test fixture so this downgrade cannot
+  return.

@@ -98,6 +98,7 @@ def test_project_directory_resolution_rejects_malformed_present_facts() -> None:
         "records": [],
     }
     cases = [
+        ("answer", "not-an-object", "answer must be an object"),
         ("records", "not-a-list", "records must be a list"),
         ("next_hop", "not-an-object", "next_hop must be an object"),
         ("selected_route", "not-an-object", "selected_route must be an object"),

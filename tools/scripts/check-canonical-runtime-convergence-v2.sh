@@ -2625,6 +2625,7 @@ if not project:
     raise SystemExit("go_directory_projection_missing")
 project_body = project.group(0)
 for token, code in (
+    ('invalidDirectory("Directory answer must be an object"', "answer_type_gate_missing"),
     ('invalidDirectory("Directory records must be a list"', "records_type_gate_missing"),
     ("optionalDirectoryMap(output, \"negative\")", "negative_gate_missing"),
     ("optionalDirectoryMap(output, \"next_hop\")", "next_hop_gate_missing"),
@@ -2673,6 +2674,15 @@ if "json.loads" in py_optional_body or "_required_mapping" in py_optional_body:
     raise SystemExit("python_directory_optional_mapping_decodes_nested_json")
 if "must be an object" not in py_optional_body:
     raise SystemExit("python_directory_optional_mapping_type_gate_missing")
+project_resolution = re.search(
+    r"def _project_resolution\(.*?\n\n",
+    py_directory,
+    re.S,
+)
+if not project_resolution:
+    raise SystemExit("python_directory_projection_missing")
+if "Directory answer must be an object" not in project_resolution.group(0):
+    raise SystemExit("python_directory_answer_type_gate_missing")
 
 py_sequence = re.search(
     r"def _optional_mapping_sequence\(.*?\n\n",
@@ -2693,6 +2703,7 @@ for text, name in ((go_test, "go"), (py_test, "python")):
     if "RejectsMalformedPresentFacts" not in text and "rejects_malformed_present_facts" not in text:
         raise SystemExit(f"{name}_directory_malformed_present_facts_test_missing")
     for field in (
+        "answer",
         "records",
         "next_hop",
         "selected_route",
@@ -5005,6 +5016,10 @@ EOF
     "$tmp/cli-directory-fallback/sdk/python/easynet_sdk/directory.py"
   cp "$ROOT/sdk/python/tests/test_directory.py" \
     "$tmp/cli-directory-fallback/sdk/python/tests/test_directory.py"
+  perl -0pi -e 's/return DirectoryResolution\{\}, invalidDirectory\("Directory answer must be an object", nil\)/return DirectoryResolution{}, nil/' \
+    "$tmp/cli-directory-fallback/sdk/go/directory.go"
+  perl -0pi -e 's/            raise _invalid\("Directory answer must be an object"\)/            pass/' \
+    "$tmp/cli-directory-fallback/sdk/python/easynet_sdk/directory.py"
   perl -0pi -e 's/return nil, invalidDirectory\("Directory "\+key\+" item must be an object", nil\)/continue/' \
     "$tmp/cli-directory-fallback/sdk/go/directory.go"
   perl -0pi -e 's/if not isinstance\(value, Mapping\):\n        raise _invalid\(f"Directory \{name\} must be an object"\)\n    return dict\(value\)/return _required_mapping(value, f"Directory {name}")/' \

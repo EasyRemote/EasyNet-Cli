@@ -246,7 +246,11 @@ func ParseDirectoryEvent(raw []byte) (DirectoryEvent, error) {
 // ProjectDirectoryResolution projects a daemon namespace.resolve output object
 // into the SDK's product-neutral DirectoryResolution model.
 func ProjectDirectoryResolution(output map[string]any) (DirectoryResolution, error) {
-	if answer, ok := output["answer"].(map[string]any); ok {
+	if rawAnswer, present := output["answer"]; present && rawAnswer != nil {
+		answer, ok := rawAnswer.(map[string]any)
+		if !ok {
+			return DirectoryResolution{}, invalidDirectory("Directory answer must be an object", nil)
+		}
 		output = answer
 	}
 	answerKind := directoryString(output, "answer_kind")

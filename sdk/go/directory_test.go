@@ -83,6 +83,7 @@ func TestProjectDirectoryResolutionRejectsMalformedPresentFacts(t *testing.T) {
 		value   any
 		message string
 	}{
+		{name: "answer", key: "answer", value: "not-an-object", message: "answer must be an object"},
 		{name: "records", key: "records", value: "not-a-list", message: "records must be a list"},
 		{name: "next hop", key: "next_hop", value: "not-an-object", message: "next_hop must be an object"},
 		{name: "selected route", key: "selected_route", value: "not-an-object", message: "selected_route must be an object"},
