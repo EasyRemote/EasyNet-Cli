@@ -757,7 +757,6 @@ def _validate_session_history_filter_binding(
         )
     caller_ura = call.caller_ura.strip()
     callee_ura = call.callee_ura.strip()
-    subject_ura = call.subject_ura.strip()
     details = _runtime_call_details(call)
     filter_caller = receipt_filter.caller_ura.strip()
     if filter_caller and filter_caller != caller_ura:
@@ -777,18 +776,9 @@ def _validate_session_history_filter_binding(
             "receipt filter callee_ura does not match receipt query callee_ura",
             details,
         )
-    for filter_subject in receipt_filter.subject_uras:
-        filter_subject = filter_subject.strip()
-        if not filter_subject:
-            continue
-        if filter_subject != subject_ura:
-            details["filter_subject_ura"] = filter_subject
-            raise _session_error(
-                ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
-                "history",
-                "receipt filter subject_uras must be bound to receipt query subject_ura",
-                details,
-            )
+    # Subject filters are receipt-query predicates, not the authority subject.
+    # The session authority remains bound to call.subject_ura above; the daemon
+    # receives subject_uras only as exact ledger filters after admission.
 
 
 def _runtime_call_authority(

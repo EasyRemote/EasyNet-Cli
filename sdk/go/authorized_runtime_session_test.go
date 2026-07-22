@@ -146,7 +146,7 @@ func TestAuthorizedRuntimeSessionHistoryRejectsOwnerEquivalentSubjectExpansionBe
 	}
 }
 
-func TestAuthorizedRuntimeSessionHistoryRejectsFilterSubjectExpansionBeforeReceiptProvider(t *testing.T) {
+func TestAuthorizedRuntimeSessionHistoryAllowsSessionAuthorityWithExactDeviceSubjectFilter(t *testing.T) {
 	session := newAuthorizedRuntimeSessionFixture(t)
 	request := ReceiptListRequest{
 		Call: RuntimeCallContext{
@@ -167,14 +167,11 @@ func TestAuthorizedRuntimeSessionHistoryRejectsFilterSubjectExpansionBeforeRecei
 	}
 
 	_, err := session.sdk.History().List(context.Background(), request)
-	if err == nil {
-		t.Fatalf("expected filter subject mismatch")
+	if err != nil {
+		t.Fatalf("history list: %v", err)
 	}
-	if !IsCode(err, ErrAuthoritySubjectMismatch) {
-		t.Fatalf("error = %v", err)
-	}
-	if session.receipts.listCalls != 0 {
-		t.Fatalf("receipt provider called after filter mismatch: %d", session.receipts.listCalls)
+	if session.receipts.listCalls != 1 {
+		t.Fatalf("receipt provider calls = %d, want 1", session.receipts.listCalls)
 	}
 }
 

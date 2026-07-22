@@ -132,7 +132,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.AUTHORITY_SUBJECT_MISMATCH))
         self.assertEqual(fixture.receipts.list_calls, 0)
 
-    def test_history_rejects_filter_subject_expansion_before_receipt_provider(self) -> None:
+    def test_history_allows_session_authority_with_exact_device_subject_filter(self) -> None:
         fixture = _SessionFixture()
         request = ReceiptListRequest(
             call=RuntimeCallContext(
@@ -149,11 +149,9 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
             limit=10,
         )
 
-        with self.assertRaises(SDKError) as caught:
-            fixture.session.history.list(request)
+        fixture.session.history.list(request)
 
-        self.assertTrue(is_code(caught.exception, ErrorCode.AUTHORITY_SUBJECT_MISMATCH))
-        self.assertEqual(fixture.receipts.list_calls, 0)
+        self.assertEqual(fixture.receipts.list_calls, 1)
 
     def test_runtime_client_provider_rejects_unsigned_stream_downgrade(self) -> None:
         provider = RuntimeClientSessionRuntimeProvider(object())

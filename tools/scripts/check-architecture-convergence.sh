@@ -8143,42 +8143,44 @@ if ffi_invocation.exists():
         )
 
 
-# Rule 96: Authorized runtime history reads must bind receipt filters to the
-# same tuple validated by the session authority. Otherwise products can submit
-# an authorized envelope for one subject/callee/caller while querying another
-# history scope through filter arguments.
+# Rule 96: Authorized runtime history reads must bind the authority-bearing
+# call tuple while keeping receipt filters as post-admission ledger predicates.
+# Caller/callee filters may only narrow the authorized tuple. Subject filters
+# are exact ledger predicates and must not be coupled to the authority subject:
+# a user-session authority can authorize the history call while filtering the
+# device-owned receipt subject that is being inspected.
 for (
     path,
     list_name,
     request_validator,
     filter_validator,
-    subject_token,
     history_subject_validator,
     history_owner_expansion,
     history_test,
     history_test_name,
+    filter_subject_test_name,
 ) in (
     (
         cli_root / "sdk/go/authorized_runtime_session.go",
         "List",
         "validateSessionHistoryRequest(request)",
         "validateSessionHistoryFilterBinding(request.Call, request.Filter)",
-        "receipt filter subject_uras must be bound to receipt query subject_ura",
         "sessionHistoryAuthoritySubjectMatches(authority, subjectURA)",
         "runtimeSessionAuthorityAdmitsSubject(authority, subjectURA)",
         cli_root / "sdk/go/authorized_runtime_session_test.go",
         "TestAuthorizedRuntimeSessionHistoryRejectsOwnerEquivalentSubjectExpansionBeforeReceiptProvider",
+        "TestAuthorizedRuntimeSessionHistoryAllowsSessionAuthorityWithExactDeviceSubjectFilter",
     ),
     (
         cli_root / "sdk/python/easynet_sdk/authorized_runtime_session.py",
         "list",
         "_validate_session_history_request(request)",
         "_validate_session_history_filter_binding(request.call, request.filter)",
-        "receipt filter subject_uras must be bound to receipt query subject_ura",
         "_session_history_authority_subject_matches(authority, subject_ura)",
         "_session_authority_admits_subject(authority, subject_ura)",
         cli_root / "sdk/python/tests/test_authorized_runtime_session.py",
         "test_history_rejects_owner_equivalent_subject_expansion_before_receipt_provider",
+        "test_history_allows_session_authority_with_exact_device_subject_filter",
     ),
 ):
     if not path.exists():
@@ -8244,6 +8246,13 @@ for (
             1,
             "Session history tests must reject owner-equivalent subject expansion before provider dispatch",
         )
+    if history_test.exists() and filter_subject_test_name not in source(history_test):
+        add(
+            "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
+            history_test,
+            1,
+            "Session history tests must allow exact device subject filters under a session-authorized call",
+        )
     for token, detail in (
         (
             "filter_caller_ura",
@@ -8253,17 +8262,20 @@ for (
             "filter_callee_ura",
             "history filter callee_ura must be compared with call callee_ura",
         ),
-        (
-            "filter_subject_ura",
-            "history filter subject_uras must be compared with call subject_ura",
-        ),
-        (
-            subject_token,
-            "history filter subject mismatch must be reported explicitly",
-        ),
     ):
         if token not in text:
             add("R96_SDK_HISTORY_FILTER_TUPLE_BINDING", path, 1, detail)
+    for retired in (
+        "filter_subject_ura",
+        "receipt filter subject_uras must be bound to receipt query subject_ura",
+    ):
+        if retired in text:
+            add(
+                "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
+                path,
+                1,
+                "Session history subject filters must remain ledger predicates, not authority-subject aliases",
+            )
 
 
 # Rule 92: Invocation attempt audit is the product-visible pre-runtime

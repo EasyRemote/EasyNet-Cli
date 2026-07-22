@@ -820,7 +820,6 @@ func validateSessionHistoryRuntimeCall(call RuntimeCallContext) error {
 func validateSessionHistoryFilterBinding(call RuntimeCallContext, filter ReceiptFilter) error {
 	callerURA := strings.TrimSpace(call.CallerURA)
 	calleeURA := strings.TrimSpace(call.CalleeURA)
-	subjectURA := strings.TrimSpace(call.SubjectURA)
 	details := runtimeCallDetails(call)
 	if filterCaller := strings.TrimSpace(filter.CallerURA); filterCaller != "" && filterCaller != callerURA {
 		details["filter_caller_ura"] = filter.CallerURA
@@ -842,22 +841,9 @@ func validateSessionHistoryFilterBinding(call RuntimeCallContext, filter Receipt
 			nil,
 		)
 	}
-	for _, filterSubject := range filter.SubjectURAs {
-		filterSubject = strings.TrimSpace(filterSubject)
-		if filterSubject == "" {
-			continue
-		}
-		if filterSubject != subjectURA {
-			details["filter_subject_ura"] = filterSubject
-			return v3SessionError(
-				ErrAuthoritySubjectMismatch,
-				"history",
-				"receipt filter subject_uras must be bound to receipt query subject_ura",
-				details,
-				nil,
-			)
-		}
-	}
+	// Subject filters are receipt-query predicates, not the authority subject.
+	// The session authority remains bound to call.SubjectURA above; the daemon
+	// receives SubjectURAs only as exact ledger filters after admission.
 	return nil
 }
 
