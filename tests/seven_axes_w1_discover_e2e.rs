@@ -160,7 +160,14 @@ fn discover_e2e_local_scope_and_typed_federation_degradation() {
         candidate.score, 10,
         "score must follow the frozen name×3(+2)/desc×1/owner×1/+2 contract"
     );
-    assert_eq!(weather.skipped_unparseable, 0, "nothing may drop silently");
+    assert!(
+        weather.diagnostics.iter().all(|diagnostic| !matches!(
+            diagnostic.code,
+            "candidate_parse_skipped"
+        )),
+        "candidate projection defects must fail closed or surface as typed diagnostics, not skipped counters: {:?}",
+        weather.diagnostics
+    );
 
     // ── W1-E2E-1 user tier: same daemon acting as local hub ──────────
     //

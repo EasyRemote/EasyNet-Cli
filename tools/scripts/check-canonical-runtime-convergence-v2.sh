@@ -2766,6 +2766,67 @@ for required_test in (
 PY
 }
 
+check_cli_discover_candidate_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local discover="$cli_root/src/cli/commands/discover.rs"
+  local e2e="$cli_root/tests/seven_axes_w1_discover_e2e.rs"
+  [[ -f "$discover" ]] || fail "CLI discover source is missing: $discover"
+  [[ -f "$e2e" ]] || fail "CLI discover e2e source is missing: $e2e"
+
+  "$PYTHON_BIN" - "$discover" "$e2e" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+discover_path, e2e_path = map(Path, sys.argv[1:])
+discover = discover_path.read_text(encoding="utf-8")
+e2e = e2e_path.read_text(encoding="utf-8")
+production = discover.split("\n#[cfg(test)]", 1)[0]
+
+if "skipped_unparseable" in discover or "skipped_unparseable" in e2e:
+    raise SystemExit("cli_discover_candidate_projection:retired_skipped_counter")
+if "pub skipped_unparseable" in production:
+    raise SystemExit("cli_discover_candidate_projection:report_legacy_counter_field")
+if "pub diagnostics: Vec<DiscoverDiagnostic>" not in production:
+    raise SystemExit("cli_discover_candidate_projection:typed_diagnostics_missing")
+if "struct DiscoverCandidateRow" not in production:
+    raise SystemExit("cli_discover_candidate_projection:typed_row_parser_missing")
+if "fn parse(row: &Value) -> anyhow::Result<Self>" not in production:
+    raise SystemExit("cli_discover_candidate_projection:row_parser_parse_missing")
+parser_start = production.find("impl DiscoverCandidateRow")
+candidate_start = production.find("impl Candidate")
+if parser_start < 0 or candidate_start < 0:
+    raise SystemExit("cli_discover_candidate_projection:parser_slice_missing")
+parser_body = production[parser_start:candidate_start]
+candidate_body = production[candidate_start:production.find("/// Typed projection", candidate_start)]
+if 'let scope = required_row_string(row, "scope_matched")?;' not in production:
+    raise SystemExit("cli_discover_candidate_projection:scope_not_required")
+for forbidden, label in {
+    '.unwrap_or("device")': "scope_literal_default",
+    '.unwrap_or_else(|| "device"': "scope_lazy_default",
+    '.and_then(Value::as_bool)': "callable_type_downgrade",
+}.items():
+    if forbidden in parser_body or forbidden in candidate_body:
+        raise SystemExit(f"cli_discover_candidate_projection:{label}")
+for required in (
+    "fn optional_row_bool(",
+    "discover candidate row field {field} must be a boolean",
+    "fn required_row_string(",
+    "discover candidate row missing non-empty {field}",
+):
+    if required not in production:
+        raise SystemExit(f"cli_discover_candidate_projection:missing:{required}")
+for required_test in (
+    "ladder_row_missing_scope_fails_closed_instead_of_defaulting_to_device",
+    "ladder_row_malformed_callable_fails_closed_instead_of_downgrading",
+):
+    if required_test not in discover:
+        raise SystemExit(f"cli_discover_candidate_projection:missing_test:{required_test}")
+if "candidate projection defects must fail closed or surface as typed diagnostics" not in e2e:
+    raise SystemExit("cli_discover_candidate_projection:e2e_typed_diagnostic_assertion_missing")
+PY
+}
+
 check_ffi_invocation_json_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
@@ -6776,6 +6837,28 @@ EOF
   if ( check_target_gate_credential_state_contract "$tmp/target-gate-credential-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected target gate credential state gate to fail"
   fi
+  mkdir -p "$tmp/cli-discover-candidate-legacy/src/cli/commands" \
+    "$tmp/cli-discover-candidate-legacy/tests"
+  cat >"$tmp/cli-discover-candidate-legacy/src/cli/commands/discover.rs" <<'EOF'
+pub struct DiscoverReport {
+  pub skipped_unparseable: usize,
+  pub diagnostics: Vec<DiscoverDiagnostic>,
+}
+pub struct DiscoverDiagnostic { pub code: &'static str }
+pub struct Candidate;
+impl Candidate {
+  fn from_ladder_row(row: &Value, tokens: &[String]) -> anyhow::Result<Option<Self>> {
+    let scope = row.get("scope_matched").and_then(Value::as_str).unwrap_or("device");
+    let callable = row.get("callable").and_then(Value::as_bool);
+    Ok(None)
+  }
+}
+EOF
+  printf 'assert_eq!(weather.skipped_unparseable, 0);\n' \
+    > "$tmp/cli-discover-candidate-legacy/tests/seven_axes_w1_discover_e2e.rs"
+  if ( CLI_ROOT="$tmp/cli-discover-candidate-legacy"; check_cli_discover_candidate_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected CLI discover candidate projection fallback gate to fail"
+  fi
   check_mcp_reflection_async_bridge_contract
   check_active_source_contract
   check_sdk_root_runtime_description_contract
@@ -6820,6 +6903,7 @@ EOF
   check_namespace_resolver_authority_projection_contract
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
   check_ffi_descriptor_runtime_owner_contract
+  check_cli_discover_candidate_projection_contract
   check_ffi_invocation_json_projection_contract
   check_ffi_last_error_typed_tls_contract
   check_canonical_ability_catalog_projection_contract
@@ -6903,6 +6987,7 @@ check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract
 check_daemon_invocation_service_descriptor_ref_route_projection_contract
 check_ffi_descriptor_runtime_owner_contract
+check_cli_discover_candidate_projection_contract
 check_ffi_invocation_json_projection_contract
 check_ffi_last_error_typed_tls_contract
 check_canonical_ability_catalog_projection_contract

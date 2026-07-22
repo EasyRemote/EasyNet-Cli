@@ -180,32 +180,29 @@ pub struct Candidate {
     pub owner_ura: String,
 }
 
-impl Candidate {
-    /// Project one runtime ladder row, scoring it against the intent
-    /// tokens. Returns `None` only for zero-score rows. Schema and
-    /// canonical-address defects are corrupt discovery read-model
-    /// state and fail closed before ranking.
-    fn from_ladder_row(row: &Value, tokens: &[String]) -> anyhow::Result<Option<Self>> {
-        let ura = row
-            .get("qualified_name")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default();
-        let identity_state = row
-            .get("identity_state")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("minted");
-        let owner = row
-            .get("owner")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default();
+#[derive(Debug)]
+struct DiscoverCandidateRow {
+    ura: String,
+    identity_state: String,
+    owner: String,
+    selector: Option<AbilitySelector>,
+    ability: String,
+    description: String,
+    scope: String,
+    callable: Option<bool>,
+    diagnostic: Option<String>,
+}
+
+impl DiscoverCandidateRow {
+    fn parse(row: &Value) -> anyhow::Result<Self> {
+        let ura = optional_row_string(row, "qualified_name")?.unwrap_or_default();
+        let identity_state =
+            optional_row_string(row, "identity_state")?.unwrap_or_else(|| "minted".to_string());
+        let owner = optional_row_string(row, "owner")?.unwrap_or_default();
         let selector = if ura.is_empty() {
             None
         } else {
-            Some(AbilitySelector::parse(ura).map_err(|error| {
+            Some(AbilitySelector::parse(&ura).map_err(|error| {
                 anyhow::anyhow!(
                     "discover candidate row has non-canonical qualified_name {ura:?}: {error}"
                 )
@@ -214,43 +211,64 @@ impl Candidate {
         if selector.is_none() && identity_state == "minted" {
             anyhow::bail!("discover minted candidate row missing canonical qualified_name");
         }
-        let ability = row
-            .get("ability")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .or_else(|| selector.as_ref().map(AbilitySelector::public_name))
+
+        let ability = optional_row_string(row, "ability")?
+            .or_else(|| {
+                selector
+                    .as_ref()
+                    .map(|selector| selector.public_name().to_string())
+            })
             .ok_or_else(|| anyhow::anyhow!("discover candidate row missing non-empty ability"))?;
         if selector.is_none() && owner.is_empty() {
             anyhow::bail!("discover unminted candidate row missing owner");
         }
-        let description = row
-            .get("description")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let scope = row
-            .get("scope_matched")
-            .and_then(Value::as_str)
-            .unwrap_or("device");
+        let scope = required_row_string(row, "scope_matched")?;
+        Ok(Self {
+            ura,
+            identity_state,
+            owner,
+            selector,
+            ability,
+            description: optional_row_string(row, "description")?.unwrap_or_default(),
+            scope,
+            callable: optional_row_bool(row, "callable")?,
+            diagnostic: optional_row_string(row, "diagnostic")?,
+        })
+    }
 
-        let name = if owner.is_empty() {
-            ability.to_string()
+    fn display_name(&self) -> String {
+        if self.owner.is_empty() {
+            self.ability.clone()
         } else {
-            format!("{owner}.{ability}")
-        };
-        let owner_signal = if ura.is_empty() { owner } else { ura };
-        let score = score_candidate(tokens, &name, description, Some(owner_signal));
+            format!("{}.{}", self.owner, self.ability)
+        }
+    }
+
+    fn owner_signal(&self) -> &str {
+        if self.ura.is_empty() {
+            self.owner.as_str()
+        } else {
+            self.ura.as_str()
+        }
+    }
+}
+
+impl Candidate {
+    /// Project one runtime ladder row, scoring it against the intent
+    /// tokens. Returns `None` only for zero-score rows. Schema and
+    /// canonical URA defects are corrupt discovery read-model
+    /// state and fail closed before ranking.
+    fn from_ladder_row(row: &Value, tokens: &[String]) -> anyhow::Result<Option<Self>> {
+        let row = DiscoverCandidateRow::parse(row)?;
+        let name = row.display_name();
+        let score = score_candidate(tokens, &name, &row.description, Some(row.owner_signal()));
         if score == 0 {
             return Ok(None);
         }
-        let mut diagnostic = row
-            .get("diagnostic")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let (owner_kind, owner_ura, callable) = match selector.as_ref() {
+        let mut diagnostic = row.diagnostic;
+        let (owner_kind, owner_ura, callable) = match row.selector.as_ref() {
             Some(selector) => {
-                let callable = row.get("callable").and_then(Value::as_bool);
-                if callable.is_none() {
+                if row.callable.is_none() {
                     diagnostic.get_or_insert_with(|| {
                         "callable status missing from discovery row; treating as non-callable"
                             .to_string()
@@ -259,26 +277,47 @@ impl Candidate {
                 (
                     selector.owner_kind(),
                     selector.owner_ura().to_string(),
-                    callable.unwrap_or(false),
+                    row.callable.unwrap_or(false),
                 )
             }
-            None if identity_state != "minted" => {
-                ("agent", format!("unminted-agent:{owner}"), false)
+            None if row.identity_state != "minted" => {
+                ("agent", format!("unminted-agent:{}", row.owner), false)
             }
             None => unreachable!("minted candidates without selector fail before scoring"),
         };
         Ok(Some(Candidate {
             score,
             name,
-            ura: ura.to_string(),
+            ura: row.ura,
             owner_kind,
-            scope: scope.to_string(),
-            description: description.to_string(),
+            scope: row.scope,
+            description: row.description,
             callable,
-            identity_state: identity_state.to_string(),
+            identity_state: row.identity_state,
             diagnostic,
             owner_ura,
         }))
+    }
+}
+
+fn optional_row_string(row: &Value, field: &'static str) -> anyhow::Result<Option<String>> {
+    match row.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.trim().to_string()).filter(|s| !s.is_empty())),
+        Some(_) => anyhow::bail!("discover candidate row field {field} must be a string"),
+    }
+}
+
+fn required_row_string(row: &Value, field: &'static str) -> anyhow::Result<String> {
+    optional_row_string(row, field)?
+        .ok_or_else(|| anyhow::anyhow!("discover candidate row missing non-empty {field}"))
+}
+
+fn optional_row_bool(row: &Value, field: &'static str) -> anyhow::Result<Option<bool>> {
+    match row.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => anyhow::bail!("discover candidate row field {field} must be a boolean"),
     }
 }
 
@@ -1176,6 +1215,48 @@ mod tests {
         assert!(
             err.to_string().contains("missing candidates array"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn ladder_row_missing_scope_fails_closed_instead_of_defaulting_to_device() {
+        let toks = vec!["chat".to_string()];
+        let mut row = agent_row("acme");
+        row.as_object_mut()
+            .expect("row object")
+            .remove("scope_matched");
+
+        let err = project_rows(
+            &json!({ "candidates": [row] }),
+            &toks,
+            LocalSelfProjection::Preserve,
+        )
+        .expect_err("missing scope is corrupt discovery read-model state");
+
+        assert!(
+            format!("{err:#}").contains("missing non-empty scope_matched"),
+            "scope fallback must stay retired: {err:#}"
+        );
+    }
+
+    #[test]
+    fn ladder_row_malformed_callable_fails_closed_instead_of_downgrading() {
+        let toks = vec!["chat".to_string()];
+        let mut row = agent_row("acme");
+        row.as_object_mut()
+            .expect("row object")
+            .insert("callable".to_string(), json!("yes"));
+
+        let err = project_rows(
+            &json!({ "candidates": [row] }),
+            &toks,
+            LocalSelfProjection::Preserve,
+        )
+        .expect_err("malformed callable state must fail closed");
+
+        assert!(
+            format!("{err:#}").contains("field callable must be a boolean"),
+            "callable type fallback must stay retired: {err:#}"
         );
     }
 
