@@ -9,7 +9,6 @@ from .keyring import (
 from .identity import read_daemon_runtime_identity_projection
 from .lifecycle import (
     DaemonMode,
-    DaemonStartProjection,
     DiscoverOptions,
     StartConfig,
 )
@@ -27,7 +26,6 @@ from .transport import (
 __all__ = [
     "DaemonKeyringSignatureProvider",
     "DaemonMode",
-    "DaemonStartProjection",
     "DiscoverOptions",
     "RuntimeSigningIdentity",
     "SidecarHandler",

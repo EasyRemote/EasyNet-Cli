@@ -37,6 +37,10 @@ development_loader_violations() {
   rg -n 'target[/\\](debug|release)([/\\]deps)?' "$@"
 }
 
+provider_profile_projection_violations() {
+  rg -n '\b(DaemonStartProjection|RuntimeHostStartProjection|from_profile|def\s+(hub|device)\s*\(|func\s+(Hub|Device)StartProjection)\b' "$@"
+}
+
 retired_product_sdk_modules() {
   cat <<'EOF'
 sdk/go/profiles.go
@@ -152,6 +156,13 @@ if [[ "${1:-}" == "--self-test" ]]; then
     fail "self-test failed to detect development deps directory in SDK provider loader"
   fi
   rm -f "$injected"
+  injected="$tmp/sdk/python/easynet_sdk/providers/easynet/lifecycle.py"
+  mkdir -p "$(dirname "$injected")"
+  printf 'class DaemonStartProjection:\n    @classmethod\n    def hub(cls):\n        return cls.from_profile(mode="hub")\n' >"$injected"
+  if ! provider_profile_projection_violations "$injected" >/dev/null; then
+    fail "self-test failed to detect provider product start projection"
+  fi
+  rm -f "$injected"
   mkdir -p "$tmp/sdk/python/easynet_sdk"
   injected="$tmp/sdk/python/easynet_sdk/_key_service.py"
   printf '"""Compatibility exports for the EasyNet key-service provider."""\n' >"$injected"
@@ -218,6 +229,21 @@ fi
 
 if development_loader_violations "${production_sources[@]}"; then
   fail "development build-directory lookup leaked into SDK production provider loading"
+fi
+
+provider_profile_sources=()
+while IFS= read -r path; do provider_profile_sources+=("$path"); done < <(
+  find sdk/go/provider sdk/python/easynet_sdk/providers sdk/node/provider \
+    \( -path '*/__pycache__/*' -o -path '*/.pytest_cache/*' \) -prune -o \
+    -type f \( -name '*.go' -o -name '*.py' -o -name '*.js' -o -name '*.ts' \) \
+    ! -name '*_test.go' \
+    ! -name '*test.py' \
+    ! -name '*.test.mjs' \
+    -print 2>/dev/null | LC_ALL=C sort
+)
+if ((${#provider_profile_sources[@]} > 0)) \
+  && provider_profile_projection_violations "${provider_profile_sources[@]}"; then
+  fail "product profile start projection leaked into SDK provider package"
 fi
 
 if receipt_storage_violations \

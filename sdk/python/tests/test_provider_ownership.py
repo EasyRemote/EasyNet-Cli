@@ -21,12 +21,12 @@ def test_easynet_lifecycle_exports_are_provider_scoped() -> None:
         "StartConfig",
         "DiscoverOptions",
         "DaemonMode",
-        "DaemonStartProjection",
         "start_daemon",
         "discover_daemon",
         "attach_daemon",
     ):
         assert not hasattr(easynet_sdk, name), name
+    assert not hasattr(provider_lifecycle, "DaemonStartProjection")
 
 
 def test_transport_root_exports_only_runtime_transport_names() -> None:
