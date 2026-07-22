@@ -8226,6 +8226,29 @@ if ffi_invocation.exists():
 ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
 if ffi_invocation.exists():
     text = source(ffi_invocation)
+    if "fn descriptor_resolution_error_projection(" in text:
+        add(
+            "R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER",
+            ffi_invocation,
+            line_number(text, text.find("fn descriptor_resolution_error_projection(")),
+            "descriptor resolver FFI projection must use typed DescriptorResolutionError, not message-string classification",
+        )
+    for token, detail in (
+        (
+            "enum DescriptorResolutionError",
+            "descriptor resolver must expose typed failure states",
+        ),
+        (
+            "fn abi_projection(&self) -> (i32, ErrorProjection)",
+            "descriptor resolver typed failures must own ABI projection",
+        ),
+        (
+            "error.abi_projection()",
+            "FFI descriptor resolver must project from typed error variants",
+        ),
+    ):
+        if token not in text:
+            add("R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER", ffi_invocation, 1, detail)
     resolve_body = rust_method_body(text, "runtime_resolve_descriptor_ref_json")
     if resolve_body is not None:
         offset, body = resolve_body

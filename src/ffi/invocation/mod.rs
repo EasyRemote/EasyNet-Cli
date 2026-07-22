@@ -398,8 +398,8 @@ pub unsafe extern "C" fn easynet_runtime_resolve_descriptor_ref(
                 EASYNET_OK
             }
             Err(error) => {
-                let message = format!("easynet_runtime_resolve_descriptor_ref: {error:#}");
-                let (abi_code, projection) = descriptor_resolution_error_projection(&message);
+                let (abi_code, projection) = error.abi_projection();
+                let message = format!("easynet_runtime_resolve_descriptor_ref: {error}");
                 record_invocation_projected_error(abi_code, projection, message)
             }
         }
@@ -407,85 +407,136 @@ pub unsafe extern "C" fn easynet_runtime_resolve_descriptor_ref(
 }
 
 #[cfg(feature = "axon-pb")]
-fn descriptor_resolution_error_projection(message: &str) -> (i32, ErrorProjection) {
-    let lowered = message.to_ascii_lowercase();
-    if lowered.contains("request_json is not valid utf-8")
-        || lowered.contains("decode descriptor_ref request")
-        || lowered.contains("descriptor_ref request must be a json object")
-        || lowered.contains("descriptor_ref request missing")
-        || lowered.contains("derive ability ura")
-        || lowered.contains("callee ura is invalid")
-    {
-        return (
-            ERR_INVALID_ARG,
-            ErrorProjection {
-                code: "INVALID_ARGUMENT",
-                stage: "sdk",
-                retry: "never",
-            },
-        );
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DescriptorResolutionError {
+    InvalidRequest(String),
+    InvalidCatalogPayload(String),
+    RuntimeOwnerUnavailable(String),
+    RuntimeOffline(String),
+    CallerSignerUnavailable(String),
+    OwnerOffline(String),
+    DescriptorNotFound(String),
+}
+
+#[cfg(feature = "axon-pb")]
+impl DescriptorResolutionError {
+    fn invalid_request(message: impl Into<String>) -> Self {
+        Self::InvalidRequest(message.into())
     }
-    if lowered.contains("descriptor catalog row") {
-        return (
-            ERR_INVALID_ARG,
-            ErrorProjection {
-                code: "INVALID_ARGUMENT",
-                stage: "provider_payload",
-                retry: "never",
-            },
-        );
+
+    fn invalid_catalog_payload(message: impl Into<String>) -> Self {
+        Self::InvalidCatalogPayload(message.into())
     }
-    if lowered.contains("resolve descriptor_ref runtime owner") {
-        return (
-            ERR_PERMISSION_DENIED,
-            ErrorProjection {
-                code: "CALLER_IDENTITY_UNAVAILABLE",
-                stage: "caller_identity",
-                retry: "never",
-            },
-        );
+
+    fn runtime_owner_unavailable(message: impl Into<String>) -> Self {
+        Self::RuntimeOwnerUnavailable(message.into())
     }
-    if lowered.contains("daemon not running") || lowered.contains("listener unreachable") {
-        return (
-            ERR_DAEMON_DOWN,
-            ErrorProjection {
-                code: "RUNTIME_OFFLINE",
-                stage: "transport",
-                retry: "after_backoff",
-            },
-        );
+
+    fn caller_signer_unavailable(message: impl Into<String>) -> Self {
+        Self::CallerSignerUnavailable(message.into())
     }
-    if lowered.contains("requires a caller signer") {
-        return (
-            ERR_PERMISSION_DENIED,
-            ErrorProjection {
-                code: "CALLER_SIGNER_UNAVAILABLE",
-                stage: "caller_identity",
-                retry: "never",
-            },
-        );
+
+    fn descriptor_not_found(message: impl Into<String>) -> Self {
+        Self::DescriptorNotFound(message.into())
     }
-    if lowered.contains("owner is not online")
-        || message.contains("NEGATIVE_REASON_NXDOMAIN")
-        || message.contains("ROUTE_NEGATIVE")
-    {
-        return (
-            ERR_NOT_FOUND,
-            ErrorProjection {
-                code: "DESCRIPTOR_OWNER_OFFLINE",
-                stage: "routing",
-                retry: "after_backoff",
-            },
-        );
+
+    fn from_remote_probe_failure(error: anyhow::Error) -> Self {
+        let message = format!("{error:#}");
+        let lowered = message.to_ascii_lowercase();
+        if lowered.contains("daemon not running") || lowered.contains("listener unreachable") {
+            return Self::RuntimeOffline(message);
+        }
+        if lowered.contains("requires a caller signer") {
+            return Self::CallerSignerUnavailable(message);
+        }
+        if lowered.contains("owner is not online")
+            || message.contains("NEGATIVE_REASON_NXDOMAIN")
+            || message.contains("ROUTE_NEGATIVE")
+        {
+            return Self::OwnerOffline(message);
+        }
+        Self::DescriptorNotFound(message)
     }
-    (
-        ERR_NOT_FOUND,
-        ErrorProjection {
-            code: "DESCRIPTOR_NOT_FOUND",
-            stage: "routing",
-            retry: "never",
-        },
-    )
+
+    fn message(&self) -> &str {
+        match self {
+            Self::InvalidRequest(message)
+            | Self::InvalidCatalogPayload(message)
+            | Self::RuntimeOwnerUnavailable(message)
+            | Self::RuntimeOffline(message)
+            | Self::CallerSignerUnavailable(message)
+            | Self::OwnerOffline(message)
+            | Self::DescriptorNotFound(message) => message,
+        }
+    }
+
+    fn abi_projection(&self) -> (i32, ErrorProjection) {
+        match self {
+            Self::InvalidRequest(_) => (
+                ERR_INVALID_ARG,
+                ErrorProjection {
+                    code: "INVALID_ARGUMENT",
+                    stage: "sdk",
+                    retry: "never",
+                },
+            ),
+            Self::InvalidCatalogPayload(_) => (
+                ERR_INVALID_ARG,
+                ErrorProjection {
+                    code: "INVALID_ARGUMENT",
+                    stage: "provider_payload",
+                    retry: "never",
+                },
+            ),
+            Self::RuntimeOwnerUnavailable(_) => (
+                ERR_PERMISSION_DENIED,
+                ErrorProjection {
+                    code: "CALLER_IDENTITY_UNAVAILABLE",
+                    stage: "caller_identity",
+                    retry: "never",
+                },
+            ),
+            Self::RuntimeOffline(_) => (
+                ERR_DAEMON_DOWN,
+                ErrorProjection {
+                    code: "RUNTIME_OFFLINE",
+                    stage: "transport",
+                    retry: "after_backoff",
+                },
+            ),
+            Self::CallerSignerUnavailable(_) => (
+                ERR_PERMISSION_DENIED,
+                ErrorProjection {
+                    code: "CALLER_SIGNER_UNAVAILABLE",
+                    stage: "caller_identity",
+                    retry: "never",
+                },
+            ),
+            Self::OwnerOffline(_) => (
+                ERR_NOT_FOUND,
+                ErrorProjection {
+                    code: "DESCRIPTOR_OWNER_OFFLINE",
+                    stage: "routing",
+                    retry: "after_backoff",
+                },
+            ),
+            Self::DescriptorNotFound(_) => (
+                ERR_NOT_FOUND,
+                ErrorProjection {
+                    code: "DESCRIPTOR_NOT_FOUND",
+                    stage: "routing",
+                    retry: "never",
+                },
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl std::fmt::Display for DescriptorResolutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
 }
 
 /// Allocate a mutable Invocation builder handle.
@@ -1918,37 +1969,52 @@ fn runtime_descriptor_catalog_entries(
 fn runtime_resolve_descriptor_ref_json(
     session: &crate::ffi::client::handle::ClientSession,
     request_json: &str,
-) -> anyhow::Result<serde_json::Value> {
-    let request: serde_json::Value = serde_json::from_str(request_json)
-        .map_err(|error| anyhow::anyhow!("decode descriptor_ref request: {error}"))?;
-    let object = request
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("descriptor_ref request must be a JSON object"))?;
+) -> Result<serde_json::Value, DescriptorResolutionError> {
+    let request: serde_json::Value = serde_json::from_str(request_json).map_err(|error| {
+        DescriptorResolutionError::invalid_request(format!(
+            "decode descriptor_ref request: {error}"
+        ))
+    })?;
+    let object = request.as_object().ok_or_else(|| {
+        DescriptorResolutionError::invalid_request("descriptor_ref request must be a JSON object")
+    })?;
     let callee_ura = object
         .get("callee_ura")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("descriptor_ref request missing callee_ura"))?;
+        .ok_or_else(|| {
+            DescriptorResolutionError::invalid_request("descriptor_ref request missing callee_ura")
+        })?;
     let ability = object
         .get("ability")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("descriptor_ref request missing ability"))?;
+        .ok_or_else(|| {
+            DescriptorResolutionError::invalid_request("descriptor_ref request missing ability")
+        })?;
     let call_mode = object
         .get("call_mode")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("descriptor_ref request missing call_mode"))?;
+        .ok_or_else(|| {
+            DescriptorResolutionError::invalid_request("descriptor_ref request missing call_mode")
+        })?;
     let ability_ura = match crate::core::ura::AbilitySelector::parse(ability) {
         Ok(selector) => selector.ability_ura().to_string(),
-        Err(_) => crate::core::ura::owner_ability_ura(callee_ura, ability)
-            .ok_or_else(|| anyhow::anyhow!("derive ability URA for `{callee_ura}` `{ability}`"))?,
+        Err(_) => crate::core::ura::owner_ability_ura(callee_ura, ability).ok_or_else(|| {
+            DescriptorResolutionError::invalid_request(format!(
+                "derive ability URA for `{callee_ura}` `{ability}`"
+            ))
+        })?,
     };
-    let runtime_owner_ura = runtime_owner_ura_from_session(session)
-        .map_err(|error| anyhow::anyhow!("resolve descriptor_ref runtime owner: {error}"))?;
+    let runtime_owner_ura = runtime_owner_ura_from_session(session).map_err(|error| {
+        DescriptorResolutionError::runtime_owner_unavailable(format!(
+            "resolve descriptor_ref runtime owner: {error}"
+        ))
+    })?;
     if runtime_owner_ura == callee_ura {
         let catalog = runtime_descriptor_catalog_entries(session, callee_ura);
         if let Some(resolution) = descriptor_catalog_resolution_from_entries(
@@ -1956,12 +2022,14 @@ fn runtime_resolve_descriptor_ref_json(
             &ability_ura,
             call_mode,
             "runtime_local_descriptor_catalog",
-        )? {
+        )
+        .map_err(|error| DescriptorResolutionError::invalid_catalog_payload(error.to_string()))?
+        {
             return Ok(resolution);
         }
-        anyhow::bail!(
+        return Err(DescriptorResolutionError::descriptor_not_found(format!(
             "descriptor_ref not found in local runtime catalog for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
-        );
+        )));
     }
     let catalog = runtime_descriptor_catalog_entries(session, &runtime_owner_ura);
     if let Some(resolution) = descriptor_catalog_resolution_from_entries(
@@ -1969,7 +2037,9 @@ fn runtime_resolve_descriptor_ref_json(
         &ability_ura,
         call_mode,
         "runtime_realm_descriptor_catalog",
-    )? {
+    )
+    .map_err(|error| DescriptorResolutionError::invalid_catalog_payload(error.to_string()))?
+    {
         return Ok(resolution);
     }
 
@@ -1981,39 +2051,49 @@ fn runtime_resolve_descriptor_ref_json(
     let abilities = output
         .get("abilities")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("meta.list_abilities result omitted abilities array"))?;
+        .ok_or_else(|| {
+            DescriptorResolutionError::invalid_catalog_payload(
+                "meta.list_abilities result omitted abilities array",
+            )
+        })?;
     let entries: Vec<_> = abilities
         .iter()
         .enumerate()
         .map(|(index, value)| {
             descriptor_catalog_entry_from_value(value, "runtime_meta_list_abilities", index)
-                .map_err(anyhow::Error::msg)
+                .map_err(DescriptorResolutionError::invalid_catalog_payload)
         })
-        .collect::<anyhow::Result<_>>()?;
+        .collect::<Result<_, _>>()?;
     if let Some(resolution) = descriptor_catalog_resolution_from_entries(
         &entries,
         &ability_ura,
         call_mode,
         "runtime_meta_list_abilities",
-    )? {
+    )
+    .map_err(|error| DescriptorResolutionError::invalid_catalog_payload(error.to_string()))?
+    {
         return Ok(resolution);
     }
-    anyhow::bail!(
+    Err(DescriptorResolutionError::descriptor_not_found(format!(
         "descriptor_ref not found for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
-    )
+    )))
 }
 
 #[cfg(feature = "axon-pb")]
 fn descriptor_ref_request_required_string<'a>(
     object: &'a serde_json::Map<String, serde_json::Value>,
     field: &'static str,
-) -> anyhow::Result<&'a str> {
+) -> Result<&'a str, DescriptorResolutionError> {
     object
         .get(field)
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("descriptor_ref request missing {field}"))
+        .ok_or_else(|| {
+            DescriptorResolutionError::invalid_request(format!(
+                "descriptor_ref request missing {field}"
+            ))
+        })
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2027,20 +2107,31 @@ struct RemoteDescriptorCatalogProbe {
 
 #[cfg(feature = "axon-pb")]
 impl RemoteDescriptorCatalogProbe {
-    fn prepare(callee_ura: &str, caller_ura: &str, ability_ura: String) -> anyhow::Result<Self> {
+    fn prepare(
+        callee_ura: &str,
+        caller_ura: &str,
+        ability_ura: String,
+    ) -> Result<Self, DescriptorResolutionError> {
         let caller_ura = caller_ura.trim().to_string();
         let caller_signer =
             crate::daemon::invocation::routing::remote_invoke::load_remote_invocation_caller_signer(
                 &caller_ura,
             )
             .map_err(|error| {
-                anyhow::anyhow!("prepare remote descriptor catalog probe signer: {error}")
+                DescriptorResolutionError::caller_signer_unavailable(format!(
+                    "prepare remote descriptor catalog probe signer: {error}"
+                ))
             })?;
         let target =
             crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
                 callee_ura,
                 "meta.list_abilities",
-            )?;
+            )
+            .map_err(|error| {
+                DescriptorResolutionError::invalid_request(format!(
+                    "prepare remote descriptor catalog probe target: {error}"
+                ))
+            })?;
         let subject_ura = target_owned_descriptor_catalog_subject_ura(callee_ura, target.as_str())?;
         Ok(Self {
             target,
@@ -2051,7 +2142,7 @@ impl RemoteDescriptorCatalogProbe {
         })
     }
 
-    fn invoke(self) -> anyhow::Result<serde_json::Value> {
+    fn invoke(self) -> Result<serde_json::Value, DescriptorResolutionError> {
         let Self {
             target,
             caller_ura,
@@ -2067,7 +2158,8 @@ impl RemoteDescriptorCatalogProbe {
             ),
             serde_json::json!({ "subject_ura": ability_ura }),
             std::time::Duration::from_secs(30),
-        )?
+        )
+        .map_err(DescriptorResolutionError::from_remote_probe_failure)?
         .into_request()
         .and_then(|request| {
             crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_with_caller_signer(
@@ -2075,6 +2167,7 @@ impl RemoteDescriptorCatalogProbe {
                 caller_signer,
             )
         })
+        .map_err(DescriptorResolutionError::from_remote_probe_failure)
     }
 }
 
@@ -2082,15 +2175,18 @@ impl RemoteDescriptorCatalogProbe {
 fn target_owned_descriptor_catalog_subject_ura(
     callee_ura: &str,
     ability_ura: &str,
-) -> anyhow::Result<String> {
-    let parsed = crate::core::ura::parse_ura(callee_ura)
-        .map_err(|error| anyhow::anyhow!("remote descriptor callee URA is invalid: {error}"))?;
+) -> Result<String, DescriptorResolutionError> {
+    let parsed = crate::core::ura::parse_ura(callee_ura).map_err(|error| {
+        DescriptorResolutionError::invalid_request(format!(
+            "remote descriptor callee URA is invalid: {error}"
+        ))
+    })?;
     match parsed.kind {
         crate::core::ura::URAKind::Device => Ok(callee_ura.to_string()),
         crate::core::ura::URAKind::Authority => Ok(ability_ura.to_string()),
-        other => anyhow::bail!(
+        other => Err(DescriptorResolutionError::invalid_request(format!(
             "target-owned descriptor catalogue requires Device or Hub callee, got {other}"
-        ),
+        ))),
     }
 }
 
@@ -9518,37 +9614,45 @@ mod tests {
     #[cfg(feature = "axon-pb")]
     #[test]
     fn descriptor_resolution_errors_project_canonical_runtime_codes() {
-        let (abi_code, projection) = descriptor_resolution_error_projection(
-            "easynet_runtime_resolve_descriptor_ref: descriptor_ref not found in local runtime catalog",
-        );
+        let (abi_code, projection) = DescriptorResolutionError::descriptor_not_found(
+            "descriptor_ref not found in local runtime catalog",
+        )
+        .abi_projection();
         assert_eq!(abi_code, ERR_NOT_FOUND);
         assert_eq!(projection.code, "DESCRIPTOR_NOT_FOUND");
         assert_eq!(projection.stage, "routing");
 
-        let (abi_code, projection) = descriptor_resolution_error_projection(
-            "easynet_runtime_resolve_descriptor_ref: remote invocation requires a caller signer for `easynet:///r/cli/device/local`",
-        );
+        let (abi_code, projection) = DescriptorResolutionError::caller_signer_unavailable(
+            "remote invocation requires a caller signer for `easynet:///r/cli/device/local`",
+        )
+        .abi_projection();
         assert_eq!(abi_code, ERR_PERMISSION_DENIED);
         assert_eq!(projection.code, "CALLER_SIGNER_UNAVAILABLE");
         assert_eq!(projection.stage, "caller_identity");
 
-        let (abi_code, projection) = descriptor_resolution_error_projection(
-            "easynet_runtime_resolve_descriptor_ref: resolve descriptor_ref runtime owner: control discovery /tmp/control.json does not exist",
-        );
+        let (abi_code, projection) =
+            DescriptorResolutionError::runtime_owner_unavailable(
+                "resolve descriptor_ref runtime owner: control discovery /tmp/control.json does not exist",
+            )
+            .abi_projection();
         assert_eq!(abi_code, ERR_PERMISSION_DENIED);
         assert_eq!(projection.code, "CALLER_IDENTITY_UNAVAILABLE");
         assert_eq!(projection.stage, "caller_identity");
 
-        let (abi_code, projection) = descriptor_resolution_error_projection(
-            "easynet_runtime_resolve_descriptor_ref: ROUTE_NEGATIVE: namespace.resolve negative: NEGATIVE_REASON_NXDOMAIN: owner is not online",
-        );
+        let (abi_code, projection) =
+            DescriptorResolutionError::from_remote_probe_failure(anyhow::anyhow!(
+                "ROUTE_NEGATIVE: namespace.resolve negative: NEGATIVE_REASON_NXDOMAIN: owner is not online"
+            ))
+            .abi_projection();
         assert_eq!(abi_code, ERR_NOT_FOUND);
         assert_eq!(projection.code, "DESCRIPTOR_OWNER_OFFLINE");
         assert_eq!(projection.retry, "after_backoff");
 
-        let (abi_code, projection) = descriptor_resolution_error_projection(
-            "easynet_runtime_resolve_descriptor_ref: descriptor catalog row for ability \"easynet:///r/localhost/ability/device.dev-a.observe.health\" from runtime_local_descriptor_catalog missing descriptor_ref",
-        );
+        let (abi_code, projection) =
+            DescriptorResolutionError::invalid_catalog_payload(
+                "descriptor catalog row for ability \"easynet:///r/localhost/ability/device.dev-a.observe.health\" from runtime_local_descriptor_catalog missing descriptor_ref",
+            )
+            .abi_projection();
         assert_eq!(abi_code, ERR_INVALID_ARG);
         assert_eq!(projection.code, "INVALID_ARGUMENT");
         assert_eq!(projection.stage, "provider_payload");

@@ -2904,7 +2904,7 @@ path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
 
 resolve = re.search(
-    r"fn runtime_resolve_descriptor_ref_json\([^)]*\)\s*->\s*anyhow::Result<serde_json::Value>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn descriptor_ref_request_required_string",
+    r"fn runtime_resolve_descriptor_ref_json\([^)]*\)\s*->\s*Result<serde_json::Value,\s*DescriptorResolutionError>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn descriptor_ref_request_required_string",
     text,
     re.S,
 )
@@ -2949,18 +2949,29 @@ for required in (
     if required not in probe_body:
         raise SystemExit(f"ffi_descriptor_runtime_owner:remote_probe_state_missing:{required}")
 
-projection = re.search(
-    r"fn descriptor_resolution_error_projection\(message: &str\) -> \(i32, ErrorProjection\) \{(?P<body>.*?)\n\}\n\n/// Allocate a mutable Invocation builder handle.",
-    text,
-    re.S,
-)
-if projection is None:
-    raise SystemExit("ffi_descriptor_runtime_owner:projection_function_missing")
-projection_body = projection.group("body")
-if "resolve descriptor_ref runtime owner" not in projection_body:
-    raise SystemExit("ffi_descriptor_runtime_owner:projection_context_missing")
-if 'code: "CALLER_IDENTITY_UNAVAILABLE"' not in projection_body:
-    raise SystemExit("ffi_descriptor_runtime_owner:caller_identity_projection_missing")
+if "fn descriptor_resolution_error_projection(" in text:
+    raise SystemExit("ffi_descriptor_runtime_owner:retired_message_projection_classifier")
+for required in (
+    "enum DescriptorResolutionError",
+    "RuntimeOwnerUnavailable(String)",
+    "CallerSignerUnavailable(String)",
+    "OwnerOffline(String)",
+    "DescriptorNotFound(String)",
+    "fn abi_projection(&self) -> (i32, ErrorProjection)",
+    'code: "CALLER_IDENTITY_UNAVAILABLE"',
+    'code: "CALLER_SIGNER_UNAVAILABLE"',
+    'code: "DESCRIPTOR_OWNER_OFFLINE"',
+    'code: "DESCRIPTOR_NOT_FOUND"',
+    "error.abi_projection()",
+):
+    if required not in text:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:typed_projection_missing:{required}")
+entry = text[text.find("pub unsafe extern \"C\" fn easynet_runtime_resolve_descriptor_ref("):]
+entry = entry[: entry.find("/// Allocate a mutable Invocation builder handle.") if "/// Allocate a mutable Invocation builder handle." in entry else len(entry)]
+if "descriptor_resolution_error_projection(&message)" in entry:
+    raise SystemExit("ffi_descriptor_runtime_owner:ffi_entry_uses_message_classifier")
+if "format!(\"easynet_runtime_resolve_descriptor_ref: {error:#}\")" in entry:
+    raise SystemExit("ffi_descriptor_runtime_owner:ffi_entry_formats_error_before_projection")
 
 for required_test in (
     "runtime_descriptor_remote_probe_requires_runtime_owner_identity",
