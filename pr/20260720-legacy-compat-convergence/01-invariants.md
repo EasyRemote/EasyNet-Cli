@@ -395,3 +395,7 @@
   not a function-name alias. Malformed descriptor refs, descriptor selector
   projection failures, and descriptor-owner/envelope-callee mismatches must
   fail before route table lookup or selected-route fallback.
+- Unary, stream, and bidi daemon exact-route ingress must share the same
+  descriptor-ref route projection. A descriptor-like bidi frame-0 route token
+  must fail before generic bidi dispatch when it cannot be projected to a
+  public route name for the envelope callee.

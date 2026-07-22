@@ -2740,6 +2740,19 @@ Commands and outcomes will be appended after implementation.
   codegraph `status` reports `Index is up to date` with 35,295 nodes and
   135,449 edges.
 
+## 2026-07-22 Bidi exact-route descriptor-ref projection
+
+- `cargo test -q -p easynet --lib route_table_ --features axon-pb` — PASS
+  (`4 passed`); now includes Hub-owned `session.open` bidi descriptor-ref
+  projection.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; gate now requires bidi frame-0 routing to call
+  `dispatch_function_name_for_route_table`.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
+  codegraph `status` reports `Index is up to date` with 35,296 nodes and
+  135,458 edges.
+
 ## 2026-07-22 Canonical ability catalog projection
 
 - `cargo test -q -p easynet --lib

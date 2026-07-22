@@ -1528,15 +1528,31 @@ impl Invocation for DaemonInvocationService {
                 return Err(status);
             }
         };
+        let route_function = match dispatch_function_name_for_route_table(
+            ability_name,
+            envelope_open.envelope.as_ref(),
+        ) {
+            Ok(route_function) => route_function,
+            Err(status) => {
+                attempt
+                    .reject_status("descriptor_ref_route_projection", &status)
+                    .map_err(invocation_attempt_audit_status)?;
+                return Err(status);
+            }
+        };
 
         let dispatcher = self.bidi_dispatcher();
-        let result = match DaemonBidiRoute::from_function(ability_name) {
+        let result = match DaemonBidiRoute::from_function(&route_function) {
             Some(route) => {
                 dispatcher
                     .dispatch_daemon_route_runtime(route, envelope_open, up)
                     .await
             }
-            None => dispatcher.dispatch(ability_name, envelope_open, up).await,
+            None => {
+                dispatcher
+                    .dispatch(&route_function, envelope_open, up)
+                    .await
+            }
         };
         match result {
             Ok(response) => {

@@ -712,6 +712,33 @@ fn route_table_match_projects_descriptor_ref_to_public_name() {
 }
 
 #[test]
+fn route_table_projects_hub_bidi_descriptor_ref_to_session_open() {
+    let hub_ura = crate::core::ura::hub_ura("test-realm");
+    let descriptor_ref =
+        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+            &hub_ura,
+            ABILITY_SESSION_OPEN,
+            crate::daemon::ability::CallMode::Bidi,
+        )
+        .expect("session.open bidi descriptor ref");
+    let envelope = ProtoEnvelope::from_target(
+        crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+        &hub_ura,
+        crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+        InvocationDerivationPolicy::FreshRoot,
+    )
+    .expect("valid hub envelope")
+    .into_inner("test.session.open", b"")
+    .expect("complete hub tuple");
+
+    assert_eq!(
+        dispatch_function_name_for_route_table(&descriptor_ref, Some(&envelope))
+            .expect("session.open descriptor ref route table projection"),
+        ABILITY_SESSION_OPEN
+    );
+}
+
+#[test]
 fn route_table_rejects_malformed_descriptor_ref_before_name_fallback() {
     let envelope = test_envelope();
     let error = dispatch_function_name_for_route_table(

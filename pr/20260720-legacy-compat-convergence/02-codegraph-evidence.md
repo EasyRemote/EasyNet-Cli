@@ -2581,3 +2581,21 @@ Evidence will be appended after indexing and focused impact queries.
   `ability_selector_from_descriptor_ref` helper. Both route resolver and
   daemon exact-route dispatch use this shared selector, and descriptor-like
   route tokens fail with `InvalidArgument` before route-table fallback.
+
+## 2026-07-22 Bidi exact-route descriptor-ref projection audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph callers
+  DaemonBidiRoute::from_function` showed bidi exact route selection has two
+  callers: `DaemonInvocationService::invoke_bidi` and
+  `BidiDispatcher::dispatch`.
+- The same codegraph path showed `invoke_bidi` extracted
+  `function_name_from_invocation_target` and matched `DaemonBidiRoute` directly,
+  while unary and stream had already moved through
+  `dispatch_function_name_for_route_table`.
+- Root abstraction problem: exact-route descriptor projection was shared by
+  unary/stream but not bidi frame-0 routing. Descriptor-like bidi route tokens
+  could therefore bypass the fail-closed projection boundary and enter generic
+  bidi route resolution.
+- Boundary decision: `invoke_bidi` now uses the same fallible
+  `dispatch_function_name_for_route_table` as unary and stream before choosing
+  an exact bidi route or generic bidi dispatch.

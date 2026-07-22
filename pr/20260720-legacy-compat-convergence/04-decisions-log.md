@@ -979,3 +979,10 @@ Decisions will be appended as root-fork choices are made.
 - Move descriptor-ref selector projection into
   `daemon::axon_bridge::descriptor_ref` so daemon exact routes and the main
   route resolver cannot drift into separate selector semantics.
+
+## 2026-07-22 Bidi exact-route descriptor-ref projection
+
+- Use one exact-route projection path for unary, stream, and bidi. Bidi
+  frame-0 route selection no longer has its own descriptor-like token behavior.
+- Preserve generic bidi dispatch for non-descriptor public ability names.
+  Descriptor-like failures are rejected before generic dispatch or escalation.

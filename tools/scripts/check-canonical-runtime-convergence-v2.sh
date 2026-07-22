@@ -1359,14 +1359,24 @@ for pattern, label in {
     if re.sub(r"\s+", "", pattern) in compact_projection:
         raise SystemExit(f"daemon_invocation_service_descriptor_projection:{label}")
 
+compact_service = re.sub(r"\s+", "", service)
 if "descriptor_ref_route_projection" not in service:
     raise SystemExit("daemon_invocation_service_descriptor_projection:audit_stage_missing")
 if "return Err(status);" not in service:
     raise SystemExit("daemon_invocation_service_descriptor_projection:callsite_return_missing")
+for required, haystack in (
+    ("dispatch_function_name_for_route_table(function, inner.envelope.as_ref())", service),
+    ("dispatch_function_name_for_route_table(ability_name,envelope_open.envelope.as_ref(),)", compact_service),
+    ("DaemonBidiRoute::from_function(&route_function)", service),
+    ("dispatcher.dispatch(&route_function, envelope_open, up)", service),
+):
+    if re.sub(r"\s+", "", required) not in re.sub(r"\s+", "", haystack):
+        raise SystemExit(f"daemon_invocation_service_descriptor_projection:callsite_missing:{required}")
 
 if "pub(crate) fn ability_selector_from_descriptor_ref(" not in descriptor_ref:
     raise SystemExit("daemon_invocation_service_descriptor_projection:shared_helper_missing")
 for required_test in (
+    "route_table_projects_hub_bidi_descriptor_ref_to_session_open",
     "route_table_rejects_malformed_descriptor_ref_before_name_fallback",
     "route_table_rejects_descriptor_ref_owner_mismatch_before_name_fallback",
 ):
