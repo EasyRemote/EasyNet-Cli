@@ -805,8 +805,12 @@ check_pages_identity_credentials_contract() {
   local config="$cli_root/src/daemon/persistence/config.rs"
   local daemon="$cli_root/src/bin/easynet-daemon.rs"
   local smoke="$cli_root/src/bin/real-user-smoke.rs"
+  local build="$cli_root/src/daemon/ability/catalog/build.rs"
+  local api_key="$cli_root/src/daemon/ability/builtins/governance/api_key.rs"
+  local openai="$cli_root/src/daemon/ability/builtins/integrations/openai_compat.rs"
+  local assembly_tests="$cli_root/src/daemon/ability/catalog/assembly_tests.rs"
 
-  "$PYTHON_BIN" - "$identity" "$config" "$daemon" "$smoke" <<'PY'
+  "$PYTHON_BIN" - "$identity" "$config" "$daemon" "$smoke" "$build" "$api_key" "$openai" "$assembly_tests" <<'PY'
 import sys
 from pathlib import Path
 
@@ -814,11 +818,19 @@ identity = Path(sys.argv[1]).read_text()
 config = Path(sys.argv[2]).read_text() if Path(sys.argv[2]).exists() else ""
 daemon = Path(sys.argv[3]).read_text() if Path(sys.argv[3]).exists() else ""
 smoke = Path(sys.argv[4]).read_text() if Path(sys.argv[4]).exists() else ""
+build = Path(sys.argv[5]).read_text() if Path(sys.argv[5]).exists() else ""
+api_key = Path(sys.argv[6]).read_text() if Path(sys.argv[6]).exists() else ""
+openai = Path(sys.argv[7]).read_text() if Path(sys.argv[7]).exists() else ""
+assembly_tests = Path(sys.argv[8]).read_text() if Path(sys.argv[8]).exists() else ""
 
 if "pub fn from_env() -> Self" in identity:
     raise SystemExit("pages_identity_retains_infallible_from_env")
 if "pub fn try_from_env() -> anyhow::Result<Self>" not in identity:
     raise SystemExit("pages_identity_missing_fallible_env_resolver")
+if "pub fn user_root_identity(&self) -> anyhow::Result<Option<PagesUserRootIdentity>>" not in identity:
+    raise SystemExit("pages_identity_missing_explicit_user_root_projection")
+if "pub struct PagesUserRootIdentity" not in identity:
+    raise SystemExit("pages_identity_user_root_projection_type_missing")
 for retired in (
     "load_credentials()\n                    .ok()",
     "load_credentials().ok()",
@@ -845,9 +857,71 @@ for test in (
     "pages_identity_rejects_malformed_credentials_instead_of_defaulting",
     "pages_identity_rejects_invalid_port_instead_of_defaulting",
     "load_credentials_optional_rejects_malformed_existing_file",
+    "pages_identity_user_root_projection_requires_realm",
+    "pages_identity_user_root_projection_accepts_complete_identity",
 ):
     if test not in identity and test not in config:
         raise SystemExit(f"missing_pages_identity_credentials_test:{test}")
+
+if build:
+    for required in (
+        "pages_identity.user_root_identity()?",
+        "api_key_ability::register(&mut reg, &user, &pages_realm)",
+        "openai_compat_ability::set_identity(pages_identity.clone())?",
+    ):
+        if required not in build:
+            raise SystemExit(f"pages_identity_consumer_missing_explicit_projection:{required}")
+    for retired in (
+        ".realm\n                .clone()\n                .unwrap_or_else(|| crate::core::ura::REALM_EASYNET.to_string())",
+        ".realm\n        .as_deref()\n        .unwrap_or(crate::core::ura::REALM_EASYNET)",
+        "api_key_ability::register(&mut reg, &user);",
+        "openai_compat_ability::set_identity(pages_identity.clone());",
+    ):
+        if retired in build:
+            raise SystemExit(f"pages_identity_consumer_retains_default_realm:{retired}")
+
+if api_key:
+    for required in (
+        "pub fn register(reg: &mut AxonAbilityCatalog, user: &str, realm: &str)",
+        "handle_create(&u1, &r1, args)",
+        "handle_list(&u2, &r2, args)",
+        "handle_revoke(&u3, &r3, args)",
+        "create_stamps_registered_realm_without_product_default_lookup",
+    ):
+        if required not in api_key:
+            raise SystemExit(f"api_key_user_root_realm_projection_missing:{required}")
+    for retired in (
+        "fn realm() -> String",
+        "EASYNET_PAGES_REALM",
+        "REALM_EASYNET",
+        "pub fn handle_create(user: &str, args: Value)",
+        "pub fn handle_list(user: &str, _args: Value)",
+        "pub fn handle_revoke(user: &str, args: Value)",
+        "pub fn register(reg: &mut AxonAbilityCatalog, user: &str)",
+    ):
+        if retired in api_key:
+            raise SystemExit(f"api_key_retains_product_default_realm:{retired}")
+
+if openai:
+    for required in (
+        "ProcessSingleton<Option<OpenAICompatIdentity>>",
+        "OpenAICompatIdentity::from_pages_identity(identity)?",
+        "fn openai_file_user_root_identity(",
+        "openai_runtime_rejects_partial_user_identity_without_realm",
+    ):
+        if required not in openai:
+            raise SystemExit(f"openai_user_root_realm_projection_missing:{required}")
+    for retired in (
+        "ProcessSingleton<OpenAICompatIdentity>",
+        "fn compatibility_file_identity",
+        "unwrap_or_else(|| crate::core::ura::REALM_EASYNET.to_string())",
+        "unwrap_or(crate::core::ura::REALM_EASYNET)",
+    ):
+        if retired in openai:
+            raise SystemExit(f"openai_retains_product_default_realm:{retired}")
+
+if assembly_tests and "user_rooted_registry_rejects_paired_identity_without_realm" not in assembly_tests:
+    raise SystemExit("pages_identity_consumer_missing_registry_rejection_test")
 PY
 }
 
@@ -5719,6 +5793,75 @@ EOF
     > "$tmp/pages-identity-legacy/src/daemon/ability/builtins/resources/pages/identity.rs"
   if ( check_pages_identity_credentials_contract "$tmp/pages-identity-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected Pages identity credential fallback gate to fail"
+  fi
+  mkdir -p "$tmp/pages-user-root-realm-legacy/src/daemon/ability/builtins/resources/pages" \
+    "$tmp/pages-user-root-realm-legacy/src/daemon/ability/builtins/governance" \
+    "$tmp/pages-user-root-realm-legacy/src/daemon/ability/builtins/integrations" \
+    "$tmp/pages-user-root-realm-legacy/src/daemon/ability/catalog" \
+    "$tmp/pages-user-root-realm-legacy/src/daemon/persistence" \
+    "$tmp/pages-user-root-realm-legacy/src/bin"
+  cat >"$tmp/pages-user-root-realm-legacy/src/daemon/ability/builtins/resources/pages/identity.rs" <<'EOF'
+pub struct PagesIdentity { pub user: Option<String>, pub realm: Option<String>, pub listener_port: Option<u16> }
+impl PagesIdentity {
+  pub fn try_from_env() -> anyhow::Result<Self> {
+    let _creds = crate::daemon::persistence::config::load_credentials_optional()?;
+    let _port = pages_listener_port_from_env()?;
+    let _message = "EASYNET_PAGES_PORT must be greater than 0";
+    Ok(Self { user: Some("alice".into()), realm: None, listener_port: None })
+  }
+}
+fn pages_listener_port_from_env() -> anyhow::Result<Option<u16>> { Ok(None) }
+#[cfg(test)]
+mod tests {
+  #[test] fn pages_identity_missing_credentials_is_unpaired_state() {}
+  #[test] fn pages_identity_rejects_malformed_credentials_instead_of_defaulting() {}
+  #[test] fn pages_identity_rejects_invalid_port_instead_of_defaulting() {}
+  #[test] fn pages_identity_user_root_projection_requires_realm() {}
+  #[test] fn pages_identity_user_root_projection_accepts_complete_identity() {}
+}
+EOF
+  cat >"$tmp/pages-user-root-realm-legacy/src/daemon/persistence/config.rs" <<'EOF'
+pub fn load_credentials_optional() -> anyhow::Result<Option<Credentials>> { Ok(None) }
+#[cfg(test)]
+mod tests { #[test] fn load_credentials_optional_rejects_malformed_existing_file() {} }
+EOF
+  printf '%s\n' 'fn boot() { PagesIdentity::try_from_env(); }' \
+    > "$tmp/pages-user-root-realm-legacy/src/bin/easynet-daemon.rs"
+  printf '%s\n' 'fn smoke() { PagesIdentity::try_from_env(); }' \
+    > "$tmp/pages-user-root-realm-legacy/src/bin/real-user-smoke.rs"
+  cat >"$tmp/pages-user-root-realm-legacy/src/daemon/ability/catalog/build.rs" <<'EOF'
+fn build(pages_identity: PagesIdentity) -> anyhow::Result<()> {
+  if let Some(user) = pages_identity.user.clone() {
+    let realm = pages_identity
+      .realm
+      .clone()
+      .unwrap_or_else(|| crate::core::ura::REALM_EASYNET.to_string());
+    api_key_ability::register(&mut reg, &user);
+  }
+  openai_compat_ability::set_identity(pages_identity.clone());
+  Ok(())
+}
+EOF
+  cat >"$tmp/pages-user-root-realm-legacy/src/daemon/ability/builtins/governance/api_key.rs" <<'EOF'
+fn realm() -> String {
+  std::env::var("EASYNET_PAGES_REALM")
+    .unwrap_or_else(|_| crate::core::ura::REALM_EASYNET.to_string())
+}
+pub fn register(reg: &mut AxonAbilityCatalog, user: &str) {}
+EOF
+  cat >"$tmp/pages-user-root-realm-legacy/src/daemon/ability/builtins/integrations/openai_compat.rs" <<'EOF'
+static OPENAI_IDENTITY: ProcessSingleton<OpenAICompatIdentity> = ProcessSingleton::last_writer_wins();
+impl OpenAICompatIdentity {
+  fn from_pages_identity(identity: PagesIdentity) -> Self {
+    Self { user: identity.user, realm: identity.realm.unwrap_or_else(|| crate::core::ura::REALM_EASYNET.to_string()) }
+  }
+}
+fn compatibility_file_identity(identity: Option<&OpenAICompatIdentity>) -> anyhow::Result<(String, String)> { todo!() }
+EOF
+  printf '%s\n' '#[test] fn unrelated_registry_test() {}' \
+    > "$tmp/pages-user-root-realm-legacy/src/daemon/ability/catalog/assembly_tests.rs"
+  if ( check_pages_identity_credentials_contract "$tmp/pages-user-root-realm-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected Pages user-root realm default gate to fail"
   fi
   mkdir -p "$tmp/local-api-key-cache-legacy/src/daemon/ability/builtins/governance" \
     "$tmp/local-api-key-cache-legacy/src/cli/commands"

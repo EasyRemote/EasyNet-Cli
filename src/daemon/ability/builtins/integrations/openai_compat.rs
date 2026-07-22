@@ -61,7 +61,7 @@ static DISPATCH_HANDLE: ProcessSingleton<OnceLock<Arc<AxonAbilityCatalog>>> =
 /// `set_identity({user: Some("alice"), …})` from
 /// `ensure_openai_http_registry` can override a default written
 /// earlier by `build_registry()` in another test.
-static OPENAI_IDENTITY: ProcessSingleton<OpenAICompatIdentity> =
+static OPENAI_IDENTITY: ProcessSingleton<Option<OpenAICompatIdentity>> =
     ProcessSingleton::last_writer_wins();
 
 #[derive(Debug, Clone)]
@@ -88,11 +88,11 @@ impl OpenAICompatRuntime {
     pub(crate) fn from_pages_identity(
         dispatch_handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
         identity: PagesIdentity,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
             dispatch_handle,
-            identity: Some(OpenAICompatIdentity::from_pages_identity(identity)),
-        }
+            identity: OpenAICompatIdentity::from_pages_identity(identity)?,
+        })
     }
 
     fn current() -> Option<Self> {
@@ -124,13 +124,11 @@ impl OpenAICompatRuntime {
 }
 
 impl OpenAICompatIdentity {
-    fn from_pages_identity(identity: PagesIdentity) -> Self {
-        Self {
-            user: identity.user,
-            realm: identity
-                .realm
-                .unwrap_or_else(|| crate::core::ura::REALM_EASYNET.to_string()),
-        }
+    fn from_pages_identity(identity: PagesIdentity) -> anyhow::Result<Option<Self>> {
+        Ok(identity.user_root_identity()?.map(|identity| Self {
+            user: Some(identity.user),
+            realm: identity.realm,
+        }))
     }
 }
 
@@ -142,14 +140,15 @@ fn current_dispatch_handle() -> Option<Arc<OnceLock<Arc<AxonAbilityCatalog>>>> {
     DISPATCH_HANDLE.get()
 }
 
-pub(crate) fn set_identity(identity: PagesIdentity) {
+pub(crate) fn set_identity(identity: PagesIdentity) -> anyhow::Result<()> {
     OPENAI_IDENTITY.set(Arc::new(OpenAICompatIdentity::from_pages_identity(
         identity,
-    )));
+    )?));
+    Ok(())
 }
 
 fn current_identity() -> Option<OpenAICompatIdentity> {
-    OPENAI_IDENTITY.get().map(|arc| (*arc).clone())
+    OPENAI_IDENTITY.get().and_then(|arc| (*arc).clone())
 }
 
 fn now_secs() -> u64 {
@@ -589,7 +588,7 @@ fn handle_file_upload_with_context(
     identity: Option<&OpenAICompatIdentity>,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let (user, realm) = compatibility_file_identity(identity)?;
+    let (user, realm) = openai_file_user_root_identity(identity)?;
     let filename = args
         .get("filename")
         .and_then(Value::as_str)
@@ -659,7 +658,7 @@ fn handle_file_retrieve_with_context(
     identity: Option<&OpenAICompatIdentity>,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let (user, realm) = compatibility_file_identity(identity)?;
+    let (user, realm) = openai_file_user_root_identity(identity)?;
     let file_id = args
         .get("file_id")
         .or_else(|| args.get("id"))
@@ -694,11 +693,8 @@ fn handle_file_retrieve_with_context(
         .get("content_type")
         .and_then(Value::as_str)
         .unwrap_or("application/octet-stream");
-    let realm = identity
-        .map(|value| value.realm.as_str())
-        .unwrap_or(crate::core::ura::REALM_EASYNET);
     let file_ref = crate::daemon::ability::builtins::resources::files_store::state::blob_ura(
-        realm, &user, sha,
+        &realm, &user, sha,
     );
 
     project_file(&json!({
@@ -722,7 +718,7 @@ fn handle_file_delete_with_context(
     identity: Option<&OpenAICompatIdentity>,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let _ = compatibility_file_identity(identity)?;
+    let _ = openai_file_user_root_identity(identity)?;
     let file_id = args
         .get("file_id")
         .or_else(|| args.get("id"))
@@ -738,7 +734,7 @@ fn handle_file_delete_with_context(
     .map_err(|err| anyhow::anyhow!("openai.files.delete: project delete: {err}"))
 }
 
-fn compatibility_file_identity(
+fn openai_file_user_root_identity(
     identity: Option<&OpenAICompatIdentity>,
 ) -> anyhow::Result<(String, String)> {
     let identity = identity.ok_or_else(|| anyhow::anyhow!("openai.files: identity missing"))?;
@@ -1200,6 +1196,26 @@ mod tests {
     }
 
     #[test]
+    fn openai_runtime_rejects_partial_user_identity_without_realm() {
+        let handle = Arc::new(OnceLock::new());
+
+        let error = OpenAICompatRuntime::from_pages_identity(
+            handle,
+            PagesIdentity {
+                user: Some("alice".into()),
+                realm: None,
+                listener_port: None,
+            },
+        )
+        .expect_err("OpenAI adapter must not invent a default realm");
+
+        assert!(
+            error.to_string().contains("explicit realm"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn project_model_id_drops_non_agent_chat_owner() {
         let mut reg = AxonAbilityCatalog::new();
         register_test_rpc(
@@ -1288,7 +1304,8 @@ mod tests {
                 realm: Some("example".into()),
                 listener_port: None,
             },
-        );
+        )
+        .expect("test OpenAI file runtime identity is complete");
         (runtime, handle)
     }
 

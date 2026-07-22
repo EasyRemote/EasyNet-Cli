@@ -766,6 +766,7 @@ mod tests {
                 listener_port: Some(8787),
             },
         )
+        .expect("pages test OpenAI runtime identity is complete")
     }
 
     fn attach_openai_runtime(req: &mut Request<Body>) {

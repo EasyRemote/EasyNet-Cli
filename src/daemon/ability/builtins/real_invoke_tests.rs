@@ -3681,7 +3681,8 @@ fn real_device_openai_files_upload_retrieve_delete_round_trip() {
                 realm: Some("default".to_string()),
                 listener_port: None,
             },
-        );
+        )
+        .expect("test OpenAI runtime identity is complete");
     let mut reg = runtime_attached_catalog_for_realm("default");
     crate::daemon::ability::builtins::resources::files_store::register(
         &mut reg,
@@ -3806,7 +3807,7 @@ fn real_test_api_key_create_then_list_then_revoke_round_trip() {
             None,
         ),
     );
-    crate::daemon::ability::builtins::governance::api_key::register(&mut reg, "test");
+    crate::daemon::ability::builtins::governance::api_key::register(&mut reg, "test", "default");
     let d = dispatcher_for(Arc::new(reg));
 
     // Create issues a bearer + identifier. The wire shape changed

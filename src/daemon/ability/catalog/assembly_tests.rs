@@ -980,6 +980,28 @@ fn pages_management_is_user_owned_and_runs_on_the_declared_pages_agent() {
 }
 
 #[test]
+fn user_rooted_registry_rejects_paired_identity_without_realm() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let agents = AgentRegistry::default();
+    let mut config = registry_config_for_agents(&agents);
+    config.pages_identity = crate::daemon::ability::builtins::resources::pages::PagesIdentity {
+        user: Some("alice".to_string()),
+        realm: None,
+        listener_port: Some(8787),
+    };
+
+    let error = match build_registry_with_services_result(config) {
+        Ok(_) => panic!("registry assembly must not default a paired user into a product realm"),
+        Err(error) => error,
+    };
+
+    assert!(
+        error.to_string().contains("explicit realm"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
 fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let agents = AgentRegistry::default();

@@ -23,15 +23,46 @@ pub struct PagesIdentity {
     /// yet" — the user-rooted families are skipped (no
     /// `self.api_key.*` placeholder leak).
     pub user: Option<String>,
-    /// Realm the user-rooted handlers stamp into URAs. Defaults
-    /// to `crate::core::ura::REALM_EASYNET`.
+    /// Realm the user-rooted handlers stamp into URAs. `None` is valid only
+    /// when `user` is also `None` (unpaired daemon). Paired user-rooted
+    /// surfaces must carry an explicit realm; callers must not fabricate the
+    /// product default at registration time.
     pub realm: Option<String>,
     /// HTTP listener port for the pages server. `None` falls back
     /// to the historical 8787.
     pub listener_port: Option<u16>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PagesUserRootIdentity {
+    pub user: String,
+    pub realm: String,
+}
+
 impl PagesIdentity {
+    pub fn user_root_identity(&self) -> anyhow::Result<Option<PagesUserRootIdentity>> {
+        let user = self
+            .user
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        let realm = self
+            .realm
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        match (user, realm) {
+            (None, _) => Ok(None),
+            (Some(_), None) => {
+                anyhow::bail!("PagesIdentity user-root identity requires an explicit realm")
+            }
+            (Some(user), Some(realm)) => Ok(Some(PagesUserRootIdentity {
+                user: user.to_string(),
+                realm: realm.to_string(),
+            })),
+        }
+    }
+
     /// Resolve from the boot-time env vars. Read ONCE at process
     /// startup; downstream callers receive the resolved struct.
     /// Tests should not call this — they construct
@@ -48,7 +79,7 @@ impl PagesIdentity {
             user,
             // Follow the daemon's actual realm before the public
             // default: EASYNET_PAGES_REALM override → credentials
-            // realm → (None here; REALM_EASYNET applied at register).
+            // realm → None for unpaired state.
             // Without the credentials step a daemon joined to a
             // non-default realm (e.g. `localhost`) would mint pages
             // URLs under `easynet.run`, which don't resolve to it.
@@ -157,6 +188,41 @@ mod tests {
 
         assert_eq!(identity.user.as_deref(), Some("alice"));
         assert_eq!(identity.realm.as_deref(), Some("localhost"));
+    }
+
+    #[test]
+    fn pages_identity_user_root_projection_requires_realm() {
+        let identity = PagesIdentity {
+            user: Some("alice".to_string()),
+            realm: None,
+            listener_port: None,
+        };
+
+        let error = identity
+            .user_root_identity()
+            .expect_err("paired user-root identity must not invent a default realm");
+
+        assert!(
+            error.to_string().contains("explicit realm"),
+            "error should require explicit realm: {error}"
+        );
+    }
+
+    #[test]
+    fn pages_identity_user_root_projection_accepts_complete_identity() {
+        let identity = PagesIdentity {
+            user: Some("alice".to_string()),
+            realm: Some("localhost".to_string()),
+            listener_port: None,
+        };
+
+        let projected = identity
+            .user_root_identity()
+            .expect("complete identity")
+            .expect("paired identity");
+
+        assert_eq!(projected.user, "alice");
+        assert_eq!(projected.realm, "localhost");
     }
 
     #[test]

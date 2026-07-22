@@ -830,11 +830,9 @@ fn build_registry_with_services_result_inner(
         // ability surface returns once pairing completes and the
         // supervisor rebuilds the registry with a populated
         // identity.
-        if let Some(user) = pages_identity.user.clone() {
-            let realm = pages_identity
-                .realm
-                .clone()
-                .unwrap_or_else(|| crate::core::ura::REALM_EASYNET.to_string());
+        if let Some(identity) = pages_identity.user_root_identity()? {
+            let user = identity.user;
+            let realm = identity.realm;
             let listener_port = pages_identity.listener_port.unwrap_or(8787);
             let pages_realm = realm.clone();
             pages::register(
@@ -854,18 +852,18 @@ fn build_registry_with_services_result_inner(
                 &mut reg,
                 files::FilesConfig {
                     user: user.clone(),
-                    realm: pages_realm,
+                    realm: pages_realm.clone(),
                 },
             );
             // RFC-006-C v0.1 — API key abilities. Register under the
             // same `user` identity pages used so a single user owns
             // both surface families on this daemon.
-            api_key_ability::register(&mut reg, &user);
+            api_key_ability::register(&mut reg, &user, &pages_realm);
         }
         // RFC-006-C v0.1 — device-local OpenAI shim. Device-owned,
         // no `<user>` slot — registers regardless of pairing state.
         openai_compat_ability::set_dispatch_handle(Arc::clone(&local_registry_handle));
-        openai_compat_ability::set_identity(pages_identity.clone());
+        openai_compat_ability::set_identity(pages_identity.clone())?;
         openai_compat_ability::register(&mut reg);
     }
     skill_install_ability::register(&mut reg);
@@ -1047,10 +1045,11 @@ fn build_registry_with_services_result_inner(
     // boundary — every branch is a named variant carrying exactly
     // the data the apply step needs.
     let reflection_plan = if hosts_device_authority && daemon_runtime_assembly {
-        let reflection_realm = pages_identity
-            .realm
-            .clone()
-            .unwrap_or_else(|| crate::core::ura::REALM_EASYNET.to_string());
+        let user_root_identity = pages_identity.user_root_identity()?;
+        let (reflection_user, reflection_realm) = user_root_identity
+            .as_ref()
+            .map(|identity| (Some(identity.user.as_str()), identity.realm.as_str()))
+            .unwrap_or((None, ""));
         crate::daemon::ability::builtins::integrations::mcp::reflective_registry::PostArcReflection::plan(
             crate::daemon::ability::builtins::integrations::mcp::reflective_registry::McpReflectionMode::from_env()
                 .with_context(|| {
@@ -1059,8 +1058,8 @@ fn build_registry_with_services_result_inner(
                         crate::daemon::ability::builtins::integrations::mcp::reflective_registry::ENV_MCP_REFLECTION_MODE
                     )
                 })?,
-            pages_identity.user.as_deref(),
-            &reflection_realm,
+            reflection_user,
+            reflection_realm,
             &mcp_svc,
             &mut reg,
         )
@@ -1235,13 +1234,12 @@ fn declare_daemon_native_agent_authorities(
     if !authority_context.hosts_device_authority() {
         return Ok(authority_context);
     }
-    let Some(user) = identity.user.as_deref() else {
+    let user_root_identity = identity.user_root_identity()?;
+    let Some(user_root_identity) = user_root_identity.as_ref() else {
         return Ok(authority_context);
     };
-    let realm = identity
-        .realm
-        .as_deref()
-        .unwrap_or(crate::core::ura::REALM_EASYNET);
+    let realm = user_root_identity.realm.as_str();
+    let user = user_root_identity.user.as_str();
     let declared_roots = [
         ("Pages", pages::management_agent_ura(realm, user)),
         ("Files", files::management_agent_ura(realm, user)),

@@ -135,14 +135,9 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-fn realm() -> String {
-    std::env::var("EASYNET_PAGES_REALM")
-        .unwrap_or_else(|_| crate::core::ura::REALM_EASYNET.to_string())
-}
-
 /// Mint a fresh API key. Returns the bearer token ONCE — the
 /// caller must persist it client-side.
-pub fn handle_create(user: &str, args: Value) -> anyhow::Result<Value> {
+pub fn handle_create(user: &str, realm: &str, args: Value) -> anyhow::Result<Value> {
     let label = args.get("label").and_then(Value::as_str).map(String::from);
 
     // 32 random bytes → 64-hex token. Prefix with `easynet-sk-`
@@ -156,7 +151,7 @@ pub fn handle_create(user: &str, args: Value) -> anyhow::Result<Value> {
     let entry = ApiKeyEntry {
         id_prefix: id[..12].to_string(),
         token_hash: hash_token(&token),
-        user_ura: crate::core::ura::user_ura(&realm(), user),
+        user_ura: crate::core::ura::user_ura(realm, user),
         label: label.clone(),
         created_at: now_secs(),
         revoked_at: None,
@@ -174,7 +169,7 @@ pub fn handle_create(user: &str, args: Value) -> anyhow::Result<Value> {
         // operator-visible listing only; the URA must carry the
         // full unguessable id so revocation by URA cannot collide
         // and so the URA itself functions as the capability.
-        crate::core::ura::resource_dot_ura(&realm(), &format!("api_key.{id}"), "")
+        crate::core::ura::resource_dot_ura(realm, &format!("api_key.{id}"), "")
     };
 
     Ok(json!({
@@ -189,9 +184,9 @@ pub fn handle_create(user: &str, args: Value) -> anyhow::Result<Value> {
 }
 
 /// List keys (without exposing tokens).
-pub fn handle_list(user: &str, _args: Value) -> anyhow::Result<Value> {
+pub fn handle_list(user: &str, realm: &str, _args: Value) -> anyhow::Result<Value> {
     let store = load_store()?;
-    let user_ura = crate::core::ura::user_ura(&realm(), user);
+    let user_ura = crate::core::ura::user_ura(realm, user);
     let mine: Vec<_> = store
         .keys
         .iter()
@@ -211,12 +206,12 @@ pub fn handle_list(user: &str, _args: Value) -> anyhow::Result<Value> {
 }
 
 /// Revoke a key by id_prefix.
-pub fn handle_revoke(user: &str, args: Value) -> anyhow::Result<Value> {
+pub fn handle_revoke(user: &str, realm: &str, args: Value) -> anyhow::Result<Value> {
     let id_prefix = args
         .get("id_prefix")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("missing id_prefix"))?;
-    let user_ura = crate::core::ura::user_ura(&realm(), user);
+    let user_ura = crate::core::ura::user_ura(realm, user);
 
     let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let mut store = load_store()?;
@@ -317,12 +312,14 @@ pub fn write_local_default_token(token: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn register(reg: &mut AxonAbilityCatalog, user: &str) {
+pub fn register(reg: &mut AxonAbilityCatalog, user: &str, realm: &str) {
     use crate::daemon::ability::dispatch::OwnerKind;
     let owner = OwnerKind::User(user.to_string());
     let user_owned = user.to_string();
+    let realm_owned = realm.to_string();
     let u1 = user_owned.clone();
-    let create_handler: LocalRpcHandler = Arc::new(move |args| handle_create(&u1, args));
+    let r1 = realm_owned.clone();
+    let create_handler: LocalRpcHandler = Arc::new(move |args| handle_create(&u1, &r1, args));
     reg.register_rpc_with_owner_and_action(
         format!("{user}.api_key.create"),
         owner.clone(),
@@ -331,7 +328,8 @@ pub fn register(reg: &mut AxonAbilityCatalog, user: &str) {
     );
 
     let u2 = user_owned.clone();
-    let list_handler: LocalRpcHandler = Arc::new(move |args| handle_list(&u2, args));
+    let r2 = realm_owned.clone();
+    let list_handler: LocalRpcHandler = Arc::new(move |args| handle_list(&u2, &r2, args));
     reg.register_rpc_with_owner_and_action(
         format!("{user}.api_key.list"),
         owner.clone(),
@@ -340,7 +338,8 @@ pub fn register(reg: &mut AxonAbilityCatalog, user: &str) {
     );
 
     let u3 = user_owned.clone();
-    let revoke_handler: LocalRpcHandler = Arc::new(move |args| handle_revoke(&u3, args));
+    let r3 = realm_owned;
+    let revoke_handler: LocalRpcHandler = Arc::new(move |args| handle_revoke(&u3, &r3, args));
     reg.register_rpc_with_owner_and_action(
         format!("{user}.api_key.revoke"),
         owner,
@@ -380,7 +379,8 @@ mod tests {
     fn missing_store_is_fresh_install_empty_state() {
         let _home = HomeGuard::new();
 
-        let listed = handle_list("alice", json!({})).expect("missing store lists as empty");
+        let listed =
+            handle_list("alice", "example", json!({})).expect("missing store lists as empty");
 
         assert_eq!(listed["keys"].as_array().expect("keys array").len(), 0);
     }
@@ -390,7 +390,8 @@ mod tests {
         let _home = HomeGuard::new();
         seed_malformed_store();
 
-        let error = handle_list("alice", json!({})).expect_err("malformed store must fail list");
+        let error =
+            handle_list("alice", "example", json!({})).expect_err("malformed store must fail list");
 
         assert_store_parse_failure(error);
     }
@@ -400,12 +401,32 @@ mod tests {
         let _home = HomeGuard::new();
         seed_malformed_store();
 
-        let error = handle_create("alice", json!({"label": "new"}))
+        let error = handle_create("alice", "example", json!({"label": "new"}))
             .expect_err("malformed store must fail create");
 
         assert_store_parse_failure(error);
         let body = std::fs::read_to_string(store_path()).expect("malformed store still present");
         assert_eq!(body, "keys = [");
+    }
+
+    #[test]
+    fn create_stamps_registered_realm_without_product_default_lookup() {
+        let _home = HomeGuard::new();
+
+        let created = handle_create("alice", "custom-realm", json!({"label": "new"}))
+            .expect("create API key");
+
+        assert_eq!(
+            created["user_ura"].as_str(),
+            Some("easynet:///r/custom-realm/user/alice")
+        );
+        assert!(
+            created["key_ura"]
+                .as_str()
+                .expect("key ura")
+                .starts_with("easynet:///r/custom-realm/resource/api_key."),
+            "key URA should use registered realm: {created}"
+        );
     }
 
     #[test]
