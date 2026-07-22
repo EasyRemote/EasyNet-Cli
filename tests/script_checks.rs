@@ -353,6 +353,13 @@ fn reset_credential_state_boundary_script_holds() {
 }
 
 #[test]
+fn start_ready_signer_proof_boundary_script_holds() {
+    // Pins fresh device start to the same paired-user signer proof required
+    // when attaching to an existing daemon.
+    run_bash_script("tests/scripts/test_check_start_ready_signer_proof_boundary.sh");
+}
+
+#[test]
 fn runtime_abilities_manifest_boundary_script_holds() {
     // Pins per-agent ability discovery to authored manifests under
     // AgentDirectory. Missing roots must not synthesize chat abilities.

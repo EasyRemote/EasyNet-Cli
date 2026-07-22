@@ -51,6 +51,18 @@ const SOCKET_WAIT_BUDGET: Duration = Duration::from_secs(30);
 #[derive(Debug, Clone, Default)]
 pub struct BootProgressOutcome {
     pub pages_port: Option<u16>,
+    pub ready_capability_flags: Vec<String>,
+}
+
+impl BootProgressOutcome {
+    pub fn has_ready_capability_flag(&self, flag: &str) -> bool {
+        let flag = flag.trim();
+        !flag.is_empty()
+            && self
+                .ready_capability_flags
+                .iter()
+                .any(|candidate| candidate == flag)
+    }
 }
 
 /// Wait until the daemon's control socket accepts, then subscribe
@@ -236,6 +248,10 @@ fn apply_event(
             renderer.stage_ok(&line);
         }
         BootEvent::Ready => {
+            let disc = discovery::read(&discovery::default_path())
+                .context("read daemon ready discovery after Ready")?
+                .ok_or_else(|| anyhow::anyhow!("daemon Ready without control discovery"))?;
+            outcome.ready_capability_flags = disc.capability_flags.clone();
             renderer.stage_ok("daemon ready");
             return Ok(true);
         }
