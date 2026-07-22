@@ -32,9 +32,9 @@ const (
 	defaultDirectRuntimeTransportName = "direct-axon-grpc-uds"
 )
 
-// DirectRuntimeConnector opens a concrete Runtime Core transport over an Axon
+// directRuntimeConnector opens a concrete Runtime Core transport over an Axon
 // Invocation gRPC endpoint.
-type DirectRuntimeConnector struct {
+type directRuntimeConnector struct {
 	controlPath string
 	reader      ControlDiscoveryReader
 
@@ -52,19 +52,19 @@ type directRuntimeConnectorOptions struct {
 	closeHandleTransport bool
 }
 
-func newDirectRuntimeConnector(controlPath string, reader ControlDiscoveryReader) *DirectRuntimeConnector {
+func newDirectRuntimeConnector(controlPath string, reader ControlDiscoveryReader) *directRuntimeConnector {
 	return newDirectRuntimeConnectorWithOptions(directRuntimeConnectorOptions{
 		controlPath: controlPath,
 		reader:      reader,
 	})
 }
 
-func newDirectRuntimeConnectorWithOptions(options directRuntimeConnectorOptions) *DirectRuntimeConnector {
+func newDirectRuntimeConnectorWithOptions(options directRuntimeConnectorOptions) *directRuntimeConnector {
 	reader := options.reader
 	if reader == nil {
 		reader = fileControlDiscoveryReader{}
 	}
-	return &DirectRuntimeConnector{
+	return &directRuntimeConnector{
 		controlPath:          options.controlPath,
 		reader:               reader,
 		handle:               options.handleTransport,
@@ -73,7 +73,7 @@ func newDirectRuntimeConnectorWithOptions(options directRuntimeConnectorOptions)
 	}
 }
 
-func (c *DirectRuntimeConnector) Resolve(ctx context.Context, optionsJSON []byte) ([]byte, error) {
+func (c *directRuntimeConnector) Resolve(ctx context.Context, optionsJSON []byte) ([]byte, error) {
 	if err := c.requireOpen(ctx); err != nil {
 		return nil, err
 	}
@@ -110,7 +110,7 @@ func (c *DirectRuntimeConnector) Resolve(ctx context.Context, optionsJSON []byte
 	}, options)
 }
 
-func (c *DirectRuntimeConnector) Handshake(ctx context.Context, endpointJSON []byte) (RuntimeTransport, []byte, error) {
+func (c *directRuntimeConnector) Handshake(ctx context.Context, endpointJSON []byte) (RuntimeTransport, []byte, error) {
 	if err := c.requireOpen(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -153,7 +153,7 @@ func (c *DirectRuntimeConnector) Handshake(ctx context.Context, endpointJSON []b
 	return transport, raw, nil
 }
 
-func (c *DirectRuntimeConnector) Close(ctx context.Context) error {
+func (c *directRuntimeConnector) Close(ctx context.Context) error {
 	if c == nil {
 		return invalidRuntimeClient("runtime connector is not initialized")
 	}
@@ -189,7 +189,7 @@ func (c *DirectRuntimeConnector) Close(ctx context.Context) error {
 	return closeErr
 }
 
-func (c *DirectRuntimeConnector) requireOpen(ctx context.Context) error {
+func (c *directRuntimeConnector) requireOpen(ctx context.Context) error {
 	if c == nil || c.reader == nil {
 		return invalidRuntimeClient("runtime connector is not initialized")
 	}
@@ -204,7 +204,7 @@ func (c *DirectRuntimeConnector) requireOpen(ctx context.Context) error {
 	return nil
 }
 
-func (c *DirectRuntimeConnector) handleTransport(ctx context.Context) RuntimeTransport {
+func (c *directRuntimeConnector) handleTransport(ctx context.Context) RuntimeTransport {
 	if c == nil || ctx == nil {
 		return nil
 	}
