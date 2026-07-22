@@ -83,9 +83,9 @@ use crate::daemon::invocation::dispatch::forwarded_finalization::{
     ForwardedFinalizedInvocation, ForwardedInvocationBinding,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
-    descriptor_ref_from_invocation_target, encode_json_payload,
+    callee_ura_from_envelope, descriptor_ref_from_invocation_target, encode_json_payload,
     function_name_from_invocation_target, parse_json_args, status_from_axon_invoke_error,
-    target_ura_from_envelope, FEDERATION_RESULT_CONTENT_TYPE,
+    FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::daemon::invocation::dispatch::remote_failure::{
     is_admission_denial_message, status_from_remote_failure,
@@ -1915,7 +1915,7 @@ impl UnaryDispatcher {
 }
 
 fn local_invoke_target_ura(request: &InvokeRequest) -> Result<String, Status> {
-    target_ura_from_envelope(request.envelope.as_ref(), "Invoke")
+    callee_ura_from_envelope(request.envelope.as_ref(), "Invoke")
 }
 
 pub(crate) fn require_complete_signed_remote_request(

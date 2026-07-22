@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::descriptor_binding::RuntimeBoundAbility;
-use super::invocation_wire::{target_ura_from_envelope, FEDERATION_RESULT_CONTENT_TYPE};
+use super::invocation_wire::{callee_ura_from_envelope, FEDERATION_RESULT_CONTENT_TYPE};
 #[cfg(test)]
 use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
@@ -257,7 +257,7 @@ impl LocalAxonSessionDispatcher {
                 "carrier-v1 dispatch: Axon LocalRuntime is not wired".to_string(),
             ));
         };
-        let target_ura = target_ura_from_envelope(Some(&envelope), "carrier-v1 DispatchCall")
+        let target_ura = callee_ura_from_envelope(Some(&envelope), "carrier-v1 DispatchCall")
             .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?;
         self.sync_external_signed_caller_key(&envelope).await?;
         let bound_ability = RuntimeBoundAbility::from_wire_target(
@@ -1052,7 +1052,7 @@ impl LocalAxonSessionDispatcher {
             )
             .await;
         };
-        let target_ura = match target_ura_from_envelope(Some(&envelope), "carrier-v1 BidiOpen") {
+        let target_ura = match callee_ura_from_envelope(Some(&envelope), "carrier-v1 BidiOpen") {
             Ok(target_ura) => target_ura,
             Err(status) => {
                 return Self::send_bidi_control_failure(

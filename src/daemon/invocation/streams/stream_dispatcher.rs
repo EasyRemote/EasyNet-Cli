@@ -54,7 +54,7 @@ use crate::daemon::invocation::dispatch::forwarded_finalization::{
     ensure_forwarded_receipt_signer_key, ForwardedFinalizationVerifier, ForwardedInvocationBinding,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
-    function_name_from_invocation_target, status_from_axon_invoke_error, target_ura_from_envelope,
+    callee_ura_from_envelope, function_name_from_invocation_target, status_from_axon_invoke_error,
     BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::daemon::invocation::dispatch::remote_failure::status_from_remote_failure;
@@ -1100,7 +1100,7 @@ fn daemon_route_initial_sequence(
 }
 
 fn local_stream_target_ura(request: &InvokeServerStreamRequest) -> Result<String, Status> {
-    target_ura_from_envelope(request.envelope.as_ref(), "InvokeStream")
+    callee_ura_from_envelope(request.envelope.as_ref(), "InvokeStream")
 }
 
 fn stream_request_as_invoke_request(

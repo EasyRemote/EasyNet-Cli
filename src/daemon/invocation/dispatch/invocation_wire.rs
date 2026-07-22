@@ -743,11 +743,12 @@ pub(crate) const FEDERATION_RESULT_CONTENT_TYPE: &str = "application/json";
 pub(crate) type BoxedDownStream<T> =
     std::pin::Pin<Box<dyn futures::Stream<Item = Result<T, tonic::Status>> + Send + 'static>>;
 
-/// Extract the namespace.resolve target URA from a request envelope:
-/// callee first, caller as fallback (genesis preludes carry caller
-/// only). Validates URA grammar before returning. Shared by the
-/// unary and server-stream local-dispatch paths.
-pub(crate) fn target_ura_from_envelope(
+/// Extract the namespace.resolve target URA from a request envelope.
+///
+/// Route selection is bound to the explicit callee tuple field. Caller identity
+/// is authority/proof input and must never be substituted as a route target.
+/// Shared by unary, server-stream, bidi, and carrier-v1 local dispatch paths.
+pub(crate) fn callee_ura_from_envelope(
     envelope: Option<&Envelope>,
     label: &str,
 ) -> Result<String, tonic::Status> {
@@ -758,20 +759,19 @@ pub(crate) fn target_ura_from_envelope(
             "{label} request missing envelope for namespace.resolve"
         ))
     })?;
-    let target_ura = envelope
+    let callee_ura = envelope
         .callee
         .as_ref()
-        .or(envelope.caller.as_ref())
         .map(|identity| identity.ura.trim())
         .filter(|ura| !ura.is_empty())
         .ok_or_else(|| {
             Status::invalid_argument(format!(
-                "{label} request envelope must carry callee or caller URA for namespace.resolve"
+                "{label} request envelope must carry callee URA for namespace.resolve"
             ))
         })?;
-    crate::core::ura::parse_ura(target_ura)
+    crate::core::ura::parse_ura(callee_ura)
         .map_err(|err| Status::invalid_argument(format!("{label} target URA is invalid: {err}")))?;
-    Ok(target_ura.to_string())
+    Ok(callee_ura.to_string())
 }
 
 /// Map an Axon `LocalRuntime` dispatch error onto the tonic `Status`
@@ -1026,6 +1026,46 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err}").contains("caller_ura is not a valid URA"));
+    }
+
+    #[test]
+    fn callee_ura_from_envelope_extracts_explicit_callee() {
+        let envelope = ProtoEnvelope::from_target(
+            "easynet:///r/acme/device/caller",
+            "easynet:///r/acme/device/callee",
+            "easynet:///r/acme/device/callee",
+            InvocationDerivationPolicy::FreshRoot,
+        )
+        .unwrap()
+        .into_inner("device.ping", b"{}")
+        .unwrap();
+
+        let callee = callee_ura_from_envelope(Some(&envelope), "Invoke").unwrap();
+        assert_eq!(callee, "easynet:///r/acme/device/callee");
+    }
+
+    #[test]
+    fn callee_ura_from_envelope_rejects_caller_only_tuple() {
+        let envelope = Envelope {
+            caller: Some(axon_sdk::pb::axon::v1::AgentIdentity {
+                ura: "easynet:///r/acme/device/caller".to_string(),
+                profile: DEFAULT_URA_PROFILE.to_string(),
+            }),
+            callee: None,
+            subject: Some(axon_sdk::pb::axon::v1::SubjectIdentity {
+                ura: "easynet:///r/acme/device/caller".to_string(),
+                profile: DEFAULT_URA_PROFILE.to_string(),
+            }),
+            ..Envelope::default()
+        };
+
+        let err = callee_ura_from_envelope(Some(&envelope), "Invoke").unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains("must carry callee URA"),
+            "unexpected error: {}",
+            err.message()
+        );
     }
 
     #[test]

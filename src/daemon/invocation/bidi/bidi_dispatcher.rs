@@ -73,7 +73,7 @@ use crate::daemon::invocation::dispatch::forwarded_finalization::{
     ensure_forwarded_receipt_signer_key, ForwardedFinalizationVerifier, ForwardedInvocationBinding,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
-    status_from_axon_invoke_error, target_ura_from_envelope, BoxedDownStream,
+    callee_ura_from_envelope, status_from_axon_invoke_error, BoxedDownStream,
 };
 use crate::daemon::invocation::dispatch::unary_dispatcher::UnaryDispatcher;
 use crate::daemon::invocation::routing::route_resolver::{
@@ -1112,7 +1112,7 @@ impl BidiDispatcher {
         &self,
         envelope_open: &EnvelopeOpen,
     ) -> Result<CanonicalRouteSelection, Status> {
-        let target_ura = target_ura_from_envelope(envelope_open.envelope.as_ref(), "InvokeBidi")?;
+        let target_ura = callee_ura_from_envelope(envelope_open.envelope.as_ref(), "InvokeBidi")?;
         let ability =
             crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
                 "InvokeBidi frame 0",

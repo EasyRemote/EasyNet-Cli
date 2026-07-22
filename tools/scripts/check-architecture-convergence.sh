@@ -10127,6 +10127,121 @@ if stream_dispatcher.exists():
                 detail,
             )
 
+invocation_wire = cli_root / "src/daemon/invocation/dispatch/invocation_wire.rs"
+invocation_wire_callers = [
+    cli_root / "src/daemon/invocation/dispatch/unary_dispatcher.rs",
+    cli_root / "src/daemon/invocation/streams/stream_dispatcher.rs",
+    cli_root / "src/daemon/invocation/bidi/bidi_dispatcher.rs",
+    cli_root / "src/daemon/invocation/dispatch/local_session_dispatcher.rs",
+]
+if invocation_wire.exists():
+    text = source(invocation_wire)
+    raw_text = invocation_wire.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
+        (
+            "fn target_ura_from_envelope",
+            "invocation wire must not retain caller-fallback target helper",
+        ),
+        (
+            "caller as fallback",
+            "invocation wire must not document caller as a target fallback",
+        ),
+        (
+            "callee or caller URA",
+            "invocation wire must not accept caller as a substitute route target",
+        ),
+        (
+            ".or(envelope.caller.as_ref())",
+            "invocation wire target extraction must not fall back to caller",
+        ),
+        (
+            "or(envelope.caller",
+            "invocation wire target extraction must not fall back to caller",
+        ),
+    ):
+        if token in text:
+            match = re.search(re.escape(token), text)
+            add(
+                "R91_INVOCATION_WIRE_CALLEE_TARGET",
+                invocation_wire,
+                line_number(text, match.start() if match else 0),
+                detail,
+            )
+    helper = rust_method_body(text, "callee_ura_from_envelope")
+    if helper is None:
+        add(
+            "R91_INVOCATION_WIRE_CALLEE_TARGET",
+            invocation_wire,
+            1,
+            "invocation wire must centralize callee-only target extraction",
+        )
+    else:
+        offset, body = helper
+        for present, detail in (
+            (
+                "callee" in body and ".as_ref()" in body,
+                "callee-only target extraction must read the callee tuple field",
+            ),
+            (
+                "must carry callee URA" in body,
+                "callee-only target extraction must reject missing callee explicitly",
+            ),
+            (
+                "crate::core::ura::parse_ura(callee_ura)" in body,
+                "callee-only target extraction must validate callee URA grammar",
+            ),
+        ):
+            if not present:
+                add(
+                    "R91_INVOCATION_WIRE_CALLEE_TARGET",
+                    invocation_wire,
+                    line_number(text, offset),
+                    detail,
+                )
+        if "envelope.caller" in body:
+            add(
+                "R91_INVOCATION_WIRE_CALLEE_TARGET",
+                invocation_wire,
+                line_number(text, offset),
+                "callee-only target extraction must not read caller",
+            )
+    for token, detail in (
+        (
+            "callee_ura_from_envelope_extracts_explicit_callee",
+            "missing callee target positive regression test",
+        ),
+        (
+            "callee_ura_from_envelope_rejects_caller_only_tuple",
+            "missing caller-only tuple rejection regression test",
+        ),
+    ):
+        if token not in raw_text:
+            add(
+                "R91_INVOCATION_WIRE_CALLEE_TARGET",
+                invocation_wire,
+                1,
+                detail,
+            )
+
+for caller in invocation_wire_callers:
+    if caller.exists():
+        text = source(caller)
+        if "target_ura_from_envelope" in text:
+            match = re.search(r"target_ura_from_envelope", text)
+            add(
+                "R91_INVOCATION_WIRE_CALLEE_TARGET",
+                caller,
+                line_number(text, match.start() if match else 0),
+                "dispatch callers must not use retired caller-fallback target helper",
+            )
+        if "callee_ura_from_envelope" not in text:
+            add(
+                "R91_INVOCATION_WIRE_CALLEE_TARGET",
+                caller,
+                1,
+                "dispatch callers must route through callee-only target extraction",
+            )
+
 
 if violations:
     for violation in sorted(violations):

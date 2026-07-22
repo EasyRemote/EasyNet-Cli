@@ -3968,6 +3968,71 @@ if "historic forms" in text:
 PY
 }
 
+check_invocation_wire_callee_target_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local invocation_wire="$cli_root/src/daemon/invocation/dispatch/invocation_wire.rs"
+  local unary_dispatcher="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  local stream_dispatcher="$cli_root/src/daemon/invocation/streams/stream_dispatcher.rs"
+  local bidi_dispatcher="$cli_root/src/daemon/invocation/bidi/bidi_dispatcher.rs"
+  local session_dispatcher="$cli_root/src/daemon/invocation/dispatch/local_session_dispatcher.rs"
+
+  for path in "$invocation_wire" "$unary_dispatcher" "$stream_dispatcher" "$bidi_dispatcher" "$session_dispatcher"; do
+    [[ -f "$path" ]] || fail "invocation callee target contract source is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$invocation_wire" "$unary_dispatcher" "$stream_dispatcher" "$bidi_dispatcher" "$session_dispatcher" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+invocation_wire = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+callers = [Path(path).read_text(encoding="utf-8", errors="replace") for path in sys.argv[2:]]
+
+for token, code in (
+    ("fn target_ura_from_envelope", "retired_target_helper_present"),
+    ("caller as fallback", "caller_fallback_wording_present"),
+    ("callee or caller URA", "caller_fallback_error_wording_present"),
+    (".or(envelope.caller.as_ref())", "caller_fallback_expression_present"),
+    ("or(envelope.caller", "caller_fallback_expression_present"),
+):
+    if token in invocation_wire:
+        raise SystemExit(f"invocation_wire_callee_target:{code}")
+
+if "pub(crate) fn callee_ura_from_envelope" not in invocation_wire:
+    raise SystemExit("invocation_wire_callee_target:callee_helper_missing")
+helper = re.search(
+    r"pub\(crate\) fn callee_ura_from_envelope\s*\([^)]*\)\s*->\s*Result<String, tonic::Status>\s*\{(?P<body>.*?)\n\}",
+    invocation_wire,
+    re.S,
+)
+if not helper:
+    raise SystemExit("invocation_wire_callee_target:callee_helper_signature_missing")
+body = helper.group("body")
+for present, code in (
+    ("callee" in body and ".as_ref()" in body, "callee_read_missing"),
+    ("must carry callee URA" in body, "callee_required_error_missing"),
+    ("crate::core::ura::parse_ura(callee_ura)" in body, "callee_ura_validation_missing"),
+):
+    if not present:
+        raise SystemExit(f"invocation_wire_callee_target:{code}")
+if "envelope.caller" in body:
+    raise SystemExit("invocation_wire_callee_target:callee_helper_reads_caller")
+
+for token, code in (
+    ("callee_ura_from_envelope_extracts_explicit_callee", "callee_positive_test_missing"),
+    ("callee_ura_from_envelope_rejects_caller_only_tuple", "caller_only_rejection_test_missing"),
+):
+    if token not in invocation_wire:
+        raise SystemExit(f"invocation_wire_callee_target:{code}")
+
+for index, text in enumerate(callers, start=1):
+    if "target_ura_from_envelope" in text:
+        raise SystemExit(f"invocation_wire_callee_target:caller_{index}_uses_retired_helper")
+    if "callee_ura_from_envelope" not in text:
+        raise SystemExit(f"invocation_wire_callee_target:caller_{index}_not_migrated")
+PY
+}
+
 check_sdk_principal_projection_fail_closed_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local go_principal="$cli_root/sdk/go/principal.go"
@@ -7545,6 +7610,7 @@ EOF
   check_plugin_sidecar_helper_matrix_contract
   check_retired_browser_mock_surface_contract
   check_runtime_wire_target_state_contract
+  check_invocation_wire_callee_target_contract
   check_sdk_directory_projection_fail_closed_contract
   check_sdk_principal_projection_fail_closed_contract
   check_runtime_owner_signer_custody_contract
@@ -7636,6 +7702,7 @@ check_federation_directory_device_projection_contract
 check_plugin_sidecar_helper_matrix_contract
 check_retired_browser_mock_surface_contract
 check_runtime_wire_target_state_contract
+check_invocation_wire_callee_target_contract
 check_sdk_directory_projection_fail_closed_contract
 check_sdk_principal_projection_fail_closed_contract
 check_runtime_owner_signer_custody_contract
