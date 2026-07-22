@@ -185,6 +185,39 @@ check_sdk_product_neutrality_contract() {
   bash "$ROOT/tools/scripts/check-sdk-product-neutrality.sh" >/dev/null
 }
 
+check_sdk_root_runtime_description_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+
+  "$PYTHON_BIN" - "$cli_root" <<'PY'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+files = [
+    root / "sdk/go/doc.go",
+    root / "sdk/go/README.md",
+    root / "sdk/python/easynet_sdk/__init__.py",
+    root / "sdk/python/README.md",
+]
+forbidden = (
+    "canonical EasyNet runtime SDK",
+    "Product-neutral EasyNet runtime SDK",
+    "product-neutral EasyNet runtime SDK",
+    "EasyNet runtime SDK",
+)
+
+for path in files:
+    if not path.exists():
+        continue
+    text = path.read_text(encoding="utf-8")
+    for token in forbidden:
+        if token in text:
+            raise SystemExit(
+                f"sdk_root_runtime_description_product_named:{path.relative_to(root)}:{token}"
+            )
+PY
+}
+
 check_go_sdk_public_ura_alias_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_sdk="$cli_root/sdk/go"
@@ -6132,7 +6165,17 @@ EOF
   if ( check_sdk_runtime_failure_code_contract "$tmp/sdk-runtime-failure-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected SDK runtime failure code fallback gate to fail"
   fi
+  mkdir -p "$tmp/sdk-root-product-named/sdk/go" \
+    "$tmp/sdk-root-product-named/sdk/python/easynet_sdk"
+  printf '// Package easynet provides the Go binding for the canonical EasyNet runtime SDK.\npackage easynet\n' \
+    > "$tmp/sdk-root-product-named/sdk/go/doc.go"
+  printf '"""Product-neutral EasyNet runtime SDK."""\n' \
+    > "$tmp/sdk-root-product-named/sdk/python/easynet_sdk/__init__.py"
+  if ( check_sdk_root_runtime_description_contract "$tmp/sdk-root-product-named" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK root product-named runtime description gate to fail"
+  fi
   check_active_source_contract
+  check_sdk_root_runtime_description_contract
   check_go_sdk_public_ura_alias_contract
   check_advertise_agent_ingress_contract
   check_agent_start_model_intent_contract
@@ -6208,6 +6251,7 @@ fi
 check_lifecycle_evidence_freshness_contract
 check_manifest_contract
 check_active_source_contract
+check_sdk_root_runtime_description_contract
 check_go_sdk_public_ura_alias_contract
 check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract

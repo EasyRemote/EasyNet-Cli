@@ -1,4 +1,4 @@
-"""Product-neutral EasyNet runtime SDK."""
+"""Product-neutral canonical runtime SDK."""
 
 from .ability_descriptor import (
     AbilityDescriptorClient,

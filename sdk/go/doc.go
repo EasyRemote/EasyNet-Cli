@@ -1,4 +1,4 @@
-// Package easynet provides the Go binding for the canonical EasyNet runtime SDK.
+// Package easynet provides the Go binding for the canonical runtime SDK.
 //
 // The package is product-neutral. EasyNet backend, EasyRemote and future
 // products own their workflows, DTOs, account policy, HTTP routes and UI

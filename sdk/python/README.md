@@ -1,8 +1,8 @@
 # Python Runtime SDK
 
 The Python package is the Python binding of the canonical, product-neutral
-EasyNet runtime SDK. It is not an EasyRemote SDK and it is not a product
-profile bundle.
+runtime SDK. It is not an EasyRemote SDK and it is not a product profile
+bundle.
 
 Products such as EasyNet Backend, EasyRemote and future applications own their
 workflow names, request/result DTOs, account policy, HTTP routes, UI
