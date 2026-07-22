@@ -300,6 +300,15 @@ for token, detail in (
         violations.append(f"{target}: missing {detail}: {token}")
 
 for token in (
+    "pub fn with_subject(",
+    "pub fn with_causal_context(",
+):
+    if token in production_source(target_text):
+        violations.append(
+            f"{target}: retired post-resolution tuple mutation API remains exposed: {token}"
+        )
+
+for token in (
     "PublicRootDerived",
     "public_root_derived",
 ):

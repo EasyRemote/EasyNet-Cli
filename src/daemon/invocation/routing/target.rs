@@ -449,20 +449,6 @@ impl InvocationTarget {
         }
     }
 
-    /// Builder: attach a subject to the resolved target. Used by
-    /// callers that have envelope context (the IPC translator, or a
-    /// future planner).
-    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
-        self.subject = InvocationSubject::explicit(subject);
-        self
-    }
-
-    /// Builder: attach a causal context to the resolved target.
-    pub fn with_causal_context(mut self, causal_context: CausalContext) -> Self {
-        self.causal_context = InvocationCausalContext::explicit(causal_context);
-        self
-    }
-
     pub fn with_request_metadata(mut self, request_metadata: HashMap<String, String>) -> Self {
         self.request_metadata = request_metadata;
         self
@@ -734,28 +720,6 @@ mod tests {
             err.to_string()
                 .contains("public invocation ingress subject"),
             "{err}"
-        );
-    }
-
-    #[test]
-    fn target_with_subject_builder_attaches_ura() {
-        // The builder is the dispatcher-side path: a caller that
-        // already has a resolved target can attach a subject after
-        // the fact (used by the IPC layer translator that resolves
-        // first, then rebuilds with envelope context).
-        let t = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: "camera.snapshot".into(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: InvocationSubject::daemon_system_derived(),
-            causal_context: InvocationCausalContext::daemon_system_root(),
-            request_metadata: HashMap::new(),
-        };
-        let with = t.with_subject("easynet:///r/acme/resource/01CAM");
-        assert_eq!(
-            with.subject.as_deref(),
-            Some("easynet:///r/acme/resource/01CAM")
         );
     }
 

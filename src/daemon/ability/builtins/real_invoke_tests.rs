@@ -339,12 +339,29 @@ fn dispatcher_for(reg: Arc<AxonAbilityCatalog>) -> Arc<AxonAbilityCatalog> {
 
 fn target(name: &str, args: Value) -> InvocationTarget {
     // Test helper: default smoke calls use the named daemon-system policy.
-    // Per-test code can still attach explicit subjects with `with_subject`.
     crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
         name,
         args,
         CallMode::Rpc,
     )
+}
+
+fn target_for_subject(name: &str, args: Value, subject: impl Into<String>) -> InvocationTarget {
+    crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+        name,
+        args,
+        CallMode::Rpc,
+        subject,
+    )
+}
+
+fn explicit_target(
+    name: &str,
+    args: Value,
+    subject: impl Into<String>,
+    causal_context: axon_sdk::invocation::CausalContext,
+) -> InvocationTarget {
+    InvocationTarget::local_explicit_tuple(name, args, CallMode::Rpc, subject, causal_context)
 }
 
 fn terminal_followup_target(
@@ -3128,8 +3145,11 @@ fn real_mic_subscribe_routes_to_subject_gate() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
-    let mut t = target("mic.subscribe", json!({}))
-        .with_subject("easynet:///r/acme/resource/missing-real-invoke-mic");
+    let mut t = target_for_subject(
+        "mic.subscribe",
+        json!({}),
+        "easynet:///r/acme/resource/missing-real-invoke-mic",
+    );
     t.call_mode = CallMode::Stream;
     let err = d
         .execute_stream(t)
@@ -3289,18 +3309,16 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let session_id = unique_call_id("remote-desktop");
 
     let created = d
-        .execute_rpc(
-            target(
-                "remote_desktop.create_session",
-                json!({
-                    "session_id": session_id,
-                    "mode": "view_only",
-                    "lease_ttl_ms": 5000,
-                }),
-            )
-            .with_subject(subject.clone())
-            .with_causal_context(remote_desktop_test_consent_causal_context()),
-        )
+        .execute_rpc(explicit_target(
+            "remote_desktop.create_session",
+            json!({
+                "session_id": session_id,
+                "mode": "view_only",
+                "lease_ttl_ms": 5000,
+            }),
+            subject.clone(),
+            remote_desktop_test_consent_causal_context(),
+        ))
         .expect("remote_desktop.create_session must create a session");
     assert_eq!(created["session_id"], session_id);
     let token = created["session_token"]
@@ -3309,14 +3327,12 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
         .to_string();
 
     let shown = d
-        .execute_rpc(
-            target(
-                "remote_desktop.show_session",
-                json!({"session_id": session_id, "session_token": token}),
-            )
-            .with_subject(subject.clone())
-            .with_causal_context(remote_desktop_test_consent_causal_context()),
-        )
+        .execute_rpc(explicit_target(
+            "remote_desktop.show_session",
+            json!({"session_id": session_id, "session_token": token}),
+            subject.clone(),
+            remote_desktop_test_consent_causal_context(),
+        ))
         .expect("remote_desktop.show_session must dispatch");
     assert_eq!(shown["session_id"], session_id);
     assert!(
@@ -3326,46 +3342,42 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let token = created["session_token"].as_str().unwrap().to_string();
 
     let signaled = d
-        .execute_rpc(
-            target(
-                "remote_desktop.set_description",
-                json!({
-                    "session_id": session_id,
-                    "session_token": token,
-                    "side": "local",
-                    "description": {"type": "answer", "sdp": "v=0"}
-                }),
-            )
-            .with_subject(subject.clone())
-            .with_causal_context(remote_desktop_test_consent_causal_context()),
-        )
+        .execute_rpc(explicit_target(
+            "remote_desktop.set_description",
+            json!({
+                "session_id": session_id,
+                "session_token": token,
+                "side": "local",
+                "description": {"type": "answer", "sdp": "v=0"}
+            }),
+            subject.clone(),
+            remote_desktop_test_consent_causal_context(),
+        ))
         .expect("remote_desktop.set_description must dispatch");
     assert_eq!(signaled["state"], "negotiating");
     let token = created["session_token"].as_str().unwrap().to_string();
 
     let candidate_view = d
-        .execute_rpc(
-            target(
-                "remote_desktop.add_ice_candidate",
-                json!({
-                    "session_id": session_id,
-                    "session_token": token,
-                    "candidate": {"candidate": "candidate:1"}
-                }),
-            )
-            .with_subject(subject.clone())
-            .with_causal_context(remote_desktop_test_consent_causal_context()),
-        )
+        .execute_rpc(explicit_target(
+            "remote_desktop.add_ice_candidate",
+            json!({
+                "session_id": session_id,
+                "session_token": token,
+                "candidate": {"candidate": "candidate:1"}
+            }),
+            subject.clone(),
+            remote_desktop_test_consent_causal_context(),
+        ))
         .expect("remote_desktop.add_ice_candidate must dispatch");
     assert_eq!(candidate_view["signaling"]["ice_candidate_count"], 1);
     let token = created["session_token"].as_str().unwrap().to_string();
 
-    let mut watch = target(
+    let mut watch = explicit_target(
         "remote_desktop.watch_events",
         json!({"session_id": session_id, "session_token": token}),
-    )
-    .with_subject(subject.clone())
-    .with_causal_context(remote_desktop_test_consent_causal_context());
+        subject.clone(),
+        remote_desktop_test_consent_causal_context(),
+    );
     watch.call_mode = CallMode::Stream;
     let events = d
         .execute_stream(watch)
@@ -3380,31 +3392,27 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let token = created["session_token"].as_str().unwrap().to_string();
 
     let refreshed = d
-        .execute_rpc(
-            target(
-                "remote_desktop.refresh_lease",
-                json!({
-                    "session_id": session_id,
-                    "session_token": token,
-                    "lease_ttl_ms": 5000
-                }),
-            )
-            .with_subject(subject.clone())
-            .with_causal_context(remote_desktop_test_consent_causal_context()),
-        )
+        .execute_rpc(explicit_target(
+            "remote_desktop.refresh_lease",
+            json!({
+                "session_id": session_id,
+                "session_token": token,
+                "lease_ttl_ms": 5000
+            }),
+            subject.clone(),
+            remote_desktop_test_consent_causal_context(),
+        ))
         .expect("remote_desktop.refresh_lease must dispatch");
     assert_eq!(refreshed["session_id"], session_id);
     let token = created["session_token"].as_str().unwrap().to_string();
 
     let ended = d
-        .execute_rpc(
-            target(
-                "remote_desktop.end_session",
-                json!({"session_id": session_id, "session_token": token}),
-            )
-            .with_subject(subject)
-            .with_causal_context(remote_desktop_test_consent_causal_context()),
-        )
+        .execute_rpc(explicit_target(
+            "remote_desktop.end_session",
+            json!({"session_id": session_id, "session_token": token}),
+            subject,
+            remote_desktop_test_consent_causal_context(),
+        ))
         .expect("remote_desktop.end_session must dispatch");
     assert_eq!(ended["state"], "closed");
 }

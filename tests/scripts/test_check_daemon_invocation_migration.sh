@@ -296,6 +296,33 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "production InvocationTarget tuple patching should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+python3 - "$SB/src/daemon/invocation/routing/target.rs" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+needle = "    pub fn with_request_metadata("
+insertion = '''
+    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = InvocationSubject::explicit(subject);
+        self
+    }
+
+    pub fn with_causal_context(mut self, causal_context: CausalContext) -> Self {
+        self.causal_context = InvocationCausalContext::explicit(causal_context);
+        self
+    }
+
+'''
+path.write_text(text.replace(needle, insertion + needle, 1), encoding="utf-8")
+PY
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "InvocationTarget retired tuple mutation API should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 cat >"$SB/src/__target_constructor_probe.rs" <<'RS'
 pub fn probe() {
     let _ = crate::daemon::invocation::routing::target::InvocationTarget::local_daemon_system(
