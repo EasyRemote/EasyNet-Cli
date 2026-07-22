@@ -8,6 +8,7 @@ directory.
 from __future__ import annotations
 
 import base64
+import binascii
 from dataclasses import dataclass
 from enum import Enum
 from typing import Mapping, Protocol, Sequence
@@ -528,25 +529,47 @@ def _snapshot_from_mapping(raw: Mapping[str, object]) -> PrincipalSnapshot:
     principal_ura = _required_text(raw.get("principal_ura"), "principal_ura")
     return PrincipalSnapshot(
         principal_ura=principal_ura,
-        state=PrincipalState(_text(raw.get("state")) or PrincipalState.PENDING.value),
-        version=_int(raw.get("version")),
-        bindings=tuple(_binding_from_mapping(_mapping(item, "binding")) for item in _sequence(raw.get("bindings"))),
-        grants=tuple(_grant_from_mapping(_mapping(item, "grant")) for item in _sequence(raw.get("grants"))),
-        created_unix_ms=_int(raw.get("created_unix_ms")),
-        updated_unix_ms=_int(raw.get("updated_unix_ms")),
+        state=_required_principal_state(raw.get("state"), "principal.state"),
+        version=_required_int(raw.get("version"), "principal.version"),
+        bindings=tuple(
+            _binding_from_mapping(_mapping(item, f"principal.bindings[{index}]"))
+            for index, item in enumerate(
+                _optional_sequence(raw.get("bindings"), "principal.bindings")
+            )
+        ),
+        grants=tuple(
+            _grant_from_mapping(_mapping(item, f"principal.grants[{index}]"))
+            for index, item in enumerate(
+                _optional_sequence(raw.get("grants"), "principal.grants")
+            )
+        ),
+        created_unix_ms=_required_int(
+            raw.get("created_unix_ms"), "principal.created_unix_ms"
+        ),
+        updated_unix_ms=_required_int(
+            raw.get("updated_unix_ms"), "principal.updated_unix_ms"
+        ),
         enrollment_proof=(
-            _proof_from_mapping(_mapping(raw.get("enrollment_proof"), "enrollment_proof"))
-            if isinstance(raw.get("enrollment_proof"), Mapping)
+            _proof_from_mapping(
+                _optional_mapping(
+                    raw.get("enrollment_proof"), "principal.enrollment_proof"
+                )
+            )
+            if raw.get("enrollment_proof") is not None
             else None
         ),
         recovery=(
-            _recovery_from_mapping(_mapping(raw.get("recovery"), "recovery"))
-            if isinstance(raw.get("recovery"), Mapping)
+            _recovery_from_mapping(
+                _optional_mapping(raw.get("recovery"), "principal.recovery")
+            )
+            if raw.get("recovery") is not None
             else None
         ),
         enrollments=tuple(
-            _enrollment_from_mapping(_mapping(item, "enrollment"))
-            for item in _sequence(raw.get("enrollments"))
+            _enrollment_from_mapping(_mapping(item, f"principal.enrollments[{index}]"))
+            for index, item in enumerate(
+                _optional_sequence(raw.get("enrollments"), "principal.enrollments")
+            )
         ),
     )
 
@@ -569,56 +592,73 @@ def _reject_private_projection_fields(value: object, path: str) -> None:
 
 def _proof_from_mapping(raw: Mapping[str, object]) -> PrincipalProofRef:
     return PrincipalProofRef(
-        kind=PrincipalProofKind(_required_text(raw.get("kind"), "proof.kind")),
+        kind=_required_principal_proof_kind(raw.get("kind"), "proof.kind"),
         reference=_required_text(raw.get("reference"), "proof.reference"),
     )
 
 
 def _binding_from_mapping(raw: Mapping[str, object]) -> PublicKeyBinding:
     return PublicKeyBinding(
-        binding_id=_text(raw.get("binding_id")),
-        principal_ura=_text(raw.get("principal_ura")),
-        key_id=_text(raw.get("key_id")),
-        public_key=base64.b64decode(_text(raw.get("public_key_b64")) or b""),
-        state=PublicKeyBindingState(_text(raw.get("state")) or PublicKeyBindingState.ACTIVE.value),
-        created_unix_ms=_int(raw.get("created_unix_ms")),
-        expires_unix_ms=_optional_int(raw.get("expires_unix_ms")),
-        rotated_unix_ms=_optional_int(raw.get("rotated_unix_ms")),
-        revoked_unix_ms=_optional_int(raw.get("revoked_unix_ms")),
-        rotated_to=_text(raw.get("rotated_to")),
+        binding_id=_required_text(raw.get("binding_id"), "binding.binding_id"),
+        principal_ura=_required_text(raw.get("principal_ura"), "binding.principal_ura"),
+        key_id=_required_text(raw.get("key_id"), "binding.key_id"),
+        public_key=_required_public_key(
+            raw.get("public_key_b64"), "binding.public_key_b64"
+        ),
+        state=_required_public_key_binding_state(raw.get("state"), "binding.state"),
+        created_unix_ms=_required_int(raw.get("created_unix_ms"), "binding.created_unix_ms"),
+        expires_unix_ms=_optional_int(raw.get("expires_unix_ms"), "binding.expires_unix_ms"),
+        rotated_unix_ms=_optional_int(raw.get("rotated_unix_ms"), "binding.rotated_unix_ms"),
+        revoked_unix_ms=_optional_int(raw.get("revoked_unix_ms"), "binding.revoked_unix_ms"),
+        rotated_to=_optional_text(raw.get("rotated_to"), "binding.rotated_to"),
     )
 
 
 def _recovery_from_mapping(raw: Mapping[str, object]) -> RecoveryPolicy:
     return RecoveryPolicy(
-        policy_ref=_text(raw.get("policy_ref")),
-        enabled=bool(raw.get("enabled")),
-        updated_unix_ms=_int(raw.get("updated_unix_ms")),
+        policy_ref=_required_text(raw.get("policy_ref"), "recovery.policy_ref"),
+        enabled=_required_bool(raw.get("enabled"), "recovery.enabled"),
+        updated_unix_ms=_required_int(
+            raw.get("updated_unix_ms"), "recovery.updated_unix_ms"
+        ),
     )
 
 
 def _grant_from_mapping(raw: Mapping[str, object]) -> AuthorizationGrant:
     return AuthorizationGrant(
-        grant_id=_text(raw.get("grant_id")),
-        principal_ura=_text(raw.get("principal_ura")),
-        issuer_ura=_text(raw.get("issuer_ura")),
-        actions=tuple(item for item in _sequence(raw.get("actions")) if isinstance(item, str)),
-        created_unix_ms=_int(raw.get("created_unix_ms")),
-        expires_unix_ms=_optional_int(raw.get("expires_unix_ms")),
-        revoked_unix_ms=_optional_int(raw.get("revoked_unix_ms")),
+        grant_id=_required_text(raw.get("grant_id"), "grant.grant_id"),
+        principal_ura=_required_text(raw.get("principal_ura"), "grant.principal_ura"),
+        issuer_ura=_required_text(raw.get("issuer_ura"), "grant.issuer_ura"),
+        actions=_required_text_sequence(raw.get("actions"), "grant.actions"),
+        created_unix_ms=_required_int(raw.get("created_unix_ms"), "grant.created_unix_ms"),
+        expires_unix_ms=_optional_int(raw.get("expires_unix_ms"), "grant.expires_unix_ms"),
+        revoked_unix_ms=_optional_int(raw.get("revoked_unix_ms"), "grant.revoked_unix_ms"),
     )
 
 
 def _enrollment_from_mapping(raw: Mapping[str, object]) -> EnrollmentCapability:
     return EnrollmentCapability(
-        enrollment_id=_text(raw.get("enrollment_id")),
-        issuer_ura=_text(raw.get("issuer_ura")),
-        subject_principal_ura=_text(raw.get("subject_principal_ura")),
-        created_unix_ms=_int(raw.get("created_unix_ms")),
-        expires_unix_ms=_optional_int(raw.get("expires_unix_ms")),
-        revoked_unix_ms=_optional_int(raw.get("revoked_unix_ms")),
-        consumed_by_principal_ura=_text(raw.get("consumed_by_principal_ura")),
-        consumed_unix_ms=_optional_int(raw.get("consumed_unix_ms")),
+        enrollment_id=_required_text(raw.get("enrollment_id"), "enrollment.enrollment_id"),
+        issuer_ura=_required_text(raw.get("issuer_ura"), "enrollment.issuer_ura"),
+        subject_principal_ura=_required_text(
+            raw.get("subject_principal_ura"), "enrollment.subject_principal_ura"
+        ),
+        created_unix_ms=_required_int(
+            raw.get("created_unix_ms"), "enrollment.created_unix_ms"
+        ),
+        expires_unix_ms=_optional_int(
+            raw.get("expires_unix_ms"), "enrollment.expires_unix_ms"
+        ),
+        revoked_unix_ms=_optional_int(
+            raw.get("revoked_unix_ms"), "enrollment.revoked_unix_ms"
+        ),
+        consumed_by_principal_ura=_optional_text(
+            raw.get("consumed_by_principal_ura"),
+            "enrollment.consumed_by_principal_ura",
+        ),
+        consumed_unix_ms=_optional_int(
+            raw.get("consumed_unix_ms"), "enrollment.consumed_unix_ms"
+        ),
     )
 
 
@@ -628,10 +668,28 @@ def _mapping(value: object, field: str) -> Mapping[str, object]:
     raise _invalid(f"{field} projection is required")
 
 
-def _sequence(value: object) -> tuple[object, ...]:
+def _optional_mapping(value: object, field: str) -> Mapping[str, object]:
+    if isinstance(value, Mapping):
+        return value
+    raise _invalid(f"{field} projection must be an object when present")
+
+
+def _optional_sequence(value: object, field: str) -> tuple[object, ...]:
+    if value is None:
+        return ()
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return tuple(value)
-    return ()
+    raise _invalid(f"{field} projection must be an array when present")
+
+
+def _required_text_sequence(value: object, field: str) -> tuple[str, ...]:
+    if value is None:
+        raise _invalid(f"{field} is required")
+    values = _optional_sequence(value, field)
+    out: list[str] = []
+    for index, item in enumerate(values):
+        out.append(_required_text(item, f"{field}[{index}]"))
+    return tuple(out)
 
 
 def _required_text(value: object, field: str) -> str:
@@ -640,16 +698,72 @@ def _required_text(value: object, field: str) -> str:
     return value.strip()
 
 
-def _text(value: object) -> str:
-    return value if isinstance(value, str) else ""
+def _required_principal_state(value: object, field: str) -> PrincipalState:
+    text = _required_text(value, field)
+    try:
+        return PrincipalState(text)
+    except ValueError as error:
+        raise _invalid(f"{field} is not a canonical Principal state", error) from error
 
 
-def _int(value: object) -> int:
-    return int(value) if isinstance(value, (int, float)) else 0
+def _required_public_key_binding_state(
+    value: object, field: str
+) -> PublicKeyBindingState:
+    text = _required_text(value, field)
+    try:
+        return PublicKeyBindingState(text)
+    except ValueError as error:
+        raise _invalid(
+            f"{field} is not a canonical public-key binding state", error
+        ) from error
 
 
-def _optional_int(value: object) -> int | None:
-    return _int(value) if isinstance(value, (int, float)) else None
+def _required_principal_proof_kind(value: object, field: str) -> PrincipalProofKind:
+    text = _required_text(value, field)
+    try:
+        return PrincipalProofKind(text)
+    except ValueError as error:
+        raise _invalid(f"{field} is not a canonical Principal proof kind", error) from error
+
+
+def _optional_text(value: object, field: str) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise _invalid(f"{field} must be a string when present")
+    return value.strip()
+
+
+def _required_int(value: object, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _invalid(f"{field} must be an integer")
+    parsed = int(value)
+    if value != parsed:
+        raise _invalid(f"{field} must be an integer")
+    return parsed
+
+
+def _optional_int(value: object, field: str) -> int | None:
+    if value is None:
+        return None
+    return _required_int(value, field)
+
+
+def _required_bool(value: object, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise _invalid(f"{field} must be a boolean")
+    return value
+
+
+def _required_public_key(value: object, field: str) -> bytes:
+    encoded = _required_text(value, field)
+    try:
+        decoded = base64.b64decode(encoded, validate=True)
+    except binascii.Error as error:
+        raise _invalid(f"{field} base64 decode failed", error) from error
+    if len(decoded) != 32:
+        raise _invalid(f"{field} must decode to 32 bytes")
+    return decoded
 
 
 def _optional(target: dict[str, object], key: str, value: str) -> None:

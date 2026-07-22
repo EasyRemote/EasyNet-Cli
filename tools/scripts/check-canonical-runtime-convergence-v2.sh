@@ -2706,6 +2706,95 @@ for text, name in ((go_test, "go"), (py_test, "python")):
 PY
 }
 
+check_sdk_principal_projection_fail_closed_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local go_principal="$cli_root/sdk/go/principal.go"
+  local py_principal="$cli_root/sdk/python/easynet_sdk/principal.py"
+  local go_test="$cli_root/sdk/go/principal_test.go"
+  local py_test="$cli_root/sdk/python/tests/test_principal.py"
+
+  for path in "$go_principal" "$py_principal" "$go_test" "$py_test"; do
+    [[ -f "$path" ]] || fail "SDK Principal projection contract source is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$go_principal" "$py_principal" "$go_test" "$py_test" <<'PY'
+import sys
+from pathlib import Path
+
+go_principal = Path(sys.argv[1]).read_text(encoding="utf-8")
+py_principal = Path(sys.argv[2]).read_text(encoding="utf-8")
+go_test = Path(sys.argv[3]).read_text(encoding="utf-8")
+py_test = Path(sys.argv[4]).read_text(encoding="utf-8")
+
+for token in (
+    "func principalStringFromMap",
+    "func principalStringSliceFromMap",
+    "func principalPublicKeyFromMap",
+    "func int64FromPrincipalMap",
+    "func uint64FromPrincipalMap",
+    "func boolFromPrincipalMap",
+    "return map[string]any{}",
+):
+    if token in go_principal:
+        raise SystemExit(f"go_principal_projection_legacy_fallback_present:{token}")
+
+for token in (
+    "requiredPrincipalMap(output, \"principal\")",
+    "requiredPrincipalMapValue(value any, path string) (map[string]any, error)",
+    "func requiredPrincipalStringSlice",
+    "func requiredPrincipalPublicKey",
+    "func requiredPrincipalBool",
+    "func optionalPrincipalProjectionString",
+):
+    if token not in go_principal:
+        raise SystemExit(f"go_principal_projection_fail_closed_missing:{token}")
+
+for token in (
+    "def _sequence(",
+    "def _text(",
+    "def _int(",
+):
+    if token in py_principal:
+        raise SystemExit(f"python_principal_projection_legacy_fallback_present:{token}")
+
+for token in (
+    "def _optional_mapping",
+    "def _optional_sequence",
+    "def _required_text_sequence",
+    "def _required_public_key",
+    "def _required_principal_state",
+    "def _required_public_key_binding_state",
+    "def _required_principal_proof_kind",
+):
+    if token not in py_principal:
+        raise SystemExit(f"python_principal_projection_fail_closed_missing:{token}")
+
+for text, language, test_name in (
+    (
+        go_test,
+        "go",
+        "TestRuntimePrincipalProviderRejectsMalformedPrincipalProjection",
+    ),
+    (
+        py_test,
+        "python",
+        "test_runtime_principal_provider_rejects_malformed_projection",
+    ),
+):
+    if test_name not in text:
+        raise SystemExit(f"{language}_principal_malformed_projection_test_missing")
+    for field in (
+        "principal root must be object",
+        "bindings must be array",
+        "binding key id is required",
+        "binding public key must decode",
+        "grant actions must be string array",
+    ):
+        if field not in text:
+            raise SystemExit(f"{language}_principal_malformed_projection_case_missing:{field}")
+PY
+}
+
 check_runtime_owner_signer_custody_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local self_identity="$cli_root/src/daemon/identity/self_identity.rs"
@@ -4923,6 +5012,22 @@ EOF
   if ( CLI_ROOT="$tmp/cli-directory-fallback"; check_sdk_directory_projection_fail_closed_contract ) >/dev/null 2>&1; then
     fail "self-test expected SDK Directory provider-output fallback gate to fail"
   fi
+  mkdir -p "$tmp/cli-principal-fallback/sdk/go" \
+    "$tmp/cli-principal-fallback/sdk/python/easynet_sdk" \
+    "$tmp/cli-principal-fallback/sdk/python/tests"
+  cp "$ROOT/sdk/go/principal.go" "$tmp/cli-principal-fallback/sdk/go/principal.go"
+  cp "$ROOT/sdk/go/principal_test.go" "$tmp/cli-principal-fallback/sdk/go/principal_test.go"
+  cp "$ROOT/sdk/python/easynet_sdk/principal.py" \
+    "$tmp/cli-principal-fallback/sdk/python/easynet_sdk/principal.py"
+  cp "$ROOT/sdk/python/tests/test_principal.py" \
+    "$tmp/cli-principal-fallback/sdk/python/tests/test_principal.py"
+  printf '\nfunc principalStringFromMap(raw map[string]any, key string) string { return "" }\n' \
+    >> "$tmp/cli-principal-fallback/sdk/go/principal.go"
+  printf '\ndef _text(value: object) -> str:\n    return ""\n' \
+    >> "$tmp/cli-principal-fallback/sdk/python/easynet_sdk/principal.py"
+  if ( CLI_ROOT="$tmp/cli-principal-fallback"; check_sdk_principal_projection_fail_closed_contract ) >/dev/null 2>&1; then
+    fail "self-test expected SDK Principal provider-output fallback gate to fail"
+  fi
   mkdir -p "$tmp/runtime-owner-signer-legacy/src/daemon/identity"
   printf '%s\n' \
     'pub struct RuntimeSigningIdentity;' \
@@ -5611,6 +5716,7 @@ EOF
   check_plugin_sidecar_helper_matrix_contract
   check_retired_browser_mock_surface_contract
   check_sdk_directory_projection_fail_closed_contract
+  check_sdk_principal_projection_fail_closed_contract
   check_runtime_owner_signer_custody_contract
   check_key_custody_boundary_contract
   check_daemon_mission_eal_boundary_contract
@@ -5682,6 +5788,7 @@ check_daemon_runtime_assembly_contract
 check_plugin_sidecar_helper_matrix_contract
 check_retired_browser_mock_surface_contract
 check_sdk_directory_projection_fail_closed_contract
+check_sdk_principal_projection_fail_closed_contract
 check_runtime_owner_signer_custody_contract
 check_key_custody_boundary_contract
 check_daemon_mission_eal_boundary_contract

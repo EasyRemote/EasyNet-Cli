@@ -3052,3 +3052,29 @@ Evidence will be appended after indexing and focused impact queries.
   malformed present provider facts. Missing/null optional fields remain absent
   evidence; present non-object/non-list facts and non-object route-candidate
   rows are invalid provider output.
+
+## 2026-07-22 SDK Principal provider-output fail-closed audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` reported the graph
+  is available for the checkout and identified the current modified SDK
+  Principal files as pending re-index candidates.
+- `rg -n
+  "principalStringFromMap|principalStringSliceFromMap|principalPublicKeyFromMap|int64FromPrincipalMap|uint64FromPrincipalMap|boolFromPrincipalMap|def _sequence\\(|def _text\\(|def _int\\("
+  sdk/go/principal.go sdk/python/easynet_sdk/principal.py` traced the active
+  provider-output repair surface to the cross-language Principal projection
+  decoders.
+- Source inspection found Go and Python Principal providers accepting malformed
+  provider facts by defaulting non-object roots, missing strings, non-string
+  action rows, invalid public keys, numeric timestamps and booleans into empty
+  strings, nil keys, zero values or skipped rows.
+- Root abstraction problem: the SDK Principal projection was acting as a
+  product-facing read-model repair layer instead of a canonical provider
+  contract boundary. That lets bad principal lifecycle facts become apparently
+  valid public SDK objects and hides signer/admission custody defects from
+  conformance.
+- Boundary decision: keep request lowering public-compatible, but make
+  provider-output decoding schema-bound and fail closed. Missing/null optional
+  facts remain absent; present malformed principal facts now raise typed SDK
+  invalid-argument errors in both Go and Python.
+- Added cross-language malformed projection tests and SPEC v2 gate coverage so
+  the old Principal fallback helpers cannot return.

@@ -284,6 +284,69 @@ func TestRuntimePrincipalProviderRejectsPrivateProjectionFields(t *testing.T) {
 	}
 }
 
+func TestRuntimePrincipalProviderRejectsMalformedPrincipalProjection(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any) any
+		want   string
+	}{
+		{
+			name: "principal root must be object",
+			mutate: func(_ map[string]any) any {
+				return "not-object"
+			},
+			want: "principal projection must be an object",
+		},
+		{
+			name: "bindings must be array",
+			mutate: func(principal map[string]any) any {
+				principal["bindings"] = "not-array"
+				return principal
+			},
+			want: "principal.bindings must be an array",
+		},
+		{
+			name: "binding key id is required",
+			mutate: func(principal map[string]any) any {
+				bindings := principal["bindings"].([]any)
+				delete(bindings[0].(map[string]any), "key_id")
+				return principal
+			},
+			want: "principal.bindings[0].key_id is required",
+		},
+		{
+			name: "binding public key must decode",
+			mutate: func(principal map[string]any) any {
+				bindings := principal["bindings"].([]any)
+				bindings[0].(map[string]any)["public_key_b64"] = "bad-base64"
+				return principal
+			},
+			want: "principal.bindings[0].public_key_b64 base64 decode failed",
+		},
+		{
+			name: "grant actions must be string array",
+			mutate: func(principal map[string]any) any {
+				grants := principal["grants"].([]any)
+				grants[0].(map[string]any)["actions"] = []any{"principal.key.add", 42}
+				return principal
+			},
+			want: "principal.grants[0].actions[1] must be a non-empty string",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider, err := NewRuntimePrincipalProvider(&malformedPrincipalProjectionAbility{mutate: test.mutate}, principalCallFixture())
+			if err != nil {
+				t.Fatalf("NewRuntimePrincipalProvider: %v", err)
+			}
+			_, err = provider.Get(context.Background(), "easynet:///r/example/user/alice")
+			if err == nil || !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("malformed projection error = %v, want INVALID_ARGUMENT containing %q", err, test.want)
+			}
+		})
+	}
+}
+
 type privateProjectionAbility struct {
 	mutate func(map[string]any)
 }
@@ -297,6 +360,21 @@ func (p *privateProjectionAbility) Invoke(ctx context.Context, call RuntimeCallC
 	if p.mutate != nil {
 		p.mutate(output["principal"].(map[string]any))
 	}
+	return output, nil
+}
+
+type malformedPrincipalProjectionAbility struct {
+	mutate func(map[string]any) any
+}
+
+func (m *malformedPrincipalProjectionAbility) Invoke(ctx context.Context, call RuntimeCallContext, ability string, args any) (map[string]any, error) {
+	base := &memoryPrincipalAbility{}
+	output, err := base.Invoke(ctx, call, ability, args)
+	if err != nil {
+		return nil, err
+	}
+	principal := output["principal"].(map[string]any)
+	output["principal"] = m.mutate(principal)
 	return output, nil
 }
 

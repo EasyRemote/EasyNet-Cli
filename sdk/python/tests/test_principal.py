@@ -178,6 +178,41 @@ class PrincipalTests(unittest.TestCase):
                 with self.assertRaisesRegex(Exception, "forbidden private field"):
                     provider.get("easynet:///r/example/user/alice")
 
+    def test_runtime_principal_provider_rejects_malformed_projection(self) -> None:
+        tests = {
+            "principal root must be object": (
+                lambda principal: "not-object",
+                "principal projection is required",
+            ),
+            "bindings must be array": (
+                lambda principal: _replace(principal, "bindings", "not-array"),
+                "principal.bindings projection must be an array",
+            ),
+            "binding key id is required": (
+                lambda principal: _delete_from_first(principal, "bindings", "key_id"),
+                "binding.key_id is required",
+            ),
+            "binding public key must decode": (
+                lambda principal: _set_on_first(
+                    principal, "bindings", "public_key_b64", "bad-base64"
+                ),
+                "binding.public_key_b64 base64 decode failed",
+            ),
+            "grant actions must be string array": (
+                lambda principal: _set_on_first(
+                    principal, "grants", "actions", ["principal.key.add", 42]
+                ),
+                r"grant\.actions\[1\] is required",
+            ),
+        }
+        for name, (mutate, message) in tests.items():
+            with self.subTest(name=name):
+                provider = RuntimePrincipalProvider(
+                    _MalformedProjectionAbility(mutate), _call()
+                )
+                with self.assertRaisesRegex(Exception, message):
+                    provider.get("easynet:///r/example/user/alice")
+
 
 class _MemoryAbility:
     def __init__(self) -> None:
@@ -259,6 +294,48 @@ class _PrivateProjectionAbility(_MemoryAbility):
         assert isinstance(principal, dict)
         self._mutate(principal)
         return output
+
+
+class _MalformedProjectionAbility(_MemoryAbility):
+    def __init__(self, mutate) -> None:  # type: ignore[no-untyped-def]
+        super().__init__()
+        self._mutate = mutate
+
+    def invoke(
+        self, call: RuntimeCallContext, ability_name: str, arguments: object
+    ) -> dict[str, object]:
+        output = super().invoke(call, ability_name, arguments)
+        principal = output["principal"]
+        assert isinstance(principal, dict)
+        output["principal"] = self._mutate(principal)
+        return output
+
+
+def _replace(principal: dict[str, object], key: str, value: object) -> dict[str, object]:
+    principal[key] = value
+    return principal
+
+
+def _set_on_first(
+    principal: dict[str, object], collection: str, key: str, value: object
+) -> dict[str, object]:
+    items = principal[collection]
+    assert isinstance(items, list)
+    first = items[0]
+    assert isinstance(first, dict)
+    first[key] = value
+    return principal
+
+
+def _delete_from_first(
+    principal: dict[str, object], collection: str, key: str
+) -> dict[str, object]:
+    items = principal[collection]
+    assert isinstance(items, list)
+    first = items[0]
+    assert isinstance(first, dict)
+    del first[key]
+    return principal
 
 
 def _command() -> PrincipalCommand:

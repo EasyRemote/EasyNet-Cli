@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -455,7 +456,11 @@ func (p *RuntimePrincipalProvider) invoke(ctx context.Context, ability string, a
 	if err != nil {
 		return PrincipalSnapshot{}, err
 	}
-	return principalSnapshotFromMap(requiredPrincipalMap(output, "principal"))
+	principal, err := requiredPrincipalMap(output, "principal")
+	if err != nil {
+		return PrincipalSnapshot{}, err
+	}
+	return principalSnapshotFromMap(principal)
 }
 
 func principalCreateWire(request CreatePrincipalRequest) map[string]any {
@@ -577,20 +582,57 @@ func principalSnapshotFromMap(raw map[string]any) (PrincipalSnapshot, error) {
 	if err := rejectPrincipalPrivateProjectionFields(raw, "principal"); err != nil {
 		return PrincipalSnapshot{}, err
 	}
-	snapshot := PrincipalSnapshot{
-		PrincipalURA:    principalStringFromMap(raw, "principal_ura"),
-		State:           PrincipalState(principalStringFromMap(raw, "state")),
-		Version:         uint64FromPrincipalMap(raw, "version"),
-		Bindings:        principalBindingsFromMap(raw, "bindings"),
-		EnrollmentProof: principalProofRefFromMap(raw, "enrollment_proof"),
-		Recovery:        principalRecoveryFromMap(raw, "recovery"),
-		Enrollments:     principalEnrollmentsFromMap(raw, "enrollments"),
-		Grants:          principalGrantsFromMap(raw, "grants"),
-		CreatedUnixMS:   int64FromPrincipalMap(raw, "created_unix_ms"),
-		UpdatedUnixMS:   int64FromPrincipalMap(raw, "updated_unix_ms"),
+	principalURA, err := requiredPrincipalString(raw, "principal_ura", "principal.principal_ura")
+	if err != nil {
+		return PrincipalSnapshot{}, err
 	}
-	if snapshot.PrincipalURA == "" {
-		return PrincipalSnapshot{}, invalidPrincipal("principal_ura is required in Principal snapshot", nil)
+	state, err := requiredPrincipalState(raw, "state", "principal.state")
+	if err != nil {
+		return PrincipalSnapshot{}, err
+	}
+	version, err := requiredPrincipalUint64(raw, "version", "principal.version")
+	if err != nil {
+		return PrincipalSnapshot{}, err
+	}
+	bindings, err := principalBindingsFromMap(raw, "bindings")
+	if err != nil {
+		return PrincipalSnapshot{}, err
+	}
+	enrollmentProof, err := principalProofRefFromMap(raw, "enrollment_proof")
+	if err != nil {
+		return PrincipalSnapshot{}, err
+	}
+	recovery, err := principalRecoveryFromMap(raw, "recovery")
+	if err != nil {
+		return PrincipalSnapshot{}, err
+	}
+	enrollments, err := principalEnrollmentsFromMap(raw, "enrollments")
+	if err != nil {
+		return PrincipalSnapshot{}, err
+	}
+	grants, err := principalGrantsFromMap(raw, "grants")
+	if err != nil {
+		return PrincipalSnapshot{}, err
+	}
+	createdUnixMS, err := requiredPrincipalInt64(raw, "created_unix_ms", "principal.created_unix_ms")
+	if err != nil {
+		return PrincipalSnapshot{}, err
+	}
+	updatedUnixMS, err := requiredPrincipalInt64(raw, "updated_unix_ms", "principal.updated_unix_ms")
+	if err != nil {
+		return PrincipalSnapshot{}, err
+	}
+	snapshot := PrincipalSnapshot{
+		PrincipalURA:    principalURA,
+		State:           state,
+		Version:         version,
+		Bindings:        bindings,
+		EnrollmentProof: enrollmentProof,
+		Recovery:        recovery,
+		Enrollments:     enrollments,
+		Grants:          grants,
+		CreatedUnixMS:   createdUnixMS,
+		UpdatedUnixMS:   updatedUnixMS,
 	}
 	return snapshot, nil
 }
@@ -622,186 +664,445 @@ func rejectPrincipalPrivateProjectionFields(value any, path string) error {
 	return nil
 }
 
-func principalProofRefFromMap(raw map[string]any, key string) *PrincipalProofRef {
-	value, ok := raw[key].(map[string]any)
-	if !ok {
-		return nil
+func principalProofRefFromMap(raw map[string]any, key string) (*PrincipalProofRef, error) {
+	value, err := optionalPrincipalMap(raw, key, "principal."+key)
+	if err != nil || value == nil {
+		return nil, err
+	}
+	kind, err := requiredPrincipalProofKind(value, "kind", "principal."+key+".kind")
+	if err != nil {
+		return nil, err
+	}
+	reference, err := requiredPrincipalString(value, "reference", "principal."+key+".reference")
+	if err != nil {
+		return nil, err
 	}
 	proof := PrincipalProofRef{
-		Kind:      PrincipalProofKind(principalStringFromMap(value, "kind")),
-		Reference: principalStringFromMap(value, "reference"),
+		Kind:      kind,
+		Reference: reference,
 	}
-	if proof.Kind == "" && proof.Reference == "" {
-		return nil
-	}
-	return &proof
+	return &proof, nil
 }
 
-func principalBindingsFromMap(raw map[string]any, key string) []PublicKeyBinding {
-	values, ok := raw[key].([]any)
-	if !ok {
-		return nil
+func principalBindingsFromMap(raw map[string]any, key string) ([]PublicKeyBinding, error) {
+	values, err := optionalPrincipalSequence(raw, key, "principal."+key)
+	if err != nil || values == nil {
+		return nil, err
 	}
 	out := make([]PublicKeyBinding, 0, len(values))
-	for _, item := range values {
-		mapped := requiredPrincipalMapValue(item)
+	for index, item := range values {
+		path := fmt.Sprintf("principal.%s[%d]", key, index)
+		mapped, err := requiredPrincipalMapValue(item, path)
+		if err != nil {
+			return nil, err
+		}
+		bindingID, err := requiredPrincipalString(mapped, "binding_id", path+".binding_id")
+		if err != nil {
+			return nil, err
+		}
+		principalURA, err := requiredPrincipalString(mapped, "principal_ura", path+".principal_ura")
+		if err != nil {
+			return nil, err
+		}
+		keyID, err := requiredPrincipalString(mapped, "key_id", path+".key_id")
+		if err != nil {
+			return nil, err
+		}
+		publicKey, err := requiredPrincipalPublicKey(mapped, "public_key_b64", path+".public_key_b64")
+		if err != nil {
+			return nil, err
+		}
+		state, err := requiredPublicKeyBindingState(mapped, "state", path+".state")
+		if err != nil {
+			return nil, err
+		}
+		createdUnixMS, err := requiredPrincipalInt64(mapped, "created_unix_ms", path+".created_unix_ms")
+		if err != nil {
+			return nil, err
+		}
+		expiresUnixMS, err := optionalPrincipalInt64(mapped, "expires_unix_ms", path+".expires_unix_ms")
+		if err != nil {
+			return nil, err
+		}
+		rotatedUnixMS, err := optionalPrincipalInt64(mapped, "rotated_unix_ms", path+".rotated_unix_ms")
+		if err != nil {
+			return nil, err
+		}
+		revokedUnixMS, err := optionalPrincipalInt64(mapped, "revoked_unix_ms", path+".revoked_unix_ms")
+		if err != nil {
+			return nil, err
+		}
+		rotatedTo, err := optionalPrincipalProjectionString(mapped, "rotated_to", path+".rotated_to")
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, PublicKeyBinding{
-			BindingID:     principalStringFromMap(mapped, "binding_id"),
-			PrincipalURA:  principalStringFromMap(mapped, "principal_ura"),
-			KeyID:         principalStringFromMap(mapped, "key_id"),
-			PublicKey:     principalPublicKeyFromMap(mapped, "public_key_b64"),
-			State:         PublicKeyBindingState(principalStringFromMap(mapped, "state")),
-			CreatedUnixMS: int64FromPrincipalMap(mapped, "created_unix_ms"),
-			ExpiresUnixMS: optionalInt64FromPrincipalMap(mapped, "expires_unix_ms"),
-			RotatedUnixMS: optionalInt64FromPrincipalMap(mapped, "rotated_unix_ms"),
-			RevokedUnixMS: optionalInt64FromPrincipalMap(mapped, "revoked_unix_ms"),
-			RotatedTo:     principalStringFromMap(mapped, "rotated_to"),
+			BindingID:     bindingID,
+			PrincipalURA:  principalURA,
+			KeyID:         keyID,
+			PublicKey:     publicKey,
+			State:         state,
+			CreatedUnixMS: createdUnixMS,
+			ExpiresUnixMS: expiresUnixMS,
+			RotatedUnixMS: rotatedUnixMS,
+			RevokedUnixMS: revokedUnixMS,
+			RotatedTo:     rotatedTo,
 		})
 	}
-	return out
+	return out, nil
 }
 
-func principalRecoveryFromMap(raw map[string]any, key string) *RecoveryPolicy {
-	mapped, ok := raw[key].(map[string]any)
-	if !ok || mapped == nil {
-		return nil
+func principalRecoveryFromMap(raw map[string]any, key string) (*RecoveryPolicy, error) {
+	mapped, err := optionalPrincipalMap(raw, key, "principal."+key)
+	if err != nil || mapped == nil {
+		return nil, err
+	}
+	policyRef, err := requiredPrincipalString(mapped, "policy_ref", "principal."+key+".policy_ref")
+	if err != nil {
+		return nil, err
+	}
+	enabled, err := requiredPrincipalBool(mapped, "enabled", "principal."+key+".enabled")
+	if err != nil {
+		return nil, err
+	}
+	updatedUnixMS, err := requiredPrincipalInt64(mapped, "updated_unix_ms", "principal."+key+".updated_unix_ms")
+	if err != nil {
+		return nil, err
 	}
 	return &RecoveryPolicy{
-		PolicyRef:     principalStringFromMap(mapped, "policy_ref"),
-		Enabled:       boolFromPrincipalMap(mapped, "enabled"),
-		UpdatedUnixMS: int64FromPrincipalMap(mapped, "updated_unix_ms"),
-	}
+		PolicyRef:     policyRef,
+		Enabled:       enabled,
+		UpdatedUnixMS: updatedUnixMS,
+	}, nil
 }
 
-func principalEnrollmentsFromMap(raw map[string]any, key string) []EnrollmentCapability {
-	values, ok := raw[key].([]any)
-	if !ok {
-		return nil
+func principalEnrollmentsFromMap(raw map[string]any, key string) ([]EnrollmentCapability, error) {
+	values, err := optionalPrincipalSequence(raw, key, "principal."+key)
+	if err != nil || values == nil {
+		return nil, err
 	}
 	out := make([]EnrollmentCapability, 0, len(values))
-	for _, item := range values {
-		mapped := requiredPrincipalMapValue(item)
+	for index, item := range values {
+		path := fmt.Sprintf("principal.%s[%d]", key, index)
+		mapped, err := requiredPrincipalMapValue(item, path)
+		if err != nil {
+			return nil, err
+		}
+		enrollmentID, err := requiredPrincipalString(mapped, "enrollment_id", path+".enrollment_id")
+		if err != nil {
+			return nil, err
+		}
+		issuerURA, err := requiredPrincipalString(mapped, "issuer_ura", path+".issuer_ura")
+		if err != nil {
+			return nil, err
+		}
+		subjectPrincipalURA, err := requiredPrincipalString(mapped, "subject_principal_ura", path+".subject_principal_ura")
+		if err != nil {
+			return nil, err
+		}
+		createdUnixMS, err := requiredPrincipalInt64(mapped, "created_unix_ms", path+".created_unix_ms")
+		if err != nil {
+			return nil, err
+		}
+		expiresUnixMS, err := optionalPrincipalInt64(mapped, "expires_unix_ms", path+".expires_unix_ms")
+		if err != nil {
+			return nil, err
+		}
+		revokedUnixMS, err := optionalPrincipalInt64(mapped, "revoked_unix_ms", path+".revoked_unix_ms")
+		if err != nil {
+			return nil, err
+		}
+		consumedByPrincipalURA, err := optionalPrincipalProjectionString(mapped, "consumed_by_principal_ura", path+".consumed_by_principal_ura")
+		if err != nil {
+			return nil, err
+		}
+		consumedUnixMS, err := optionalPrincipalInt64(mapped, "consumed_unix_ms", path+".consumed_unix_ms")
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, EnrollmentCapability{
-			EnrollmentID:           principalStringFromMap(mapped, "enrollment_id"),
-			IssuerURA:              principalStringFromMap(mapped, "issuer_ura"),
-			SubjectPrincipalURA:    principalStringFromMap(mapped, "subject_principal_ura"),
-			CreatedUnixMS:          int64FromPrincipalMap(mapped, "created_unix_ms"),
-			ExpiresUnixMS:          optionalInt64FromPrincipalMap(mapped, "expires_unix_ms"),
-			RevokedUnixMS:          optionalInt64FromPrincipalMap(mapped, "revoked_unix_ms"),
-			ConsumedByPrincipalURA: principalStringFromMap(mapped, "consumed_by_principal_ura"),
-			ConsumedUnixMS:         optionalInt64FromPrincipalMap(mapped, "consumed_unix_ms"),
+			EnrollmentID:           enrollmentID,
+			IssuerURA:              issuerURA,
+			SubjectPrincipalURA:    subjectPrincipalURA,
+			CreatedUnixMS:          createdUnixMS,
+			ExpiresUnixMS:          expiresUnixMS,
+			RevokedUnixMS:          revokedUnixMS,
+			ConsumedByPrincipalURA: consumedByPrincipalURA,
+			ConsumedUnixMS:         consumedUnixMS,
 		})
 	}
-	return out
+	return out, nil
 }
 
-func principalGrantsFromMap(raw map[string]any, key string) []AuthorizationGrant {
-	values, ok := raw[key].([]any)
-	if !ok {
-		return nil
+func principalGrantsFromMap(raw map[string]any, key string) ([]AuthorizationGrant, error) {
+	values, err := optionalPrincipalSequence(raw, key, "principal."+key)
+	if err != nil || values == nil {
+		return nil, err
 	}
 	out := make([]AuthorizationGrant, 0, len(values))
-	for _, item := range values {
-		mapped := requiredPrincipalMapValue(item)
+	for index, item := range values {
+		path := fmt.Sprintf("principal.%s[%d]", key, index)
+		mapped, err := requiredPrincipalMapValue(item, path)
+		if err != nil {
+			return nil, err
+		}
+		grantID, err := requiredPrincipalString(mapped, "grant_id", path+".grant_id")
+		if err != nil {
+			return nil, err
+		}
+		principalURA, err := requiredPrincipalString(mapped, "principal_ura", path+".principal_ura")
+		if err != nil {
+			return nil, err
+		}
+		issuerURA, err := requiredPrincipalString(mapped, "issuer_ura", path+".issuer_ura")
+		if err != nil {
+			return nil, err
+		}
+		actions, err := requiredPrincipalStringSlice(mapped, "actions", path+".actions")
+		if err != nil {
+			return nil, err
+		}
+		createdUnixMS, err := requiredPrincipalInt64(mapped, "created_unix_ms", path+".created_unix_ms")
+		if err != nil {
+			return nil, err
+		}
+		expiresUnixMS, err := optionalPrincipalInt64(mapped, "expires_unix_ms", path+".expires_unix_ms")
+		if err != nil {
+			return nil, err
+		}
+		revokedUnixMS, err := optionalPrincipalInt64(mapped, "revoked_unix_ms", path+".revoked_unix_ms")
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, AuthorizationGrant{
-			GrantID:       principalStringFromMap(mapped, "grant_id"),
-			PrincipalURA:  principalStringFromMap(mapped, "principal_ura"),
-			IssuerURA:     principalStringFromMap(mapped, "issuer_ura"),
-			Actions:       principalStringSliceFromMap(mapped, "actions"),
-			CreatedUnixMS: int64FromPrincipalMap(mapped, "created_unix_ms"),
-			ExpiresUnixMS: optionalInt64FromPrincipalMap(mapped, "expires_unix_ms"),
-			RevokedUnixMS: optionalInt64FromPrincipalMap(mapped, "revoked_unix_ms"),
+			GrantID:       grantID,
+			PrincipalURA:  principalURA,
+			IssuerURA:     issuerURA,
+			Actions:       actions,
+			CreatedUnixMS: createdUnixMS,
+			ExpiresUnixMS: expiresUnixMS,
+			RevokedUnixMS: revokedUnixMS,
 		})
 	}
-	return out
+	return out, nil
 }
 
-func requiredPrincipalMap(raw map[string]any, key string) map[string]any {
-	return requiredPrincipalMapValue(raw[key])
+func requiredPrincipalMap(raw map[string]any, key string) (map[string]any, error) {
+	return requiredPrincipalMapValue(raw[key], key)
 }
 
-func requiredPrincipalMapValue(value any) map[string]any {
+func requiredPrincipalMapValue(value any, path string) (map[string]any, error) {
 	if mapped, ok := value.(map[string]any); ok && mapped != nil {
-		return mapped
+		return mapped, nil
 	}
-	return map[string]any{}
+	return nil, invalidPrincipal(path+" projection must be an object", nil)
 }
 
-func principalStringFromMap(raw map[string]any, key string) string {
-	if value, ok := raw[key].(string); ok {
-		return value
+func optionalPrincipalMap(raw map[string]any, key string, path string) (map[string]any, error) {
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return nil, nil
 	}
-	return ""
+	return requiredPrincipalMapValue(value, path)
 }
 
-func principalStringSliceFromMap(raw map[string]any, key string) []string {
-	values, ok := raw[key].([]any)
+func requiredPrincipalString(raw map[string]any, key string, path string) (string, error) {
+	value, ok := raw[key]
 	if !ok {
-		return nil
+		return "", invalidPrincipal(path+" is required", nil)
+	}
+	text, ok := value.(string)
+	if !ok || strings.TrimSpace(text) == "" {
+		return "", invalidPrincipal(path+" must be a non-empty string", nil)
+	}
+	return strings.TrimSpace(text), nil
+}
+
+func optionalPrincipalProjectionString(raw map[string]any, key string, path string) (string, error) {
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return "", nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", invalidPrincipal(path+" must be a string when present", nil)
+	}
+	return strings.TrimSpace(text), nil
+}
+
+func requiredPrincipalProofKind(raw map[string]any, key string, path string) (PrincipalProofKind, error) {
+	value, err := requiredPrincipalString(raw, key, path)
+	if err != nil {
+		return "", err
+	}
+	switch PrincipalProofKind(value) {
+	case PrincipalProofBootstrap, PrincipalProofActiveKey, PrincipalProofGrant, PrincipalProofEnrollment, PrincipalProofRecovery:
+		return PrincipalProofKind(value), nil
+	default:
+		return "", invalidPrincipal(path+" is not a canonical Principal proof kind", nil)
+	}
+}
+
+func requiredPrincipalState(raw map[string]any, key string, path string) (PrincipalState, error) {
+	value, err := requiredPrincipalString(raw, key, path)
+	if err != nil {
+		return "", err
+	}
+	switch PrincipalState(value) {
+	case PrincipalStatePending, PrincipalStateActive, PrincipalStateSuspended, PrincipalStateDeleted:
+		return PrincipalState(value), nil
+	default:
+		return "", invalidPrincipal(path+" is not a canonical Principal state", nil)
+	}
+}
+
+func requiredPublicKeyBindingState(raw map[string]any, key string, path string) (PublicKeyBindingState, error) {
+	value, err := requiredPrincipalString(raw, key, path)
+	if err != nil {
+		return "", err
+	}
+	switch PublicKeyBindingState(value) {
+	case PublicKeyBindingStateActive, PublicKeyBindingStateRotated, PublicKeyBindingStateRevoked:
+		return PublicKeyBindingState(value), nil
+	default:
+		return "", invalidPrincipal(path+" is not a canonical public-key binding state", nil)
+	}
+}
+
+func optionalPrincipalSequence(raw map[string]any, key string, path string) ([]any, error) {
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return nil, nil
+	}
+	values, ok := value.([]any)
+	if !ok {
+		return nil, invalidPrincipal(path+" must be an array when present", nil)
+	}
+	return values, nil
+}
+
+func requiredPrincipalStringSlice(raw map[string]any, key string, path string) ([]string, error) {
+	value, ok := raw[key]
+	if !ok {
+		return nil, invalidPrincipal(path+" is required", nil)
+	}
+	values, ok := value.([]any)
+	if !ok {
+		return nil, invalidPrincipal(path+" must be an array", nil)
 	}
 	out := make([]string, 0, len(values))
-	for _, item := range values {
-		if value, ok := item.(string); ok {
-			out = append(out, value)
+	for index, item := range values {
+		value, ok := item.(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			return nil, invalidPrincipal(fmt.Sprintf("%s[%d] must be a non-empty string", path, index), nil)
 		}
+		out = append(out, strings.TrimSpace(value))
 	}
-	return out
+	return out, nil
 }
 
-func principalPublicKeyFromMap(raw map[string]any, key string) ed25519.PublicKey {
-	encoded := principalStringFromMap(raw, key)
-	if encoded == "" {
-		return nil
+func requiredPrincipalPublicKey(raw map[string]any, key string, path string) (ed25519.PublicKey, error) {
+	encoded, err := requiredPrincipalString(raw, key, path)
+	if err != nil {
+		return nil, err
 	}
 	decoded, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return nil
+		return nil, invalidPrincipal(path+" base64 decode failed", err)
 	}
-	return ed25519.PublicKey(decoded)
+	if len(decoded) != ed25519.PublicKeySize {
+		return nil, invalidPrincipal(fmt.Sprintf("%s must decode to %d bytes", path, ed25519.PublicKeySize), nil)
+	}
+	return ed25519.PublicKey(decoded), nil
 }
 
-func int64FromPrincipalMap(raw map[string]any, key string) int64 {
-	switch value := raw[key].(type) {
+func requiredPrincipalInt64(raw map[string]any, key string, path string) (int64, error) {
+	value, ok := raw[key]
+	if !ok {
+		return 0, invalidPrincipal(path+" is required", nil)
+	}
+	parsed, ok := principalIntegerInt64(value)
+	if !ok {
+		return 0, invalidPrincipal(path+" must be an integer", nil)
+	}
+	return parsed, nil
+}
+
+func requiredPrincipalUint64(raw map[string]any, key string, path string) (uint64, error) {
+	value, ok := raw[key]
+	if !ok {
+		return 0, invalidPrincipal(path+" is required", nil)
+	}
+	parsed, ok := principalIntegerUint64(value)
+	if !ok {
+		return 0, invalidPrincipal(path+" must be a non-negative integer", nil)
+	}
+	return parsed, nil
+}
+
+func optionalPrincipalInt64(raw map[string]any, key string, path string) (*int64, error) {
+	value, ok := raw[key]
+	if !ok || value == nil {
+		return nil, nil
+	}
+	parsed, ok := principalIntegerInt64(value)
+	if !ok {
+		return nil, invalidPrincipal(path+" must be an integer when present", nil)
+	}
+	return &parsed, nil
+}
+
+func principalIntegerInt64(value any) (int64, bool) {
+	switch value := value.(type) {
 	case int64:
-		return value
+		return value, true
 	case int:
-		return int64(value)
-	case float64:
-		return int64(value)
-	default:
-		return 0
-	}
-}
-
-func uint64FromPrincipalMap(raw map[string]any, key string) uint64 {
-	switch value := raw[key].(type) {
+		return int64(value), true
 	case uint64:
-		return value
-	case int:
-		if value > 0 {
-			return uint64(value)
+		if value <= math.MaxInt64 {
+			return int64(value), true
 		}
 	case float64:
-		if value > 0 {
-			return uint64(value)
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < math.MinInt64 || value > math.MaxInt64 {
+			return 0, false
+		}
+		parsed := int64(value)
+		if value == float64(parsed) {
+			return parsed, true
 		}
 	}
-	return 0
+	return 0, false
 }
 
-func optionalInt64FromPrincipalMap(raw map[string]any, key string) *int64 {
-	if _, ok := raw[key]; !ok {
-		return nil
+func principalIntegerUint64(value any) (uint64, bool) {
+	switch value := value.(type) {
+	case uint64:
+		return value, true
+	case int:
+		if value >= 0 {
+			return uint64(value), true
+		}
+	case int64:
+		if value >= 0 {
+			return uint64(value), true
+		}
+	case float64:
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > math.MaxUint64 {
+			return 0, false
+		}
+		parsed := uint64(value)
+		if value >= 0 && value == float64(parsed) {
+			return parsed, true
+		}
 	}
-	value := int64FromPrincipalMap(raw, key)
-	return &value
+	return 0, false
 }
 
-func boolFromPrincipalMap(raw map[string]any, key string) bool {
+func requiredPrincipalBool(raw map[string]any, key string, path string) (bool, error) {
 	if value, ok := raw[key].(bool); ok {
-		return value
+		return value, nil
 	}
-	return false
+	return false, invalidPrincipal(path+" must be a boolean", nil)
 }
 
 func optionalPrincipalString(args map[string]any, key string, value string) {
