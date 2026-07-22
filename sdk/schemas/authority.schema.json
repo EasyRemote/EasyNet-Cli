@@ -30,8 +30,8 @@
         "expected_session_authority"
       ],
       "properties": {
-        "delegation_metadata_key": {"const": "x-easynet-delegation"},
-        "session_authority_metadata_key": {"const": "x-easynet-session-authority"},
+        "delegation_metadata_key": {"const": "x-runtime-delegation"},
+        "session_authority_metadata_key": {"const": "x-runtime-session-authority"},
         "delegation_metadata_value": {"type": "string", "minLength": 1},
         "session_authority_metadata_value": {"type": "string", "minLength": 1},
         "expected_delegation": {"$ref": "#/$defs/delegation_projection"},

@@ -338,7 +338,7 @@ public final class RuntimeCoreSeamTest {
     InvocationDraft authorized =
         completeBuilder().authorityMetadata(delegation.metadata()).inspect();
     check(
-        authorized.inspectTuple().metadata().containsKey("x-easynet-delegation"),
+        authorized.inspectTuple().metadata().containsKey("x-runtime-delegation"),
         "delegation attached once");
 
     expectSDKError(
@@ -347,9 +347,9 @@ public final class RuntimeCoreSeamTest {
             completeBuilder()
                 .metadata(
                     Map.of(
-                        "x-easynet-delegation",
+                        "x-runtime-delegation",
                         delegationValue,
-                        "x-easynet-session-authority",
+                        "x-runtime-session-authority",
                         sessionValue))
                 .inspect());
     authority.close();
@@ -790,7 +790,7 @@ public final class RuntimeCoreSeamTest {
           JsonValueReader.object(requestJSON, "session request").get("session_id").equals("session-1"),
           "session id");
       return JsonValueWriter.object(
-          Map.of("metadata", Map.of("x-easynet-session-authority", sessionValue)));
+          Map.of("metadata", Map.of("x-runtime-session-authority", sessionValue)));
     }
   }
 

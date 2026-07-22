@@ -19,8 +19,8 @@ steps:
 expect:
   result: error
   error_code: INVALID_ARGUMENT
-  delegation_metadata_key: x-easynet-delegation
-  session_authority_metadata_key: x-easynet-session-authority
+  delegation_metadata_key: x-runtime-delegation
+  session_authority_metadata_key: x-runtime-session-authority
   typed_delegation_projection: true
   typed_session_authority_projection: true
   authority_minting_facade: provider_backed

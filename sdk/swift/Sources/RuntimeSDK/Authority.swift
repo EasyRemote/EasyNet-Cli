@@ -1,8 +1,8 @@
 import Foundation
 
 public let authorityProfile = "authority"
-public let delegationMetadataKey = "x-easynet-delegation"
-public let sessionAuthorityMetadataKey = "x-easynet-session-authority"
+public let delegationMetadataKey = "x-runtime-delegation"
+public let sessionAuthorityMetadataKey = "x-runtime-session-authority"
 
 public struct AuthorityMetadata: Sendable, Equatable {
     public let kind: String

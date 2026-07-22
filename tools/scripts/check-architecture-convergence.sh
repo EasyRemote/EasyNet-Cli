@@ -7904,6 +7904,55 @@ if authority_metadata.exists():
                     detail,
                 )
 
+    # Rule 93: Canonical runtime authority metadata keys must be
+    # product-neutral. EasyNet-hosted-agent delegation metadata is provider
+    # policy and intentionally not part of this canonical SDK/admission set.
+    authority_key_sources = [
+        authority_metadata,
+        cli_root / "sdk/go/authority.go",
+        cli_root / "sdk/python/easynet_sdk/authority.py",
+        cli_root / "sdk/node/index.js",
+        cli_root / "sdk/node/index.d.ts",
+        cli_root / "sdk/java/src/main/java/run/runtime/sdk/AuthoritySupport.java",
+        cli_root / "sdk/swift/Sources/RuntimeSDK/Authority.swift",
+        cli_root / "sdk/schemas/authority.schema.json",
+        cli_root / "sdk/conformance/fixtures/authority-metadata.v4.json",
+        cli_root / "sdk/conformance/cases/authority-mutual-exclusion.yaml",
+    ]
+    existing_authority_key_sources = [path for path in authority_key_sources if path.exists()]
+    if len(existing_authority_key_sources) != len(authority_key_sources):
+        for path in authority_key_sources:
+            if not path.exists():
+                add(
+                    "R93_RUNTIME_AUTHORITY_METADATA_KEY_NEUTRALITY",
+                    path,
+                    1,
+                    "runtime authority metadata key source is missing",
+                )
+    else:
+        texts = [
+            path.read_text(encoding="utf-8", errors="replace")
+            for path in authority_key_sources
+        ]
+        combined = "\n".join(texts)
+        for retired in ("x-easynet-delegation", "x-easynet-session-authority"):
+            if retired in combined:
+                add(
+                    "R93_RUNTIME_AUTHORITY_METADATA_KEY_NEUTRALITY",
+                    authority_metadata,
+                    1,
+                    f"canonical runtime authority metadata must not use product key {retired}",
+                )
+        for required in ("x-runtime-delegation", "x-runtime-session-authority"):
+            for path, text in zip(authority_key_sources, texts):
+                if required not in text:
+                    add(
+                        "R93_RUNTIME_AUTHORITY_METADATA_KEY_NEUTRALITY",
+                        path,
+                        1,
+                        f"runtime authority metadata key {required} must be shared across SDK languages and daemon admission",
+                    )
+
 
 # Rule 94: Product device show/remove must not repair unavailable local
 # pairing identity into empty route/caller facts. Non-local device product

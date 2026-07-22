@@ -23,8 +23,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::daemon::ability::canonical_json_bytes;
 
-pub(crate) const DELEGATION_METADATA_KEY: &str = "x-easynet-delegation";
-pub(crate) const SESSION_AUTHORITY_METADATA_KEY: &str = "x-easynet-session-authority";
+pub(crate) const DELEGATION_METADATA_KEY: &str = "x-runtime-delegation";
+pub(crate) const SESSION_AUTHORITY_METADATA_KEY: &str = "x-runtime-session-authority";
 pub(crate) const REASON_AUTHORITY_FORMAT_INVALID: &str = "AUTHORITY_FORMAT_INVALID";
 pub(crate) const REASON_AUTHORITY_EXPIRED: &str = "AUTHORITY_EXPIRED";
 pub(crate) const REASON_AUTHORITY_CLOCK_UNAVAILABLE: &str = "AUTHORITY_CLOCK_UNAVAILABLE";

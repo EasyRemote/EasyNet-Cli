@@ -1995,7 +1995,7 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
         ..InvokeRequest::default()
     };
     request.metadata.insert(
-        "x-easynet-delegation".to_string(),
+        "x-runtime-delegation".to_string(),
         signed_delegation_metadata_for_test(
             hub_signer.as_ref(),
             &caller_ura,

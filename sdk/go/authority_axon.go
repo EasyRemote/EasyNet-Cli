@@ -76,7 +76,7 @@ func (p *DelegationProof) MarshalRaw() ([]byte, error) {
 	return (&proof).MarshalRaw()
 }
 
-// MarshalMetadataValue returns the value to put under x-easynet-delegation.
+// MarshalMetadataValue returns the value to put under x-runtime-delegation.
 func (p *DelegationProof) MarshalMetadataValue() (string, error) {
 	raw, err := p.MarshalRaw()
 	if err != nil {
@@ -216,7 +216,7 @@ func (a *SessionAuthority) MarshalRaw() ([]byte, error) {
 	})
 }
 
-// MarshalMetadataValue returns the value to put under x-easynet-session-authority.
+// MarshalMetadataValue returns the value to put under x-runtime-session-authority.
 func (a *SessionAuthority) MarshalMetadataValue() (string, error) {
 	raw, err := a.MarshalRaw()
 	if err != nil {

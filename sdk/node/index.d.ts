@@ -40,8 +40,8 @@ export declare const RetryHint: Readonly<{
 }>;
 export declare const HEALTH_PROFILE: "health";
 export declare const AUTHORITY_PROFILE: "authority";
-export declare const DELEGATION_METADATA_KEY: "x-easynet-delegation";
-export declare const SESSION_AUTHORITY_METADATA_KEY: "x-easynet-session-authority";
+export declare const DELEGATION_METADATA_KEY: "x-runtime-delegation";
+export declare const SESSION_AUTHORITY_METADATA_KEY: "x-runtime-session-authority";
 export declare const MAX_STREAM_BUFFERED_EVENTS: 1024;
 export declare const MAX_BIDI_BUFFERED_FRAMES: 1024;
 export declare function profileSourceRef(profile: string): string;
@@ -184,7 +184,7 @@ export class HealthClient {
 
 export interface AuthorityMetadataFields {
   kind: "delegation" | "session_authority";
-  key: "x-easynet-delegation" | "x-easynet-session-authority";
+  key: "x-runtime-delegation" | "x-runtime-session-authority";
   value: string;
 }
 

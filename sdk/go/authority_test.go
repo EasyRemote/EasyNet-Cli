@@ -490,7 +490,7 @@ func TestAuthoritySigningMaterialProjectionValidatesRuntimeCoreOutput(t *testing
 		"profile":"authority",
 		"kind":"delegation",
 		"algorithm":"ed25519",
-		"metadata_key":"x-easynet-delegation",
+		"metadata_key":"x-runtime-delegation",
 		"canonical_bytes_base64":"eyJjYWxsZXJfdXJhIjoiZWFzeW5ldDovLy9yL2V4YW1wbGUvYWdlbnQvYmFja2VuZCJ9",
 		"canonical_hash_hex":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		"signed_fields":["caller_ura"],

@@ -12,8 +12,8 @@ from .axon_addressing import parse_ura, user_ura
 from .errors import ErrorCode, RetryHint, SDKError
 from ._identity_guards import contains_all_zero_principal
 
-DELEGATION_METADATA_KEY = "x-easynet-delegation"
-SESSION_AUTHORITY_METADATA_KEY = "x-easynet-session-authority"
+DELEGATION_METADATA_KEY = "x-runtime-delegation"
+SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority"
 
 
 @dataclass(frozen=True)

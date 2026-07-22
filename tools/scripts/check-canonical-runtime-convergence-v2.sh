@@ -1808,6 +1808,46 @@ for required_test in (
 PY
 }
 
+check_runtime_authority_metadata_key_neutrality_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local paths=(
+    "$cli_root/src/daemon/invocation/admission/authority_metadata.rs"
+    "$cli_root/sdk/go/authority.go"
+    "$cli_root/sdk/python/easynet_sdk/authority.py"
+    "$cli_root/sdk/node/index.js"
+    "$cli_root/sdk/node/index.d.ts"
+    "$cli_root/sdk/java/src/main/java/run/runtime/sdk/AuthoritySupport.java"
+    "$cli_root/sdk/swift/Sources/RuntimeSDK/Authority.swift"
+    "$cli_root/sdk/schemas/authority.schema.json"
+    "$cli_root/sdk/conformance/fixtures/authority-metadata.v4.json"
+    "$cli_root/sdk/conformance/cases/authority-mutual-exclusion.yaml"
+  )
+
+  for path in "${paths[@]}"; do
+    [[ -f "$path" ]] || fail "runtime authority metadata key source is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "${paths[@]}" <<'PY'
+import sys
+from pathlib import Path
+
+texts = {Path(path).as_posix(): Path(path).read_text(encoding="utf-8", errors="replace") for path in sys.argv[1:]}
+combined = "\n".join(texts.values())
+
+for retired in ("x-easynet-delegation", "x-easynet-session-authority"):
+    if retired in combined:
+        raise SystemExit(f"runtime_authority_metadata_key_neutrality:retired_product_key:{retired}")
+
+for required in ("x-runtime-delegation", "x-runtime-session-authority"):
+    for path, text in texts.items():
+        if required not in text:
+            raise SystemExit(
+                f"runtime_authority_metadata_key_neutrality:missing:{required}:{path}"
+            )
+
+PY
+}
+
 check_session_prelude_credentials_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local prelude="$cli_root/src/daemon/invocation/bidi/session_initiator/prelude.rs"
@@ -7726,6 +7766,7 @@ EOF
   check_admission_owner_credentials_contract
   check_shared_local_device_owner_projection_contract
   check_node_session_authority_subject_contract
+  check_runtime_authority_metadata_key_neutrality_contract
   check_local_ability_target_subject_policy_contract
   check_session_prelude_credentials_contract
   check_session_prelude_receipt_contract
@@ -7818,6 +7859,7 @@ check_observe_health_contract_projection_contract
 check_admission_owner_credentials_contract
 check_shared_local_device_owner_projection_contract
 check_node_session_authority_subject_contract
+check_runtime_authority_metadata_key_neutrality_contract
 check_local_ability_target_subject_policy_contract
 check_session_prelude_credentials_contract
 check_start_attach_user_signer_readiness_contract

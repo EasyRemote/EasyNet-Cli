@@ -64,8 +64,8 @@ export const RetryHint = Object.freeze({
 
 export const HEALTH_PROFILE = "health";
 export const AUTHORITY_PROFILE = "authority";
-export const DELEGATION_METADATA_KEY = "x-easynet-delegation";
-export const SESSION_AUTHORITY_METADATA_KEY = "x-easynet-session-authority";
+export const DELEGATION_METADATA_KEY = "x-runtime-delegation";
+export const SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority";
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
 

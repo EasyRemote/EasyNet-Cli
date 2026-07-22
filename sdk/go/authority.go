@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	DelegationMetadataKey       = "x-easynet-delegation"
-	SessionAuthorityMetadataKey = "x-easynet-session-authority"
+	DelegationMetadataKey       = "x-runtime-delegation"
+	SessionAuthorityMetadataKey = "x-runtime-session-authority"
 	authorityProfile            = "authority"
 )
 

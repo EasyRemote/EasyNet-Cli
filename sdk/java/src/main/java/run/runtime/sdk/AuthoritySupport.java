@@ -7,8 +7,8 @@ import java.util.List;
 import java.util.Map;
 
 final class AuthoritySupport {
-  static final String DELEGATION_METADATA_KEY = "x-easynet-delegation";
-  static final String SESSION_AUTHORITY_METADATA_KEY = "x-easynet-session-authority";
+  static final String DELEGATION_METADATA_KEY = "x-runtime-delegation";
+  static final String SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority";
   static final String DELEGATION_KIND = "delegation";
   static final String SESSION_AUTHORITY_KIND = "session_authority";
 
