@@ -376,7 +376,8 @@ pub struct WhoamiArgs;
 /// 3. Neither → tell the user what to do.
 pub fn run_whoami(_args: WhoamiArgs) -> anyhow::Result<()> {
     let session = load_session()?;
-    let creds = config::load_credentials().ok();
+    let creds = config::load_credentials_optional()
+        .context("load device credentials for identity projection")?;
 
     match (session, creds) {
         (Some(s), creds) => {
@@ -1062,6 +1063,7 @@ pub fn run_signing_key_register(args: SigningKeyRegisterArgs) -> anyhow::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
 
     #[test]
     fn auth_exec_tool_name_accepts_canonical_device_tool() {
@@ -1136,5 +1138,20 @@ mod tests {
         assert_eq!(row.display_name, "-");
         assert_eq!(row.node_id, "device-1");
         assert_eq!(row.skill_count, 0);
+    }
+
+    #[test]
+    fn whoami_rejects_malformed_credentials_instead_of_rendering_unpaired() {
+        let _home = HomeGuard::new();
+        std::fs::create_dir_all(config::state_dir()).expect("state dir");
+        std::fs::write(config::state_dir().join("credentials.json"), "{ not json")
+            .expect("malformed credentials");
+
+        let error = run_whoami(WhoamiArgs {}).expect_err("malformed credentials must fail closed");
+
+        assert!(
+            error.to_string().contains("load device credentials"),
+            "whoami must expose credential projection failure: {error}"
+        );
     }
 }

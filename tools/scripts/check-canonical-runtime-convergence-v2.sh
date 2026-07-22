@@ -1100,6 +1100,33 @@ for test in (
 PY
 }
 
+check_cli_credentials_optional_read_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local src_root="$cli_root/src"
+  [[ -d "$src_root" ]] || return 0
+
+  "$PYTHON_BIN" - "$src_root" <<'PY'
+import sys
+from pathlib import Path
+
+src_root = Path(sys.argv[1])
+retired = (
+    "load_credentials().ok()",
+    "load_credentials().ok()?",
+)
+violations = []
+for path in src_root.rglob("*.rs"):
+    text = path.read_text()
+    for token in retired:
+        if token in text:
+            violations.append(f"{path.relative_to(src_root.parent)}:{token}")
+if violations:
+    raise SystemExit(
+        "cli_credentials_optional_read_retired_fallback:" + ",".join(violations)
+    )
+PY
+}
+
 check_runtime_trust_revoke_credentials_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local invalidator="$cli_root/src/daemon/invocation/admission/runtime_trust_invalidator.rs"
@@ -6602,6 +6629,15 @@ EOF
   if ( check_mcp_reflection_async_bridge_contract "$tmp/cli-mcp-local-bridge" ) >/dev/null 2>&1; then
     fail "self-test expected MCP local async bridge gate to fail"
   fi
+  mkdir -p "$tmp/cli-credentials-ok-fallback/src/cli/presentation"
+  printf '%s\n' \
+    'fn write_runtime_status() {' \
+    '  let creds = crate::daemon::persistence::config::load_credentials().ok();' \
+    '}' \
+    > "$tmp/cli-credentials-ok-fallback/src/cli/presentation/banner.rs"
+  if ( check_cli_credentials_optional_read_contract "$tmp/cli-credentials-ok-fallback" ) >/dev/null 2>&1; then
+    fail "self-test expected credentials .ok fallback gate to fail"
+  fi
   check_mcp_reflection_async_bridge_contract
   check_active_source_contract
   check_sdk_root_runtime_description_contract
@@ -6617,6 +6653,7 @@ EOF
   check_principal_lifecycle_cli_schema_contract
   check_auth_agents_backend_shape_contract
   check_pages_identity_credentials_contract
+  check_cli_credentials_optional_read_contract
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
   check_runtime_trust_user_key_inventory_scope_contract
@@ -6695,6 +6732,7 @@ check_sdk_runtime_failure_code_contract
 check_principal_lifecycle_cli_schema_contract
 check_auth_agents_backend_shape_contract
 check_pages_identity_credentials_contract
+check_cli_credentials_optional_read_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_runtime_trust_user_key_inventory_scope_contract

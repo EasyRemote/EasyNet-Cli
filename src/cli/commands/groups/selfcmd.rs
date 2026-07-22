@@ -232,7 +232,7 @@ enum SelfUninstallStage {
 trait UninstallEnvironment {
     fn record_stage(&mut self, _stage: SelfUninstallStage) {}
 
-    fn capture_device_identity(&mut self) -> Option<DeviceIdentity>;
+    fn capture_device_identity(&mut self) -> anyhow::Result<Option<DeviceIdentity>>;
 
     fn report_hub_removal(&mut self, identity: &DeviceIdentity) -> HubRemovalReport;
 
@@ -259,7 +259,16 @@ struct SelfUninstallPlan;
 impl SelfUninstallPlan {
     fn execute<E: UninstallEnvironment>(&self, env: &mut E) -> anyhow::Result<()> {
         env.record_stage(SelfUninstallStage::CaptureIdentity);
-        let identity = env.capture_device_identity();
+        let identity = match env.capture_device_identity() {
+            Ok(identity) => identity,
+            Err(error) => {
+                output::warn(&format!(
+                    "Local device credentials are invalid; hub removal report cannot be \
+                     constructed: {error}"
+                ));
+                None
+            }
+        };
 
         env.record_stage(SelfUninstallStage::ReportHubRemoval);
         match identity.as_ref() {
@@ -325,11 +334,13 @@ impl SelfUninstallPlan {
 struct ProductionUninstallEnvironment;
 
 impl UninstallEnvironment for ProductionUninstallEnvironment {
-    fn capture_device_identity(&mut self) -> Option<DeviceIdentity> {
-        let creds = config::load_credentials().ok()?;
-        Some(DeviceIdentity {
+    fn capture_device_identity(&mut self) -> anyhow::Result<Option<DeviceIdentity>> {
+        let Some(creds) = config::load_credentials_optional()? else {
+            return Ok(None);
+        };
+        Ok(Some(DeviceIdentity {
             device_ura: crate::core::ura::device_ura(&creds.realm, &creds.node_id),
-        })
+        }))
     }
 
     fn report_hub_removal(&mut self, identity: &DeviceIdentity) -> HubRemovalReport {
@@ -481,6 +492,7 @@ mod tests {
         cleaned_profiles: Vec<PathBuf>,
         report_targets: Vec<String>,
         stop_calls: usize,
+        identity_result: Result<(), String>,
     }
 
     impl FakeUninstallEnvironment {
@@ -502,6 +514,7 @@ mod tests {
                 cleaned_profiles: Vec::new(),
                 report_targets: Vec::new(),
                 stop_calls: 0,
+                identity_result: Ok(()),
             }
         }
     }
@@ -511,8 +524,9 @@ mod tests {
             self.stages.push(stage);
         }
 
-        fn capture_device_identity(&mut self) -> Option<DeviceIdentity> {
-            self.identity.clone()
+        fn capture_device_identity(&mut self) -> anyhow::Result<Option<DeviceIdentity>> {
+            self.identity_result.clone().map_err(anyhow::Error::msg)?;
+            Ok(self.identity.clone())
         }
 
         fn report_hub_removal(&mut self, identity: &DeviceIdentity) -> HubRemovalReport {
@@ -605,6 +619,27 @@ mod tests {
         SelfUninstallPlan
             .execute(&mut env)
             .expect("missing credentials is non-fatal");
+
+        assert!(env.report_targets.is_empty());
+        assert_eq!(env.stop_calls, 1);
+        assert_eq!(
+            &env.stages[..3],
+            &[
+                SelfUninstallStage::CaptureIdentity,
+                SelfUninstallStage::ReportHubRemoval,
+                SelfUninstallStage::StopRuntime,
+            ]
+        );
+    }
+
+    #[test]
+    fn self_uninstall_surfaces_invalid_credentials_without_second_identity_path() {
+        let mut env = FakeUninstallEnvironment::with_identity();
+        env.identity_result = Err("parse credentials".to_string());
+
+        SelfUninstallPlan
+            .execute(&mut env)
+            .expect("credential projection failure is reported but local cleanup continues");
 
         assert!(env.report_targets.is_empty());
         assert_eq!(env.stop_calls, 1);

@@ -201,7 +201,7 @@ fn write_tagline(buf: &mut String, style: ColourMode) {
 /// padded to `LABEL_WIDTH`, values follow. ≤ 3 lines.
 fn write_runtime_status(buf: &mut String, style: ColourMode) {
     let lifecycle = RuntimeLifecycleService::new().status();
-    let creds = config::load_credentials().ok();
+    let creds = BannerCredentialsObservation::load();
 
     // Row 1 — daemon liveness.
     let daemon_observation = BannerDaemonObservation::from_lifecycle_result(&lifecycle);
@@ -245,7 +245,7 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
     // labels and status dots first, URA values are there to be
     // copied / read when needed, not foregrounded.
     match &creds {
-        Some(c) => {
+        BannerCredentialsObservation::Paired(c) => {
             let realm = c.realm_str();
             let hub_ura = ura::hub_ura(realm);
             let device_ura = ura::device_ura(realm, &c.node_id);
@@ -265,12 +265,20 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
                 &style.paint(sgr::DIM, &device_ura),
             );
         }
-        None => {
+        BannerCredentialsObservation::Unpaired => {
             write_row(
                 buf,
                 style,
                 "Hub:",
                 &style.paint(sgr::DIM, "not paired  ·  run 'easynet device join <token>'"),
+            );
+        }
+        BannerCredentialsObservation::Invalid(error) => {
+            write_row(
+                buf,
+                style,
+                "Hub:",
+                &style.paint(sgr::WARN, &format!("credentials invalid  ·  {error}")),
             );
         }
     }
@@ -288,6 +296,23 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
             style.paint(sgr::DIM, "(see `easynet federation peers`)"),
         );
         write_row(buf, style, "Peers:", &body);
+    }
+}
+
+#[derive(Debug)]
+enum BannerCredentialsObservation {
+    Paired(config::Credentials),
+    Unpaired,
+    Invalid(String),
+}
+
+impl BannerCredentialsObservation {
+    fn load() -> Self {
+        match config::load_credentials_optional() {
+            Ok(Some(credentials)) => Self::Paired(credentials),
+            Ok(None) => Self::Unpaired,
+            Err(error) => Self::Invalid(error.to_string()),
+        }
     }
 }
 
@@ -536,6 +561,25 @@ mod tests {
         assert!(
             !out.contains("not running  ·  start with 'easynet runtime start'"),
             "corrupt runtime projection must not render as stopped: {out}"
+        );
+    }
+
+    #[test]
+    fn malformed_credentials_render_invalid_not_unpaired() {
+        let _home = HomeGuard::new();
+        std::fs::create_dir_all(config::state_dir()).expect("state dir");
+        std::fs::write(config::state_dir().join("credentials.json"), "{ not json")
+            .expect("malformed credentials");
+
+        let out = render_plain_with_current_home();
+
+        assert!(
+            out.contains("credentials invalid"),
+            "banner must expose invalid credentials: {out}"
+        );
+        assert!(
+            !out.contains("not paired  ·  run 'easynet device join <token>'"),
+            "invalid credentials must not render as unpaired: {out}"
         );
     }
 }
