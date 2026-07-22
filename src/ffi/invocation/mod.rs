@@ -1919,10 +1919,6 @@ fn runtime_resolve_descriptor_ref_json(
     session: &crate::ffi::client::handle::ClientSession,
     request_json: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    use crate::daemon::invocation::routing::remote_invoke::{
-        self, RemoteAbilityInvocationTarget, RemoteInvocationSubject, RemoteSystemInvocationIssuer,
-    };
-
     let request: serde_json::Value = serde_json::from_str(request_json)
         .map_err(|error| anyhow::anyhow!("decode descriptor_ref request: {error}"))?;
     let object = request
@@ -1977,22 +1973,10 @@ fn runtime_resolve_descriptor_ref_json(
         return Ok(resolution);
     }
 
-    let caller_ura = descriptor_ref_request_required_string(object, "caller_ura")?.to_string();
-    let target_call = RemoteAbilityInvocationTarget::for_target_owned_selector(
-        callee_ura,
-        "meta.list_abilities",
-    )?;
-    let subject_ura =
-        target_owned_descriptor_catalog_subject_ura(callee_ura, target_call.as_str())?;
-    let output = RemoteSystemInvocationIssuer::root_plan(
-        &target_call,
-        caller_ura,
-        RemoteInvocationSubject::TargetOwnedSystem(subject_ura),
-        serde_json::json!({ "subject_ura": ability_ura }),
-        std::time::Duration::from_secs(30),
-    )?
-    .into_request()
-    .and_then(remote_invoke::invoke_remote_target)?;
+    let caller_ura = descriptor_ref_request_required_string(object, "caller_ura")?;
+    let output =
+        RemoteDescriptorCatalogProbe::prepare(callee_ura, caller_ura, ability_ura.clone())?
+            .invoke()?;
 
     let abilities = output
         .get("abilities")
@@ -2030,6 +2014,68 @@ fn descriptor_ref_request_required_string<'a>(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("descriptor_ref request missing {field}"))
+}
+
+#[cfg(feature = "axon-pb")]
+struct RemoteDescriptorCatalogProbe {
+    target: crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget,
+    caller_ura: String,
+    subject_ura: String,
+    ability_ura: String,
+    caller_signer: crate::daemon::invocation::routing::remote_invoke::RemoteInvocationCallerSigner,
+}
+
+#[cfg(feature = "axon-pb")]
+impl RemoteDescriptorCatalogProbe {
+    fn prepare(callee_ura: &str, caller_ura: &str, ability_ura: String) -> anyhow::Result<Self> {
+        let caller_ura = caller_ura.trim().to_string();
+        let caller_signer =
+            crate::daemon::invocation::routing::remote_invoke::load_remote_invocation_caller_signer(
+                &caller_ura,
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("prepare remote descriptor catalog probe signer: {error}")
+            })?;
+        let target =
+            crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
+                callee_ura,
+                "meta.list_abilities",
+            )?;
+        let subject_ura = target_owned_descriptor_catalog_subject_ura(callee_ura, target.as_str())?;
+        Ok(Self {
+            target,
+            caller_ura,
+            subject_ura,
+            ability_ura,
+            caller_signer,
+        })
+    }
+
+    fn invoke(self) -> anyhow::Result<serde_json::Value> {
+        let Self {
+            target,
+            caller_ura,
+            subject_ura,
+            ability_ura,
+            caller_signer,
+        } = self;
+        crate::daemon::invocation::routing::remote_invoke::RemoteSystemInvocationIssuer::root_plan(
+            &target,
+            caller_ura,
+            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationSubject::TargetOwnedSystem(
+                subject_ura,
+            ),
+            serde_json::json!({ "subject_ura": ability_ura }),
+            std::time::Duration::from_secs(30),
+        )?
+        .into_request()
+        .and_then(|request| {
+            crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_with_caller_signer(
+                request,
+                caller_signer,
+            )
+        })
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -9353,6 +9399,76 @@ mod tests {
         assert!(
             !message.contains("offline-daemon.sock"),
             "missing caller_ura must fail before remote daemon IO: {message}"
+        );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_descriptor_remote_probe_requires_caller_signer_before_daemon_io() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path = dir.path().join("control.json");
+        let local_node_id = "local-runtime-node";
+        let remote_node_id = "remote-runtime-node";
+        let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
+        let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        let caller_ura = "easynet:///r/localhost/user/missing-descriptor-probe-signer";
+        crate::daemon::control::discovery::write(
+            &control_path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(dir.path().join("control.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("offline-daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: Some(local_node_id.to_string()),
+                }),
+                pid: 1,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write control discovery");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            control_path.display().to_string(),
+            Some(dir.path().join("offline-daemon.sock").display().to_string()),
+        );
+
+        let error = runtime_resolve_descriptor_ref_json(
+            &session,
+            &serde_json::json!({
+                "callee_ura": remote_device_ura,
+                "caller_ura": caller_ura,
+                "subject_ura": remote_device_ura,
+                "ability": format!(
+                    "easynet:///r/localhost/ability/device.{remote_node_id}.custom.not.system"
+                ),
+                "call_mode": "rpc",
+            })
+            .to_string(),
+        )
+        .expect_err("remote descriptor probe must require caller signer before daemon IO");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("prepare remote descriptor catalog probe signer"),
+            "unexpected descriptor resolver error: {message}"
+        );
+        assert!(
+            message.contains("requires a caller signer"),
+            "remote descriptor probe must fail in caller signer readiness: {message}"
+        );
+        assert!(
+            !message.contains("offline-daemon.sock") && !message.contains("ROUTE_NEGATIVE"),
+            "caller signer readiness must happen before daemon IO or route lookup: {message}"
+        );
+        assert!(
+            !message.contains(&local_device_ura),
+            "remote descriptor probe must not replace caller identity with runtime owner: {message}"
         );
     }
 

@@ -2711,6 +2711,37 @@ if "resolve descriptor_ref runtime owner" not in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:runtime_owner_error_context_missing")
 if 'descriptor_ref_request_required_string(object, "caller_ura")' not in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:explicit_caller_required_missing")
+if "RemoteDescriptorCatalogProbe::prepare(callee_ura, caller_ura, ability_ura.clone())" not in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:remote_probe_state_missing")
+if "RemoteSystemInvocationIssuer::root_plan(" in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:remote_probe_inline_plan")
+if "invoke_remote_target)" in resolve_body or ".and_then(remote_invoke::invoke_remote_target)" in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:remote_probe_implicit_invoke")
+
+probe = re.search(
+    r"struct RemoteDescriptorCatalogProbe \{(?P<struct>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nimpl RemoteDescriptorCatalogProbe \{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn target_owned_descriptor_catalog_subject_ura",
+    text,
+    re.S,
+)
+if probe is None:
+    raise SystemExit("ffi_descriptor_runtime_owner:remote_probe_state_object_missing")
+probe_struct = probe.group("struct")
+probe_body = probe.group("body")
+for required in (
+    "caller_signer:",
+    "RemoteInvocationCallerSigner",
+):
+    if required not in probe_struct:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:remote_probe_state_field_missing:{required}")
+for required in (
+    "fn prepare(",
+    "load_remote_invocation_caller_signer(",
+    "prepare remote descriptor catalog probe signer",
+    "fn invoke(self)",
+    "invoke_remote_target_with_caller_signer(",
+):
+    if required not in probe_body:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:remote_probe_state_missing:{required}")
 
 projection = re.search(
     r"fn descriptor_resolution_error_projection\(message: &str\) -> \(i32, ErrorProjection\) \{(?P<body>.*?)\n\}\n\n/// Allocate a mutable Invocation builder handle.",
@@ -2727,6 +2758,7 @@ if 'code: "CALLER_IDENTITY_UNAVAILABLE"' not in projection_body:
 
 for required_test in (
     "runtime_descriptor_remote_probe_requires_runtime_owner_identity",
+    "runtime_descriptor_remote_probe_requires_caller_signer_before_daemon_io",
     "descriptor_resolution_errors_project_canonical_runtime_codes",
 ):
     if required_test not in text:

@@ -28,7 +28,7 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{anyhow, bail, Context};
 use serde_json::{json, Value};
@@ -42,6 +42,9 @@ use crate::daemon::invocation::{
 use axon_sdk::invocation::CausalContext;
 use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
 use axon_sdk::pb::axon::v1::{InvocationState as WireInvocationState, InvokeResponse};
+
+pub(crate) type RemoteInvocationCallerSigner =
+    Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>;
 
 /// Validate a `--node` argument as a canonical Axon Device or Hub URA.
 /// Returns the URA string when it parses; surfaces a typed error
@@ -508,6 +511,51 @@ impl<'a> RemoteInvocationRequest<'a> {
 }
 
 pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyhow::Result<Value> {
+    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+    ensure_remote_invocation_daemon_accepting(&socket_path)?;
+    let signer = load_remote_invocation_caller_signer(request.caller_ura.as_str())?;
+    invoke_remote_target_on_ready_socket(request, signer, socket_path)
+}
+
+pub(crate) fn load_remote_invocation_caller_signer(
+    caller_ura: &str,
+) -> anyhow::Result<RemoteInvocationCallerSigner> {
+    let caller_ura = caller_ura.to_string();
+    crate::daemon::identity::self_identity::load_runtime_caller_signer(caller_ura.clone()).map_err(
+        |err| {
+            anyhow!(
+                "remote invocation requires a caller signer for `{caller_ura}`; \
+                 load or provision that identity in the local key service: {err}"
+            )
+        },
+    )
+}
+
+pub(crate) fn invoke_remote_target_with_caller_signer(
+    request: RemoteInvocationRequest<'_>,
+    signer: RemoteInvocationCallerSigner,
+) -> anyhow::Result<Value> {
+    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+    ensure_remote_invocation_daemon_accepting(&socket_path)?;
+    invoke_remote_target_on_ready_socket(request, signer, socket_path)
+}
+
+fn ensure_remote_invocation_daemon_accepting(socket_path: &std::path::Path) -> anyhow::Result<()> {
+    if !crate::support::platform::local_daemon_grpc::probe_accepting(socket_path) {
+        bail!(
+            "daemon not running (local gRPC listener unreachable at {}). \
+             Start it with `easynet runtime start`.",
+            socket_path.display()
+        );
+    }
+    Ok(())
+}
+
+fn invoke_remote_target_on_ready_socket(
+    request: RemoteInvocationRequest<'_>,
+    signer: RemoteInvocationCallerSigner,
+    socket_path: std::path::PathBuf,
+) -> anyhow::Result<Value> {
     let RemoteInvocationRequest {
         target,
         caller_ura,
@@ -519,14 +567,6 @@ pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyh
     } = request;
     let arguments = serde_json::to_vec(&args).context("serialise remote invocation arguments")?;
     let timeout_seconds = i32::try_from(timeout.as_secs().max(1)).unwrap_or(i32::MAX);
-    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
-    if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
-        bail!(
-            "daemon not running (local gRPC listener unreachable at {}). \
-             Start it with `easynet runtime start`.",
-            socket_path.display()
-        );
-    }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -534,14 +574,6 @@ pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyh
         .context("build tokio runtime for canonical remote invoke")?;
 
     runtime.block_on(async move {
-        let signer =
-            crate::daemon::identity::self_identity::load_runtime_caller_signer(caller_ura.clone())
-                .map_err(|err| {
-                    anyhow!(
-                        "remote invocation requires a caller signer for `{caller_ura}`; \
-                 load or provision that identity in the local key service: {err}"
-                    )
-                })?;
         let mut request = ProtoEnvelope::from_target(
             caller_ura.clone(),
             target.callee_ura.clone(),
