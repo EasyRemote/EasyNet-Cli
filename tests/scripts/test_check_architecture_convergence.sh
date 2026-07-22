@@ -1405,6 +1405,44 @@ impl LocalHostedAgentPlacements {
     }
 }
 
+fn route_selector_from_query(
+    query_name: &str,
+    ability_name: &str,
+) -> Result<Option<RouteSelector>, ResolveRouteFailure> {
+    if query_name.contains("@") {
+        let _selector = ability_selector_from_descriptor_ref(query_name)?;
+    }
+    if ability_name.contains("@") {
+        return route_selector_from_descriptor_ref(query_name, ability_name).map(Some);
+    }
+    Ok(None)
+}
+
+fn route_selector_from_descriptor_ref(
+    owner_ura: &str,
+    descriptor_ref: &str,
+) -> Result<RouteSelector, ResolveRouteFailure> {
+    let selector = ability_selector_from_descriptor_ref(descriptor_ref)?;
+    if selector.owner_ura() != owner_ura {
+        return Err(ResolveRouteFailure);
+    }
+    Ok(RouteSelector)
+}
+
+fn ability_selector_from_descriptor_ref(
+    descriptor_ref: &str,
+) -> Result<crate::core::ura::AbilitySelector, ResolveRouteFailure> {
+    let descriptor_ref =
+        axon_sdk::invocation::canonical_ability_descriptor_ref(descriptor_ref)
+            .map_err(|_| ResolveRouteFailure)?;
+    let ability_ura =
+        crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+            &descriptor_ref,
+        )
+        .map_err(|_| ResolveRouteFailure)?;
+    crate::core::ura::AbilitySelector::parse(&ability_ura).map_err(|_| ResolveRouteFailure)
+}
+
 fn resolve_delegation(peer_source: PeerSource, parsed_owner: ParsedOwner, selector: Selector) {
     let resolution = HubResolver::new(
         peer_source.federated_peers,
@@ -3969,6 +4007,61 @@ impl LocalHostedAgentPlacements {
 EOF
 expect_fail \
   "route resolver hosted placement aggregate fork" \
+  "R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/routing/route_resolver.rs" <<'EOF'
+struct LocalHostedAgentPlacements {
+    state: HostedPlacementProjectionState,
+}
+
+enum HostedPlacementProjectionState {
+    Available,
+    Unavailable { reason: String },
+}
+
+impl LocalHostedAgentPlacements {
+    fn load() -> Self {
+        match AgentAggregateRepository::try_load_snapshot() {
+            Ok(snapshot) => Self::from_projection(snapshot.hosted_agent_placements()),
+            Err(error) => Self {
+                state: HostedPlacementProjectionState::Unavailable {
+                    reason: format!("{error:#}"),
+                },
+            },
+        }
+    }
+
+    fn from_projection(projection: AgentHostedPlacementProjection) -> Self {
+        Self {
+            state: HostedPlacementProjectionState::Available,
+        }
+    }
+}
+
+fn route_selector_from_query(query_name: &str, ability_name: &str) -> Option<RouteSelector> {
+    if ability_name.trim().is_empty() {
+        if let Some(selector) = ability_selector_from_descriptor_ref(query_name) {
+            return Some(RouteSelector);
+        }
+    }
+    None
+}
+
+fn ability_selector_from_descriptor_ref(
+    descriptor_ref: &str,
+) -> Option<crate::core::ura::AbilitySelector> {
+    let descriptor_ref =
+        axon_sdk::invocation::canonical_ability_descriptor_ref(descriptor_ref).ok()?;
+    let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+        &descriptor_ref,
+    )
+    .ok()?;
+    crate::core::ura::AbilitySelector::parse(&ability_ura).ok()
+}
+EOF
+expect_fail \
+  "route resolver descriptor-ref selector fallback" \
   "R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK"
 
 make_good_fixture

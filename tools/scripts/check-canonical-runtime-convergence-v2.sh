@@ -988,6 +988,76 @@ check_daemon_runtime_route_inventory_contract() {
   bash "$ROOT/tools/scripts/check-architecture-convergence.sh" >/dev/null
 }
 
+check_route_resolver_descriptor_ref_selector_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local route_resolver="$cli_root/src/daemon/invocation/routing/route_resolver.rs"
+  [[ -f "$route_resolver" ]] || fail "route resolver source is missing: $route_resolver"
+
+  "$PYTHON_BIN" - "$route_resolver" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]\nmod tests", 1)[0]
+
+def function_slice(name: str, next_name: str | None = None) -> tuple[str, str]:
+    marker = f"fn {name}"
+    start = production.find(marker)
+    if start < 0:
+        raise SystemExit(f"route_resolver:{name}:missing")
+    brace = production.find("{", start)
+    if brace < 0:
+        raise SystemExit(f"route_resolver:{name}:body_missing")
+    signature = production[start:brace]
+    if next_name is not None:
+        next_marker = f"\nfn {next_name}"
+        end = production.find(next_marker, brace)
+        if end < 0:
+            end = len(production)
+    else:
+        end = len(production)
+    return signature, production[brace:end]
+
+route_signature, route_body = function_slice(
+    "route_selector_from_query",
+    "route_selector_from_descriptor_ref",
+)
+descriptor_signature, descriptor_body = function_slice(
+    "ability_selector_from_descriptor_ref",
+    "selected_execution_for_owner",
+)
+
+if "Result<Option<RouteSelector>, ResolveRouteFailure>" not in route_signature:
+    raise SystemExit("route_resolver:descriptor_ref_selector:route_selector_not_fallible")
+if "ability_selector_from_descriptor_ref(query_name)?" not in route_body:
+    raise SystemExit("route_resolver:descriptor_ref_selector:query_parse_not_propagated")
+if "route_selector_from_descriptor_ref(owner_ura, ability_name).map(Some)" not in route_body:
+    raise SystemExit("route_resolver:descriptor_ref_selector:owner_parse_not_propagated")
+if "Result<crate::core::ura::AbilitySelector, ResolveRouteFailure>" not in descriptor_signature:
+    raise SystemExit("route_resolver:descriptor_ref_selector:descriptor_selector_not_fallible")
+
+compact_descriptor = re.sub(r"\s+", "", descriptor_body)
+legacy_patterns = {
+    "canonical_ability_descriptor_ref(descriptor_ref).ok()": "canonicalization_none",
+    "ability_ura_from_descriptor_ref(&descriptor_ref).ok()": "ability_extraction_none",
+    ".ok()?": "option_question_fallback",
+    "AbilitySelector::parse(&ability_ura).ok()": "selector_parse_none",
+}
+for pattern, label in legacy_patterns.items():
+    if re.sub(r"\s+", "", pattern) in compact_descriptor:
+        raise SystemExit(f"route_resolver:descriptor_ref_selector:{label}")
+
+for required_test in (
+    "malformed_descriptor_ref_does_not_fall_through_as_public_name",
+    "descriptor_ref_owner_mismatch_fails_before_route_lookup",
+):
+    if required_test not in text:
+        raise SystemExit(f"route_resolver:descriptor_ref_selector:missing_test:{required_test}")
+PY
+}
+
 check_daemon_runtime_assembly_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local runtime_binding="$cli_root/src/daemon/invocation/dispatch/deps.rs"
@@ -2656,6 +2726,50 @@ PY
   if ( AXON_ROOT="$tmp/axon-rust-legacy-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Rust legacy plain proof boundary gate to fail"
   fi
+  mkdir -p "$tmp/cli-route-selector-legacy/src/daemon/invocation/routing"
+  cat >"$tmp/cli-route-selector-legacy/src/daemon/invocation/routing/route_resolver.rs" <<'EOF'
+fn route_selector_from_query(query_name: &str, ability_name: &str) -> Option<RouteSelector> {
+    if ability_name.trim().is_empty() {
+        if let Some(selector) = ability_selector_from_descriptor_ref(query_name) {
+            return Some(RouteSelector {
+                query_name: selector.ability_ura().to_string(),
+                owner_ura: selector.owner_ura().to_string(),
+                ability_ura: selector.ability_ura().to_string(),
+                public_name: selector.public_name().to_string(),
+            });
+        }
+    }
+    None
+}
+
+fn route_selector_from_descriptor_ref(
+    owner_ura: &str,
+    descriptor_ref: &str,
+) -> Option<RouteSelector> {
+    let selector = ability_selector_from_descriptor_ref(descriptor_ref)?;
+    if selector.owner_ura() != owner_ura {
+        return None;
+    }
+    None
+}
+
+fn ability_selector_from_descriptor_ref(
+    descriptor_ref: &str,
+) -> Option<crate::core::ura::AbilitySelector> {
+    let descriptor_ref =
+        axon_sdk::invocation::canonical_ability_descriptor_ref(descriptor_ref).ok()?;
+    let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
+        &descriptor_ref,
+    )
+    .ok()?;
+    crate::core::ura::AbilitySelector::parse(&ability_ura).ok()
+}
+
+fn selected_execution_for_owner() {}
+EOF
+  if ( CLI_ROOT="$tmp/cli-route-selector-legacy"; check_route_resolver_descriptor_ref_selector_contract ) >/dev/null 2>&1; then
+    fail "self-test expected route descriptor-ref selector fallback gate to fail"
+  fi
   cp -R "$tmp/axon" "$tmp/axon-python-private-plain-proof"
   printf 'def _canonical_invocation_bytes(env):\n  return b""\n' \
     > "$tmp/axon-python-private-plain-proof/sdk/python/axon_sdk/invocation/axiom.py"
@@ -3165,6 +3279,7 @@ EOF
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
   check_daemon_runtime_route_inventory_contract
+  check_route_resolver_descriptor_ref_selector_contract
   check_daemon_runtime_assembly_contract
   check_plugin_sidecar_helper_matrix_contract
   check_key_custody_boundary_contract
@@ -3211,6 +3326,7 @@ check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
 check_daemon_runtime_route_inventory_contract
+check_route_resolver_descriptor_ref_selector_contract
 check_daemon_runtime_assembly_contract
 check_plugin_sidecar_helper_matrix_contract
 check_key_custody_boundary_contract

@@ -845,3 +845,16 @@ Decisions will be appended as root-fork choices are made.
   `CredentialsUnavailable`.
 - Add SPEC v2 and architecture gates so prelude credential classification
   cannot regress to `let Ok(...) else NotRequired` fallback semantics.
+
+## 2026-07-22 Descriptor-ref route selector failures
+
+- Treat descriptor-ref parsing as a route selector state machine, not an
+  optional public-name lookup. Canonicalization, descriptor ability extraction,
+  and ability selector parsing now either produce a selector or a typed
+  `ResolveRouteFailure`.
+- Refuse descriptor owner mismatch before catalog/remote lookup. This prevents
+  a descriptor-bound request for one owner from being reinterpreted as a local
+  ability-name query against another owner.
+- Extend architecture and SPEC v2 gates with negative fixtures for the retired
+  `Option`/`.ok()?` descriptor selector path so future route work cannot
+  reintroduce silent fallback semantics.

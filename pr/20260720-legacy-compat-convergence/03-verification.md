@@ -2616,3 +2616,24 @@ Commands and outcomes will be appended after implementation.
   tools/scripts/check-architecture-convergence.sh` — PASS.
 - `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
 - `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+
+## 2026-07-22 Descriptor-ref route selector fail-closed cutover
+
+- `cargo test -q descriptor_ref --lib --features axon-pb` — PASS (`35
+  passed`); covers malformed descriptor refs and descriptor owner mismatch
+  failing before public-name/catalog lookup.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS; includes a negative fixture for the retired
+  `Option`/`.ok()?` descriptor selector fallback.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.
+- `GOCACHE=/tmp/easynet-go-build-cache bash
+  tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` —
+  PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `cargo fmt --all -- --check` — PASS.
+- `git diff --check` — PASS.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync
+  /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS;
+  codegraph `status` reports `Index is up to date`.

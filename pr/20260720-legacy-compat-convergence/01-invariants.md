@@ -338,3 +338,9 @@
   paired-user identity. Missing credentials may skip paired-user trust sync;
   unreadable, malformed, schema-invalid, or all-zero paired credentials must
   fail the prelude before `session.open` can expose a ready route.
+- Descriptor-ref route selection is a typed parse/admission state, not a
+  best-effort name lookup. Malformed descriptor refs, descriptor ability
+  extraction failures, and descriptor owner mismatches must return
+  descriptor-specific `ResolveRouteFailure` values before catalog lookup; they
+  must not collapse into `None`, public-name fallback, NXDOMAIN-style misses,
+  or timeout-driven discovery failures.

@@ -4018,7 +4018,7 @@ if ability_health.exists():
 route_resolver = cli_root / "src/daemon/invocation/routing/route_resolver.rs"
 if route_resolver.exists():
     text = source(route_resolver)
-    production_text = text.split("#[cfg(test)]", 1)[0]
+    production_text = text.split("\n#[cfg(test)]\nmod tests", 1)[0]
     route_placement_requirements = (
         (
             "AgentAggregateRepository::try_load_snapshot()",
@@ -4064,6 +4064,88 @@ if route_resolver.exists():
     ):
         if token in production_text:
             add("R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK", route_resolver, 1, detail)
+
+    # Descriptor-bound route selection must be a fail-closed parse state, not
+    # an Option pipeline that collapses malformed descriptor refs into a
+    # generic route-shape miss.
+    selector_body = rust_method_body(production_text, "route_selector_from_query")
+    if selector_body is None:
+        add(
+            "R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK",
+            route_resolver,
+            1,
+            "route selector must remain inspectable",
+        )
+    else:
+        offset, body = selector_body
+        signature = production_text[offset : production_text.find("{", offset)]
+        if "Result<Option<RouteSelector>, ResolveRouteFailure>" not in signature:
+            add(
+                "R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK",
+                route_resolver,
+                line_number(production_text, offset),
+                "route selector must preserve descriptor-ref parse failures as typed route failures",
+            )
+        if "ability_selector_from_descriptor_ref(query_name)?" not in body:
+            add(
+                "R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK",
+                route_resolver,
+                line_number(production_text, offset),
+                "descriptor-ref query parsing must propagate selector failures",
+            )
+    descriptor_body = rust_method_body(production_text, "ability_selector_from_descriptor_ref")
+    if descriptor_body is None:
+        add(
+            "R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK",
+            route_resolver,
+            1,
+            "descriptor-ref ability selector must remain inspectable",
+        )
+    else:
+        offset, body = descriptor_body
+        signature = production_text[offset : production_text.find("{", offset)]
+        if "Result<crate::core::ura::AbilitySelector, ResolveRouteFailure>" not in signature:
+            add(
+                "R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK",
+                route_resolver,
+                line_number(production_text, offset),
+                "descriptor-ref selector must return a typed route failure",
+            )
+        descriptor_ref_legacy_patterns = (
+            (
+                "canonical_ability_descriptor_ref(descriptor_ref).ok()",
+                "descriptor-ref canonicalization failures must not be collapsed into None",
+            ),
+            (
+                "ability_ura_from_descriptor_ref(&descriptor_ref).ok()",
+                "descriptor-ref ability extraction failures must not be collapsed into None",
+            ),
+            (
+                ".ok()?",
+                "descriptor-ref ability extraction failures must not be collapsed into None",
+            ),
+            (
+                "AbilitySelector::parse(&ability_ura).ok()",
+                "descriptor-ref ability selector parse failures must not be collapsed into None",
+            ),
+        )
+        compact_body = re.sub(r"\s+", "", body)
+        for pattern, detail in descriptor_ref_legacy_patterns:
+            compact_pattern = re.sub(r"\s+", "", pattern)
+            if pattern in body:
+                add(
+                    "R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK",
+                    route_resolver,
+                    line_number(production_text, offset + body.find(pattern)),
+                    detail,
+                )
+            elif compact_pattern in compact_body:
+                add(
+                    "R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK",
+                    route_resolver,
+                    line_number(production_text, offset),
+                    detail,
+                )
 
 # Rule 38: Mission child-target proof consumes Agent aggregate projections.
 # Mission execution creates child Invocations; target proof must not duplicate

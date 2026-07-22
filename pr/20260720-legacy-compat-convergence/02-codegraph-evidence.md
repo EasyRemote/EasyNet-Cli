@@ -2343,3 +2343,28 @@ Evidence will be appended after indexing and focused impact queries.
 - Boundary decision: session prelude now uses the same optional-credential
   classifier pattern as admission: absent file is optional absence; existing
   invalid paired identity is a prelude failure.
+
+## 2026-07-22 Descriptor-ref route selector fallback audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` reported the index
+  for `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` at version
+  `1.4.1` with pending Rust changes in the route resolver; the documented
+  override path was absent in this shell, so the existing
+  `/Users/macbook.silan.tech/.local/bin/codegraph` installation was used.
+- `rg -n "descriptor_ref not found|meta.list_abilities|invocation.history.list|
+  remote invocation requires a caller signer" src sdk tools tests -S` tied the
+  reported product failures to the descriptor resolution and route selector
+  boundary rather than the browser UI.
+- `git diff -- src/daemon/invocation/routing/route_resolver.rs` showed the
+  previous selector helper collapsed
+  `canonical_ability_descriptor_ref(...).ok()?`,
+  `ability_ura_from_descriptor_ref(...).ok()?`, and
+  `AbilitySelector::parse(...).ok()` into `None`.
+- Root abstraction problem: descriptor-ref parsing was represented as an
+  optional route-shape match, so malformed descriptor refs and owner mismatches
+  could degrade into generic route query failures or later catalog/remote
+  discovery errors.
+- Boundary decision: route selector construction is now fallible. Descriptor
+  canonicalization, ability extraction, and selector parsing failures remain
+  typed `ResolveRouteFailure` states; descriptor owner mismatch is refused
+  before any route lookup.
