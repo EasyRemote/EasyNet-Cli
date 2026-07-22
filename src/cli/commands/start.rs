@@ -502,12 +502,21 @@ fn load_and_verify_credentials_with<F>(verify: F) -> anyhow::Result<(config::Cre
 where
     F: Fn(&config::Credentials) -> CredentialCheck,
 {
-    let Ok(creds) = config::load_credentials() else {
-        output::info("No credentials found.");
-        output::info("Visit https://easynet.run or your Hub to create a pairing token,");
-        output::info("then run 'easynet device join <token>' to pair this device.");
-        output::info("If you're running a Hub, use 'easynet runtime start --as-hub' instead.");
-        anyhow::bail!("no credentials — cannot start device agent");
+    let creds = match StartCredentialReadiness::load() {
+        StartCredentialReadiness::Ready(creds) => creds,
+        StartCredentialReadiness::Missing => {
+            output::info("No credentials found.");
+            output::info("Visit https://easynet.run or your Hub to create a pairing token,");
+            output::info("then run 'easynet device join <token>' to pair this device.");
+            output::info("If you're running a Hub, use 'easynet runtime start --as-hub' instead.");
+            anyhow::bail!("no credentials — cannot start device agent");
+        }
+        StartCredentialReadiness::Invalid { reason } => {
+            output::info("Credentials invalid.");
+            output::info("Run 'easynet device join <token>' to re-pair this device.");
+            output::info("If you're running a Hub, use 'easynet runtime start --as-hub' instead.");
+            anyhow::bail!("invalid credentials — cannot start device agent: {reason}");
+        }
     };
 
     if has_daemon_native_join_lineage(&creds) {
@@ -566,6 +575,38 @@ where
             eprintln!("  Visit https://easynet.run or your Hub to create a new pairing token,");
             eprintln!("  then run 'easynet device join <token>'.");
             anyhow::bail!("credential revoked");
+        }
+    }
+}
+
+#[derive(Debug)]
+enum StartCredentialReadiness {
+    Ready(config::Credentials),
+    Missing,
+    Invalid { reason: String },
+}
+
+impl StartCredentialReadiness {
+    fn load() -> Self {
+        Self::from_credentials_result(config::load_credentials_optional())
+    }
+
+    fn from_credentials_result(result: anyhow::Result<Option<config::Credentials>>) -> Self {
+        match result {
+            Ok(Some(credentials)) => Self::Ready(credentials),
+            Ok(None) => Self::Missing,
+            Err(error) => Self::Invalid {
+                reason: format!("{error:#}"),
+            },
+        }
+    }
+
+    #[cfg(test)]
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Ready(_) => "ready",
+            Self::Missing => "missing",
+            Self::Invalid { .. } => "invalid",
         }
     }
 }
@@ -993,6 +1034,38 @@ mod tests {
     }
 
     #[test]
+    fn start_credential_readiness_reports_ready_credentials() {
+        let state = StartCredentialReadiness::from_credentials_result(Ok(Some(test_creds())));
+
+        assert_eq!(state.label(), "ready");
+    }
+
+    #[test]
+    fn start_credential_readiness_reports_missing_only_for_absent_credentials() {
+        let state = StartCredentialReadiness::from_credentials_result(Ok(None));
+
+        assert_eq!(state.label(), "missing");
+    }
+
+    #[test]
+    fn start_credential_readiness_reports_invalid_existing_credentials() {
+        let state = StartCredentialReadiness::from_credentials_result(Err(anyhow::anyhow!(
+            "parse credentials from /tmp/credentials.json: expected value"
+        )));
+
+        assert_eq!(state.label(), "invalid");
+        match state {
+            StartCredentialReadiness::Invalid { reason } => {
+                assert!(
+                    reason.contains("parse credentials"),
+                    "invalid state must preserve reason: {reason}"
+                );
+            }
+            other => panic!("expected invalid state, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn load_and_verify_credentials_fails_but_keeps_credentials_when_hub_unavailable() {
         let _g = HomeGuard::new();
         let creds = test_creds();
@@ -1107,6 +1180,28 @@ mod tests {
         let _g = HomeGuard::new();
         let err = load_and_verify_credentials().expect_err("missing credentials must fail");
         assert!(err.to_string().contains("no credentials"));
+    }
+
+    #[test]
+    fn load_and_verify_credentials_rejects_invalid_credentials_before_verify() {
+        let _g = HomeGuard::new();
+        std::fs::create_dir_all(config::state_dir()).expect("create state dir");
+        std::fs::write(config::state_dir().join("credentials.json"), b"{not-json")
+            .expect("write malformed credentials");
+
+        let err = load_and_verify_credentials_with(|_| {
+            panic!("Hub verifier must not run for invalid existing credentials")
+        })
+        .expect_err("invalid credentials must fail before verification");
+        let message = err.to_string();
+        assert!(
+            message.contains("invalid credentials"),
+            "invalid existing credentials must not render as missing: {message}"
+        );
+        assert!(
+            message.contains("parse credentials"),
+            "invalid readiness must preserve parser reason: {message}"
+        );
     }
 
     #[test]

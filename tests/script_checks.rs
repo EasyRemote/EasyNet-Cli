@@ -339,6 +339,13 @@ fn status_pairing_state_boundary_script_holds() {
 }
 
 #[test]
+fn start_credential_readiness_boundary_script_holds() {
+    // Pins daemon start preflight to explicit ready/missing/invalid credential
+    // states. Invalid existing credentials must not render as first-run setup.
+    run_bash_script("tests/scripts/test_check_start_credential_readiness_boundary.sh");
+}
+
+#[test]
 fn runtime_abilities_manifest_boundary_script_holds() {
     // Pins per-agent ability discovery to authored manifests under
     // AgentDirectory. Missing roots must not synthesize chat abilities.
