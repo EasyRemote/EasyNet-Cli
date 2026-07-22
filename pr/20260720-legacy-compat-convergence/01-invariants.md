@@ -435,3 +435,10 @@
   generic Agent identity field. `identity.list_user_pubkeys` request, response,
   schema, CLI callers, and RuntimeTrust snapshot state must use `user_ura` and
   reject retired `agent_ura` input before reading trust rows.
+- Runtime trust writes must expose role-accurate tuple fields. Generic trust
+  registration uses `principal_ura` because it can write User, Device,
+  Backend, or Hub rows; user-key revocation uses `user_ura` because it is
+  user-only. `agent_ura` may remain in persisted trust-anchor row storage until
+  that schema is migrated, but it must not reappear as the request field or
+  intent accessor for `identity.register_pubkey` or
+  `identity.revoke_user_pubkey`.

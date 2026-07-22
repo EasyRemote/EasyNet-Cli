@@ -23,7 +23,7 @@
 // Inputs
 // ------
 //   {
-//     "agent_ura":      "easynet:///r/{realm}/device/{device_id}"
+//     "principal_ura":  "easynet:///r/{realm}/device/{device_id}"
 //                       | "easynet:///r/{realm}/authority",
 //     "public_key_b64": "<base64 standard, 32-byte ed25519 vk>",
 //     "role":           "device" | "backend" | "hub"
@@ -32,7 +32,7 @@
 // Realm cross-boundary rule
 // -------------------------
 // `role = "device"` is allowed to register an out-of-realm
-// `agent_ura`. Production pairing stamps device URAs under the
+// `principal_ura`. Production pairing stamps device URAs under the
 // owning user's realm (`realm = user_id`) while the hosting
 // daemon may run a platform realm (for example
 // `easynet-platform`). The trust anchor is keyed by full URA, not
@@ -72,8 +72,9 @@ pub const ABILITY_IDENTITY_REGISTER_PUBKEY: &str =
 /// future protocol version surfaces as a clean `invalid_argument`
 /// rather than a serde decoder error.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RegisterArgs {
-    agent_ura: String,
+    principal_ura: String,
     public_key_b64: String,
     role: String,
     #[serde(default)]
@@ -90,13 +91,13 @@ struct RegisterArgs {
 /// realm rules, duplicate policy, and atomic save.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RegisterPubkeyIntent {
-    agent_ura: String,
+    principal_ura: String,
     role: TrustedAgentRole,
 }
 
 impl RegisterPubkeyIntent {
-    pub(crate) fn agent_ura(&self) -> &str {
-        &self.agent_ura
+    pub(crate) fn principal_ura(&self) -> &str {
+        &self.principal_ura
     }
 
     pub(crate) fn role(&self) -> TrustedAgentRole {
@@ -104,8 +105,11 @@ impl RegisterPubkeyIntent {
     }
 
     #[cfg(test)]
-    pub(crate) fn for_test(agent_ura: String, role: TrustedAgentRole) -> Self {
-        Self { agent_ura, role }
+    pub(crate) fn for_test(principal_ura: String, role: TrustedAgentRole) -> Self {
+        Self {
+            principal_ura,
+            role,
+        }
     }
 }
 
@@ -124,7 +128,7 @@ pub struct RegisterResponse {
 ///
 ///   1. Decode `arguments` JSON into `RegisterArgs`. Any decoder
 ///      failure → `Status::invalid_argument`.
-///   2. Validate `agent_ura` matches the trust-writer policy:
+///   2. Validate `principal_ura` matches the trust-writer policy:
 ///      device entries may target any realm, backend/hub entries
 ///      must stay daemon-local. Policy mismatch →
 ///      `Status::permission_denied`.
@@ -149,7 +153,7 @@ pub fn handle(
 
     let owner = trusted_principal_owner_from_args(&args)?;
     RuntimeTrust::new(daemon_realm, trust_anchor_path, cell).register_pubkey_with_owner(
-        args.agent_ura,
+        args.principal_ura,
         args.public_key_b64,
         role,
         owner,
@@ -167,7 +171,7 @@ pub(crate) fn parse_register_pubkey_intent(
 ) -> Result<RegisterPubkeyIntent, Status> {
     let (args, role) = decode_register_args(arguments)?;
     Ok(RegisterPubkeyIntent {
-        agent_ura: args.agent_ura,
+        principal_ura: args.principal_ura,
         role,
     })
 }
@@ -179,9 +183,9 @@ fn decode_register_args(arguments: &[u8]) -> Result<(RegisterArgs, TrustedAgentR
         ))
     })?;
 
-    if args.agent_ura.is_empty() {
+    if args.principal_ura.is_empty() {
         return Err(Status::invalid_argument(
-            "identity.register_pubkey: agent_ura is required",
+            "identity.register_pubkey: principal_ura is required",
         ));
     }
     if args.public_key_b64.is_empty() {
@@ -226,7 +230,7 @@ fn trusted_principal_owner_from_args(
         .filter(|value| !value.is_empty())
         .map(ToString::to_string);
     Ok(Some(TrustedPrincipalOwner {
-        principal_ura: args.agent_ura.clone(),
+        principal_ura: args.principal_ura.clone(),
         owner_user_id: owner_user_id.to_string(),
         owner_ura: owner_ura.to_string(),
         owner_username,
@@ -275,7 +279,7 @@ mod tests {
 
     fn args_bytes(ura: &str, key: &str, role: &str) -> Vec<u8> {
         serde_json::to_vec(&json!({
-            "agent_ura": ura,
+            "principal_ura": ura,
             "public_key_b64": key,
             "role": role
         }))
@@ -284,7 +288,7 @@ mod tests {
 
     fn args_bytes_with_owner_ura(ura: &str, key: &str, role: &str, owner_ura: &str) -> Vec<u8> {
         serde_json::to_vec(&json!({
-            "agent_ura": ura,
+            "principal_ura": ura,
             "public_key_b64": key,
             "role": role,
             "principal_owner_ura": owner_ura
@@ -300,7 +304,7 @@ mod tests {
         owner_username: &str,
     ) -> Vec<u8> {
         serde_json::to_vec(&json!({
-            "agent_ura": ura,
+            "principal_ura": ura,
             "public_key_b64": key,
             "role": role,
             "principal_owner_ura": owner_ura,
@@ -555,13 +559,29 @@ mod tests {
     }
 
     #[test]
-    fn empty_agent_ura_rejected_with_invalid_argument() {
+    fn empty_principal_ura_rejected_with_invalid_argument() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
         let args = args_bytes("", &test_pub_b64(), "device");
         let err = handle(&args, "r1", &path, &cell).expect_err("must reject");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(err.message().contains("agent_ura is required"));
+        assert!(err.message().contains("principal_ura is required"));
+    }
+
+    #[test]
+    fn register_rejects_retired_agent_ura_request_field() {
+        let (_dir, path) = fresh_path();
+        let cell = empty_cell();
+        let args = serde_json::to_vec(&json!({
+            "agent_ura": "easynet:///r/r1/device/alpha",
+            "public_key_b64": test_pub_b64(),
+            "role": "device"
+        }))
+        .expect("encode legacy args");
+
+        let err = handle(&args, "r1", &path, &cell).expect_err("must reject retired field");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("unknown field"));
     }
 
     #[test]

@@ -1,5 +1,26 @@
 # Verification
 
+## 2026-07-22 Runtime trust write-scope tuple convergence
+
+- `cargo fmt --all -- --check` — PASS.
+- `cargo test -q -p easynet --lib register_device_pubkey --features axon-pb`
+  — PASS (`20 passed`).
+- `cargo test -q -p easynet --lib revoke_user_pubkey --features axon-pb`
+  — PASS (`13 passed`).
+- `cargo test -q -p easynet --lib identity_write_gate --features axon-pb`
+  — PASS (`9 passed`).
+- `cargo test -q -p easynet --lib runtime_trust --features axon-pb` — PASS
+  (`20 passed`).
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  — PASS (`canonical-runtime-convergence-v2 self-test ok`).
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS
+  (`canonical-runtime-convergence-v2: OK`).
+- `cargo check -q -p easynet --lib --features axon-pb` — PASS.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh` — PASS.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS.
+- `git diff --check` — PASS.
+
 Commands and outcomes will be appended after implementation.
 
 ## 2026-07-22 Runtime-owner signer User custody guard

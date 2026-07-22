@@ -2769,3 +2769,30 @@ Evidence will be appended after indexing and focused impact queries.
   canonical `user_ura` input, projecting `user_ura` output, renaming the
   RuntimeTrust snapshot field, migrating local callers, and adding a SPEC v2
   gate that rejects the retired `agent_ura` list path.
+
+## 2026-07-22 Runtime trust write-scope audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; the index
+  was current for the checkout before this slice.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore
+  "identity.register_pubkey identity.revoke_user_pubkey RuntimeTrust
+  RegisterPubkeyIntent RevokeUserPubkeyIntent principal_ura user_ura
+  agent_ura"` identified the write path across
+  `register_device_pubkey.rs`, `revoke_user_pubkey.rs`,
+  `runtime_trust.rs`, `identity_write_gate.rs`, daemon invocation contracts,
+  CLI local signing reconciliation, and session prelude trust sync.
+- Source inspection found the public register/revoke tuples and write intents
+  still used `agent_ura` to mean several different subjects: generic
+  trust-row principal for register, and User URA for revocation. This
+  preserved the same conceptual ambiguity that surfaces later as authority
+  subject mismatches, missing caller signer custody, or descriptor route
+  failures.
+- Root abstraction problem: identity write APIs were carrying storage-row
+  vocabulary (`TrustedAgent.agent_ura`) across the public runtime tuple
+  boundary. The public tuple must express the semantic subject being mutated,
+  while storage schema migration can remain a separate trust-anchor task.
+- Boundary decision: require `principal_ura` for
+  `identity.register_pubkey`, require `user_ura` for
+  `identity.revoke_user_pubkey`, deny unknown legacy fields, update intent
+  accessors and local callers, and add SPEC v2 coverage so retired
+  `agent_ura` write tuples cannot re-enter.

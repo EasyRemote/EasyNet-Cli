@@ -2199,7 +2199,7 @@ mod tests {
             calls
                 .iter()
                 .any(|(name, body)| name == "identity.register_pubkey"
-                    && body.get("agent_ura").and_then(Value::as_str) == Some(user_ura)
+                    && body.get("principal_ura").and_then(Value::as_str) == Some(user_ura)
                     && body.get("public_key_b64").and_then(Value::as_str) == Some(user_pubkey_b64)),
             "prelude must publish the paired user key before resolving it: {calls:#?}"
         );

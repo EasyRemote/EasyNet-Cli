@@ -1008,7 +1008,7 @@ async fn sync_paired_user_trust_prelude(
     let mut last_import_error = None;
     for pubkey_b64 in pubkeys {
         let register_args = match serde_json::to_vec(&serde_json::json!({
-            "agent_ura": user_ura,
+            "principal_ura": user_ura,
             "public_key_b64": pubkey_b64,
             "role": "user",
         })) {
@@ -1133,7 +1133,7 @@ async fn publish_paired_user_keys_prelude(
 ) -> Result<(), UserTrustBootstrapError> {
     for public_key_b64 in public_keys_b64 {
         let args = serde_json::to_vec(&serde_json::json!({
-            "agent_ura": user_ura,
+            "principal_ura": user_ura,
             "public_key_b64": public_key_b64,
             "role": "user",
         }))

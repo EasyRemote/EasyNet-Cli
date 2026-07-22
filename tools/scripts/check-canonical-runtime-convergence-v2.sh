@@ -940,6 +940,138 @@ for required_test in (
 PY
 }
 
+check_runtime_trust_user_key_write_scope_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local register_handler="$cli_root/src/daemon/invocation/admission/register_device_pubkey.rs"
+  local revoke_handler="$cli_root/src/daemon/invocation/admission/revoke_user_pubkey.rs"
+  local trust="$cli_root/src/daemon/invocation/admission/runtime_trust.rs"
+  local gate="$cli_root/src/daemon/invocation/admission/identity_write_gate.rs"
+  local dispatcher="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  local contracts="$cli_root/src/daemon/ability/catalog/daemon_invocation_contracts.rs"
+  local cli_user="$cli_root/src/cli/commands/user_signing_identity.rs"
+  local prelude="$cli_root/src/daemon/invocation/bidi/session_initiator/prelude.rs"
+  [[ -f "$register_handler" ]] || fail "identity.register_pubkey handler is missing: $register_handler"
+  [[ -f "$revoke_handler" ]] || fail "identity.revoke_user_pubkey handler is missing: $revoke_handler"
+  [[ -f "$trust" ]] || fail "runtime trust aggregate is missing: $trust"
+  [[ -f "$contracts" ]] || fail "daemon invocation contracts source is missing: $contracts"
+
+  "$PYTHON_BIN" - "$register_handler" "$revoke_handler" "$trust" "$gate" "$dispatcher" "$contracts" "$cli_user" "$prelude" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+register = Path(sys.argv[1]).read_text(encoding="utf-8")
+revoke = Path(sys.argv[2]).read_text(encoding="utf-8")
+trust = Path(sys.argv[3]).read_text(encoding="utf-8")
+gate = Path(sys.argv[4]).read_text(encoding="utf-8") if Path(sys.argv[4]).exists() else ""
+dispatcher = Path(sys.argv[5]).read_text(encoding="utf-8") if Path(sys.argv[5]).exists() else ""
+contracts = Path(sys.argv[6]).read_text(encoding="utf-8")
+cli_user = Path(sys.argv[7]).read_text(encoding="utf-8") if Path(sys.argv[7]).exists() else ""
+prelude = Path(sys.argv[8]).read_text(encoding="utf-8") if Path(sys.argv[8]).exists() else ""
+
+register_prod = register.split("\n#[cfg(test)]\nmod tests", 1)[0]
+revoke_prod = revoke.split("\n#[cfg(test)]\nmod tests", 1)[0]
+
+for required in (
+    "#[serde(deny_unknown_fields)]",
+    "principal_ura: String",
+    "pub(crate) fn principal_ura(&self) -> &str",
+    "identity.register_pubkey: principal_ura is required",
+    "register_pubkey_with_owner(",
+    "args.principal_ura",
+):
+    if required not in register_prod:
+        raise SystemExit(f"runtime_trust_write_scope:register_missing:{required}")
+for retired in (
+    "agent_ura: String",
+    "pub(crate) fn agent_ura(&self) -> &str",
+    "args.agent_ura",
+    '"agent_ura"',
+    "agent_ura is required",
+):
+    if retired in register_prod:
+        raise SystemExit(f"runtime_trust_write_scope:register_retired:{retired}")
+
+for required in (
+    "#[serde(deny_unknown_fields)]",
+    "user_ura: String",
+    "pub(crate) fn user_ura(&self) -> &str",
+    "fn decode_revoke_args(",
+    "identity.revoke_user_pubkey: user_ura is required",
+    "args.user_ura",
+):
+    if required not in revoke_prod:
+        raise SystemExit(f"runtime_trust_write_scope:revoke_missing:{required}")
+for retired in (
+    "agent_ura: String",
+    "pub(crate) fn agent_ura(&self) -> &str",
+    "args.agent_ura",
+    '"agent_ura"',
+    "agent_ura is required",
+):
+    if retired in revoke_prod:
+        raise SystemExit(f"runtime_trust_write_scope:revoke_retired:{retired}")
+
+for required in (
+    "pub(crate) fn register_pubkey(",
+    "principal_ura: String",
+    "pub(crate) fn revoke_user_pubkey(",
+    "user_ura: &str",
+    "identity.revoke_user_pubkey: user_ura must identify a User",
+    "URAKind::User",
+):
+    if required not in trust:
+        raise SystemExit(f"runtime_trust_write_scope:runtime_trust_missing:{required}")
+
+if "intent.agent_ura()" in gate or "intent.agent_ura()" in dispatcher:
+    raise SystemExit("runtime_trust_write_scope:intent_uses_retired_agent_accessor")
+for required in (
+    "intent.principal_ura()",
+    "intent.user_ura()",
+):
+    if required not in gate + dispatcher:
+        raise SystemExit(f"runtime_trust_write_scope:intent_missing:{required}")
+
+def ability_schema(source: str, marker: str) -> str:
+    parts = source.split(marker, 1)
+    if len(parts) != 2:
+        raise SystemExit(f"runtime_trust_write_scope:schema_missing:{marker}")
+    body = parts[1]
+    next_marker = body.find("\n        ABILITY_")
+    if next_marker >= 0:
+        return body[:next_marker]
+    return body
+
+register_schema = ability_schema(contracts, "ABILITY_IDENTITY_REGISTER_PUBKEY => object_schema(")
+if '"principal_ura"' not in register_schema or '"agent_ura"' in register_schema:
+    raise SystemExit("runtime_trust_write_scope:register_schema_not_principal_scoped")
+if '&["principal_ura", "public_key_b64", "role"]' not in register_schema:
+    raise SystemExit("runtime_trust_write_scope:register_schema_required_tuple_not_principal_scoped")
+
+revoke_schema = ability_schema(contracts, "ABILITY_IDENTITY_REVOKE_USER_PUBKEY => object_schema(")
+if '"user_ura"' not in revoke_schema or '"agent_ura"' in revoke_schema:
+    raise SystemExit("runtime_trust_write_scope:revoke_schema_not_user_scoped")
+if '&["user_ura", "public_key_b64"]' not in revoke_schema:
+    raise SystemExit("runtime_trust_write_scope:revoke_schema_required_tuple_not_user_scoped")
+
+for label, source in (("cli_user", cli_user), ("prelude", prelude)):
+    if '"identity.register_pubkey"' not in source:
+        continue
+    if '"principal_ura"' not in source:
+        raise SystemExit(f"runtime_trust_write_scope:{label}_register_missing_principal_field")
+    if re.search(r'"agent_ura"\s*:\s*user_ura\b', source):
+        raise SystemExit(f"runtime_trust_write_scope:{label}_register_uses_retired_agent_field")
+
+for required_test, source in (
+    ("register_rejects_retired_agent_ura_request_field", register),
+    ("revoke_rejects_retired_agent_ura_request_field", revoke),
+    ("revoke_rejects_non_user_ura_scope", revoke),
+):
+    if required_test not in source:
+        raise SystemExit(f"runtime_trust_write_scope:missing_test:{required_test}")
+PY
+}
+
 check_admission_owner_credentials_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local policy="$cli_root/src/daemon/invocation/admission/policy_gate.rs"
@@ -4531,6 +4663,48 @@ EOF
   if ( check_runtime_trust_user_key_inventory_scope_contract "$tmp/runtime-trust-user-key-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected runtime trust user-key inventory agent_ura gate to fail"
   fi
+  mkdir -p "$tmp/runtime-trust-user-key-write-legacy/src/daemon/invocation/admission" \
+    "$tmp/runtime-trust-user-key-write-legacy/src/daemon/invocation/dispatch" \
+    "$tmp/runtime-trust-user-key-write-legacy/src/daemon/ability/catalog" \
+    "$tmp/runtime-trust-user-key-write-legacy/src/cli/commands" \
+    "$tmp/runtime-trust-user-key-write-legacy/src/daemon/invocation/bidi/session_initiator"
+  printf '%s\n' \
+    '#[derive(Debug, Deserialize)]' \
+    'struct RegisterArgs { agent_ura: String, public_key_b64: String, role: String }' \
+    'pub(crate) struct RegisterPubkeyIntent { agent_ura: String, role: TrustedAgentRole }' \
+    'impl RegisterPubkeyIntent { pub(crate) fn agent_ura(&self) -> &str { &self.agent_ura } }' \
+    'fn decode_register_args(args: &[u8]) { let args: RegisterArgs = serde_json::from_slice(args).unwrap(); if args.agent_ura.is_empty() { panic!("identity.register_pubkey: agent_ura is required"); } }' \
+    > "$tmp/runtime-trust-user-key-write-legacy/src/daemon/invocation/admission/register_device_pubkey.rs"
+  printf '%s\n' \
+    '#[derive(Debug, Deserialize)]' \
+    'struct RevokeArgs { agent_ura: String, public_key_b64: String }' \
+    'pub(crate) struct RevokeUserPubkeyIntent { agent_ura: String, public_key_b64: String }' \
+    'impl RevokeUserPubkeyIntent { pub(crate) fn agent_ura(&self) -> &str { &self.agent_ura } }' \
+    'fn parse_revoke_user_pubkey_intent(args: &[u8]) { let args: RevokeArgs = serde_json::from_slice(args).unwrap(); if args.agent_ura.is_empty() { panic!("identity.revoke_user_pubkey: agent_ura is required"); } }' \
+    > "$tmp/runtime-trust-user-key-write-legacy/src/daemon/invocation/admission/revoke_user_pubkey.rs"
+  printf '%s\n' \
+    'pub(crate) fn register_pubkey(agent_ura: String) {}' \
+    'pub(crate) fn revoke_user_pubkey(agent_ura: &str) {}' \
+    > "$tmp/runtime-trust-user-key-write-legacy/src/daemon/invocation/admission/runtime_trust.rs"
+  printf '%s\n' \
+    'fn gate(intent: &RegisterPubkeyIntent, revoke: &RevokeUserPubkeyIntent) { let _ = intent.agent_ura(); let _ = revoke.agent_ura(); }' \
+    > "$tmp/runtime-trust-user-key-write-legacy/src/daemon/invocation/admission/identity_write_gate.rs"
+  printf '%s\n' \
+    'fn dispatch(intent: &RevokeUserPubkeyIntent) { invalidate_revoked_subject(intent.agent_ura(), None, true); }' \
+    > "$tmp/runtime-trust-user-key-write-legacy/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  printf '%s\n' \
+    'ABILITY_IDENTITY_REGISTER_PUBKEY => object_schema(json!({"agent_ura": string_prop("Agent, Device, User, or Hub URA to trust."), "public_key_b64": string_prop("key"), "role": string_prop("role")}), &["agent_ura", "public_key_b64", "role"], false),' \
+    'ABILITY_IDENTITY_REVOKE_USER_PUBKEY => object_schema(json!({"agent_ura": string_prop("User URA whose key row should be revoked."), "public_key_b64": string_prop("key")}), &["agent_ura", "public_key_b64"], false),' \
+    > "$tmp/runtime-trust-user-key-write-legacy/src/daemon/ability/catalog/daemon_invocation_contracts.rs"
+  printf '%s\n' \
+    'fn register(user_ura: &str) { invoke_local_ability("identity.register_pubkey", serde_json::json!({ "agent_ura": user_ura })); }' \
+    > "$tmp/runtime-trust-user-key-write-legacy/src/cli/commands/user_signing_identity.rs"
+  printf '%s\n' \
+    'fn publish(user_ura: &str) { invoke_prelude_unary(client, request, "identity.register_pubkey"); let _ = serde_json::json!({ "agent_ura": user_ura }); }' \
+    > "$tmp/runtime-trust-user-key-write-legacy/src/daemon/invocation/bidi/session_initiator/prelude.rs"
+  if ( check_runtime_trust_user_key_write_scope_contract "$tmp/runtime-trust-user-key-write-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected runtime trust user-key write scope gate to fail"
+  fi
   mkdir -p "$tmp/admission-owner-legacy/src/daemon/invocation/admission"
   printf '%s\n' \
     'pub(crate) fn resolve_owner(subject_ura: &str, callee_ura: &str, daemon_ura: Option<&str>, trust_anchor: &RealmTrustAnchor) -> OwnerResolution {' \
@@ -4693,6 +4867,7 @@ EOF
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
   check_runtime_trust_user_key_inventory_scope_contract
+  check_runtime_trust_user_key_write_scope_contract
   check_admission_owner_credentials_contract
   check_shared_local_device_owner_projection_contract
   check_node_session_authority_subject_contract
@@ -4754,6 +4929,7 @@ check_pages_identity_credentials_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_runtime_trust_user_key_inventory_scope_contract
+check_runtime_trust_user_key_write_scope_contract
 check_admission_owner_credentials_contract
 check_shared_local_device_owner_projection_contract
 check_node_session_authority_subject_contract

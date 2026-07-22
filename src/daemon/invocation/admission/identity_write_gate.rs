@@ -83,7 +83,7 @@ impl IdentityWriteGate {
                     && self
                         .trust_anchor
                         .lookup_principal_owner(caller_ura)
-                        .is_some_and(|owner| owner.owner_ura == intent.agent_ura())
+                        .is_some_and(|owner| owner.owner_ura == intent.principal_ura())
                 {
                     return Ok(());
                 }
@@ -92,7 +92,7 @@ impl IdentityWriteGate {
             TrustedAgentRole::Backend => {
                 if caller.local_self
                     || (self.is_local_backend_or_hub(caller_ura, caller.role)
-                        && caller_ura == intent.agent_ura())
+                        && caller_ura == intent.principal_ura())
                 {
                     Ok(())
                 } else {
@@ -118,7 +118,7 @@ impl IdentityWriteGate {
             "identity.revoke_user_pubkey: caller `{}` with role `{}` cannot revoke user trust row `{}`",
             caller.ura,
             role_label(caller.role),
-            intent.agent_ura(),
+            intent.user_ura(),
         )))
     }
 
@@ -182,7 +182,7 @@ impl IdentityWriteGate {
             caller_ura,
             role_label(caller_role),
             role_label(intent.role()),
-            intent.agent_ura(),
+            intent.principal_ura(),
         ))
     }
 }
@@ -211,12 +211,12 @@ mod tests {
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
 
-    fn intent(agent_ura: &str, role: TrustedAgentRole) -> RegisterPubkeyIntent {
-        RegisterPubkeyIntent::for_test(agent_ura.to_string(), role)
+    fn intent(principal_ura: &str, role: TrustedAgentRole) -> RegisterPubkeyIntent {
+        RegisterPubkeyIntent::for_test(principal_ura.to_string(), role)
     }
 
-    fn revoke_intent(agent_ura: &str) -> RevokeUserPubkeyIntent {
-        RevokeUserPubkeyIntent::for_test(agent_ura.to_string(), "test-pubkey".to_string())
+    fn revoke_intent(user_ura: &str) -> RevokeUserPubkeyIntent {
+        RevokeUserPubkeyIntent::for_test(user_ura.to_string(), "test-pubkey".to_string())
     }
 
     fn envelope(caller_ura: &str) -> Envelope {

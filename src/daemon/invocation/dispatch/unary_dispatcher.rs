@@ -964,7 +964,7 @@ impl UnaryDispatcher {
         )
         .with_connection_state_projector(connection_state_projector)
         .invalidate_revoked_subject(
-            intent.agent_ura(),
+            intent.user_ura(),
             Some(intent.public_key_b64()),
             outcome.removed,
         );
@@ -972,7 +972,7 @@ impl UnaryDispatcher {
             crate::op_event!(
                 component = daemon_invocation,
                 kind = runtime_trust_revoke_invalidated_presence,
-                subject_ura = intent.agent_ura(),
+                subject_ura = intent.user_ura(),
                 direct_presence_removed = invalidation.direct_presence_removed,
                 hosted_agents_removed = invalidation.hosted_agents_removed,
                 hosted_hosts_revoked = invalidation.hosted_hosts_revoked,

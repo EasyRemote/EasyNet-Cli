@@ -145,33 +145,33 @@ impl<'a> RuntimeTrust<'a> {
 
     pub(crate) fn register_pubkey(
         &self,
-        agent_ura: String,
+        principal_ura: String,
         public_key_b64: String,
         role: TrustedAgentRole,
     ) -> Result<(), Status> {
-        self.register_pubkey_with_owner(agent_ura, public_key_b64, role, None)
+        self.register_pubkey_with_owner(principal_ura, public_key_b64, role, None)
     }
 
     pub(crate) fn register_pubkey_with_owner(
         &self,
-        agent_ura: String,
+        principal_ura: String,
         public_key_b64: String,
         role: TrustedAgentRole,
         owner: Option<TrustedPrincipalOwner>,
     ) -> Result<(), Status> {
         validate_public_key_b64("identity.register_pubkey", &public_key_b64)?;
-        self.validate_register_realm(&agent_ura, role)?;
+        self.validate_register_realm(&principal_ura, role)?;
         if let Some(owner) = owner.as_ref() {
-            if owner.principal_ura != agent_ura {
+            if owner.principal_ura != principal_ura {
                 return Err(Status::invalid_argument(format!(
-                    "identity.register_pubkey: owner principal_ura `{}` must match agent_ura `{agent_ura}`",
+                    "identity.register_pubkey: owner principal_ura `{}` must match principal_ura `{principal_ura}`",
                     owner.principal_ura
                 )));
             }
         }
 
         let entry = TrustedAgent {
-            agent_ura: agent_ura.clone(),
+            agent_ura: principal_ura.clone(),
             public_key_b64: public_key_b64.clone(),
             role,
             added_at_unix_ms: now_unix_ms(),
@@ -186,7 +186,7 @@ impl<'a> RuntimeTrust<'a> {
         self.mutate_anchor_when_changed("identity.register_pubkey", |next_anchor| {
             let user_key_already_present = matches!(role, TrustedAgentRole::User)
                 && next_anchor
-                    .lookup_user_by_pubkey(&agent_ura, &public_key_b64)
+                    .lookup_user_by_pubkey(&principal_ura, &public_key_b64)
                     .is_some();
             let mut changed = false;
             match role {
@@ -222,17 +222,17 @@ impl<'a> RuntimeTrust<'a> {
 
     pub(crate) fn revoke_user_pubkey(
         &self,
-        agent_ura: &str,
+        user_ura: &str,
         public_key_b64: &str,
     ) -> Result<bool, Status> {
         validate_public_key_b64("identity.revoke_user_pubkey", public_key_b64)?;
-        self.validate_revoke_realm(agent_ura)?;
+        self.validate_revoke_realm(user_ura)?;
 
         let _cell_guard = self.cell.mutation_guard();
         let _file_guard = self.lock_store("identity.revoke_user_pubkey")?;
         let mut next_anchor = self.anchor_for_mutation("identity.revoke_user_pubkey")?;
         let revoked = next_anchor
-            .revoke_user_pubkey(agent_ura, public_key_b64, now_unix_ms())
+            .revoke_user_pubkey(user_ura, public_key_b64, now_unix_ms())
             .map_err(|err| realm_error_to_status("identity.revoke_user_pubkey", err))?;
         if revoked.is_none() {
             return Ok(false);
@@ -307,18 +307,18 @@ impl<'a> RuntimeTrust<'a> {
 
     fn validate_register_realm(
         &self,
-        agent_ura: &str,
+        principal_ura: &str,
         role: TrustedAgentRole,
     ) -> Result<(), Status> {
-        let parsed_realm = parse_realm_from_ura(agent_ura).ok_or_else(|| {
+        let parsed_realm = parse_realm_from_ura(principal_ura).ok_or_else(|| {
             Status::invalid_argument(format!(
-                "identity.register_pubkey: agent_ura `{agent_ura}` does not match Axon's \
+                "identity.register_pubkey: principal_ura `{principal_ura}` does not match Axon's \
                  canonical URA grammar",
             ))
         })?;
         if parsed_realm != self.daemon_realm && !matches!(role, TrustedAgentRole::Device) {
             return Err(Status::permission_denied(format!(
-                "identity.register_pubkey: role `{}` requires agent_ura realm `{parsed_realm}` \
+                "identity.register_pubkey: role `{}` requires principal_ura realm `{parsed_realm}` \
                  to match daemon realm `{}` — cross-realm user pubkey resolution \
                  happens via federation.resolve_key, not via remote registration",
                 role_wire_label(role),
@@ -328,15 +328,21 @@ impl<'a> RuntimeTrust<'a> {
         Ok(())
     }
 
-    fn validate_revoke_realm(&self, agent_ura: &str) -> Result<(), Status> {
-        let parsed_realm = parse_realm_from_ura(agent_ura).ok_or_else(|| {
+    fn validate_revoke_realm(&self, user_ura: &str) -> Result<(), Status> {
+        let parsed = crate::core::ura::parse_ura(user_ura).map_err(|_| {
             Status::invalid_argument(format!(
-                "identity.revoke_user_pubkey: agent_ura `{agent_ura}` does not match the canonical user URA",
+                "identity.revoke_user_pubkey: user_ura `{user_ura}` does not match the canonical user URA",
             ))
         })?;
+        if parsed.kind != crate::core::ura::URAKind::User {
+            return Err(Status::invalid_argument(
+                "identity.revoke_user_pubkey: user_ura must identify a User",
+            ));
+        }
+        let parsed_realm = parsed.realm;
         if parsed_realm != self.daemon_realm {
             return Err(Status::permission_denied(format!(
-                "identity.revoke_user_pubkey: agent_ura realm `{parsed_realm}` must match daemon \
+                "identity.revoke_user_pubkey: user_ura realm `{parsed_realm}` must match daemon \
                  realm `{}` (cross-realm user roaming is DEC-EU §multi-realm followup)",
                 self.daemon_realm,
             )));

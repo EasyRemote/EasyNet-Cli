@@ -384,13 +384,13 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
         ABILITY_FEDERATION_STATUS => closed_empty_schema(),
         ABILITY_IDENTITY_REGISTER_PUBKEY => object_schema(
             json!({
-                "agent_ura": string_prop("Agent, Device, User, or Hub URA to trust."),
+                "principal_ura": string_prop("Principal URA whose verifying key should be trusted."),
                 "public_key_b64": string_prop("Base64-encoded Ed25519 verifying key."),
                 "role": string_prop("Trust role for this key row."),
                 "principal_owner_ura": string_prop("Optional owner principal URA."),
                 "principal_owner_username": string_prop("Optional owner principal username.")
             }),
-            &["agent_ura", "public_key_b64", "role"],
+            &["principal_ura", "public_key_b64", "role"],
             false,
         ),
         ABILITY_IDENTITY_LIST_USER_PUBKEYS => object_schema(
@@ -402,10 +402,10 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
         ),
         ABILITY_IDENTITY_REVOKE_USER_PUBKEY => object_schema(
             json!({
-                "agent_ura": string_prop("User URA whose key row should be revoked."),
+                "user_ura": string_prop("User URA whose key row should be revoked."),
                 "public_key_b64": string_prop("Base64-encoded Ed25519 verifying key to revoke.")
             }),
-            &["agent_ura", "public_key_b64"],
+            &["user_ura", "public_key_b64"],
             false,
         ),
         ABILITY_PRINCIPAL_GET => object_schema(

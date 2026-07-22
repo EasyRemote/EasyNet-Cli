@@ -2,6 +2,25 @@
 
 Decisions will be appended as root-fork choices are made.
 
+## 2026-07-22 runtime trust write-scope tuple convergence
+
+- Treat `identity.register_pubkey` as generic principal trust registration,
+  not as an Agent-specific write. Its public tuple now carries
+  `principal_ura`, and the policy intent exposes `principal_ura()` so the
+  write gate compares the admitted caller against the actual mutated
+  principal.
+- Treat `identity.revoke_user_pubkey` as user-only mutation. Its public tuple
+  now carries `user_ura`, the handler validates that it identifies a canonical
+  User URA before mutation, and runtime invalidation uses the same user scope.
+- Reject retired `agent_ura` write requests with serde
+  `deny_unknown_fields`. There is no compatibility fallback because the SPEC
+  objective is architecture convergence, and keeping both fields would preserve
+  the subject ambiguity behind authority/signer/route failures.
+- Keep persisted `TrustedAgent.agent_ura` unchanged in this slice. That name is
+  storage schema owned by the trust-anchor aggregate; migrating it requires a
+  separate persisted-schema cutover and should not be mixed into the public API
+  tuple convergence.
+
 ## 2026-07-22 runtime-owner signer User custody
 
 - Treat runtime-owner signing and managed-user signing as separate explicit

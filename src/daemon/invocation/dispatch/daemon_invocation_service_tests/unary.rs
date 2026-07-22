@@ -1198,7 +1198,7 @@ async fn identity_register_pubkey_rejects_device_caller_for_user_role_before_wri
     let user_key = ed25519_dalek::SigningKey::from_bytes(&[0x55; 32]);
     let user_ura = "easynet:///r/local/user/user-1";
     let arguments = serde_json::to_vec(&serde_json::json!({
-        "agent_ura": user_ura,
+        "principal_ura": user_ura,
         "public_key_b64": BASE64_STANDARD.encode(user_key.verifying_key().to_bytes()),
         "role": "user",
     }))
@@ -1291,7 +1291,7 @@ async fn identity_revoke_user_pubkey_rejects_device_caller_before_write() {
     );
 
     let arguments = serde_json::to_vec(&serde_json::json!({
-        "agent_ura": user_ura,
+        "user_ura": user_ura,
         "public_key_b64": user_pubkey_b64,
     }))
     .expect("revoke args");
@@ -1396,7 +1396,7 @@ async fn identity_revoke_user_pubkey_removes_matching_presence_after_write() {
     );
 
     let arguments = serde_json::to_vec(&serde_json::json!({
-        "agent_ura": user_ura,
+        "user_ura": user_ura,
         "public_key_b64": user_pubkey_b64,
     }))
     .expect("revoke args");
@@ -1539,7 +1539,7 @@ async fn identity_revoke_user_pubkey_removes_user_hosted_agents_and_host_presenc
     );
 
     let arguments = serde_json::to_vec(&serde_json::json!({
-        "agent_ura": user_ura,
+        "user_ura": user_ura,
         "public_key_b64": user_pubkey_b64,
     }))
     .expect("revoke args");
@@ -1654,7 +1654,7 @@ async fn identity_revoke_user_pubkey_idempotent_miss_keeps_presence() {
     );
 
     let arguments = serde_json::to_vec(&serde_json::json!({
-        "agent_ura": user_ura,
+        "user_ura": user_ura,
         "public_key_b64": missing_pubkey_b64,
     }))
     .expect("revoke args");
