@@ -89,12 +89,7 @@ impl TargetGate {
             .as_deref()
             .filter(|realm| !realm.is_empty())
         {
-            resolver = resolver.with_peer_delegation(
-                local_realm,
-                &self.federation.peers,
-                &self.directory.federated_directory,
-                self.federation.allow_directory_auto_route,
-            );
+            resolver = resolver.with_peer_delegation(local_realm, &self.federation.peers);
         }
         if let Some(catalog) = self.directory.local_ability_catalog.as_ref() {
             if let Some(local_authority_ura) = local_runtime_authority_ura(

@@ -1335,49 +1335,24 @@ EOF
   cat >"$CLI/src/daemon/invocation/routing/hub_resolver.rs" <<'EOF'
 pub enum HubResolution {
     Static { hub_endpoint: String },
-    DirectoryFallback {
-        hub_endpoint: String,
-        target_ura: String,
-    },
     Offline,
 }
 
 pub struct HubResolver<'a> {
     static_peers: &'a SharedFederatedPeers,
-    federated_directory: &'a SharedFederatedDirectoryView,
-    allow_directory_fallback: bool,
 }
 
 impl<'a> HubResolver<'a> {
-    pub fn new(
-        static_peers: &'a SharedFederatedPeers,
-        federated_directory: &'a SharedFederatedDirectoryView,
-        allow_directory_fallback: bool,
-    ) -> Self {
-        Self {
-            static_peers,
-            federated_directory,
-            allow_directory_fallback,
-        }
+    pub fn new(static_peers: &'a SharedFederatedPeers) -> Self {
+        Self { static_peers }
     }
 
-    pub fn resolve(&self, target_realm: &str, target_ura: &str) -> HubResolution {
+    pub fn resolve(&self, target_realm: &str) -> HubResolution {
         let peers_snapshot = self.static_peers.snapshot();
         if let Some(ura) = peers_snapshot.get(target_realm) {
             return HubResolution::Static {
                 hub_endpoint: ura.clone(),
             };
-        }
-
-        if self.allow_directory_fallback {
-            if let Some(endpoint) = lookup_in_federated_view(self.federated_directory, target_ura)
-                .and_then(|entry| entry.hub_endpoint)
-            {
-                return HubResolution::DirectoryFallback {
-                    hub_endpoint: endpoint,
-                    target_ura: target_ura.to_string(),
-                };
-            }
         }
 
         HubResolution::Offline
@@ -1452,24 +1427,11 @@ fn ability_selector_from_descriptor_ref(
 }
 
 fn resolve_delegation(peer_source: PeerSource, parsed_owner: ParsedOwner, selector: Selector) {
-    let resolution = HubResolver::new(
-        peer_source.federated_peers,
-        peer_source.federated_directory,
-        peer_source.allow_directory_auto_route,
-    )
-    .resolve(&parsed_owner.realm, &selector.owner_ura);
+    let resolution = HubResolver::new(peer_source.federated_peers).resolve(&parsed_owner.realm);
     let endpoint = match resolution {
         HubResolution::Static { hub_endpoint } => {
             DelegatedPeerEndpoint::new(hub_endpoint, "federated_peers", None)
         }
-        HubResolution::DirectoryFallback {
-            hub_endpoint,
-            target_ura,
-        } => DelegatedPeerEndpoint::new(
-            hub_endpoint,
-            "federated_directory",
-            Some(target_ura.as_str()),
-        ),
         HubResolution::Offline => return,
     };
 }

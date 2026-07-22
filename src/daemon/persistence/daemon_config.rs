@@ -407,20 +407,6 @@ pub struct DaemonConfig {
     /// **PR-N3 / 2026-05-25 hardening**. When `true`, the federation
     /// dispatcher is allowed to dial a peer hub whose endpoint comes
     /// from an observed `federated_directory` entry (hub-to-hub
-    /// sync) — i.e. without an operator-curated `federated_peers`
-    /// mapping for the target realm. When `false` (the default), an
-    /// unmapped target realm returns `target_offline` regardless of
-    /// what the directory has observed.
-    ///
-    /// **Why default-off:** `federated_directory.hub_endpoint` is a
-    /// string the peer hub published about itself; trusting it
-    /// blindly hands a peer-hub-controlled URL to our outbound
-    /// federation client. Until the directory sync's transport
-    /// layer ratchets to "endpoints only flow from authenticated
-    /// peers", the safer default is "operator-declared peers only".
-    /// See [`crate::daemon::invocation::routing::hub_resolver`] for the
-    /// resolver-side enforcement and the threat-model write-up.
-    allow_directory_auto_route: bool,
     /// #185: per-consumer invocation quota policy (caps applied per
     /// ability per window — see [`QuotaConfig`]). `None` = the feature
     /// is off and every caller is unmetered. `Some` even with no caps
@@ -470,7 +456,6 @@ impl DaemonConfig {
             uds_path,
             ledger_dir,
             federated_peers,
-            allow_directory_auto_route,
             quota,
         } = daemon;
 
@@ -511,7 +496,6 @@ impl DaemonConfig {
             uds_path,
             ledger_dir,
             federated_peers: federated_peers.unwrap_or_default(),
-            allow_directory_auto_route: allow_directory_auto_route.unwrap_or(false),
             quota: quota.map(QuotaConfig::from),
         })
     }
@@ -595,15 +579,6 @@ impl DaemonConfig {
         &self.federated_peers
     }
 
-    /// True when the daemon is allowed to dial a peer hub whose
-    /// endpoint comes from an observed `federated_directory` entry
-    /// (i.e. without an operator-curated `federated_peers` mapping
-    /// for the target realm). Default `false`; see the field
-    /// doc-comment for the threat model.
-    pub fn allow_directory_auto_route(&self) -> bool {
-        self.allow_directory_auto_route
-    }
-
     /// The per-consumer invocation quota policy (#185), or `None` when
     /// the operator did not configure a `[daemon.quota]` table (the
     /// feature is off; every caller is unmetered).
@@ -643,14 +618,6 @@ pub(crate) struct RawDaemonSection {
     /// policy load with an empty map.
     #[serde(default)]
     pub(crate) federated_peers: Option<BTreeMap<String, String>>,
-    /// 2026-05-25 P0 hardening: opt-in to dialing peer hubs whose
-    /// endpoint came from an observed `federated_directory` entry
-    /// rather than `federated_peers`. Default `false` (secure
-    /// default); see [`DaemonConfig::allow_directory_auto_route`]
-    /// for the threat model. `#[serde(default)]` so existing
-    /// configs load unchanged and inherit the default.
-    #[serde(default)]
-    pub(crate) allow_directory_auto_route: Option<bool>,
     /// #185: per-consumer invocation quota. Absent = the whole
     /// feature is off (every caller unmetered). `#[serde(default)]`
     /// so existing configs load unchanged.
@@ -834,7 +801,6 @@ mod tests {
                 uds_path: None,
                 ledger_dir: None,
                 federated_peers: None,
-                allow_directory_auto_route: None,
                 quota: None,
             },
         }
@@ -856,35 +822,6 @@ mod tests {
         assert_eq!(cfg.realm(), "easynet.run");
         assert_eq!(cfg.hub_endpoint(), Some("https://hub.example.com:50051"));
         assert!(cfg.listen_tcp().is_none());
-    }
-
-    #[test]
-    fn allow_directory_auto_route_defaults_to_false_and_round_trips_when_set() {
-        // **P0 secure-default pin**. A legacy daemon-config.toml
-        // without the `allow_directory_auto_route` key must load
-        // with the secure default (false). An operator who
-        // explicitly opts in via `allow_directory_auto_route = true`
-        // must see that value preserved end-to-end.
-        let mut raw = raw(
-            DaemonMode::Device,
-            "easynet.run",
-            Some("https://hub.example.com:50051"),
-            None,
-            None,
-            None,
-        );
-        let defaulted = DaemonConfig::from_raw(raw.clone()).expect("default config");
-        assert!(
-            !defaulted.allow_directory_auto_route(),
-            "absence of the key MUST mean false (secure default), not true"
-        );
-
-        raw.daemon.allow_directory_auto_route = Some(true);
-        let opted_in = DaemonConfig::from_raw(raw).expect("opted-in config");
-        assert!(
-            opted_in.allow_directory_auto_route(),
-            "explicit `allow_directory_auto_route = true` must be honoured"
-        );
     }
 
     #[test]
@@ -1010,6 +947,24 @@ mod tests {
         assert!(
             err.to_string().contains("billing_dir"),
             "error should name retired billing_dir field: {err}"
+        );
+    }
+
+    #[test]
+    fn retired_directory_auto_route_key_is_rejected() {
+        let err = toml::from_str::<RawDaemonConfig>(
+            r#"
+            [daemon]
+            mode = "device"
+            realm = "easynet.run"
+            hub_endpoint = "https://hub.example.com:50051"
+            allow_directory_auto_route = true
+            "#,
+        )
+        .expect_err("retired directory auto-route switch must not deserialize");
+        assert!(
+            err.to_string().contains("allow_directory_auto_route"),
+            "error should name retired allow_directory_auto_route field: {err}"
         );
     }
 

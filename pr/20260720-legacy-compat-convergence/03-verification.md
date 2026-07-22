@@ -3078,3 +3078,23 @@ Commands and outcomes will be appended after implementation.
   /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` — PASS.
 - `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS; index is up
   to date with 1,019 files, 35,403 nodes, and 135,848 edges.
+
+## 2026-07-22 HubResolver directory auto-route retirement
+
+- `cargo fmt --all` — PASS; applied rustfmt after the target-gate call-site
+  signature changed.
+- `cargo check -q -p easynet --lib --features axon-pb` — PASS.
+- `cargo test -q -p easynet --lib hub_resolver --features axon-pb` — PASS
+  (`2` tests); confirms static peer resolution and static miss → offline.
+- `cargo test -q -p easynet --lib route_resolver --features axon-pb` — PASS
+  (`44` tests); confirms cross-realm route selection still delegates through
+  static `federated_peers`.
+- `cargo test -q -p easynet --lib daemon_config --features axon-pb` — PASS
+  (`27` tests); includes retired `allow_directory_auto_route` config rejection.
+- `bash tools/scripts/check-architecture-convergence.sh` — PASS; Rule 34 now
+  rejects `DirectoryFallback`, `allow_directory_fallback`,
+  `allow_directory_auto_route`, and directory endpoint route evidence in the
+  hub-route authority path.
+- `bash tests/scripts/test_check_architecture_convergence.sh` — PASS; self-test
+  fixture proves a directory fallback resolver shape fails the gate.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh` — PASS.

@@ -451,3 +451,10 @@
   diagnostics carrier. Its public response may expose `status`, `details`,
   `uptime_ms`, `version`, and `components`; caller payloads must not be
   reflected through top-level compatibility fields.
+- Cross-realm peer-hub dispatch has one route authority: operator-curated
+  `federated_peers`. Federated directory entries are read-model observations
+  for discovery and status only; their `hub_endpoint` fields must never be used
+  to synthesize Invocation dispatch endpoints, even behind an opt-in switch.
+- Retired daemon route policy keys are invalid configuration. In particular,
+  `allow_directory_auto_route` must fail at config parse time instead of being
+  ignored or preserved as a dormant compatibility flag.

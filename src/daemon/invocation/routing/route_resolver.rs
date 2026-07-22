@@ -32,7 +32,6 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::{json, Value};
 
 use crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot;
-use crate::daemon::federation::directory::SharedFederatedDirectoryView;
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore;
 use crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore;
@@ -487,8 +486,6 @@ pub(crate) struct DaemonRouteResolver<'a> {
 struct PeerDelegationSource<'a> {
     local_realm: &'a str,
     federated_peers: &'a SharedFederatedPeers,
-    federated_directory: &'a SharedFederatedDirectoryView,
-    allow_directory_auto_route: bool,
 }
 
 /// This daemon's own namespace authority, injected when the daemon
@@ -675,14 +672,10 @@ impl<'a> DaemonRouteResolver<'a> {
         mut self,
         local_realm: &'a str,
         federated_peers: &'a SharedFederatedPeers,
-        federated_directory: &'a SharedFederatedDirectoryView,
-        allow_directory_auto_route: bool,
     ) -> Self {
         self.peer_delegation = Some(PeerDelegationSource {
             local_realm,
             federated_peers,
-            federated_directory,
-            allow_directory_auto_route,
         });
         self
     }
@@ -1044,24 +1037,11 @@ impl<'a> DaemonRouteResolver<'a> {
             return Ok(None);
         }
 
-        let resolution = HubResolver::new(
-            peer_source.federated_peers,
-            peer_source.federated_directory,
-            peer_source.allow_directory_auto_route,
-        )
-        .resolve(&parsed_owner.realm, &selector.owner_ura);
+        let resolution = HubResolver::new(peer_source.federated_peers).resolve(&parsed_owner.realm);
         let endpoint = match resolution {
             HubResolution::Static { hub_endpoint } => {
                 DelegatedPeerEndpoint::new(hub_endpoint, "federated_peers", None)
             }
-            HubResolution::DirectoryFallback {
-                hub_endpoint,
-                target_ura,
-            } => DelegatedPeerEndpoint::new(
-                hub_endpoint,
-                "federated_directory",
-                Some(target_ura.as_str()),
-            ),
             HubResolution::Offline => {
                 return Err(ResolveRouteFailure {
                     query_name: selector.query_name,
@@ -1932,7 +1912,6 @@ mod tests {
 
     use std::collections::BTreeMap;
 
-    use crate::daemon::federation::directory::SharedFederatedDirectoryView;
     use crate::daemon::federation::peers::SharedFederatedPeers;
     use crate::daemon::federation::read_model::ability_catalog::{
         AbilityCatalogStore, OwnerAbilityProjectionRow,
@@ -2126,13 +2105,12 @@ mod tests {
             "remote-realm".to_string(),
             "https://remote-hub.example".to_string(),
         )]));
-        let directory = SharedFederatedDirectoryView::default();
         let owner_ura = crate::core::ura::device_ura("remote-realm", "remote-device");
         let ability_ura =
             crate::core::ura::owner_ability_ura(&owner_ura, "observe.health").expect("ability ura");
         let catalog = AbilityCatalogStore::new();
         let resolver = DaemonRouteResolver::new(&registry, None, &catalog)
-            .with_peer_delegation("local-realm", &peers, &directory, false)
+            .with_peer_delegation("local-realm", &peers)
             .at(TEST_NOW_MS);
 
         let mut fingerprints = Vec::new();
@@ -3045,14 +3023,13 @@ mod tests {
             "remote-realm".to_string(),
             "https://remote-hub.example".to_string(),
         )]));
-        let directory = SharedFederatedDirectoryView::default();
         let remote_owner = crate::core::ura::device_ura("remote-realm", "remote-device");
         let ability_ura = crate::core::ura::owner_ability_ura(&remote_owner, "observe.health")
             .expect("ability ura");
 
         let catalog = AbilityCatalogStore::new();
         let delegation = DaemonRouteResolver::new(&registry, None, &catalog)
-            .with_peer_delegation("local-realm", &peers, &directory, false)
+            .with_peer_delegation("local-realm", &peers)
             .resolve_delegation(&ability_ura, "")
             .expect("delegation lookup succeeds")
             .expect("remote owner delegates to peer hub");

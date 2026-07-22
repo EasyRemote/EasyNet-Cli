@@ -596,7 +596,6 @@ impl DaemonInvocationService {
                 client: None,
                 peers: SharedFederatedPeers::default(),
                 hub_signer: None,
-                allow_directory_auto_route: false,
             },
             sessions: SessionPlane {
                 pending: None,
@@ -1256,19 +1255,6 @@ impl DaemonInvocationService {
         cell: crate::daemon::federation::directory::SharedFederatedDirectoryView,
     ) -> Self {
         self.directory.federated_directory = cell;
-        self
-    }
-
-    /// **2026-05-25 P0 hardening**. Set the directory-auto-route
-    /// security posture. Boot wires this from
-    /// `DaemonConfig::allow_directory_auto_route()`. The default
-    /// (`false`) is the secure shape; this builder is the single
-    /// place that should ever set `true`, and it is intended to be
-    /// called from the daemon's startup path with the value the
-    /// operator deliberately opted into in `daemon-config.toml`.
-    #[must_use]
-    pub fn with_allow_directory_auto_route(mut self, allow: bool) -> Self {
-        self.federation.allow_directory_auto_route = allow;
         self
     }
 

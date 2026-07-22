@@ -1136,3 +1136,19 @@ Decisions will be appended as root-fork choices are made.
 - Keep register/revoke write-side `agent_ura` naming out of this commit. That
   is a wider trust-anchor schema migration; this slice closes the read-model
   path directly involved in user signer inventory checks.
+
+## 2026-07-22 peer hub route authority convergence
+
+- Treat `federated_peers` as the only authority for peer-hub Invocation
+  dispatch endpoints. Federated directory `hub_endpoint` remains observable
+  discovery state, but it no longer participates in route selection.
+- Delete the `DirectoryFallback` resolution variant and the
+  `allow_directory_auto_route` control surface instead of retaining a dormant
+  compatibility switch. A stale daemon-config key is invalid and must be
+  removed by the operator during clean rebuild.
+- Keep `SharedFederatedDirectoryView` in the daemon directory plane because
+  `federation.discover` and related read-model abilities still consume it as
+  status/discovery evidence; the removed behavior is only endpoint authority
+  for dispatch.
+- Update architecture Rule 34 so the gate now rejects directory endpoint route
+  fallback rather than requiring it to be guarded by a flag.

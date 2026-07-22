@@ -2844,3 +2844,29 @@ Evidence will be appended after indexing and focused impact queries.
   `observe.health`, retain `details.replied_at_unix_ms` as the canonical
   timestamp fact, update focused tests, and add SPEC v2 coverage so the echo
   carrier cannot return.
+
+## 2026-07-22 HubResolver directory auto-route audit
+
+- `/Users/macbook.silan.tech/.local/bin/codegraph status` — PASS before this
+  slice; index was up to date for the current checkout with 1,019 files,
+  35,407 nodes, and 135,866 edges.
+- `/Users/macbook.silan.tech/.local/bin/codegraph explore --max-files 8
+  "HubResolver allow_directory_fallback directory fallback route authority"`
+  identified `src/daemon/invocation/routing/hub_resolver.rs`,
+  `src/daemon/invocation/routing/route_resolver.rs`,
+  `src/daemon/invocation/admission/target_gate.rs`, daemon dispatch deps, and
+  `DaemonConfig::allow_directory_auto_route` as the active route-policy fork.
+- Source inspection found `HubResolver` consulting `federated_peers` first, then
+  optionally consulting `SharedFederatedDirectoryView` when
+  `allow_directory_auto_route` was true, returning
+  `HubResolution::DirectoryFallback` tagged as `"federated_directory"`.
+- Root abstraction problem: cross-realm Invocation dispatch had two peer-hub
+  endpoint authorities. `federated_peers` is operator intent; directory
+  `hub_endpoint` is an observed read-model fact produced by peers. Letting the
+  latter route Invocation transport preserves a fallback path and weakens the
+  single shared runtime route model.
+- Boundary decision: retire directory auto-route entirely. `HubResolver` now
+  resolves only from `federated_peers` or returns `Offline`; `RouteResolver`
+  no longer accepts or emits directory fallback evidence; boot/config/service
+  no longer carry the `allow_directory_auto_route` switch; config TOML
+  containing that retired key fails closed under `deny_unknown_fields`.

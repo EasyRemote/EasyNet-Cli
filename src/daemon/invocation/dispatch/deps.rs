@@ -78,8 +78,7 @@ pub(crate) struct DirectoryPlane {
 }
 
 /// Cross-realm dial plane: the federation client, the operator-curated
-/// peer map, the owner-bound hub signer for peer-envelope signatures, and
-/// the directory-auto-route security posture.
+/// peer map, and the owner-bound hub signer for peer-envelope signatures.
 #[derive(Clone)]
 pub(crate) struct FederationDial {
     /// Cross-hub federation client. `None` ⇒ cross-realm targets
@@ -93,11 +92,6 @@ pub(crate) struct FederationDial {
     /// peer-envelope signatures. `None` is valid only for deployments without
     /// federation; an attempted peer request fails closed.
     pub(crate) hub_signer: Option<Arc<dyn CanonicalSigner>>,
-    /// When `false` (default) the dispatcher refuses to dial a peer
-    /// hub whose endpoint came from an observed `federated_directory`
-    /// entry — see [`crate::daemon::invocation::routing::hub_resolver`]
-    /// for the threat model. Set at boot; never toggled at runtime.
-    pub(crate) allow_directory_auto_route: bool,
 }
 
 /// Device<->hub session correlation plane: per-call dispatch maps for

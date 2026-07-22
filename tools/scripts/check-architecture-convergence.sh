@@ -2414,10 +2414,9 @@ if principal_cli.exists():
 
 
 # Rule 34: remote hub routing has one authority boundary. Static
-# `federated_peers` are operator intent and must win first; federated-directory
-# endpoints are observed facts and may route only behind the explicit
-# `allow_directory_fallback` switch. RouteResolver must consume HubResolver's
-# typed outcome instead of rebuilding directory fallback policy inline.
+# `federated_peers` are operator intent and the only peer-hub dispatch endpoint
+# authority. Federated-directory endpoints are observed read-model facts and
+# must never synthesize Invocation dispatch routes.
 hub_resolver = cli_root / "src/daemon/invocation/routing/hub_resolver.rs"
 route_resolver = cli_root / "src/daemon/invocation/routing/route_resolver.rs"
 if hub_resolver.exists():
@@ -2432,62 +2431,51 @@ if hub_resolver.exists():
             "static operator route must be a distinct resolution variant",
         ),
         (
-            "DirectoryFallback {\n        hub_endpoint: String,\n        target_ura: String,\n    }",
-            "directory auto-route must be a distinct resolution variant with target evidence",
-        ),
-        (
             "Offline",
-            "static miss without authorized directory fallback must resolve offline",
-        ),
-        (
-            "allow_directory_fallback: bool",
-            "directory auto-route must be controlled by an explicit resolver switch",
-        ),
-        (
-            "if self.allow_directory_fallback {",
-            "directory lookup must be inside the explicit fallback guard",
-        ),
-        (
-            "lookup_in_federated_view(self.federated_directory, target_ura)",
-            "directory fallback must use the shared federated directory view",
+            "static miss must resolve offline",
         ),
     )
     for token, detail in hub_requirements:
         if token not in text:
             add("R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK", hub_resolver, 1, detail)
 
-    static_lookup = text.find("let peers_snapshot = self.static_peers.snapshot();")
-    fallback_guard = text.find("if self.allow_directory_fallback {")
-    directory_lookup = text.find("lookup_in_federated_view(self.federated_directory, target_ura)")
-    if min(static_lookup, fallback_guard, directory_lookup) < 0:
+    resolve_match = re.search(
+        r"pub\s+fn\s+resolve\s*\([^)]*\)\s*->\s*HubResolution\s*\{([\s\S]{0,1200})\n    \}",
+        text,
+        re.S,
+    )
+    resolve_body = resolve_match.group(1) if resolve_match else ""
+    static_lookup = resolve_body.find("let peers_snapshot = self.static_peers.snapshot();")
+    offline = resolve_body.find("HubResolution::Offline")
+    if not resolve_match or static_lookup < 0 or offline < 0:
         add(
             "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
             hub_resolver,
             1,
-            "HubResolver must make static lookup, fallback guard and directory lookup visible",
+            "HubResolver must make static lookup and offline miss visible",
         )
-    elif not (static_lookup < fallback_guard < directory_lookup):
+    elif not (static_lookup < offline):
         add(
             "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
             hub_resolver,
-            line_number(text, max(0, fallback_guard)),
-            "operator static peer lookup must precede guarded directory fallback",
+            line_number(text, resolve_match.start(1) + offline),
+            "operator static peer lookup must precede offline miss",
         )
 
-    direct_directory_route = re.search(
-        r"pub\s+fn\s+resolve\s*\([^)]*\)[\s\S]{0,900}"
-        r"lookup_in_federated_view\([^)]*\)"
-        r"[\s\S]{0,200}(?:HubResolution::DirectoryFallback|return\s+HubResolution::Static)",
-        text,
-        re.S,
-    )
-    if direct_directory_route and "if self.allow_directory_fallback" not in direct_directory_route.group(0):
-        add(
-            "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
-            hub_resolver,
-            line_number(text, direct_directory_route.start()),
-            "directory-observed endpoints must not be an unconditional route fallback",
-        )
+    for token in (
+        "DirectoryFallback",
+        "allow_directory_fallback",
+        "lookup_in_federated_view",
+        "federated_directory",
+    ):
+        pos = text.find(token)
+        if pos >= 0:
+            add(
+                "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
+                hub_resolver,
+                line_number(text, pos),
+                f"HubResolver must not preserve directory auto-route authority token `{token}`",
+            )
 else:
     add(
         "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
@@ -2504,10 +2492,6 @@ if route_resolver.exists():
             "RouteResolver must delegate remote hub source ordering to HubResolver",
         ),
         (
-            "peer_source.allow_directory_auto_route",
-            "RouteResolver must pass the daemon directory auto-route switch",
-        ),
-        (
             "HubResolution::Static { hub_endpoint }",
             "RouteResolver must preserve static route evidence",
         ),
@@ -2519,35 +2503,21 @@ if route_resolver.exists():
     for token, detail in route_requirements:
         if token not in text:
             add("R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK", route_resolver, 1, detail)
-    if not re.search(
-        r"HubResolution::DirectoryFallback\s*\{\s*hub_endpoint,\s*target_ura,\s*\}",
-        text,
-        re.S,
+    for token in (
+        "peer_source.allow_directory_auto_route",
+        "HubResolution::DirectoryFallback",
+        '"federated_directory"',
+        "allow_directory_auto_route",
+        "lookup_in_federated_view",
     ):
-        add(
-            "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
-            route_resolver,
-            1,
-            "RouteResolver must preserve directory fallback evidence",
-        )
-    if not re.search(
-        r'DelegatedPeerEndpoint::new\s*\(\s*hub_endpoint,\s*"federated_directory",\s*Some\s*\(\s*target_ura\.as_str\s*\(\s*\)\s*\)',
-        text,
-        re.S,
-    ):
-        add(
-            "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
-            route_resolver,
-            1,
-            "directory fallback route evidence source must stay explicit",
-        )
-    if "lookup_in_federated_view" in text:
-        add(
-            "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
-            route_resolver,
-            1,
-            "RouteResolver must not read federated directory endpoints directly",
-        )
+        pos = text.find(token)
+        if pos >= 0:
+            add(
+                "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
+                route_resolver,
+                line_number(text, pos),
+                f"RouteResolver must not preserve directory auto-route authority token `{token}`",
+            )
 else:
     add(
         "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
