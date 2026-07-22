@@ -178,6 +178,8 @@ impl TargetGate {
             };
             let local_agent_projection_state = self.local_agent_targets.projection_state_label();
             let local_agent_projection_error = self.local_agent_targets.projection_error();
+            let local_credential_state = self.local_agent_targets.credential_state_label();
+            let local_credential_error = self.local_agent_targets.credential_error();
             crate::op_event!(
                 component = daemon_invocation,
                 kind = self_target_miss_for_agent_ura,
@@ -190,6 +192,8 @@ impl TargetGate {
                 agent_registry_miss = agent_registry_miss,
                 local_agent_projection_state = local_agent_projection_state,
                 local_agent_projection_error = local_agent_projection_error,
+                local_credential_state = local_credential_state,
+                local_credential_error = local_credential_error,
                 message = "matches_self_target_ura: agent URA not local; \
                           no exact local hosted Agent identity matched. Call \
                           will fall through to PresenceRegistry lookup.",
@@ -205,10 +209,23 @@ struct LocalCredentialIdentity {
     user_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LocalCredentialIdentityState {
+    Available(LocalCredentialIdentity),
+    Unpaired,
+    Unavailable { reason: String },
+}
+
+impl Default for LocalCredentialIdentityState {
+    fn default() -> Self {
+        Self::Unpaired
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct LocalAgentTargetIndex {
     projection: LocalAgentTargetProjectionState,
-    credential_identity: Option<LocalCredentialIdentity>,
+    credential_identity: LocalCredentialIdentityState,
 }
 
 impl LocalAgentTargetIndex {
@@ -229,10 +246,11 @@ impl LocalAgentTargetIndex {
     }
 
     fn credentials_match_target(&self, target: &HostedAgentTarget) -> bool {
-        self.credential_identity
-            .as_ref()
-            .map(|identity| identity.realm == target.realm && identity.user_id == target.user_id)
-            .unwrap_or(false)
+        matches!(
+            &self.credential_identity,
+            LocalCredentialIdentityState::Available(identity)
+                if identity.realm == target.realm && identity.user_id == target.user_id
+        )
     }
 
     fn has_registered_agent_id(&self, agent_id: &str) -> bool {
@@ -250,6 +268,31 @@ impl LocalAgentTargetIndex {
 
     fn projection_error(&self) -> &str {
         self.projection.error()
+    }
+
+    fn credential_state_label(&self) -> &'static str {
+        self.credential_identity.label()
+    }
+
+    fn credential_error(&self) -> &str {
+        self.credential_identity.error()
+    }
+}
+
+impl LocalCredentialIdentityState {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Available(_) => "available",
+            Self::Unpaired => "unpaired",
+            Self::Unavailable { .. } => "unavailable",
+        }
+    }
+
+    fn error(&self) -> &str {
+        match self {
+            Self::Unavailable { reason } => reason,
+            Self::Available(_) | Self::Unpaired => "",
+        }
     }
 }
 
@@ -305,17 +348,36 @@ impl LocalAgentTargetProjectionState {
     }
 }
 
-fn load_local_credential_identity() -> Option<LocalCredentialIdentity> {
-    crate::daemon::persistence::config::load_credentials()
-        .ok()
-        .and_then(|creds| {
-            let realm = creds.realm.trim().to_string();
-            let user_id = creds.user_id().ok()?.trim().to_string();
-            if realm.is_empty() || user_id.is_empty() {
-                return None;
-            }
-            Some(LocalCredentialIdentity { realm, user_id })
-        })
+fn load_local_credential_identity() -> LocalCredentialIdentityState {
+    match project_local_credential_identity() {
+        Ok(Some(identity)) => LocalCredentialIdentityState::Available(identity),
+        Ok(None) => LocalCredentialIdentityState::Unpaired,
+        Err(error) => {
+            let reason = format!("{error:#}");
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = target_gate_credential_identity_load_failed,
+                error = reason.as_str(),
+                message = "target_gate: local credential identity matching failed closed because credentials could not be projected",
+            );
+            LocalCredentialIdentityState::Unavailable { reason }
+        }
+    }
+}
+
+fn project_local_credential_identity() -> anyhow::Result<Option<LocalCredentialIdentity>> {
+    let Some(creds) = crate::daemon::persistence::config::load_credentials_optional()? else {
+        return Ok(None);
+    };
+    let realm = creds.realm.trim().to_string();
+    if realm.is_empty() {
+        anyhow::bail!("local credentials realm is empty");
+    }
+    let user_id = creds.user_id()?.trim().to_string();
+    if user_id.is_empty() {
+        anyhow::bail!("local credentials user_id is empty");
+    }
+    Ok(Some(LocalCredentialIdentity { realm, user_id }))
 }
 
 #[cfg(test)]
@@ -340,7 +402,7 @@ mod local_agent_target_tests {
                     registered_agent_ids: ["codex".to_string()].into(),
                 },
             },
-            credential_identity: Some(LocalCredentialIdentity {
+            credential_identity: LocalCredentialIdentityState::Available(LocalCredentialIdentity {
                 realm: "acme".to_string(),
                 user_id: "u1".to_string(),
             }),
@@ -351,6 +413,8 @@ mod local_agent_target_tests {
         assert!(index.has_registered_agent_id("codex"));
         assert_eq!(index.projection_state_label(), "available");
         assert_eq!(index.projection_error(), "");
+        assert_eq!(index.credential_state_label(), "available");
+        assert_eq!(index.credential_error(), "");
     }
 
     #[test]
@@ -359,7 +423,7 @@ mod local_agent_target_tests {
             projection: LocalAgentTargetProjectionState::Unavailable {
                 reason: "load Agent registry projection: denied".to_string(),
             },
-            credential_identity: Some(LocalCredentialIdentity {
+            credential_identity: LocalCredentialIdentityState::Available(LocalCredentialIdentity {
                 realm: "acme".to_string(),
                 user_id: "u1".to_string(),
             }),
@@ -370,6 +434,38 @@ mod local_agent_target_tests {
         assert!(!index.has_registered_agent_id("codex"));
         assert_eq!(index.projection_state_label(), "unavailable");
         assert!(index.projection_error().contains("denied"));
+    }
+
+    #[test]
+    fn local_agent_target_index_unpaired_credentials_do_not_match_targets() {
+        let hosted_target = target("acme", "u1", "codex");
+        let index = LocalAgentTargetIndex {
+            projection: LocalAgentTargetProjectionState::Available {
+                projection: AgentLocalTargetProjection::default(),
+            },
+            credential_identity: LocalCredentialIdentityState::Unpaired,
+        };
+
+        assert!(!index.credentials_match_target(&hosted_target));
+        assert_eq!(index.credential_state_label(), "unpaired");
+        assert_eq!(index.credential_error(), "");
+    }
+
+    #[test]
+    fn local_agent_target_index_unavailable_credentials_fail_closed() {
+        let hosted_target = target("acme", "u1", "codex");
+        let index = LocalAgentTargetIndex {
+            projection: LocalAgentTargetProjectionState::Available {
+                projection: AgentLocalTargetProjection::default(),
+            },
+            credential_identity: LocalCredentialIdentityState::Unavailable {
+                reason: "validate credentials: all-zero user_id".to_string(),
+            },
+        };
+
+        assert!(!index.credentials_match_target(&hosted_target));
+        assert_eq!(index.credential_state_label(), "unavailable");
+        assert!(index.credential_error().contains("all-zero user_id"));
     }
 }
 

@@ -1164,6 +1164,40 @@ for test in (
 PY
 }
 
+check_target_gate_credential_state_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local target_gate="$cli_root/src/daemon/invocation/admission/target_gate.rs"
+  [[ -f "$target_gate" ]] || return 0
+
+  "$PYTHON_BIN" - "$target_gate" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+for retired in (
+    "load_credentials()\n        .ok()",
+    "load_credentials().ok()",
+    "creds.user_id().ok()",
+    "user_id().ok()",
+):
+    if retired in text:
+        raise SystemExit(f"target_gate_credential_state_retired_fallback:{retired}")
+for required in (
+    "enum LocalCredentialIdentityState",
+    "Available(LocalCredentialIdentity)",
+    "Unpaired",
+    "Unavailable { reason: String }",
+    "load_credentials_optional()?",
+    "creds.user_id()?",
+    "target_gate_credential_identity_load_failed",
+    "local_agent_target_index_unpaired_credentials_do_not_match_targets",
+    "local_agent_target_index_unavailable_credentials_fail_closed",
+):
+    if required not in text:
+        raise SystemExit(f"target_gate_credential_state_missing:{required}")
+PY
+}
+
 check_runtime_trust_revoke_credentials_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local invalidator="$cli_root/src/daemon/invocation/admission/runtime_trust_invalidator.rs"
@@ -6695,6 +6729,21 @@ EOF
   if ( check_credentials_user_binding_validation_contract "$tmp/credentials-user-binding-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected credentials user-binding validation gate to fail"
   fi
+  mkdir -p "$tmp/target-gate-credential-legacy/src/daemon/invocation/admission"
+  cat >"$tmp/target-gate-credential-legacy/src/daemon/invocation/admission/target_gate.rs" <<'EOF'
+struct LocalCredentialIdentity { realm: String, user_id: String }
+fn load_local_credential_identity() -> Option<LocalCredentialIdentity> {
+  crate::daemon::persistence::config::load_credentials()
+    .ok()
+    .and_then(|creds| {
+      let user_id = creds.user_id().ok()?.to_string();
+      Some(LocalCredentialIdentity { realm: creds.realm, user_id })
+    })
+}
+EOF
+  if ( check_target_gate_credential_state_contract "$tmp/target-gate-credential-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected target gate credential state gate to fail"
+  fi
   check_mcp_reflection_async_bridge_contract
   check_active_source_contract
   check_sdk_root_runtime_description_contract
@@ -6712,6 +6761,7 @@ EOF
   check_pages_identity_credentials_contract
   check_cli_credentials_optional_read_contract
   check_credentials_user_binding_validation_contract
+  check_target_gate_credential_state_contract
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
   check_runtime_trust_user_key_inventory_scope_contract
@@ -6792,6 +6842,7 @@ check_auth_agents_backend_shape_contract
 check_pages_identity_credentials_contract
 check_cli_credentials_optional_read_contract
 check_credentials_user_binding_validation_contract
+check_target_gate_credential_state_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_runtime_trust_user_key_inventory_scope_contract
