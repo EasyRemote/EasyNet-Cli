@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::cli::daemon_client::remote_system_ability::invoke_remote_device_system_ability;
 use crate::core::ura::{parse_ura, AbilitySelector, URAKind};
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AbilityCatalogueQuery {
@@ -62,7 +62,7 @@ impl AbilityCatalogueClient {
     }
 
     pub(crate) fn fetch_local_value(&self) -> anyhow::Result<Value> {
-        invoke_local_ability("meta.list_abilities", self.query.to_request())
+        LocalRuntimeStateReadIssuer::invoke("meta.list_abilities", self.query.to_request())
     }
 
     pub(crate) fn fetch_local_abilities(&self) -> anyhow::Result<Vec<Value>> {

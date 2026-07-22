@@ -325,6 +325,13 @@ fn call_create_participant_identity_boundary_script_holds() {
 }
 
 #[test]
+fn runtime_state_read_subject_boundary_script_holds() {
+    // Pins runtime-state reads to an explicit control-discovery daemon subject.
+    // History/catalog/status/watch must not re-enter implicit daemon-self reads.
+    run_bash_script("tests/scripts/test_check_runtime_state_read_subject_boundary.sh");
+}
+
+#[test]
 fn runtime_abilities_manifest_boundary_script_holds() {
     // Pins per-agent ability discovery to authored manifests under
     // AgentDirectory. Missing roots must not synthesize chat abilities.

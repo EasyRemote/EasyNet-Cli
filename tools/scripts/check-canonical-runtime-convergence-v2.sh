@@ -563,8 +563,10 @@ for retired in (
     if retired in production:
         raise SystemExit(f"cli_invocation_history_read_model_retired_json:{retired}")
 
-if "crate::support::platform::local_invoke::invoke_local_ability(ability, args)" not in production:
-    raise SystemExit("cli_invocation_history_read_model_not_using_local_invoke")
+if "LocalRuntimeStateReadIssuer::invoke(ability, args)" not in production:
+    raise SystemExit("cli_invocation_history_read_model_not_using_runtime_state_read_issuer")
+if re.search(r"\binvoke_local_ability\s*\(", production):
+    raise SystemExit("cli_invocation_history_read_model_uses_generic_local_invoke")
 
 for required_test in (
     "invocation_history_read_list_emits_explicit_ura_scope_fields",
@@ -3784,6 +3786,7 @@ check_product_identity_boundary_contract() {
   bash "$ROOT/tools/scripts/check-plugin-control-subject-boundary.sh" >/dev/null
   bash "$ROOT/tools/scripts/check-current-realm-hub-context-boundary.sh" >/dev/null
   bash "$ROOT/tools/scripts/check-call-create-participant-identity-boundary.sh" >/dev/null
+  bash "$ROOT/tools/scripts/check-runtime-state-read-subject-boundary.sh" >/dev/null
 }
 
 check_axon_product_protocol_boundary_contract() {

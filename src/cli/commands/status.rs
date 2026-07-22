@@ -20,7 +20,7 @@ use crate::core::ura;
 use crate::daemon::boot::join_connection_state;
 use crate::daemon::lifecycle::{RuntimeLifecycleService, RuntimeLifecycleStatus};
 use crate::daemon::persistence::config;
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer;
 use crate::support::platform::output;
 
 #[derive(Debug, Args)]
@@ -158,7 +158,9 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    match invoke_local_ability("observe.health", json!({"source": "runtime.status"})) {
+    let health_probe =
+        LocalRuntimeStateReadIssuer::invoke("observe.health", json!({"source": "runtime.status"}));
+    match health_probe {
         Ok(_) => {}
         Err(e) => {
             // The transport layer already converts the common case
@@ -203,7 +205,7 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
     // returns the full local catalogue). Cheaper than the legacy
     // O(N) per-node fan-out and matches what `easynet ability list`
     // reports.
-    match invoke_local_ability("meta.list_abilities", serde_json::json!({})) {
+    match LocalRuntimeStateReadIssuer::invoke("meta.list_abilities", serde_json::json!({})) {
         Ok(v) => {
             let count = v
                 .get("abilities")

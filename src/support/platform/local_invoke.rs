@@ -398,6 +398,41 @@ impl LocalDaemonSystemAbilityIssuer {
     }
 }
 
+/// Named issuer for daemon-local runtime-state reads.
+///
+/// These reads are product/operator projections over the running LocalRuntime
+/// state: ability catalogue, health/status probes, and invocation ledger views.
+/// They must not enter transport through the generic daemon-self subject
+/// shortcut because that hides the semantic subject until admission fails. The
+/// issuer binds every read to the daemon identity published by control discovery
+/// before crossing the local Axon gRPC boundary.
+pub struct LocalRuntimeStateReadIssuer;
+
+impl LocalRuntimeStateReadIssuer {
+    pub fn invoke(ability: &str, args: Value) -> anyhow::Result<Value> {
+        Self::invoke_timeout(ability, args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invoke_timeout(
+        ability: &str,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        let subject_ura = Self::subject_ura()?;
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_subject_timeout(
+            ability,
+            args,
+            &subject_ura,
+            timeout,
+        )
+    }
+
+    fn subject_ura() -> anyhow::Result<String> {
+        crate::daemon::identity::local_invocation::local_daemon_ura()
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))
+    }
+}
+
 /// Invoke a canonical local target with public-ingress tuple facts.
 ///
 /// This is the user-facing ability-invoke path: subject, nonce, and root
@@ -826,6 +861,22 @@ mod tests {
         assert!(
             msg.contains("easynet runtime start"),
             "must point at `easynet [runtime] start`; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn runtime_state_read_subject_requires_control_discovery_identity() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let error = LocalRuntimeStateReadIssuer::subject_ura()
+            .expect_err("runtime-state reads must not synthesize daemon identity");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("runtime-state read subject unavailable"),
+            "wrong readiness error: {message}"
+        );
+        assert!(
+            message.contains("control discovery does not publish a daemon identity"),
+            "runtime-state read must fail before default/device fallback: {message}"
         );
     }
 }

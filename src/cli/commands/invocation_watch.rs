@@ -49,7 +49,7 @@ use crate::cli::commands::receipt_verification::CliReceiptChainVerification;
 use crate::daemon::ability::builtins::governance::invocation_history::{
     ABILITY_INVOCATION_RECORD_GET, ABILITY_TRACE_GET,
 };
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer;
 use crate::support::platform::output;
 
 type Record = axon_sdk::invocation::InvocationLedgerRecord;
@@ -535,7 +535,7 @@ struct CausalSet {
 }
 
 fn fetch_trace(trace_id: &str) -> anyhow::Result<CausalSet> {
-    let resp = invoke_local_ability(
+    let resp = LocalRuntimeStateReadIssuer::invoke(
         ABILITY_TRACE_GET,
         json!({ "key": { "trace_id": trace_id } }),
     )
@@ -573,7 +573,7 @@ fn fetch_causal_set(args: &WatchArgs) -> anyhow::Result<CausalSet> {
     let ura = args.invocation.as_deref().ok_or_else(|| {
         anyhow::anyhow!("invocation watch requires either an invocation URA or --trace <trace_id>")
     })?;
-    let resp = invoke_local_ability(
+    let resp = LocalRuntimeStateReadIssuer::invoke(
         ABILITY_INVOCATION_RECORD_GET,
         json!({ "key": { "ura": ura } }),
     )
