@@ -41,6 +41,7 @@
 use serde_json::Value;
 
 pub use crate::daemon::invocation::routing::target::LocalAbilityTarget;
+use crate::daemon::invocation::routing::target::{CallMode, LocalTargetRootInvocation};
 
 /// One decoded frame from a daemon-hosted server-stream ability.
 ///
@@ -378,13 +379,22 @@ impl LocalDaemonSystemAbilityIssuer {
         )
     }
 
-    pub fn invoke_target_root_derived_subject_timeout(
-        target: &LocalAbilityTarget,
-        args: Value,
+    pub fn invoke_issued_target_root_timeout(
+        invocation: &LocalTargetRootInvocation,
         timeout: std::time::Duration,
     ) -> anyhow::Result<Value> {
-        let subject_ura = target.daemon_system_subject_ura()?;
-        Self::invoke_target_root_timeout(target, args, &subject_ura, timeout)
+        if invocation.call_mode() != CallMode::Rpc {
+            anyhow::bail!(
+                "local daemon system target root invoke requires RPC call_mode, got {:?}",
+                invocation.call_mode()
+            );
+        }
+        Self::invoke_target_root_timeout(
+            invocation.target(),
+            invocation.normalized_args().clone(),
+            invocation.subject_ura(),
+            timeout,
+        )
     }
 
     pub fn stream_target_root(

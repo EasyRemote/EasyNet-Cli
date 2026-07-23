@@ -10545,6 +10545,14 @@ else:
             "pub fn local_root_for_target(",
             "SystemInvocationTargetIssuer must issue target-bound daemon-system invocations",
         ),
+        (
+            "pub struct LocalTargetRootInvocation",
+            "target-bound daemon-system invocation facts must have an issued value object",
+        ),
+        (
+            "pub fn local_target_root(",
+            "SystemInvocationTargetIssuer must issue local target root invocation facts",
+        ),
     ):
         if token not in target_text:
             add(
@@ -10555,8 +10563,8 @@ else:
             )
     for token, detail in (
         (
-            "invoke_target_root_derived_subject_timeout",
-            "local daemon system invoker must expose a target-bound subject helper",
+            "invoke_issued_target_root_timeout",
+            "local daemon system invoker must consume issued target-root facts",
         ),
         (
             "root_context_for_target",
@@ -10570,6 +10578,13 @@ else:
                 1,
                 detail,
             )
+    if "invoke_target_root_derived_subject_timeout" in local_invoke_text:
+        add(
+            "R93_LOCAL_ABILITY_TARGET_SUBJECT_POLICY",
+            local_target_subject_sources[1],
+            1,
+            "local invoke must not derive target subjects outside SystemInvocationTargetIssuer",
+        )
     raw_local_invoke_text = raw_source_texts[1]
     for token, detail in (
         (

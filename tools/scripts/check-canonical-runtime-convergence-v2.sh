@@ -4550,12 +4550,14 @@ for token, code in (
     ("fn daemon_system_subject_ura_for_descriptor(", "descriptor_policy_missing"),
     ("pub(crate) fn daemon_system_subject_ura(&self) -> anyhow::Result<String>", "target_policy_method_missing"),
     ("pub fn local_root_for_target(", "target_issuer_missing"),
+    ("pub struct LocalTargetRootInvocation", "issued_target_invocation_missing"),
+    ("pub fn local_target_root(", "issued_target_root_missing"),
 ):
     if token not in target:
         raise SystemExit(f"local_ability_target_subject_policy:{code}")
 
 for token, code in (
-    ("invoke_target_root_derived_subject_timeout", "daemon_system_invoke_helper_missing"),
+    ("invoke_issued_target_root_timeout", "daemon_system_issued_invoke_helper_missing"),
     ("root_context_for_target", "system_context_target_helper_missing"),
     ("pub fn classify_invoke_failure(err: &anyhow::Error) -> LocalInvokeFailureClass", "failure_classifier_missing"),
     ("pub enum LocalInvokeFailureClass", "failure_class_missing"),
@@ -4564,6 +4566,7 @@ for token, code in (
         raise SystemExit(f"local_ability_target_subject_policy:{code}")
 
 for retired, code in (
+    ("invoke_target_root_derived_subject_timeout", "retired_derived_subject_invoke_helper"),
     ("classify_invoke_error", "retired_error_classifier_name"),
     ("LocalInvokeErrorKind", "retired_error_kind_name"),
     ("fallback executor", "fallback_executor_semantics"),

@@ -125,6 +125,41 @@ impl LocalAbilityTarget {
     }
 }
 
+/// One daemon-system root invocation issued for a local ability target.
+///
+/// The target owns dispatch and callee identity; the issuer owns the derived
+/// subject. Transport helpers receive this value as already-bound tuple facts
+/// and must not derive another subject policy from `LocalAbilityTarget`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalTargetRootInvocation {
+    target: LocalAbilityTarget,
+    normalized_args: Value,
+    call_mode: CallMode,
+    subject_ura: String,
+}
+
+impl LocalTargetRootInvocation {
+    #[must_use]
+    pub fn target(&self) -> &LocalAbilityTarget {
+        &self.target
+    }
+
+    #[must_use]
+    pub fn normalized_args(&self) -> &Value {
+        &self.normalized_args
+    }
+
+    #[must_use]
+    pub fn call_mode(&self) -> CallMode {
+        self.call_mode
+    }
+
+    #[must_use]
+    pub fn subject_ura(&self) -> &str {
+        &self.subject_ura
+    }
+}
+
 /// Caller's request *before* the resolver has decided scope or
 /// call mode. Built by the IPC layer (or by a future planner) from
 /// Client-supplied parameters.
@@ -501,6 +536,19 @@ impl SystemInvocationTargetIssuer {
         ))
     }
 
+    pub fn local_target_root(
+        target: &LocalAbilityTarget,
+        normalized_args: Value,
+        call_mode: CallMode,
+    ) -> anyhow::Result<LocalTargetRootInvocation> {
+        Ok(LocalTargetRootInvocation {
+            target: target.clone(),
+            normalized_args,
+            call_mode,
+            subject_ura: target.daemon_system_subject_ura()?,
+        })
+    }
+
     #[must_use]
     pub fn remote_root(
         node: NodeId,
@@ -758,6 +806,29 @@ mod tests {
             target.causal_context,
             InvocationCausalContext::daemon_system_root()
         );
+    }
+
+    #[test]
+    fn local_target_root_issues_target_bound_tuple_facts() {
+        let ability_ura = crate::core::ura::hub_ability_ura("acme", "principal.lifecycle.get");
+        let selector =
+            crate::core::ura::AbilitySelector::parse(&ability_ura).expect("ability selector");
+        let local_target = LocalAbilityTarget::from_selector(&selector);
+        let issued =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_target_root(
+                &local_target,
+                json!({"principal_ura": "easynet:///r/acme/user/alice"}),
+                CallMode::Rpc,
+            )
+            .expect("issued target root");
+
+        assert_eq!(issued.target(), &local_target);
+        assert_eq!(issued.call_mode(), CallMode::Rpc);
+        assert_eq!(
+            issued.normalized_args(),
+            &json!({"principal_ura": "easynet:///r/acme/user/alice"})
+        );
+        assert_eq!(issued.subject_ura(), ability_ura);
     }
 
     #[test]

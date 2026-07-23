@@ -23,6 +23,7 @@ use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
 use crate::daemon::ability::builtins::resources::pages::{PagesIdentity, PagesUserRootIdentity};
+use crate::daemon::invocation::routing::target::{CallMode, SystemInvocationTargetIssuer};
 use crate::support::platform::local_invoke::{LocalAbilityTarget, LocalDaemonSystemAbilityIssuer};
 
 /// User-owned Pages ability verbs exposed by the local daemon.
@@ -198,9 +199,9 @@ fn invoke_pages_ability(
     args: Value,
 ) -> anyhow::Result<Value> {
     let target = ability.local_target(&identity.realm)?;
-    LocalDaemonSystemAbilityIssuer::invoke_target_root_derived_subject_timeout(
-        &target,
-        args,
+    let invocation = SystemInvocationTargetIssuer::local_target_root(&target, args, CallMode::Rpc)?;
+    LocalDaemonSystemAbilityIssuer::invoke_issued_target_root_timeout(
+        &invocation,
         std::time::Duration::from_secs(30),
     )
 }
