@@ -6170,6 +6170,61 @@ for required in (
 PY
 }
 
+check_media_resource_subject_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local subject="$cli_root/src/daemon/ability/builtins/resources/media/resource_subject.rs"
+  [[ -f "$subject" ]] || fail "media resource subject resolver is missing: $subject"
+
+  "$PYTHON_BIN" - "$subject" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+for required in (
+    "enum ResourceSubjectProjection",
+    "Missing",
+    "MalformedUra",
+    "NonResourceUra",
+    "ResourceUra(&'a str)",
+    "fn classify(subject: Option<&'a str>) -> Self",
+    "fn as_resource_ura(self) -> Option<&'a str>",
+    "fn is_resource(self) -> bool",
+    "ResourceSubjectProjection::classify(subject)",
+    "ResourceSubjectProjection::classify(Some(subject)).is_resource()",
+):
+    if required not in text:
+        raise SystemExit(f"media_resource_subject_projection:missing:{required}")
+
+compact = re.sub(r"\s+", "", production)
+for pattern, label in {
+    "parse_ura(subject.trim()).map(|parsed|parsed.kind==URAKind::Resource).unwrap_or(false)": "bool_parse_collapse",
+    ".ok()?": "option_question_fallback",
+    "unwrap_or(false)": "default_false_projection",
+}.items():
+    if re.sub(r"\s+", "", pattern) in compact:
+        raise SystemExit(f"media_resource_subject_projection:retired:{label}")
+
+resolve_pos = production.find("pub fn resolve_resource_ura_subject(")
+require_pos = production.find("require_resource_ura_subject(", resolve_pos)
+load_pos = production.find("resources::load()", resolve_pos)
+if resolve_pos < 0 or require_pos < 0 or load_pos < 0 or require_pos > load_pos:
+    raise SystemExit("media_resource_subject_projection:resource_table_before_subject_projection")
+
+for required_test in (
+    "malformed_subject_is_subject_required_before_resource_table_lookup",
+    "resource_subject_classifier_keeps_projection_states_explicit",
+    "ResourceSubjectProjection::MalformedUra",
+    "ResourceSubjectProjection::NonResourceUra",
+    "ResourceSubjectProjection::ResourceUra",
+):
+    if required_test not in text:
+        raise SystemExit(f"media_resource_subject_projection:missing_test:{required_test}")
+PY
+}
+
 check_kernel_runtime_session_read_model_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local kernel="$cli_root/src/daemon/boot/kernel/mod.rs"
@@ -13113,6 +13168,31 @@ EOF
   if ( check_node_session_authority_subject_contract "$tmp/node-session-authority-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected Node session authority subject-binding gate to fail"
   fi
+  mkdir -p "$tmp/media-resource-subject-bool-legacy/src/daemon/ability/builtins/resources/media"
+  cat >"$tmp/media-resource-subject-bool-legacy/src/daemon/ability/builtins/resources/media/resource_subject.rs" <<'EOF'
+use crate::core::ura::URAKind;
+pub fn resolve_resource_ura_subject(subject: &str) {
+  let file = resources::load().unwrap();
+  let _ = require_resource_ura_subject("device.test.media", Some(subject), "display");
+}
+pub fn require_resource_ura_subject<'a>(_ability: &str, subject: Option<&'a str>, _required: &str) -> anyhow::Result<&'a str> {
+  let subject = subject.unwrap();
+  if !is_resource_ura_subject(subject) {
+    anyhow::bail!("subject required; reason=subject_required");
+  }
+  Ok(subject)
+}
+pub fn is_resource_ura_subject(subject: &str) -> bool {
+  crate::core::ura::parse_ura(subject.trim())
+    .map(|parsed| parsed.kind == URAKind::Resource)
+    .unwrap_or(false)
+}
+#[cfg(test)]
+mod tests {}
+EOF
+  if ( check_media_resource_subject_projection_contract "$tmp/media-resource-subject-bool-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected media resource subject bool-collapse gate to fail"
+  fi
   mkdir -p "$tmp/admission-authority-raw-default-legacy/src/daemon/invocation/admission"
   cat >"$tmp/admission-authority-raw-default-legacy/src/daemon/invocation/admission/admission_facade.rs" <<'EOF'
 #[derive(Debug, Deserialize)]
@@ -15072,6 +15152,7 @@ check_remote_invocation_subject_provenance_contract
 check_daemon_runtime_route_inventory_contract
 check_daemon_local_device_identity_contract
 check_filesystem_resource_owner_contract
+check_media_resource_subject_projection_contract
 check_federation_probe_local_identity_contract
 check_ready_capability_proof_contract
 check_daemon_local_runtime_identity_contract
