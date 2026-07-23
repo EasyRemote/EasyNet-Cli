@@ -59,6 +59,7 @@ pub enum PluginRealtimeTransport {
 /// This is activation metadata, not an AbilityDescriptor replacement. Concrete
 /// callable names still live in `[[ability_metadata]]`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginRealtimeCapability {
     kind: PluginRealtimeKind,
     modes: Vec<PluginRealtimeMode>,
@@ -131,7 +132,7 @@ impl<'de> Deserialize<'de> for PluginKind {
         match raw.as_str() {
             "declarative" => Ok(Self::Declarative),
             "sidecar" => Ok(Self::Sidecar),
-            "builtin" | "stateful-device-plugin" => Ok(Self::Builtin),
+            "builtin" => Ok(Self::Builtin),
             "desktop_companion" => Ok(Self::DesktopCompanion),
             other => Err(serde::de::Error::custom(format!(
                 "unsupported plugin kind {other:?}"
@@ -175,6 +176,7 @@ pub enum PluginCompanionHealthMode {
 
 /// Platform-specific desktop companion supervisor declaration.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginCompanionMacos {
     bundle_id: String,
     app_bundle: String,
@@ -207,6 +209,7 @@ impl PluginCompanionMacos {
 
 /// Platform-specific Windows companion declaration.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginCompanionWindows {
     exe: String,
     supervisor: String,
@@ -234,6 +237,7 @@ impl PluginCompanionWindows {
 
 /// Platform-specific Linux companion declaration.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginCompanionLinux {
     exe: String,
     supervisor: String,
@@ -261,6 +265,7 @@ impl PluginCompanionLinux {
 
 /// Desktop companion metadata declared by a package manifest.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginCompanionManifest {
     display_name: String,
     lifecycle: PluginCompanionLifecycle,
@@ -322,7 +327,7 @@ impl PluginCompanionManifest {
 /// reuse the daemon's existing in-process executors instead of creating a
 /// plugin-specific orchestration or MCP call path.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PluginDeclarativeBinding {
     /// Spawn an executable declared by argv[0]. The process speaks the same
     /// JSON frame envelope as sidecar packages.
@@ -357,6 +362,7 @@ impl PluginDeclarativeBinding {
 
 /// Runtime limits declared by a plugin package manifest.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginRuntimeLimits {
     max_sessions: usize,
     max_frame_queue: usize,
@@ -537,6 +543,7 @@ impl PluginPackageManifest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawPluginToml {
     schema_version: String,
     id: String,
@@ -559,6 +566,7 @@ struct RawPluginToml {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawPluginAbilityMetadata {
     name: String,
     layer: PluginAbilityLayer,
@@ -1157,6 +1165,188 @@ resources = ["camera"]
     }
 
     #[test]
+    fn manifest_rejects_unknown_top_level_fields() {
+        assert_manifest_parse_unknown_field(
+            r#"
+schema_version = "1"
+id = "test.plugin"
+version = "0.1.0"
+kind = "sidecar"
+entrypoint = "bin/plugin"
+abilities = ["abilities/*.ability.toml"]
+permissions = []
+resources = []
+platforms = []
+legacy_kind_alias = "stateful-device-plugin"
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[[ability_metadata]]
+name = "test.echo"
+layer = "operational"
+"#,
+            "legacy_kind_alias",
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_retired_plugin_kind_alias() {
+        let body = test_manifest(
+            r#"
+[[ability_metadata]]
+name = "test.echo"
+layer = "operational"
+"#,
+        )
+        .replace("kind = \"sidecar\"", "kind = \"stateful-device-plugin\"");
+        let err = PluginPackageManifest::parse("plugins/test/plugin.toml", &body)
+            .expect_err("retired plugin kind aliases must stay removed");
+        assert!(
+            matches!(err, PluginHostError::ManifestParseFailed { .. }),
+            "kind alias must fail during typed parse, got: {err}"
+        );
+        assert!(
+            format!("{err}").contains("unsupported plugin kind"),
+            "kind alias rejection should name unsupported kind: {err}"
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_unknown_ability_metadata_fields() {
+        assert_manifest_parse_unknown_field(
+            &test_manifest(
+                r#"
+[[ability_metadata]]
+name = "test.echo"
+layer = "operational"
+legacy_call_mode = "rpc"
+"#,
+            ),
+            "legacy_call_mode",
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_unknown_realtime_capability_fields() {
+        assert_manifest_parse_unknown_field(
+            &test_manifest(
+                r#"
+[[ability_metadata]]
+name = "test.camera"
+layer = "operational"
+call_mode = "bidi"
+
+[[realtime_capability]]
+kind = "camera"
+modes = ["snapshot"]
+transport = "invoke_bidi"
+resources = ["camera"]
+legacy_media_bus = "webrtc-v0"
+"#,
+            ),
+            "legacy_media_bus",
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_unknown_runtime_limit_fields() {
+        assert_manifest_parse_unknown_field(
+            r#"
+schema_version = "1"
+id = "test.plugin"
+version = "0.1.0"
+kind = "sidecar"
+entrypoint = "bin/plugin"
+abilities = ["abilities/*.ability.toml"]
+permissions = []
+resources = []
+platforms = []
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+legacy_queue = 1024
+
+[[ability_metadata]]
+name = "test.echo"
+layer = "operational"
+"#,
+            "legacy_queue",
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_unknown_declarative_binding_fields() {
+        assert_manifest_parse_unknown_field(
+            r#"
+schema_version = "1"
+id = "test.plugin"
+version = "0.1.0"
+kind = "declarative"
+entrypoint = "bin/plugin"
+abilities = ["abilities/*.ability.toml"]
+permissions = []
+resources = []
+platforms = []
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[declarative]
+kind = "exec"
+argv = ["bin/plugin"]
+legacy_shell = true
+
+[[ability_metadata]]
+name = "test.echo"
+layer = "operational"
+"#,
+            "legacy_shell",
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_unknown_companion_platform_fields() {
+        assert_manifest_parse_unknown_field(
+            r#"
+schema_version = "1"
+id = "easynet.desktop.menubar"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "dist/macos/EasyNetMenuBar.app"
+abilities = []
+permissions = ["clipboard_read"]
+resources = ["desktop_session"]
+platforms = ["macos"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "EasyNet Menu Bar"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "companions/easynet.desktop.menubar/status.json"
+
+[companion.macos]
+bundle_id = "tech.silan.easynet.menubar"
+app_bundle = "dist/macos/EasyNetMenuBar.app"
+supervisor = "launch_agent"
+launch_agent_label = "tech.silan.easynet.menubar"
+session = "aqua"
+legacy_plist_label = "tech.silan.old"
+"#,
+            "legacy_plist_label",
+        );
+    }
+
+    #[test]
     fn manifest_accepts_desktop_companion_without_abilities() {
         let manifest = PluginPackageManifest::parse(
             "plugins/easynet.desktop.menubar/plugin.toml",
@@ -1278,6 +1468,23 @@ session = "aqua"
         );
     }
 
+    #[test]
+    fn real_plugin_manifests_parse_under_strict_schema() {
+        let remote_desktop = PluginPackageManifest::parse(
+            "plugins/remote-desktop/plugin.toml",
+            include_str!("../../../plugins/remote-desktop/plugin.toml"),
+        )
+        .expect("remote desktop plugin manifest");
+        assert_eq!(remote_desktop.kind(), PluginKind::Builtin);
+
+        let desktop_menubar = PluginPackageManifest::parse(
+            "plugins/desktop-menubar/plugin.toml",
+            include_str!("../../../plugins/desktop-menubar/plugin.toml"),
+        )
+        .expect("desktop menubar plugin manifest");
+        assert_eq!(desktop_menubar.kind(), PluginKind::DesktopCompanion);
+    }
+
     fn test_manifest(extra: &str) -> String {
         format!(
             r#"
@@ -1298,5 +1505,18 @@ max_frame_queue = 1
 {extra}
 "#
         )
+    }
+
+    fn assert_manifest_parse_unknown_field(body: &str, field: &str) {
+        let err = PluginPackageManifest::parse("plugins/test/plugin.toml", body)
+            .expect_err("unknown plugin manifest field must fail at typed parse");
+        assert!(
+            matches!(err, PluginHostError::ManifestParseFailed { .. }),
+            "unknown field should fail before semantic validation, got: {err}"
+        );
+        assert!(
+            format!("{err}").contains(&format!("unknown field `{field}`")),
+            "parse error should name unknown field {field:?}, got: {err}"
+        );
     }
 }
