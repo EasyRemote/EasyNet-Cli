@@ -475,11 +475,17 @@ pub fn send_task_description() -> &'static str {
 mod tests {
     use super::*;
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/acme/device/local";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
     /// Tests run without a local daemon socket. The handler should
     /// return ok:false instead of panicking; the populated path is
     /// exercised by daemon/axon integration tests.
     fn fresh_registry() -> Arc<AxonAbilityCatalog> {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(
             &mut reg,
             Arc::new(crate::daemon::ability::builtins::agents::discover::DetachedDiscoverFederationResolver),
