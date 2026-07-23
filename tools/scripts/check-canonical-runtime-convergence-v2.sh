@@ -1794,6 +1794,64 @@ for required in (
 PY
 }
 
+check_pages_publish_response_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local projection="$cli_root/src/daemon/resources/projection.rs"
+  local publish="$cli_root/src/daemon/ability/builtins/resources/pages/publish.rs"
+  [[ -f "$projection" ]] || fail "daemon resource projection source is missing: $projection"
+  [[ -f "$publish" ]] || fail "pages publish source is missing: $publish"
+
+  "$PYTHON_BIN" - "$projection" "$publish" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+projection, publish = [Path(arg).read_text(encoding="utf-8") for arg in sys.argv[1:]]
+
+struct = re.search(
+    r"(?P<attrs>(?:#\[[^\n]+\]\n)*)pub struct PagesPublishResponse \{(?P<body>.*?)\n\}",
+    projection,
+    re.S,
+)
+if struct is None:
+    raise SystemExit("pages_publish_response_projection:struct_missing")
+if "#[serde(deny_unknown_fields)]" not in struct.group("attrs"):
+    raise SystemExit("pages_publish_response_projection:struct_not_strict")
+
+for required in (
+    "pub struct PagesPublishResponse",
+    "pub project_ura: String",
+    "pub url_root: String",
+    "pub user: String",
+    "pub project_id: String",
+    "pub visibility: String",
+    "PagesPublishResponse::success(",
+    "pages_publish_response_preserves_public_shape",
+    "pages_publish_response_rejects_unknown_fields",
+):
+    if required not in projection:
+        raise SystemExit(f"pages_publish_response_projection:projection_missing:{required}")
+
+for retired in (
+    'Ok(json!({',
+    '"project_ura": project_ura',
+    '"url_root":    url_root',
+    '"visibility":  visibility.as_str()',
+    'use serde_json::{json, Value}',
+):
+    if retired in publish:
+        raise SystemExit(f"pages_publish_response_projection:handler_retired:{retired}")
+
+for required in (
+    "PagesPublishResponse::success(",
+    "serde_json::to_value(PagesPublishResponse::success(",
+    "handle_publish_returns_typed_payload_projection_shape",
+):
+    if required not in publish:
+        raise SystemExit(f"pages_publish_response_projection:handler_missing:{required}")
+PY
+}
+
 check_local_agents_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local local_agents="$cli_root/src/daemon/persistence/local_agents.rs"
@@ -12593,6 +12651,28 @@ EOF
   if ( CLI_ROOT="$tmp/pages-fetch-response-projection-legacy"; check_pages_fetch_response_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected pages fetch response projection gate to fail"
   fi
+  mkdir -p "$tmp/pages-publish-response-projection-legacy/src/daemon/resources"
+  mkdir -p "$tmp/pages-publish-response-projection-legacy/src/daemon/ability/builtins/resources/pages"
+  cat >"$tmp/pages-publish-response-projection-legacy/src/daemon/resources/projection.rs" <<'EOF'
+pub struct PagesPublishResponse {
+    pub payload: serde_json::Value,
+}
+EOF
+  cat >"$tmp/pages-publish-response-projection-legacy/src/daemon/ability/builtins/resources/pages/publish.rs" <<'EOF'
+use serde_json::{json, Value};
+fn handle_publish() -> Value {
+    Ok(json!({
+        "project_ura": project_ura,
+        "url_root":    url_root,
+        "user":        user,
+        "project_id":  project_id,
+        "visibility":  visibility.as_str(),
+    }))
+}
+EOF
+  if ( CLI_ROOT="$tmp/pages-publish-response-projection-legacy"; check_pages_publish_response_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected pages publish response projection gate to fail"
+  fi
   mkdir -p "$tmp/local-agents-schema-legacy/src/daemon/persistence"
   cat >"$tmp/local-agents-schema-legacy/src/daemon/persistence/local_agents.rs" <<'EOF'
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -13038,6 +13118,7 @@ EOF
   check_pages_management_response_projection_contract
   check_pages_health_response_projection_contract
   check_pages_fetch_response_projection_contract
+  check_pages_publish_response_projection_contract
   check_local_agents_schema_contract
   check_profile_store_schema_contract
   check_auth_session_owner_fact_contract
@@ -13192,6 +13273,7 @@ check_files_store_response_projection_contract
 check_pages_management_response_projection_contract
 check_pages_health_response_projection_contract
 check_pages_fetch_response_projection_contract
+check_pages_publish_response_projection_contract
 check_profile_store_schema_contract
 check_auth_session_owner_fact_contract
 check_resources_schema_contract

@@ -23,9 +23,10 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::Context;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::resources::projection::PagesPublishResponse;
 
 use super::sandbox::open_directory;
 use super::state::{
@@ -137,13 +138,13 @@ pub fn handle_publish(
         crate::core::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/");
     let url_root = super::pages_public_url_root(realm, user, project_id);
 
-    Ok(json!({
-        "project_ura": project_ura,
-        "url_root":    url_root,
-        "user":        user,
-        "project_id":  project_id,
-        "visibility":  visibility.as_str(),
-    }))
+    Ok(serde_json::to_value(PagesPublishResponse::success(
+        project_ura,
+        url_root,
+        user,
+        project_id,
+        visibility.as_str(),
+    ))?)
 }
 
 /// project_id grammar: URA-safe segment per RFC-006-B v0.6 §2.1.
@@ -165,4 +166,80 @@ pub(super) fn validate_project_id(project_id: &str) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
+    use serde_json::json;
+
+    fn pages_registry(realm: &str, user: &str) -> Arc<AxonAbilityCatalog> {
+        let device_ura = crate::core::ura::device_ura(realm, "pages-publish-test-device");
+        let pages_agent = super::super::management_agent_ura(realm, user);
+        let authority_context = AbilityAuthorityContext::for_device_authority_root(device_ura)
+            .expect("Pages publish test Device authority")
+            .with_declared_agent_authority_root(pages_agent)
+            .expect("Pages publish test Agent authority");
+        Arc::new(AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            authority_context,
+        ))
+    }
+
+    fn clear_registry_for_user(user: &str) {
+        let keys: Vec<_> = PUBLISHED_PROJECTS
+            .iter()
+            .filter_map(|entry| {
+                let key = entry.key();
+                (key.0 == user).then(|| key.clone())
+            })
+            .collect();
+        for key in keys {
+            PUBLISHED_PROJECTS.remove(&key);
+        }
+    }
+
+    #[test]
+    fn handle_publish_returns_typed_payload_projection_shape() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let realm = "easynet.run";
+        let user = "pages-publish-projection-user";
+        let project_id = "docs-publish";
+        clear_registry_for_user(user);
+        let folder = tempfile::tempdir().expect("temp pages publish root");
+        std::fs::write(folder.path().join("index.html"), "<h1>Hello</h1>")
+            .expect("write test page");
+
+        let published = handle_publish(
+            user,
+            8787,
+            realm,
+            pages_registry(realm, user),
+            json!({
+                "folder": folder.path().display().to_string(),
+                "project_id": project_id,
+                "visibility": "public",
+            }),
+        )
+        .expect("publish test project");
+        clear_registry_for_user(user);
+
+        assert_eq!(
+            published["project_ura"],
+            "easynet:///r/easynet.run/resource/pages-publish-projection-user.docs-publish"
+        );
+        assert_eq!(
+            published["url_root"],
+            "https://easynet.run/web/pages-publish-projection-user/docs-publish/"
+        );
+        assert_eq!(published["user"], user);
+        assert_eq!(published["project_id"], project_id);
+        assert_eq!(published["visibility"], "public");
+        assert!(published.get("folder").is_none());
+        assert!(published.get("canonical_root").is_none());
+    }
 }

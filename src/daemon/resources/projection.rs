@@ -386,6 +386,34 @@ impl PagesFetchResponse {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PagesPublishResponse {
+    pub project_ura: String,
+    pub url_root: String,
+    pub user: String,
+    pub project_id: String,
+    pub visibility: String,
+}
+
+impl PagesPublishResponse {
+    pub fn success(
+        project_ura: impl Into<String>,
+        url_root: impl Into<String>,
+        user: impl Into<String>,
+        project_id: impl Into<String>,
+        visibility: impl Into<String>,
+    ) -> Self {
+        Self {
+            project_ura: project_ura.into(),
+            url_root: url_root.into(),
+            user: user.into(),
+            project_id: project_id.into(),
+            visibility: visibility.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,6 +812,45 @@ mod tests {
         assert!(
             error.to_string().contains("local_path"),
             "strict pages fetch response error should name unknown field: {error}"
+        );
+    }
+
+    #[test]
+    fn pages_publish_response_preserves_public_shape() {
+        let response = PagesPublishResponse::success(
+            "easynet:///r/example/resource/alice.docs",
+            "https://example/web/alice/docs/",
+            "alice",
+            "docs",
+            "public",
+        );
+        let wire = serde_json::to_value(&response).expect("pages publish response serializes");
+
+        assert_eq!(
+            wire["project_ura"],
+            "easynet:///r/example/resource/alice.docs"
+        );
+        assert_eq!(wire["url_root"], "https://example/web/alice/docs/");
+        assert_eq!(wire["user"], "alice");
+        assert_eq!(wire["project_id"], "docs");
+        assert_eq!(wire["visibility"], "public");
+    }
+
+    #[test]
+    fn pages_publish_response_rejects_unknown_fields() {
+        let error = serde_json::from_value::<PagesPublishResponse>(json!({
+            "project_ura": "easynet:///r/example/resource/alice.docs",
+            "url_root": "https://example/web/alice/docs/",
+            "user": "alice",
+            "project_id": "docs",
+            "visibility": "public",
+            "canonical_root": "/tmp/site"
+        }))
+        .expect_err("pages publish response must reject local path leaks");
+
+        assert!(
+            error.to_string().contains("canonical_root"),
+            "strict pages publish response error should name unknown field: {error}"
         );
     }
 }
