@@ -950,11 +950,8 @@ struct PrincipalRecord {
     enrollment_proof: Option<PrincipalProofRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery: Option<RecoveryPolicy>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     consumed_recovery_proofs: BTreeMap<String, i64>,
-    #[serde(default)]
     enrollments: Vec<EnrollmentCapability>,
-    #[serde(default)]
     grants: Vec<AuthorizationGrant>,
     created_unix_ms: i64,
     updated_unix_ms: i64,
@@ -1851,6 +1848,9 @@ mod tests {
                         "state": "active",
                         "version": 1,
                         "bindings": [],
+                        "consumed_recovery_proofs": {},
+                        "enrollments": [],
+                        "grants": [],
                         "created_unix_ms": 1,
                         "updated_unix_ms": 1
                     }
@@ -1867,6 +1867,54 @@ mod tests {
             error.message().contains("missing field `command_log`"),
             "unexpected missing command_log error: {error}"
         );
+    }
+
+    #[test]
+    fn principal_record_requires_lifecycle_collection_facts() {
+        for (field, omitted) in [
+            ("consumed_recovery_proofs", "consumed_recovery_proofs"),
+            ("enrollments", "enrollments"),
+            ("grants", "grants"),
+        ] {
+            let dir = tempdir().expect("tempdir");
+            let store_path = dir.path().join(format!("{field}.json"));
+            let mut principal = json!({
+                "principal_ura": "easynet:///r/realm/user/alice",
+                "state": "active",
+                "version": 1,
+                "bindings": [],
+                "consumed_recovery_proofs": {},
+                "enrollments": [],
+                "grants": [],
+                "created_unix_ms": 1,
+                "updated_unix_ms": 1,
+                "command_log": {"create": 1}
+            });
+            principal
+                .as_object_mut()
+                .expect("principal object")
+                .remove(omitted);
+            fs::write(
+                &store_path,
+                serde_json::to_vec_pretty(&json!({
+                    "principals": {
+                        "easynet:///r/realm/user/alice": principal
+                    }
+                }))
+                .expect("encode malformed lifecycle collection store"),
+            )
+            .expect("write malformed lifecycle collection store");
+
+            let error = PrincipalStore::load_unlocked(&store_path, ABILITY_PRINCIPAL_GET)
+                .expect_err("principal record without lifecycle collections must fail closed");
+            assert_eq!(error.code(), tonic::Code::Internal);
+            assert!(
+                error
+                    .message()
+                    .contains(&format!("missing field `{field}`")),
+                "unexpected missing {field} error: {error}"
+            );
+        }
     }
 
     #[test]

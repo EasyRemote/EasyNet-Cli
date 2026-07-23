@@ -1474,10 +1474,27 @@ if command_log is None:
 if "#[serde(default" in command_log.group(0):
     raise SystemExit("principal_lifecycle_command_log_legacy_default")
 
+for field, ty in (
+    ("consumed_recovery_proofs", "BTreeMap<String, i64>"),
+    ("enrollments", "Vec<EnrollmentCapability>"),
+    ("grants", "Vec<AuthorizationGrant>"),
+):
+    pattern = rf"(?s)((?:#\[[^\]]*\]\s*)*){field}: {re.escape(ty)},"
+    match = re.search(pattern, body)
+    if match is None:
+        raise SystemExit(f"principal_lifecycle_collection_fact_missing:{field}")
+    if "#[serde(default" in match.group(0):
+        raise SystemExit(f"principal_lifecycle_collection_legacy_default:{field}")
+    if field == "consumed_recovery_proofs" and "skip_serializing_if" in match.group(0):
+        raise SystemExit("principal_lifecycle_consumed_recovery_proofs_skip_empty")
+
 for required in (
     "existing_principal_store_requires_principals_fact",
     "missing field `principals`",
     "existing principal store without principals must fail closed",
+    "principal_record_requires_lifecycle_collection_facts",
+    "missing field `{field}`",
+    "principal record without lifecycle collections must fail closed",
     "principal_record_requires_idempotency_command_log_fact",
     "missing field `command_log`",
     "principal record without command_log must fail closed",
@@ -8618,12 +8635,21 @@ EOF
     '  principals: BTreeMap<String, PrincipalRecord>,' \
     '}' \
     'struct PrincipalRecord {' \
+    '  #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]' \
+    '  consumed_recovery_proofs: BTreeMap<String, i64>,' \
+    '  #[serde(default)]' \
+    '  enrollments: Vec<EnrollmentCapability>,' \
+    '  #[serde(default)]' \
+    '  grants: Vec<AuthorizationGrant>,' \
     '  #[serde(default)]' \
     '  command_log: BTreeMap<String, u64>,' \
     '}' \
     'fn existing_principal_store_requires_principals_fact() {}' \
     'const STORE_MESSAGE: &str = "missing field `principals`";' \
     'const STORE_FAIL_CLOSED: &str = "existing principal store without principals must fail closed";' \
+    'fn principal_record_requires_lifecycle_collection_facts() {}' \
+    'const COLLECTION_MESSAGE: &str = "missing field `{field}`";' \
+    'const COLLECTION_FAIL_CLOSED: &str = "principal record without lifecycle collections must fail closed";' \
     'fn principal_record_requires_idempotency_command_log_fact() {}' \
     'const MESSAGE: &str = "missing field `command_log`";' \
     'const FAIL_CLOSED: &str = "principal record without command_log must fail closed";' \
