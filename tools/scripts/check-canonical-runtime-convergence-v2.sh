@@ -1079,6 +1079,76 @@ for required in (
 PY
 }
 
+check_local_agents_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local local_agents="$cli_root/src/daemon/persistence/local_agents.rs"
+  [[ -f "$local_agents" ]] || fail "local agents persistence source is missing: $local_agents"
+
+  "$PYTHON_BIN" - "$local_agents" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+def struct_with_attrs(name: str) -> tuple[str, str]:
+    pattern = (
+        r"(?P<attrs>(?:#\[[^\n]+\]\n)*)"
+        + rf"pub struct {name} \{{(?P<body>.*?)\n\}}"
+    )
+    match = re.search(pattern, text, re.S)
+    if match is None:
+        raise SystemExit(f"local_agents_schema:{name}:missing")
+    return match.group("attrs"), match.group("body")
+
+file_attrs, file_body = struct_with_attrs("LocalAgentsFile")
+entry_attrs, entry_body = struct_with_attrs("HostedAgentEntry")
+for name, attrs in (
+    ("LocalAgentsFile", file_attrs),
+    ("HostedAgentEntry", entry_attrs),
+):
+    if "#[serde(deny_unknown_fields)]" not in attrs:
+        raise SystemExit(f"local_agents_schema:{name}:missing_deny_unknown_fields")
+for retired in ("#[serde(default)]",):
+    if retired in file_body:
+        raise SystemExit(f"local_agents_schema:LocalAgentsFile:retired_default:{retired}")
+for field in (
+    "pub host_device_agent_ura: String",
+    "pub hosted_agents: Vec<HostedAgentEntry>",
+):
+    if field not in file_body:
+        raise SystemExit(f"local_agents_schema:LocalAgentsFile:missing_field:{field}")
+for field in (
+    "pub profile: String",
+    "pub name: String",
+    "pub agent_ura: String",
+    "pub signing_authority: String",
+    "pub first_seen_at: String",
+):
+    if field not in entry_body:
+        raise SystemExit(f"local_agents_schema:HostedAgentEntry:missing_field:{field}")
+for retired in (
+    "deserialize_tolerates_unknown_fields_for_forward_compat",
+    "forward_compat",
+    "Older daemons must still parse",
+    "ignore unknown fields",
+):
+    if retired in text:
+        raise SystemExit(f"local_agents_schema:retired_compat:{retired}")
+for required in (
+    "deserialize_rejects_unknown_fields",
+    "unknown local-agents fields must fail closed",
+    "deserialize_rejects_missing_host_device_agent_ura",
+    "missing field `host_device_agent_ura`",
+    "deserialize_rejects_missing_hosted_agents",
+    "missing field `hosted_agents`",
+    "return Ok(LocalAgentsFile::default())",
+):
+    if required not in text:
+        raise SystemExit(f"local_agents_schema:missing:{required}")
+PY
+}
+
 check_sdk_history_authority_subject_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -9951,6 +10021,39 @@ EOF
   if ( CLI_ROOT="$tmp/chat-session-index-default-legacy"; check_chat_session_index_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected chat session index default gate to fail"
   fi
+  mkdir -p "$tmp/local-agents-schema-legacy/src/daemon/persistence"
+  cat >"$tmp/local-agents-schema-legacy/src/daemon/persistence/local_agents.rs" <<'EOF'
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalAgentsFile {
+    #[serde(default)]
+    pub host_device_agent_ura: String,
+    #[serde(default)]
+    pub hosted_agents: Vec<HostedAgentEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HostedAgentEntry {
+    pub profile: String,
+    pub name: String,
+    pub agent_ura: String,
+    pub signing_authority: String,
+    pub first_seen_at: String,
+}
+
+pub fn load() -> anyhow::Result<LocalAgentsFile> {
+    return Ok(LocalAgentsFile::default());
+}
+
+#[cfg(test)]
+mod tests {
+    fn deserialize_tolerates_unknown_fields_for_forward_compat() {
+        let f: LocalAgentsFile = serde_json::from_str(json).unwrap();
+    }
+}
+EOF
+  if ( CLI_ROOT="$tmp/local-agents-schema-legacy"; check_local_agents_schema_contract ) >/dev/null 2>&1; then
+    fail "self-test expected local agents schema compatibility gate to fail"
+  fi
   mkdir -p "$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing" \
     "$tmp/remote-subject-provenance-legacy/src/ffi/invocation"
   cat >"$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
@@ -10058,6 +10161,7 @@ EOF
   check_runtime_state_kind_required_contract
   check_daemon_config_mode_required_contract
   check_chat_session_index_schema_contract
+  check_local_agents_schema_contract
   check_sdk_history_authority_subject_contract
   check_sdk_descriptor_resolution_error_vocabulary_contract
   check_sdk_ability_descriptor_not_found_vocabulary_contract

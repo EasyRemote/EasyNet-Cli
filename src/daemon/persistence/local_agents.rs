@@ -55,22 +55,23 @@ use super::config::{atomic_write_with_permissions, state_dir, WritePermissions};
 pub(crate) const FILE_NAME: &str = "local-agents.json";
 
 /// On-disk shape of `~/.easynet/local-agents.json`. Field names
-/// must remain stable — older daemons must read what newer daemons
-/// write, and the file is operator-inspectable.
+/// must remain stable because this file is hosted-agent identity
+/// authority. Missing files represent first boot; existing files
+/// must carry the complete canonical schema.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct LocalAgentsFile {
     /// The device-profile Agent's canonical URA. Empty until the
     /// first successful `federation.join`. Populated from the join
     /// receipt body.
-    #[serde(default)]
     pub host_device_agent_ura: String,
     /// Hosted Agents (consent / mcp / llm-per-sub-agent).
     /// Order is insertion order; readers MUST NOT rely on order.
-    #[serde(default)]
     pub hosted_agents: Vec<HostedAgentEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct HostedAgentEntry {
     /// One of `consent`, `mcp`, `llm`. Free-form to allow
     /// future profiles without a schema migration.
@@ -246,10 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_tolerates_unknown_fields_for_forward_compat() {
-        // A future schema may add `metadata`, `tags`, etc. Older
-        // daemons must still parse the file (serde default behaviour
-        // for our struct is to ignore unknown fields).
+    fn deserialize_rejects_unknown_fields() {
         let json = r#"{
             "host_device_agent_ura": "easynet:///r/acme/device/01DEV",
             "hosted_agents": [
@@ -264,8 +262,34 @@ mod tests {
             ],
             "future_top_level_field": 42
         }"#;
-        let f: LocalAgentsFile = serde_json::from_str(json).unwrap();
-        assert_eq!(f.hosted_agents.len(), 1);
-        assert_eq!(f.hosted_agents[0].name, "claude");
+        let err = serde_json::from_str::<LocalAgentsFile>(json)
+            .expect_err("unknown local-agents fields must fail closed");
+        assert!(
+            err.to_string().contains("unknown field"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn deserialize_rejects_missing_host_device_agent_ura() {
+        let json = r#"{"hosted_agents": []}"#;
+        let err = serde_json::from_str::<LocalAgentsFile>(json)
+            .expect_err("missing host_device_agent_ura must fail closed");
+        assert!(
+            err.to_string()
+                .contains("missing field `host_device_agent_ura`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn deserialize_rejects_missing_hosted_agents() {
+        let json = r#"{"host_device_agent_ura": ""}"#;
+        let err = serde_json::from_str::<LocalAgentsFile>(json)
+            .expect_err("missing hosted_agents must fail closed");
+        assert!(
+            err.to_string().contains("missing field `hosted_agents`"),
+            "unexpected error: {err}"
+        );
     }
 }
