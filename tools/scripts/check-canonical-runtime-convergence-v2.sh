@@ -8832,6 +8832,11 @@ for token in (
     "fn validate_runtime_owner_signing_ura(owner_ura: &str)",
     "runtime-owner signing identity does not manage User URAs; use managed user signing custody",
     "runtime_owner_signing_identity_rejects_user_before_keyring_lookup",
+    "enum RuntimeCallerCustody",
+    "RuntimeCallerCustody::ManagedUser",
+    "ManagedRuntimeSigningIdentity::load_user(owner_ura, Arc::clone(&self.provider))",
+    "runtime_caller_signer_resolver_does_not_fall_back_from_user_to_owner_key",
+    '!message.contains("keyring entry not found")',
 ):
     if token not in text:
         raise SystemExit(f"runtime_owner_signer_custody_missing:{token}")
@@ -8899,6 +8904,15 @@ for required in (
 ):
     if required not in production:
         raise SystemExit(f"remote_invocation_signer_first:missing:{required}")
+
+loader = fn_body(
+    "load_remote_invocation_caller_signer_for_carrier",
+    "ensure_remote_invocation_daemon_accepting",
+)
+if "load_runtime_caller_signer(caller_ura.clone())" not in loader:
+    raise SystemExit("remote_invocation_signer_first:canonical_caller_signer_loader_missing")
+if "RuntimeSigningIdentity::load_default" in loader:
+    raise SystemExit("remote_invocation_signer_first:runtime_owner_loader_used_for_caller")
 
 unary = fn_body("invoke_remote_target", "load_remote_invocation_caller_signer")
 stream = fn_body("invoke_remote_target_stream", "invoke_remote_target_bidi_json_frames")
