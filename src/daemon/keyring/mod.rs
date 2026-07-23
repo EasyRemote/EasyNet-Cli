@@ -73,11 +73,13 @@ pub mod abilities;
 pub mod federated_bindings;
 pub mod lifecycle;
 pub mod managed_signing_projection;
+pub mod managed_signing_provider;
 mod passphrase;
 pub mod resolver;
 pub mod service;
 pub mod user_binding_chain;
 pub mod user_binding_consume;
+pub mod user_binding_issue;
 pub mod user_binding_projection;
 
 /// Ed25519 seed length (32 bytes per RFC 8032 §5.1.5).

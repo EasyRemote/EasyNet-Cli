@@ -736,6 +736,7 @@ check_core_ura_realm_projection_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local core="$cli_root/src/core/ura/mod.rs"
   local keyring_abilities="$cli_root/src/daemon/keyring/abilities.rs"
+  local keyring_issue="$cli_root/src/daemon/keyring/user_binding_issue.rs"
   local keyring_resolver="$cli_root/src/daemon/keyring/resolver.rs"
   local runtime_trust="$cli_root/src/daemon/invocation/admission/runtime_trust.rs"
   local register_pubkey="$cli_root/src/daemon/invocation/admission/register_device_pubkey.rs"
@@ -743,6 +744,7 @@ check_core_ura_realm_projection_contract() {
 
   [[ -f "$core" ]] || fail "canonical core URA facade is missing: ${core#$cli_root/}"
   [[ -f "$keyring_abilities" ]] || fail "keyring abilities source is missing: ${keyring_abilities#$cli_root/}"
+  [[ -f "$keyring_issue" ]] || fail "keyring federated token issuance state machine is missing: ${keyring_issue#$cli_root/}"
   [[ -f "$keyring_resolver" ]] || fail "keyring federated user resolver source is missing: ${keyring_resolver#$cli_root/}"
   [[ -f "$runtime_trust" ]] || fail "runtime trust source is missing: ${runtime_trust#$cli_root/}"
   [[ -f "$register_pubkey" ]] || fail "register-device pubkey source is missing: ${register_pubkey#$cli_root/}"
@@ -754,14 +756,14 @@ check_core_ura_realm_projection_contract() {
   if ! rg -q 'pub fn user_realm_from_ura\(ura: &str\) -> Option<String>' "$core"; then
     fail "core URA facade must expose User-only user_realm_from_ura projection"
   fi
-  if rg -n 'fn\s+parse_realm_from_user_ura' "$keyring_abilities" "$keyring_resolver"; then
+  if rg -n 'fn\s+parse_realm_from_user_ura' "$keyring_abilities" "$keyring_issue" "$keyring_resolver"; then
     fail "keyring must not define duplicated user URA realm parser functions"
   fi
-  if rg -n 'duplicated rather than re-exported|federated fallback' "$keyring_abilities" "$keyring_resolver"; then
+  if rg -n 'duplicated rather than re-exported|federated fallback' "$keyring_abilities" "$keyring_issue" "$keyring_resolver"; then
     fail "keyring preserves retired duplicated/fallback URA projection vocabulary"
   fi
-  if ! rg -q 'user_realm_from_ura\(' "$keyring_abilities"; then
-    fail "keyring federated token issuance must consume core::ura::user_realm_from_ura"
+  if ! rg -q 'user_realm_from_ura\(' "$keyring_issue"; then
+    fail "keyring federated token issuance state machine must consume core::ura::user_realm_from_ura"
   fi
   if ! rg -q 'user_realm_from_ura\(' "$keyring_resolver"; then
     fail "keyring federated user resolver must consume core::ura::user_realm_from_ura"
@@ -4256,6 +4258,95 @@ for retired in (
 ):
     if retired in body:
         raise SystemExit(f"user_binding_consume_state_machine:handler_retired:{retired}")
+PY
+}
+
+check_user_binding_issue_state_machine_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local abilities="$cli_root/src/daemon/keyring/abilities.rs"
+  local issue="$cli_root/src/daemon/keyring/user_binding_issue.rs"
+  local provider="$cli_root/src/daemon/keyring/managed_signing_provider.rs"
+  local keyring_mod="$cli_root/src/daemon/keyring/mod.rs"
+  [[ -f "$abilities" ]] || return 0
+  [[ -f "$issue" ]] || fail "user binding issue state-machine source is missing: $issue"
+  [[ -f "$provider" ]] || fail "managed signing provider boundary source is missing: $provider"
+
+  "$PYTHON_BIN" - "$abilities" "$issue" "$provider" "$keyring_mod" <<'PY'
+import sys
+from pathlib import Path
+
+abilities = Path(sys.argv[1]).read_text(encoding="utf-8")
+issue = Path(sys.argv[2]).read_text(encoding="utf-8")
+provider = Path(sys.argv[3]).read_text(encoding="utf-8")
+keyring_mod = Path(sys.argv[4]).read_text(encoding="utf-8") if Path(sys.argv[4]).exists() else ""
+
+if "pub mod user_binding_issue;" not in keyring_mod:
+    raise SystemExit("user_binding_issue_state_machine:module_not_exported")
+if "pub mod managed_signing_provider;" not in keyring_mod:
+    raise SystemExit("user_binding_issue_state_machine:provider_module_not_exported")
+
+for required in (
+    "pub trait ManagedSigningProvider",
+    "impl<T: ManagedSigningProvider + ?Sized> ManagedSigningProvider for Arc<T>",
+    "impl ManagedSigningProvider for KeyringClient",
+):
+    if required not in provider:
+        raise SystemExit(f"user_binding_issue_state_machine:provider_missing:{required}")
+for retired in (
+    "pub trait ManagedSigningProvider",
+    "impl ManagedSigningProvider for KeyringClient",
+):
+    if retired in abilities:
+        raise SystemExit(f"user_binding_issue_state_machine:abilities_owns_provider:{retired}")
+if "pub use crate::daemon::keyring::managed_signing_provider::ManagedSigningProvider;" not in abilities:
+    raise SystemExit("user_binding_issue_state_machine:abilities_missing_provider_reexport")
+
+for required in (
+    "pub struct UserBindingIssueRequest",
+    "pub struct UserBindingIssueStateMachine",
+    "pub fn execute(self) -> Result<UserBindingToken>",
+    "fn ensure_signing_authority(",
+    "fn source_realm(&self) -> Result<String>",
+    "fn ensure_cross_realm_target(&self, source_realm: &str) -> Result<()>",
+    "fn decode_source_user_pubkey(",
+    "fn generate_nonce() -> [u8; USER_BINDING_NONCE_LEN]",
+    "UserBindingToken::new_unsigned(",
+    "canonical_user_binding_bytes(&token)",
+    "self.provider.sign(&signing_entry.key_id, &canonical)",
+    "issue_state_machine_returns_signed_token",
+    "issue_state_machine_rejects_self_target_realm",
+    "issue_state_machine_rejects_unbound_signing_key",
+):
+    if required not in issue:
+        raise SystemExit(f"user_binding_issue_state_machine:missing:{required}")
+
+handler_start = abilities.find("pub fn handle_federate_user_identity_token(")
+handler_end = abilities.find("\n/// **PR-N4 commit 3/N**", handler_start)
+if handler_start < 0 or handler_end < 0:
+    raise SystemExit("user_binding_issue_state_machine:handler_missing")
+body = abilities[handler_start:handler_end]
+for required in (
+    "UserBindingIssueRequest::new(",
+    "UserBindingIssueStateMachine::new(",
+    ".execute()?",
+    "UserBindingIssueResponse::issued(",
+):
+    if required not in body:
+        raise SystemExit(f"user_binding_issue_state_machine:handler_missing:{required}")
+for retired in (
+    "provider.public_key(managed_key_id)",
+    "ManagedSigningStatus::Active",
+    "purpose != \"agent_signing\"",
+    "user_realm_from_ura(",
+    "ED25519_PUBKEY_LEN",
+    "USER_BINDING_NONCE_LEN",
+    "rand::thread_rng()",
+    "UserBindingToken::new_unsigned(",
+    "canonical_user_binding_bytes(",
+    "provider.sign(",
+):
+    if retired in body:
+        raise SystemExit(f"user_binding_issue_state_machine:handler_retired:{retired}")
 PY
 }
 
@@ -12214,6 +12305,61 @@ EOF
   if ( check_user_binding_consume_state_machine_contract "$tmp/user-binding-consume-inline-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected user binding consume inline lifecycle gate to fail"
   fi
+  mkdir -p "$tmp/user-binding-issue-inline-legacy/src/daemon/keyring"
+  cat >"$tmp/user-binding-issue-inline-legacy/src/daemon/keyring/mod.rs" <<'EOF'
+pub mod abilities;
+pub mod managed_signing_provider;
+pub mod user_binding_issue;
+EOF
+  cat >"$tmp/user-binding-issue-inline-legacy/src/daemon/keyring/managed_signing_provider.rs" <<'EOF'
+pub trait ManagedSigningProvider {}
+impl<T: ManagedSigningProvider + ?Sized> ManagedSigningProvider for Arc<T> {}
+impl ManagedSigningProvider for KeyringClient {}
+EOF
+  cat >"$tmp/user-binding-issue-inline-legacy/src/daemon/keyring/user_binding_issue.rs" <<'EOF'
+pub struct UserBindingIssueRequest;
+pub struct UserBindingIssueStateMachine;
+impl UserBindingIssueStateMachine {
+  pub fn execute(self) -> Result<UserBindingToken> {}
+  fn ensure_signing_authority(&self, entry: &ManagedSigningKeyProjection) -> Result<()> {}
+  fn source_realm(&self) -> Result<String> {}
+  fn ensure_cross_realm_target(&self, source_realm: &str) -> Result<()> {}
+}
+fn decode_source_user_pubkey(public_key_b64: &str) {}
+fn generate_nonce() -> [u8; USER_BINDING_NONCE_LEN] {}
+fn issue_state_machine_returns_signed_token() {}
+fn issue_state_machine_rejects_self_target_realm() {}
+fn issue_state_machine_rejects_unbound_signing_key() {}
+fn evidence() {
+  UserBindingToken::new_unsigned();
+  canonical_user_binding_bytes(&token);
+  self.provider.sign(&signing_entry.key_id, &canonical);
+}
+EOF
+  cat >"$tmp/user-binding-issue-inline-legacy/src/daemon/keyring/abilities.rs" <<'EOF'
+pub use crate::daemon::keyring::managed_signing_provider::ManagedSigningProvider;
+pub fn handle_federate_user_identity_token(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
+    let target_realm = require_str(&args, "target_realm")?.to_string();
+    let managed_key_id = require_str(&args, "managed_key_id")?;
+    let signing_entry = provider.public_key(managed_key_id)?;
+    if signing_entry.status != ManagedSigningStatus::Active || signing_entry.purpose != "agent_signing" {
+        anyhow::bail!("bad key");
+    }
+    let source_realm = user_realm_from_ura(&source_user_ura).unwrap();
+    let mut nonce = [0u8; USER_BINDING_NONCE_LEN];
+    rand::thread_rng().fill_bytes(&mut nonce);
+    let mut token = UserBindingToken::new_unsigned(source_realm.to_string(), source_user_ura, source_user_pubkey, target_realm, issued_at_ms, nonce);
+    let canonical = canonical_user_binding_bytes(&token);
+    let sig = provider.sign(&signing_entry.key_id, &canonical)?;
+    token.signature = sig.to_bytes().to_vec();
+    Ok(serde_json::to_value(UserBindingIssueResponse::issued(token))?)
+}
+/// **PR-N4 commit 3/N**
+pub fn handle_consume_federate_user_token() {}
+EOF
+  if ( check_user_binding_issue_state_machine_contract "$tmp/user-binding-issue-inline-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected user binding issue inline lifecycle gate to fail"
+  fi
   mkdir -p "$tmp/local-api-key-cache-legacy/src/daemon/ability/builtins/governance" \
     "$tmp/local-api-key-cache-legacy/src/cli/commands"
   printf '%s\n' \
@@ -14029,6 +14175,7 @@ EOF
   check_user_binding_response_projection_contract
   check_user_binding_token_wire_strictness_contract
   check_user_binding_consume_state_machine_contract
+  check_user_binding_issue_state_machine_contract
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
   check_runtime_trust_user_key_inventory_scope_contract
@@ -14189,6 +14336,7 @@ check_managed_signing_response_projection_contract
 check_user_binding_response_projection_contract
 check_user_binding_token_wire_strictness_contract
 check_user_binding_consume_state_machine_contract
+check_user_binding_issue_state_machine_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_runtime_trust_user_key_inventory_scope_contract

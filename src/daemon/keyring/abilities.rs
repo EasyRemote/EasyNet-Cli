@@ -27,140 +27,19 @@ use serde_json::Value;
 use std::sync::Arc;
 
 use super::federated_bindings::FederatedBindingsStore;
-use super::user_binding_chain::{UserBindingToken, ED25519_PUBKEY_LEN, USER_BINDING_NONCE_LEN};
+use super::user_binding_chain::UserBindingToken;
 use super::user_binding_consume::{UserBindingConsumeRequest, UserBindingConsumeStateMachine};
+use super::user_binding_issue::{UserBindingIssueRequest, UserBindingIssueStateMachine};
 use super::user_binding_projection::{UserBindingConsumeResponse, UserBindingIssueResponse};
-use super::{ManagedPeer, ManagedSigningKeyProjection, ManagedSigningStatus};
-use crate::core::ura::user_realm_from_ura;
+use super::ManagedSigningStatus;
 use crate::daemon::ability::descriptors::AdmissionAction;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
-use crate::daemon::identity::self_identity::KeyringClient;
 use crate::daemon::keyring::managed_signing_projection::{
     ManagedSigningAckResponse, ManagedSigningCreateResponse, ManagedSigningListResponse,
     ManagedSigningPeerAddResponse, ManagedSigningPeerListResponse, ManagedSigningPublicResponse,
     ManagedSigningRevokeResponse, ManagedSigningRotateResponse,
 };
-
-/// Provider boundary used by daemon abilities. Production is always backed by
-/// the daemon-local key-service endpoint; tests use the same state-machine
-/// implementation in memory without introducing a second persistence model.
-pub trait ManagedSigningProvider: Send + Sync {
-    fn create(
-        &self,
-        purpose: String,
-        bound_subject: Option<String>,
-    ) -> Result<ManagedSigningKeyProjection>;
-    fn list(
-        &self,
-        purpose: Option<String>,
-        status: Option<ManagedSigningStatus>,
-    ) -> Result<Vec<ManagedSigningKeyProjection>>;
-    fn public_key(&self, key_id: &str) -> Result<ManagedSigningKeyProjection>;
-    fn sign(&self, key_id: &str, canonical_bytes: &[u8]) -> Result<ed25519_dalek::Signature>;
-    fn rotate(&self, key_id: &str) -> Result<ManagedSigningKeyProjection>;
-    fn revoke(&self, key_id: &str) -> Result<i64>;
-    fn set_expiry(&self, key_id: &str, expires_unix_ms: i64) -> Result<()>;
-    fn bind_subject(&self, key_id: &str, subject_ura: &str) -> Result<()>;
-    fn peer_add(
-        &self,
-        peer_ura: &str,
-        public_key_b64: &str,
-        via_hub: Option<String>,
-    ) -> Result<bool>;
-    fn peer_list(&self) -> Result<Vec<ManagedPeer>>;
-}
-
-impl<T: ManagedSigningProvider + ?Sized> ManagedSigningProvider for Arc<T> {
-    fn create(
-        &self,
-        purpose: String,
-        bound_subject: Option<String>,
-    ) -> Result<ManagedSigningKeyProjection> {
-        (**self).create(purpose, bound_subject)
-    }
-    fn list(
-        &self,
-        purpose: Option<String>,
-        status: Option<ManagedSigningStatus>,
-    ) -> Result<Vec<ManagedSigningKeyProjection>> {
-        (**self).list(purpose, status)
-    }
-    fn public_key(&self, key_id: &str) -> Result<ManagedSigningKeyProjection> {
-        (**self).public_key(key_id)
-    }
-    fn sign(&self, key_id: &str, canonical_bytes: &[u8]) -> Result<ed25519_dalek::Signature> {
-        (**self).sign(key_id, canonical_bytes)
-    }
-    fn rotate(&self, key_id: &str) -> Result<ManagedSigningKeyProjection> {
-        (**self).rotate(key_id)
-    }
-    fn revoke(&self, key_id: &str) -> Result<i64> {
-        (**self).revoke(key_id)
-    }
-    fn set_expiry(&self, key_id: &str, expires_unix_ms: i64) -> Result<()> {
-        (**self).set_expiry(key_id, expires_unix_ms)
-    }
-    fn bind_subject(&self, key_id: &str, subject_ura: &str) -> Result<()> {
-        (**self).bind_subject(key_id, subject_ura)
-    }
-    fn peer_add(
-        &self,
-        peer_ura: &str,
-        public_key_b64: &str,
-        via_hub: Option<String>,
-    ) -> Result<bool> {
-        (**self).peer_add(peer_ura, public_key_b64, via_hub)
-    }
-    fn peer_list(&self) -> Result<Vec<ManagedPeer>> {
-        (**self).peer_list()
-    }
-}
-
-impl ManagedSigningProvider for KeyringClient {
-    fn create(
-        &self,
-        purpose: String,
-        bound_subject: Option<String>,
-    ) -> Result<ManagedSigningKeyProjection> {
-        Ok(self.inventory_create(purpose, bound_subject)?)
-    }
-    fn list(
-        &self,
-        purpose: Option<String>,
-        status: Option<ManagedSigningStatus>,
-    ) -> Result<Vec<ManagedSigningKeyProjection>> {
-        Ok(self.inventory_list(purpose, status)?)
-    }
-    fn public_key(&self, key_id: &str) -> Result<ManagedSigningKeyProjection> {
-        Ok(self.inventory_public_key(key_id)?)
-    }
-    fn sign(&self, key_id: &str, canonical_bytes: &[u8]) -> Result<ed25519_dalek::Signature> {
-        Ok(self.inventory_sign(key_id, canonical_bytes)?)
-    }
-    fn rotate(&self, key_id: &str) -> Result<ManagedSigningKeyProjection> {
-        Ok(self.inventory_rotate(key_id)?)
-    }
-    fn revoke(&self, key_id: &str) -> Result<i64> {
-        Ok(self.inventory_revoke(key_id)?)
-    }
-    fn set_expiry(&self, key_id: &str, expires_unix_ms: i64) -> Result<()> {
-        Ok(self.inventory_set_expiry(key_id, expires_unix_ms)?)
-    }
-    fn bind_subject(&self, key_id: &str, subject_ura: &str) -> Result<()> {
-        Ok(self.inventory_bind_subject(key_id, subject_ura)?)
-    }
-    fn peer_add(
-        &self,
-        peer_ura: &str,
-        public_key_b64: &str,
-        via_hub: Option<String>,
-    ) -> Result<bool> {
-        Ok(self.inventory_peer_add(peer_ura, public_key_b64, via_hub)?)
-    }
-    fn peer_list(&self) -> Result<Vec<ManagedPeer>> {
-        Ok(self.inventory_peer_list()?)
-    }
-}
+pub use crate::daemon::keyring::managed_signing_provider::ManagedSigningProvider;
 
 fn b64_encode(bytes: &[u8]) -> String {
     use base64::engine::general_purpose::STANDARD;
@@ -267,57 +146,12 @@ pub fn handle_federate_user_identity_token(
         .ok_or_else(|| anyhow!("missing required u64 field `issued_at_unix_ms`"))?;
     let source_user_ura = require_str(&args, "source_user_ura")?.to_string();
     let managed_key_id = require_str(&args, "managed_key_id")?;
-    let signing_entry = provider.public_key(managed_key_id)?;
-    if signing_entry.status != ManagedSigningStatus::Active
-        || signing_entry.purpose != "agent_signing"
-        || signing_entry.bound_subject.as_deref() != Some(source_user_ura.as_str())
-    {
-        return Err(anyhow!(
-            "managed signing authority does not bind active agent_signing key to source_user_ura"
-        ));
-    }
-    let source_realm = user_realm_from_ura(&source_user_ura).ok_or_else(|| {
-        anyhow!(
-            "device-subject {source_user_ura:?} is not a canonical \
-             easynet:///r/<realm>/user/<id> URA"
-        )
-    })?;
-    if source_realm == target_realm {
-        return Err(anyhow!(
-            "target_realm equals source_realm (`{source_realm}`); \
-             a token issued for the daemon's own realm has no federated meaning"
-        ));
-    }
 
-    let pubkey_raw = b64_decode(&signing_entry.public_key_b64)?;
-    let mut source_user_pubkey = [0u8; ED25519_PUBKEY_LEN];
-    if pubkey_raw.len() != ED25519_PUBKEY_LEN {
-        return Err(anyhow!(
-            "agent_signing entry has wrong-length pubkey: {} bytes (expected {})",
-            pubkey_raw.len(),
-            ED25519_PUBKEY_LEN
-        ));
-    }
-    source_user_pubkey.copy_from_slice(&pubkey_raw);
-
-    // Generate a fresh CSPRNG nonce so two tokens issued with
-    // identical timestamps still distinguish on the consumer's
-    // replay store.
-    let mut nonce = [0u8; USER_BINDING_NONCE_LEN];
-    use rand::RngCore;
-    rand::thread_rng().fill_bytes(&mut nonce);
-
-    let mut token = UserBindingToken::new_unsigned(
-        source_realm.to_string(),
-        source_user_ura.clone(),
-        source_user_pubkey,
-        target_realm,
-        issued_at_ms,
-        nonce,
-    );
-    let canonical = super::user_binding_chain::canonical_user_binding_bytes(&token);
-    let sig = provider.sign(&signing_entry.key_id, &canonical)?;
-    token.signature = sig.to_bytes().to_vec();
+    let token = UserBindingIssueStateMachine::new(
+        provider,
+        UserBindingIssueRequest::new(source_user_ura, managed_key_id, target_realm, issued_at_ms)?,
+    )
+    .execute()?;
 
     Ok(serde_json::to_value(UserBindingIssueResponse::issued(
         token,
@@ -574,6 +408,7 @@ pub fn register_federated_consume_for_owner(
 
 #[cfg(test)]
 mod tests {
+    use super::super::{ManagedPeer, ManagedSigningKeyProjection};
     use super::*;
     use serde_json::json;
 
