@@ -164,6 +164,36 @@ for needle, label in required.items():
 PY
 }
 
+check_session_failure_wire_facts_contract() {
+  local cli_root="${1:-$ROOT}"
+  local failure="$cli_root/src/daemon/invocation/bidi/state/session_failure.rs"
+  [[ -f "$failure" ]] || fail "session failure source is missing: ${failure#$cli_root/}"
+
+  "$PYTHON_BIN" - "$failure" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+match = re.search(r"pub struct SessionFailure\s*\{(?P<body>.*?)\n\}", text, re.S)
+if not match:
+    raise SystemExit("session_failure_wire_facts:struct_missing")
+body = match.group("body")
+if "#[serde(default)]" in body:
+    raise SystemExit("session_failure_wire_facts:serde_default_present")
+required = {
+    "pub retryable: bool": "retryable_field_missing",
+    "pub stage: i32": "stage_field_missing",
+    "pub security_class: i32": "security_class_field_missing",
+    "session_failure_wire_requires_retry_and_classification_facts": "missing_facts_test_missing",
+    "session_failure_wire_round_trips_complete_facts": "complete_facts_roundtrip_test_missing",
+}
+for needle, label in required.items():
+    if needle not in text:
+        raise SystemExit(f"session_failure_wire_facts:{label}")
+PY
+}
+
 check_manifest_contract() {
   "$PYTHON_BIN" - \
     "$MANIFEST" \
@@ -8981,12 +9011,30 @@ EOF
   if ( check_bidi_reverse_unary_terminal_state_contract "$tmp/bidi-reverse-unary-terminal-state-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected bidi reverse unary terminal state gate to fail"
   fi
+  mkdir -p "$tmp/session-failure-wire-facts-legacy/src/daemon/invocation/bidi/state"
+  cat >"$tmp/session-failure-wire-facts-legacy/src/daemon/invocation/bidi/state/session_failure.rs" <<'EOF'
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SessionFailure {
+    pub code: String,
+    pub message: String,
+    #[serde(default)]
+    pub retryable: bool,
+    #[serde(default)]
+    pub stage: i32,
+    #[serde(default)]
+    pub security_class: i32,
+}
+EOF
+  if ( check_session_failure_wire_facts_contract "$tmp/session-failure-wire-facts-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected session failure wire facts gate to fail"
+  fi
   check_mcp_reflection_async_bridge_contract
   check_runtime_session_projection_accessor_contract
   check_ffi_runtime_sizing_policy_contract
   check_failure_code_default_policy_contract
   check_bidi_dispatch_default_code_policy_contract
   check_bidi_reverse_unary_terminal_state_contract
+  check_session_failure_wire_facts_contract
   check_active_source_contract
   check_sdk_root_runtime_description_contract
   check_go_sdk_public_ura_alias_contract
@@ -9102,6 +9150,7 @@ check_ffi_runtime_sizing_policy_contract
 check_failure_code_default_policy_contract
 check_bidi_dispatch_default_code_policy_contract
 check_bidi_reverse_unary_terminal_state_contract
+check_session_failure_wire_facts_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract
 check_go_sdk_public_ura_alias_contract

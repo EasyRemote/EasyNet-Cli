@@ -18,11 +18,8 @@ use serde::{Deserialize, Serialize};
 pub struct SessionFailure {
     pub code: String,
     pub message: String,
-    #[serde(default)]
     pub retryable: bool,
-    #[serde(default)]
     pub stage: i32,
-    #[serde(default)]
     pub security_class: i32,
 }
 
@@ -90,5 +87,44 @@ impl SessionFailure {
             failure_class.stage.axon_number(),
             failure_class.security_class.axon_number(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionFailure;
+
+    #[test]
+    fn session_failure_wire_requires_retry_and_classification_facts() {
+        let legacy = serde_json::json!({
+            "code": "TARGET_OFFLINE",
+            "message": "target device is offline"
+        });
+
+        let error = serde_json::from_value::<SessionFailure>(legacy)
+            .expect_err("session failure wire must reject missing typed failure facts");
+        let message = error.to_string();
+        assert!(
+            message.contains("retryable")
+                || message.contains("stage")
+                || message.contains("security_class"),
+            "missing typed failure facts must be surfaced as a schema failure: {message}"
+        );
+    }
+
+    #[test]
+    fn session_failure_wire_round_trips_complete_facts() {
+        let failure =
+            SessionFailure::from_reason("target device is offline", "TARGET_OFFLINE", true);
+        let encoded = serde_json::to_value(&failure).expect("session failure serializes");
+        assert_eq!(encoded["code"], "TARGET_OFFLINE");
+        assert_eq!(encoded["message"], "target device is offline");
+        assert_eq!(encoded["retryable"], true);
+        assert!(encoded.get("stage").is_some());
+        assert!(encoded.get("security_class").is_some());
+
+        let decoded: SessionFailure =
+            serde_json::from_value(encoded).expect("complete session failure wire decodes");
+        assert_eq!(decoded, failure);
     }
 }
