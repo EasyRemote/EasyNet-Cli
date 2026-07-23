@@ -169,6 +169,111 @@ impl FilesListResponse {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PagesProjectListItem {
+    pub user: String,
+    pub project_id: String,
+    pub folder: String,
+    pub visibility: String,
+    pub started_at_ms: u64,
+    pub url_root: String,
+    pub dev_listener_url_root: String,
+}
+
+impl PagesProjectListItem {
+    pub fn new(
+        user: impl Into<String>,
+        project_id: impl Into<String>,
+        folder: impl Into<String>,
+        visibility: impl Into<String>,
+        started_at_ms: u64,
+        url_root: impl Into<String>,
+        dev_listener_url_root: impl Into<String>,
+    ) -> Self {
+        Self {
+            user: user.into(),
+            project_id: project_id.into(),
+            folder: folder.into(),
+            visibility: visibility.into(),
+            started_at_ms,
+            url_root: url_root.into(),
+            dev_listener_url_root: dev_listener_url_root.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PagesProjectListResponse {
+    pub projects: Vec<PagesProjectListItem>,
+}
+
+impl PagesProjectListResponse {
+    pub fn from_projects(projects: Vec<PagesProjectListItem>) -> Self {
+        Self { projects }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PagesProjectDetailResponse {
+    pub user: String,
+    pub project_id: String,
+    pub project_ura: String,
+    pub folder: String,
+    pub visibility: String,
+    pub started_at_ms: u64,
+    pub url_root: String,
+    pub dev_listener_url_root: String,
+    pub file_size_cap: u64,
+}
+
+impl PagesProjectDetailResponse {
+    #[allow(clippy::too_many_arguments)]
+    pub fn success(
+        user: impl Into<String>,
+        project_id: impl Into<String>,
+        project_ura: impl Into<String>,
+        folder: impl Into<String>,
+        visibility: impl Into<String>,
+        started_at_ms: u64,
+        url_root: impl Into<String>,
+        dev_listener_url_root: impl Into<String>,
+        file_size_cap: u64,
+    ) -> Self {
+        Self {
+            user: user.into(),
+            project_id: project_id.into(),
+            project_ura: project_ura.into(),
+            folder: folder.into(),
+            visibility: visibility.into(),
+            started_at_ms,
+            url_root: url_root.into(),
+            dev_listener_url_root: dev_listener_url_root.into(),
+            file_size_cap,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PagesUnpublishResponse {
+    pub user: String,
+    pub project_id: String,
+    pub removed: bool,
+}
+
+impl PagesUnpublishResponse {
+    pub fn success(user: impl Into<String>, project_id: impl Into<String>) -> Self {
+        Self {
+            user: user.into(),
+            project_id: project_id.into(),
+            removed: true,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,6 +444,119 @@ mod tests {
         assert!(
             list_error.to_string().contains("legacy_items"),
             "strict list response error should name unknown field: {list_error}"
+        );
+    }
+
+    #[test]
+    fn pages_project_list_response_preserves_public_shape() {
+        let response = PagesProjectListResponse::from_projects(vec![PagesProjectListItem::new(
+            "alice",
+            "docs",
+            "/srv/docs",
+            "public",
+            123,
+            "https://example/web/alice/docs/",
+            "http://docs.alice.pages.localhost:8787/",
+        )]);
+        let wire = serde_json::to_value(&response).expect("pages list response serializes");
+
+        assert_eq!(wire["projects"][0]["user"], "alice");
+        assert_eq!(wire["projects"][0]["project_id"], "docs");
+        assert_eq!(wire["projects"][0]["folder"], "/srv/docs");
+        assert_eq!(wire["projects"][0]["visibility"], "public");
+        assert_eq!(wire["projects"][0]["started_at_ms"], 123);
+        assert_eq!(
+            wire["projects"][0]["url_root"],
+            "https://example/web/alice/docs/"
+        );
+        assert_eq!(
+            wire["projects"][0]["dev_listener_url_root"],
+            "http://docs.alice.pages.localhost:8787/"
+        );
+    }
+
+    #[test]
+    fn pages_project_detail_response_preserves_public_shape() {
+        let response = PagesProjectDetailResponse::success(
+            "alice",
+            "docs",
+            "easynet:///r/example/resource/alice.docs",
+            "/srv/docs",
+            "public",
+            123,
+            "https://example/web/alice/docs/",
+            "http://docs.alice.pages.localhost:8787/",
+            1048576,
+        );
+        let wire = serde_json::to_value(&response).expect("pages detail response serializes");
+
+        assert_eq!(wire["user"], "alice");
+        assert_eq!(wire["project_id"], "docs");
+        assert_eq!(
+            wire["project_ura"],
+            "easynet:///r/example/resource/alice.docs"
+        );
+        assert_eq!(wire["folder"], "/srv/docs");
+        assert_eq!(wire["visibility"], "public");
+        assert_eq!(wire["started_at_ms"], 123);
+        assert_eq!(wire["url_root"], "https://example/web/alice/docs/");
+        assert_eq!(
+            wire["dev_listener_url_root"],
+            "http://docs.alice.pages.localhost:8787/"
+        );
+        assert_eq!(wire["file_size_cap"], 1048576);
+    }
+
+    #[test]
+    fn pages_unpublish_response_preserves_public_shape() {
+        let response = PagesUnpublishResponse::success("alice", "docs");
+        let wire = serde_json::to_value(&response).expect("pages unpublish response serializes");
+
+        assert_eq!(wire["user"], "alice");
+        assert_eq!(wire["project_id"], "docs");
+        assert_eq!(wire["removed"], true);
+    }
+
+    #[test]
+    fn pages_management_response_dtos_reject_unknown_fields() {
+        let list_error = serde_json::from_value::<PagesProjectListResponse>(json!({
+            "projects": [],
+            "legacy_projects": []
+        }))
+        .expect_err("pages list response must reject legacy envelopes");
+        assert!(
+            list_error.to_string().contains("legacy_projects"),
+            "strict pages list response error should name unknown field: {list_error}"
+        );
+
+        let detail_error = serde_json::from_value::<PagesProjectDetailResponse>(json!({
+            "user": "alice",
+            "project_id": "docs",
+            "project_ura": "easynet:///r/example/resource/alice.docs",
+            "folder": "/srv/docs",
+            "visibility": "public",
+            "started_at_ms": 123,
+            "url_root": "https://example/web/alice/docs/",
+            "dev_listener_url_root": "http://docs.alice.pages.localhost:8787/",
+            "file_size_cap": 1048576,
+            "local_fd": 7
+        }))
+        .expect_err("pages detail response must reject local fd leaks");
+        assert!(
+            detail_error.to_string().contains("local_fd"),
+            "strict pages detail response error should name unknown field: {detail_error}"
+        );
+
+        let unpublish_error = serde_json::from_value::<PagesUnpublishResponse>(json!({
+            "user": "alice",
+            "project_id": "docs",
+            "removed": true,
+            "registry_path": "/tmp/pages-published-alice.json"
+        }))
+        .expect_err("pages unpublish response must reject registry path leaks");
+        assert!(
+            unpublish_error.to_string().contains("registry_path"),
+            "strict pages unpublish response error should name unknown field: {unpublish_error}"
         );
     }
 }

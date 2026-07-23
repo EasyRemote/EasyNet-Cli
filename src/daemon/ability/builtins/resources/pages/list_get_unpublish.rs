@@ -22,8 +22,12 @@ use serde_json::{json, Value};
 use anyhow::Context;
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::resources::projection::{
+    PagesProjectDetailResponse, PagesProjectListItem, PagesProjectListResponse,
+    PagesUnpublishResponse,
+};
 
-use super::state::{persist_registry_for_user, PUBLISHED_PROJECTS};
+use super::state::{persist_registry_for_user, ProjectHandle, PUBLISHED_PROJECTS};
 
 /// `project_list` — return every project the daemon
 /// currently hosts under this user. `url_root` is the production
@@ -41,23 +45,17 @@ pub fn handle_list(
         if k_user != user {
             continue;
         }
-        let h = entry.value();
-        let started_at_ms = h
-            .started_at
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        entries.push(json!({
-            "user":                  k_user,
-            "project_id":            project_id,
-            "folder":                h.canonical_root.display().to_string(),
-            "visibility":            h.visibility.as_str(),
-            "started_at_ms":         started_at_ms,
-            "url_root":              super::pages_public_url_root(realm, k_user, project_id),
-            "dev_listener_url_root": super::pages_dev_listener_url_root(k_user, project_id, listener_port),
-        }));
+        entries.push(project_list_item(
+            k_user,
+            project_id,
+            entry.value(),
+            listener_port,
+            realm,
+        ));
     }
-    Ok(json!({ "projects": entries }))
+    Ok(serde_json::to_value(
+        PagesProjectListResponse::from_projects(entries),
+    )?)
 }
 
 /// `pages.get` — return one project's detail.
@@ -77,33 +75,13 @@ pub fn handle_get(
         .ok_or_else(|| anyhow::anyhow!("project not found: user={user} project_id={project_id}"))?
         .clone();
 
-    let started_at_ms = h
-        .started_at
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let url_root = super::pages_public_url_root(realm, user, project_id);
-    let dev_listener_url_root = super::pages_dev_listener_url_root(user, project_id, listener_port);
-    let project_ura =
-        crate::core::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/");
-
-    Ok(json!({
-        "user":                      user,
-        "project_id":                project_id,
-        "project_ura":               project_ura,
-        "folder":                    h.canonical_root.display().to_string(),
-        "visibility":                h.visibility.as_str(),
-        "started_at_ms":             started_at_ms,
-        // Production URL — what a browser hits at easynet.run.
-        "url_root":                  url_root,
-        // Dev-only daemon-local listener URL. Only reachable when
-        // EASYNET_PAGES_PORT is set and the daemon spawned its
-        // in-process HTTP listener; null in production daemons.
-        // CLI `pages show` renders both; `pages url` prints only
-        // `url_root`.
-        "dev_listener_url_root":     dev_listener_url_root,
-        "file_size_cap":             h.file_size_cap,
-    }))
+    Ok(serde_json::to_value(project_detail_response(
+        user,
+        project_id,
+        &h,
+        listener_port,
+        realm,
+    ))?)
 }
 
 /// `pages.health` — report daemon-owned Pages registry readiness.
@@ -217,11 +195,55 @@ fn handle_unpublish_inner(
         super::unregister_project_abilities(registry, ability_names)
             .context("unregister pages project abilities")?;
     }
-    Ok(json!({
-        "user":       user,
-        "project_id": project_id,
-        "removed":    true,
-    }))
+    Ok(serde_json::to_value(PagesUnpublishResponse::success(
+        user, project_id,
+    ))?)
+}
+
+fn project_started_at_ms(handle: &ProjectHandle) -> u64 {
+    handle
+        .started_at
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn project_list_item(
+    user: &str,
+    project_id: &str,
+    handle: &ProjectHandle,
+    listener_port: u16,
+    realm: &str,
+) -> PagesProjectListItem {
+    PagesProjectListItem::new(
+        user,
+        project_id,
+        handle.canonical_root.display().to_string(),
+        handle.visibility.as_str(),
+        project_started_at_ms(handle),
+        super::pages_public_url_root(realm, user, project_id),
+        super::pages_dev_listener_url_root(user, project_id, listener_port),
+    )
+}
+
+fn project_detail_response(
+    user: &str,
+    project_id: &str,
+    handle: &ProjectHandle,
+    listener_port: u16,
+    realm: &str,
+) -> PagesProjectDetailResponse {
+    PagesProjectDetailResponse::success(
+        user,
+        project_id,
+        crate::core::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/"),
+        handle.canonical_root.display().to_string(),
+        handle.visibility.as_str(),
+        project_started_at_ms(handle),
+        super::pages_public_url_root(realm, user, project_id),
+        super::pages_dev_listener_url_root(user, project_id, listener_port),
+        handle.file_size_cap,
+    )
 }
 
 fn project_id_from_surface_ref<'a>(user: &str, raw: &'a str) -> Option<&'a str> {
@@ -235,6 +257,111 @@ fn project_id_from_surface_ref<'a>(user: &str, raw: &'a str) -> Option<&'a str> 
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::Arc;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    fn publish_test_project(user: &str, project_id: &str) -> (tempfile::TempDir, (String, String)) {
+        let root = tempfile::tempdir().expect("temp pages root");
+        let canonical_root = std::fs::canonicalize(root.path()).expect("canonical pages root");
+        let folder_handle =
+            crate::daemon::ability::builtins::resources::pages::sandbox::open_directory(
+                &canonical_root,
+            )
+            .expect("open test pages root");
+        let key = (user.to_string(), project_id.to_string());
+        PUBLISHED_PROJECTS.insert(
+            key.clone(),
+            Arc::new(ProjectHandle {
+                user: user.to_string(),
+                project_id: project_id.to_string(),
+                folder_handle,
+                canonical_root,
+                visibility: super::super::state::PageVisibility::Public,
+                file_size_cap: super::super::state::DEFAULT_FILE_SIZE_CAP,
+                started_at: UNIX_EPOCH + Duration::from_millis(123),
+            }),
+        );
+        (root, key)
+    }
+
+    fn remove_test_project(key: &(String, String)) {
+        PUBLISHED_PROJECTS.remove(key);
+    }
+
+    #[test]
+    fn handle_list_returns_typed_project_projection_shape() {
+        let user = "pages-list-projection-user";
+        let (_root, key) = publish_test_project(user, "docs-list");
+
+        let listed = handle_list(user, 8787, "example", json!({})).unwrap();
+        remove_test_project(&key);
+
+        let projects = listed["projects"].as_array().expect("projects array");
+        let project = projects
+            .iter()
+            .find(|project| project["project_id"] == "docs-list")
+            .expect("test project listed");
+        assert_eq!(project["user"], user);
+        assert_eq!(project["visibility"], "public");
+        assert_eq!(project["started_at_ms"], 123);
+        assert_eq!(
+            project["url_root"],
+            "https://example/web/pages-list-projection-user/docs-list/"
+        );
+        assert_eq!(
+            project["dev_listener_url_root"],
+            "http://docs-list.pages-list-projection-user.pages.localhost:8787/"
+        );
+        assert!(project.get("file_size_cap").is_none());
+        assert!(project.get("project_ura").is_none());
+    }
+
+    #[test]
+    fn handle_get_returns_typed_project_detail_shape() {
+        let user = "pages-get-projection-user";
+        let (_root, key) = publish_test_project(user, "docs-get");
+
+        let detail = handle_get(user, 8787, "example", json!({"project_id": "docs-get"})).unwrap();
+        remove_test_project(&key);
+
+        assert_eq!(detail["user"], user);
+        assert_eq!(detail["project_id"], "docs-get");
+        assert_eq!(
+            detail["project_ura"],
+            "easynet:///r/example/resource/pages-get-projection-user.docs-get"
+        );
+        assert_eq!(detail["visibility"], "public");
+        assert_eq!(detail["started_at_ms"], 123);
+        assert_eq!(
+            detail["url_root"],
+            "https://example/web/pages-get-projection-user/docs-get/"
+        );
+        assert_eq!(
+            detail["dev_listener_url_root"],
+            "http://docs-get.pages-get-projection-user.pages.localhost:8787/"
+        );
+        assert_eq!(
+            detail["file_size_cap"],
+            super::super::state::DEFAULT_FILE_SIZE_CAP
+        );
+    }
+
+    #[test]
+    fn handle_unpublish_returns_typed_receipt_and_removes_project() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let user = "pages-unpublish-projection-user";
+        let (_root, key) = publish_test_project(user, "docs-unpublish");
+
+        let removed = handle_unpublish(user, json!({"project_id": "docs-unpublish"})).unwrap();
+
+        assert_eq!(removed["user"], user);
+        assert_eq!(removed["project_id"], "docs-unpublish");
+        assert_eq!(removed["removed"], true);
+        assert!(
+            !PUBLISHED_PROJECTS.contains_key(&key),
+            "unpublish must remove published project"
+        );
+    }
 
     #[test]
     fn handle_health_reports_aggregate_ready_without_projects() {

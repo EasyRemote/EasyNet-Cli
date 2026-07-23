@@ -1590,6 +1590,88 @@ for required in (
 PY
 }
 
+check_pages_management_response_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local projection="$cli_root/src/daemon/resources/projection.rs"
+  local handlers="$cli_root/src/daemon/ability/builtins/resources/pages/list_get_unpublish.rs"
+  [[ -f "$projection" ]] || fail "daemon resource projection source is missing: $projection"
+  [[ -f "$handlers" ]] || fail "pages list/get/unpublish source is missing: $handlers"
+
+  "$PYTHON_BIN" - "$projection" "$handlers" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+projection, handlers = [Path(arg).read_text(encoding="utf-8") for arg in sys.argv[1:]]
+
+for struct_name in (
+    "PagesProjectListItem",
+    "PagesProjectListResponse",
+    "PagesProjectDetailResponse",
+    "PagesUnpublishResponse",
+):
+    struct = re.search(
+        rf"(?P<attrs>(?:#\[[^\n]+\]\n)*)pub struct {struct_name} \{{(?P<body>.*?)\n\}}",
+        projection,
+        re.S,
+    )
+    if struct is None:
+        raise SystemExit(f"pages_management_response_projection:struct_missing:{struct_name}")
+    if "#[serde(deny_unknown_fields)]" not in struct.group("attrs"):
+        raise SystemExit(f"pages_management_response_projection:struct_not_strict:{struct_name}")
+
+for required in (
+    "pub struct PagesProjectListItem",
+    "pub user: String",
+    "pub project_id: String",
+    "pub folder: String",
+    "pub visibility: String",
+    "pub started_at_ms: u64",
+    "pub url_root: String",
+    "pub dev_listener_url_root: String",
+    "pub struct PagesProjectListResponse",
+    "pub projects: Vec<PagesProjectListItem>",
+    "pub struct PagesProjectDetailResponse",
+    "pub project_ura: String",
+    "pub file_size_cap: u64",
+    "pub struct PagesUnpublishResponse",
+    "pub removed: bool",
+    "PagesProjectListResponse::from_projects(",
+    "PagesProjectDetailResponse::success(",
+    "PagesUnpublishResponse::success(",
+    "pages_project_list_response_preserves_public_shape",
+    "pages_project_detail_response_preserves_public_shape",
+    "pages_unpublish_response_preserves_public_shape",
+    "pages_management_response_dtos_reject_unknown_fields",
+):
+    if required not in projection:
+        raise SystemExit(f"pages_management_response_projection:projection_missing:{required}")
+
+for retired in (
+    "entries.push(json!({",
+    'Ok(json!({ "projects": entries }))',
+    '"project_ura":',
+    '"file_size_cap":',
+    '"removed":    true',
+    '"removed": true',
+):
+    if retired in handlers:
+        raise SystemExit(f"pages_management_response_projection:handler_retired:{retired}")
+
+for required in (
+    "PagesProjectListResponse::from_projects(entries)",
+    "project_detail_response(",
+    "PagesUnpublishResponse::success(",
+    "project_list_item(",
+    "handle_list_returns_typed_project_projection_shape",
+    "handle_get_returns_typed_project_detail_shape",
+    "handle_unpublish_returns_typed_receipt_and_removes_project",
+):
+    if required not in handlers:
+        raise SystemExit(f"pages_management_response_projection:handler_missing:{required}")
+PY
+}
+
 check_local_agents_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local local_agents="$cli_root/src/daemon/persistence/local_agents.rs"
@@ -12278,6 +12360,52 @@ EOF
   if ( CLI_ROOT="$tmp/files-store-response-projection-legacy"; check_files_store_response_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected files-store response projection gate to fail"
   fi
+  mkdir -p "$tmp/pages-management-response-projection-legacy/src/daemon/resources"
+  mkdir -p "$tmp/pages-management-response-projection-legacy/src/daemon/ability/builtins/resources/pages"
+  cat >"$tmp/pages-management-response-projection-legacy/src/daemon/resources/projection.rs" <<'EOF'
+pub struct PagesProjectListResponse {
+    pub projects: Vec<serde_json::Value>,
+}
+EOF
+  cat >"$tmp/pages-management-response-projection-legacy/src/daemon/ability/builtins/resources/pages/list_get_unpublish.rs" <<'EOF'
+fn handle_list() -> Value {
+    entries.push(json!({
+        "user": k_user,
+        "project_id": project_id,
+        "folder": folder,
+        "visibility": "public",
+        "started_at_ms": started_at_ms,
+        "url_root": url_root,
+        "dev_listener_url_root": dev_listener_url_root,
+    }));
+    Ok(json!({ "projects": entries }))
+}
+
+fn handle_get() -> Value {
+    Ok(json!({
+        "user": user,
+        "project_id": project_id,
+        "project_ura": project_ura,
+        "folder": folder,
+        "visibility": "public",
+        "started_at_ms": started_at_ms,
+        "url_root": url_root,
+        "dev_listener_url_root": dev_listener_url_root,
+        "file_size_cap": cap,
+    }))
+}
+
+fn handle_unpublish() -> Value {
+    Ok(json!({
+        "user": user,
+        "project_id": project_id,
+        "removed": true,
+    }))
+}
+EOF
+  if ( CLI_ROOT="$tmp/pages-management-response-projection-legacy"; check_pages_management_response_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected pages management response projection gate to fail"
+  fi
   mkdir -p "$tmp/local-agents-schema-legacy/src/daemon/persistence"
   cat >"$tmp/local-agents-schema-legacy/src/daemon/persistence/local_agents.rs" <<'EOF'
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -12720,6 +12848,7 @@ EOF
   check_skill_record_projection_boundary_contract
   check_resource_list_projection_boundary_contract
   check_files_store_response_projection_contract
+  check_pages_management_response_projection_contract
   check_local_agents_schema_contract
   check_profile_store_schema_contract
   check_auth_session_owner_fact_contract
@@ -12871,6 +13000,7 @@ check_skill_install_record_schema_contract
 check_skill_record_projection_boundary_contract
 check_resource_list_projection_boundary_contract
 check_files_store_response_projection_contract
+check_pages_management_response_projection_contract
 check_profile_store_schema_contract
 check_auth_session_owner_fact_contract
 check_resources_schema_contract
