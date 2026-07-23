@@ -40,11 +40,10 @@ def read_daemon_runtime_identity_projection(
 
 
 def _runtime_instance_id(raw: Mapping[str, object]) -> str:
+    if _text(raw, "node_id"):
+        raise ValueError("daemon credentials contain retired node_id identity alias")
     device_id = _text(raw, "device_id")
-    node_id = _text(raw, "node_id")
-    if device_id and node_id and device_id != node_id:
-        raise ValueError("daemon credentials contain conflicting device_id and node_id")
-    return device_id or node_id
+    return device_id
 
 
 def _text(raw: Mapping[str, object], key: str) -> str:

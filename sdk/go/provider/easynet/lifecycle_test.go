@@ -45,7 +45,7 @@ func TestProviderMapsDaemonCredentialsToCanonicalRuntimeIdentity(t *testing.T) {
 	}
 }
 
-func TestProviderMapsDaemonNodeIDAliasToCanonicalRuntimeIdentity(t *testing.T) {
+func TestProviderRejectsRetiredDaemonNodeIDAlias(t *testing.T) {
 	dir := t.TempDir()
 	credentials := filepath.Join(dir, "credentials.json")
 	if err := os.WriteFile(credentials, []byte(`{
@@ -55,16 +55,16 @@ func TestProviderMapsDaemonNodeIDAliasToCanonicalRuntimeIdentity(t *testing.T) {
 		t.Fatalf("write credentials: %v", err)
 	}
 
-	projection, err := easynetprovider.ReadDaemonRuntimeIdentityProjection(context.Background(), credentials)
-	if err != nil {
-		t.Fatalf("ReadDaemonRuntimeIdentityProjection: %v", err)
+	_, err := easynetprovider.ReadDaemonRuntimeIdentityProjection(context.Background(), credentials)
+	if err == nil {
+		t.Fatal("expected retired node_id daemon identity alias to fail")
 	}
-	if projection.RuntimeInstanceID != "node-a" {
-		t.Fatalf("runtime instance id = %q", projection.RuntimeInstanceID)
+	if !strings.Contains(err.Error(), "retired node_id identity alias") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
-func TestProviderRejectsConflictingDaemonIdentityAliases(t *testing.T) {
+func TestProviderRejectsNodeIDEvenWhenDeviceIDIsPresent(t *testing.T) {
 	dir := t.TempDir()
 	credentials := filepath.Join(dir, "credentials.json")
 	if err := os.WriteFile(credentials, []byte(`{
@@ -77,9 +77,9 @@ func TestProviderRejectsConflictingDaemonIdentityAliases(t *testing.T) {
 
 	_, err := easynetprovider.ReadDaemonRuntimeIdentityProjection(context.Background(), credentials)
 	if err == nil {
-		t.Fatal("expected conflicting daemon identity aliases to fail")
+		t.Fatal("expected retired node_id daemon identity alias to fail")
 	}
-	if !strings.Contains(err.Error(), "conflicting device_id and node_id") {
+	if !strings.Contains(err.Error(), "retired node_id identity alias") {
 		t.Fatalf("error = %v", err)
 	}
 }

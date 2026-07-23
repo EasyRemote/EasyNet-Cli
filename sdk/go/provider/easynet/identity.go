@@ -13,9 +13,9 @@ import (
 // ReadDaemonRuntimeIdentityProjection adapts EasyNet daemon credentials into
 // the canonical runtime identity projection.
 //
-// EasyNet credentials are product-owned and may still contain device/node
-// fields. The canonical SDK root does not accept those fields as runtime
-// identity; this provider adapter is the only place that translates them into
+// EasyNet credentials are product-owned and expose a device identity fact. The
+// canonical SDK root does not accept product fields as runtime identity; this
+// provider adapter is the only place that translates device_id into
 // RuntimeInstanceID.
 func ReadDaemonRuntimeIdentityProjection(ctx context.Context, credentialsPath string) (runtimesdk.RuntimeIdentityProjection, error) {
 	projection, err := runtimesdk.ReadRuntimeIdentityProjection(ctx, credentialsPath, "")
@@ -50,15 +50,11 @@ func ReadDaemonRuntimeIdentityProjection(ctx context.Context, credentialsPath st
 }
 
 func providerRuntimeInstanceID(decoded map[string]any) (string, error) {
+	if retired := providerIdentityString(decoded, "node_id"); retired != "" {
+		return "", fmt.Errorf("daemon credentials contain retired node_id identity alias")
+	}
 	deviceID := providerIdentityString(decoded, "device_id")
-	nodeID := providerIdentityString(decoded, "node_id")
-	if deviceID != "" && nodeID != "" && deviceID != nodeID {
-		return "", fmt.Errorf("daemon credentials contain conflicting device_id and node_id")
-	}
-	if deviceID != "" {
-		return deviceID, nil
-	}
-	return nodeID, nil
+	return deviceID, nil
 }
 
 func providerIdentityString(raw map[string]any, key string) string {

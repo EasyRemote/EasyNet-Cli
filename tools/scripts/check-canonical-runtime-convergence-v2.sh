@@ -1985,6 +1985,96 @@ if "test_rejection_projects_missing_runtime_identity_to_caller_signer_unavailabl
 PY
 }
 
+check_sdk_easynet_provider_identity_alias_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go="$cli_root/sdk/go/provider/easynet/identity.go"
+  local go_test="$cli_root/sdk/go/provider/easynet/lifecycle_test.go"
+  local py="$cli_root/sdk/python/easynet_sdk/providers/easynet/identity.py"
+  local py_test="$cli_root/sdk/python/tests/test_runtime_environment.py"
+
+  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"sdk_easynet_provider_identity_alias_source_missing:{path}")
+    return path.read_text()
+
+def section(text: str, pattern: str, label: str) -> str:
+    match = re.search(pattern, text, re.DOTALL)
+    if match is None:
+        raise SystemExit(f"sdk_easynet_provider_identity_alias_section_missing:{label}")
+    return match.group("body")
+
+go = read(go_path)
+go_body = section(
+    go,
+    r"func providerRuntimeInstanceID\(decoded map\[string\]any\) \(string, error\) \{(?P<body>.*?)\n\}",
+    "go_provider_runtime_instance_id",
+)
+for required in (
+    'providerIdentityString(decoded, "node_id")',
+    "retired node_id identity alias",
+    'providerIdentityString(decoded, "device_id")',
+    "return deviceID, nil",
+):
+    if required not in go_body:
+        raise SystemExit(f"sdk_go_easynet_provider_identity_alias_required_missing:{required}")
+for forbidden in (
+    "return nodeID",
+    "deviceID or nodeID",
+    "device_id and node_id",
+    "conflicting",
+):
+    if forbidden in go_body:
+        raise SystemExit(f"sdk_go_easynet_provider_identity_alias_fallback_present:{forbidden}")
+go_tests = read(go_test_path)
+for required_test in (
+    "TestProviderRejectsRetiredDaemonNodeIDAlias",
+    "TestProviderRejectsNodeIDEvenWhenDeviceIDIsPresent",
+):
+    if required_test not in go_tests:
+        raise SystemExit(f"sdk_go_easynet_provider_identity_alias_test_missing:{required_test}")
+if "TestProviderMapsDaemonNodeIDAliasToCanonicalRuntimeIdentity" in go_tests:
+    raise SystemExit("sdk_go_easynet_provider_identity_alias_mapping_test_present")
+
+py = read(py_path)
+py_body = section(
+    py,
+    r"def _runtime_instance_id\(raw: Mapping\[str, object\]\) -> str:\n(?P<body>.*?)(?=\n\ndef |\Z)",
+    "python_runtime_instance_id",
+)
+for required in (
+    '_text(raw, "node_id")',
+    "retired node_id identity alias",
+    '_text(raw, "device_id")',
+    "return device_id",
+):
+    if required not in py_body:
+        raise SystemExit(f"sdk_python_easynet_provider_identity_alias_required_missing:{required}")
+for forbidden in (
+    "return device_id or node_id",
+    "device_id and node_id",
+    "conflicting",
+):
+    if forbidden in py_body:
+        raise SystemExit(f"sdk_python_easynet_provider_identity_alias_fallback_present:{forbidden}")
+py_tests = read(py_test_path)
+for required_test in (
+    "test_easynet_provider_rejects_retired_daemon_node_id_alias",
+    "test_easynet_provider_rejects_node_id_even_when_device_id_is_present",
+):
+    if required_test not in py_tests:
+        raise SystemExit(f"sdk_python_easynet_provider_identity_alias_test_missing:{required_test}")
+if "test_easynet_provider_maps_daemon_node_id_alias_to_canonical_projection" in py_tests:
+    raise SystemExit("sdk_python_easynet_provider_identity_alias_mapping_test_present")
+PY
+}
+
 check_sdk_runtime_failure_code_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_errors="$cli_root/sdk/go/errors.go"
@@ -9874,6 +9964,35 @@ EOF
   if ( check_sdk_runtime_identity_signer_not_found_contract "$tmp/sdk-runtime-identity-signer-not-found-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected SDK runtime identity signer not-found gate to fail"
   fi
+  mkdir -p "$tmp/sdk-easynet-provider-identity-alias-legacy/sdk/go/provider/easynet" \
+    "$tmp/sdk-easynet-provider-identity-alias-legacy/sdk/python/easynet_sdk/providers/easynet" \
+    "$tmp/sdk-easynet-provider-identity-alias-legacy/sdk/python/tests"
+  printf '%s\n' \
+    'func providerRuntimeInstanceID(decoded map[string]any) (string, error) {' \
+    '  deviceID := providerIdentityString(decoded, "device_id")' \
+    '  nodeID := providerIdentityString(decoded, "node_id")' \
+    '  if deviceID != "" && nodeID != "" && deviceID != nodeID {' \
+    '    return "", fmt.Errorf("daemon credentials contain conflicting device_id and node_id")' \
+    '  }' \
+    '  if deviceID != "" { return deviceID, nil }' \
+    '  return nodeID, nil' \
+    '}' \
+    > "$tmp/sdk-easynet-provider-identity-alias-legacy/sdk/go/provider/easynet/identity.go"
+  printf 'func TestProviderMapsDaemonNodeIDAliasToCanonicalRuntimeIdentity(t *testing.T) {}\n' \
+    > "$tmp/sdk-easynet-provider-identity-alias-legacy/sdk/go/provider/easynet/lifecycle_test.go"
+  printf '%s\n' \
+    'def _runtime_instance_id(raw: Mapping[str, object]) -> str:' \
+    '    device_id = _text(raw, "device_id")' \
+    '    node_id = _text(raw, "node_id")' \
+    '    if device_id and node_id and device_id != node_id:' \
+    '        raise ValueError("daemon credentials contain conflicting device_id and node_id")' \
+    '    return device_id or node_id' \
+    > "$tmp/sdk-easynet-provider-identity-alias-legacy/sdk/python/easynet_sdk/providers/easynet/identity.py"
+  printf 'def test_easynet_provider_maps_daemon_node_id_alias_to_canonical_projection(): pass\n' \
+    > "$tmp/sdk-easynet-provider-identity-alias-legacy/sdk/python/tests/test_runtime_environment.py"
+  if ( check_sdk_easynet_provider_identity_alias_contract "$tmp/sdk-easynet-provider-identity-alias-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK EasyNet provider identity alias gate to fail"
+  fi
   mkdir -p "$tmp/principal-lifecycle-fallback/src/cli/commands/groups"
   printf '%s\n' \
     'fn principal_ability_realm_source(args: &Value) -> anyhow::Result<&str> {' \
@@ -11543,6 +11662,7 @@ EOF
   check_sdk_descriptor_resolution_error_vocabulary_contract
   check_sdk_ability_descriptor_not_found_vocabulary_contract
   check_sdk_runtime_identity_signer_not_found_contract
+  check_sdk_easynet_provider_identity_alias_contract
   check_sdk_runtime_failure_code_contract
   check_sdk_direct_runtime_descriptor_not_found_contract
   check_principal_lifecycle_cli_schema_contract
@@ -11682,6 +11802,7 @@ check_sdk_history_authority_subject_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_ability_descriptor_not_found_vocabulary_contract
 check_sdk_runtime_identity_signer_not_found_contract
+check_sdk_easynet_provider_identity_alias_contract
 check_sdk_runtime_failure_code_contract
 check_sdk_direct_runtime_descriptor_not_found_contract
 check_principal_lifecycle_cli_schema_contract

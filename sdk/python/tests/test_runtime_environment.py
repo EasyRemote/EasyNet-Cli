@@ -71,7 +71,7 @@ def test_easynet_provider_maps_daemon_credentials_to_canonical_projection(tmp_pa
     assert projection.control_plane_endpoint == "hub:443"
 
 
-def test_easynet_provider_maps_daemon_node_id_alias_to_canonical_projection(tmp_path):
+def test_easynet_provider_rejects_retired_daemon_node_id_alias(tmp_path):
     credentials = tmp_path / "credentials.json"
     credentials.write_text(
         json.dumps(
@@ -84,15 +84,13 @@ def test_easynet_provider_maps_daemon_node_id_alias_to_canonical_projection(tmp_
         )
     )
 
-    projection = read_daemon_runtime_identity_projection(credentials)
+    with pytest.raises(ValueError) as exc_info:
+        read_daemon_runtime_identity_projection(credentials)
 
-    assert projection.realm == "acme"
-    assert projection.runtime_instance_id == "dev-a"
-    assert projection.principal == "alice"
-    assert projection.control_plane_endpoint == "hub:443"
+    assert "retired node_id identity alias" in str(exc_info.value)
 
 
-def test_easynet_provider_rejects_conflicting_daemon_identity_aliases(tmp_path):
+def test_easynet_provider_rejects_node_id_even_when_device_id_is_present(tmp_path):
     credentials = tmp_path / "credentials.json"
     credentials.write_text(
         json.dumps({"realm": "acme", "device_id": "dev-a", "node_id": "dev-b"})
@@ -101,4 +99,4 @@ def test_easynet_provider_rejects_conflicting_daemon_identity_aliases(tmp_path):
     with pytest.raises(ValueError) as exc_info:
         read_daemon_runtime_identity_projection(credentials)
 
-    assert "conflicting device_id and node_id" in str(exc_info.value)
+    assert "retired node_id identity alias" in str(exc_info.value)
