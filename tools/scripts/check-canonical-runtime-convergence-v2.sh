@@ -5345,6 +5345,71 @@ if guard < 0 or lookup < 0 or guard > lookup:
 PY
 }
 
+check_remote_invocation_signer_first_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local remote_invoke="$cli_root/src/daemon/invocation/routing/remote_invoke.rs"
+  [[ -f "$remote_invoke" ]] || fail "remote invocation source is missing: ${remote_invoke#$cli_root/}"
+
+  "$PYTHON_BIN" - "$remote_invoke" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+def fn_body(name: str, next_name: str) -> str:
+    start = production.find(f"fn {name}")
+    if start < 0:
+        raise SystemExit(f"remote_invocation_signer_first:missing:{name}")
+    end = production.find(f"\nfn {next_name}", start)
+    if end < 0:
+        end = len(production)
+    return production[start:end]
+
+for required in (
+    "enum RemoteInvocationCarrier",
+    "fn load_remote_invocation_caller_signer_for_carrier(",
+    "RemoteInvocationCarrier::Unary",
+    "RemoteInvocationCarrier::Stream",
+    "RemoteInvocationCarrier::Bidi",
+):
+    if required not in production:
+        raise SystemExit(f"remote_invocation_signer_first:missing:{required}")
+
+unary = fn_body("invoke_remote_target", "load_remote_invocation_caller_signer")
+stream = fn_body("invoke_remote_target_stream", "invoke_remote_target_bidi_json_frames")
+bidi = fn_body("invoke_remote_target_bidi_json_frames", "checked_remote_invocation_ura")
+
+checks = (
+    ("unary", unary, r"load_remote_invocation_caller_signer\s*\(\s*request\.caller_ura\.as_str\s*\(\s*\)\s*\)\s*\?", r"ensure_remote_invocation_daemon_accepting\s*\(\s*&socket_path\s*\)\s*\?"),
+    ("stream", stream, r"load_remote_invocation_caller_signer_for_carrier\s*\(\s*&caller_ura\s*,\s*RemoteInvocationCarrier::Stream\s*,?\s*\)\s*\?", r"probe_accepting\s*\(\s*&socket_path\s*\)"),
+    ("bidi", bidi, r"load_remote_invocation_caller_signer_for_carrier\s*\(\s*&caller_ura\s*,\s*RemoteInvocationCarrier::Bidi\s*,?\s*\)\s*\?", r"probe_accepting\s*\(\s*&socket_path\s*\)"),
+)
+for name, body, signer_pattern, daemon_pattern in checks:
+    signer_match = re.search(signer_pattern, body)
+    daemon_match = re.search(daemon_pattern, body)
+    if signer_match is None:
+        raise SystemExit(f"remote_invocation_signer_first:{name}:signer_precondition_missing")
+    if daemon_match is None:
+        raise SystemExit(f"remote_invocation_signer_first:{name}:daemon_probe_missing")
+    if signer_match.start() > daemon_match.start():
+        raise SystemExit(f"remote_invocation_signer_first:{name}:daemon_probe_before_signer")
+
+for carrier_body, name in ((stream, "stream"), (bidi, "bidi")):
+    if "load_runtime_caller_signer(caller_ura.clone())" in carrier_body:
+        raise SystemExit(f"remote_invocation_signer_first:{name}:duplicated_signer_loader")
+
+for required_test in (
+    "remote_unary_loads_caller_signer_before_daemon_socket_probe",
+    "remote_stream_loads_caller_signer_before_daemon_socket_probe",
+    "remote_bidi_loads_caller_signer_before_daemon_socket_probe",
+):
+    if required_test not in text:
+        raise SystemExit(f"remote_invocation_signer_first:missing_test:{required_test}")
+PY
+}
+
 check_daemon_runtime_identity_vocabulary_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local identity="$cli_root/src/daemon/identity/local_invocation.rs"
@@ -7799,6 +7864,40 @@ EOF
   if ( CLI_ROOT="$tmp/runtime-owner-signer-legacy"; check_runtime_owner_signer_custody_contract ) >/dev/null 2>&1; then
     fail "self-test expected runtime-owner signer User custody gate to fail"
   fi
+  mkdir -p "$tmp/remote-invocation-signer-first-legacy/src/daemon/invocation/routing"
+  cat >"$tmp/remote-invocation-signer-first-legacy/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
+pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyhow::Result<Value> {
+    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+    ensure_remote_invocation_daemon_accepting(&socket_path)?;
+    let signer = load_remote_invocation_caller_signer(request.caller_ura.as_str())?;
+    invoke_remote_target_on_ready_socket(request, signer, socket_path)
+}
+
+pub(crate) fn load_remote_invocation_caller_signer(caller_ura: &str) -> anyhow::Result<RemoteInvocationCallerSigner> {
+    crate::daemon::identity::self_identity::load_runtime_caller_signer(caller_ura.to_string())
+}
+
+pub(crate) fn invoke_remote_target_stream(request: RemoteInvocationRequest<'_>) -> anyhow::Result<Vec<Frame>> {
+    let caller_ura = request.caller_ura;
+    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+    if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) { anyhow::bail!("daemon not running"); }
+    let signer = crate::daemon::identity::self_identity::load_runtime_caller_signer(caller_ura.clone())?;
+    Ok(Vec::new())
+}
+
+pub(crate) fn invoke_remote_target_bidi_json_frames(request: RemoteInvocationRequest<'_>) -> anyhow::Result<Vec<Frame>> {
+    let caller_ura = request.caller_ura;
+    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+    if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) { anyhow::bail!("daemon not running"); }
+    let signer = crate::daemon::identity::self_identity::load_runtime_caller_signer(caller_ura.clone())?;
+    Ok(Vec::new())
+}
+
+fn checked_remote_invocation_ura() {}
+EOF
+  if ( CLI_ROOT="$tmp/remote-invocation-signer-first-legacy"; check_remote_invocation_signer_first_contract ) >/dev/null 2>&1; then
+    fail "self-test expected remote invocation signer-first gate to fail"
+  fi
   mkdir -p "$tmp/runtime-identity-vocabulary-legacy/src/daemon/identity" \
     "$tmp/runtime-identity-vocabulary-legacy/src/daemon/ability/authority"
   printf '/// Product URA owned by the local daemon process advertised in control.json.\n' \
@@ -9408,6 +9507,7 @@ EOF
   check_sdk_directory_projection_fail_closed_contract
   check_sdk_principal_projection_fail_closed_contract
   check_runtime_owner_signer_custody_contract
+  check_remote_invocation_signer_first_contract
   check_daemon_runtime_identity_vocabulary_contract
   check_key_custody_boundary_contract
   check_daemon_mission_eal_boundary_contract
@@ -9530,6 +9630,7 @@ check_local_daemon_loopback_explicit_subject_contract
 check_sdk_directory_projection_fail_closed_contract
 check_sdk_principal_projection_fail_closed_contract
 check_runtime_owner_signer_custody_contract
+check_remote_invocation_signer_first_contract
 check_daemon_runtime_identity_vocabulary_contract
 check_key_custody_boundary_contract
 check_daemon_mission_eal_boundary_contract

@@ -569,20 +569,45 @@ impl<'a> RemoteInvocationRequest<'a> {
 }
 
 pub(crate) fn invoke_remote_target(request: RemoteInvocationRequest<'_>) -> anyhow::Result<Value> {
+    let signer = load_remote_invocation_caller_signer(request.caller_ura.as_str())?;
     let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
     ensure_remote_invocation_daemon_accepting(&socket_path)?;
-    let signer = load_remote_invocation_caller_signer(request.caller_ura.as_str())?;
     invoke_remote_target_on_ready_socket(request, signer, socket_path)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteInvocationCarrier {
+    Unary,
+    Stream,
+    Bidi,
+}
+
+impl RemoteInvocationCarrier {
+    fn signer_error_label(self) -> &'static str {
+        match self {
+            Self::Unary => "remote invocation",
+            Self::Stream => "remote stream invocation",
+            Self::Bidi => "remote bidi invocation",
+        }
+    }
 }
 
 pub(crate) fn load_remote_invocation_caller_signer(
     caller_ura: &str,
 ) -> anyhow::Result<RemoteInvocationCallerSigner> {
+    load_remote_invocation_caller_signer_for_carrier(caller_ura, RemoteInvocationCarrier::Unary)
+}
+
+fn load_remote_invocation_caller_signer_for_carrier(
+    caller_ura: &str,
+    carrier: RemoteInvocationCarrier,
+) -> anyhow::Result<RemoteInvocationCallerSigner> {
     let caller_ura = caller_ura.to_string();
+    let label = carrier.signer_error_label();
     crate::daemon::identity::self_identity::load_runtime_caller_signer(caller_ura.clone()).map_err(
         |err| {
             anyhow!(
-                "remote invocation requires a caller signer for `{caller_ura}`; \
+                "{label} requires a caller signer for `{caller_ura}`; \
                  load or provision that identity in the local key service: {err}"
             )
         },
@@ -745,6 +770,10 @@ pub(crate) fn invoke_remote_target_stream(
     }
     let arguments = serde_json::to_vec(&args).context("serialise remote stream arguments")?;
     let timeout_seconds = i32::try_from(timeout.as_secs()).unwrap_or(i32::MAX);
+    let signer = load_remote_invocation_caller_signer_for_carrier(
+        &caller_ura,
+        RemoteInvocationCarrier::Stream,
+    )?;
     let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
     if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
@@ -760,14 +789,6 @@ pub(crate) fn invoke_remote_target_stream(
         .context("build tokio runtime for remote InvokeStream")?;
 
     runtime.block_on(async move {
-        let signer =
-            crate::daemon::identity::self_identity::load_runtime_caller_signer(caller_ura.clone())
-                .map_err(|err| {
-                    anyhow!(
-                        "remote stream invocation requires a caller signer for `{caller_ura}`; \
-                 load or provision that identity in the local key service: {err}"
-                    )
-                })?;
         let mut stream_request = ProtoEnvelope::from_target(
             caller_ura.clone(),
             target.callee_ura.clone(),
@@ -870,6 +891,10 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
         bail!("--max-frames must be greater than 0 when provided");
     }
     let arguments = serde_json::to_vec(&args).context("serialise remote bidi arguments")?;
+    let signer = load_remote_invocation_caller_signer_for_carrier(
+        &caller_ura,
+        RemoteInvocationCarrier::Bidi,
+    )?;
     let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
     if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
@@ -885,14 +910,6 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
         .context("build tokio runtime for remote InvokeBidi")?;
 
     runtime.block_on(async move {
-        let signer =
-            crate::daemon::identity::self_identity::load_runtime_caller_signer(caller_ura.clone())
-                .map_err(|err| {
-                    anyhow!(
-                        "remote bidi invocation requires a caller signer for `{caller_ura}`; \
-                 load or provision that identity in the local key service: {err}"
-                    )
-                })?;
         let envelope_open = ProtoEnvelope::from_target(
             caller_ura.clone(),
             target.callee_ura.clone(),
@@ -1650,6 +1667,83 @@ mod tests {
             Duration::from_secs(1),
         );
         assert!(zero_nonce.is_err());
+    }
+
+    fn signer_first_test_request<'a>(
+        target: &'a RemoteAbilityInvocationTarget,
+    ) -> RemoteInvocationRequest<'a> {
+        RemoteInvocationRequest::new(
+            target,
+            "easynet:///r/signer-first-test/device/missing-caller",
+            "easynet:///r/signer-first-test/resource/device.node-a/probe/signer-first",
+            [0x61; 16],
+            CausalContext::None,
+            json!({"probe": true}),
+            Duration::from_secs(1),
+        )
+        .expect("signer-first request")
+    }
+
+    fn assert_signer_first_error(error: anyhow::Error, label: &str) {
+        let message = error.to_string();
+        assert!(
+            message.contains(label),
+            "remote carrier must name signer custody stage: {message}"
+        );
+        assert!(
+            message.contains("requires a caller signer"),
+            "remote carrier must fail at caller signer readiness: {message}"
+        );
+        assert!(
+            !message.contains("daemon not running"),
+            "caller signer readiness must run before daemon socket probe: {message}"
+        );
+    }
+
+    #[test]
+    fn remote_unary_loads_caller_signer_before_daemon_socket_probe() {
+        let descriptor = "easynet:///r/signer-first-test/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
+            "easynet:///r/signer-first-test/device/node-a",
+            descriptor,
+        )
+        .expect("target");
+        let error = invoke_remote_target(signer_first_test_request(&target))
+            .expect_err("missing signer must fail before daemon socket readiness");
+
+        assert_signer_first_error(error, "remote invocation");
+    }
+
+    #[test]
+    fn remote_stream_loads_caller_signer_before_daemon_socket_probe() {
+        let descriptor = "easynet:///r/signer-first-test/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
+            "easynet:///r/signer-first-test/device/node-a",
+            descriptor,
+        )
+        .expect("target");
+        let error = invoke_remote_target_stream(signer_first_test_request(&target), None)
+            .expect_err("missing signer must fail before stream daemon socket readiness");
+
+        assert_signer_first_error(error, "remote stream invocation");
+    }
+
+    #[test]
+    fn remote_bidi_loads_caller_signer_before_daemon_socket_probe() {
+        let descriptor = "easynet:///r/signer-first-test/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
+            "easynet:///r/signer-first-test/device/node-a",
+            descriptor,
+        )
+        .expect("target");
+        let error = invoke_remote_target_bidi_json_frames(
+            signer_first_test_request(&target),
+            Vec::new(),
+            None,
+        )
+        .expect_err("missing signer must fail before bidi daemon socket readiness");
+
+        assert_signer_first_error(error, "remote bidi invocation");
     }
 
     #[test]
