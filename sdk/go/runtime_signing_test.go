@@ -3,6 +3,7 @@ package easynet
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -149,6 +150,51 @@ func TestRuntimeSigningTransportRejectsUnsignedDraftForDifferentCaller(t *testin
 	}
 	if provider.material.CanonicalBytesBase64() != "" {
 		t.Fatal("provider was called for a mismatched caller")
+	}
+}
+
+func TestRuntimeSigningCausalContextRejectsRetiredDAGProofAliases(t *testing.T) {
+	canonical, err := causalContextForInvocationDraft(map[string]any{
+		"form":      "dag",
+		"root_hex":  strings.Repeat("ab", 32),
+		"proof_ura": "easynet:///r/example/resource/agent.alice/proof/causal",
+	})
+	if err != nil {
+		t.Fatalf("canonical DAG causal context: %v", err)
+	}
+	if canonical.Kind != CausalContextDAG ||
+		canonical.DAGRootHex != strings.Repeat("ab", 32) ||
+		canonical.DAGProofURA != "easynet:///r/example/resource/agent.alice/proof/causal" {
+		t.Fatalf("canonical DAG causal context = %#v", canonical)
+	}
+
+	for _, test := range []struct {
+		name  string
+		value map[string]any
+	}{
+		{
+			name: "retired proof alias",
+			value: map[string]any{
+				"form":          "dag",
+				"root_hex":      strings.Repeat("ab", 32),
+				"dag_proof_ura": "easynet:///r/example/resource/agent.alice/proof/causal",
+			},
+		},
+		{
+			name: "retired root alias",
+			value: map[string]any{
+				"form":         "dag",
+				"dag_root_hex": strings.Repeat("ab", 32),
+				"proof_ura":    "easynet:///r/example/resource/agent.alice/proof/causal",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := causalContextForInvocationDraft(test.value)
+			if !IsCode(err, ErrInvalidArgument) {
+				t.Fatalf("retired DAG alias error = %v, want %s", err, ErrInvalidArgument)
+			}
+		})
 	}
 }
 

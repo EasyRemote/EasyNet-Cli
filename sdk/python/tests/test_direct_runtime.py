@@ -40,6 +40,7 @@ from easynet_sdk.direct_runtime import (
     DirectRuntimeTransport,
     _canonical_receipt_document,
     _canonical_receipt_projection,
+    _axon_causal_context,
     _grpc_error,
     _invoke_response_json,
     _response_error_code,
@@ -764,6 +765,35 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertNotIn("x-easynet-signed-descriptor-ref", request.metadata)
         tuple_projection = cast(dict[str, object], result["tuple"])
         self.assertEqual(tuple_projection, draft.to_json_dict())
+
+    def test_direct_runtime_causal_context_rejects_retired_dag_proof_alias(self) -> None:
+        canonical = _axon_causal_context(
+            {
+                "form": "merkle",
+                "root_hex": "ab" * 32,
+                "proof_ura": "easynet:///r/example/resource/agent.alice/proof/causal",
+            }
+        )
+        self.assertIsNotNone(canonical.as_merkle())
+
+        for causal_context in (
+            {
+                "form": "merkle",
+                "root_hex": "ab" * 32,
+                "dag_proof_ura": (
+                    "easynet:///r/example/resource/agent.alice/proof/causal"
+                ),
+            },
+            {
+                "form": "merkle",
+                "dag_root_hex": "ab" * 32,
+                "proof_ura": "easynet:///r/example/resource/agent.alice/proof/causal",
+            },
+        ):
+            with self.subTest(causal_context=causal_context):
+                with self.assertRaises(SDKError) as raised:
+                    _axon_causal_context(causal_context)
+                self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_INVOCATION))
 
     def test_direct_transport_rejects_descriptor_not_owned_by_callee(self) -> None:
         servicer = RecordingInvocationServicer()

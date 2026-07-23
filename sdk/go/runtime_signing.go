@@ -189,13 +189,7 @@ func causalContextForInvocationDraft(value map[string]any) (CausalContext, error
 		return CausalVectorRefs(refs), nil
 	case "merkle", "dag":
 		rootHex := causalString(value, "root_hex")
-		if rootHex == "" {
-			rootHex = causalString(value, "dag_root_hex")
-		}
 		proofURA := causalString(value, "proof_ura")
-		if proofURA == "" {
-			proofURA = causalString(value, "dag_proof_ura")
-		}
 		if rootHex == "" || proofURA == "" {
 			return CausalContext{}, invalidRuntimePayload("causal_context DAG requires root_hex and proof_ura", nil)
 		}

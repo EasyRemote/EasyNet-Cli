@@ -2420,6 +2420,65 @@ for required in (
 PY
 }
 
+check_sdk_causal_context_dag_alias_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_signing="$cli_root/sdk/go/runtime_signing.go"
+  local go_test="$cli_root/sdk/go/runtime_signing_test.go"
+  local py_direct="$cli_root/sdk/python/easynet_sdk/direct_runtime.py"
+  local py_test="$cli_root/sdk/python/tests/test_direct_runtime.py"
+
+  "$PYTHON_BIN" - "$go_signing" "$go_test" "$py_direct" "$py_test" <<'PY'
+import sys
+from pathlib import Path
+
+go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"sdk_causal_context_dag_alias_source_missing:{path}")
+    return path.read_text()
+
+go = read(go_path)
+for retired in ("dag_root_hex", "dag_proof_ura"):
+    if retired in go:
+        raise SystemExit(f"sdk_go_causal_context_retired_dag_alias:{retired}")
+if 'causalString(value, "root_hex")' not in go:
+    raise SystemExit("sdk_go_causal_context_root_hex_missing")
+if 'causalString(value, "proof_ura")' not in go:
+    raise SystemExit("sdk_go_causal_context_proof_ura_missing")
+if "causal_context DAG requires root_hex and proof_ura" not in go:
+    raise SystemExit("sdk_go_causal_context_canonical_dag_error_missing")
+go_tests = read(go_test_path)
+for required in (
+    "TestRuntimeSigningCausalContextRejectsRetiredDAGProofAliases",
+    "dag_root_hex",
+    "dag_proof_ura",
+):
+    if required not in go_tests:
+        raise SystemExit(f"sdk_go_causal_context_dag_alias_test_missing:{required}")
+
+py = read(py_path)
+for retired in ("dag_root_hex", "dag_proof_ura"):
+    if retired in py:
+        raise SystemExit(f"sdk_python_causal_context_retired_dag_alias:{retired}")
+for required in (
+    '"root_hex"',
+    "proof_ura",
+    "_axon_causal_context",
+):
+    if required not in py:
+        raise SystemExit(f"sdk_python_causal_context_canonical_dag_missing:{required}")
+py_tests = read(py_test_path)
+for required in (
+    "test_direct_runtime_causal_context_rejects_retired_dag_proof_alias",
+    "dag_root_hex",
+    "dag_proof_ura",
+):
+    if required not in py_tests:
+        raise SystemExit(f"sdk_python_causal_context_dag_alias_test_missing:{required}")
+PY
+}
+
 check_sdk_direct_runtime_descriptor_not_found_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_direct="$cli_root/sdk/go/direct_runtime.go"
@@ -11228,6 +11287,31 @@ EOF
   if ( check_sdk_direct_runtime_state_projection_contract "$tmp/sdk-direct-runtime-state-fallback" ) >/dev/null 2>&1; then
     fail "self-test expected SDK direct runtime state fallback gate to fail"
   fi
+  mkdir -p "$tmp/sdk-causal-context-dag-alias/sdk/go" \
+    "$tmp/sdk-causal-context-dag-alias/sdk/python/easynet_sdk" \
+    "$tmp/sdk-causal-context-dag-alias/sdk/python/tests"
+  printf '%s\n' \
+    'func causalContextForInvocationDraft(value map[string]any) (CausalContext, error) {' \
+    '  rootHex := causalString(value, "root_hex")' \
+    '  if rootHex == "" { rootHex = causalString(value, "dag_root_hex") }' \
+    '  proofURA := causalString(value, "proof_ura")' \
+    '  if proofURA == "" { proofURA = causalString(value, "dag_proof_ura") }' \
+    '  if rootHex == "" || proofURA == "" { return CausalContext{}, invalidRuntimePayload("causal_context DAG requires root_hex and proof_ura", nil) }' \
+    '  return CausalDAGRoot(rootHex, proofURA), nil' \
+    '}' \
+    > "$tmp/sdk-causal-context-dag-alias/sdk/go/runtime_signing.go"
+  printf 'func TestRuntimeSigningCausalContextAcceptsRetiredDAGProofAliases(t *testing.T) {}\n' \
+    > "$tmp/sdk-causal-context-dag-alias/sdk/go/runtime_signing_test.go"
+  printf '%s\n' \
+    'def _axon_causal_context(value):' \
+    '    if "dag_proof_ura" in value:' \
+    '        return {"form": "merkle", "proof_ura": value["dag_proof_ura"]}' \
+    > "$tmp/sdk-causal-context-dag-alias/sdk/python/easynet_sdk/direct_runtime.py"
+  printf 'def test_direct_runtime_causal_context_accepts_retired_dag_proof_alias(): pass\n' \
+    > "$tmp/sdk-causal-context-dag-alias/sdk/python/tests/test_direct_runtime.py"
+  if ( check_sdk_causal_context_dag_alias_contract "$tmp/sdk-causal-context-dag-alias" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK causal-context DAG alias gate to fail"
+  fi
   mkdir -p "$tmp/sdk-runtime-stage-fallback/sdk/go" \
     "$tmp/sdk-runtime-stage-fallback/sdk/python/easynet_sdk" \
     "$tmp/sdk-runtime-stage-fallback/sdk/python/tests"
@@ -12032,6 +12116,7 @@ EOF
   check_sdk_python_invocation_result_adapter_projection_contract
   check_sdk_runtime_failure_code_contract
   check_sdk_direct_runtime_state_projection_contract
+  check_sdk_causal_context_dag_alias_contract
   check_sdk_direct_runtime_descriptor_not_found_contract
   check_principal_lifecycle_cli_schema_contract
   check_principal_lifecycle_store_idempotency_schema_contract
@@ -12176,6 +12261,7 @@ check_sdk_python_transport_stream_event_projection_contract
 check_sdk_python_invocation_result_adapter_projection_contract
 check_sdk_runtime_failure_code_contract
 check_sdk_direct_runtime_state_projection_contract
+check_sdk_causal_context_dag_alias_contract
 check_sdk_direct_runtime_descriptor_not_found_contract
 check_principal_lifecycle_cli_schema_contract
 check_principal_lifecycle_store_idempotency_schema_contract
