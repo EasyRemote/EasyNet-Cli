@@ -1246,6 +1246,59 @@ for required in (
 PY
 }
 
+check_skill_install_record_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local store="$cli_root/src/daemon/resources/skills/store.rs"
+  local publish="$cli_root/src/daemon/ability/builtins/resources/skills/publish.rs"
+  [[ -f "$store" ]] || fail "skill install record store source is missing: $store"
+  [[ -f "$publish" ]] || fail "skill publish ability source is missing: $publish"
+
+  "$PYTHON_BIN" - "$store" "$publish" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+store = Path(sys.argv[1]).read_text(encoding="utf-8")
+publish = Path(sys.argv[2]).read_text(encoding="utf-8")
+
+def struct_attrs(source: str, name: str) -> str:
+    match = re.search(
+        r"(?P<attrs>(?:#\[[^\n]+\]\n)*)pub struct " + re.escape(name) + r" \{",
+        source,
+    )
+    if match is None:
+        raise SystemExit(f"skill_install_record_schema:{name}:missing")
+    return match.group("attrs")
+
+for name in ("InstallRecord", "SkillSource"):
+    attrs = struct_attrs(store, name)
+    if "#[serde(deny_unknown_fields)]" not in attrs:
+        raise SystemExit(f"skill_install_record_schema:{name}:missing_deny_unknown_fields")
+
+if '#[serde(rename = "content_hash")]' not in store:
+    raise SystemExit("skill_install_record_schema:content_hash_wire_name_missing")
+if "pub skill_tree_hash: String" not in store:
+    raise SystemExit("skill_install_record_schema:semantic_tree_hash_field_missing")
+for retired in (
+    ".and_then(|t|",
+    "serde_json::from_str::<crate::daemon::resources::skills::store::InstallRecord>(&t).ok()",
+    "fall back to \"unknown\" rather than refusing",
+):
+    if retired in publish:
+        raise SystemExit(f"skill_install_record_schema:retired_silent_parse:{retired}")
+for required in (
+    "install_record_rejects_unknown_top_level_fields",
+    "unknown install record fields must fail closed",
+    "install_record_rejects_unknown_source_fields",
+    "unknown nested source fields must fail closed",
+    "unpublish_marks_malformed_install_record_without_accepting_legacy_fields",
+    "invalid-install-record:",
+):
+    if required not in store and required not in publish:
+        raise SystemExit(f"skill_install_record_schema:missing:{required}")
+PY
+}
+
 check_local_agents_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local local_agents="$cli_root/src/daemon/persistence/local_agents.rs"
@@ -11760,6 +11813,47 @@ EOF
   if ( CLI_ROOT="$tmp/chat-session-index-default-legacy"; check_chat_session_index_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected chat session index default gate to fail"
   fi
+  mkdir -p "$tmp/skill-install-record-schema-legacy/src/daemon/resources/skills"
+  mkdir -p "$tmp/skill-install-record-schema-legacy/src/daemon/ability/builtins/resources/skills"
+  cat >"$tmp/skill-install-record-schema-legacy/src/daemon/resources/skills/store.rs" <<'EOF'
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstallRecord {
+    pub name: String,
+    pub agent_id: String,
+    pub source: SkillSource,
+    pub skill_tree_hash: String,
+    pub size_bytes: u64,
+    pub installed_at: String,
+    #[serde(default)]
+    pub upgrade_available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillSource {
+    pub kind: String,
+    pub identifier: String,
+    #[serde(rename = "ref", default, skip_serializing_if = "Option::is_none")]
+    pub ref_: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    fn install_record_unknown_field_is_ignored_for_compat() {}
+}
+EOF
+  cat >"$tmp/skill-install-record-schema-legacy/src/daemon/ability/builtins/resources/skills/publish.rs" <<'EOF'
+fn unpublish_handler() {
+    let logged_hash = std::fs::read_to_string(&install_path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<crate::daemon::resources::skills::store::InstallRecord>(&t).ok())
+        .map(|record| record.skill_tree_hash)
+        .unwrap_or_else(|| "unknown".to_string());
+    // fall back to "unknown" rather than refusing bad records
+}
+EOF
+  if ( CLI_ROOT="$tmp/skill-install-record-schema-legacy"; check_skill_install_record_schema_contract ) >/dev/null 2>&1; then
+    fail "self-test expected skill install record schema compatibility gate to fail"
+  fi
   mkdir -p "$tmp/local-agents-schema-legacy/src/daemon/persistence"
   cat >"$tmp/local-agents-schema-legacy/src/daemon/persistence/local_agents.rs" <<'EOF'
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -12198,6 +12292,7 @@ EOF
   check_federation_realm_resolver_contract
   check_daemon_config_mode_required_contract
   check_chat_session_index_schema_contract
+  check_skill_install_record_schema_contract
   check_local_agents_schema_contract
   check_profile_store_schema_contract
   check_auth_session_owner_fact_contract
@@ -12345,6 +12440,7 @@ check_agent_purge_publication_state_contract
 check_local_runtime_state_read_subject_contract
 check_runtime_state_kind_required_contract
 check_federation_realm_resolver_contract
+check_skill_install_record_schema_contract
 check_profile_store_schema_contract
 check_auth_session_owner_fact_contract
 check_resources_schema_contract

@@ -34,8 +34,9 @@ const GLOBAL_SKILL_OWNER_PREFIX: &str = "global:";
 /// `content_hash` name via `#[serde(rename)]` so that the backend
 /// (`types.InstalledSkill.ContentHash`), the Frontend (`content_hash`
 /// in `easynet-skills.ts`), and any pre-existing `install.json`
-/// files keep parsing without a coordinated three-repo rename.
+/// files remain wire-compatible with the canonical public field name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InstallRecord {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -73,6 +74,7 @@ pub struct InstallRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SkillSource {
     pub kind: String,
     pub identifier: String,
@@ -1332,6 +1334,52 @@ mod tests {
         let rec: InstallRecord = serde_json::from_str(wire).unwrap();
         assert_eq!(rec.skill_tree_hash, "sha256:wire");
         assert_eq!(rec.description, "");
+    }
+
+    #[test]
+    fn install_record_rejects_unknown_top_level_fields() {
+        let wire = r#"{
+            "name": "alpha",
+            "agent_id": "alice",
+            "source": {
+                "kind": "github",
+                "identifier": "a/b"
+            },
+            "content_hash": "sha256:wire",
+            "size_bytes": 99,
+            "installed_at": "2026-04-23T00:00:00Z",
+            "upgrade_available": false,
+            "legacy_content_hash": "sha256:legacy"
+        }"#;
+        let error = serde_json::from_str::<InstallRecord>(wire)
+            .expect_err("unknown install record fields must fail closed");
+        assert!(
+            error.to_string().contains("legacy_content_hash"),
+            "strict schema error should name the unknown field: {error}"
+        );
+    }
+
+    #[test]
+    fn install_record_rejects_unknown_source_fields() {
+        let wire = r#"{
+            "name": "alpha",
+            "agent_id": "alice",
+            "source": {
+                "kind": "github",
+                "identifier": "a/b",
+                "legacy_ref": "main"
+            },
+            "content_hash": "sha256:wire",
+            "size_bytes": 99,
+            "installed_at": "2026-04-23T00:00:00Z",
+            "upgrade_available": false
+        }"#;
+        let error = serde_json::from_str::<InstallRecord>(wire)
+            .expect_err("unknown nested source fields must fail closed");
+        assert!(
+            error.to_string().contains("legacy_ref"),
+            "strict nested schema error should name the unknown field: {error}"
+        );
     }
 
     // ─── TempDirGuard ─────────────────────────────────────────────

@@ -241,25 +241,12 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
     }
 
     // Capture content hash from the install record before delete so
-    // the log line gives operators a recovery handle. If the
-    // install.json is missing or unreadable (a hand-edited skill
-    // dir), fall back to "unknown" rather than refusing to delete —
-    // the operator is asking to remove a directory that exists, the
-    // hash is a nice-to-have for the log, not a precondition.
+    // the log line gives operators a recovery handle. If the record
+    // is absent we log "unknown"; if it is present but malformed, log
+    // an explicit marker rather than silently treating non-canonical
+    // provenance as a valid install record.
     let install_path = skill_dir.join(".easynet").join("install.json");
-    let logged_hash = std::fs::read_to_string(&install_path)
-        .ok()
-        .and_then(|t| {
-            serde_json::from_str::<crate::daemon::resources::skills::store::InstallRecord>(&t).ok()
-        })
-        .map(|r| {
-            if r.skill_tree_hash.starts_with("sha256:") {
-                r.skill_tree_hash
-            } else {
-                format!("sha256:{}", r.skill_tree_hash)
-            }
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+    let logged_hash = unpublish_audit_hash(&install_path);
 
     std::fs::remove_dir_all(&skill_dir).map_err(|e| {
         anyhow::anyhow!(
@@ -285,6 +272,29 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
         "removed_dir": skill_dir.display().to_string(),
         "content_hash": logged_hash,
     }))
+}
+
+fn unpublish_audit_hash(install_path: &Path) -> String {
+    let Ok(body) = std::fs::read_to_string(install_path) else {
+        return "unknown".to_string();
+    };
+    match serde_json::from_str::<crate::daemon::resources::skills::store::InstallRecord>(&body) {
+        Ok(record) if record.skill_tree_hash.starts_with("sha256:") => record.skill_tree_hash,
+        Ok(record) => format!("sha256:{}", record.skill_tree_hash),
+        Err(error) => format!(
+            "invalid-install-record:{}",
+            install_record_error_category(error.classify())
+        ),
+    }
+}
+
+fn install_record_error_category(category: serde_json::error::Category) -> &'static str {
+    match category {
+        serde_json::error::Category::Io => "io",
+        serde_json::error::Category::Syntax => "syntax",
+        serde_json::error::Category::Data => "data",
+        serde_json::error::Category::Eof => "eof",
+    }
 }
 
 /// `skill.tree` — list files inside one installed skill package.
@@ -1174,6 +1184,45 @@ mod tests {
         assert!(h.starts_with("sha256:"));
         assert_eq!(h, pub_res["content_hash"].as_str().unwrap());
         assert!(!std::path::Path::new(&dir).exists());
+    }
+
+    #[test]
+    fn unpublish_marks_malformed_install_record_without_accepting_legacy_fields() {
+        let g = HomeGuard::new();
+        let name = materialise_agent("unpub-malformed-install", &g);
+        let pub_res = publish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "bad-provenance",
+            "skill_md": "body",
+        }))
+        .unwrap();
+        let dir = PathBuf::from(pub_res["skill_dir"].as_str().unwrap());
+        std::fs::write(
+            dir.join(".easynet").join("install.json"),
+            r#"{
+                "name": "bad-provenance",
+                "agent_id": "agent",
+                "source": {"kind": "curator", "identifier": "mission"},
+                "content_hash": "sha256:deadbeef",
+                "size_bytes": 1,
+                "installed_at": "2026-04-23T00:00:00Z",
+                "upgrade_available": false,
+                "legacy_content_hash": "sha256:legacy"
+            }"#,
+        )
+        .unwrap();
+
+        let unpub_res = unpublish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "bad-provenance",
+        }))
+        .expect("unpublish still removes an existing directory");
+        let hash = unpub_res["content_hash"].as_str().unwrap();
+        assert!(
+            hash.starts_with("invalid-install-record:"),
+            "malformed provenance must be explicit in audit output: {hash}"
+        );
+        assert!(!dir.exists());
     }
 
     #[test]
