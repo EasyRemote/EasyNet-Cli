@@ -450,7 +450,7 @@ async fn invoke_dispatches_federation_advertise_agent() {
         arguments: arguments.to_vec(),
         ..InvokeRequest::default()
     });
-    let access_control_stores = svc.admission.access_control_stores();
+    let access_control_stores = svc.admission_plane.access_control_stores();
     grant_child_access_for_test(
         access_control_stores.as_ref(),
         ChildAccessGrantInput {

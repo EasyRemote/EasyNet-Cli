@@ -134,7 +134,7 @@ async fn invoke_staged_wire(
     let lease = service
         .runtime
         .stage_product_admission(
-            &service.admission,
+            service.admission_plane.verifier_ref(),
             &wire,
             geometry.ability,
             axon_mode(geometry.mode),

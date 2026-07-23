@@ -163,10 +163,10 @@ fn register_test_daemon_routes(
     let catalog = test_catalog_for_route_owner(
         route_owner_ura,
         runtime,
-        service.admission.access_control_stores(),
+        service.admission_plane.access_control_stores(),
     );
-    service.admission = service
-        .admission
+    service.admission_plane = service
+        .admission_plane
         .clone()
         .with_ability_catalog(Arc::clone(&catalog));
     service = service.with_local_ability_catalog(catalog);
@@ -546,7 +546,8 @@ fn local_test_owner_kind(
     let parsed = crate::core::ura::parse_ura(owner_ura).ok()?;
     match parsed.kind {
         crate::core::ura::URAKind::Device => svc
-            .admission
+            .admission_plane
+            .verifier_ref()
             .daemon_ura()
             .is_some_and(|daemon_ura| daemon_ura == owner_ura)
             .then_some(crate::daemon::ability::dispatch::OwnerKind::Device),
@@ -567,7 +568,7 @@ fn local_test_owner_kind(
                     .get(owner_ura)
                     .and_then(|record| record.host_ura().map(str::to_string))
                     .as_deref()
-                    == svc.admission.daemon_ura()
+                    == svc.admission_plane.verifier_ref().daemon_ura()
             })
         }
         _ => None,

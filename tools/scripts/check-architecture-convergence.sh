@@ -6403,8 +6403,16 @@ if daemon_service_transport.exists():
             "DaemonInvocationService must wire typed transport boundaries",
         ),
         (
-            "self.admission.with_transport_boundary(boundary)",
-            "DaemonInvocationService must delegate the boundary into AdmissionFacade",
+            "struct RuntimeAdmissionPlane",
+            "DaemonInvocationService must own admission through a runtime admission plane",
+        ),
+        (
+            "admission_plane: RuntimeAdmissionPlane",
+            "DaemonInvocationService must store the runtime admission plane, not a raw AdmissionFacade field",
+        ),
+        (
+            "self.admission_plane = self.admission_plane.with_transport_boundary(boundary)",
+            "DaemonInvocationService must delegate the boundary through RuntimeAdmissionPlane",
         ),
     )
     for token, detail in service_requirements:
@@ -6417,6 +6425,19 @@ if daemon_service_transport.exists():
             1,
             "DaemonInvocationService must not retain boolean loopback admission wiring",
         )
+    for retired in (
+        "legacy generic-route transport policy facade",
+        "Transport policy gate retained by route families",
+        "    admission: AdmissionFacade,",
+        "self.admission.with_transport_boundary(boundary)",
+    ):
+        if retired in text:
+            add(
+                "R27_ADMISSION_TRANSPORT_BOUNDARY_FORK",
+                daemon_service_transport,
+                1,
+                f"DaemonInvocationService retained retired admission ownership shape: {retired}",
+            )
 
 if boot_invocation_transport.exists():
     text = source(boot_invocation_transport)

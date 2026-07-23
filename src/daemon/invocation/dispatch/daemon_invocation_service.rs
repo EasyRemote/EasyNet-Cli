@@ -429,9 +429,9 @@ use axon_sdk::pb::axon::v1::{
 ///   wrappers (resolve / canonical_invoke / revoke / heartbeat /
 ///   subscribe_directory) and owned for `session.open` lifecycle mutation by
 ///   the registered Hub provider
-/// - `admission` — the legacy generic-route transport policy facade.
-///   Descriptor-bound exact routes enter LocalRuntime directly; their product
-///   policy runs behind the registered provider after canonical admission.
+/// - `admission_plane` — canonical runtime admission verifier shared by
+///   descriptor-bound exact routes, route resolution, and remaining generic
+///   carriers.
 ///
 /// Future-shape (commit 8/9 onward) will add:
 /// `ability_dispatch: Arc<AxonAbilityCatalog>` for the unmatched-
@@ -443,10 +443,65 @@ use axon_sdk::pb::axon::v1::{
 /// the original instance hostage. All fields are `Arc`/`Option<Arc>`/
 /// `Option<String>`; clone is cheap.
 #[derive(Clone)]
+struct RuntimeAdmissionPlane {
+    verifier: AdmissionFacade,
+}
+
+impl RuntimeAdmissionPlane {
+    fn new(verifier: AdmissionFacade) -> Self {
+        Self { verifier }
+    }
+
+    fn verifier(&self) -> AdmissionFacade {
+        self.verifier.clone()
+    }
+
+    #[cfg(test)]
+    fn verifier_ref(&self) -> &AdmissionFacade {
+        &self.verifier
+    }
+
+    fn accepts_local_system_envelope(
+        &self,
+        envelope: Option<&axon_sdk::pb::axon::v1::Envelope>,
+    ) -> bool {
+        self.verifier.accepts_local_system_envelope(envelope)
+    }
+
+    fn with_transport_boundary(mut self, boundary: AdmissionTransportBoundary) -> Self {
+        self.verifier = self.verifier.with_transport_boundary(boundary);
+        self
+    }
+
+    #[cfg(test)]
+    fn with_ability_catalog(
+        mut self,
+        catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
+    ) -> Self {
+        self.verifier = self.verifier.with_ability_catalog(catalog);
+        self
+    }
+
+    #[cfg(test)]
+    fn access_control_stores(
+        &self,
+    ) -> Arc<crate::daemon::persistence::access_control::AccessControlStoreRegistry> {
+        self.verifier.access_control_stores()
+    }
+}
+
+impl std::fmt::Debug for RuntimeAdmissionPlane {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.verifier.fmt(f)
+    }
+}
+
+#[derive(Clone)]
 pub struct DaemonInvocationService {
-    /// Transport policy gate retained by route families that have not yet
-    /// converged on descriptor-bound exact-route admission.
-    admission: AdmissionFacade,
+    /// Canonical runtime admission plane shared by route resolution, exact-route
+    /// LocalRuntime providers, and generic carriers that still enter through the
+    /// daemon Invocation service.
+    admission_plane: RuntimeAdmissionPlane,
     /// Directory read plane: presence, hosted-agent rows, ability
     /// catalogs, federated directory view. See [`DirectoryPlane`].
     directory: DirectoryPlane,
@@ -485,7 +540,7 @@ impl std::fmt::Debug for DaemonInvocationService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DaemonInvocationService")
             .field("presence", &self.directory.presence)
-            .field("admission", &self.admission)
+            .field("admission_plane", &self.admission_plane)
             .field("pending", &self.sessions.pending)
             .field("runtime_trust", &self.identity.runtime_trust)
             .field("session_realm", &self.identity.session_realm)
@@ -559,19 +614,19 @@ fn normalize_daemon_route_owners(
 }
 
 impl DaemonInvocationService {
-    /// Construct a service against the supplied presence registry and generic
-    /// transport policy facade. Production callers wire one registry per
+    /// Construct a service against the supplied presence registry and canonical
+    /// runtime admission verifier. Production callers wire one registry per
     /// daemon process and share it via `Arc` between the service, the
     /// descriptor-bound `session.open` provider, and audit subscribers. The
-    /// policy facade is constructed from the reloadable realm trust anchor at
-    /// daemon boot.
+    /// verifier is constructed from the reloadable realm trust anchor at daemon
+    /// boot.
     ///
     /// Session-routed calls require a `PendingDispatchMap`; use
     /// `with_pending(...)` to attach one.
     #[must_use]
     pub fn new(presence: Arc<PresenceRegistry>, admission: AdmissionFacade) -> Self {
         Self {
-            admission,
+            admission_plane: RuntimeAdmissionPlane::new(admission),
             directory: DirectoryPlane {
                 presence,
                 advertised_agents: Arc::new(
@@ -652,7 +707,7 @@ impl DaemonInvocationService {
     /// paths. Cheap per-call construction: every plane is `Arc`-shaped.
     pub(crate) fn target_gate(&self) -> TargetGate {
         TargetGate::new(
-            self.admission.clone(),
+            self.admission_plane.verifier(),
             self.directory.clone(),
             self.federation.clone(),
             self.identity.clone(),
@@ -663,7 +718,7 @@ impl DaemonInvocationService {
     /// per-call construction: planes and gate are `Arc`-shaped.
     fn stream_dispatcher(&self) -> StreamDispatcher {
         StreamDispatcher::new(
-            self.admission.clone(),
+            self.admission_plane.verifier(),
             self.directory.clone(),
             self.sessions.clone(),
             self.runtime.clone(),
@@ -676,7 +731,7 @@ impl DaemonInvocationService {
     /// so module tests can drive dispatch arms directly.
     pub(crate) fn unary_dispatcher(&self) -> UnaryDispatcher {
         UnaryDispatcher::new(
-            self.admission.clone(),
+            self.admission_plane.verifier(),
             self.directory.clone(),
             self.federation.clone(),
             self.sessions.clone(),
@@ -732,7 +787,7 @@ impl DaemonInvocationService {
                 crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
                     runtime,
                     self.runtime.cancellations.clone(),
-                    self.admission.clone(),
+                    self.admission_plane.verifier(),
                     product_policy,
                 )
                 .register_for_owners(
@@ -787,7 +842,7 @@ impl DaemonInvocationService {
                 crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
                     runtime,
                     self.runtime.cancellations.clone(),
-                    self.admission.clone(),
+                    self.admission_plane.verifier(),
                     product_policy,
                 )
                 .register_streams(owner_ura, catalog.as_ref(), streams.daemon_route_provider())
@@ -843,7 +898,7 @@ impl DaemonInvocationService {
                 crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
                     runtime,
                     self.runtime.cancellations.clone(),
-                    self.admission.clone(),
+                    self.admission_plane.verifier(),
                     product_policy,
                 )
                 .register_bidis(owner_ura, catalog.as_ref(), bidi.daemon_route_provider())
@@ -916,7 +971,9 @@ impl DaemonInvocationService {
         }
 
         if envelope.caller_signature.is_none()
-            && self.admission.accepts_local_system_envelope(Some(envelope))
+            && self
+                .admission_plane
+                .accepts_local_system_envelope(Some(envelope))
         {
             return Ok(DaemonRouteIngress::TrustedLocalSystem);
         }
@@ -927,7 +984,7 @@ impl DaemonInvocationService {
     /// module tests can drive session/bidi arms directly.
     pub(crate) fn bidi_dispatcher(&self) -> BidiDispatcher {
         BidiDispatcher::new(BidiDispatcherDeps {
-            admission: self.admission.clone(),
+            admission: self.admission_plane.verifier(),
             directory: self.directory.clone(),
             sessions: self.sessions.clone(),
             identity: self.identity.clone(),
@@ -938,9 +995,8 @@ impl DaemonInvocationService {
     }
 
     /// Attach the correlation table for typed session dispatch results.
-    /// Builder-style so existing
-    /// `DaemonInvocationService::new(presence, admission)` callers
-    /// stay source-compatible.
+    /// Builder-style because session routing is an optional process plane during
+    /// tests and single-node daemon modes.
     ///
     /// The descriptor-bound `session.open` provider shares this
     /// `Arc<PendingDispatchMap>` to settle typed results returned by target
@@ -1178,7 +1234,7 @@ impl DaemonInvocationService {
     /// [`AdmissionFacade::with_transport_boundary`].
     #[must_use]
     pub fn with_transport_boundary(mut self, boundary: AdmissionTransportBoundary) -> Self {
-        self.admission = self.admission.with_transport_boundary(boundary);
+        self.admission_plane = self.admission_plane.with_transport_boundary(boundary);
         self
     }
 
