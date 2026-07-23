@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use base64::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use tonic::Status;
 
@@ -946,7 +946,7 @@ struct PrincipalRecord {
     state: PrincipalState,
     version: u64,
     bindings: Vec<PublicKeyBinding>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "deserialize_required_option")]
     enrollment_proof: Option<PrincipalProofRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery: Option<RecoveryPolicy>,
@@ -1357,6 +1357,14 @@ fn decode_args<T: for<'de> Deserialize<'de>>(
 fn encode_snapshot(ability: &'static str, principal: &PrincipalRecord) -> Result<Vec<u8>, Status> {
     serde_json::to_vec(&serde_json::json!({ "principal": principal }))
         .map_err(|err| Status::internal(format!("{ability}: response JSON encode failed: {err}")))
+}
+
+fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
 }
 
 fn validate_principal_ura(
@@ -1848,6 +1856,10 @@ mod tests {
                         "state": "active",
                         "version": 1,
                         "bindings": [],
+                        "enrollment_proof": {
+                            "kind": "bootstrap",
+                            "reference": "proof:create"
+                        },
                         "consumed_recovery_proofs": {},
                         "enrollments": [],
                         "grants": [],
@@ -1870,6 +1882,41 @@ mod tests {
     }
 
     #[test]
+    fn principal_record_requires_enrollment_proof_fact() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("principal-lifecycle.json");
+        fs::write(
+            &store_path,
+            serde_json::to_vec_pretty(&json!({
+                "principals": {
+                    "easynet:///r/realm/user/alice": {
+                        "principal_ura": "easynet:///r/realm/user/alice",
+                        "state": "active",
+                        "version": 1,
+                        "bindings": [],
+                        "consumed_recovery_proofs": {},
+                        "enrollments": [],
+                        "grants": [],
+                        "created_unix_ms": 1,
+                        "updated_unix_ms": 1,
+                        "command_log": {"create": 1}
+                    }
+                }
+            }))
+            .expect("encode legacy store"),
+        )
+        .expect("write legacy store");
+
+        let error = PrincipalStore::load_unlocked(&store_path, ABILITY_PRINCIPAL_GET)
+            .expect_err("principal record without enrollment_proof must fail closed");
+        assert_eq!(error.code(), tonic::Code::Internal);
+        assert!(
+            error.message().contains("missing field `enrollment_proof`"),
+            "unexpected missing enrollment_proof error: {error}"
+        );
+    }
+
+    #[test]
     fn principal_record_requires_lifecycle_collection_facts() {
         for (field, omitted) in [
             ("consumed_recovery_proofs", "consumed_recovery_proofs"),
@@ -1883,6 +1930,10 @@ mod tests {
                 "state": "active",
                 "version": 1,
                 "bindings": [],
+                "enrollment_proof": {
+                    "kind": "bootstrap",
+                    "reference": "proof:create"
+                },
                 "consumed_recovery_proofs": {},
                 "enrollments": [],
                 "grants": [],
