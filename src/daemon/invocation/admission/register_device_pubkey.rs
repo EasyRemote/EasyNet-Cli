@@ -83,6 +83,66 @@ struct RegisterArgs {
     principal_owner_username: Option<String>,
 }
 
+/// Canonical request DTO for `identity.register_pubkey`.
+///
+/// Producers use this type instead of hand-writing JSON so the retired
+/// `agent_ura` field cannot leak back into trust-sync or prelude paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegisterPubkeyRequest {
+    principal_ura: String,
+    public_key_b64: String,
+    role: TrustedAgentRole,
+    principal_owner_ura: Option<String>,
+    principal_owner_username: Option<String>,
+}
+
+impl RegisterPubkeyRequest {
+    pub(crate) fn new(
+        principal_ura: impl Into<String>,
+        public_key_b64: impl Into<String>,
+        role: TrustedAgentRole,
+    ) -> Self {
+        Self {
+            principal_ura: principal_ura.into(),
+            public_key_b64: public_key_b64.into(),
+            role,
+            principal_owner_ura: None,
+            principal_owner_username: None,
+        }
+    }
+
+    pub(crate) fn with_principal_owner(
+        mut self,
+        owner_ura: impl Into<String>,
+        owner_username: Option<impl Into<String>>,
+    ) -> Self {
+        self.principal_owner_ura = Some(owner_ura.into());
+        self.principal_owner_username = owner_username.map(Into::into);
+        self
+    }
+
+    pub(crate) fn to_arguments_bytes(&self) -> serde_json::Result<Vec<u8>> {
+        #[derive(serde::Serialize)]
+        struct Wire<'a> {
+            principal_ura: &'a str,
+            public_key_b64: &'a str,
+            role: &'static str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            principal_owner_ura: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            principal_owner_username: Option<&'a str>,
+        }
+
+        serde_json::to_vec(&Wire {
+            principal_ura: &self.principal_ura,
+            public_key_b64: &self.public_key_b64,
+            role: role_wire(self.role),
+            principal_owner_ura: self.principal_owner_ura.as_deref(),
+            principal_owner_username: self.principal_owner_username.as_deref(),
+        })
+    }
+}
+
 /// Narrow policy view of an `identity.register_pubkey` request.
 ///
 /// The dispatcher needs this before persistence so it can decide
@@ -257,6 +317,15 @@ fn parse_role(raw: &str) -> Result<TrustedAgentRole, Status> {
     }
 }
 
+fn role_wire(role: TrustedAgentRole) -> &'static str {
+    match role {
+        TrustedAgentRole::Device => "device",
+        TrustedAgentRole::Backend => "backend",
+        TrustedAgentRole::Hub => "hub",
+        TrustedAgentRole::User => "user",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,6 +394,28 @@ mod tests {
     fn test_pub_b64_with_seed(seed: u8) -> String {
         let signing = SigningKey::from_bytes(&[seed; 32]);
         BASE64_STANDARD.encode(signing.verifying_key().to_bytes())
+    }
+
+    #[test]
+    fn register_pubkey_request_encodes_principal_scoped_tuple() {
+        let args = RegisterPubkeyRequest::new(
+            "easynet:///r/r1/device/alpha",
+            test_pub_b64(),
+            TrustedAgentRole::Device,
+        )
+        .with_principal_owner("easynet:///r/r1/user/user-1", Some("dev"))
+        .to_arguments_bytes()
+        .expect("request encodes");
+        let value: serde_json::Value = serde_json::from_slice(&args).expect("request JSON");
+
+        assert_eq!(value["principal_ura"], "easynet:///r/r1/device/alpha");
+        assert_eq!(value["role"], "device");
+        assert_eq!(value["principal_owner_ura"], "easynet:///r/r1/user/user-1");
+        assert_eq!(value["principal_owner_username"], "dev");
+        assert!(
+            value.get("agent_ura").is_none(),
+            "register pubkey request DTO must not emit retired agent_ura"
+        );
     }
 
     #[test]

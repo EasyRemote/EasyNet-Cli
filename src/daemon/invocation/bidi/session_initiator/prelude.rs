@@ -12,9 +12,11 @@ use super::SessionError;
 use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use crate::daemon::identity::self_identity::CanonicalSigner;
+use crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkeyRequest;
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentHostedAdvertiseEntry,
 };
+use crate::daemon::trust::anchor::TrustedAgentRole;
 
 pub struct SessionPreludeInputs<'a> {
     pub(super) ability_descriptors: &'a [AbilityDescriptor],
@@ -1132,17 +1134,14 @@ async fn publish_paired_user_keys_prelude(
     public_keys_b64: &[String],
 ) -> Result<(), UserTrustBootstrapError> {
     for public_key_b64 in public_keys_b64 {
-        let args = serde_json::to_vec(&serde_json::json!({
-            "principal_ura": user_ura,
-            "public_key_b64": public_key_b64,
-            "role": "user",
-        }))
-        .map_err(|err| UserTrustBootstrapError::PublishFailed {
-            user_ura: user_ura.to_string(),
-            status: tonic::Status::internal(format!(
-                "identity.register_pubkey user args encode failed: {err}"
-            )),
-        })?;
+        let args = RegisterPubkeyRequest::new(user_ura, public_key_b64, TrustedAgentRole::User)
+            .to_arguments_bytes()
+            .map_err(|err| UserTrustBootstrapError::PublishFailed {
+                user_ura: user_ura.to_string(),
+                status: tonic::Status::internal(format!(
+                    "identity.register_pubkey user args encode failed: {err}"
+                )),
+            })?;
         let request = signed_prelude_request(
             signer,
             user_ura,

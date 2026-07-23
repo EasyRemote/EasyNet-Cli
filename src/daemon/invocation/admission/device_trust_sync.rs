@@ -26,8 +26,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkeyRequest;
 use crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle;
 use crate::daemon::invocation::bidi::session_wire::RequestOutcome;
+use crate::daemon::trust::anchor::TrustedAgentRole;
 use crate::daemon::trust::cell::SharedTrustAnchor;
 
 /// How long a hub "unknown caller" answer suppresses re-resolving the
@@ -106,6 +108,13 @@ impl SyncableCaller {
         match self {
             Self::Device { .. } => "device",
             Self::User { .. } => "user",
+        }
+    }
+
+    fn trusted_role(&self) -> TrustedAgentRole {
+        match self {
+            Self::Device { .. } => TrustedAgentRole::Device,
+            Self::User { .. } => TrustedAgentRole::User,
         }
     }
 
@@ -335,20 +344,17 @@ impl DeviceTrustSync {
         role: &SyncableCaller,
     ) -> bool {
         for public_key_b64 in &resolved.public_keys_b64 {
-            let mut register_args_value = serde_json::json!({
-                "agent_ura": caller_ura,
-                "public_key_b64": public_key_b64,
-                "role": role.register_role(),
-            });
-            if let Some(owner_ura) = resolved.principal_owner_ura.as_deref() {
-                register_args_value["principal_owner_ura"] =
-                    serde_json::Value::String(owner_ura.to_string());
-            }
-            if let Some(owner_username) = resolved.principal_owner_username.as_deref() {
-                register_args_value["principal_owner_username"] =
-                    serde_json::Value::String(owner_username.to_string());
-            }
-            let register_args = match serde_json::to_vec(&register_args_value) {
+            let request = match resolved.principal_owner_ura.as_deref() {
+                Some(owner_ura) => {
+                    RegisterPubkeyRequest::new(caller_ura, public_key_b64, role.trusted_role())
+                        .with_principal_owner(
+                            owner_ura,
+                            resolved.principal_owner_username.as_deref(),
+                        )
+                }
+                None => RegisterPubkeyRequest::new(caller_ura, public_key_b64, role.trusted_role()),
+            };
+            let register_args = match request.to_arguments_bytes() {
                 Ok(v) => v,
                 Err(_) => continue,
             };

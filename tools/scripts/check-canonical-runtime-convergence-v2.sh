@@ -1987,12 +1987,13 @@ check_runtime_trust_user_key_write_scope_contract() {
   local contracts="$cli_root/src/daemon/ability/catalog/daemon_invocation_contracts.rs"
   local cli_user="$cli_root/src/cli/commands/user_signing_identity.rs"
   local prelude="$cli_root/src/daemon/invocation/bidi/session_initiator/prelude.rs"
+  local device_sync="$cli_root/src/daemon/invocation/admission/device_trust_sync.rs"
   [[ -f "$register_handler" ]] || fail "identity.register_pubkey handler is missing: $register_handler"
   [[ -f "$revoke_handler" ]] || fail "identity.revoke_user_pubkey handler is missing: $revoke_handler"
   [[ -f "$trust" ]] || fail "runtime trust aggregate is missing: $trust"
   [[ -f "$contracts" ]] || fail "daemon invocation contracts source is missing: $contracts"
 
-  "$PYTHON_BIN" - "$register_handler" "$revoke_handler" "$trust" "$gate" "$dispatcher" "$contracts" "$cli_user" "$prelude" <<'PY'
+  "$PYTHON_BIN" - "$register_handler" "$revoke_handler" "$trust" "$gate" "$dispatcher" "$contracts" "$cli_user" "$prelude" "$device_sync" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -2005,6 +2006,7 @@ dispatcher = Path(sys.argv[5]).read_text(encoding="utf-8") if Path(sys.argv[5]).
 contracts = Path(sys.argv[6]).read_text(encoding="utf-8")
 cli_user = Path(sys.argv[7]).read_text(encoding="utf-8") if Path(sys.argv[7]).exists() else ""
 prelude = Path(sys.argv[8]).read_text(encoding="utf-8") if Path(sys.argv[8]).exists() else ""
+device_sync = Path(sys.argv[9]).read_text(encoding="utf-8") if Path(sys.argv[9]).exists() else ""
 
 register_prod = register.split("\n#[cfg(test)]\nmod tests", 1)[0]
 revoke_prod = revoke.split("\n#[cfg(test)]\nmod tests", 1)[0]
@@ -2015,6 +2017,9 @@ for required in (
     "pub(crate) fn principal_ura(&self) -> &str",
     "identity.register_pubkey: principal_ura is required",
     "register_pubkey_with_owner(",
+    "pub(crate) struct RegisterPubkeyRequest",
+    "pub(crate) fn to_arguments_bytes(&self) -> serde_json::Result<Vec<u8>>",
+    "fn role_wire(role: TrustedAgentRole) -> &'static str",
     "args.principal_ura",
 ):
     if required not in register_prod:
@@ -2099,8 +2104,19 @@ for label, source in (("cli_user", cli_user), ("prelude", prelude)):
     if re.search(r'"agent_ura"\s*:\s*user_ura\b', source):
         raise SystemExit(f"runtime_trust_write_scope:{label}_register_uses_retired_agent_field")
 
+if '"identity.register_pubkey"' in prelude and "RegisterPubkeyRequest::new(" not in prelude:
+    raise SystemExit("runtime_trust_write_scope:prelude_register_not_using_dto")
+if "import_caller_trust" in device_sync:
+    if "RegisterPubkeyRequest::new(" not in device_sync:
+        raise SystemExit("runtime_trust_write_scope:device_trust_sync_register_not_using_dto")
+    if re.search(r'"agent_ura"\s*:\s*caller_ura', device_sync):
+        raise SystemExit("runtime_trust_write_scope:device_trust_sync_uses_retired_agent_field")
+    if "request.to_arguments_bytes()" not in device_sync:
+        raise SystemExit("runtime_trust_write_scope:device_trust_sync_register_not_deterministic")
+
 for required_test, source in (
     ("register_rejects_retired_agent_ura_request_field", register),
+    ("register_pubkey_request_encodes_principal_scoped_tuple", register),
     ("revoke_rejects_retired_agent_ura_request_field", revoke),
     ("revoke_rejects_non_user_ura_scope", revoke),
 ):
@@ -8379,6 +8395,9 @@ EOF
   printf '%s\n' \
     'fn publish(user_ura: &str) { invoke_prelude_unary(client, request, "identity.register_pubkey"); let _ = serde_json::json!({ "agent_ura": user_ura }); }' \
     > "$tmp/runtime-trust-user-key-write-legacy/src/daemon/invocation/bidi/session_initiator/prelude.rs"
+  printf '%s\n' \
+    'fn import_caller_trust(caller_ura: &str) { let register_args = serde_json::to_vec(&serde_json::json!({ "agent_ura": caller_ura, "public_key_b64": "k", "role": "device" })).unwrap(); }' \
+    > "$tmp/runtime-trust-user-key-write-legacy/src/daemon/invocation/admission/device_trust_sync.rs"
   if ( check_runtime_trust_user_key_write_scope_contract "$tmp/runtime-trust-user-key-write-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected runtime trust user-key write scope gate to fail"
   fi
