@@ -188,6 +188,43 @@ for needle, label in required.items():
 PY
 }
 
+check_terminal_lifecycle_args_contract() {
+  local cli_root="${1:-$ROOT}"
+  local lifecycle="$cli_root/src/daemon/ability/builtins/device_control/terminal/lifecycle.rs"
+  [[ -f "$lifecycle" ]] || fail "terminal lifecycle source is missing: ${lifecycle#$cli_root/}"
+
+  "$PYTHON_BIN" - "$lifecycle" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+for retired in (
+    "drop unknown fields silently",
+    "future schema addition mustn't break old",
+    "unknown fields must be tolerated",
+    "parse_create_spec_drops_unknown_fields_silently",
+):
+    if retired in text:
+        raise SystemExit(f"terminal_lifecycle_args:retired_compat:{retired}")
+for required in (
+    "fn require_lifecycle_args",
+    "terminal.create",
+    "&[\"cols\", \"rows\", \"command\", \"command_args\", \"cwd\", \"env\"]",
+    "terminal.list",
+    "terminal.close",
+    "unknown argument",
+    "parse_create_spec_rejects_unknown_fields",
+    "list_rejects_unknown_argument",
+    "close_rejects_unknown_argument",
+    "parse_create_spec_rejects_non_string_command_and_cwd",
+    "`command` must be a string",
+    "`cwd` must be a string",
+):
+    if required not in text:
+        raise SystemExit(f"terminal_lifecycle_args:missing:{required}")
+PY
+}
+
 check_session_failure_wire_facts_contract() {
   local cli_root="${1:-$ROOT}"
   local failure="$cli_root/src/daemon/invocation/bidi/state/session_failure.rs"
@@ -10101,6 +10138,38 @@ EOF
   if ( check_bidi_reverse_unary_terminal_state_contract "$tmp/bidi-reverse-unary-terminal-state-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected bidi reverse unary terminal state gate to fail"
   fi
+  mkdir -p "$tmp/terminal-lifecycle-args-legacy/src/daemon/ability/builtins/device_control/terminal"
+  cat >"$tmp/terminal-lifecycle-args-legacy/src/daemon/ability/builtins/device_control/terminal/lifecycle.rs" <<'EOF'
+/// Validation policy: drop unknown fields silently (forward
+/// compatibility — a future schema addition mustn't break old callers).
+fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
+    let cols = args.get("cols");
+    let command = args.get("command").and_then(Value::as_str).map(str::to_string);
+    let cwd = args.get("cwd").and_then(Value::as_str).map(str::to_string);
+    Ok(PtyCreateSpec {})
+}
+
+fn list_handler(args: Value) -> anyhow::Result<Value> {
+    if !args.is_object() { anyhow::bail!("args must be an object"); }
+    Ok(json!({}))
+}
+
+fn close_handler(args: Value) -> anyhow::Result<Value> {
+    let id = args.get("session_id").and_then(Value::as_str);
+    Ok(json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    fn parse_create_spec_drops_unknown_fields_silently() {
+        parse_create_spec(&json!({"future_field_we_dont_know": true}))
+            .expect("unknown fields must be tolerated");
+    }
+}
+EOF
+  if ( check_terminal_lifecycle_args_contract "$tmp/terminal-lifecycle-args-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected terminal lifecycle args compatibility gate to fail"
+  fi
   mkdir -p "$tmp/session-failure-wire-facts-legacy/src/daemon/invocation/bidi/state"
   cat >"$tmp/session-failure-wire-facts-legacy/src/daemon/invocation/bidi/state/session_failure.rs" <<'EOF'
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -10143,6 +10212,7 @@ EOF
   check_failure_code_default_policy_contract
   check_bidi_dispatch_default_code_policy_contract
   check_bidi_reverse_unary_terminal_state_contract
+  check_terminal_lifecycle_args_contract
   check_session_failure_wire_facts_contract
   check_active_source_contract
   check_sdk_root_runtime_description_contract

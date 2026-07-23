@@ -35,7 +35,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
@@ -175,9 +175,7 @@ fn create_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
 /// Returns: `{ sessions: [{ session_id, status, created_unix_ms, command?,
 /// command_args?, cwd? }] }`.
 fn list_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
-    if !args.is_object() {
-        anyhow::bail!("args must be an object");
-    }
+    require_lifecycle_args(&args, "terminal.list", &[])?;
     let sessions = pty
         .list()
         .into_iter()
@@ -212,6 +210,7 @@ fn close_handler(
     io: Option<&crate::daemon::ability::builtins::device_control::terminal::io::PtyIoService>,
     args: Value,
 ) -> anyhow::Result<Value> {
+    let args = require_lifecycle_args(&args, "terminal.close", &["session_id"])?;
     let id = args
         .get("session_id")
         .and_then(Value::as_str)
@@ -233,17 +232,23 @@ fn close_handler(
 
 /// Parse the caller's args into a PtyCreateSpec, applying defaults.
 ///
-/// Validation policy: drop unknown fields silently (forward
-/// compatibility — a future schema addition mustn't break old
-/// callers), but reject malformed values (a `cols: "not-a-number"`
-/// is a caller bug, not a forward-compat scenario).
+/// Validation policy: reject unknown fields and malformed values. The
+/// published ability schema is the control-plane contract; accepting
+/// extra keys would let stale product/SDK argument shapes create live
+/// PTY lifecycle state.
 ///
 /// Error messages do NOT prefix the ability name; the dispatcher's
 /// outer wrapper already attaches it. (Same SR-6+9 lesson the Go
 /// half learned earlier — repeated prefixes are noise plus a
 /// rename hazard.)
 fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
-    fn u16_field(args: &Value, key: &str, default: u16) -> anyhow::Result<u16> {
+    let args = require_lifecycle_args(
+        args,
+        "terminal.create",
+        &["cols", "rows", "command", "command_args", "cwd", "env"],
+    )?;
+
+    fn u16_field(args: &Map<String, Value>, key: &str, default: u16) -> anyhow::Result<u16> {
         match args.get(key) {
             None | Some(Value::Null) => Ok(default),
             Some(Value::Number(n)) => n
@@ -254,16 +259,24 @@ fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
         }
     }
 
+    fn optional_string_field(
+        args: &Map<String, Value>,
+        key: &str,
+    ) -> anyhow::Result<Option<String>> {
+        match args.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(value)) => Ok(Some(value.clone())),
+            Some(other) => anyhow::bail!("`{key}` must be a string, got {other}"),
+        }
+    }
+
     let cols = u16_field(args, "cols", DEFAULT_COLS)?;
     let rows = u16_field(args, "rows", DEFAULT_ROWS)?;
     if cols == 0 || rows == 0 {
         anyhow::bail!("cols and rows must be > 0");
     }
 
-    let command = args
-        .get("command")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let command = optional_string_field(args, "command")?;
 
     let command_args: Vec<String> = match args.get("command_args") {
         None | Some(Value::Null) => Vec::new(),
@@ -278,7 +291,7 @@ fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
         Some(other) => anyhow::bail!("`command_args` must be an array, got {other}"),
     };
 
-    let cwd = args.get("cwd").and_then(Value::as_str).map(str::to_string);
+    let cwd = optional_string_field(args, "cwd")?;
 
     let mut env: HashMap<String, String> = match args.get("env") {
         None | Some(Value::Null) => HashMap::new(),
@@ -302,6 +315,22 @@ fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
         cwd,
         env,
     })
+}
+
+fn require_lifecycle_args<'a>(
+    args: &'a Value,
+    ability: &str,
+    allowed_keys: &[&str],
+) -> anyhow::Result<&'a Map<String, Value>> {
+    let object = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{ability}: args must be an object"))?;
+    for key in object.keys() {
+        if !allowed_keys.iter().any(|allowed| *allowed == key.as_str()) {
+            anyhow::bail!("{ability}: unknown argument `{key}`");
+        }
+    }
+    Ok(object)
 }
 
 fn normalize_terminal_env(env: &mut HashMap<String, String>) {
@@ -502,6 +531,17 @@ mod tests {
     }
 
     #[test]
+    fn close_rejects_unknown_argument() {
+        let svc = fresh_service();
+        let err = close_handler(&svc, None, json!({"session_id": "ghost-id", "force": true}))
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("terminal.close: unknown argument `force`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn close_is_idempotent_second_call_is_ack_false() {
         let svc = fresh_service();
         let resp = create_handler(&svc, json!({"command": true_command()})).unwrap();
@@ -516,17 +556,41 @@ mod tests {
     }
 
     #[test]
-    fn parse_create_spec_drops_unknown_fields_silently() {
-        // Forward compat: a future schema addition (e.g. `tty_name`)
-        // must NOT break old daemons. The parser ignores unknown
-        // top-level keys.
-        let spec = parse_create_spec(&json!({
+    fn list_rejects_unknown_argument() {
+        let svc = fresh_service();
+        let err = list_handler(&svc, json!({"include_closed": true})).unwrap_err();
+        assert!(
+            format!("{err}").contains("terminal.list: unknown argument `include_closed`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_create_spec_rejects_unknown_fields() {
+        let err = parse_create_spec(&json!({
             "cols": 100,
             "future_field_we_dont_know": true
         }))
-        .expect("unknown fields must be tolerated");
-        assert_eq!(spec.cols, 100);
-        assert_eq!(spec.rows, DEFAULT_ROWS);
+        .expect_err("unknown terminal.create fields must fail closed");
+        assert!(
+            format!("{err}")
+                .contains("terminal.create: unknown argument `future_field_we_dont_know`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_create_spec_rejects_non_string_command_and_cwd() {
+        let err = parse_create_spec(&json!({"command": true})).unwrap_err();
+        assert!(
+            format!("{err}").contains("`command` must be a string"),
+            "unexpected error: {err}"
+        );
+        let err = parse_create_spec(&json!({"cwd": 42})).unwrap_err();
+        assert!(
+            format!("{err}").contains("`cwd` must be a string"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
