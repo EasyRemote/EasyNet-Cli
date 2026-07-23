@@ -17,11 +17,11 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use super::*;
+use crate::core::ura::realm_from_ura;
 use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 use crate::daemon::identity::self_identity::{CanonicalSigner, TestCanonicalSigner};
 use crate::daemon::invocation::admission::peer_envelope_signer::sign_peer_request_envelope;
 use crate::daemon::invocation::admission::quota_meter::quota_meters_function;
-use crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura;
 use crate::daemon::invocation::admission::target_gate::ROUTE_NEGATIVE_CODE;
 use crate::daemon::invocation::admission::{
     decision::{AccessAction, PrincipalKind, TokenClass},

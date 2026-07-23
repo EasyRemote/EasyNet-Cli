@@ -413,7 +413,12 @@ fn resolve_device_record_with_filter(
             continue;
         }
 
-        let agent_realm = crate::core::ura::realm_from_ura(&agent.ura);
+        let agent_realm = crate::core::ura::realm_from_ura(&agent.ura).ok_or_else(|| {
+            anyhow::anyhow!(
+                "node.describe: resolved agent URA {:?} is not a canonical URA",
+                agent.ura
+            )
+        })?;
         let is_self = resolved_node_id == creds.node_id && agent_realm == creds.realm;
         let probe = if is_self {
             ProbeOutcome {
@@ -441,11 +446,7 @@ fn resolve_device_record_with_filter(
         return Ok(Some(ResolvedDeviceRecord {
             node: DeviceNodeSnapshot {
                 node_id: resolved_node_id,
-                tenant_id: if agent_realm.is_empty() {
-                    creds.realm.clone()
-                } else {
-                    agent_realm
-                },
+                tenant_id: agent_realm,
                 agent_ura: Some(agent.ura.clone()),
                 is_self,
                 paired: true,
@@ -793,7 +794,7 @@ mod tests {
             ],
         };
         let resolved_node_id = node_id_from_agent_ura(&agent.ura).expect("node id");
-        let realm = crate::core::ura::realm_from_ura(&agent.ura);
+        let realm = crate::core::ura::realm_from_ura(&agent.ura).expect("canonical device realm");
         let record = ResolvedDeviceRecord {
             node: DeviceNodeSnapshot {
                 node_id: resolved_node_id,

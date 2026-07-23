@@ -32,7 +32,7 @@ use super::user_binding_chain::{
     USER_BINDING_FRESHNESS_MS, USER_BINDING_NONCE_LEN,
 };
 use super::{ManagedPeer, ManagedSigningKeyProjection, ManagedSigningStatus};
-use crate::core::ura::{parse_ura, URAKind};
+use crate::core::ura::user_realm_from_ura;
 use crate::daemon::ability::descriptors::AdmissionAction;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::identity::self_identity::KeyringClient;
@@ -300,7 +300,7 @@ pub fn handle_federate_user_identity_token(
             "managed signing authority does not bind active agent_signing key to source_user_ura"
         ));
     }
-    let source_realm = parse_realm_from_user_ura(&source_user_ura).ok_or_else(|| {
+    let source_realm = user_realm_from_ura(&source_user_ura).ok_or_else(|| {
         anyhow!(
             "device-subject {source_user_ura:?} is not a canonical \
              easynet:///r/<realm>/user/<id> URA"
@@ -347,16 +347,6 @@ pub fn handle_federate_user_identity_token(
         "token": token,
         "transport_hint": "jwt-custom-claim",
     }))
-}
-
-/// Parse the realm slice from a canonical EasyNet user URA
-/// (`easynet:///r/<realm>/user/<id>`). Returns `None` for any
-/// malformed or non-user shape. Inlined here rather than imported from
-/// `daemon::invocation` to keep the keyring layer free of an
-/// `axon-pb` feature dependency.
-fn parse_realm_from_user_ura(ura: &str) -> Option<String> {
-    let parsed = parse_ura(ura).ok()?;
-    (parsed.kind == URAKind::User).then_some(parsed.realm)
 }
 
 /// **PR-N4 commit 3/N**. `device.keyring.consume_federate_user_token`

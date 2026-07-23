@@ -25,10 +25,10 @@ use tonic::Status;
 
 use axon_sdk::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentity};
 
+use crate::core::ura::realm_from_ura;
 use crate::daemon::axon_bridge::proof_owner::descriptor_bound_canonical_bytes;
 use crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts;
 use crate::daemon::identity::self_identity::CanonicalSigner;
-use crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura;
 use crate::daemon::invocation::dispatch::invocation_wire::try_entity_ref;
 
 pub(crate) struct PeerInvokeRequest<'a> {
@@ -121,7 +121,7 @@ pub(crate) fn build_peer_envelope(
         PeerInvocationSubject::ForwardedCaller(envelope) => envelope.clone(),
         PeerInvocationSubject::ExplicitSubject(_) => Envelope::default(),
     };
-    let peer_hub_ura = parse_realm_from_ura(target_ura)
+    let peer_hub_ura = realm_from_ura(target_ura)
         .map(|realm| crate::core::ura::hub_ura(&realm))
         .ok_or_else(|| {
             Status::invalid_argument(format!("target_ura is not a valid URA: {target_ura}"))

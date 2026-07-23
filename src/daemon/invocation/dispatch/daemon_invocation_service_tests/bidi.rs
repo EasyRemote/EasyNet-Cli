@@ -692,50 +692,50 @@ async fn pending_stream_presence_offline_watcher_delivers_terminal_failure() {
 // ── PR-N1 commit 3a/N: federation client plumbing tests ──
 
 #[test]
-fn parse_realm_from_ura_extracts_realm_component() {
+fn realm_from_ura_extracts_realm_component() {
     assert_eq!(
-        parse_realm_from_ura("easynet:///r/realm-a/device/laptop-1"),
+        realm_from_ura("easynet:///r/realm-a/device/laptop-1"),
         Some("realm-a".to_string())
     );
     assert_eq!(
-        parse_realm_from_ura("easynet:///r/realm-a/device/device-1"),
+        realm_from_ura("easynet:///r/realm-a/device/device-1"),
         Some("realm-a".to_string())
     );
     assert_eq!(
-        parse_realm_from_ura(&crate::core::ura::hub_ura("peer-realm")),
+        realm_from_ura(&crate::core::ura::hub_ura("peer-realm")),
         Some("peer-realm".to_string())
     );
     assert_eq!(
-        parse_realm_from_ura("easynet:///r/peer-realm/authority"),
+        realm_from_ura("easynet:///r/peer-realm/authority"),
         Some("peer-realm".to_string())
     );
     assert_eq!(
-        parse_realm_from_ura("easynet:///r/peer-realm/authority/extra"),
+        realm_from_ura("easynet:///r/peer-realm/authority/extra"),
         None
     );
 }
 
 #[test]
-fn parse_realm_from_ura_rejects_noncanonical_extra_path_segments() {
+fn realm_from_ura_rejects_noncanonical_extra_path_segments() {
     // Realm extraction goes through the canonical URA parser, so
     // malformed alias path tails no longer slip through.
     assert_eq!(
-        parse_realm_from_ura("easynet:///r/realm-a/agent/n1/skill/foo"),
+        realm_from_ura("easynet:///r/realm-a/agent/n1/skill/foo"),
         None
     );
 }
 
 #[test]
-fn parse_realm_from_ura_rejects_non_easynet_scheme() {
-    assert_eq!(parse_realm_from_ura("https://example.com/foo"), None);
-    assert_eq!(parse_realm_from_ura("file:///r/realm/agent/x"), None);
+fn realm_from_ura_rejects_non_easynet_scheme() {
+    assert_eq!(realm_from_ura("https://example.com/foo"), None);
+    assert_eq!(realm_from_ura("file:///r/realm/agent/x"), None);
 }
 
 #[test]
-fn parse_realm_from_ura_rejects_empty_realm() {
+fn realm_from_ura_rejects_empty_realm() {
     // Malformed URA with empty realm component must reject —
     // never silently treat as `realm = ""` which would always
     // miss the federated_peers map and surface as
     // "realm unknown" instead of "URA malformed".
-    assert_eq!(parse_realm_from_ura("easynet:///r//device/n1"), None);
+    assert_eq!(realm_from_ura("easynet:///r//device/n1"), None);
 }

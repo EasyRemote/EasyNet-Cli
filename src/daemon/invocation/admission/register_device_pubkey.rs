@@ -257,16 +257,6 @@ fn parse_role(raw: &str) -> Result<TrustedAgentRole, Status> {
     }
 }
 
-/// Extract the realm component from a canonical Axon URA.
-///
-/// This function is intentionally a thin projection over
-/// `crate::core::ura::parse_ura`; the CLI daemon must not maintain a
-/// parallel grammar for trust-anchor writes. Malformed hub identities
-/// therefore return `None` and surface to callers as `invalid_argument`.
-pub(crate) fn parse_realm_from_ura(ura: &str) -> Option<String> {
-    crate::daemon::invocation::admission::runtime_trust::parse_realm_from_ura(ura)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -663,28 +653,5 @@ mod tests {
         assert_eq!(snap.len(), 2);
         let from_disk = RealmTrustAnchor::try_load_strict(&path).expect("disk load");
         assert_eq!(from_disk.len(), 2);
-    }
-
-    #[test]
-    fn parse_realm_from_ura_handles_canonical_shape() {
-        assert_eq!(
-            parse_realm_from_ura("easynet:///r/realm-x/device/n1"),
-            Some("realm-x".to_string())
-        );
-        assert_eq!(
-            parse_realm_from_ura(&canonical_hub_ura("abc")),
-            Some("abc".to_string())
-        );
-        assert_eq!(
-            parse_realm_from_ura("easynet:///r/abc/authority"),
-            Some("abc".to_string())
-        );
-        assert_eq!(
-            parse_realm_from_ura("easynet:///r/abc/authority/extra"),
-            None
-        );
-        assert_eq!(parse_realm_from_ura("easynet:///r//device/n1"), None);
-        assert_eq!(parse_realm_from_ura("https://example.com"), None);
-        assert_eq!(parse_realm_from_ura("easynet://r/x/device/n1"), None); // missing third slash
     }
 }

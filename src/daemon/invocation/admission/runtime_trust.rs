@@ -310,7 +310,7 @@ impl<'a> RuntimeTrust<'a> {
         principal_ura: &str,
         role: TrustedAgentRole,
     ) -> Result<(), Status> {
-        let parsed_realm = parse_realm_from_ura(principal_ura).ok_or_else(|| {
+        let parsed_realm = crate::core::ura::realm_from_ura(principal_ura).ok_or_else(|| {
             Status::invalid_argument(format!(
                 "identity.register_pubkey: principal_ura `{principal_ura}` does not match Axon's \
                  canonical URA grammar",
@@ -349,13 +349,6 @@ impl<'a> RuntimeTrust<'a> {
         }
         Ok(())
     }
-}
-
-/// Extract the realm component from a canonical Axon URA.
-pub(crate) fn parse_realm_from_ura(ura: &str) -> Option<String> {
-    crate::core::ura::parse_ura(ura)
-        .ok()
-        .map(|parsed| parsed.realm)
 }
 
 fn validate_public_key_b64(ability: &'static str, raw: &str) -> Result<(), Status> {
@@ -683,15 +676,6 @@ mod tests {
             .register_pubkey(user_ura.to_string(), key, TrustedAgentRole::User)
             .expect_err("tombstoned key rejected");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
-    }
-
-    #[test]
-    fn parse_realm_from_ura_reuses_canonical_parser() {
-        assert_eq!(
-            parse_realm_from_ura("easynet:///r/realm/device/alpha"),
-            Some("realm".to_string())
-        );
-        assert_eq!(parse_realm_from_ura("not-a-ura"), None);
     }
 
     #[test]

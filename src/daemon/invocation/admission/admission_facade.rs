@@ -1965,13 +1965,9 @@ fn ability_ura_for_diagnostic(envelope: &Envelope, ability: &str) -> String {
 ///
 /// Important: federated callers are not uniformly `.../agent/...`;
 /// peer hubs use Axon's canonical hub identity shape and device sessions
-/// register under `.../device/<id>`. Reuse the same realm parser as
-/// `identity.register_pubkey` so all canonical role tails stay
-/// accepted and retired aliases stay rejected.
-#[cfg(test)]
-fn parse_realm_from_ura(ura: &str) -> Option<String> {
-    crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura(ura)
-}
+/// register under `.../device/<id>`. Realm projection goes through the
+/// core URA facade so all canonical role tails stay accepted and retired
+/// aliases stay rejected.
 
 fn federated_caller_role(caller_ura: &str) -> Option<TrustedAgentRole> {
     let parsed = parse_ura(caller_ura).ok()?;
@@ -2921,11 +2917,11 @@ mod tests {
     #[test]
     fn admission_realm_extraction_uses_the_canonical_ura_parser() {
         assert_eq!(
-            parse_realm_from_ura("easynet:///r/peer-realm/authority"),
+            crate::core::ura::realm_from_ura("easynet:///r/peer-realm/authority"),
             Some("peer-realm".to_string())
         );
         assert_eq!(
-            parse_realm_from_ura("easynet:///r/peer-realm/authority/extra"),
+            crate::core::ura::realm_from_ura("easynet:///r/peer-realm/authority/extra"),
             None
         );
     }

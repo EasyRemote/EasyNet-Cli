@@ -575,6 +575,53 @@ if "ledger_resource_ura_projection_distinguishes_unjoined_from_invalid_identity"
 PY
 }
 
+check_core_ura_realm_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local core="$cli_root/src/core/ura/mod.rs"
+  local keyring_abilities="$cli_root/src/daemon/keyring/abilities.rs"
+  local keyring_resolver="$cli_root/src/daemon/keyring/resolver.rs"
+  local runtime_trust="$cli_root/src/daemon/invocation/admission/runtime_trust.rs"
+  local register_pubkey="$cli_root/src/daemon/invocation/admission/register_device_pubkey.rs"
+  local federated_resolver="$cli_root/src/daemon/invocation/admission/federated_key_resolver.rs"
+
+  [[ -f "$core" ]] || fail "canonical core URA facade is missing: ${core#$cli_root/}"
+  [[ -f "$keyring_abilities" ]] || fail "keyring abilities source is missing: ${keyring_abilities#$cli_root/}"
+  [[ -f "$keyring_resolver" ]] || fail "keyring federated user resolver source is missing: ${keyring_resolver#$cli_root/}"
+  [[ -f "$runtime_trust" ]] || fail "runtime trust source is missing: ${runtime_trust#$cli_root/}"
+  [[ -f "$register_pubkey" ]] || fail "register-device pubkey source is missing: ${register_pubkey#$cli_root/}"
+  [[ -f "$federated_resolver" ]] || fail "federated key resolver source is missing: ${federated_resolver#$cli_root/}"
+
+  if ! rg -q 'pub fn realm_from_ura\(ura: &str\) -> Option<String>' "$core"; then
+    fail "core URA facade must expose generic realm_from_ura projection"
+  fi
+  if ! rg -q 'pub fn user_realm_from_ura\(ura: &str\) -> Option<String>' "$core"; then
+    fail "core URA facade must expose User-only user_realm_from_ura projection"
+  fi
+  if rg -n 'fn\s+parse_realm_from_user_ura' "$keyring_abilities" "$keyring_resolver"; then
+    fail "keyring must not define duplicated user URA realm parser functions"
+  fi
+  if rg -n 'duplicated rather than re-exported|federated fallback' "$keyring_abilities" "$keyring_resolver"; then
+    fail "keyring preserves retired duplicated/fallback URA projection vocabulary"
+  fi
+  if ! rg -q 'user_realm_from_ura\(' "$keyring_abilities"; then
+    fail "keyring federated token issuance must consume core::ura::user_realm_from_ura"
+  fi
+  if ! rg -q 'user_realm_from_ura\(' "$keyring_resolver"; then
+    fail "keyring federated user resolver must consume core::ura::user_realm_from_ura"
+  fi
+  if rg -n 'pub\(crate\)\s+fn\s+parse_realm_from_ura' "$runtime_trust" "$register_pubkey"; then
+    fail "admission modules must not expose generic parse_realm_from_ura parser shims"
+  fi
+  if rg -n 'register_device_pubkey::parse_realm_from_ura' \
+    "$federated_resolver" \
+    "$cli_root/src/daemon/invocation/bidi/bidi_dispatcher.rs" \
+    "$cli_root/src/daemon/invocation/admission/peer_envelope_signer.rs" \
+    "$cli_root/src/daemon/invocation/admission/admission_facade.rs" \
+    "$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"; then
+    fail "runtime/admission callers must not depend on register-device parser shims"
+  fi
+}
+
 check_invocation_history_filter_scope_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local history="$cli_root/src/daemon/ability/builtins/governance/invocation_history.rs"
@@ -7185,6 +7232,48 @@ EOF
   if ( check_invocation_history_ledger_ura_contract "$tmp/invocation-history-ledger-ura-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected invocation.history ledger_ura projection fallback gate to fail"
   fi
+  mkdir -p "$tmp/core-ura-realm-projection-legacy/src/core/ura" \
+    "$tmp/core-ura-realm-projection-legacy/src/daemon/keyring" \
+    "$tmp/core-ura-realm-projection-legacy/src/daemon/invocation/admission"
+  printf '%s\n' \
+    'pub use axon_sdk::ura::*;' \
+    'pub fn hub_ura(realm: &str) -> String { authority_ura(realm) }' \
+    > "$tmp/core-ura-realm-projection-legacy/src/core/ura/mod.rs"
+  printf '%s\n' \
+    'use crate::core::ura::{parse_ura, URAKind};' \
+    'fn issue(source_user_ura: &str) { let _ = parse_realm_from_user_ura(source_user_ura); }' \
+    'fn parse_realm_from_user_ura(ura: &str) -> Option<String> {' \
+    '  let parsed = parse_ura(ura).ok()?;' \
+    '  (parsed.kind == URAKind::User).then_some(parsed.realm)' \
+    '}' \
+    > "$tmp/core-ura-realm-projection-legacy/src/daemon/keyring/abilities.rs"
+  printf '%s\n' \
+    'use crate::core::ura::{parse_ura, URAKind};' \
+    '/// 2. **federated fallback**: otherwise, look up a binding.' \
+    '/// duplicated rather than re-exported to keep the resolver local.' \
+    'fn parse_realm_from_user_ura(ura: &str) -> Option<String> {' \
+    '  let parsed = parse_ura(ura).ok()?;' \
+    '  (parsed.kind == URAKind::User).then_some(parsed.realm)' \
+    '}' \
+    > "$tmp/core-ura-realm-projection-legacy/src/daemon/keyring/resolver.rs"
+  printf '%s\n' \
+    'pub(crate) fn parse_realm_from_ura(ura: &str) -> Option<String> {' \
+    '  crate::core::ura::parse_ura(ura).ok().map(|parsed| parsed.realm)' \
+    '}' \
+    > "$tmp/core-ura-realm-projection-legacy/src/daemon/invocation/admission/runtime_trust.rs"
+  printf '%s\n' \
+    'pub(crate) fn parse_realm_from_ura(ura: &str) -> Option<String> {' \
+    '  crate::daemon::invocation::admission::runtime_trust::parse_realm_from_ura(ura)' \
+    '}' \
+    > "$tmp/core-ura-realm-projection-legacy/src/daemon/invocation/admission/register_device_pubkey.rs"
+  printf '%s\n' \
+    'fn resolve(agent_ura: &str) {' \
+    '  let _ = crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura(agent_ura);' \
+    '}' \
+    > "$tmp/core-ura-realm-projection-legacy/src/daemon/invocation/admission/federated_key_resolver.rs"
+  if ( check_core_ura_realm_projection_contract "$tmp/core-ura-realm-projection-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected core URA realm projection gate to fail"
+  fi
   mkdir -p "$tmp/invocation-history-filter-legacy/src/daemon/ability/builtins/governance"
   cat >"$tmp/invocation-history-filter-legacy/src/daemon/ability/builtins/governance/invocation_history.rs" <<'EOF'
 fn fetch_key_from_value(value: &Value) -> anyhow::Result<InvocationLedgerFetchKey> {
@@ -8183,6 +8272,7 @@ EOF
   check_agent_start_model_intent_contract
   check_invocation_history_get_key_contract
   check_invocation_history_ledger_ura_contract
+  check_core_ura_realm_projection_contract
   check_invocation_history_filter_scope_contract
   check_cli_invocation_history_read_model_contract
   check_sdk_history_authority_subject_contract
@@ -8287,6 +8377,7 @@ check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract
 check_invocation_history_ledger_ura_contract
+check_core_ura_realm_projection_contract
 check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
 check_sdk_history_authority_subject_contract

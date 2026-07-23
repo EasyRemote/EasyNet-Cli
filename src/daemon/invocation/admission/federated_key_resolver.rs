@@ -278,11 +278,7 @@ impl FederatedKeyResolver {
         if self.federation_client.is_none() {
             return false;
         }
-        let Some(caller_realm) =
-            crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura(
-                caller_ura,
-            )
-        else {
+        let Some(caller_realm) = crate::core::ura::realm_from_ura(caller_ura) else {
             return false;
         };
         if self.self_realm.as_deref() == Some(caller_realm.as_str()) {
@@ -470,10 +466,7 @@ impl FederatedKeyResolver {
             return Err(caller_key_not_found(agent_ura, "no_federation_client"));
         };
 
-        let caller_realm =
-            crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura(
-                agent_ura,
-            )
+        let caller_realm = crate::core::ura::realm_from_ura(agent_ura)
             .ok_or_else(|| caller_key_not_found(agent_ura, "malformed_ura"))?;
 
         // INV-1 federated trust gate: same-realm caller's local

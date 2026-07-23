@@ -46,6 +46,27 @@ pub mod provisional;
 /// Axon's product-neutral URA grammar.
 pub const REALM_EASYNET: &str = "easynet.run";
 
+/// Extract the realm component from any canonical URA accepted by Axon.
+///
+/// This is a CLI-local projection over Axon's canonical parser, not a grammar
+/// implementation. Callers that only need the realm fact should use this helper
+/// instead of copying `parse_ura(...).map(|parsed| parsed.realm)` in daemon
+/// subsystems.
+pub fn realm_from_ura(ura: &str) -> Option<String> {
+    parse_ura(ura).ok().map(|parsed| parsed.realm)
+}
+
+/// Extract the realm component only from canonical User URAs.
+///
+/// Directory and key-custody policies frequently need to distinguish malformed
+/// input from a non-user role. Centralizing the role check here prevents
+/// keyring, federation, and admission modules from maintaining parallel user
+/// URA parser fragments.
+pub fn user_realm_from_ura(ura: &str) -> Option<String> {
+    let parsed = parse_ura(ura).ok()?;
+    (parsed.kind == URAKind::User).then_some(parsed.realm)
+}
+
 /// Product-facing Hub identity projected onto Axon's generic authority URA.
 ///
 /// Hub policy and lifecycle remain CLI-owned; Axon sees only the canonical
@@ -367,6 +388,39 @@ mod tests {
             realm_prefix_ura("localhost").expect("realm prefix"),
             "easynet:///r/localhost/"
         );
+    }
+
+    #[test]
+    fn realm_from_ura_accepts_every_canonical_principal_role() {
+        assert_eq!(
+            realm_from_ura("easynet:///r/acme/user/user-1").as_deref(),
+            Some("acme")
+        );
+        assert_eq!(
+            realm_from_ura("easynet:///r/acme/device/dev-1").as_deref(),
+            Some("acme")
+        );
+        assert_eq!(
+            realm_from_ura("easynet:///r/acme/authority").as_deref(),
+            Some("acme")
+        );
+    }
+
+    #[test]
+    fn realm_from_ura_rejects_noncanonical_transport_shapes() {
+        assert_eq!(realm_from_ura("https://example.com/device/dev-1"), None);
+        assert_eq!(realm_from_ura("easynet://r/acme/device/dev-1"), None);
+        assert_eq!(realm_from_ura("easynet:///r//device/dev-1"), None);
+    }
+
+    #[test]
+    fn user_realm_from_ura_accepts_only_user_role() {
+        assert_eq!(
+            user_realm_from_ura("easynet:///r/acme/user/user-1").as_deref(),
+            Some("acme")
+        );
+        assert_eq!(user_realm_from_ura("easynet:///r/acme/device/dev-1"), None);
+        assert_eq!(user_realm_from_ura("not-a-ura"), None);
     }
 
     #[test]

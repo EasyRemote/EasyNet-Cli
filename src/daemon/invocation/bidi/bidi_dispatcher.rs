@@ -42,9 +42,9 @@ use axon_sdk::pb::axon::v1::{
     InvokeRequest, StreamDescriptor,
 };
 
+use crate::core::ura::realm_from_ura;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
-use crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura;
 use crate::daemon::invocation::admission::target_gate::{
     route_negative_status, route_profile_blocked_status, signed_envelope_for_selected_route,
     TargetGate,
@@ -3464,7 +3464,7 @@ pub(crate) fn validate_session_realm(
         return Ok(());
     };
 
-    let caller_realm = parse_realm_from_ura(caller_ura).ok_or_else(|| {
+    let caller_realm = realm_from_ura(caller_ura).ok_or_else(|| {
         Status::invalid_argument(format!(
             "session.open: caller URA `{caller_ura}` does not match the canonical \
              `easynet:///r/{{realm}}/...` shape"

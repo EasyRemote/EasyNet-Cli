@@ -23,7 +23,7 @@
 
 use std::sync::Arc;
 
-use crate::core::ura::{parse_ura, URAKind};
+use crate::core::ura::user_realm_from_ura;
 
 /// Resolver for "is this cross-realm URA bound to a known local user?"
 ///
@@ -38,7 +38,7 @@ use crate::core::ura::{parse_ura, URAKind};
 ///      `local_realm`, the URA's user-id is the URA itself —
 ///      no federated lookup needed (and INV-3 says the user
 ///      always speaks for themselves on their home realm).
-///   2. **federated fallback**: otherwise, look up
+///   2. **cross-realm binding lookup**: otherwise, look up
 ///      `(parsed_realm, agent_ura)` in the bindings store.
 ///      Some(local_user_id) ⇒ the cross-realm user has been
 ///      consumed-bound; None ⇒ the URA belongs to a federated
@@ -89,7 +89,7 @@ impl FederatedUserResolver {
     /// Resolve a URA to a federated-binding outcome.
     #[must_use]
     pub fn resolve_user(&self, user_ura: &str) -> FederatedUserOutcome {
-        let Some(realm) = parse_realm_from_user_ura(user_ura) else {
+        let Some(realm) = user_realm_from_ura(user_ura) else {
             return FederatedUserOutcome::Malformed;
         };
         if realm == self.local_realm {
@@ -100,17 +100,6 @@ impl FederatedUserResolver {
             None => FederatedUserOutcome::NotBound,
         }
     }
-}
-
-/// Parse the realm slice from a canonical EasyNet user URA
-/// (`easynet:///r/<realm>/user/<id>`). Mirrors
-/// `daemon::keyring::abilities::parse_realm_from_user_ura` —
-/// duplicated rather than re-exported to keep the resolver
-/// layer free of any cross-module imports beyond
-/// `super::federated_bindings`.
-fn parse_realm_from_user_ura(ura: &str) -> Option<String> {
-    let parsed = parse_ura(ura).ok()?;
-    (parsed.kind == URAKind::User).then_some(parsed.realm)
 }
 
 #[cfg(test)]
