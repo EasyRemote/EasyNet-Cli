@@ -126,15 +126,14 @@ pub struct RunMeta {
     pub agent: String,
     pub agent_type: String,
     pub model: Option<String>,
-    /// PersistentLog invocation_id for this run. Empty on a meta
-    /// written by a pre-PR-7 binary (legacy records). A populated
-    /// id lets an operator cross-reference the run directory with
+    /// PersistentLog invocation_id for this run. This is the required
+    /// runtime identity fact that cross-references the run directory with
     /// the on-disk event log at `$AXON_INVOCATION_LOG_DIR/<id>.jsonl`,
     /// which carries the P1-P6-compliant event stream (see
-    /// `daemon::execution::mission::session::Session`). `#[serde(default)]`
-    /// keeps deserialisation backward-compatible with meta.json files
-    /// written before this field existed.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    /// `daemon::execution::mission::session::Session`).
+    #[serde(
+        deserialize_with = "crate::daemon::execution::mission::persisted_identity::deserialize_non_empty_string"
+    )]
     pub invocation_id: String,
     pub started_at: String,
     pub duration_ms: u64,
@@ -218,5 +217,58 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(agent_root);
+    }
+
+    #[test]
+    fn run_meta_requires_invocation_id_identity_fact() {
+        let legacy = r#"{
+            "agent": "alice",
+            "agent_type": "claude-code",
+            "model": null,
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "duration_ms": 7,
+            "exit_status": "ok",
+            "error": null,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "num_turns": 1,
+            "total_cost_usd": 0.0
+        }"#;
+        let error = serde_json::from_str::<RunMeta>(legacy)
+            .expect_err("meta.json without invocation_id must fail closed");
+        assert!(
+            error.to_string().contains("missing field `invocation_id`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn run_meta_rejects_empty_invocation_id_identity_fact() {
+        let invalid = r#"{
+            "agent": "alice",
+            "agent_type": "claude-code",
+            "model": null,
+            "invocation_id": "",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "duration_ms": 7,
+            "exit_status": "ok",
+            "error": null,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "num_turns": 1,
+            "total_cost_usd": 0.0
+        }"#;
+        let error = serde_json::from_str::<RunMeta>(invalid)
+            .expect_err("empty invocation_id must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("runtime identity fact must be a non-empty string"),
+            "unexpected error: {error}"
+        );
     }
 }

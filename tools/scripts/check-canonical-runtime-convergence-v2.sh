@@ -3533,6 +3533,77 @@ for required_test in (
 PY
 }
 
+check_mission_runtime_meta_identity_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local orchestration="$cli_root/src/daemon/execution/mission/orchestration.rs"
+  local run_store="$cli_root/src/daemon/execution/mission/run_store.rs"
+  local persisted_identity="$cli_root/src/daemon/execution/mission/persisted_identity.rs"
+  [[ -f "$orchestration" ]] || fail "mission orchestration source is missing: ${orchestration#$cli_root/}"
+  [[ -f "$run_store" ]] || fail "mission run store source is missing: ${run_store#$cli_root/}"
+  [[ -f "$persisted_identity" ]] || fail "mission persisted identity source is missing: ${persisted_identity#$cli_root/}"
+
+  "$PYTHON_BIN" - "$orchestration" "$run_store" "$persisted_identity" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+orchestration = Path(sys.argv[1]).read_text()
+run_store = Path(sys.argv[2]).read_text()
+persisted_identity = Path(sys.argv[3]).read_text()
+trace_match = re.search(r"(?s)((?:#\[[^\]]*\]\s*)*)pub trace_id: String,", orchestration)
+if not trace_match:
+    raise SystemExit("mission_meta_trace_id_field_missing")
+if "#[serde(default)]" in trace_match.group(0):
+    raise SystemExit("mission_meta_trace_id_legacy_default")
+if "deserialize_non_empty_string" not in trace_match.group(0):
+    raise SystemExit("mission_meta_trace_id_not_non_empty_validated")
+
+invocation_match = re.search(r"(?s)((?:#\[[^\]]*\]\s*)*)pub invocation_id: String,", run_store)
+if not invocation_match:
+    raise SystemExit("run_meta_invocation_id_field_missing")
+if "#[serde(default" in invocation_match.group(0):
+    raise SystemExit("run_meta_invocation_id_legacy_default")
+if "skip_serializing_if" in invocation_match.group(0):
+    raise SystemExit("run_meta_invocation_id_skip_empty_serialization")
+if "deserialize_non_empty_string" not in invocation_match.group(0):
+    raise SystemExit("run_meta_invocation_id_not_non_empty_validated")
+
+for required in (
+    "pub(crate) fn deserialize_non_empty_string",
+    "runtime identity fact must be a non-empty string",
+    "required_identity_rejects_empty_string",
+):
+    if required not in persisted_identity:
+        raise SystemExit(f"mission_persisted_identity_validator_missing:{required}")
+
+for retired in (
+    "pre_trace_id_meta_still_deserializes",
+    "legacy meta parses",
+    "absent field defaults",
+    "backward-compatible with meta.json",
+    "written before this field existed",
+):
+    if retired in orchestration or retired in run_store:
+        raise SystemExit(f"runtime_meta_identity_legacy_contract:{retired}")
+
+for required in (
+    "mission_run_meta_requires_trace_id_identity_fact",
+    "mission_run_meta_rejects_empty_trace_id_identity_fact",
+    "missing field `trace_id`",
+):
+    if required not in orchestration:
+        raise SystemExit(f"mission_meta_identity_schema_missing:{required}")
+
+for required in (
+    "run_meta_requires_invocation_id_identity_fact",
+    "run_meta_rejects_empty_invocation_id_identity_fact",
+    "missing field `invocation_id`",
+):
+    if required not in run_store:
+        raise SystemExit(f"run_meta_identity_schema_missing:{required}")
+PY
+}
+
 check_retired_federation_directory_v1_stream_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   "$PYTHON_BIN" - "$cli_root/src" "$cli_root/tests" <<'PY'
@@ -9158,6 +9229,30 @@ EOF
   if ( check_mission_traditional_target_conflict_contract "$tmp/mission-implicit-fallback" ) >/dev/null 2>&1; then
     fail "self-test expected Mission implicit fallback naming gate to fail"
   fi
+  mkdir -p "$tmp/mission-meta-identity-legacy/src/daemon/execution/mission"
+  printf '%s\n' \
+    '#[derive(Debug, Clone, Default, Serialize, Deserialize)]' \
+    'pub struct MissionRunMeta {' \
+    '  #[serde(default)]' \
+    '  pub trace_id: String,' \
+    '}' \
+    'fn pre_trace_id_meta_still_deserializes() {}' \
+    > "$tmp/mission-meta-identity-legacy/src/daemon/execution/mission/orchestration.rs"
+  printf '%s\n' \
+    '#[derive(Debug, Clone, Default, Serialize, Deserialize)]' \
+    'pub struct RunMeta {' \
+    '  #[serde(default, skip_serializing_if = "String::is_empty")]' \
+    '  pub invocation_id: String,' \
+    '}' \
+    > "$tmp/mission-meta-identity-legacy/src/daemon/execution/mission/run_store.rs"
+  printf '%s\n' \
+    'pub(crate) fn deserialize_non_empty_string() {}' \
+    'fn required_identity_rejects_empty_string() {}' \
+    'const MESSAGE: &str = "runtime identity fact must be a non-empty string";' \
+    > "$tmp/mission-meta-identity-legacy/src/daemon/execution/mission/persisted_identity.rs"
+  if ( check_mission_runtime_meta_identity_schema_contract "$tmp/mission-meta-identity-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected mission runtime meta identity legacy default gate to fail"
+  fi
   mkdir -p "$tmp/sdk-runtime-failure-legacy/sdk/go" \
     "$tmp/sdk-runtime-failure-legacy/sdk/python/easynet_sdk" \
     "$tmp/sdk-runtime-failure-legacy/sdk/python/tests"
@@ -9585,6 +9680,7 @@ EOF
   check_session_prelude_receipt_contract
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
+  check_mission_runtime_meta_identity_schema_contract
   check_edge_adapter_policy_contract
   check_sdk_product_neutrality_contract
   check_python_sdk_bytecode_index_contract
@@ -9709,6 +9805,7 @@ check_start_attach_user_signer_readiness_contract
 check_session_prelude_receipt_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
+check_mission_runtime_meta_identity_schema_contract
 check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_python_sdk_bytecode_index_contract

@@ -10,6 +10,7 @@ pub(crate) mod drivers;
 pub(crate) mod executors;
 pub(crate) mod invocation_gateway;
 pub mod orchestration;
+pub(crate) mod persisted_identity;
 pub(crate) mod process_runner;
 pub(crate) mod run_store;
 pub(crate) mod session;

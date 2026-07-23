@@ -337,8 +337,11 @@ pub struct MissionRunMeta {
     /// on a recorded contract, not on that coincidence. A mission has
     /// no root Invocation of its own — it is a script, and the trace
     /// is the only runtime identity a CLI-launched run has (spec
-    /// §0.1-1). Empty on metas written before this field existed.
-    #[serde(default)]
+    /// §0.1-1). Current runtime readers require it as an explicit
+    /// persisted identity fact.
+    #[serde(
+        deserialize_with = "crate::daemon::execution::mission::persisted_identity::deserialize_non_empty_string"
+    )]
     pub trace_id: String,
     pub started_at: String,
     pub duration_ms: u64,
@@ -1146,20 +1149,39 @@ mod tests {
         let _ = fs::remove_dir_all(&*root);
     }
 
-    /// W2 acceptance gate (spec §4): metas written before `trace_id`
-    /// existed must keep deserializing — the field defaults to empty,
-    /// it never gates parsing.
     #[test]
-    fn pre_trace_id_meta_still_deserializes() {
+    fn mission_run_meta_requires_trace_id_identity_fact() {
         let old = r#"{
-            "name": "legacy", "source_file": null,
+            "name": "missing-trace", "source_file": null,
             "started_at": "2026-01-01T00:00:00+00:00",
             "duration_ms": 7, "status": "ok", "error": null,
             "steps_total": 1, "steps_completed": 1, "steps_failed": 0
         }"#;
-        let meta: MissionRunMeta = serde_json::from_str(old).expect("legacy meta parses");
-        assert_eq!(meta.trace_id, "", "absent field defaults, never errors");
-        assert_eq!(meta.status, MissionRunStatus::Ok);
+        let error = serde_json::from_str::<MissionRunMeta>(old)
+            .expect_err("meta.json without trace_id must fail closed");
+        assert!(
+            error.to_string().contains("missing field `trace_id`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn mission_run_meta_rejects_empty_trace_id_identity_fact() {
+        let invalid = r#"{
+            "name": "empty-trace", "source_file": null,
+            "trace_id": "",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "duration_ms": 7, "status": "ok", "error": null,
+            "steps_total": 1, "steps_completed": 1, "steps_failed": 0
+        }"#;
+        let error = serde_json::from_str::<MissionRunMeta>(invalid)
+            .expect_err("empty trace_id must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("runtime identity fact must be a non-empty string"),
+            "unexpected error: {error}"
+        );
     }
 
     /// The in-flight meta written at `create()` time already carries
@@ -1181,7 +1203,7 @@ mod tests {
         MissionRunMeta {
             name: name.into(),
             source_file: Some(format!("/tmp/{name}.eal")),
-            trace_id: String::new(),
+            trace_id: format!("trace-{name}"),
             started_at: "2026-04-06T12:00:00+00:00".into(),
             duration_ms: 42,
             status,
