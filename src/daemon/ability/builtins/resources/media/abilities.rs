@@ -604,6 +604,12 @@ fn transcribe_args() -> Value {
 mod tests {
     use super::*;
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/media-abilities";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
     #[test]
     fn registration_dispatches_unwired_stubs_to_the_shape_they_declare() {
         // Two-way pin between the `ABILITIES` table and stub
@@ -612,7 +618,7 @@ mod tests {
         // rows with real modules must remain unregistered here so
         // one dispatch slot never has both an args-only stub and an
         // envelope-aware handler.
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(&mut reg);
         for row in ABILITIES {
             if has_real_media_handler(row.name) || is_unprovided_hub_voice(row.name) {
@@ -652,7 +658,7 @@ mod tests {
 
     #[test]
     fn stub_registration_publishes_media_descriptors() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(&mut reg);
         let rows = reg.authority_ability_catalog_snapshot();
 
@@ -746,7 +752,7 @@ mod tests {
 
     #[test]
     fn unprovided_hub_voice_geometries_are_not_registered_or_published() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(&mut reg);
         let rows = reg.authority_ability_catalog_snapshot();
         for voice in [ABILITY_VOICE_SUBSCRIBE, ABILITY_VOICE_TRANSCRIBE] {
