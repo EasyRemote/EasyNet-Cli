@@ -14,10 +14,14 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::Path;
+
+use crate::daemon::resources::projection::{
+    FilesGetResponse, FilesListItem, FilesListResponse, FilesPutResponse,
+};
 
 use super::state;
 
@@ -98,13 +102,13 @@ pub fn handle_put(user: &str, realm: &str, root: &Path, args: Value) -> anyhow::
 
     let ura = state::blob_ura(realm, user, &sha256_hex);
 
-    Ok(json!({
-        "ura": ura,
-        "sha256": sha256_hex,
-        "size": bytes.len(),
-        "content_type": content_type,
-        "filename": filename,
-    }))
+    Ok(serde_json::to_value(FilesPutResponse::success(
+        ura,
+        sha256_hex,
+        bytes.len() as u64,
+        content_type,
+        filename,
+    ))?)
 }
 
 /// `files.get` — read a blob.
@@ -131,13 +135,13 @@ pub fn handle_get(root: &Path, args: Value) -> anyhow::Result<Value> {
     let bytes_b64 = STANDARD.encode(&bytes);
     let metadata = read_metadata(root, &sha)?;
 
-    Ok(json!({
-        "bytes_b64": bytes_b64,
-        "content_type": metadata.content_type,
-        "filename": metadata.filename,
-        "sha256": sha,
-        "size": bytes.len(),
-    }))
+    Ok(serde_json::to_value(FilesGetResponse::success(
+        bytes_b64,
+        metadata.content_type,
+        metadata.filename,
+        sha,
+        bytes.len() as u64,
+    ))?)
 }
 
 /// `files.list` — enumerate blobs in the store.
@@ -152,16 +156,16 @@ pub fn handle_list(user: &str, realm: &str, root: &Path, _args: Value) -> anyhow
                 continue;
             }
             let metadata = read_metadata(root, name)?;
-            items.push(json!({
-                "sha256": name,
-                "size": metadata.size,
-                "filename": metadata.filename,
-                "content_type": metadata.content_type,
-                "ura": state::blob_ura(realm, user, name),
-            }));
+            items.push(FilesListItem::new(
+                name,
+                metadata.size,
+                metadata.filename,
+                metadata.content_type,
+                state::blob_ura(realm, user, name),
+            ));
         }
     }
-    Ok(json!({ "items": items }))
+    Ok(serde_json::to_value(FilesListResponse::from_items(items))?)
 }
 
 /// Parse the trailing path segment of a v4.1.5 resource URA as
@@ -252,6 +256,7 @@ fn read_metadata(root: &Path, sha: &str) -> anyhow::Result<BlobMetadata> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     /// Per-test root — every test gets its own tempdir, no env
     /// mutation, no shared global. Safe under cargo's default

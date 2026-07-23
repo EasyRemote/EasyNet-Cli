@@ -73,6 +73,102 @@ impl ResourceListResponse {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FilesPutResponse {
+    pub ura: String,
+    pub sha256: String,
+    pub size: u64,
+    pub content_type: String,
+    pub filename: String,
+}
+
+impl FilesPutResponse {
+    pub fn success(
+        ura: impl Into<String>,
+        sha256: impl Into<String>,
+        size: u64,
+        content_type: impl Into<String>,
+        filename: impl Into<String>,
+    ) -> Self {
+        Self {
+            ura: ura.into(),
+            sha256: sha256.into(),
+            size,
+            content_type: content_type.into(),
+            filename: filename.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FilesGetResponse {
+    pub bytes_b64: String,
+    pub content_type: String,
+    pub filename: String,
+    pub sha256: String,
+    pub size: u64,
+}
+
+impl FilesGetResponse {
+    pub fn success(
+        bytes_b64: impl Into<String>,
+        content_type: impl Into<String>,
+        filename: impl Into<String>,
+        sha256: impl Into<String>,
+        size: u64,
+    ) -> Self {
+        Self {
+            bytes_b64: bytes_b64.into(),
+            content_type: content_type.into(),
+            filename: filename.into(),
+            sha256: sha256.into(),
+            size,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FilesListItem {
+    pub sha256: String,
+    pub size: u64,
+    pub filename: String,
+    pub content_type: String,
+    pub ura: String,
+}
+
+impl FilesListItem {
+    pub fn new(
+        sha256: impl Into<String>,
+        size: u64,
+        filename: impl Into<String>,
+        content_type: impl Into<String>,
+        ura: impl Into<String>,
+    ) -> Self {
+        Self {
+            sha256: sha256.into(),
+            size,
+            filename: filename.into(),
+            content_type: content_type.into(),
+            ura: ura.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FilesListResponse {
+    pub items: Vec<FilesListItem>,
+}
+
+impl FilesListResponse {
+    pub fn from_items(items: Vec<FilesListItem>) -> Self {
+        Self { items }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,6 +247,98 @@ mod tests {
         assert!(
             error.to_string().contains("legacy_resources"),
             "strict response error should name unknown field: {error}"
+        );
+    }
+
+    #[test]
+    fn files_put_response_preserves_public_shape() {
+        let response = FilesPutResponse::success(
+            "easynet:///r/acme/resource/alice.files/abc",
+            "abc",
+            12,
+            "text/plain",
+            "a.txt",
+        );
+        let wire = serde_json::to_value(&response).expect("put response serializes");
+
+        assert_eq!(wire["ura"], "easynet:///r/acme/resource/alice.files/abc");
+        assert_eq!(wire["sha256"], "abc");
+        assert_eq!(wire["size"], 12);
+        assert_eq!(wire["content_type"], "text/plain");
+        assert_eq!(wire["filename"], "a.txt");
+    }
+
+    #[test]
+    fn files_get_response_preserves_public_shape() {
+        let response = FilesGetResponse::success("aGVsbG8=", "text/plain", "a.txt", "abc", 5);
+        let wire = serde_json::to_value(&response).expect("get response serializes");
+
+        assert_eq!(wire["bytes_b64"], "aGVsbG8=");
+        assert_eq!(wire["content_type"], "text/plain");
+        assert_eq!(wire["filename"], "a.txt");
+        assert_eq!(wire["sha256"], "abc");
+        assert_eq!(wire["size"], 5);
+    }
+
+    #[test]
+    fn files_list_response_preserves_public_shape() {
+        let response = FilesListResponse::from_items(vec![FilesListItem::new(
+            "abc",
+            12,
+            "a.txt",
+            "text/plain",
+            "easynet:///r/acme/resource/alice.files/abc",
+        )]);
+        let wire = serde_json::to_value(&response).expect("list response serializes");
+
+        assert_eq!(wire["items"][0]["sha256"], "abc");
+        assert_eq!(wire["items"][0]["size"], 12);
+        assert_eq!(wire["items"][0]["filename"], "a.txt");
+        assert_eq!(wire["items"][0]["content_type"], "text/plain");
+        assert_eq!(
+            wire["items"][0]["ura"],
+            "easynet:///r/acme/resource/alice.files/abc"
+        );
+    }
+
+    #[test]
+    fn files_store_response_dtos_reject_unknown_fields() {
+        let put_error = serde_json::from_value::<FilesPutResponse>(json!({
+            "ura": "easynet:///r/acme/resource/alice.files/abc",
+            "sha256": "abc",
+            "size": 12,
+            "content_type": "text/plain",
+            "filename": "a.txt",
+            "path": "/tmp/a.txt"
+        }))
+        .expect_err("put response must reject local path leaks");
+        assert!(
+            put_error.to_string().contains("path"),
+            "strict put response error should name unknown field: {put_error}"
+        );
+
+        let get_error = serde_json::from_value::<FilesGetResponse>(json!({
+            "bytes_b64": "aGVsbG8=",
+            "content_type": "text/plain",
+            "filename": "a.txt",
+            "sha256": "abc",
+            "size": 5,
+            "metadata_path": "/tmp/a.metadata.json"
+        }))
+        .expect_err("get response must reject local metadata path leaks");
+        assert!(
+            get_error.to_string().contains("metadata_path"),
+            "strict get response error should name unknown field: {get_error}"
+        );
+
+        let list_error = serde_json::from_value::<FilesListResponse>(json!({
+            "items": [],
+            "legacy_items": []
+        }))
+        .expect_err("list response must reject legacy envelopes");
+        assert!(
+            list_error.to_string().contains("legacy_items"),
+            "strict list response error should name unknown field: {list_error}"
         );
     }
 }

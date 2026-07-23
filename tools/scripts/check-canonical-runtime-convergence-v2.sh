@@ -1518,6 +1518,78 @@ for required in (
 PY
 }
 
+check_files_store_response_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local projection="$cli_root/src/daemon/resources/projection.rs"
+  local handlers="$cli_root/src/daemon/ability/builtins/resources/files_store/handlers.rs"
+  [[ -f "$projection" ]] || fail "daemon resource projection source is missing: $projection"
+  [[ -f "$handlers" ]] || fail "files_store handlers source is missing: $handlers"
+
+  "$PYTHON_BIN" - "$projection" "$handlers" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+projection, handlers = [Path(arg).read_text(encoding="utf-8") for arg in sys.argv[1:]]
+
+for struct_name in (
+    "FilesPutResponse",
+    "FilesGetResponse",
+    "FilesListItem",
+    "FilesListResponse",
+):
+    struct = re.search(
+        rf"(?P<attrs>(?:#\[[^\n]+\]\n)*)pub struct {struct_name} \{{(?P<body>.*?)\n\}}",
+        projection,
+        re.S,
+    )
+    if struct is None:
+        raise SystemExit(f"files_store_response_projection:struct_missing:{struct_name}")
+    if "#[serde(deny_unknown_fields)]" not in struct.group("attrs"):
+        raise SystemExit(f"files_store_response_projection:struct_not_strict:{struct_name}")
+
+for required in (
+    "pub struct FilesPutResponse",
+    "pub ura: String",
+    "pub sha256: String",
+    "pub size: u64",
+    "pub content_type: String",
+    "pub filename: String",
+    "pub struct FilesGetResponse",
+    "pub bytes_b64: String",
+    "pub struct FilesListItem",
+    "pub struct FilesListResponse",
+    "pub items: Vec<FilesListItem>",
+    "FilesPutResponse::success(",
+    "FilesGetResponse::success(",
+    "FilesListItem::new(",
+    "FilesListResponse::from_items(",
+    "files_put_response_preserves_public_shape",
+    "files_get_response_preserves_public_shape",
+    "files_list_response_preserves_public_shape",
+    "files_store_response_dtos_reject_unknown_fields",
+):
+    if required not in projection:
+        raise SystemExit(f"files_store_response_projection:projection_missing:{required}")
+
+for retired in (
+    'Ok(json!({',
+    "items.push(json!({",
+):
+    if retired in handlers:
+        raise SystemExit(f"files_store_response_projection:handler_retired:{retired}")
+
+for required in (
+    "FilesPutResponse::success(",
+    "FilesGetResponse::success(",
+    "FilesListItem::new(",
+    "FilesListResponse::from_items(items)",
+):
+    if required not in handlers:
+        raise SystemExit(f"files_store_response_projection:handler_missing:{required}")
+PY
+}
+
 check_local_agents_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local local_agents="$cli_root/src/daemon/persistence/local_agents.rs"
@@ -12164,6 +12236,48 @@ EOF
   if ( CLI_ROOT="$tmp/resource-list-projection-boundary-legacy"; check_resource_list_projection_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected resource list projection boundary gate to fail"
   fi
+  mkdir -p "$tmp/files-store-response-projection-legacy/src/daemon/resources"
+  mkdir -p "$tmp/files-store-response-projection-legacy/src/daemon/ability/builtins/resources/files_store"
+  cat >"$tmp/files-store-response-projection-legacy/src/daemon/resources/projection.rs" <<'EOF'
+pub struct FilesListResponse {
+    pub items: Vec<serde_json::Value>,
+}
+EOF
+  cat >"$tmp/files-store-response-projection-legacy/src/daemon/ability/builtins/resources/files_store/handlers.rs" <<'EOF'
+fn handle_put() -> Value {
+    Ok(json!({
+        "ura": ura,
+        "sha256": sha256_hex,
+        "size": bytes.len(),
+        "content_type": content_type,
+        "filename": filename,
+    }))
+}
+
+fn handle_get() -> Value {
+    Ok(json!({
+        "bytes_b64": bytes_b64,
+        "content_type": metadata.content_type,
+        "filename": metadata.filename,
+        "sha256": sha,
+        "size": bytes.len(),
+    }))
+}
+
+fn handle_list() -> Value {
+    items.push(json!({
+        "sha256": name,
+        "size": metadata.size,
+        "filename": metadata.filename,
+        "content_type": metadata.content_type,
+        "ura": ura,
+    }));
+    Ok(json!({ "items": items }))
+}
+EOF
+  if ( CLI_ROOT="$tmp/files-store-response-projection-legacy"; check_files_store_response_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected files-store response projection gate to fail"
+  fi
   mkdir -p "$tmp/local-agents-schema-legacy/src/daemon/persistence"
   cat >"$tmp/local-agents-schema-legacy/src/daemon/persistence/local_agents.rs" <<'EOF'
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -12605,6 +12719,7 @@ EOF
   check_skill_install_record_schema_contract
   check_skill_record_projection_boundary_contract
   check_resource_list_projection_boundary_contract
+  check_files_store_response_projection_contract
   check_local_agents_schema_contract
   check_profile_store_schema_contract
   check_auth_session_owner_fact_contract
@@ -12755,6 +12870,7 @@ check_federation_realm_resolver_contract
 check_skill_install_record_schema_contract
 check_skill_record_projection_boundary_contract
 check_resource_list_projection_boundary_contract
+check_files_store_response_projection_contract
 check_profile_store_schema_contract
 check_auth_session_owner_fact_contract
 check_resources_schema_contract
