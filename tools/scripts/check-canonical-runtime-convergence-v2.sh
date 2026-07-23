@@ -2495,6 +2495,43 @@ for required in (
 PY
 }
 
+check_admission_authority_ability_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local facade="$cli_root/src/daemon/invocation/admission/admission_facade.rs"
+  [[ -f "$facade" ]] || fail "admission facade source is missing: ${facade#$cli_root/}"
+
+  "$PYTHON_BIN" - "$facade" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+match = re.search(
+    r"impl AuthorityAbilityView\s*\{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if match is None:
+    raise SystemExit("admission_authority_ability_projection:view_impl_missing")
+body = match.group("body")
+for retired in (
+    "owner_local_ability_name",
+    "unwrap_or_else(|_| owner_local_ability_name",
+):
+    if retired in body:
+        raise SystemExit(f"admission_authority_ability_projection:retired_owner_local_fallback:{retired}")
+for required in (
+    "public_name_from_authority_ability_ura(&ability_ura)?",
+    "fn public_name_from_authority_ability_ura(ability_ura: &str) -> Result<String, Status>",
+    "authority ability projection derived non-canonical ability URA",
+    "authority_ability_projection_rejects_non_canonical_ability_ura",
+):
+    if required not in text:
+        raise SystemExit(f"admission_authority_ability_projection:missing:{required}")
+PY
+}
+
 check_peer_envelope_signer_subject_profile_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local signer="$cli_root/src/daemon/invocation/admission/peer_envelope_signer.rs"
@@ -8632,6 +8669,25 @@ EOF
   if ( check_admission_authority_raw_wire_strict_contract "$tmp/admission-authority-raw-default-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected admission authority raw wire default gate to fail"
   fi
+  mkdir -p "$tmp/admission-authority-ability-projection-legacy/src/daemon/invocation/admission"
+  cat >"$tmp/admission-authority-ability-projection-legacy/src/daemon/invocation/admission/admission_facade.rs" <<'EOF'
+impl AuthorityAbilityView {
+    fn from_envelope(envelope: &Envelope, ability: &str) -> Result<Self, Status> {
+        let callee_ura = envelope.callee.as_ref().unwrap().ura.as_str();
+        let wire = ability.trim();
+        let ability_ura =
+            crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, wire)
+                .map_err(axon_error_to_status)?;
+        let public_name = AbilitySelector::parse(&ability_ura)
+            .map(|selector| selector.public_name().to_string())
+            .unwrap_or_else(|_| owner_local_ability_name(callee_ura, wire));
+        Ok(Self { wire: wire.to_string(), public_name, ability_ura })
+    }
+}
+EOF
+  if ( check_admission_authority_ability_projection_contract "$tmp/admission-authority-ability-projection-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected admission authority ability projection fallback gate to fail"
+  fi
   mkdir -p "$tmp/peer-envelope-subject-profile-legacy/src/daemon/invocation/admission"
   cat >"$tmp/peer-envelope-subject-profile-legacy/src/daemon/invocation/admission/peer_envelope_signer.rs" <<'EOF'
 pub(crate) async fn sign_peer_request_envelope(
@@ -9225,6 +9281,7 @@ EOF
   check_node_session_authority_subject_contract
   check_runtime_authority_metadata_key_neutrality_contract
   check_admission_authority_raw_wire_strict_contract
+  check_admission_authority_ability_projection_contract
   check_peer_envelope_signer_subject_profile_contract
   check_local_ability_target_subject_policy_contract
   check_session_prelude_credentials_contract
@@ -9343,6 +9400,7 @@ check_shared_local_device_owner_projection_contract
 check_node_session_authority_subject_contract
 check_runtime_authority_metadata_key_neutrality_contract
 check_admission_authority_raw_wire_strict_contract
+check_admission_authority_ability_projection_contract
 check_peer_envelope_signer_subject_profile_contract
 check_local_ability_target_subject_policy_contract
 check_session_prelude_credentials_contract

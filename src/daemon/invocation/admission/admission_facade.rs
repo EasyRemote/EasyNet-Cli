@@ -39,7 +39,7 @@ use axon_sdk::invocation::{
     REASON_CALLER_SIGNATURE_INVALID, REASON_ENVELOPE_INCOMPLETE, REASON_NONCE_REPLAY,
 };
 
-use crate::core::ura::{owner_local_ability_name, parse_ura, AbilitySelector, URAKind};
+use crate::core::ura::{parse_ura, AbilitySelector, URAKind};
 use crate::daemon::ability::{
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
@@ -2227,9 +2227,7 @@ impl AuthorityAbilityView {
         let ability_ura =
             crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, wire)
                 .map_err(axon_error_to_status)?;
-        let public_name = AbilitySelector::parse(&ability_ura)
-            .map(|selector| selector.public_name().to_string())
-            .unwrap_or_else(|_| owner_local_ability_name(callee_ura, wire));
+        let public_name = public_name_from_authority_ability_ura(&ability_ura)?;
         Ok(Self {
             wire: wire.to_string(),
             public_name,
@@ -2254,6 +2252,16 @@ impl AuthorityAbilityView {
             || scope_matches(pattern, &self.ability_ura)
             || scope_matches(pattern, &self.wire)
     }
+}
+
+fn public_name_from_authority_ability_ura(ability_ura: &str) -> Result<String, Status> {
+    AbilitySelector::parse(ability_ura)
+        .map(|selector| selector.public_name().to_string())
+        .map_err(|error| {
+            Status::invalid_argument(format!(
+                "authority ability projection derived non-canonical ability URA `{ability_ura}`: {error}"
+            ))
+        })
 }
 
 fn verified_session_authority_id(payload: &SessionAuthorityPayload) -> String {
@@ -2853,6 +2861,22 @@ mod tests {
         assert!(
             !err.message().contains(REASON_AUTHORITY_SUBJECT_MISMATCH),
             "missing subject must not be reported as authority mismatch: {err}"
+        );
+    }
+
+    #[test]
+    fn authority_ability_projection_rejects_non_canonical_ability_ura() {
+        let err = public_name_from_authority_ability_ura("easynet:///r/policy/device/dev-a")
+            .expect_err("authority projection must not repair non-Ability URA");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(
+            err.message().contains("non-canonical ability URA"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.message().contains("AUTHORITY_SCOPE_VIOLATION"),
+            "identity projection failures must happen before scope matching: {err}"
         );
     }
 
