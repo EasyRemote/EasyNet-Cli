@@ -1320,6 +1320,72 @@ for required in (
 PY
 }
 
+check_control_discovery_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local discovery="$cli_root/src/daemon/control/discovery.rs"
+  [[ -f "$discovery" ]] || fail "control discovery source is missing: $discovery"
+
+  "$PYTHON_BIN" - "$discovery" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+def item_with_attrs(kind: str, name: str) -> tuple[str, str]:
+    pattern = (
+        r"(?P<attrs>(?:#\[[^\n]+\]\n)*)"
+        + rf"pub {kind} {name} \{{(?P<body>.*?)\n\}}"
+    )
+    match = re.search(pattern, text, re.S)
+    if match is None:
+        raise SystemExit(f"control_discovery_schema:{name}:missing")
+    return match.group("attrs"), match.group("body")
+
+for kind, name in (
+    ("struct", "ControlDiscovery"),
+    ("struct", "DaemonIdentity"),
+    ("struct", "IpcVersionRange"),
+):
+    attrs, _ = item_with_attrs(kind, name)
+    if "#[serde(deny_unknown_fields)]" not in attrs:
+        raise SystemExit(f"control_discovery_schema:{name}:missing_deny_unknown_fields")
+
+_, discovery_body = item_with_attrs("struct", "ControlDiscovery")
+for field in (
+    "pub socket_path: Option<PathBuf>",
+    "pub pipe_name: Option<String>",
+    "pub invocation_endpoint: Option<PathBuf>",
+    "pub daemon_identity: Option<DaemonIdentity>",
+    "pub pid: u32",
+    "pub daemon_version: String",
+    "pub supported_ipc_versions: IpcVersionRange",
+    "pub capability_flags: Vec<String>",
+    "pub pages_port: Option<u16>",
+):
+    if field not in discovery_body:
+        raise SystemExit(f"control_discovery_schema:ControlDiscovery:missing_field:{field}")
+for retired in (
+    "adding a field later must use `#[serde(default)]`",
+    "so old libs ignore it",
+    "old libs ignore",
+):
+    if retired in text:
+        raise SystemExit(f"control_discovery_schema:retired_compat:{retired}")
+for required in (
+    "control_discovery_rejects_unknown_fields",
+    "unknown field `legacy_attach_hint`",
+    "control_discovery_rejects_unknown_nested_identity_and_version_fields",
+    "unknown field `legacy_role`",
+    "unknown field `legacy_version`",
+    "malformed_control_json_is_a_hard_error_not_silent_none",
+    "read_missing_file_returns_none_not_error",
+):
+    if required not in text:
+        raise SystemExit(f"control_discovery_schema:missing:{required}")
+PY
+}
+
 check_sdk_history_authority_subject_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -10303,6 +10369,53 @@ EOF
   if ( CLI_ROOT="$tmp/agent-spec-schema-legacy"; check_agent_spec_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected agent spec schema compatibility gate to fail"
   fi
+  mkdir -p "$tmp/control-discovery-schema-legacy/src/daemon/control"
+  cat >"$tmp/control-discovery-schema-legacy/src/daemon/control/discovery.rs" <<'EOF'
+/// Contents of `~/.easynet/control.json`. The layout is frozen as
+/// of PR-DAEMON; adding a field later must use `#[serde(default)]`
+/// so old libs ignore it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ControlDiscovery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipe_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_endpoint: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daemon_identity: Option<DaemonIdentity>,
+    pub pid: u32,
+    pub daemon_version: String,
+    pub supported_ipc_versions: IpcVersionRange,
+    #[serde(default)]
+    pub capability_flags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages_port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DaemonIdentity {
+    pub mode: String,
+    pub realm: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IpcVersionRange {
+    pub min: u16,
+    pub max: u16,
+}
+
+#[cfg(test)]
+mod tests {
+    fn malformed_control_json_is_a_hard_error_not_silent_none() {}
+    fn read_missing_file_returns_none_not_error() {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/control-discovery-schema-legacy"; check_control_discovery_schema_contract ) >/dev/null 2>&1; then
+    fail "self-test expected control discovery schema compatibility gate to fail"
+  fi
   mkdir -p "$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing" \
     "$tmp/remote-subject-provenance-legacy/src/ffi/invocation"
   cat >"$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
@@ -10446,6 +10559,7 @@ EOF
   check_local_agents_schema_contract
   check_resources_schema_contract
   check_agent_spec_schema_contract
+  check_control_discovery_schema_contract
   check_sdk_history_authority_subject_contract
   check_sdk_descriptor_resolution_error_vocabulary_contract
   check_sdk_ability_descriptor_not_found_vocabulary_contract
@@ -10575,6 +10689,7 @@ check_local_runtime_state_read_subject_contract
 check_runtime_state_kind_required_contract
 check_resources_schema_contract
 check_agent_spec_schema_contract
+check_control_discovery_schema_contract
 check_sdk_history_authority_subject_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_ability_descriptor_not_found_vocabulary_contract

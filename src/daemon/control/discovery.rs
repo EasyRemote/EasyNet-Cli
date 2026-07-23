@@ -52,10 +52,11 @@ static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// widening the range with a flag-day plan.
 pub const IPC_VERSION_V1: u16 = 1;
 
-/// Contents of `~/.easynet/control.json`. The layout is frozen as
-/// of PR-DAEMON; adding a field later must use `#[serde(default)]`
-/// so old libs ignore it.
+/// Contents of `~/.easynet/control.json`. The layout is an explicit local
+/// attach contract; once the file exists, unknown fields are malformed rather
+/// than ignored compatibility data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ControlDiscovery {
     /// Absolute path to the Unix Domain Socket (Linux/macOS) or
     /// pipe name (Windows). Exactly one is populated per platform.
@@ -117,6 +118,7 @@ pub struct ControlDiscovery {
 /// hub daemon or a different device process just because the sockets
 /// are reachable.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DaemonIdentity {
     /// Deployment mode string: `device`, `hub`, or `both`.
     pub mode: String,
@@ -128,6 +130,7 @@ pub struct DaemonIdentity {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct IpcVersionRange {
     pub min: u16,
     pub max: u16,
@@ -381,5 +384,58 @@ mod tests {
         std::fs::write(&p, b"not json").unwrap();
         let err = read(&p).unwrap_err();
         assert!(format!("{err}").contains("malformed"));
+    }
+
+    #[test]
+    fn control_discovery_rejects_unknown_fields() {
+        let dir = unique_tmp();
+        let p = dir.join(CONTROL_JSON_FILENAME);
+        let mut value = serde_json::to_value(sample()).expect("sample discovery JSON");
+        value
+            .as_object_mut()
+            .expect("sample discovery object")
+            .insert("legacy_attach_hint".to_string(), serde_json::json!(true));
+        std::fs::write(&p, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+
+        let err = read(&p).expect_err("unknown control.json fields must fail closed");
+        assert!(
+            err.to_string()
+                .contains("unknown field `legacy_attach_hint`"),
+            "unknown field should be reported explicitly: {err}"
+        );
+    }
+
+    #[test]
+    fn control_discovery_rejects_unknown_nested_identity_and_version_fields() {
+        let dir = unique_tmp();
+        let p = dir.join(CONTROL_JSON_FILENAME);
+        let mut value = serde_json::to_value(sample()).expect("sample discovery JSON");
+        value["daemon_identity"]
+            .as_object_mut()
+            .expect("daemon identity object")
+            .insert("legacy_role".to_string(), serde_json::json!("agent"));
+        std::fs::write(&p, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+        let identity_err = read(&p).expect_err("unknown daemon_identity fields must fail closed");
+        assert!(
+            identity_err
+                .to_string()
+                .contains("unknown field `legacy_role`"),
+            "unknown identity field should be reported explicitly: {identity_err}"
+        );
+
+        let mut value = serde_json::to_value(sample()).expect("sample discovery JSON");
+        value["supported_ipc_versions"]
+            .as_object_mut()
+            .expect("ipc version object")
+            .insert("legacy_version".to_string(), serde_json::json!(0));
+        std::fs::write(&p, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+        let version_err =
+            read(&p).expect_err("unknown supported_ipc_versions fields must fail closed");
+        assert!(
+            version_err
+                .to_string()
+                .contains("unknown field `legacy_version`"),
+            "unknown version field should be reported explicitly: {version_err}"
+        );
     }
 }
