@@ -26,6 +26,32 @@ final class AuthoritySupport {
     }
   }
 
+  static String authorityMetadataValue(Map<String, Object> metadata, String key) {
+    if (metadata == null || !metadata.containsKey(key) || metadata.get(key) == null) {
+      return "";
+    }
+    Object value = metadata.get(key);
+    if (!(value instanceof String string)) {
+      throw invalid(key + " must be a string metadata value");
+    }
+    return string.trim();
+  }
+
+  static SDKError authorityBindingError(
+      ErrorCode code, String message, Map<String, Object> details) {
+    return new SDKError(
+        code,
+        "authority",
+        RetryHint.NEVER,
+        false,
+        message,
+        "",
+        "",
+        "",
+        details,
+        null);
+  }
+
   static String decodeAuthorityMetadataProjection(byte[] raw, String metadataKey, String label) {
     Map<String, Object> object = JsonValueReader.object(raw, label + " metadata projection");
     Object direct = object.get("metadata_value");

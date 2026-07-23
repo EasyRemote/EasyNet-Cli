@@ -68,8 +68,10 @@ public final class InvocationBuilder {
       throw authorityError;
     }
     AuthoritySupport.validateAuthorityMetadata(metadata);
-    return new InvocationDraft(
-        new InvocationTuple(caller, callee, descriptor, subject, nonce, causalContext, argsJson, metadata));
+    InvocationTuple tuple =
+        new InvocationTuple(caller, callee, descriptor, subject, nonce, causalContext, argsJson, metadata);
+    InvocationAuthorityBindingValidator.validate(tuple);
+    return new InvocationDraft(tuple);
   }
 
   private static Map<String, Object> copyMetadata(Map<String, Object> value) {

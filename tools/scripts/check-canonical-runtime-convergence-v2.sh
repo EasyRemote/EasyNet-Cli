@@ -9807,6 +9807,71 @@ PY
   fi
 }
 
+check_java_sdk_invocation_authority_binding_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local builder="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationBuilder.java"
+  local validator="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationAuthorityBindingValidator.java"
+  local support="$cli_root/sdk/java/src/main/java/run/runtime/sdk/AuthoritySupport.java"
+  local tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  [[ -f "$builder" ]] || fail "Java InvocationBuilder source is missing: ${builder#$cli_root/}"
+  [[ -f "$validator" ]] || fail "Java InvocationAuthorityBindingValidator source is missing: ${validator#$cli_root/}"
+  [[ -f "$support" ]] || fail "Java AuthoritySupport source is missing: ${support#$cli_root/}"
+  [[ -f "$tests" ]] || fail "Java RuntimeCoreSeamTest source is missing: ${tests#$cli_root/}"
+
+  "$PYTHON_BIN" - "$builder" "$validator" "$support" "$tests" <<'PY'
+import sys
+from pathlib import Path
+
+builder, validator, support, tests = [Path(path).read_text(encoding="utf-8") for path in sys.argv[1:]]
+
+if "InvocationAuthorityBindingValidator.validate(tuple);" not in builder:
+    raise SystemExit("java_invocation_authority_binding:builder_validator_missing")
+if "new InvocationTuple(caller, callee, descriptor, subject, nonce, causalContext, argsJson, metadata)" not in builder:
+    raise SystemExit("java_invocation_authority_binding:builder_tuple_boundary_missing")
+if "return new InvocationDraft(\n        new InvocationTuple(" in builder:
+    raise SystemExit("java_invocation_authority_binding:builder_shape_only_metadata_validation")
+
+required_validator = {
+    "final class InvocationAuthorityBindingValidator": "validator_class_missing",
+    "DelegationProof.fromMetadata": "delegation_decode_missing",
+    "SessionAuthority.fromMetadata": "session_decode_missing",
+    "validateDelegation": "delegation_validation_missing",
+    "validateSession": "session_validation_missing",
+    "ErrorCode.AUTHORITY_SUBJECT_MISMATCH": "subject_mismatch_code_missing",
+    "delegation authority subject does not match invocation subject_ura": "delegation_subject_error_missing",
+    "session authority subject does not admit invocation subject_ura": "session_subject_error_missing",
+    "audienceAdmits": "audience_binding_missing",
+    "scopesAdmit": "scope_binding_missing",
+    "sessionAuthorityAdmitsSubject": "session_subject_predicate_missing",
+    "AbilityView": "ability_view_missing",
+}
+for needle, label in required_validator.items():
+    if needle not in validator:
+        raise SystemExit(f"java_invocation_authority_binding:{label}")
+
+required_support = {
+    "static String authorityMetadataValue": "authority_metadata_value_missing",
+    "static SDKError authorityBindingError": "authority_binding_error_missing",
+}
+for needle, label in required_support.items():
+    if needle not in support:
+        raise SystemExit(f"java_invocation_authority_binding:{label}")
+
+required_tests = {
+    '"invocationAuthorityMetadataIsTupleBound"': "test_selector_missing",
+    "private static void invocationAuthorityMetadataIsTupleBound()": "test_body_missing",
+    "ErrorCode.AUTHORITY_SUBJECT_MISMATCH": "subject_mismatch_test_missing",
+    "delegation authority subject does not match invocation subject_ura": "delegation_subject_test_missing",
+    "session authority subject does not admit invocation subject_ura": "session_subject_test_missing",
+    'payload.put("subject_ura", CALLEE)': "tuple_bound_delegation_fixture_missing",
+    'payload.put("scopes", List.of("observe.health"))': "tuple_bound_scope_fixture_missing",
+}
+for needle, label in required_tests.items():
+    if needle not in tests:
+        raise SystemExit(f"java_invocation_authority_binding:{label}")
+PY
+}
+
 check_java_sdk_runtime_receipt_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local result="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
@@ -10229,6 +10294,29 @@ PY
     > "$tmp/axon-java-authority-helper/sdk/java/src/main/java/run/axon/sdk/invocation/Axiom.java"
   if ( AXON_ROOT="$tmp/axon-java-authority-helper"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java empty authority proof helper gate to fail"
+  fi
+  mkdir -p "$tmp/cli-java-authority-binding-legacy/sdk/java/src/main/java/run/runtime/sdk" \
+    "$tmp/cli-java-authority-binding-legacy/sdk/java/src/test/java/run/runtime/sdk"
+  cat >"$tmp/cli-java-authority-binding-legacy/sdk/java/src/main/java/run/runtime/sdk/InvocationBuilder.java" <<'EOF'
+package run.runtime.sdk;
+public final class InvocationBuilder {
+  public InvocationDraft inspect() {
+    AuthoritySupport.validateAuthorityMetadata(metadata);
+    return new InvocationDraft(
+        new InvocationTuple(caller, callee, descriptor, subject, nonce, causalContext, argsJson, metadata));
+  }
+}
+EOF
+  cat >"$tmp/cli-java-authority-binding-legacy/sdk/java/src/main/java/run/runtime/sdk/AuthoritySupport.java" <<'EOF'
+package run.runtime.sdk;
+final class AuthoritySupport {
+  static void validateAuthorityMetadata(java.util.Map<String, Object> metadata) {}
+}
+EOF
+  printf 'package run.runtime.sdk; public final class RuntimeCoreSeamTest {}\n' \
+    > "$tmp/cli-java-authority-binding-legacy/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  if ( CLI_ROOT="$tmp/cli-java-authority-binding-legacy"; check_java_sdk_invocation_authority_binding_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Java invocation authority binding gate to fail"
   fi
   mkdir -p "$tmp/cli-java-receipt-legacy/sdk/java/src/main/java/run/runtime/sdk" \
     "$tmp/cli-java-receipt-legacy/sdk/java/src/test/java/run/runtime/sdk"
@@ -15272,6 +15360,7 @@ check_axon_process_local_signer_fallback_contract
 check_cli_rust_local_fast_signer_boundary_contract
 check_cli_signed_submission_boundary_contract
 check_receipt_proof_fact_contract
+check_java_sdk_invocation_authority_binding_contract
 check_java_sdk_runtime_receipt_projection_contract
 check_node_sdk_runtime_receipt_projection_contract
 check_swift_sdk_runtime_receipt_projection_contract

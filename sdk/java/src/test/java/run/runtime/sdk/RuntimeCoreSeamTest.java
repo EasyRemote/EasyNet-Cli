@@ -25,6 +25,7 @@ public final class RuntimeCoreSeamTest {
           "invocationResultUsesTerminalReceipt",
           "runtimeReceiptProofFactsAreMandatory",
           "authorityMetadataIsTypedAndMutuallyExclusive",
+          "invocationAuthorityMetadataIsTupleBound",
           "authorityMetadataRejectsAllZeroSessionOwners",
           "authorityMetadataBindsSessionAuthoritySubjects",
           "streamAndBidiLifecyclesAreBounded",
@@ -75,6 +76,8 @@ public final class RuntimeCoreSeamTest {
       case "runtimeReceiptProofFactsAreMandatory" -> runtimeReceiptProofFactsAreMandatory();
       case "authorityMetadataIsTypedAndMutuallyExclusive" ->
           authorityMetadataIsTypedAndMutuallyExclusive();
+      case "invocationAuthorityMetadataIsTupleBound" ->
+          invocationAuthorityMetadataIsTupleBound();
       case "authorityMetadataRejectsAllZeroSessionOwners" ->
           authorityMetadataRejectsAllZeroSessionOwners();
       case "authorityMetadataBindsSessionAuthoritySubjects" ->
@@ -370,7 +373,33 @@ public final class RuntimeCoreSeamTest {
                     List.of("invoke"),
                     10,
                     20,
-                    Map.of())));
+                Map.of())));
+  }
+
+  private static void invocationAuthorityMetadataIsTupleBound() {
+    DelegationProof validDelegation = DelegationProof.fromMetadata(delegationMetadataValue());
+    completeBuilder().authorityMetadata(validDelegation.metadata()).inspect();
+
+    Map<String, Object> delegationPayload = new LinkedHashMap<>();
+    delegationPayload.put("issuer_ura", "easynet:///r/example/user/alice");
+    delegationPayload.put("subject_ura", "easynet:///r/example/user/alice");
+    delegationPayload.put("caller_ura", CALLER);
+    delegationPayload.put("audience", CALLEE);
+    delegationPayload.put("scopes", List.of("observe.health"));
+    delegationPayload.put("issued_at_ms", 10);
+    delegationPayload.put("expires_at_ms", 20);
+    DelegationProof mismatchedDelegation =
+        DelegationProof.fromMetadata(authorityMetadataValue(delegationPayload));
+    expectSDKError(
+        ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
+        "delegation authority subject does not match invocation subject_ura",
+        () -> completeBuilder().authorityMetadata(mismatchedDelegation.metadata()).inspect());
+
+    SessionAuthority session = SessionAuthority.fromMetadata(sessionMetadataValue());
+    expectSDKError(
+        ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
+        "session authority subject does not admit invocation subject_ura",
+        () -> completeBuilder().authorityMetadata(session.metadata()).inspect());
   }
 
   private static void authorityMetadataRejectsAllZeroSessionOwners() {
@@ -659,10 +688,10 @@ public final class RuntimeCoreSeamTest {
   private static String delegationMetadataValue() {
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("issuer_ura", "easynet:///r/example/user/alice");
-    payload.put("subject_ura", "easynet:///r/example/user/alice");
+    payload.put("subject_ura", CALLEE);
     payload.put("caller_ura", CALLER);
     payload.put("audience", CALLEE);
-    payload.put("scopes", List.of("invoke"));
+    payload.put("scopes", List.of("observe.health"));
     payload.put("issued_at_ms", 10);
     payload.put("expires_at_ms", 20);
     return authorityMetadataValue(payload);
