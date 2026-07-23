@@ -3948,6 +3948,7 @@ from pathlib import Path
 remote = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 ffi_invocation = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
 production = remote.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
+ffi_production = ffi_invocation.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
 
 for retired in (
     "Public compatibility may still offer ergonomic subject omission",
@@ -3955,7 +3956,7 @@ for retired in (
     "RemoteInvocationSubject::Explicit",
     'Self::Explicit(value) => (value, "explicit subject")',
 ):
-    if retired in production or retired in ffi_invocation:
+    if retired in production or retired in ffi_production:
         raise SystemExit(f"remote_invocation_subject_provenance:retired_subject_policy:{retired}")
 
 for required in (
@@ -3970,8 +3971,13 @@ for required in (
     if required not in remote:
         raise SystemExit(f"remote_invocation_subject_provenance:missing_remote_state:{required}")
 
-if "RemoteInvocationSubject::DaemonTargetOwned(" not in ffi_invocation:
-    raise SystemExit("remote_invocation_subject_provenance:ffi_descriptor_probe_not_daemon_target_owned")
+for retired in (
+    "RemoteDescriptorCatalogProbe",
+    "prepare remote descriptor catalog probe",
+    "RemoteInvocationSubject::DaemonTargetOwned(",
+):
+    if retired in ffi_production:
+        raise SystemExit(f"remote_invocation_subject_provenance:retired_ffi_descriptor_probe:{retired}")
 
 for required_test in (
     'assert_eq!(plan.subject.policy_name(), "CallerDeclared")',
@@ -4960,7 +4966,7 @@ text = path.read_text(encoding="utf-8")
 production = text.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
 
 resolve = re.search(
-    r"fn runtime_resolve_descriptor_ref_json\([^)]*\)\s*->\s*Result<serde_json::Value,\s*DescriptorResolutionError>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn descriptor_ref_request_required_string",
+    r"fn runtime_resolve_descriptor_ref_json\([^)]*\)\s*->\s*Result<serde_json::Value,\s*DescriptorResolutionError>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn runtime_system_descriptor_catalog_entries",
     text,
     re.S,
 )
@@ -4971,64 +4977,23 @@ if "runtime_owner_ura_from_session(session).ok()" in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:runtime_owner_error_collapsed")
 if "resolve descriptor_ref runtime owner" not in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:runtime_owner_error_context_missing")
-if 'descriptor_ref_request_required_string(object, "caller_ura")' not in resolve_body:
-    raise SystemExit("ffi_descriptor_runtime_owner:explicit_caller_required_missing")
-if "RemoteDescriptorCatalogProbe::prepare(callee_ura, caller_ura, ability_ura.clone())" not in resolve_body:
-    raise SystemExit("ffi_descriptor_runtime_owner:remote_probe_state_missing")
 if "RemoteSystemInvocationIssuer::root_plan(" in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:remote_probe_inline_plan")
 if "invoke_remote_target)" in resolve_body or ".and_then(remote_invoke::invoke_remote_target)" in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:remote_probe_implicit_invoke")
-
-probe = re.search(
-    r"struct RemoteDescriptorCatalogProbe \{(?P<struct>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nimpl RemoteDescriptorCatalogProbe \{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\n#\[derive\(Debug, Clone, PartialEq, Eq\)\]\nenum DescriptorCatalogProbeSubject",
-    text,
-    re.S,
-)
-if probe is None:
-    raise SystemExit("ffi_descriptor_runtime_owner:remote_probe_state_object_missing")
-probe_struct = probe.group("struct")
-probe_body = probe.group("body")
-for required in (
-    "caller_signer:",
+for retired in (
+    'descriptor_ref_request_required_string(object, "caller_ura")',
+    "RemoteDescriptorCatalogProbe",
+    "DescriptorCatalogProbeSubject",
     "RemoteInvocationCallerSigner",
-):
-    if required not in probe_struct:
-        raise SystemExit(f"ffi_descriptor_runtime_owner:remote_probe_state_field_missing:{required}")
-for required in (
-    "fn prepare(",
     "load_remote_invocation_caller_signer(",
-    "prepare remote descriptor catalog probe signer",
-    "fn invoke(self)",
     "invoke_remote_target_with_caller_signer_typed(",
+    "runtime_meta_list_abilities",
 ):
-    if required not in probe_body:
-        raise SystemExit(f"ffi_descriptor_runtime_owner:remote_probe_state_missing:{required}")
-
-subject_state = re.search(
-    r"enum DescriptorCatalogProbeSubject \{(?P<enum>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nimpl DescriptorCatalogProbeSubject \{(?P<body>.*?)\n\}",
-    text,
-    re.S,
-)
-if subject_state is None:
-    raise SystemExit("ffi_descriptor_runtime_owner:probe_subject_state_missing")
-subject_enum = subject_state.group("enum")
-subject_body = subject_state.group("body")
-for required in (
-    "DeviceOwner { device_ura: String }",
-    "AuthorityOwner { meta_ability_ura: String }",
-):
-    if required not in subject_enum:
-        raise SystemExit(f"ffi_descriptor_runtime_owner:probe_subject_variant_missing:{required}")
-for required in (
-    "fn from_callee(",
-    "URAKind::Device",
-    "URAKind::Authority",
-    "parse_ura(meta_ability_ura)",
-    "fn into_ura(self) -> String",
-):
-    if required not in subject_body:
-        raise SystemExit(f"ffi_descriptor_runtime_owner:probe_subject_state_missing:{required}")
+    if retired in production:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:retired_remote_probe_path:{retired}")
+if "descriptor_ref not found in runtime realm catalog" not in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:realm_catalog_miss_error_missing")
 if "target_owned_descriptor_catalog_subject_ura" in production:
     raise SystemExit("ffi_descriptor_runtime_owner:retired_target_owned_subject_helper")
 
@@ -5041,24 +5006,20 @@ for retired in (
     'contains("NEGATIVE_REASON_NXDOMAIN")',
     'contains("ROUTE_NEGATIVE")',
     'contains("requires a caller signer")',
+    "CallerSignerUnavailable",
+    "OwnerOffline",
+    "RuntimeOffline",
 ):
     if retired in production:
         raise SystemExit(f"ffi_descriptor_runtime_owner:retired_remote_probe_classifier:{retired}")
 for required in (
     "enum DescriptorResolutionError",
     "RuntimeOwnerUnavailable(String)",
-    "CallerSignerUnavailable(String)",
-    "OwnerOffline(String)",
     "DescriptorNotFound(String)",
     "fn abi_projection(&self) -> (i32, ErrorProjection)",
     'code: "CALLER_IDENTITY_UNAVAILABLE"',
-    'code: "CALLER_SIGNER_UNAVAILABLE"',
-    'code: "DESCRIPTOR_OWNER_OFFLINE"',
     'code: "DESCRIPTOR_NOT_FOUND"',
     "error.abi_projection()",
-    "from_remote_probe_rejection(",
-    "RemoteInvocationFailure::DaemonRejected",
-    "invoke_remote_target_with_caller_signer_typed(",
 ):
     if required not in text:
         raise SystemExit(f"ffi_descriptor_runtime_owner:typed_projection_missing:{required}")
@@ -5070,10 +5031,8 @@ if "format!(\"runtime_resolve_descriptor_ref: {error:#}\")" in entry:
     raise SystemExit("ffi_descriptor_runtime_owner:ffi_entry_formats_error_before_projection")
 
 for required_test in (
-    "descriptor_catalog_probe_subject_is_explicit_owner_state",
-    "descriptor_catalog_probe_subject_rejects_non_owner_callee_kind",
-    "runtime_descriptor_remote_probe_requires_runtime_owner_identity",
-    "runtime_descriptor_remote_probe_requires_caller_signer_before_daemon_io",
+    "runtime_descriptor_resolver_requires_runtime_owner_for_realm_catalog",
+    "runtime_descriptor_resolver_does_not_remote_probe_realm_catalog_miss",
     "descriptor_resolution_errors_project_canonical_runtime_codes",
 ):
     if required_test not in text:
@@ -5095,29 +5054,21 @@ path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
 production = text.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
 
-classifier = re.search(
-    r"fn from_remote_probe_rejection\([^)]*\)\s*->\s*Self\s*\{(?P<body>.*?)\n    fn message\(",
-    production,
-    re.S,
-)
-if classifier is None:
-    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:classifier_missing")
-body = classifier.group("body")
-if "code: tonic::Code::NotFound" in body:
-    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:daemon_not_found_owner_offline_fallback")
-if '"NOT_FOUND"' in body:
-    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:generic_not_found_owner_offline_fallback")
-owner_offline_branch = body[body.find("RemoteInvocationFailure::InvocationRejected"):]
-for required in (
+for retired in (
+    "fn from_remote_probe_rejection(",
+    "RemoteInvocationFailure::",
+    "Self::OwnerOffline(",
     '"ROUTE_NEGATIVE"',
     '"DESCRIPTOR_OWNER_OFFLINE"',
-    "Self::OwnerOffline(error.to_string())",
+    '"NOT_FOUND"',
 ):
-    if required not in owner_offline_branch:
-        raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:typed_owner_offline_missing:{required}")
+    if retired in production:
+        raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:retired_remote_probe_classifier:{retired}")
+if "descriptor_ref not found in runtime realm catalog" not in production:
+    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:realm_catalog_miss_missing")
 for required_test in (
     "descriptor_resolution_errors_project_canonical_runtime_codes",
-    "descriptor_remote_probe_not_found_requires_typed_descriptor_vocabulary",
+    "runtime_descriptor_resolver_does_not_remote_probe_realm_catalog_miss",
 ):
     if required_test not in text:
         raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:missing_test:{required_test}")

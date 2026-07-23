@@ -8478,17 +8478,17 @@ if ffi_invocation.exists():
                 )
 
 
-# Rule 95: Remote descriptor probes are signed runtime invocations and must
-# have an explicit caller from the SDK tuple. Falling back to the local
-# runtime owner turns an incomplete descriptor-resolution request into a
-# misleading signer/owner-offline/route-not-visible failure.
+# Rule 95: Descriptor resolution is bounded catalog lookup. It must not fall
+# through into a hidden remote meta.list_abilities invocation; otherwise a
+# catalog miss is reclassified as signer custody, owner-offline, route, or
+# timeout state.
 ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
 if ffi_invocation.exists():
     text = source(ffi_invocation)
     production = text.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
     if "fn descriptor_resolution_error_projection(" in production:
         add(
-            "R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER",
+            "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
             ffi_invocation,
             line_number(text, production.find("fn descriptor_resolution_error_projection(")),
             "descriptor resolver FFI projection must use typed DescriptorResolutionError, not message-string classification",
@@ -8518,10 +8518,42 @@ if ffi_invocation.exists():
             'contains("requires a caller signer")',
             "descriptor resolver must not depend on signer error wording",
         ),
+        (
+            "RemoteDescriptorCatalogProbe",
+            "descriptor resolver must not keep remote probe fallback state",
+        ),
+        (
+            "DescriptorCatalogProbeSubject",
+            "descriptor resolver must not keep probe-specific subject state",
+        ),
+        (
+            "load_remote_invocation_caller_signer(",
+            "descriptor resolver must not load caller signers",
+        ),
+        (
+            "invoke_remote_target_with_caller_signer_typed(",
+            "descriptor resolver must not invoke remote targets",
+        ),
+        (
+            "RemoteInvocationFailure::",
+            "descriptor resolver must not classify remote invocation failures",
+        ),
+        (
+            "CallerSignerUnavailable",
+            "descriptor resolver must not expose signer failures as catalog lookup state",
+        ),
+        (
+            "OwnerOffline",
+            "descriptor resolver must not expose owner-offline failures as catalog lookup state",
+        ),
+        (
+            "RuntimeOffline",
+            "descriptor resolver must not expose remote transport failures as catalog lookup state",
+        ),
     ):
         if token in production:
             add(
-                "R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER",
+                "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
                 ffi_invocation,
                 line_number(text, text.find(token)),
                 detail,
@@ -8540,16 +8572,12 @@ if ffi_invocation.exists():
             "FFI descriptor resolver must project from typed error variants",
         ),
         (
-            "from_remote_probe_rejection(",
-            "descriptor resolver must map typed remote probe rejection states",
-        ),
-        (
-            "invoke_remote_target_with_caller_signer_typed(",
-            "descriptor resolver must invoke remote descriptor probes through typed submit",
+            "descriptor_ref not found in runtime realm catalog",
+            "descriptor resolver must fail closed as a realm catalog miss",
         ),
     ):
         if token not in text:
-            add("R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER", ffi_invocation, 1, detail)
+            add("R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG", ffi_invocation, 1, detail)
     resolve_body = rust_method_body(text, "runtime_resolve_descriptor_ref_json")
     if resolve_body is not None:
         offset, body = resolve_body
@@ -8569,21 +8597,21 @@ if ffi_invocation.exists():
         ):
             if token in body:
                 add(
-                    "R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER",
+                    "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
                     ffi_invocation,
                     line_number(text, offset + body.find(token)),
                     detail,
                 )
-        if 'descriptor_ref_request_required_string(object, "caller_ura")' not in body:
+        if 'descriptor_ref_request_required_string(object, "caller_ura")' in body:
             add(
-                "R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER",
+                "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
                 ffi_invocation,
-                line_number(text, offset),
-                "remote descriptor probe must require explicit caller_ura from the SDK tuple",
+                line_number(text, offset + body.find('descriptor_ref_request_required_string(object, "caller_ura")')),
+                "descriptor resolver must not require caller_ura for hidden remote probe fallback",
             )
     elif "runtime_resolve_descriptor_ref_json" in text:
         add(
-            "R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER",
+            "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG",
             ffi_invocation,
             1,
             "runtime_resolve_descriptor_ref_json must remain inspectable",

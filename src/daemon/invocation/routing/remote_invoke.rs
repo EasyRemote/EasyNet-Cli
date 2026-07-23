@@ -48,9 +48,6 @@ pub(crate) type RemoteInvocationCallerSigner =
 
 #[derive(Debug)]
 pub(crate) enum RemoteInvocationFailure {
-    RuntimeOffline {
-        socket_path: String,
-    },
     RequestBuild(String),
     Transport(String),
     DaemonRejected {
@@ -70,11 +67,6 @@ pub(crate) enum RemoteInvocationFailure {
 impl std::fmt::Display for RemoteInvocationFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RuntimeOffline { socket_path } => write!(
-                f,
-                "daemon not running (local gRPC listener unreachable at {socket_path}). \
-                 Start it with `easynet runtime start`."
-            ),
             Self::RequestBuild(message) => write!(f, "{message}"),
             Self::Transport(message) => write!(f, "{message}"),
             Self::DaemonRejected {
@@ -614,15 +606,6 @@ fn load_remote_invocation_caller_signer_for_carrier(
     )
 }
 
-pub(crate) fn invoke_remote_target_with_caller_signer_typed(
-    request: RemoteInvocationRequest<'_>,
-    signer: RemoteInvocationCallerSigner,
-) -> Result<Value, RemoteInvocationFailure> {
-    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
-    ensure_remote_invocation_daemon_accepting_typed(&socket_path)?;
-    invoke_remote_target_on_ready_socket_typed(request, signer, socket_path)
-}
-
 fn ensure_remote_invocation_daemon_accepting(socket_path: &std::path::Path) -> anyhow::Result<()> {
     if !crate::support::platform::local_daemon_grpc::probe_accepting(socket_path) {
         bail!(
@@ -630,17 +613,6 @@ fn ensure_remote_invocation_daemon_accepting(socket_path: &std::path::Path) -> a
              Start it with `easynet runtime start`.",
             socket_path.display()
         );
-    }
-    Ok(())
-}
-
-fn ensure_remote_invocation_daemon_accepting_typed(
-    socket_path: &std::path::Path,
-) -> Result<(), RemoteInvocationFailure> {
-    if !crate::support::platform::local_daemon_grpc::probe_accepting(socket_path) {
-        return Err(RemoteInvocationFailure::RuntimeOffline {
-            socket_path: socket_path.display().to_string(),
-        });
     }
     Ok(())
 }
