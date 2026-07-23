@@ -1844,19 +1844,6 @@ mod tests {
         .expect("test descriptor binding")
     }
 
-    fn descriptor_ref_for_version(
-        callee_ura: &str,
-        ability: &str,
-        descriptor_version: &str,
-    ) -> String {
-        crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
-            callee_ura,
-            ability,
-            &descriptor_binding_for_version(descriptor_version),
-        )
-        .expect("test ability must resolve to a descriptor ref")
-    }
-
     fn catalog_call_mode(mode: axon_sdk::invocation::CallMode) -> crate::daemon::ability::CallMode {
         match mode {
             axon_sdk::invocation::CallMode::Rpc => crate::daemon::ability::CallMode::Rpc,
@@ -1868,7 +1855,6 @@ mod tests {
     fn descriptor_ref_for_call_mode(
         callee_ura: &str,
         ability: &str,
-        descriptor_version: &str,
         mode: axon_sdk::invocation::CallMode,
     ) -> String {
         if let Ok(descriptor_ref) = axon_sdk::invocation::canonical_ability_descriptor_ref(ability)
@@ -1880,7 +1866,20 @@ mod tests {
             ability,
             catalog_call_mode(mode),
         )
-        .unwrap_or_else(|_| descriptor_ref_for_version(callee_ura, ability, descriptor_version))
+        .expect("test ability must resolve through canonical catalog descriptor authority")
+    }
+
+    fn explicit_test_descriptor_ref(
+        callee_ura: &str,
+        ability: &str,
+        descriptor_version: &str,
+    ) -> String {
+        crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            callee_ura,
+            ability,
+            &descriptor_binding_for_version(descriptor_version),
+        )
+        .expect("explicit proof-bound test descriptor ref")
     }
 
     /// Proof-bound RPC options mirroring what the control plane stamps in
@@ -1967,6 +1966,26 @@ mod tests {
         carrier_v1_call_signed_as(call_id, ability, ability, args)
     }
 
+    fn carrier_v1_explicit_test_call(call_id: u64, ability: &str, args: Vec<u8>) -> InvokeBidiDown {
+        carrier_v1_explicit_test_call_with_mode(
+            call_id,
+            ability,
+            args,
+            axon_sdk::invocation::CallMode::Rpc,
+        )
+    }
+
+    fn carrier_v1_explicit_test_call_with_mode(
+        call_id: u64,
+        ability: &str,
+        args: Vec<u8>,
+        mode: axon_sdk::invocation::CallMode,
+    ) -> InvokeBidiDown {
+        let descriptor_ref =
+            explicit_test_descriptor_ref(TEST_DEVICE_URA, ability, TEST_DESCRIPTOR_VERSION);
+        carrier_v1_call_signed_as_with_mode(call_id, ability, &descriptor_ref, args, mode)
+    }
+
     fn carrier_v1_call_signed_as(
         call_id: u64,
         request_ability: &str,
@@ -1993,12 +2012,8 @@ mod tests {
         use ed25519_dalek::Signer as _;
 
         let signing_key = carrier_v1_signing_key();
-        let signed_descriptor_ref = descriptor_ref_for_call_mode(
-            TEST_DEVICE_URA,
-            signed_ability,
-            TEST_DESCRIPTOR_VERSION,
-            mode,
-        );
+        let signed_descriptor_ref =
+            descriptor_ref_for_call_mode(TEST_DEVICE_URA, signed_ability, mode);
         let mut envelope = crate::daemon::invocation::ProtoEnvelope::from_target(
             TEST_CALLER_URA,
             "easynet:///r/t/device/d1",
@@ -2051,6 +2066,23 @@ mod tests {
         let mut frame = carrier_v1_call_signed_as_with_mode(
             call_id,
             ability,
+            ability,
+            args,
+            axon_sdk::invocation::CallMode::Bidi,
+        );
+        if let Some(DownPayload::DispatchCall(call)) = frame.payload.as_mut() {
+            call.open_bidi = true;
+        }
+        frame
+    }
+
+    fn carrier_v1_explicit_test_bidi_open(
+        call_id: u64,
+        ability: &str,
+        args: Vec<u8>,
+    ) -> InvokeBidiDown {
+        let mut frame = carrier_v1_explicit_test_call_with_mode(
+            call_id,
             ability,
             args,
             axon_sdk::invocation::CallMode::Bidi,
@@ -2199,7 +2231,7 @@ mod tests {
         session_tx.set_negotiated_contract(1);
 
         disp.handle_down(
-            carrier_v1_bidi_open(9, "test.echo", b"{}".to_vec()),
+            carrier_v1_explicit_test_bidi_open(9, "test.echo", b"{}".to_vec()),
             &session_tx,
         )
         .await
@@ -2238,7 +2270,7 @@ mod tests {
         session_tx.set_negotiated_contract(1);
 
         disp.handle_down(
-            carrier_v1_call(7, "test.echo", br#"{"hello":"v1"}"#.to_vec()),
+            carrier_v1_explicit_test_call(7, "test.echo", br#"{"hello":"v1"}"#.to_vec()),
             &session_tx,
         )
         .await
@@ -2358,7 +2390,12 @@ mod tests {
         session_tx.set_negotiated_contract(1);
 
         disp.handle_down(
-            carrier_v1_call(18, "screen.subscribe", b"{}".to_vec()),
+            carrier_v1_explicit_test_call_with_mode(
+                18,
+                "screen.subscribe",
+                b"{}".to_vec(),
+                axon_sdk::invocation::CallMode::Stream,
+            ),
             &session_tx,
         )
         .await
@@ -2374,6 +2411,11 @@ mod tests {
         };
         assert_eq!(admission.call_id, 18);
         assert!(!admission.terminal);
+        assert!(
+            admission.failure.is_none(),
+            "stream open returned carrier control failure before admission: {:?}",
+            admission.failure
+        );
         assert_eq!(
             admission
                 .admission_receipt

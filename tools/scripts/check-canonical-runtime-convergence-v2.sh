@@ -4916,6 +4916,46 @@ for index, text in enumerate(callers, start=1):
 PY
 }
 
+check_local_session_descriptor_ref_test_authority_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local session_dispatcher="$cli_root/src/daemon/invocation/dispatch/local_session_dispatcher.rs"
+
+  [[ -f "$session_dispatcher" ]] || fail "local session dispatcher source is missing: ${session_dispatcher#$cli_root/}"
+
+  "$PYTHON_BIN" - "$session_dispatcher" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+
+for token, code in (
+    ("fn descriptor_ref_for_version", "retired_descriptor_ref_synthesis_helper"),
+    ("descriptor_ref_for_version(", "retired_descriptor_ref_synthesis_call"),
+    ("unwrap_or_else(|_| descriptor_ref_for_version", "catalog_failure_descriptor_ref_repair"),
+):
+    if token in text:
+        raise SystemExit(f"local_session_descriptor_ref_test_authority:{code}")
+
+helper = re.search(
+    r"fn descriptor_ref_for_call_mode\s*\([^)]*\)\s*->\s*String\s*\{(?P<body>.*?)\n    \}",
+    text,
+    re.S,
+)
+if not helper:
+    raise SystemExit("local_session_descriptor_ref_test_authority:helper_missing")
+body = helper.group("body")
+required = {
+    "canonical_ability_descriptor_ref(ability)": "explicit_descriptor_ref_parse_missing",
+    "catalog_descriptor_ref_for_wire(": "catalog_descriptor_ref_authority_missing",
+    "expect(\"test ability must resolve through canonical catalog descriptor authority\")": "fail_closed_catalog_error_missing",
+}
+for fragment, code in required.items():
+    if fragment not in body:
+        raise SystemExit(f"local_session_descriptor_ref_test_authority:{code}")
+PY
+}
+
 check_local_daemon_loopback_explicit_subject_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local grpc="$cli_root/src/support/platform/local_daemon_grpc.rs"
@@ -7105,6 +7145,38 @@ EOF
   if ( CLI_ROOT="$tmp/cli-daemon-route-projection-legacy"; check_daemon_invocation_service_descriptor_ref_route_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected daemon invocation service descriptor projection fallback gate to fail"
   fi
+  mkdir -p "$tmp/cli-local-session-descriptor-authority-legacy/src/daemon/invocation/dispatch"
+  cat >"$tmp/cli-local-session-descriptor-authority-legacy/src/daemon/invocation/dispatch/local_session_dispatcher.rs" <<'EOF'
+fn descriptor_ref_for_version(
+    callee_ura: &str,
+    ability: &str,
+    descriptor_version: &str,
+) -> String {
+    crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        callee_ura,
+        ability,
+        descriptor_version,
+    )
+    .unwrap()
+}
+
+fn descriptor_ref_for_call_mode(
+    callee_ura: &str,
+    ability: &str,
+    descriptor_version: &str,
+    mode: axon_sdk::invocation::CallMode,
+) -> String {
+    crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+        callee_ura,
+        ability,
+        mode,
+    )
+    .unwrap_or_else(|_| descriptor_ref_for_version(callee_ura, ability, descriptor_version))
+}
+EOF
+  if ( CLI_ROOT="$tmp/cli-local-session-descriptor-authority-legacy"; check_local_session_descriptor_ref_test_authority_contract ) >/dev/null 2>&1; then
+    fail "self-test expected local session descriptor-ref synthesis gate to fail"
+  fi
   mkdir -p "$tmp/cli-ffi-descriptor-owner-legacy/src/ffi/invocation"
   cat >"$tmp/cli-ffi-descriptor-owner-legacy/src/ffi/invocation/mod.rs" <<'EOF'
 fn descriptor_resolution_error_projection(message: &str) -> (i32, ErrorProjection) {
@@ -9129,6 +9201,7 @@ EOF
   check_ability_manifest_exec_absence_contract
   check_runtime_wire_target_state_contract
   check_invocation_wire_callee_target_contract
+  check_local_session_descriptor_ref_test_authority_contract
   check_local_daemon_loopback_explicit_subject_contract
   check_sdk_directory_projection_fail_closed_contract
   check_sdk_principal_projection_fail_closed_contract
@@ -9247,6 +9320,7 @@ check_ability_deploy_product_neutrality_contract
 check_ability_manifest_exec_absence_contract
 check_runtime_wire_target_state_contract
 check_invocation_wire_callee_target_contract
+check_local_session_descriptor_ref_test_authority_contract
 check_local_daemon_loopback_explicit_subject_contract
 check_sdk_directory_projection_fail_closed_contract
 check_sdk_principal_projection_fail_closed_contract
