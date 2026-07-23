@@ -9,6 +9,7 @@ use super::heartbeat::spawn_federation_heartbeat;
 use super::supervisor::{DeviceSessionPhase, PreludeStep, SessionPhaseTracker};
 use super::tasks::AbortOnDrop;
 use super::SessionError;
+use crate::daemon::ability::builtins::resources::pages::identity::pages_user_from_env_or_credentials;
 use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use crate::daemon::identity::self_identity::CanonicalSigner;
@@ -357,26 +358,22 @@ async fn run_hosted_agent_advertise_prelude(
 }
 
 fn resolve_hosted_agent_user_segment(hub_endpoint: &str) -> Result<String, SessionError> {
-    if let Some(value) = std::env::var("EASYNET_PAGES_USER")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    {
-        return Ok(value);
-    }
-    let credentials = crate::daemon::persistence::config::load_credentials().map_err(|error| {
-        SessionError::HostedAgentPreludeFailed {
-            endpoint: hub_endpoint.to_string(),
-            reason: format!("load credentials for hosted-agent owner projection: {error}"),
-        }
-    })?;
-    credentials
-        .username_slug()
-        .map(str::to_string)
-        .map_err(|error| SessionError::HostedAgentPreludeFailed {
-            endpoint: hub_endpoint.to_string(),
-            reason: format!("project username for hosted-agent owner projection: {error}"),
-        })
+    let credentials =
+        crate::daemon::persistence::config::load_credentials_optional().map_err(|error| {
+            SessionError::HostedAgentPreludeFailed {
+                endpoint: hub_endpoint.to_string(),
+                reason: format!("load credentials for hosted-agent owner projection: {error}"),
+            }
+        })?;
+    pages_user_from_env_or_credentials(credentials.as_ref())
+    .map_err(|error| SessionError::HostedAgentPreludeFailed {
+        endpoint: hub_endpoint.to_string(),
+        reason: format!("project username for hosted-agent owner projection: {error}"),
+    })?
+    .ok_or_else(|| SessionError::HostedAgentPreludeFailed {
+        endpoint: hub_endpoint.to_string(),
+        reason: "project username for hosted-agent owner projection: no user-root Pages identity is bound".to_string(),
+    })
 }
 
 async fn advertise_hosted_agent_entry(
@@ -1447,7 +1444,7 @@ mod tests {
                     reason.contains("project username for hosted-agent owner projection"),
                     "{reason}"
                 );
-                assert!(reason.contains("missing username"), "{reason}");
+                assert!(reason.contains("no user-root Pages identity is bound"), "{reason}");
             }
             other => panic!("expected hosted-agent credential projection failure, got {other:?}"),
         }

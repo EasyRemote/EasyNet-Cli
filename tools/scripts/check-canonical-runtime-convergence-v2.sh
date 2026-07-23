@@ -2320,7 +2320,7 @@ for retired in (
         raise SystemExit(f"pages_identity_retired_fallback:{retired}")
 for required in (
     "load_credentials_optional()?",
-    "fn pages_user_from_env_or_credentials(",
+    "pub(crate) fn pages_user_from_env_or_credentials(",
     "fn pages_realm_from_env_or_credentials(",
     "fn non_blank_env(key: &str) -> Option<String>",
     ".username_slug()",
@@ -3632,15 +3632,21 @@ if helper_start < 0:
 helper_end = text.find("\nasync fn advertise_hosted_agent_entry", helper_start)
 helper_body = text[helper_start : helper_end if helper_end >= 0 else len(text)]
 for required in (
-    "EASYNET_PAGES_USER",
-    ".map(|value| value.trim().to_string())",
-    "load_credentials()",
-    ".username_slug()",
+    "load_credentials_optional()",
+    "pages_user_from_env_or_credentials(",
+    "no user-root Pages identity is bound",
     "SessionError::HostedAgentPreludeFailed",
     "project username for hosted-agent owner projection",
 ):
     if required not in helper_body:
         raise SystemExit(f"session_prelude_hosted_agent_owner_projector_missing:{required}")
+for retired in (
+    "EASYNET_PAGES_USER",
+    ".username_slug()",
+    "load_credentials()",
+):
+    if retired in helper_body:
+        raise SystemExit(f"session_prelude_hosted_agent_owner_projector_not_shared:{retired}")
 for test in (
     "hosted_agent_owner_segment_accepts_explicit_dev_override",
     "hosted_agent_owner_segment_reads_valid_paired_credentials",

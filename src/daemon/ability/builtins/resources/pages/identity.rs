@@ -84,7 +84,7 @@ impl PagesIdentity {
     }
 }
 
-fn pages_user_from_env_or_credentials(
+pub(crate) fn pages_user_from_env_or_credentials(
     credentials: Option<&crate::daemon::persistence::config::Credentials>,
 ) -> anyhow::Result<Option<String>> {
     if let Some(user) = non_blank_env("EASYNET_PAGES_USER") {
