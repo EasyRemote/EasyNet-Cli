@@ -763,6 +763,22 @@ test("typed errors preserve stable categories and source refs", () => {
   );
   assert.equal(
     new sdk.SDKError({ code: sdk.ErrorCode.ROUTE_UNAVAILABLE, stage: "routing", message: "missing" }).errorClass(),
+    sdk.ErrorClass.ROUTING,
+  );
+  assert.equal(
+    new sdk.SDKError({ code: sdk.ErrorCode.CALLER_IDENTITY_UNAVAILABLE, stage: "caller_identity", message: "missing identity" }).errorClass(),
+    sdk.ErrorClass.PERMISSION,
+  );
+  assert.equal(
+    new sdk.SDKError({ code: sdk.ErrorCode.CALLER_SIGNER_UNAVAILABLE, stage: "caller_identity", message: "missing signer" }).errorClass(),
+    sdk.ErrorClass.ADMISSION,
+  );
+  assert.equal(
+    new sdk.SDKError({ code: sdk.ErrorCode.DESCRIPTOR_NOT_FOUND, stage: "routing", message: "missing descriptor" }).errorClass(),
+    sdk.ErrorClass.ROUTING,
+  );
+  assert.equal(
+    new sdk.SDKError({ code: sdk.ErrorCode.RUNTIME_OFFLINE, stage: "transport", message: "offline" }).errorClass(),
     sdk.ErrorClass.AVAILABILITY,
   );
   assert.deepEqual(sdk.profileErrorDetails("health", { check: "runtime" }), {

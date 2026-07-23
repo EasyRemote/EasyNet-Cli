@@ -3,12 +3,18 @@ import Foundation
 public enum SDKErrorCode: String, Sendable {
     case invalidArgument = "INVALID_ARGUMENT"
     case invalidHandle = "INVALID_HANDLE"
+    case nullPointer = "NULL_POINTER"
+    case invalidUTF8 = "INVALID_UTF8"
+    case notInitialized = "NOT_INITIALIZED"
+    case alreadyInit = "ALREADY_INIT"
+    case runtimeOffline = "RUNTIME_OFFLINE"
     case permissionDenied = "PERMISSION_DENIED"
     case admissionDenied = "ADMISSION_DENIED"
     case httpAuthDenied = "HTTP_AUTH_DENIED"
     case signatureDenied = "SIGNATURE_DENIED"
     case policyDenied = "POLICY_DENIED"
     case authorityDenied = "AUTHORITY_DENIED"
+    case authoritySubjectMismatch = "AUTHORITY_SUBJECT_MISMATCH"
     case abilityNotFound = "ABILITY_NOT_FOUND"
     case routeUnavailable = "ROUTE_UNAVAILABLE"
     case executionFailed = "EXECUTION_FAILED"
@@ -16,17 +22,33 @@ public enum SDKErrorCode: String, Sendable {
     case cancelled = "CANCELLED"
     case invalidInvocation = "INVALID_INVOCATION"
     case protocolMismatch = "PROTOCOL_MISMATCH"
+    case versionMismatch = "VERSION_MISMATCH"
     case versionIncompatible = "VERSION_INCOMPATIBLE"
     case controlOnly = "CONTROL_ONLY"
     case transport = "TRANSPORT"
     case protocolFailure = "PROTOCOL"
+    case notFound = "NOT_FOUND"
+    case abilityFailed = "ABILITY_FAILED"
     case notImplemented = "NOT_IMPLEMENTED"
     case generic = "GENERIC"
+    case callerIdentityUnavailable = "CALLER_IDENTITY_UNAVAILABLE"
+    case callerSignerUnavailable = "CALLER_SIGNER_UNAVAILABLE"
+    case descriptorNotFound = "DESCRIPTOR_NOT_FOUND"
+    case descriptorOwnerOffline = "DESCRIPTOR_OWNER_OFFLINE"
+    case descriptorModeUnsupported = "DESCRIPTOR_MODE_UNSUPPORTED"
+    case descriptorStale = "DESCRIPTOR_STALE"
+    case runtimeRouteUnavailable = "RUNTIME_ROUTE_UNAVAILABLE"
+    case invocationCancelled = "INVOCATION_CANCELLED"
+    case invocationTimeout = "INVOCATION_TIMEOUT"
+    case terminalReceiptUnavailable = "TERMINAL_RECEIPT_UNAVAILABLE"
+    case receiptProofFactsMissing = "RECEIPT_PROOF_FACTS_MISSING"
+    case providerUnavailable = "PROVIDER_UNAVAILABLE"
 }
 
 public enum SDKErrorClass: String, Sendable {
     case validation
     case handle
+    case lifecycle
     case availability
     case permission
     case admission
@@ -90,31 +112,33 @@ public struct SDKError: Error, Sendable, CustomStringConvertible {
 
     public var errorClass: SDKErrorClass {
         switch code {
-        case .invalidArgument, .invalidInvocation:
+        case .invalidArgument, .nullPointer, .invalidUTF8, .invalidInvocation:
             return .validation
         case .invalidHandle:
             return .handle
-        case .routeUnavailable, .transport:
+        case .notInitialized, .alreadyInit:
+            return .lifecycle
+        case .runtimeOffline, .transport:
             return .availability
-        case .permissionDenied, .httpAuthDenied:
+        case .permissionDenied, .httpAuthDenied, .callerIdentityUnavailable:
             return .permission
-        case .admissionDenied, .signatureDenied, .policyDenied, .authorityDenied, .executionFailed:
+        case .admissionDenied, .signatureDenied, .policyDenied, .authorityDenied, .authoritySubjectMismatch, .executionFailed, .abilityFailed, .callerSignerUnavailable, .receiptProofFactsMissing:
             return .admission
-        case .abilityNotFound:
+        case .abilityNotFound, .routeUnavailable, .notFound, .descriptorNotFound, .descriptorOwnerOffline, .descriptorModeUnsupported, .descriptorStale, .runtimeRouteUnavailable, .providerUnavailable:
             return .routing
-        case .timeout:
+        case .timeout, .invocationTimeout:
             return .timeout
-        case .cancelled:
+        case .cancelled, .invocationCancelled:
             return .cancellation
         case .protocolFailure, .protocolMismatch:
             return .protocolFailure
-        case .versionIncompatible:
+        case .versionMismatch, .versionIncompatible:
             return .version
         case .controlOnly:
             return .control
         case .notImplemented:
             return .unsupported
-        case .generic:
+        case .terminalReceiptUnavailable, .generic:
             return .generic
         }
     }

@@ -527,8 +527,20 @@ public final class RuntimeCoreSeamTest {
         sdkError(ErrorCode.AUTHORITY_DENIED).errorClass() == ErrorClass.ADMISSION,
         "authority admission class");
     check(
-        sdkError(ErrorCode.ROUTE_UNAVAILABLE).errorClass() == ErrorClass.AVAILABILITY,
-        "route availability class");
+        sdkError(ErrorCode.ROUTE_UNAVAILABLE).errorClass() == ErrorClass.ROUTING,
+        "route routing class");
+    check(
+        sdkError(ErrorCode.CALLER_IDENTITY_UNAVAILABLE).errorClass() == ErrorClass.PERMISSION,
+        "caller identity permission class");
+    check(
+        sdkError(ErrorCode.CALLER_SIGNER_UNAVAILABLE).errorClass() == ErrorClass.ADMISSION,
+        "caller signer admission class");
+    check(
+        sdkError(ErrorCode.DESCRIPTOR_NOT_FOUND).errorClass() == ErrorClass.ROUTING,
+        "descriptor routing class");
+    check(
+        sdkError(ErrorCode.RUNTIME_OFFLINE).errorClass() == ErrorClass.AVAILABILITY,
+        "runtime offline availability class");
   }
 
   private static void abiCompatibleAcceptsExactVersion() {

@@ -388,6 +388,22 @@ final class RuntimeCoreSeamTests: XCTestCase {
         )
         XCTAssertEqual(
             SDKError(code: .routeUnavailable, stage: "routing", message: "missing").errorClass,
+            .routing
+        )
+        XCTAssertEqual(
+            SDKError(code: .callerIdentityUnavailable, stage: "caller_identity", message: "missing identity").errorClass,
+            .permission
+        )
+        XCTAssertEqual(
+            SDKError(code: .callerSignerUnavailable, stage: "caller_identity", message: "missing signer").errorClass,
+            .admission
+        )
+        XCTAssertEqual(
+            SDKError(code: .descriptorNotFound, stage: "routing", message: "missing descriptor").errorClass,
+            .routing
+        )
+        XCTAssertEqual(
+            SDKError(code: .runtimeOffline, stage: "transport", message: "offline").errorClass,
             .availability
         )
     }

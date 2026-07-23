@@ -9,6 +9,7 @@ const ERROR_CODES = new Set([
   "INVALID_UTF8",
   "NOT_INITIALIZED",
   "ALREADY_INIT",
+  "RUNTIME_OFFLINE",
   "PERMISSION_DENIED",
   "ADMISSION_DENIED",
   "HTTP_AUTH_DENIED",
@@ -32,6 +33,18 @@ const ERROR_CODES = new Set([
   "ABILITY_FAILED",
   "NOT_IMPLEMENTED",
   "GENERIC",
+  "CALLER_IDENTITY_UNAVAILABLE",
+  "CALLER_SIGNER_UNAVAILABLE",
+  "DESCRIPTOR_NOT_FOUND",
+  "DESCRIPTOR_OWNER_OFFLINE",
+  "DESCRIPTOR_MODE_UNSUPPORTED",
+  "DESCRIPTOR_STALE",
+  "RUNTIME_ROUTE_UNAVAILABLE",
+  "INVOCATION_CANCELLED",
+  "INVOCATION_TIMEOUT",
+  "TERMINAL_RECEIPT_UNAVAILABLE",
+  "RECEIPT_PROOF_FACTS_MISSING",
+  "PROVIDER_UNAVAILABLE",
 ]);
 
 export const ErrorCode = Object.freeze(
@@ -2180,11 +2193,12 @@ function errorClassForCode(code) {
     case ErrorCode.NOT_INITIALIZED:
     case ErrorCode.ALREADY_INIT:
       return ErrorClass.LIFECYCLE;
+    case ErrorCode.RUNTIME_OFFLINE:
     case ErrorCode.TRANSPORT:
-    case ErrorCode.ROUTE_UNAVAILABLE:
       return ErrorClass.AVAILABILITY;
     case ErrorCode.PERMISSION_DENIED:
     case ErrorCode.HTTP_AUTH_DENIED:
+    case ErrorCode.CALLER_IDENTITY_UNAVAILABLE:
       return ErrorClass.PERMISSION;
     case ErrorCode.ADMISSION_DENIED:
     case ErrorCode.SIGNATURE_DENIED:
@@ -2193,13 +2207,24 @@ function errorClassForCode(code) {
     case ErrorCode.AUTHORITY_SUBJECT_MISMATCH:
     case ErrorCode.EXECUTION_FAILED:
     case ErrorCode.ABILITY_FAILED:
+    case ErrorCode.CALLER_SIGNER_UNAVAILABLE:
+    case ErrorCode.RECEIPT_PROOF_FACTS_MISSING:
       return ErrorClass.ADMISSION;
     case ErrorCode.ABILITY_NOT_FOUND:
+    case ErrorCode.ROUTE_UNAVAILABLE:
     case ErrorCode.NOT_FOUND:
+    case ErrorCode.DESCRIPTOR_NOT_FOUND:
+    case ErrorCode.DESCRIPTOR_OWNER_OFFLINE:
+    case ErrorCode.DESCRIPTOR_MODE_UNSUPPORTED:
+    case ErrorCode.DESCRIPTOR_STALE:
+    case ErrorCode.RUNTIME_ROUTE_UNAVAILABLE:
+    case ErrorCode.PROVIDER_UNAVAILABLE:
       return ErrorClass.ROUTING;
     case ErrorCode.TIMEOUT:
+    case ErrorCode.INVOCATION_TIMEOUT:
       return ErrorClass.TIMEOUT;
     case ErrorCode.CANCELLED:
+    case ErrorCode.INVOCATION_CANCELLED:
       return ErrorClass.CANCELLATION;
     case ErrorCode.PROTOCOL_MISMATCH:
     case ErrorCode.PROTOCOL:

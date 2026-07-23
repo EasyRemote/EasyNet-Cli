@@ -22,6 +22,7 @@
         "SIGNATURE_DENIED",
         "POLICY_DENIED",
         "AUTHORITY_DENIED",
+        "AUTHORITY_SUBJECT_MISMATCH",
         "ABILITY_NOT_FOUND",
         "ROUTE_UNAVAILABLE",
         "EXECUTION_FAILED",
@@ -37,7 +38,19 @@
         "NOT_FOUND",
         "ABILITY_FAILED",
         "NOT_IMPLEMENTED",
-        "GENERIC"
+        "GENERIC",
+        "CALLER_IDENTITY_UNAVAILABLE",
+        "CALLER_SIGNER_UNAVAILABLE",
+        "DESCRIPTOR_NOT_FOUND",
+        "DESCRIPTOR_OWNER_OFFLINE",
+        "DESCRIPTOR_MODE_UNSUPPORTED",
+        "DESCRIPTOR_STALE",
+        "RUNTIME_ROUTE_UNAVAILABLE",
+        "INVOCATION_CANCELLED",
+        "INVOCATION_TIMEOUT",
+        "TERMINAL_RECEIPT_UNAVAILABLE",
+        "RECEIPT_PROOF_FACTS_MISSING",
+        "PROVIDER_UNAVAILABLE"
       ]
     },
     "stage": {"type": "string", "minLength": 1},
