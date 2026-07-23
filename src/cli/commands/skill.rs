@@ -11,10 +11,12 @@
 
 use clap::{Args, Subcommand};
 use console::style;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 
-use crate::daemon::resources::skills::projection::InstalledSkillProjection;
+use crate::daemon::resources::skills::projection::{
+    InstalledSkillProjection, SkillListResponse, SkillRecordResponse, SkillRemoveReceipt,
+};
 use crate::daemon::resources::skills::store::format_bytes;
 use crate::support::platform::local_invoke::{invoke_local_ability, LocalRuntimeStateReadIssuer};
 use crate::support::platform::output;
@@ -164,12 +166,6 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
-struct SkillListResponse {
-    #[serde(default)]
-    items: Vec<InstalledSkillProjection>,
-}
-
 fn invoke_daemon_skill_list(args: &ListArgs) -> anyhow::Result<Vec<InstalledSkillProjection>> {
     let response = LocalRuntimeStateReadIssuer::invoke(
         "skill.list",
@@ -202,16 +198,21 @@ fn invoke_daemon_skill_upgrade(args: &UpgradeArgs) -> anyhow::Result<InstalledSk
 }
 
 fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
-    invoke_local_ability(
+    let response = invoke_local_ability(
         "skill.remove",
         json!({
             "name": args.name,
             "agent": args.agent,
         }),
     )?;
+    let receipt: SkillRemoveReceipt = serde_json::from_value(response)
+        .map_err(|err| anyhow::anyhow!("skill.remove returned invalid receipt: {err}"))?;
+    if !receipt.ok {
+        anyhow::bail!("skill.remove returned non-ok receipt");
+    }
     output::success(&format!(
         "Removed skill '{}' from agent '{}'",
-        args.name, args.agent
+        receipt.name, receipt.agent
     ));
     Ok(())
 }
@@ -220,12 +221,12 @@ fn decode_skill_record_response(
     response: serde_json::Value,
     ability: &str,
 ) -> anyhow::Result<InstalledSkillProjection> {
-    let record = response
-        .get("record")
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("{ability} response missing `record`"))?;
-    serde_json::from_value(record)
-        .map_err(|err| anyhow::anyhow!("{ability} returned invalid record: {err}"))
+    let decoded: SkillRecordResponse = serde_json::from_value(response)
+        .map_err(|err| anyhow::anyhow!("{ability} returned invalid response: {err}"))?;
+    if !decoded.ok {
+        anyhow::bail!("{ability} returned non-ok response");
+    }
+    Ok(decoded.record)
 }
 
 fn emit_install_result(args: &InstallArgs, rec: &InstalledSkillProjection) -> anyhow::Result<()> {

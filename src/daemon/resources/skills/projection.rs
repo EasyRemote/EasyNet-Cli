@@ -48,6 +48,57 @@ pub struct InstalledSkillProjection {
     pub resource_ura: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillRecordResponse {
+    pub ok: bool,
+    pub record: InstalledSkillProjection,
+}
+
+impl SkillRecordResponse {
+    pub fn ok(record: InstalledSkillProjection) -> Self {
+        Self { ok: true, record }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillListResponse {
+    #[serde(default)]
+    pub items: Vec<InstalledSkillProjection>,
+}
+
+impl SkillListResponse {
+    pub fn from_items(items: Vec<InstalledSkillProjection>) -> Self {
+        Self { items }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillRemoveReceipt {
+    pub ok: bool,
+    pub name: String,
+    pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_ura: Option<String>,
+}
+
+impl SkillRemoveReceipt {
+    pub fn success(
+        name: impl Into<String>,
+        agent: impl Into<String>,
+        resource_ura: Option<String>,
+    ) -> Self {
+        Self {
+            ok: true,
+            name: name.into(),
+            agent: agent.into(),
+            resource_ura,
+        }
+    }
+}
+
 impl InstalledSkillProjection {
     pub fn from_record(record: InstallRecord, resource_ura: Option<String>) -> Self {
         Self {
@@ -126,6 +177,59 @@ mod tests {
         assert!(
             error.to_string().contains("legacy_resource_ref"),
             "strict projection error should name the unknown field: {error}"
+        );
+    }
+
+    #[test]
+    fn skill_record_response_preserves_public_envelope_shape() {
+        let response =
+            SkillRecordResponse::ok(InstalledSkillProjection::from_record(record(), None));
+        let wire = serde_json::to_value(&response).expect("response serializes");
+
+        assert_eq!(wire["ok"], true);
+        assert_eq!(wire["record"]["name"], "alpha");
+        assert_eq!(wire["record"]["content_hash"], "sha256:wire");
+    }
+
+    #[test]
+    fn skill_list_response_preserves_items_shape() {
+        let response = SkillListResponse::from_items(vec![InstalledSkillProjection::from_record(
+            record(),
+            None,
+        )]);
+        let wire = serde_json::to_value(&response).expect("response serializes");
+
+        assert_eq!(wire["items"][0]["name"], "alpha");
+        assert_eq!(wire["items"][0]["content_hash"], "sha256:wire");
+    }
+
+    #[test]
+    fn skill_remove_receipt_preserves_public_shape_and_rejects_unknown_fields() {
+        let receipt = SkillRemoveReceipt::success(
+            "alpha",
+            "alice",
+            Some("easynet:///r/acme/resource/agent.u.alice/skill/alpha".to_string()),
+        );
+        let wire = serde_json::to_value(&receipt).expect("receipt serializes");
+
+        assert_eq!(wire["ok"], true);
+        assert_eq!(wire["name"], "alpha");
+        assert_eq!(wire["agent"], "alice");
+        assert_eq!(
+            wire["resource_ura"],
+            "easynet:///r/acme/resource/agent.u.alice/skill/alpha"
+        );
+
+        let error = serde_json::from_value::<SkillRemoveReceipt>(serde_json::json!({
+            "ok": true,
+            "name": "alpha",
+            "agent": "alice",
+            "legacy_removed": true
+        }))
+        .expect_err("unknown receipt fields must fail closed");
+        assert!(
+            error.to_string().contains("legacy_removed"),
+            "strict receipt error should name unknown field: {error}"
         );
     }
 }

@@ -36,7 +36,7 @@ use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentAggregateSnapshot, AgentHostedSkillOwnerProjection,
     AgentRegisteredWorkspace, AgentSkillLayout,
 };
-use crate::daemon::resources::skills::projection::InstalledSkillProjection;
+use crate::daemon::resources::skills::projection::{InstalledSkillProjection, SkillListResponse};
 
 /// Skill inventory handler.
 ///
@@ -82,7 +82,7 @@ pub(crate) fn handle(args: Value) -> anyhow::Result<Value> {
         })
         .collect();
 
-    Ok(json!({ "items": items }))
+    Ok(serde_json::to_value(SkillListResponse::from_items(items))?)
 }
 
 /// Builds the installed-skill inventory in one bounded pass.

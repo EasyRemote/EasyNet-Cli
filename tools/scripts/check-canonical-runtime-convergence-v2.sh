@@ -1343,32 +1343,47 @@ for required in (
     'pub resource_ura: Option<String>',
     '#[serde(rename = "content_hash")]',
     "pub fn from_record(record: InstallRecord, resource_ura: Option<String>) -> Self",
+    "pub struct SkillRecordResponse",
+    "pub fn ok(record: InstalledSkillProjection) -> Self",
+    "pub struct SkillListResponse",
+    "pub fn from_items(items: Vec<InstalledSkillProjection>) -> Self",
+    "pub struct SkillRemoveReceipt",
+    "pub fn success(",
     "installed_skill_projection_owns_resource_ura_without_mutating_install_record_schema",
     "installed_skill_projection_rejects_unknown_response_fields",
+    "skill_record_response_preserves_public_envelope_shape",
+    "skill_list_response_preserves_items_shape",
+    "skill_remove_receipt_preserves_public_shape_and_rejects_unknown_fields",
 ):
     if required not in projection:
         raise SystemExit(f"skill_record_projection_boundary:projection_missing:{required}")
 for retired in (
     "record_with_resource_ura",
     "serde_json::to_value(&record)",
+    'json!({ "ok": true, "record"',
 ):
     if retired in install:
         raise SystemExit(f"skill_record_projection_boundary:install_retired:{retired}")
 for retired in (
     "serde_json::to_value(&r)",
     'obj.insert("resource_ura".to_string()',
+    'json!({ "items": items })',
 ):
     if retired in list_src:
         raise SystemExit(f"skill_record_projection_boundary:list_retired:{retired}")
 for required in (
     "InstalledSkillProjection::from_record(record, resource_ura)",
+    "SkillRecordResponse::ok(record)",
+    "SkillRemoveReceipt::success(",
     "project_install_record_returns_response_projection_with_resource_ura",
+    "remove_handler_returns_typed_receipt_projection",
 ):
     if required not in install:
         raise SystemExit(f"skill_record_projection_boundary:install_missing:{required}")
 for required in (
     "Vec<InstalledSkillProjection>",
     "InstalledSkillProjection::from_record(r, resource_ura)",
+    "SkillListResponse::from_items(items)",
     "list_handler_projects_resource_ura_without_extending_install_record_schema",
 ):
     if required not in list_src:
@@ -1377,11 +1392,19 @@ for retired in (
     "store::{format_bytes, InstallRecord}",
     "anyhow::Result<InstallRecord>",
     "Vec<InstallRecord>",
+    "struct SkillListResponse",
+    '.get("record")',
 ):
     if retired in cli_skill:
         raise SystemExit(f"skill_record_projection_boundary:cli_retired:{retired}")
-if "projection::InstalledSkillProjection" not in cli_skill:
-    raise SystemExit("skill_record_projection_boundary:cli_projection_decode_missing")
+for required in (
+    "InstalledSkillProjection",
+    "SkillListResponse",
+    "SkillRecordResponse",
+    "SkillRemoveReceipt",
+):
+    if required not in cli_skill:
+        raise SystemExit(f"skill_record_projection_boundary:cli_projection_decode_missing:{required}")
 PY
 }
 

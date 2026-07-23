@@ -57,7 +57,9 @@ use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::federation::read_model::owner_projection::skill_resource_ura;
-use crate::daemon::resources::skills::projection::InstalledSkillProjection;
+use crate::daemon::resources::skills::projection::{
+    InstalledSkillProjection, SkillRecordResponse, SkillRemoveReceipt,
+};
 use crate::daemon::resources::skills::store::{install_skill, remove_skill, upgrade_skill};
 
 use crate::daemon::ability::dispatch::OwnerKind;
@@ -102,8 +104,8 @@ fn install_handler(args: Value) -> anyhow::Result<Value> {
     let pin = args.get("pin").and_then(Value::as_str);
     let agent_ura = args.get("agent_ura").and_then(Value::as_str);
 
-    let record = install_skill(source, agent, pin)?;
-    Ok(json!({ "ok": true, "record": project_install_record(record, agent_ura) }))
+    let record = project_install_record(install_skill(source, agent, pin)?, agent_ura);
+    Ok(serde_json::to_value(SkillRecordResponse::ok(record))?)
 }
 
 /// `skill.remove` handler.
@@ -122,15 +124,12 @@ fn remove_handler(args: Value) -> anyhow::Result<Value> {
     let agent_ura = args.get("agent_ura").and_then(Value::as_str);
 
     remove_skill(name, agent)?;
-    let mut receipt = json!({
-        "ok": true,
-        "name": name,
-        "agent": agent,
-    });
-    if let Some(ura) = agent_ura.and_then(|agent_ura| skill_resource_ura(agent_ura, name)) {
-        receipt["resource_ura"] = json!(ura);
-    }
-    Ok(receipt)
+    let resource_ura = agent_ura.and_then(|agent_ura| skill_resource_ura(agent_ura, name));
+    Ok(serde_json::to_value(SkillRemoveReceipt::success(
+        name,
+        agent,
+        resource_ura,
+    ))?)
 }
 
 /// `skill.upgrade` handler.
@@ -151,8 +150,8 @@ fn upgrade_handler(args: Value) -> anyhow::Result<Value> {
     let to = args.get("to").and_then(Value::as_str);
     let agent_ura = args.get("agent_ura").and_then(Value::as_str);
 
-    let record = upgrade_skill(name, agent, to)?;
-    Ok(json!({ "ok": true, "record": project_install_record(record, agent_ura) }))
+    let record = project_install_record(upgrade_skill(name, agent, to)?, agent_ura);
+    Ok(serde_json::to_value(SkillRecordResponse::ok(record))?)
 }
 
 fn project_install_record(
@@ -314,6 +313,40 @@ mod tests {
     fn remove_handler_rejects_missing_agent() {
         let err = remove_handler(json!({"name": "alive-video"})).unwrap_err();
         assert!(format!("{err}").contains("`agent`"));
+    }
+
+    #[test]
+    fn remove_handler_returns_typed_receipt_projection() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let agent_name = "skill-remove-receipt";
+        let agent_root = crate::daemon::persistence::config::agents_root().join(agent_name);
+        std::fs::create_dir_all(agent_root.join("skills").join("alpha")).expect("skill dir");
+
+        let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
+        let mut agent = crate::daemon::persistence::agent_registry::AgentEntry::new(
+            crate::daemon::persistence::agent_registry::AgentType::Codex,
+            None,
+        );
+        agent.root_path = Some(agent_root);
+        registry.agents.insert(agent_name.to_string(), agent);
+        crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save registry");
+
+        let response = remove_handler(json!({
+            "name": "alpha",
+            "agent": agent_name,
+            "agent_ura": "easynet:///r/acme/agent/u1.claude",
+        }))
+        .expect("remove");
+        let receipt: SkillRemoveReceipt =
+            serde_json::from_value(response).expect("typed remove receipt");
+
+        assert!(receipt.ok);
+        assert_eq!(receipt.name, "alpha");
+        assert_eq!(receipt.agent, agent_name);
+        assert_eq!(
+            receipt.resource_ura.as_deref(),
+            Some("easynet:///r/acme/resource/agent.u1.claude/skill/alpha")
+        );
     }
 
     #[test]
