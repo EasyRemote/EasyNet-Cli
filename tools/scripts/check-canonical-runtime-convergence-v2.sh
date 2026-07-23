@@ -9157,6 +9157,14 @@ if "load_runtime_caller_signer(caller_ura.clone())" not in loader:
     raise SystemExit("remote_invocation_signer_first:canonical_caller_signer_loader_missing")
 if "RuntimeSigningIdentity::load_default" in loader:
     raise SystemExit("remote_invocation_signer_first:runtime_owner_loader_used_for_caller")
+if "caller_signer_unavailable_error(label, &caller_ura)" not in loader:
+    raise SystemExit("remote_invocation_signer_first:sanitized_signer_error_missing")
+if "{err}" in loader or ": {err}" in loader:
+    raise SystemExit("remote_invocation_signer_first:raw_signer_error_interpolated")
+if "fn caller_signer_unavailable_error(label: &str, caller_ura: &str)" not in production:
+    raise SystemExit("remote_invocation_signer_first:sanitized_signer_error_helper_missing")
+if "keyring entry not found" in production or "keyring rejected request" in production:
+    raise SystemExit("remote_invocation_signer_first:keyring_detail_in_production_error")
 
 unary = fn_body("invoke_remote_target", "load_remote_invocation_caller_signer")
 stream = fn_body("invoke_remote_target_stream", "invoke_remote_target_bidi_json_frames")
@@ -9185,6 +9193,7 @@ for required_test in (
     "remote_unary_loads_caller_signer_before_daemon_socket_probe",
     "remote_stream_loads_caller_signer_before_daemon_socket_probe",
     "remote_bidi_loads_caller_signer_before_daemon_socket_probe",
+    "caller signer readiness must not expose keyring implementation details",
 ):
     if required_test not in text:
         raise SystemExit(f"remote_invocation_signer_first:missing_test:{required_test}")

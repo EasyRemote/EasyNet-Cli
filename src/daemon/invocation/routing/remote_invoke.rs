@@ -596,13 +596,14 @@ fn load_remote_invocation_caller_signer_for_carrier(
 ) -> anyhow::Result<RemoteInvocationCallerSigner> {
     let caller_ura = caller_ura.to_string();
     let label = carrier.signer_error_label();
-    crate::daemon::identity::self_identity::load_runtime_caller_signer(caller_ura.clone()).map_err(
-        |err| {
-            anyhow!(
-                "{label} requires a caller signer for `{caller_ura}`; \
-                 load or provision that identity in the local key service: {err}"
-            )
-        },
+    crate::daemon::identity::self_identity::load_runtime_caller_signer(caller_ura.clone())
+        .map_err(|_err| caller_signer_unavailable_error(label, &caller_ura))
+}
+
+fn caller_signer_unavailable_error(label: &str, caller_ura: &str) -> anyhow::Error {
+    anyhow!(
+        "{label} requires a caller signer for `{caller_ura}`; \
+         load or provision that identity in the local key service"
     )
 }
 
@@ -1298,12 +1299,7 @@ fn local_daemon_federation_signer(
     crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(
         local_daemon_ura.to_string(),
     )
-    .map_err(|err| {
-        anyhow!(
-            "{ability} requires a caller signer for `{local_daemon_ura}`; \
-             load or provision that identity in the local key service: {err}"
-        )
-    })
+    .map_err(|_err| caller_signer_unavailable_error(ability, local_daemon_ura))
 }
 
 /// `federation.revoke` against the local daemon's gRPC
@@ -1669,6 +1665,12 @@ mod tests {
         assert!(
             !message.contains("daemon not running"),
             "caller signer readiness must run before daemon socket probe: {message}"
+        );
+        assert!(
+            !message.contains("keyring entry not found")
+                && !message.contains("self-identity:")
+                && !message.contains("keyring rejected request"),
+            "caller signer readiness must not expose keyring implementation details: {message}"
         );
     }
 
