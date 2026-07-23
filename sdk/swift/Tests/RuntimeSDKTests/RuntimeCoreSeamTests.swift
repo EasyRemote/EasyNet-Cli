@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import XCTest
 @testable import RuntimeSDK
@@ -97,13 +98,13 @@ final class RuntimeCoreSeamTests: XCTestCase {
     }
 
     func testInvocationPrepareSignSubmitPreservesCompleteTuple() async throws {
-        let transport = MemoryRuntimeTransport(descriptor: descriptor)
+        let transport = MemoryRuntimeTransport(callee: callee, descriptor: descriptor)
         let runtime = RuntimeClient(transport: transport)
         let draft = try completeDraft(runtime)
 
         let result = try await runtime.invoke(draft)
         XCTAssertTrue(result.ok)
-        XCTAssertEqual(result.terminalReceipt["receipt_ref"], "opaque-receipt-ref")
+        XCTAssertEqual(result.terminalReceipt["invocation_id"], "inv-direct")
 
         let prepared = try await runtime.prepare(draft, options: ["deadline_ms": 1000])
         XCTAssertFalse(prepared.submitReady())
@@ -150,13 +151,22 @@ final class RuntimeCoreSeamTests: XCTestCase {
     }
 
     func testInvocationResultUsesTerminalReceipt() throws {
-        let canonical = try InvocationResult.fromJSON(
-            Data(
-                #"{"ok":true,"terminal_state":"Completed","terminal_receipt":{"receipt_ref":"canonical-terminal"}}"#
-                    .utf8
-            )
+        let terminal = canonicalRuntimeReceipt(
+            invocationId: "inv-result",
+            receiptType: "completed",
+            state: "Completed",
+            index: 1,
+            callee: callee,
+            descriptor: descriptor
         )
-        XCTAssertEqual(canonical.terminalReceipt["receipt_ref"], "canonical-terminal")
+        let canonical = try InvocationResult.fromJSON(
+            jsonData([
+                "ok": true,
+                "terminal_state": "Completed",
+                "terminal_receipt": terminal,
+            ])
+        )
+        XCTAssertEqual(canonical.terminalReceipt["invocation_id"], "inv-result")
 
         expectSyncSDKError(.invalidArgument) {
             _ = try InvocationResult.fromJSON(
@@ -174,6 +184,66 @@ final class RuntimeCoreSeamTests: XCTestCase {
         expectSyncSDKError(.invalidArgument) {
             _ = try InvocationResult.fromJSON(
                 Data(#"{"ok":true,"terminal_state":"Completed","terminal_receipt":"bad"}"#.utf8)
+            )
+        }
+        var mismatchedProofHash = terminal
+        var authorityProof = mismatchedProofHash["authority_proof"] as! [String: Any]
+        authorityProof["proof_hash_hex"] = String(repeating: "ff", count: 32)
+        mismatchedProofHash["authority_proof"] = authorityProof
+        expectSyncSDKError(.invalidArgument, "authority_proof_hash_mismatch") {
+            _ = try InvocationResult.fromJSON(
+                jsonData([
+                    "ok": true,
+                    "terminal_state": "Completed",
+                    "terminal_receipt": mismatchedProofHash,
+                ])
+            )
+        }
+
+        var bindingHashReceipt = terminal
+        var bindingHashProof = bindingHashReceipt["authority_proof"] as! [String: Any]
+        bindingHashProof["proof_payload_base64"] = ""
+        bindingHashProof["proof_hash_hex"] = authorityBindingProofHashSelf(callee)
+        bindingHashProof.removeValue(forKey: "signature")
+        bindingHashReceipt["authority_proof"] = bindingHashProof
+        let bindingHash = try InvocationResult.fromJSON(
+            jsonData([
+                "ok": true,
+                "terminal_state": "Completed",
+                "terminal_receipt": bindingHashReceipt,
+            ])
+        )
+        XCTAssertEqual(bindingHash.terminalReceipt["invocation_id"], "inv-result")
+
+        var wrongIssuer = terminal
+        var wrongIssuerProof = wrongIssuer["authority_proof"] as! [String: Any]
+        wrongIssuerProof["issuer"] = [
+            "ura": "easynet:///r/example/device/other",
+            "profile": "axon-strict-v2",
+        ]
+        wrongIssuer["authority_proof"] = wrongIssuerProof
+        expectSyncSDKError(.invalidArgument, "authority_proof issuer does not match callee_binding") {
+            _ = try InvocationResult.fromJSON(
+                jsonData([
+                    "ok": true,
+                    "terminal_state": "Completed",
+                    "terminal_receipt": wrongIssuer,
+                ])
+            )
+        }
+
+        var hostedSignerWithoutAttestation = terminal
+        hostedSignerWithoutAttestation["signer_binding"] = [
+            "ura": "easynet:///r/example/device/runtime-host",
+            "profile": "axon-strict-v2",
+        ]
+        expectSyncSDKError(.invalidArgument, "hosted runtime receipt is missing host_attestation_base64") {
+            _ = try InvocationResult.fromJSON(
+                jsonData([
+                    "ok": true,
+                    "terminal_state": "Completed",
+                    "terminal_receipt": hostedSignerWithoutAttestation,
+                ])
             )
         }
     }
@@ -382,7 +452,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
     }
 
     func testBidiFrame0IsRequiredBeforeRuntimeSessionEntry() async throws {
-        let transport = MemoryRuntimeTransport(descriptor: descriptor)
+        let transport = MemoryRuntimeTransport(callee: callee, descriptor: descriptor)
         let runtime = RuntimeClient(transport: transport)
         await expectSDKError(.invalidArgument) {
             _ = try await runtime.openBidi(try self.completeDraft(runtime), frame0: nil)
@@ -440,7 +510,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
     }
 
     func testCanonicalSigningMaterialComesFromPrepare() async throws {
-        let runtime = RuntimeClient(transport: MemoryRuntimeTransport(descriptor: descriptor))
+        let runtime = RuntimeClient(transport: MemoryRuntimeTransport(callee: callee, descriptor: descriptor))
         let prepared = try await runtime.prepare(completeDraft(runtime), options: ["deadline_ms": 1000])
         XCTAssertEqual(prepared.signingMaterial.descriptorRef, descriptor)
         XCTAssertEqual(Data(base64Encoded: prepared.signingMaterial.canonicalBytesBase64), Data("canonical".utf8))
@@ -473,7 +543,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
     }
 
     func testPreparedInvocationCannotBeSubmitted() async throws {
-        let runtime = RuntimeClient(transport: MemoryRuntimeTransport(descriptor: descriptor))
+        let runtime = RuntimeClient(transport: MemoryRuntimeTransport(callee: callee, descriptor: descriptor))
         let prepared = try await runtime.prepare(completeDraft(runtime), options: ["deadline_ms": 1000])
         await expectSDKError(.invalidArgument) { _ = try await runtime.submitSigned(prepared) }
     }
@@ -631,7 +701,10 @@ actor MemoryRuntimeTransport: RuntimeTransport {
     private var eventHandleId: Int64 = 7
     private var openedBidi = 0
 
-    init(descriptor: String) {
+    private let callee: String
+
+    init(callee: String, descriptor: String) {
+        self.callee = callee
         self.descriptor = descriptor
     }
 
@@ -640,7 +713,16 @@ actor MemoryRuntimeTransport: RuntimeTransport {
             ok: true,
             terminalState: .completed,
             outputJSON: "{\"ok\":true}",
-            terminalReceipt: ["receipt_ref": "opaque-receipt-ref", "receipt_hash": "opaque-hash"]
+            terminalReceipt: try RuntimeReceipt(
+                canonicalRuntimeReceipt(
+                    invocationId: "inv-direct",
+                    receiptType: "completed",
+                    state: "Completed",
+                    index: 1,
+                    callee: callee,
+                    descriptor: descriptor
+                )
+            ).projection()
         )
     }
 
@@ -686,7 +768,14 @@ actor MemoryRuntimeTransport: RuntimeTransport {
                 "ok": true,
                 "terminal_state": "Completed",
                 "output_json": ["done": true],
-                "terminal_receipt": ["receipt_ref": "opaque-receipt-ref"],
+                "terminal_receipt": canonicalRuntimeReceipt(
+                    invocationId: "inv-await",
+                    receiptType: "completed",
+                    state: "Completed",
+                    index: 1,
+                    callee: callee,
+                    descriptor: descriptor
+                ),
             ],
             options: [.sortedKeys]
         )
@@ -834,6 +923,90 @@ private func object(_ data: Data) throws -> [String: Any] {
         throw SDKError.validation("test", "JSON object required")
     }
     return object
+}
+
+private func jsonData(_ object: [String: Any]) throws -> Data {
+    try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func canonicalRuntimeReceipt(
+    invocationId: String,
+    receiptType: String,
+    state: String,
+    index: Int,
+    callee: String,
+    descriptor: String
+) -> [String: Any] {
+    let proofPayload = Data("canonical-runtime-test-proof".utf8)
+    return [
+        "receipt_ura": "easynet:///r/example/resource/runtime/invocation/\(invocationId)/receipt/\(index)",
+        "invocation_id": invocationId,
+        "receipt_type": receiptType,
+        "state": state,
+        "index": index,
+        "timestamp_unix_ms": 1_783_100_000_000 + index,
+        "prev_receipt_hash_hex": String(repeating: "00", count: 32),
+        "self_hash_hex": String(format: "%064x", index + 1),
+        "cleanup_complete": !["admitted", "Admitted", "ADMITTED"].contains(state),
+        "caller_binding": agentBinding("easynet:///r/example/agent/alice.sdk"),
+        "callee_binding": agentBinding(callee),
+        "subject_binding": agentBinding(callee),
+        "invocation_nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+        "causal_binding_kind": "none",
+        "causal_binding": ["form": "none"],
+        "callee_signature": [
+            "algorithm": "ed25519",
+            "signature_base64": Data(repeating: 0x71, count: 64).base64EncodedString(),
+        ],
+        "signer_binding": agentBinding(callee),
+        "authority_binding_kind": "self",
+        "authority_binding": ["kind": "self", "principal_ura": callee],
+        "ability_binding": descriptor,
+        "subject_ref": ["kind": 1, "ura": callee, "profile": "axon-strict-v2"],
+        "descriptor_version": "1.0.0",
+        "schema_hash_hex": String(repeating: "11", count: 32),
+        "impl_hash_hex": String(repeating: "22", count: 32),
+        "runtime_env": "swift-test",
+        "authority_proof": [
+            "proof_type": "self",
+            "binding_kind": "self",
+            "binding": ["kind": "self", "principal_ura": callee],
+            "proof_payload_base64": proofPayload.base64EncodedString(),
+            "proof_hash_hex": sha256Hex(proofPayload),
+            "issuer": agentBinding(callee),
+            "signature": [
+                "algorithm": "ed25519",
+                "signature_base64": Data(repeating: 0x72, count: 64).base64EncodedString(),
+            ],
+            "admission_hook": "test.runtime.admission",
+        ],
+        "input_hash_hex": String(repeating: "33", count: 32),
+        "output_hash_hex": String(repeating: "44", count: 32),
+        "parent_receipts": [],
+    ]
+}
+
+private func agentBinding(_ ura: String) -> [String: String] {
+    ["ura": ura, "profile": "axon-strict-v2"]
+}
+
+private func authorityBindingProofHashSelf(_ principalURA: String) -> String {
+    var canonical = Data()
+    canonical.append(0x01)
+    canonical.appendLengthPrefixed(Data(principalURA.utf8))
+    return sha256Hex(canonical)
+}
+
+private func sha256Hex(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
+
+private extension Data {
+    mutating func appendLengthPrefixed(_ data: Data) {
+        var count = UInt32(data.count).bigEndian
+        Swift.withUnsafeBytes(of: &count) { append(contentsOf: $0) }
+        append(data)
+    }
 }
 
 private func expectSyncSDKError(

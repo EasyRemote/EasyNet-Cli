@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum InvocationTerminalState: String, Sendable {
@@ -48,8 +49,194 @@ public struct InvocationResult: Sendable {
             terminalState: terminalState,
             outputJSON: runtimeOptionalJSONObjectString(object["output_json"]),
             error: nil,
-            terminalReceipt: try runtimeRequiredTerminalReceipt(object)
+            terminalReceipt: try runtimeRequiredTerminalReceipt(object, terminalState: terminalState)
         )
+    }
+}
+
+public struct RuntimeReceipt {
+    public let invocationId: String
+    public let receiptType: String
+    public let state: String
+    private let raw: [String: Any]
+
+    public init(_ raw: [String: Any]) throws {
+        self.raw = raw
+        invocationId = try runtimeRequiredString(raw, "invocation_id", "runtime_receipt")
+        receiptType = try runtimeRequiredString(raw, "receipt_type", "runtime_receipt")
+        state = try runtimeRequiredString(raw, "state", "runtime_receipt")
+        try validateSummary()
+    }
+
+    public func lifecycleState() throws -> String {
+        try RuntimeReceipt.canonicalLifecycleState(state)
+    }
+
+    public func projection() -> [String: String] {
+        raw.compactMapValues { $0 as? String }
+    }
+
+    private func validateSummary() throws {
+        let lifecycleState = try lifecycleState()
+        guard lifecycleState != "UNSPECIFIED" else {
+            throw SDKError.validation("runtime_receipt", "runtime receipt lifecycle state must not be UNSPECIFIED")
+        }
+        guard receiptType == RuntimeReceipt.canonicalReceiptType(lifecycleState) else {
+            throw SDKError.validation("runtime_receipt", "runtime receipt receipt_type does not match its lifecycle state")
+        }
+        _ = try runtimeReceiptHash(raw, "prev_receipt_hash_hex", allowZero: true)
+        _ = try runtimeReceiptHash(raw, "self_hash_hex", allowZero: false)
+        try RuntimeReceiptProofFacts.validate(raw)
+    }
+
+    static func canonicalLifecycleState(_ value: String) throws -> String {
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "accepted", "Accepted", "ACCEPTED": return "ACCEPTED"
+        case "admitted", "Admitted", "ADMITTED": return "ADMITTED"
+        case "dispatched", "Dispatched", "DISPATCHED": return "DISPATCHED"
+        case "running", "Running", "RUNNING": return "RUNNING"
+        case "completed", "Completed", "COMPLETED": return "COMPLETED"
+        case "failed", "Failed", "FAILED": return "FAILED"
+        case "timed_out", "TimedOut", "TIMED_OUT": return "TIMED_OUT"
+        case "cancelled", "Cancelled", "CANCELLED": return "CANCELLED"
+        case "unspecified", "Unspecified", "UNSPECIFIED": return "UNSPECIFIED"
+        default: throw SDKError.validation("runtime_receipt", "unknown receipt state \(value)")
+        }
+    }
+
+    static func canonicalReceiptType(_ lifecycleState: String) -> String {
+        switch lifecycleState {
+        case "ACCEPTED": return "accepted"
+        case "ADMITTED": return "admitted"
+        case "DISPATCHED": return "dispatched"
+        case "RUNNING": return "running"
+        case "COMPLETED": return "completed"
+        case "FAILED": return "failed"
+        case "TIMED_OUT": return "timed_out"
+        case "CANCELLED": return "cancelled"
+        default: return ""
+        }
+    }
+}
+
+private enum RuntimeReceiptProofFacts {
+    static func validate(_ raw: [String: Any]) throws {
+        _ = try runtimeReceiptAgentBinding(raw["caller_binding"], "caller_binding")
+        let calleeBinding = try runtimeReceiptAgentBinding(raw["callee_binding"], "callee_binding")
+        _ = try runtimeReceiptAgentBinding(raw["subject_binding"], "subject_binding")
+        _ = try runtimeBase64(
+            runtimeRequiredString(raw, "invocation_nonce_base64", "runtime_receipt"),
+            "invocation_nonce_base64",
+            expectedLength: 16,
+            allowEmpty: false
+        )
+        let causalKind = try runtimeRequiredString(raw, "causal_binding_kind", "runtime_receipt")
+        try validateCausalBinding(causalKind, runtimeRequiredObject(raw, "causal_binding", "runtime_receipt"))
+        try runtimeReceiptSignature(raw["callee_signature"], "callee_signature", required: true)
+        let signerBinding = try runtimeReceiptAgentBinding(raw["signer_binding"], "signer_binding")
+        try validateSigningModel(
+            calleeBinding: calleeBinding,
+            signerBinding: signerBinding,
+            hostAttestationBase64: runtimeOptionalString(raw, "host_attestation_base64", "runtime_receipt") ?? ""
+        )
+
+        let authorityKind = try runtimeRequiredString(raw, "authority_binding_kind", "runtime_receipt")
+        let authorityBinding = try RuntimeAuthorityBinding(raw["authority_binding"], "authority_binding")
+        guard authorityBinding.kind == authorityKind else {
+            throw SDKError.validation("runtime_receipt", "runtime receipt authority_binding kind does not match authority_binding_kind")
+        }
+        _ = try runtimeRequiredString(raw, "ability_binding", "runtime_receipt")
+        try runtimeReceiptEntityRef(raw["subject_ref"], "subject_ref")
+        _ = try runtimeRequiredString(raw, "descriptor_version", "runtime_receipt")
+        _ = try runtimeReceiptHash(raw, "schema_hash_hex", allowZero: false)
+        _ = try runtimeReceiptHash(raw, "impl_hash_hex", allowZero: false)
+        _ = try runtimeRequiredString(raw, "runtime_env", "runtime_receipt")
+
+        let proof = try runtimeRequiredObject(raw, "authority_proof", "runtime_receipt")
+        _ = try runtimeRequiredString(proof, "proof_type", "runtime_receipt")
+        let proofBindingKind = try runtimeRequiredString(proof, "binding_kind", "runtime_receipt")
+        guard proofBindingKind == authorityKind else {
+            throw SDKError.validation("runtime_receipt", "runtime receipt authority_proof binding_kind does not match authority_binding_kind")
+        }
+        let proofBinding = try RuntimeAuthorityBinding(proof["binding"], "authority_proof.binding")
+        guard proofBinding.canonicalBytes == authorityBinding.canonicalBytes else {
+            throw SDKError.validation("runtime_receipt", "runtime receipt authority_proof binding does not match authority_binding")
+        }
+        let proofPayload = try runtimeBase64(
+            runtimeOptionalString(proof, "proof_payload_base64", "runtime_receipt") ?? "",
+            "authority_proof.proof_payload_base64",
+            expectedLength: nil,
+            allowEmpty: true
+        )
+        let proofHash = try runtimeReceiptHash(proof, "proof_hash_hex", allowZero: false)
+        try validateAuthorityProofHash(proofPayload: proofPayload, proofBinding: proofBinding, proofHash: proofHash)
+        let issuer = try runtimeReceiptAgentBinding(proof["issuer"], "authority_proof.issuer")
+        guard issuer == calleeBinding else {
+            throw SDKError.validation("runtime_receipt", "runtime receipt authority_proof issuer does not match callee_binding")
+        }
+        try runtimeReceiptSignature(proof["signature"], "authority_proof.signature", required: false)
+        _ = try runtimeRequiredString(proof, "admission_hook", "runtime_receipt")
+
+        _ = try runtimeReceiptHash(raw, "input_hash_hex", allowZero: false)
+        _ = try runtimeReceiptHash(raw, "output_hash_hex", allowZero: false)
+        try runtimeParentReceipts(raw["parent_receipts"])
+    }
+
+    private static func validateAuthorityProofHash(
+        proofPayload: Data,
+        proofBinding: RuntimeAuthorityBinding,
+        proofHash: Data
+    ) throws {
+        let expected = proofPayload.isEmpty
+            ? Data(SHA256.hash(data: proofBinding.canonicalBytes))
+            : Data(SHA256.hash(data: proofPayload))
+        guard !expected.allSatisfy({ $0 == 0 }),
+              !proofHash.allSatisfy({ $0 == 0 }),
+              proofHash == expected else {
+            throw SDKError.validation("runtime_receipt", "runtime receipt proof facts are not canonical: authority_proof_hash_mismatch")
+        }
+    }
+
+    private static func validateSigningModel(
+        calleeBinding: RuntimeAgentBinding,
+        signerBinding: RuntimeAgentBinding,
+        hostAttestationBase64: String
+    ) throws {
+        if signerBinding.ura == calleeBinding.ura {
+            if !hostAttestationBase64.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw SDKError.validation("runtime_receipt", "self-signed runtime receipt must not carry host_attestation_base64")
+            }
+            return
+        }
+        guard !hostAttestationBase64.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw SDKError.validation("runtime_receipt", "hosted runtime receipt is missing host_attestation_base64")
+        }
+        _ = try runtimeBase64(hostAttestationBase64, "host_attestation_base64", expectedLength: 64, allowEmpty: false)
+    }
+
+    private static func validateCausalBinding(_ kind: String, _ binding: [String: Any]) throws {
+        let form = try runtimeRequiredString(binding, "form", "runtime_receipt")
+        guard form == kind else {
+            throw SDKError.validation("runtime_receipt", "runtime receipt causal_binding form does not match causal_binding_kind")
+        }
+        switch form {
+        case "none":
+            return
+        case "scalar":
+            try runtimeReceiptRef(binding["receipt"], "causal_binding.receipt")
+        case "list":
+            guard let prior = binding["prior"] as? [Any], !prior.isEmpty else {
+                throw SDKError.validation("runtime_receipt", "causal_binding.prior must be a non-empty array")
+            }
+            for (index, receipt) in prior.enumerated() {
+                try runtimeReceiptRef(receipt, "causal_binding.prior[\(index)]")
+            }
+        case "merkle":
+            _ = try runtimeReceiptHash(binding, "root_hex", allowZero: false)
+            _ = try runtimeRequiredString(binding, "proof_ura", "runtime_receipt")
+        default:
+            throw SDKError.validation("runtime_receipt", "unsupported causal_binding form \(form)")
+        }
     }
 }
 
@@ -336,14 +523,293 @@ private func runtimeRequiredInt64(_ object: [String: Any], _ field: String, _ la
     throw SDKError.validation(label, "\(field) must be an integer")
 }
 
-private func runtimeRequiredTerminalReceipt(_ object: [String: Any]) throws -> [String: String] {
+private func runtimeRequiredTerminalReceipt(
+    _ object: [String: Any],
+    terminalState: InvocationTerminalState
+) throws -> [String: String] {
     guard let value = object["terminal_receipt"] else {
         throw SDKError.validation("invocation_result", "terminal_receipt is required")
     }
     guard let map = value as? [String: Any] else {
         throw SDKError.validation("invocation_result", "terminal_receipt must be an object")
     }
-    return map.compactMapValues { $0 as? String }
+    let receipt = try RuntimeReceipt(map)
+    guard try receipt.lifecycleState() == runtimeCanonicalTerminalState(terminalState) else {
+        throw SDKError.validation("invocation_result", "terminal_receipt state does not match invocation terminal_state")
+    }
+    return receipt.projection()
+}
+
+private struct RuntimeAgentBinding: Equatable {
+    let ura: String
+    let profile: String
+}
+
+private struct RuntimeAuthorityBinding {
+    let kind: String
+    let canonicalBytes: Data
+
+    init(_ value: Any?, _ field: String) throws {
+        let object = try runtimeObject(value, field)
+        kind = try runtimeRequiredText(object, "kind", "runtime_receipt")
+        var bytes = Data()
+        switch kind {
+        case "self":
+            bytes.append(0x01)
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "principal_ura", "runtime_receipt"))
+        case "delegation":
+            bytes.append(0x02)
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "issuer_ura", "runtime_receipt"))
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "subject_ura", "runtime_receipt"))
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "caller_ura", "runtime_receipt"))
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "audience", "runtime_receipt"))
+            let scopes = try runtimeStringList(object["scopes"], "\(field).scopes")
+            bytes.appendUInt32(UInt32(scopes.count))
+            for scope in scopes {
+                bytes.appendLengthPrefixed(scope)
+            }
+            bytes.appendInt64(try runtimeNonNegativeInt64(object["issued_at_ms"], "\(field).issued_at_ms"))
+            bytes.appendInt64(try runtimeNonNegativeInt64(object["expires_at_ms"], "\(field).expires_at_ms"))
+            bytes.appendLengthPrefixed(
+                try runtimeBase64(
+                    try runtimeRequiredText(object, "signature_base64", "runtime_receipt"),
+                    "\(field).signature_base64",
+                    expectedLength: 64,
+                    allowEmpty: false
+                )
+            )
+        case "capability":
+            bytes.append(0x03)
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "capability_ura", "runtime_receipt"))
+        case "policy":
+            bytes.append(0x04)
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "policy_ura", "runtime_receipt"))
+        case "session":
+            bytes.append(0x05)
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "backend_ura", "runtime_receipt"))
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "user_ura", "runtime_receipt"))
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "session_id", "runtime_receipt"))
+            let scopes = try runtimeStringList(object["scopes"], "\(field).scopes")
+            bytes.appendUInt32(UInt32(scopes.count))
+            for scope in scopes {
+                bytes.appendLengthPrefixed(scope)
+            }
+            let audiences = try runtimeStringList(object["audiences"], "\(field).audiences")
+            bytes.appendUInt32(UInt32(audiences.count))
+            for audience in audiences {
+                bytes.appendLengthPrefixed(audience)
+            }
+            bytes.appendInt64(try runtimeNonNegativeInt64(object["issued_at_ms"], "\(field).issued_at_ms"))
+            bytes.appendInt64(try runtimeNonNegativeInt64(object["expires_at_ms"], "\(field).expires_at_ms"))
+            bytes.appendLengthPrefixed(
+                try runtimeBase64(
+                    try runtimeRequiredText(object, "signature_base64", "runtime_receipt"),
+                    "\(field).signature_base64",
+                    expectedLength: 64,
+                    allowEmpty: false
+                )
+            )
+        case "bootstrap":
+            bytes.append(0x06)
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "principal_ura", "runtime_receipt"))
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "realm", "runtime_receipt"))
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "ability", "runtime_receipt"))
+        default:
+            throw SDKError.validation("runtime_receipt", "\(field).kind is not canonical: \(kind)")
+        }
+        canonicalBytes = bytes
+    }
+}
+
+private func runtimeRequiredObject(_ object: [String: Any], _ field: String, _ label: String) throws -> [String: Any] {
+    try runtimeObject(object[field], "\(label).\(field)")
+}
+
+private func runtimeObject(_ value: Any?, _ field: String) throws -> [String: Any] {
+    guard let object = value as? [String: Any] else {
+        throw SDKError.validation("runtime_receipt", "\(field) must be an object")
+    }
+    return object
+}
+
+private func runtimeOptionalString(_ object: [String: Any], _ field: String, _ label: String) throws -> String? {
+    guard let value = object[field], !(value is NSNull) else {
+        return nil
+    }
+    guard let string = value as? String else {
+        throw SDKError.validation(label, "\(field) must be a string")
+    }
+    return string
+}
+
+private func runtimeRequiredText(_ object: [String: Any], _ field: String, _ label: String) throws -> String {
+    let value = try runtimeRequiredString(object, field, label)
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw SDKError.validation(label, "\(field) is required")
+    }
+    return trimmed
+}
+
+private func runtimeStringList(_ value: Any?, _ field: String) throws -> [String] {
+    guard let raw = value as? [Any], !raw.isEmpty else {
+        throw SDKError.validation("runtime_receipt", "\(field) must be a non-empty array")
+    }
+    return try raw.enumerated().map { index, item in
+        guard let string = item as? String else {
+            throw SDKError.validation("runtime_receipt", "\(field)[\(index)] must be a non-empty string")
+        }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw SDKError.validation("runtime_receipt", "\(field)[\(index)] must be a non-empty string")
+        }
+        return trimmed
+    }
+}
+
+private func runtimeNonNegativeInt64(_ value: Any?, _ field: String) throws -> Int64 {
+    let integer: Int64
+    if let number = value as? NSNumber {
+        integer = number.int64Value
+    } else if let int = value as? Int {
+        integer = Int64(int)
+    } else if let int64 = value as? Int64 {
+        integer = int64
+    } else {
+        throw SDKError.validation("runtime_receipt", "\(field) must be a non-negative integer")
+    }
+    guard integer >= 0 else {
+        throw SDKError.validation("runtime_receipt", "\(field) must be a non-negative integer")
+    }
+    return integer
+}
+
+private func runtimeReceiptAgentBinding(_ value: Any?, _ field: String) throws -> RuntimeAgentBinding {
+    let object = try runtimeObject(value, field)
+    let binding = RuntimeAgentBinding(
+        ura: try runtimeRequiredText(object, "ura", "runtime_receipt"),
+        profile: try runtimeRequiredText(object, "profile", "runtime_receipt")
+    )
+    try runtimeValidateURAProfile(binding.profile, "\(field).profile")
+    return binding
+}
+
+private func runtimeReceiptEntityRef(_ value: Any?, _ field: String) throws {
+    let object = try runtimeObject(value, field)
+    let kind = try runtimeNonNegativeInt64(object["kind"], "\(field).kind")
+    guard (1...7).contains(kind) else {
+        throw SDKError.validation("runtime_receipt", "\(field).kind is not canonical")
+    }
+    _ = try runtimeRequiredText(object, "ura", "runtime_receipt")
+    try runtimeValidateURAProfile(try runtimeRequiredText(object, "profile", "runtime_receipt"), "\(field).profile")
+}
+
+private func runtimeReceiptSignature(_ value: Any?, _ field: String, required: Bool) throws {
+    guard let value, !(value is NSNull) else {
+        if required {
+            throw SDKError.validation("runtime_receipt", "\(field) must be an object")
+        }
+        return
+    }
+    let object = try runtimeObject(value, field)
+    _ = try runtimeRequiredText(object, "algorithm", "runtime_receipt")
+    _ = try runtimeBase64(
+        try runtimeRequiredText(object, "signature_base64", "runtime_receipt"),
+        "\(field).signature_base64",
+        expectedLength: nil,
+        allowEmpty: false
+    )
+}
+
+private func runtimeReceiptRef(_ value: Any?, _ field: String) throws {
+    let object = try runtimeObject(value, field)
+    _ = try runtimeReceiptHash(object, "receipt_hash_hex", allowZero: false)
+    _ = try runtimeRequiredText(object, "receipt_ura", "runtime_receipt")
+}
+
+private func runtimeParentReceipts(_ value: Any?) throws {
+    guard let parents = value as? [Any] else {
+        throw SDKError.validation("runtime_receipt", "parent_receipts must be an array")
+    }
+    for (index, parent) in parents.enumerated() {
+        try runtimeReceiptRef(parent, "parent_receipts[\(index)]")
+    }
+}
+
+private func runtimeReceiptHash(_ object: [String: Any], _ field: String, allowZero: Bool) throws -> Data {
+    let value = try runtimeRequiredText(object, field, "runtime_receipt")
+    guard value.count == 64, value.allSatisfy({ $0.isHexDigit }) else {
+        throw SDKError.validation("runtime_receipt", "\(field) must be exactly 32 bytes hex")
+    }
+    var bytes = Data()
+    var index = value.startIndex
+    while index < value.endIndex {
+        let next = value.index(index, offsetBy: 2)
+        guard let byte = UInt8(value[index..<next], radix: 16) else {
+            throw SDKError.validation("runtime_receipt", "\(field) must be hexadecimal")
+        }
+        bytes.append(byte)
+        index = next
+    }
+    if !allowZero, bytes.allSatisfy({ $0 == 0 }) {
+        throw SDKError.validation("runtime_receipt", "\(field) must not be all-zero")
+    }
+    return bytes
+}
+
+private func runtimeBase64(
+    _ value: String,
+    _ field: String,
+    expectedLength: Int?,
+    allowEmpty: Bool
+) throws -> Data {
+    guard let data = Data(base64Encoded: value) else {
+        throw SDKError.validation("runtime_receipt", "\(field) must be base64")
+    }
+    if data.isEmpty, !allowEmpty {
+        throw SDKError.validation("runtime_receipt", "\(field) must decode to non-empty bytes")
+    }
+    if let expectedLength, data.count != expectedLength {
+        throw SDKError.validation("runtime_receipt", "\(field) must decode to exactly \(expectedLength) bytes")
+    }
+    return data
+}
+
+private func runtimeValidateURAProfile(_ profile: String, _ field: String) throws {
+    guard ["axon-strict-v2", "axon-legacy-v1", "opaque"].contains(profile) else {
+        throw SDKError.validation("runtime_receipt", "\(field) is not canonical")
+    }
+}
+
+private func runtimeCanonicalTerminalState(_ terminalState: InvocationTerminalState) -> String {
+    switch terminalState {
+    case .completed: return "COMPLETED"
+    case .failed: return "FAILED"
+    case .cancelled: return "CANCELLED"
+    case .timedOut: return "TIMED_OUT"
+    case .backpressureTerminated: return "FAILED"
+    }
+}
+
+private extension Data {
+    mutating func appendLengthPrefixed(_ string: String) {
+        appendLengthPrefixed(Data(string.utf8))
+    }
+
+    mutating func appendLengthPrefixed(_ data: Data) {
+        appendUInt32(UInt32(data.count))
+        append(data)
+    }
+
+    mutating func appendUInt32(_ value: UInt32) {
+        var bigEndian = value.bigEndian
+        Swift.withUnsafeBytes(of: &bigEndian) { append(contentsOf: $0) }
+    }
+
+    mutating func appendInt64(_ value: Int64) {
+        var bigEndian = UInt64(value).bigEndian
+        Swift.withUnsafeBytes(of: &bigEndian) { append(contentsOf: $0) }
+    }
 }
 
 private func runtimeOptionalJSONObjectString(_ value: Any?) throws -> String {

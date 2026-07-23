@@ -10388,8 +10388,19 @@ tests = Path(sys.argv[2]).read_text(encoding="utf-8")
 
 if 'object.keys.contains("receipt")' not in runtime or "retired receipt alias is not accepted" not in runtime:
     raise SystemExit("swift_runtime_receipt_projection:retired_receipt_alias_not_rejected")
-if "runtimeRequiredTerminalReceipt(object)" not in runtime:
+if "runtimeRequiredTerminalReceipt(object, terminalState: terminalState)" not in runtime:
     raise SystemExit("swift_runtime_receipt_projection:terminal_receipt_not_required")
+for fragment, label in {
+    "public struct RuntimeReceipt": "runtime_receipt_type_missing",
+    "RuntimeReceiptProofFacts": "proof_fact_validator_missing",
+    "validateAuthorityProofHash": "authority_proof_hash_validator_missing",
+    "RuntimeAuthorityBinding": "authority_binding_projection_missing",
+    "authority_proof_hash_mismatch": "authority_proof_hash_mismatch_missing",
+    "hosted runtime receipt is missing host_attestation_base64": "hosted_signer_attestation_missing",
+    "terminal_receipt state does not match invocation terminal_state": "terminal_state_topology_missing",
+}.items():
+    if fragment not in runtime:
+        raise SystemExit(f"swift_runtime_receipt_projection:{label}")
 if "terminal_receipt is required" not in runtime:
     raise SystemExit("swift_runtime_receipt_projection:terminal_receipt_required_error_missing")
 if "terminal_receipt must be an object" not in runtime:
@@ -10407,9 +10418,20 @@ for required_test in (
     '"receipt":{"receipt_ref":"legacy-only"}',
     '"terminal_state":"Completed"}',
     '"terminal_receipt":"bad"',
+    "canonicalRuntimeReceipt",
+    "authorityBindingProofHashSelf",
+    "authority_proof_hash_mismatch",
+    "hosted runtime receipt is missing host_attestation_base64",
 ):
     if required_test not in tests:
         raise SystemExit(f"swift_runtime_receipt_projection:missing_test:{required_test}")
+for forbidden, label in {
+    '"terminal_receipt":{"receipt_ref"': "opaque_terminal_receipt_fixture",
+    'terminalReceipt["receipt_ref"]': "opaque_terminal_receipt_assertion",
+    '["receipt_ref": "opaque-receipt-ref"': "opaque_runtime_transport_receipt",
+}.items():
+    if forbidden in tests:
+        raise SystemExit(f"swift_runtime_receipt_projection:{label}")
 PY
 }
 
