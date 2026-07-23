@@ -27,12 +27,24 @@ if ! rg -n 'outcome\.ready_capability_flags = disc\.capability_flags\.clone\(\)'
   fail "start boot watcher must capture capability flags from control discovery on Ready"
 fi
 
-if ! rg -n 'fn validate_device_ready_capabilities' "$START" >/dev/null; then
-  fail "device start must validate daemon Ready signer capability before success"
+if ! rg -n 'fn validate_device_runtime_readiness' "$START" >/dev/null; then
+  fail "device start must validate daemon Ready signer capability and caller signer custody before success"
 fi
 
 if ! rg -n 'PAIRED_USER_RUNTIME_SIGNER' "$START" >/dev/null; then
   fail "device start must require paired_user_runtime_signer readiness"
+fi
+
+if ! rg -n 'RuntimeCallerSignerReadinessProbe' "$START" >/dev/null; then
+  fail "device start must route signer readiness through an explicit probe boundary"
+fi
+
+if ! rg -n 'prove_runtime_caller_signer_custody' "$START" >/dev/null; then
+  fail "device start must prove active caller signer custody, not only inspect Ready flags"
+fi
+
+if rg -n 'fn validate_device_ready_capabilities' "$START" >/dev/null; then
+  fail "retired device-ready flag-only validator is still present"
 fi
 
 python3 - "$START" <<'PY'
@@ -40,13 +52,13 @@ import pathlib
 import sys
 
 text = pathlib.Path(sys.argv[1]).read_text()
-validate = text.find("validate_device_ready_capabilities(&boot)")
+validate = text.find("validate_device_runtime_readiness(&boot, &creds)")
 save = text.find("save_runtime_projection_after_ready(&mut daemon_handle")
 welcome = text.find('console::style("Welcome,")')
 stop = text.find("daemon_handle.stop()")
 
 if validate == -1:
-    raise SystemExit("missing validate_device_ready_capabilities call")
+    raise SystemExit("missing validate_device_runtime_readiness call")
 if save == -1:
     raise SystemExit("missing save_runtime_projection_after_ready")
 if welcome == -1:
@@ -58,8 +70,10 @@ if stop == -1 or not (validate < stop < save):
 PY
 
 for required_test in \
-  start_ready_capability_accepts_paired_user_signer \
-  start_ready_capability_rejects_missing_paired_user_signer
+  start_runtime_readiness_accepts_paired_user_signer_custody \
+  start_runtime_readiness_rejects_missing_paired_user_signer_flag \
+  start_runtime_readiness_rejects_missing_credential_user_ura \
+  start_runtime_readiness_rejects_failed_signer_custody_proof
 do
   if ! rg -n "$required_test" "$START" >/dev/null; then
     fail "start ready signer proof missing test: $required_test"

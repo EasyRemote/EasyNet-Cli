@@ -270,6 +270,39 @@ pub fn load_runtime_caller_signer(
     RuntimeCallerSignerResolver::default_path().load(owner_ura)
 }
 
+const RUNTIME_CALLER_SIGNER_CUSTODY_CHALLENGE: &[u8] = b"easynet.runtime.caller-signer-custody.v1";
+
+/// Prove that the canonical runtime caller signer for `owner_ura` is present
+/// and can produce a verifiable signature now.
+///
+/// This is stronger than loading a public projection from the key-service
+/// inventory: it exercises the same owner-bound signing capability later used
+/// by descriptor-bound remote invocation. Start/attach paths use this before
+/// publishing local runtime projections so a stale keyring or removed managed
+/// User key cannot masquerade as daemon readiness.
+pub fn prove_runtime_caller_signer_custody(
+    owner_ura: impl Into<String>,
+) -> Result<(), SelfIdentityError> {
+    let signer = load_runtime_caller_signer(owner_ura)?;
+    prove_runtime_caller_signer_custody_with(signer)
+}
+
+fn prove_runtime_caller_signer_custody_with(
+    signer: Arc<dyn CanonicalSigner>,
+) -> Result<(), SelfIdentityError> {
+    let public_key = signer.signing_public_key()?;
+    let signature = crate::support::async_bridge::run_blocking(
+        signer.sign_canonical(RUNTIME_CALLER_SIGNER_CUSTODY_CHALLENGE),
+        crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
+    )?;
+    public_key
+        .verify(RUNTIME_CALLER_SIGNER_CUSTODY_CHALLENGE, &signature)
+        .map_err(|error| SelfIdentityError::Rejected {
+            kind: "signature_verification".into(),
+            message: format!("runtime caller signer custody proof failed: {error}"),
+        })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeCallerCustody {
     ManagedUser,
@@ -1132,6 +1165,31 @@ mod tests {
         }
     }
 
+    struct MismatchedCanonicalSigner {
+        owner_ura: String,
+        signing_key: ed25519_dalek::SigningKey,
+        projected_key: VerifyingKey,
+    }
+
+    #[async_trait::async_trait]
+    impl CanonicalSigner for MismatchedCanonicalSigner {
+        fn owner_ura(&self) -> &str {
+            &self.owner_ura
+        }
+
+        async fn sign_canonical(
+            &self,
+            canonical_bytes: &[u8],
+        ) -> Result<Signature, SelfIdentityError> {
+            use ed25519_dalek::Signer as _;
+            Ok(self.signing_key.sign(canonical_bytes))
+        }
+
+        fn signing_public_key(&self) -> Result<VerifyingKey, SelfIdentityError> {
+            Ok(self.projected_key)
+        }
+    }
+
     struct CountingIdentity {
         public_key_calls: Arc<Mutex<usize>>,
     }
@@ -1214,6 +1272,40 @@ mod tests {
             sign_thread, tokio_thread,
             "synchronous key-service providers must run on Tokio's blocking pool"
         );
+    }
+
+    #[test]
+    fn runtime_caller_signer_custody_proof_verifies_bound_signer() {
+        let signer = Arc::new(TestCanonicalSigner::new(
+            "easynet:///r/acme/user/alice",
+            [0x31; 32],
+        ));
+
+        prove_runtime_caller_signer_custody_with(signer)
+            .expect("custody proof signs and verifies through canonical signer");
+    }
+
+    #[test]
+    fn runtime_caller_signer_custody_proof_rejects_mismatched_projection() {
+        let signer = Arc::new(MismatchedCanonicalSigner {
+            owner_ura: "easynet:///r/acme/user/alice".to_string(),
+            signing_key: ed25519_dalek::SigningKey::from_bytes(&[0x31; 32]),
+            projected_key: ed25519_dalek::SigningKey::from_bytes(&[0x32; 32]).verifying_key(),
+        });
+
+        let error = prove_runtime_caller_signer_custody_with(signer)
+            .expect_err("custody proof must verify the signer projection");
+
+        match error {
+            SelfIdentityError::Rejected { kind, message } => {
+                assert_eq!(kind, "signature_verification");
+                assert!(
+                    message.contains("runtime caller signer custody proof failed"),
+                    "unexpected proof error: {message}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

@@ -338,7 +338,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // here, so this branch is defence-in-depth only).
     let pages_listener_port = super::start_boot_watcher::final_pages_port(boot.pages_port)
         .ok_or_else(|| anyhow::anyhow!("daemon reported Ready without binding a pages port"))?;
-    if let Err(err) = validate_device_ready_capabilities(&boot) {
+    if let Err(err) = validate_device_runtime_readiness(&boot, &creds) {
         if !attached_existing_daemon {
             if let Err(stop_err) = daemon_handle.stop() {
                 output::warn(&format!(
@@ -621,17 +621,53 @@ impl StartCredentialReadiness {
     }
 }
 
-fn validate_device_ready_capabilities(
+fn validate_device_runtime_readiness(
     boot: &super::start_boot_watcher::BootProgressOutcome,
+    creds: &config::Credentials,
+) -> anyhow::Result<()> {
+    validate_device_runtime_readiness_with(
+        boot,
+        creds,
+        &KeyServiceRuntimeCallerSignerReadinessProbe,
+    )
+}
+
+trait RuntimeCallerSignerReadinessProbe {
+    fn prove(&self, user_ura: &str) -> anyhow::Result<()>;
+}
+
+struct KeyServiceRuntimeCallerSignerReadinessProbe;
+
+impl RuntimeCallerSignerReadinessProbe for KeyServiceRuntimeCallerSignerReadinessProbe {
+    fn prove(&self, user_ura: &str) -> anyhow::Result<()> {
+        crate::daemon::identity::self_identity::prove_runtime_caller_signer_custody(user_ura)
+            .map_err(|error| anyhow::anyhow!("{error}"))
+    }
+}
+
+fn validate_device_runtime_readiness_with(
+    boot: &super::start_boot_watcher::BootProgressOutcome,
+    creds: &config::Credentials,
+    signer_probe: &dyn RuntimeCallerSignerReadinessProbe,
 ) -> anyhow::Result<()> {
     let required = crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER;
-    if boot.has_ready_capability_flag(required) {
-        return Ok(());
+    if !boot.has_ready_capability_flag(required) {
+        anyhow::bail!(
+            "daemon Ready did not advertise runtime capability `{required}`; refusing to publish \
+             runtime projection because paired User caller signer custody was not proven"
+        );
     }
-    anyhow::bail!(
-        "daemon Ready did not advertise runtime capability `{required}`; refusing to publish \
-         runtime projection because paired User caller signer custody was not proven"
-    )
+    let user_ura = creds
+        .user_ura()
+        .context("paired device credentials must include a canonical User URA for runtime caller signer readiness")?;
+    signer_probe
+        .prove(&user_ura)
+        .with_context(|| {
+            format!(
+                "prove paired User runtime caller signer custody for `{user_ura}` before publishing runtime projection"
+            )
+        })?;
+    Ok(())
 }
 
 fn has_daemon_native_join_lineage(creds: &config::Credentials) -> bool {
@@ -964,6 +1000,31 @@ mod tests {
         }
     }
 
+    struct TestRuntimeCallerSignerReadinessProbe {
+        result: anyhow::Result<()>,
+    }
+
+    impl TestRuntimeCallerSignerReadinessProbe {
+        fn ready() -> Self {
+            Self { result: Ok(()) }
+        }
+
+        fn failed(message: &'static str) -> Self {
+            Self {
+                result: Err(anyhow::anyhow!(message)),
+            }
+        }
+    }
+
+    impl RuntimeCallerSignerReadinessProbe for TestRuntimeCallerSignerReadinessProbe {
+        fn prove(&self, _user_ura: &str) -> anyhow::Result<()> {
+            match &self.result {
+                Ok(()) => Ok(()),
+                Err(error) => Err(anyhow::anyhow!("{error}")),
+            }
+        }
+    }
+
     fn hub_args(cert: Option<&str>, key: Option<&str>) -> StartArgs {
         StartArgs {
             hub: config::DEFAULT_HUB.into(),
@@ -1089,7 +1150,7 @@ mod tests {
     }
 
     #[test]
-    fn start_ready_capability_accepts_paired_user_signer() {
+    fn start_runtime_readiness_accepts_paired_user_signer_custody() {
         let boot = super::super::start_boot_watcher::BootProgressOutcome {
             pages_port: Some(8787),
             ready_capability_flags: vec![
@@ -1097,22 +1158,81 @@ mod tests {
             ],
         };
 
-        validate_device_ready_capabilities(&boot)
-            .expect("paired User signer proof must admit device start success");
+        validate_device_runtime_readiness_with(
+            &boot,
+            &test_creds(),
+            &TestRuntimeCallerSignerReadinessProbe::ready(),
+        )
+        .expect("paired User signer proof must admit device start success");
     }
 
     #[test]
-    fn start_ready_capability_rejects_missing_paired_user_signer() {
+    fn start_runtime_readiness_rejects_missing_paired_user_signer_flag() {
         let boot = super::super::start_boot_watcher::BootProgressOutcome {
             pages_port: Some(8787),
             ready_capability_flags: Vec::new(),
         };
 
-        let err = validate_device_ready_capabilities(&boot)
-            .expect_err("device start must reject Ready without signer proof");
+        let err = validate_device_runtime_readiness_with(
+            &boot,
+            &test_creds(),
+            &TestRuntimeCallerSignerReadinessProbe::ready(),
+        )
+        .expect_err("device start must reject Ready without signer proof");
         assert!(
             err.to_string().contains("paired_user_runtime_signer"),
             "error must name missing signer readiness capability: {err:#}"
+        );
+    }
+
+    #[test]
+    fn start_runtime_readiness_rejects_missing_credential_user_ura() {
+        let boot = super::super::start_boot_watcher::BootProgressOutcome {
+            pages_port: Some(8787),
+            ready_capability_flags: vec![
+                crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string(),
+            ],
+        };
+        let mut creds = test_creds();
+        creds.user_id = None;
+
+        let err = validate_device_runtime_readiness_with(
+            &boot,
+            &creds,
+            &TestRuntimeCallerSignerReadinessProbe::ready(),
+        )
+        .expect_err("device runtime readiness requires a concrete paired User URA");
+
+        assert!(
+            err.to_string().contains("canonical User URA"),
+            "error must name missing active user binding: {err:#}"
+        );
+    }
+
+    #[test]
+    fn start_runtime_readiness_rejects_failed_signer_custody_proof() {
+        let boot = super::super::start_boot_watcher::BootProgressOutcome {
+            pages_port: Some(8787),
+            ready_capability_flags: vec![
+                crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string(),
+            ],
+        };
+
+        let err = validate_device_runtime_readiness_with(
+            &boot,
+            &test_creds(),
+            &TestRuntimeCallerSignerReadinessProbe::failed("managed user signing key not found"),
+        )
+        .expect_err("device runtime readiness requires live signer custody");
+
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("prove paired User runtime caller signer custody"),
+            "error must name signer custody proof boundary: {message}"
+        );
+        assert!(
+            message.contains("managed user signing key not found"),
+            "error must preserve key-service failure: {message}"
         );
     }
 

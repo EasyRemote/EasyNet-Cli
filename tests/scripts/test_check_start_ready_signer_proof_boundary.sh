@@ -38,7 +38,7 @@ fn run() -> anyhow::Result<()> {
     let boot = wait_for_daemon_boot()?;
     let mut daemon_handle = DaemonHandle;
     let attached_existing_daemon = false;
-    validate_device_ready_capabilities(&boot)?;
+    validate_device_runtime_readiness(&boot, &creds)?;
     if !attached_existing_daemon {
         daemon_handle.stop()?;
     }
@@ -47,21 +47,43 @@ fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn validate_device_ready_capabilities(
+fn validate_device_runtime_readiness(
     boot: &super::start_boot_watcher::BootProgressOutcome,
+    creds: &Credentials,
 ) -> anyhow::Result<()> {
     let required = crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER;
-    if boot.has_ready_capability_flag(required) {
-        return Ok(());
+    if !boot.has_ready_capability_flag(required) {
+        anyhow::bail!("daemon Ready did not advertise runtime capability `{required}`")
     }
-    anyhow::bail!("daemon Ready did not advertise runtime capability `{required}`")
+    let user_ura = creds.user_ura()?;
+    KeyServiceRuntimeCallerSignerReadinessProbe.prove(&user_ura)?;
+    Ok(())
+}
+
+trait RuntimeCallerSignerReadinessProbe {
+    fn prove(&self, user_ura: &str) -> anyhow::Result<()>;
+}
+
+struct KeyServiceRuntimeCallerSignerReadinessProbe;
+
+impl RuntimeCallerSignerReadinessProbe for KeyServiceRuntimeCallerSignerReadinessProbe {
+    fn prove(&self, user_ura: &str) -> anyhow::Result<()> {
+        crate::daemon::identity::self_identity::prove_runtime_caller_signer_custody(user_ura)?;
+        Ok(())
+    }
 }
 
 #[test]
-fn start_ready_capability_accepts_paired_user_signer() {}
+fn start_runtime_readiness_accepts_paired_user_signer_custody() {}
 
 #[test]
-fn start_ready_capability_rejects_missing_paired_user_signer() {}
+fn start_runtime_readiness_rejects_missing_paired_user_signer_flag() {}
+
+#[test]
+fn start_runtime_readiness_rejects_missing_credential_user_ura() {}
+
+#[test]
+fn start_runtime_readiness_rejects_failed_signer_custody_proof() {}
 RS
 
 (
@@ -73,7 +95,7 @@ python3 - "$SB/src/cli/commands/start.rs" <<'PY'
 import pathlib
 path = pathlib.Path(__import__("sys").argv[1])
 text = path.read_text()
-text = text.replace("    validate_device_ready_capabilities(&boot)?;\n", "")
+text = text.replace("    validate_device_runtime_readiness(&boot, &creds)?;\n", "")
 path.write_text(text)
 PY
 
