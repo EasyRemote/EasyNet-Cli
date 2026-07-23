@@ -196,6 +196,15 @@ func TestDirectRuntimeUnaryReceiptFreeOutcomeRequiresTypedPreAdmissionFailure(t 
 	}
 }
 
+func TestDirectRuntimeUnaryRejectsUnsupportedInvocationState(t *testing.T) {
+	_, err := directInvokeResponseJSON(directRuntimeDraft(t), &axonpb.InvokeResponse{
+		State: axonpb.InvocationState_INVOCATION_STATE_UNSPECIFIED,
+	})
+	if !IsCode(err, ErrProtocol) {
+		t.Fatalf("unsupported unary state error = %v, want %s", err, ErrProtocol)
+	}
+}
+
 func TestDirectAxonFailureProjectsMissingErrorCodeToProtocolMismatch(t *testing.T) {
 	failure := directAxonFailure(&axonpb.Error{Message: "provider omitted code"}, "direct_runtime.invoke")
 	if got := failure["code"]; got != string(ErrProtocolMismatch) {
@@ -261,6 +270,13 @@ func TestDirectRuntimeUnaryRejectsReceiptFreeProofFailureAndPartialReceiptPairs(
 
 func TestDirectRuntimeStreamSeparatesCanonicalAndTransportTerminality(t *testing.T) {
 	_, err := directStreamChunkJSON(&axonpb.InvokeStreamChunk{
+		State: axonpb.InvocationState_INVOCATION_STATE_UNSPECIFIED,
+	})
+	if !IsCode(err, ErrProtocol) {
+		t.Fatalf("unsupported stream state error = %v, want %s", err, ErrProtocol)
+	}
+
+	_, err = directStreamChunkJSON(&axonpb.InvokeStreamChunk{
 		State:    axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
 		Terminal: true,
 	})
@@ -335,12 +351,16 @@ func TestDirectRuntimeResponsesExposeOnlyCanonicalReceiptCheckpoints(t *testing.
 	if err != nil {
 		t.Fatalf("stream receipt projection: %v", err)
 	}
+	admissionProjection, err := directReceipt(admission, "direct_runtime.bidi")
+	if err != nil {
+		t.Fatalf("admission receipt projection: %v", err)
+	}
 	bidi, err := directBidiDownJSON(&axonpb.InvokeBidiDown{
 		Sequence: 1,
 		Payload: &axonpb.InvokeBidiDown_Receipt{
 			Receipt: terminal,
 		},
-	}, directReceipt(admission))
+	}, admissionProjection)
 	if err != nil {
 		t.Fatalf("bidi receipt projection: %v", err)
 	}

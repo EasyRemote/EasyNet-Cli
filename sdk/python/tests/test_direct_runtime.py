@@ -41,7 +41,9 @@ from easynet_sdk.direct_runtime import (
     _canonical_receipt_document,
     _canonical_receipt_projection,
     _grpc_error,
+    _invoke_response_json,
     _response_error_code,
+    _stream_chunk_json,
 )
 from test_runtime import complete_draft
 from addressing_fake import MemoryAddressingTransport
@@ -824,6 +826,27 @@ class DirectRuntimeTests(unittest.TestCase):
         self,
     ) -> None:
         self.assertEqual(_response_error_code(""), ErrorCode.PROTOCOL_MISMATCH)
+
+    def test_direct_runtime_unary_rejects_unsupported_invocation_state(self) -> None:
+        with self.assertRaises(SDKError) as raised:
+            _invoke_response_json(
+                _signed_draft(),
+                invoke_pb2.InvokeResponse(
+                    state=types_pb2.INVOCATION_STATE_UNSPECIFIED,
+                ),
+            )
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
+
+    def test_direct_runtime_stream_rejects_unsupported_invocation_state(self) -> None:
+        with self.assertRaises(SDKError) as raised:
+            _stream_chunk_json(
+                invoke_pb2.InvokeStreamChunk(
+                    state=types_pb2.INVOCATION_STATE_UNSPECIFIED,
+                )
+            )
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.PROTOCOL))
 
     def test_direct_transport_projects_cancelled_terminal_state_to_cancelled(
         self,

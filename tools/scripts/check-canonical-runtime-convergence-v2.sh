@@ -2263,6 +2263,95 @@ if py_errors:
 PY
 }
 
+check_sdk_direct_runtime_state_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_direct="$cli_root/sdk/go/direct_runtime.go"
+  local go_direct_test="$cli_root/sdk/go/direct_runtime_codec_test.go"
+  local py_direct="$cli_root/sdk/python/easynet_sdk/direct_runtime.py"
+  local py_direct_test="$cli_root/sdk/python/tests/test_direct_runtime.py"
+
+  "$PYTHON_BIN" - "$go_direct" "$go_direct_test" "$py_direct" "$py_direct_test" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"sdk_direct_runtime_state_projection_source_missing:{path}")
+    return path.read_text()
+
+def section(text: str, pattern: str, label: str) -> str:
+    match = re.search(pattern, text, re.DOTALL)
+    if match is None:
+        raise SystemExit(f"sdk_direct_runtime_state_projection_section_missing:{label}")
+    return match.group("body")
+
+go = read(go_path)
+go_state = section(
+    go,
+    r"func directStateName\(state axonpb\.InvocationState, stage string\) \(string, error\) \{(?P<body>.*?)\n\}",
+    "go_direct_state_name",
+)
+if 'return "Unspecified"' in go_state:
+    raise SystemExit("sdk_go_direct_runtime_state_unspecified_fallback")
+if "directRuntimeProtocolError(stage" not in go_state:
+    raise SystemExit("sdk_go_direct_runtime_state_not_fail_closed")
+for retired_call in (
+    "directStateName(response.GetState())",
+    "directStateName(chunk.GetState())",
+    "directStateName(receipt.GetState())",
+    "directStateName(terminal.GetState())",
+    "directStateName(down.GetReceipt().GetState())",
+):
+    if retired_call in go:
+        raise SystemExit(f"sdk_go_direct_runtime_state_call_without_stage:{retired_call}")
+if "stateName, err := directStateName(response.GetState(), \"direct_runtime.invoke\")" not in go:
+    raise SystemExit("sdk_go_direct_runtime_unary_state_not_fallible")
+if "stateName, err := directStateName(chunk.GetState(), \"direct_runtime.stream\")" not in go:
+    raise SystemExit("sdk_go_direct_runtime_stream_state_not_fallible")
+if "stateName, err := directStateName(receipt.GetState(), stage)" not in go:
+    raise SystemExit("sdk_go_direct_runtime_receipt_state_not_fallible")
+go_tests = read(go_test_path)
+for required in (
+    "TestDirectRuntimeUnaryRejectsUnsupportedInvocationState",
+    "INVOCATION_STATE_UNSPECIFIED",
+    "unsupported stream state error",
+):
+    if required not in go_tests:
+        raise SystemExit(f"sdk_go_direct_runtime_state_test_missing:{required}")
+
+py = read(py_path)
+py_state = section(
+    py,
+    r"def _state_name\(value: int, stage: str\) -> str:\n(?P<body>.*?)(?=\n\ndef |\Z)",
+    "python_state_name",
+)
+if '\"Unspecified\"' in py_state:
+    raise SystemExit("sdk_python_direct_runtime_state_unspecified_fallback")
+if "raise _direct_error(" not in py_state or "ErrorCode.PROTOCOL" not in py_state:
+    raise SystemExit("sdk_python_direct_runtime_state_not_fail_closed")
+if re.search(r"_state_name\([^,\n)]+\)", py):
+    raise SystemExit("sdk_python_direct_runtime_state_call_without_stage")
+for required in (
+    '_state_name(response.state, "direct_runtime.invoke")',
+    '_state_name(chunk.state, "direct_runtime.stream")',
+    '_state_name(receipt.state, "direct_runtime.receipt")',
+):
+    if required not in py:
+        raise SystemExit(f"sdk_python_direct_runtime_state_call_missing:{required}")
+py_tests = read(py_test_path)
+for required in (
+    "test_direct_runtime_unary_rejects_unsupported_invocation_state",
+    "test_direct_runtime_stream_rejects_unsupported_invocation_state",
+    "INVOCATION_STATE_UNSPECIFIED",
+):
+    if required not in py_tests:
+        raise SystemExit(f"sdk_python_direct_runtime_state_test_missing:{required}")
+PY
+}
+
 check_sdk_direct_runtime_descriptor_not_found_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_direct="$cli_root/sdk/go/direct_runtime.go"
@@ -11002,6 +11091,42 @@ EOF
   if ( check_sdk_runtime_failure_code_contract "$tmp/sdk-runtime-failure-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected SDK runtime failure code fallback gate to fail"
   fi
+  mkdir -p "$tmp/sdk-direct-runtime-state-fallback/sdk/go" \
+    "$tmp/sdk-direct-runtime-state-fallback/sdk/python/easynet_sdk" \
+    "$tmp/sdk-direct-runtime-state-fallback/sdk/python/tests"
+  printf '%s\n' \
+    'func directStateName(state axonpb.InvocationState) string {' \
+    '  switch state {' \
+    '  case axonpb.InvocationState_INVOCATION_STATE_COMPLETED:' \
+    '    return "Completed"' \
+    '  default:' \
+    '    return "Unspecified"' \
+    '  }' \
+    '}' \
+    'func directInvokeResponseJSON(response *axonpb.InvokeResponse) { stateName := directStateName(response.GetState()); _ = stateName }' \
+    'func directStreamChunkJSON(chunk *axonpb.InvokeStreamChunk) { stateName := directStateName(chunk.GetState()); _ = stateName }' \
+    'func directReceipt(receipt *axonpb.InvocationReceipt) { stateName := directStateName(receipt.GetState()); _ = stateName }' \
+    > "$tmp/sdk-direct-runtime-state-fallback/sdk/go/direct_runtime.go"
+  printf 'func TestDirectRuntimeUnaryProjectsUnspecifiedInvocationState(t *testing.T) {}\n' \
+    > "$tmp/sdk-direct-runtime-state-fallback/sdk/go/direct_runtime_codec_test.go"
+  printf '%s\n' \
+    'def _state_name(value: int) -> str:' \
+    '    return {5: "Completed"}.get(value, "Unspecified")' \
+    '' \
+    'def _invoke_response_json(response):' \
+    '    terminal_state = _state_name(response.state)' \
+    '' \
+    'def _stream_chunk_json(chunk):' \
+    '    return {"state": _state_name(chunk.state)}' \
+    '' \
+    'def _canonical_receipt_projection(receipt):' \
+    '    return {"state": _state_name(receipt.state)}' \
+    > "$tmp/sdk-direct-runtime-state-fallback/sdk/python/easynet_sdk/direct_runtime.py"
+  printf 'def test_direct_runtime_projects_unspecified_invocation_state(): pass\n' \
+    > "$tmp/sdk-direct-runtime-state-fallback/sdk/python/tests/test_direct_runtime.py"
+  if ( check_sdk_direct_runtime_state_projection_contract "$tmp/sdk-direct-runtime-state-fallback" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK direct runtime state fallback gate to fail"
+  fi
   mkdir -p "$tmp/sdk-runtime-stage-fallback/sdk/go" \
     "$tmp/sdk-runtime-stage-fallback/sdk/python/easynet_sdk" \
     "$tmp/sdk-runtime-stage-fallback/sdk/python/tests"
@@ -11804,6 +11929,7 @@ EOF
   check_sdk_python_transport_stream_event_projection_contract
   check_sdk_python_invocation_result_adapter_projection_contract
   check_sdk_runtime_failure_code_contract
+  check_sdk_direct_runtime_state_projection_contract
   check_sdk_direct_runtime_descriptor_not_found_contract
   check_principal_lifecycle_cli_schema_contract
   check_principal_lifecycle_store_idempotency_schema_contract
@@ -11946,6 +12072,7 @@ check_sdk_easynet_provider_identity_alias_contract
 check_sdk_python_transport_stream_event_projection_contract
 check_sdk_python_invocation_result_adapter_projection_contract
 check_sdk_runtime_failure_code_contract
+check_sdk_direct_runtime_state_projection_contract
 check_sdk_direct_runtime_descriptor_not_found_contract
 check_principal_lifecycle_cli_schema_contract
 check_principal_lifecycle_store_idempotency_schema_contract

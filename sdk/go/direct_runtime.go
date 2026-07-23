@@ -713,15 +713,26 @@ func (t *directRuntimeBidiTransport) Recv(ctx context.Context) ([]byte, error) {
 			t.mu.Lock()
 			admissionReceipt := t.admissionReceipt
 			t.mu.Unlock()
+			terminalStateName, err := directStateName(
+				down.GetReceipt().GetState(),
+				"direct_runtime.bidi",
+			)
+			if err != nil {
+				return nil, err
+			}
 			if err := validateDirectReceiptPair(
 				admissionReceipt,
 				down.GetReceipt(),
-				directStateName(down.GetReceipt().GetState()),
+				terminalStateName,
 				"direct_runtime.bidi",
 			); err != nil {
 				return nil, err
 			}
-			return directBidiDownJSON(down, directReceipt(admissionReceipt))
+			admissionProjection, err := directReceipt(admissionReceipt, "direct_runtime.bidi")
+			if err != nil {
+				return nil, err
+			}
+			return directBidiDownJSON(down, admissionProjection)
 		}
 		return directBidiDownJSON(down, nil)
 	}
@@ -868,7 +879,10 @@ func directInvokeResponseJSON(draft InvocationDraft, response *axonpb.InvokeResp
 	if response == nil {
 		return nil, directRuntimeProtocolError("direct_runtime.invoke", "runtime unary response is required")
 	}
-	stateName := directStateName(response.GetState())
+	stateName, err := directStateName(response.GetState(), "direct_runtime.invoke")
+	if err != nil {
+		return nil, err
+	}
 	if response.GetProofError() != nil && response.GetTerminalReceipt() == nil {
 		return nil, directRuntimeProtocolError(
 			"direct_runtime.invoke",
@@ -904,8 +918,14 @@ func directInvokeResponseJSON(draft InvocationDraft, response *axonpb.InvokeResp
 			return nil, err
 		}
 	}
-	admissionReceipt := directReceipt(response.GetAdmissionReceipt())
-	terminalReceipt := directReceipt(response.GetTerminalReceipt())
+	admissionReceipt, err := directReceipt(response.GetAdmissionReceipt(), "direct_runtime.invoke")
+	if err != nil {
+		return nil, err
+	}
+	terminalReceipt, err := directReceipt(response.GetTerminalReceipt(), "direct_runtime.invoke")
+	if err != nil {
+		return nil, err
+	}
 	value := map[string]any{
 		"ok":                  errorValue == nil && terminalReceipt != nil,
 		"tuple":               draft,
@@ -965,7 +985,10 @@ func directStreamChunkJSONWithAdmission(
 	if chunk == nil {
 		return nil, directRuntimeProtocolError("direct_runtime.stream", "runtime stream chunk is required")
 	}
-	stateName := directStateName(chunk.GetState())
+	stateName, err := directStateName(chunk.GetState(), "direct_runtime.stream")
+	if err != nil {
+		return nil, err
+	}
 	admission := chunk.GetAdmissionReceipt()
 	if admission == nil && chunk.GetTerminalReceipt() != nil {
 		admission = priorAdmission
@@ -1018,10 +1041,18 @@ func directStreamChunkJSONWithAdmission(
 		value["elapsed_ms"] = chunk.GetElapsedMs()
 	}
 	if admission != nil {
-		value["admission_receipt"] = directReceipt(admission)
+		admissionProjection, err := directReceipt(admission, "direct_runtime.stream")
+		if err != nil {
+			return nil, err
+		}
+		value["admission_receipt"] = admissionProjection
 	}
 	if chunk.GetTerminalReceipt() != nil {
-		value["terminal_receipt"] = directReceipt(chunk.GetTerminalReceipt())
+		terminalProjection, err := directReceipt(chunk.GetTerminalReceipt(), "direct_runtime.stream")
+		if err != nil {
+			return nil, err
+		}
+		value["terminal_receipt"] = terminalProjection
 	}
 	return json.Marshal(value)
 }
@@ -1120,7 +1151,10 @@ func directBidiDownJSON(frame *axonpb.InvokeBidiDown, admissionReceipt map[strin
 	case *axonpb.InvokeBidiDown_Control:
 		value["payload_json"] = directBidiControlJSON(payload.Control)
 	case *axonpb.InvokeBidiDown_Receipt:
-		receipt := directReceipt(payload.Receipt)
+		receipt, err := directReceipt(payload.Receipt, "direct_runtime.bidi")
+		if err != nil {
+			return nil, err
+		}
 		if terminal {
 			value["terminal_receipt"] = receipt
 			if admissionReceipt != nil {
@@ -1203,7 +1237,7 @@ func directCanonicalReceiptRole(receipt *axonpb.InvocationReceipt, stage string)
 	default:
 		return directReceiptNone, directRuntimeProtocolError(
 			stage,
-			fmt.Sprintf("runtime receipt has unsupported lifecycle state %s", directStateName(receipt.GetState())),
+			fmt.Sprintf("runtime receipt has unsupported lifecycle state %d", receipt.GetState()),
 		)
 	}
 }
@@ -1233,7 +1267,11 @@ func validateDirectReceiptPair(
 	if role != directReceiptTerminal {
 		return directRuntimeProtocolError(stage, "terminal_receipt does not carry a terminal state")
 	}
-	if wireState != directStateName(terminal.GetState()) {
+	terminalStateName, err := directStateName(terminal.GetState(), stage)
+	if err != nil {
+		return err
+	}
+	if wireState != terminalStateName {
 		return directRuntimeProtocolError(stage, "wire state does not match terminal_receipt state")
 	}
 	if admission == nil {
@@ -1318,15 +1356,19 @@ func directErrorStage(stage axonpb.ErrorStage) string {
 	return strings.ToLower(name)
 }
 
-func directReceipt(receipt *axonpb.InvocationReceipt) map[string]any {
+func directReceipt(receipt *axonpb.InvocationReceipt, stage string) (map[string]any, error) {
 	if receipt == nil {
-		return nil
+		return nil, nil
+	}
+	stateName, err := directStateName(receipt.GetState(), stage)
+	if err != nil {
+		return nil, err
 	}
 	value := map[string]any{
 		"index":                   receipt.GetIndex(),
 		"invocation_id":           receipt.GetInvocationId(),
 		"receipt_type":            receipt.GetReceiptType(),
-		"state":                   directStateName(receipt.GetState()),
+		"state":                   stateName,
 		"timestamp_unix_ms":       receipt.GetTimestampUnixMs(),
 		"prev_receipt_hash_hex":   hex.EncodeToString(receipt.GetPrevReceiptHash()),
 		"self_hash_hex":           hex.EncodeToString(receipt.GetSelfHash()),
@@ -1371,7 +1413,7 @@ func directReceipt(receipt *axonpb.InvocationReceipt) map[string]any {
 			value["payload_base64"] = base64.StdEncoding.EncodeToString(payload)
 		}
 	}
-	return value
+	return value, nil
 }
 
 func directAgentBinding(binding *axonpb.AgentIdentity) map[string]any {
@@ -1597,26 +1639,26 @@ func directAuthorityBindingKind(binding *axonpb.AuthorityBinding) string {
 	}
 }
 
-func directStateName(state axonpb.InvocationState) string {
+func directStateName(state axonpb.InvocationState, stage string) (string, error) {
 	switch state {
 	case axonpb.InvocationState_INVOCATION_STATE_ACCEPTED:
-		return "Accepted"
+		return "Accepted", nil
 	case axonpb.InvocationState_INVOCATION_STATE_ADMITTED:
-		return "Admitted"
+		return "Admitted", nil
 	case axonpb.InvocationState_INVOCATION_STATE_DISPATCHED:
-		return "Dispatched"
+		return "Dispatched", nil
 	case axonpb.InvocationState_INVOCATION_STATE_RUNNING:
-		return "Running"
+		return "Running", nil
 	case axonpb.InvocationState_INVOCATION_STATE_COMPLETED:
-		return "Completed"
+		return "Completed", nil
 	case axonpb.InvocationState_INVOCATION_STATE_FAILED:
-		return "Failed"
+		return "Failed", nil
 	case axonpb.InvocationState_INVOCATION_STATE_TIMED_OUT:
-		return "TimedOut"
+		return "TimedOut", nil
 	case axonpb.InvocationState_INVOCATION_STATE_CANCELLED:
-		return "Cancelled"
+		return "Cancelled", nil
 	default:
-		return "Unspecified"
+		return "", directRuntimeProtocolError(stage, fmt.Sprintf("runtime invocation state is unsupported: %d", state))
 	}
 }
 

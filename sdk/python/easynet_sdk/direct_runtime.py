@@ -823,7 +823,7 @@ def _cancel_stream_iterator(iterator: Any) -> None:
 
 def _stream_chunk_terminal(chunk: Any) -> bool:
     return (
-        bool(chunk.terminal) or _state_name(chunk.state) in _TERMINAL_INVOCATION_STATES
+        bool(chunk.terminal) or _state_name(chunk.state, "direct_runtime.stream") in _TERMINAL_INVOCATION_STATES
     )
 
 
@@ -1177,7 +1177,7 @@ def _invoke_response_json(
     draft: InvocationDraft,
     response: Any,
 ) -> bytes:
-    terminal_state = _state_name(response.state)
+    terminal_state = _state_name(response.state, "direct_runtime.invoke")
     output_content_type = response.result_content_type
     output_base64 = base64.b64encode(response.result).decode("ascii")
     error = _response_failure(response, terminal_state)
@@ -1322,7 +1322,7 @@ def _stream_chunk_json(chunk: Any) -> bytes:
     event: dict[str, object] = {
         "sequence": int(chunk.sequence) + 1,
         "kind": "terminal" if _stream_chunk_terminal(chunk) else "data",
-        "state": _state_name(chunk.state),
+        "state": _state_name(chunk.state, "direct_runtime.stream"),
         "terminal": _stream_chunk_terminal(chunk),
         "payload_content_type": content_type,
         "payload_base64": base64.b64encode(chunk.payload).decode("ascii"),
@@ -1497,7 +1497,7 @@ def _bidi_down_is_internal_admission(frame: Any) -> bool:
 def _bidi_receipt_terminal(receipt: Any) -> bool:
     return (
         bool(receipt.cleanup_complete)
-        or _state_name(receipt.state) in _TERMINAL_INVOCATION_STATES
+        or _state_name(receipt.state, "direct_runtime.bidi") in _TERMINAL_INVOCATION_STATES
     )
 
 
@@ -1527,7 +1527,7 @@ def _bidi_control_json(control: Any) -> dict[str, object]:
 def _stream_chunk_error(chunk: Any) -> dict[str, object] | None:
     if chunk.HasField("error"):
         return _axon_failure(chunk.error, _error_stage(chunk.error.stage))
-    state = _state_name(chunk.state)
+    state = _state_name(chunk.state, "direct_runtime.stream")
     if state in {"Failed", "TimedOut", "Cancelled"}:
         code = canonical_terminal_state_code(state)
         return {
@@ -1633,7 +1633,7 @@ def _canonical_receipt_projection(receipt: Any) -> dict[str, object]:
         "index": int(receipt.index),
         "invocation_id": receipt.invocation_id,
         "receipt_type": receipt.receipt_type,
-        "state": _state_name(receipt.state),
+        "state": _state_name(receipt.state, "direct_runtime.receipt"),
         "timestamp_unix_ms": int(receipt.timestamp_unix_ms),
         "prev_receipt_hash_hex": receipt.prev_receipt_hash.hex(),
         "self_hash_hex": receipt.self_hash.hex(),
@@ -1706,8 +1706,7 @@ def _canonical_receipt_projection(receipt: Any) -> dict[str, object]:
 def _canonical_receipt_document(receipt: Any) -> dict[str, object]:
     _require_receipt_text(receipt.invocation_id, "invocation_id")
     _require_receipt_text(receipt.receipt_type, "receipt_type")
-    if _state_name(receipt.state) == "Unspecified":
-        raise _receipt_protocol_error("state is unspecified")
+    _state_name(receipt.state, "direct_runtime.receipt")
     _require_receipt_hash(receipt.prev_receipt_hash, "prev_receipt_hash", zero=True)
     if int(receipt.index) > 0 and not any(receipt.prev_receipt_hash):
         raise _receipt_protocol_error("prev_receipt_hash is zero after index 0")
@@ -2172,7 +2171,7 @@ def _failure_code_value(code: ErrorCode | str) -> str:
     return code.value if isinstance(code, ErrorCode) else code
 
 
-def _state_name(value: int) -> str:
+def _state_name(value: int, stage: str) -> str:
     names = {
         _types_pb2.INVOCATION_STATE_ACCEPTED: "Accepted",
         _types_pb2.INVOCATION_STATE_ADMITTED: "Admitted",
@@ -2183,7 +2182,15 @@ def _state_name(value: int) -> str:
         _types_pb2.INVOCATION_STATE_TIMED_OUT: "TimedOut",
         _types_pb2.INVOCATION_STATE_CANCELLED: "Cancelled",
     }
-    return names.get(value, "Unspecified")
+    try:
+        return names[value]
+    except KeyError as exc:
+        raise _direct_error(
+            f"runtime invocation state is unsupported: {value}",
+            code=ErrorCode.PROTOCOL,
+            retry=RetryHint.NEVER,
+            details={"stage": stage, "state": int(value)},
+        ) from exc
 
 
 def _canonical_receipt_state(value: int) -> str:
