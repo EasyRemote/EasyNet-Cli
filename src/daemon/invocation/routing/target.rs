@@ -254,12 +254,33 @@ fn checked_subject_ura(subject: &str, field: &str) -> anyhow::Result<String> {
     Ok(subject.to_string())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DaemonSystemSubjectPolicy {
+    HubAbilitySubject(String),
+    CalleeOwnerSubject(String),
+}
+
+impl DaemonSystemSubjectPolicy {
+    fn for_descriptor(ability: &str, callee_ura: &str) -> Self {
+        match crate::core::ura::AbilitySelector::parse(ability) {
+            Ok(selector) if selector.owner_kind() == "hub" => {
+                Self::HubAbilitySubject(selector.ability_ura().to_string())
+            }
+            _ => Self::CalleeOwnerSubject(callee_ura.to_string()),
+        }
+    }
+
+    fn subject_ura(&self) -> &str {
+        match self {
+            Self::HubAbilitySubject(subject) | Self::CalleeOwnerSubject(subject) => subject,
+        }
+    }
+}
+
 fn daemon_system_subject_ura_for_descriptor(ability: &str, callee_ura: &str) -> String {
-    crate::core::ura::AbilitySelector::parse(ability)
-        .ok()
-        .filter(|selector| selector.owner_kind() == "hub")
-        .map(|selector| selector.ability_ura().to_string())
-        .unwrap_or_else(|| callee_ura.to_string())
+    DaemonSystemSubjectPolicy::for_descriptor(ability, callee_ura)
+        .subject_ura()
+        .to_string()
 }
 
 /// Explicit subject binding state for a daemon-local runtime dispatch.
@@ -895,6 +916,22 @@ mod tests {
     }
 
     #[test]
+    fn daemon_system_subject_policy_names_callee_owner_subject() {
+        let policy = DaemonSystemSubjectPolicy::for_descriptor(
+            "observe.health",
+            "easynet:///r/acme/device/dev-a",
+        );
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::CalleeOwnerSubject(
+                "easynet:///r/acme/device/dev-a".to_string()
+            )
+        );
+        assert_eq!(policy.subject_ura(), "easynet:///r/acme/device/dev-a");
+    }
+
+    #[test]
     fn daemon_system_subject_resolves_to_ability_ura_for_hub_owner() {
         let hub_ability = crate::core::ura::hub_ability_ura("acme", "federation.status");
         let target =
@@ -910,6 +947,21 @@ mod tests {
                 .unwrap(),
             crate::core::ura::hub_ability_ura("acme", "federation.status")
         );
+    }
+
+    #[test]
+    fn daemon_system_subject_policy_names_hub_ability_subject() {
+        let hub_ability = crate::core::ura::hub_ability_ura("acme", "federation.status");
+        let policy = DaemonSystemSubjectPolicy::for_descriptor(
+            &hub_ability,
+            &crate::core::ura::hub_ura("acme"),
+        );
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::HubAbilitySubject(hub_ability.clone())
+        );
+        assert_eq!(policy.subject_ura(), hub_ability);
     }
 
     #[test]

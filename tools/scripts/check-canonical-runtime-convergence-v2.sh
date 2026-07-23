@@ -8411,8 +8411,14 @@ production = "\n".join(
 )
 if "default_subject_ura" in production:
     raise SystemExit("local_ability_target_subject_policy:default_subject_accessor_leaked")
+if "unwrap_or_else(|| callee_ura.to_string())" in production:
+    raise SystemExit("local_ability_target_subject_policy:implicit_callee_subject_fallback")
 
 for token, code in (
+    ("enum DaemonSystemSubjectPolicy", "subject_policy_state_missing"),
+    ("HubAbilitySubject(String)", "hub_ability_subject_state_missing"),
+    ("CalleeOwnerSubject(String)", "callee_owner_subject_state_missing"),
+    ("fn for_descriptor(ability: &str, callee_ura: &str) -> Self", "subject_policy_selector_missing"),
     ("fn daemon_system_subject_ura_for_descriptor(", "descriptor_policy_missing"),
     ("pub(crate) fn daemon_system_subject_ura(&self) -> anyhow::Result<String>", "target_policy_method_missing"),
     ("pub fn local_root_for_target(", "target_issuer_missing"),
@@ -8453,8 +8459,10 @@ for text, code in (
 for token, code in (
     ("local_system_context_for_agent_target_uses_agent_owner_subject", "agent_subject_regression_missing"),
     ("local_system_context_for_hub_target_uses_ability_subject", "hub_subject_regression_missing"),
+    ("daemon_system_subject_policy_names_callee_owner_subject", "callee_policy_state_test_missing"),
+    ("daemon_system_subject_policy_names_hub_ability_subject", "hub_policy_state_test_missing"),
 ):
-    if token not in local_invoke:
+    if token not in local_invoke and token not in target:
         raise SystemExit(f"local_ability_target_subject_policy:{code}")
 PY
 }
@@ -11255,6 +11263,52 @@ EOF
     > "$tmp/cli-local-invoke-fallback/src/daemon/ability/catalog/profiles/mcp.rs"
   if ( CLI_ROOT="$tmp/cli-local-invoke-fallback"; check_local_ability_target_subject_policy_contract ) >/dev/null 2>&1; then
     fail "self-test expected local invoke fallback classifier gate to fail"
+  fi
+  mkdir -p "$tmp/cli-subject-policy-implicit-fallback/src/daemon/invocation/routing" \
+    "$tmp/cli-subject-policy-implicit-fallback/src/support/platform" \
+    "$tmp/cli-subject-policy-implicit-fallback/src/daemon/ability/builtins/integrations/mcp" \
+    "$tmp/cli-subject-policy-implicit-fallback/src/daemon/ability/builtins/integrations/a2a" \
+    "$tmp/cli-subject-policy-implicit-fallback/src/daemon/ability/catalog/profiles"
+  cat > "$tmp/cli-subject-policy-implicit-fallback/src/daemon/invocation/routing/target.rs" <<'EOF'
+enum DaemonSystemSubjectPolicy {
+    HubAbilitySubject(String),
+    CalleeOwnerSubject(String),
+}
+impl DaemonSystemSubjectPolicy {
+    fn for_descriptor(ability: &str, callee_ura: &str) -> Self { todo!() }
+}
+fn daemon_system_subject_ura_for_descriptor(ability: &str, callee_ura: &str) -> String {
+    crate::core::ura::AbilitySelector::parse(ability)
+        .ok()
+        .map(|selector| selector.ability_ura().to_string())
+        .unwrap_or_else(|| callee_ura.to_string())
+}
+pub(crate) fn daemon_system_subject_ura(&self) -> anyhow::Result<String> { todo!() }
+pub fn local_root_for_target() {}
+pub struct LocalTargetRootInvocation;
+pub fn local_target_root() {}
+#[cfg(test)]
+mod tests {
+    fn daemon_system_subject_policy_names_callee_owner_subject() {}
+    fn daemon_system_subject_policy_names_hub_ability_subject() {}
+}
+EOF
+  cat > "$tmp/cli-subject-policy-implicit-fallback/src/support/platform/local_invoke.rs" <<'EOF'
+pub enum LocalInvokeFailureClass { DaemonOffline }
+pub fn classify_invoke_failure(err: &anyhow::Error) -> LocalInvokeFailureClass { todo!() }
+fn invoke_issued_target_root_timeout() {}
+fn root_context_for_target() {}
+fn local_system_context_for_agent_target_uses_agent_owner_subject() {}
+fn local_system_context_for_hub_target_uses_ability_subject() {}
+EOF
+  printf 'fn bridge() { local_root_for_target(); }\n' \
+    > "$tmp/cli-subject-policy-implicit-fallback/src/daemon/ability/builtins/integrations/mcp/bridge.rs"
+  printf 'fn bridge() { local_root_for_target(); }\n' \
+    > "$tmp/cli-subject-policy-implicit-fallback/src/daemon/ability/builtins/integrations/a2a/bridge.rs"
+  printf 'fn profile() { root_context_for_target(); }\n' \
+    > "$tmp/cli-subject-policy-implicit-fallback/src/daemon/ability/catalog/profiles/mcp.rs"
+  if ( CLI_ROOT="$tmp/cli-subject-policy-implicit-fallback"; check_local_ability_target_subject_policy_contract ) >/dev/null 2>&1; then
+    fail "self-test expected implicit daemon-system subject fallback gate to fail"
   fi
   mkdir -p "$tmp/cli-kernel-session-read-model/src/daemon/boot/kernel" \
     "$tmp/cli-kernel-session-read-model/src/daemon/execution"
