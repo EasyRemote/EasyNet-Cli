@@ -17,9 +17,8 @@
 //
 // Wire shape
 // ----------
-// The exported helper returns `{ "items": [InstallRecord, ...] }`
-// where each item matches the on-wire `InstalledSkill` schema. Each
-// item carries:
+// The exported helper returns `{ "items": [InstalledSkillProjection, ...] }`.
+// Each item carries:
 //   * name, description, agent_id, resource_ura
 //   * source = { kind, identifier, ref?, subpath? }
 //   * content_hash (empty for global-pool skills)
@@ -37,6 +36,7 @@ use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentAggregateSnapshot, AgentHostedSkillOwnerProjection,
     AgentRegisteredWorkspace, AgentSkillLayout,
 };
+use crate::daemon::resources::skills::projection::InstalledSkillProjection;
 
 /// Skill inventory handler.
 ///
@@ -69,26 +69,16 @@ pub(crate) fn handle(args: Value) -> anyhow::Result<Value> {
     let scope = SkillListScope::from_args(&args, &hosted_skill_owners)?;
     let rows = SkillInventoryBuilder::new(&snapshot, &scope).collect()?;
 
-    // Serialise InstallRecord directly — its serde derive emits the
-    // wire shape backend already speaks (content_hash via
-    // #[serde(rename)], etc.). Building the items array via
-    // serde_json::to_value preserves field ordering deterministically
-    // for downstream byte-stable comparisons.
-    let items: Vec<Value> = rows
+    let items: Vec<InstalledSkillProjection> = rows
         .into_iter()
         .map(|r| {
-            let mut value = serde_json::to_value(&r).unwrap_or(Value::Null);
-            if let Some(resource_ura) = scoped_skill_resource_ura(
+            let resource_ura = scoped_skill_resource_ura(
                 &hosted_skill_owners,
                 scope.agent_ura_for_row(&r.agent_id),
                 &r.agent_id,
                 &r.name,
-            ) {
-                if let Some(obj) = value.as_object_mut() {
-                    obj.insert("resource_ura".to_string(), json!(resource_ura));
-                }
-            }
-            value
+            );
+            InstalledSkillProjection::from_record(r, resource_ura)
         })
         .collect();
 
@@ -693,6 +683,66 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["agent_id"], "global:claude-global");
         assert_eq!(items[0]["name"], "summarize");
+    }
+
+    #[test]
+    fn list_handler_projects_resource_ura_without_extending_install_record_schema() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let agent_root = crate::daemon::persistence::config::agents_root().join("claude");
+        let skill_dir = agent_root.join("skills").join("inspectable");
+        std::fs::create_dir_all(skill_dir.join(".easynet")).expect("skill metadata dir");
+        std::fs::write(
+            skill_dir.join(".easynet").join("install.json"),
+            r#"{
+                "name": "inspectable",
+                "agent_id": "claude",
+                "source": {"kind": "github", "identifier": "owner/repo", "ref": "main"},
+                "content_hash": "sha256:abc",
+                "size_bytes": 42,
+                "installed_at": "2026-04-23T00:00:00Z",
+                "upgrade_available": false
+            }"#,
+        )
+        .expect("install record");
+
+        let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
+        let mut agent = crate::daemon::persistence::agent_registry::AgentEntry::new(
+            crate::daemon::persistence::agent_registry::AgentType::Codex,
+            None,
+        );
+        agent.root_path = Some(agent_root);
+        registry.agents.insert("claude".to_string(), agent);
+        crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save registry");
+        crate::daemon::persistence::local_agents::save(
+            &crate::daemon::persistence::local_agents::LocalAgentsFile {
+                host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+                hosted_agents: vec![crate::daemon::persistence::local_agents::HostedAgentEntry {
+                    profile: "llm".to_string(),
+                    name: "claude".to_string(),
+                    agent_ura: "easynet:///r/acme/agent/u1.claude".to_string(),
+                    signing_authority: "hosted_by:easynet:///r/acme/device/dev-1".to_string(),
+                    first_seen_at: "2026-01-01T00:00:00Z".to_string(),
+                }],
+            },
+        )
+        .expect("save local agents");
+
+        let response = handle(json!({"owner_agent_id": "claude"})).expect("skill list");
+        let items = response["items"].as_array().expect("items");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["name"], "inspectable");
+        assert_eq!(items[0]["content_hash"], "sha256:abc");
+        assert_eq!(
+            items[0]["resource_ura"],
+            "easynet:///r/acme/resource/agent.u1.claude/skill/inspectable"
+        );
+        assert!(
+            serde_json::from_value::<crate::daemon::resources::skills::store::InstallRecord>(
+                items[0].clone()
+            )
+            .is_err(),
+            "response-only resource_ura must not be accepted by the persistence schema"
+        );
     }
 
     #[test]

@@ -31,11 +31,10 @@
 //
 // Receipt shapes
 // --------------
-// install: `{ ok: true, record: InstallRecord }`
-//   InstallRecord includes name, agent_id, source { kind,
-//   identifier, ref?, subpath? }, skill_tree_hash (sha256 over the
-//   installed tree excluding .easynet/), size_bytes, installed_at.
-//   Backend forwards this verbatim to the Frontend.
+// install: `{ ok: true, record: InstalledSkillProjection }`
+//   The projection includes the persisted install fields plus optional
+//   response-only fields such as `resource_ura`. Persistence remains owned by
+//   `InstallRecord`; ability responses do not mutate persistence JSON.
 //
 // remove:  `{ ok: true, name, agent }`
 //   Idempotency: if the skill isn't present the helper errors; the
@@ -44,10 +43,10 @@
 //   semantics (e.g. the Frontend) decide what to do with the typed
 //   error.
 //
-// upgrade: `{ ok: true, record: InstallRecord }`
-//   Same shape as install. The helper handles backup + rollback on
-//   failure; if the ability returns an error, the on-disk skill is
-//   guaranteed to be at the pre-upgrade state.
+// upgrade: `{ ok: true, record: InstalledSkillProjection }`
+//   Same projection shape as install. The helper handles backup + rollback on
+//   failure; if the ability returns an error, the on-disk skill is guaranteed
+//   to be at the pre-upgrade state.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -58,9 +57,8 @@ use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::federation::read_model::owner_projection::skill_resource_ura;
-use crate::daemon::resources::skills::store::{
-    install_skill, remove_skill, upgrade_skill, InstallRecord,
-};
+use crate::daemon::resources::skills::projection::InstalledSkillProjection;
+use crate::daemon::resources::skills::store::{install_skill, remove_skill, upgrade_skill};
 
 use crate::daemon::ability::dispatch::OwnerKind;
 pub const ABILITY_INSTALL: &str = crate::daemon::ability::names::resources::SKILL_INSTALL;
@@ -91,7 +89,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 /// Args: `{ "source": "github:owner/repo[@ref][:subpath]",
 ///          "agent": "<name>",
 ///          "pin": "<ref>"? }`
-/// Returns: `{ "ok": true, "record": InstallRecord + { resource_ura } }`
+/// Returns: `{ "ok": true, "record": InstalledSkillProjection }`
 fn install_handler(args: Value) -> anyhow::Result<Value> {
     let source = args
         .get("source")
@@ -105,7 +103,7 @@ fn install_handler(args: Value) -> anyhow::Result<Value> {
     let agent_ura = args.get("agent_ura").and_then(Value::as_str);
 
     let record = install_skill(source, agent, pin)?;
-    Ok(json!({ "ok": true, "record": record_with_resource_ura(record, agent_ura) }))
+    Ok(json!({ "ok": true, "record": project_install_record(record, agent_ura) }))
 }
 
 /// `skill.remove` handler.
@@ -140,7 +138,7 @@ fn remove_handler(args: Value) -> anyhow::Result<Value> {
 /// Args: `{ "name": "<skill-name>",
 ///          "agent": "<agent-name>",
 ///          "to": "<ref>"? }`   // omit = upstream HEAD
-/// Returns: `{ "ok": true, "record": InstallRecord }`
+/// Returns: `{ "ok": true, "record": InstalledSkillProjection }`
 fn upgrade_handler(args: Value) -> anyhow::Result<Value> {
     let name = args
         .get("name")
@@ -154,17 +152,15 @@ fn upgrade_handler(args: Value) -> anyhow::Result<Value> {
     let agent_ura = args.get("agent_ura").and_then(Value::as_str);
 
     let record = upgrade_skill(name, agent, to)?;
-    Ok(json!({ "ok": true, "record": record_with_resource_ura(record, agent_ura) }))
+    Ok(json!({ "ok": true, "record": project_install_record(record, agent_ura) }))
 }
 
-fn record_with_resource_ura(record: InstallRecord, agent_ura: Option<&str>) -> Value {
-    let mut value = serde_json::to_value(&record).unwrap_or(Value::Null);
-    if let Some(ura) = agent_ura.and_then(|agent_ura| skill_resource_ura(agent_ura, &record.name)) {
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("resource_ura".to_string(), json!(ura));
-        }
-    }
-    value
+fn project_install_record(
+    record: crate::daemon::resources::skills::store::InstallRecord,
+    agent_ura: Option<&str>,
+) -> InstalledSkillProjection {
+    let resource_ura = agent_ura.and_then(|agent_ura| skill_resource_ura(agent_ura, &record.name));
+    InstalledSkillProjection::from_record(record, resource_ura)
 }
 
 // ── Discovery surfaces (input schemas + descriptions) ─────────────
@@ -230,8 +226,8 @@ pub fn upgrade_input_schema() -> Value {
 
 pub fn install_description() -> &'static str {
     "Install a skill from a marketplace source into an agent's skills/ directory. \
-     v1 supports github: sources. Returns the InstallRecord (name, agent_id, source, \
-     skill_tree_hash, size_bytes, installed_at)."
+     v1 supports github: sources. Returns an InstalledSkillProjection (name, agent_id, source, \
+     content_hash, size_bytes, installed_at, resource_ura?)."
 }
 
 pub fn remove_description() -> &'static str {
@@ -248,6 +244,7 @@ pub fn upgrade_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::resources::skills::store::{InstallRecord, SkillSource};
 
     /// All three abilities must register or the daemon-side
     /// dispatch will silently miss them.
@@ -276,6 +273,35 @@ mod tests {
     fn install_handler_rejects_missing_agent() {
         let err = install_handler(json!({"source": "github:x/y"})).unwrap_err();
         assert!(format!("{err}").contains("`agent`"));
+    }
+
+    #[test]
+    fn project_install_record_returns_response_projection_with_resource_ura() {
+        let record = InstallRecord {
+            name: "alpha".to_string(),
+            description: "Alpha skill".to_string(),
+            agent_id: "claude".to_string(),
+            source: SkillSource {
+                kind: "github".to_string(),
+                identifier: "owner/repo".to_string(),
+                ref_: Some("main".to_string()),
+                subpath: None,
+            },
+            skill_tree_hash: "sha256:abc".to_string(),
+            size_bytes: 42,
+            installed_at: "2026-04-23T00:00:00Z".to_string(),
+            last_checked_at: None,
+            upgrade_available: false,
+        };
+
+        let projected = project_install_record(record, Some("easynet:///r/acme/agent/u1.claude"));
+
+        assert_eq!(projected.name, "alpha");
+        assert_eq!(projected.skill_tree_hash, "sha256:abc");
+        assert_eq!(
+            projected.resource_ura.as_deref(),
+            Some("easynet:///r/acme/resource/agent.u1.claude/skill/alpha")
+        );
     }
 
     #[test]

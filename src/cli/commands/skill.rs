@@ -14,7 +14,8 @@ use console::style;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::daemon::resources::skills::store::{format_bytes, InstallRecord};
+use crate::daemon::resources::skills::projection::InstalledSkillProjection;
+use crate::daemon::resources::skills::store::format_bytes;
 use crate::support::platform::local_invoke::{invoke_local_ability, LocalRuntimeStateReadIssuer};
 use crate::support::platform::output;
 
@@ -116,7 +117,7 @@ fn run_install(args: InstallArgs) -> anyhow::Result<()> {
     emit_install_result(&args, &record)
 }
 
-fn invoke_daemon_skill_install(args: &InstallArgs) -> anyhow::Result<InstallRecord> {
+fn invoke_daemon_skill_install(args: &InstallArgs) -> anyhow::Result<InstalledSkillProjection> {
     let response = invoke_local_ability(
         "skill.install",
         json!({
@@ -166,10 +167,10 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
 #[derive(Debug, Deserialize)]
 struct SkillListResponse {
     #[serde(default)]
-    items: Vec<InstallRecord>,
+    items: Vec<InstalledSkillProjection>,
 }
 
-fn invoke_daemon_skill_list(args: &ListArgs) -> anyhow::Result<Vec<InstallRecord>> {
+fn invoke_daemon_skill_list(args: &ListArgs) -> anyhow::Result<Vec<InstalledSkillProjection>> {
     let response = LocalRuntimeStateReadIssuer::invoke(
         "skill.list",
         json!({
@@ -188,7 +189,7 @@ fn run_upgrade(args: UpgradeArgs) -> anyhow::Result<()> {
     emit_upgrade_result(&args, &record)
 }
 
-fn invoke_daemon_skill_upgrade(args: &UpgradeArgs) -> anyhow::Result<InstallRecord> {
+fn invoke_daemon_skill_upgrade(args: &UpgradeArgs) -> anyhow::Result<InstalledSkillProjection> {
     let response = invoke_local_ability(
         "skill.upgrade",
         json!({
@@ -218,7 +219,7 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
 fn decode_skill_record_response(
     response: serde_json::Value,
     ability: &str,
-) -> anyhow::Result<InstallRecord> {
+) -> anyhow::Result<InstalledSkillProjection> {
     let record = response
         .get("record")
         .cloned()
@@ -227,7 +228,7 @@ fn decode_skill_record_response(
         .map_err(|err| anyhow::anyhow!("{ability} returned invalid record: {err}"))
 }
 
-fn emit_install_result(args: &InstallArgs, rec: &InstallRecord) -> anyhow::Result<()> {
+fn emit_install_result(args: &InstallArgs, rec: &InstalledSkillProjection) -> anyhow::Result<()> {
     if args.json {
         #[derive(Serialize)]
         struct MachineOut<'a> {
@@ -260,7 +261,7 @@ fn emit_install_result(args: &InstallArgs, rec: &InstallRecord) -> anyhow::Resul
     Ok(())
 }
 
-fn emit_upgrade_result(args: &UpgradeArgs, rec: &InstallRecord) -> anyhow::Result<()> {
+fn emit_upgrade_result(args: &UpgradeArgs, rec: &InstalledSkillProjection) -> anyhow::Result<()> {
     if args.json {
         println!("{}", serde_json::to_string(rec)?);
     } else {

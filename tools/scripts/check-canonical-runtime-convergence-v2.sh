@@ -1299,6 +1299,92 @@ for required in (
 PY
 }
 
+check_skill_record_projection_boundary_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local store="$cli_root/src/daemon/resources/skills/store.rs"
+  local projection="$cli_root/src/daemon/resources/skills/projection.rs"
+  local skills_mod="$cli_root/src/daemon/resources/skills/mod.rs"
+  local install="$cli_root/src/daemon/ability/builtins/resources/skills/install.rs"
+  local list="$cli_root/src/daemon/ability/builtins/resources/skills/list.rs"
+  local cli_skill="$cli_root/src/cli/commands/skill.rs"
+  [[ -f "$store" ]] || fail "skill install record store source is missing: $store"
+  [[ -f "$projection" ]] || fail "skill projection source is missing: $projection"
+  [[ -f "$skills_mod" ]] || fail "skill resources module source is missing: $skills_mod"
+  [[ -f "$install" ]] || fail "skill install ability source is missing: $install"
+  [[ -f "$list" ]] || fail "skill list ability source is missing: $list"
+  [[ -f "$cli_skill" ]] || fail "skill CLI source is missing: $cli_skill"
+
+  "$PYTHON_BIN" - "$store" "$projection" "$skills_mod" "$install" "$list" "$cli_skill" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+store, projection, skills_mod, install, list_src, cli_skill = [
+    Path(arg).read_text(encoding="utf-8") for arg in sys.argv[1:]
+]
+
+install_record = re.search(r"pub struct InstallRecord \{(?P<body>.*?)\n\}", store, re.S)
+if install_record is None:
+    raise SystemExit("skill_record_projection_boundary:install_record_missing")
+if "resource_ura" in install_record.group("body"):
+    raise SystemExit("skill_record_projection_boundary:persistence_owns_resource_ura")
+if "pub mod projection;" not in skills_mod:
+    raise SystemExit("skill_record_projection_boundary:projection_module_not_exported")
+projection_struct = re.search(
+    r"(?P<attrs>(?:#\[[^\n]+\]\n)*)pub struct InstalledSkillProjection \{(?P<body>.*?)\n\}",
+    projection,
+    re.S,
+)
+if projection_struct is None:
+    raise SystemExit("skill_record_projection_boundary:projection_struct_missing")
+if "#[serde(deny_unknown_fields)]" not in projection_struct.group("attrs"):
+    raise SystemExit("skill_record_projection_boundary:projection_not_strict")
+for required in (
+    'pub resource_ura: Option<String>',
+    '#[serde(rename = "content_hash")]',
+    "pub fn from_record(record: InstallRecord, resource_ura: Option<String>) -> Self",
+    "installed_skill_projection_owns_resource_ura_without_mutating_install_record_schema",
+    "installed_skill_projection_rejects_unknown_response_fields",
+):
+    if required not in projection:
+        raise SystemExit(f"skill_record_projection_boundary:projection_missing:{required}")
+for retired in (
+    "record_with_resource_ura",
+    "serde_json::to_value(&record)",
+):
+    if retired in install:
+        raise SystemExit(f"skill_record_projection_boundary:install_retired:{retired}")
+for retired in (
+    "serde_json::to_value(&r)",
+    'obj.insert("resource_ura".to_string()',
+):
+    if retired in list_src:
+        raise SystemExit(f"skill_record_projection_boundary:list_retired:{retired}")
+for required in (
+    "InstalledSkillProjection::from_record(record, resource_ura)",
+    "project_install_record_returns_response_projection_with_resource_ura",
+):
+    if required not in install:
+        raise SystemExit(f"skill_record_projection_boundary:install_missing:{required}")
+for required in (
+    "Vec<InstalledSkillProjection>",
+    "InstalledSkillProjection::from_record(r, resource_ura)",
+    "list_handler_projects_resource_ura_without_extending_install_record_schema",
+):
+    if required not in list_src:
+        raise SystemExit(f"skill_record_projection_boundary:list_missing:{required}")
+for retired in (
+    "store::{format_bytes, InstallRecord}",
+    "anyhow::Result<InstallRecord>",
+    "Vec<InstallRecord>",
+):
+    if retired in cli_skill:
+        raise SystemExit(f"skill_record_projection_boundary:cli_retired:{retired}")
+if "projection::InstalledSkillProjection" not in cli_skill:
+    raise SystemExit("skill_record_projection_boundary:cli_projection_decode_missing")
+PY
+}
+
 check_local_agents_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local local_agents="$cli_root/src/daemon/persistence/local_agents.rs"
@@ -11854,6 +11940,53 @@ EOF
   if ( CLI_ROOT="$tmp/skill-install-record-schema-legacy"; check_skill_install_record_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected skill install record schema compatibility gate to fail"
   fi
+  mkdir -p "$tmp/skill-record-projection-boundary-legacy/src/daemon/resources/skills"
+  mkdir -p "$tmp/skill-record-projection-boundary-legacy/src/daemon/ability/builtins/resources/skills"
+  mkdir -p "$tmp/skill-record-projection-boundary-legacy/src/cli/commands"
+  cat >"$tmp/skill-record-projection-boundary-legacy/src/daemon/resources/skills/store.rs" <<'EOF'
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstallRecord {
+    pub name: String,
+    #[serde(rename = "content_hash")]
+    pub skill_tree_hash: String,
+    pub resource_ura: Option<String>,
+}
+EOF
+  cat >"$tmp/skill-record-projection-boundary-legacy/src/daemon/resources/skills/projection.rs" <<'EOF'
+pub struct InstalledSkillProjection {
+    pub name: String,
+}
+EOF
+  cat >"$tmp/skill-record-projection-boundary-legacy/src/daemon/resources/skills/mod.rs" <<'EOF'
+pub mod store;
+EOF
+  cat >"$tmp/skill-record-projection-boundary-legacy/src/daemon/ability/builtins/resources/skills/install.rs" <<'EOF'
+fn record_with_resource_ura(record: InstallRecord, agent_ura: Option<&str>) -> Value {
+    let mut value = serde_json::to_value(&record).unwrap();
+    value
+}
+EOF
+  cat >"$tmp/skill-record-projection-boundary-legacy/src/daemon/ability/builtins/resources/skills/list.rs" <<'EOF'
+fn handle(rows: Vec<InstallRecord>) {
+    let items: Vec<Value> = rows.into_iter().map(|r| {
+        let mut value = serde_json::to_value(&r).unwrap();
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("resource_ura".to_string(), json!("legacy"));
+        }
+        value
+    }).collect();
+}
+EOF
+  cat >"$tmp/skill-record-projection-boundary-legacy/src/cli/commands/skill.rs" <<'EOF'
+use crate::daemon::resources::skills::store::{format_bytes, InstallRecord};
+
+fn decode_skill_record_response() -> anyhow::Result<InstallRecord> {}
+struct SkillListResponse { items: Vec<InstallRecord> }
+EOF
+  if ( CLI_ROOT="$tmp/skill-record-projection-boundary-legacy"; check_skill_record_projection_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected skill record projection boundary gate to fail"
+  fi
   mkdir -p "$tmp/local-agents-schema-legacy/src/daemon/persistence"
   cat >"$tmp/local-agents-schema-legacy/src/daemon/persistence/local_agents.rs" <<'EOF'
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -12293,6 +12426,7 @@ EOF
   check_daemon_config_mode_required_contract
   check_chat_session_index_schema_contract
   check_skill_install_record_schema_contract
+  check_skill_record_projection_boundary_contract
   check_local_agents_schema_contract
   check_profile_store_schema_contract
   check_auth_session_owner_fact_contract
@@ -12441,6 +12575,7 @@ check_local_runtime_state_read_subject_contract
 check_runtime_state_kind_required_contract
 check_federation_realm_resolver_contract
 check_skill_install_record_schema_contract
+check_skill_record_projection_boundary_contract
 check_profile_store_schema_contract
 check_auth_session_owner_fact_contract
 check_resources_schema_contract
