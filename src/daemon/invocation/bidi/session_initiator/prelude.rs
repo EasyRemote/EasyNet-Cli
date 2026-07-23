@@ -294,20 +294,7 @@ async fn run_hosted_agent_advertise_prelude(
     // `svc.UsernameForUID` (username), so advertising under the UUID
     // (`<uuid>.pages`) lands a directory entry the resolver never queries →
     // `namespace.resolve NXDOMAIN: owner is not online` on `project_list`/etc.
-    let user_segment = match std::env::var("EASYNET_PAGES_USER")
-        .ok()
-        .filter(|value| !value.is_empty())
-    {
-        Some(value) => value,
-        None => crate::daemon::persistence::config::load_credentials()
-            .map_err(|error| SessionError::HostedAgentPreludeFailed {
-                endpoint: hub_endpoint.to_string(),
-                reason: format!("load credentials for hosted-agent owner projection: {error}"),
-            })?
-            .username
-            .filter(|value| !value.is_empty())
-            .unwrap_or_default(),
-    };
+    let user_segment = resolve_hosted_agent_user_segment(hub_endpoint)?;
 
     let hosted_identity =
         AgentAggregateRepository::load_hosted_identity_snapshot().map_err(|error| {
@@ -367,6 +354,29 @@ async fn run_hosted_agent_advertise_prelude(
         agent_count = entries_done_count,
     );
     Ok(())
+}
+
+fn resolve_hosted_agent_user_segment(hub_endpoint: &str) -> Result<String, SessionError> {
+    if let Some(value) = std::env::var("EASYNET_PAGES_USER")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(value);
+    }
+    let credentials = crate::daemon::persistence::config::load_credentials().map_err(|error| {
+        SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!("load credentials for hosted-agent owner projection: {error}"),
+        }
+    })?;
+    credentials
+        .username_slug()
+        .map(str::to_string)
+        .map_err(|error| SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!("project username for hosted-agent owner projection: {error}"),
+        })
 }
 
 async fn advertise_hosted_agent_entry(
@@ -1221,14 +1231,15 @@ pub(super) fn committed_owner_ability_descriptors(
 mod tests {
     use super::{
         apply_federation_join_receipt, paired_user_resolve_key_args, paired_user_trust_present,
-        resolved_public_keys, sync_paired_user_trust_prelude, HostedAgentPreludePublicationPlan,
-        UserTrustBootstrapError, UserTrustBootstrapOutcome, UserTrustSync,
+        resolve_hosted_agent_user_segment, resolved_public_keys, sync_paired_user_trust_prelude,
+        HostedAgentPreludePublicationPlan, UserTrustBootstrapError, UserTrustBootstrapOutcome,
+        UserTrustSync,
     };
     use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
     use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
     use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
     use crate::daemon::identity::self_identity::TestCanonicalSigner;
-    use crate::daemon::persistence::config::state_dir;
+    use crate::daemon::persistence::config::{save_credentials, state_dir, Credentials};
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
     use crate::daemon::trust::cell::SharedTrustAnchor;
     use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
@@ -1361,6 +1372,84 @@ mod tests {
                 }])
                 .expect("user anchor"),
             )),
+        }
+    }
+
+    fn paired_credentials(username: Option<&str>) -> Credentials {
+        Credentials {
+            node_id: "n1".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.example:7700".to_string(),
+            realm: "realm".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: username.map(str::to_string),
+            user_id: Some("user-dev".to_string()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        }
+    }
+
+    fn federation_native_credentials_without_user_binding() -> Credentials {
+        Credentials {
+            node_id: "n1".to_string(),
+            credential_token: String::new(),
+            hub_endpoint: "https://hub.example:50443".to_string(),
+            realm: "realm".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: None,
+            user_id: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: Some("a".repeat(64)),
+        }
+    }
+
+    #[test]
+    fn hosted_agent_owner_segment_accepts_explicit_dev_override() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        std::env::set_var("EASYNET_PAGES_USER", " dev ");
+
+        let user_segment =
+            resolve_hosted_agent_user_segment("https://hub:50443").expect("env user segment");
+
+        assert_eq!(user_segment, "dev");
+    }
+
+    #[test]
+    fn hosted_agent_owner_segment_reads_valid_paired_credentials() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        save_credentials(&paired_credentials(Some("dev"))).expect("save credentials");
+
+        let user_segment = resolve_hosted_agent_user_segment("https://hub:50443")
+            .expect("credential user segment");
+
+        assert_eq!(user_segment, "dev");
+    }
+
+    #[test]
+    fn hosted_agent_owner_segment_rejects_federation_native_credentials_without_username() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        save_credentials(&federation_native_credentials_without_user_binding())
+            .expect("save federation-native device credential");
+
+        let error = resolve_hosted_agent_user_segment("https://hub:50443")
+            .expect_err("missing username must fail hosted-agent prelude");
+
+        match error {
+            crate::daemon::invocation::bidi::session_initiator::SessionError::HostedAgentPreludeFailed {
+                reason,
+                ..
+            } => {
+                assert!(
+                    reason.contains("project username for hosted-agent owner projection"),
+                    "{reason}"
+                );
+                assert!(reason.contains("missing username"), "{reason}");
+            }
+            other => panic!("expected hosted-agent credential projection failure, got {other:?}"),
         }
     }
 

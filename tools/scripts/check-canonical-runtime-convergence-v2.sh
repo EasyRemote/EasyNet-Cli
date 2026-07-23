@@ -3599,6 +3599,44 @@ for test in (
 ):
     if test not in text:
         raise SystemExit(f"missing_session_prelude_credentials_test:{test}")
+
+advertise_start = text.find("async fn run_hosted_agent_advertise_prelude(")
+if advertise_start < 0:
+    raise SystemExit("session_prelude_hosted_agent_advertise_missing")
+advertise_end = text.find("\nasync fn advertise_hosted_agent_entry", advertise_start)
+advertise_body = text[advertise_start : advertise_end if advertise_end >= 0 else len(text)]
+for retired in (
+    ".username\n            .filter",
+    ".username.filter",
+    ".unwrap_or_default()",
+):
+    if retired in advertise_body:
+        raise SystemExit(f"session_prelude_hosted_agent_owner_retired_fallback:{retired}")
+if "resolve_hosted_agent_user_segment(hub_endpoint)?" not in advertise_body:
+    raise SystemExit("session_prelude_hosted_agent_owner_projector_not_used")
+
+helper_start = text.find("fn resolve_hosted_agent_user_segment(")
+if helper_start < 0:
+    raise SystemExit("session_prelude_hosted_agent_owner_projector_missing")
+helper_end = text.find("\nasync fn advertise_hosted_agent_entry", helper_start)
+helper_body = text[helper_start : helper_end if helper_end >= 0 else len(text)]
+for required in (
+    "EASYNET_PAGES_USER",
+    ".map(|value| value.trim().to_string())",
+    "load_credentials()",
+    ".username_slug()",
+    "SessionError::HostedAgentPreludeFailed",
+    "project username for hosted-agent owner projection",
+):
+    if required not in helper_body:
+        raise SystemExit(f"session_prelude_hosted_agent_owner_projector_missing:{required}")
+for test in (
+    "hosted_agent_owner_segment_accepts_explicit_dev_override",
+    "hosted_agent_owner_segment_reads_valid_paired_credentials",
+    "hosted_agent_owner_segment_rejects_federation_native_credentials_without_username",
+):
+    if test not in text:
+        raise SystemExit(f"missing_session_prelude_hosted_agent_owner_test:{test}")
 PY
 }
 
@@ -10207,6 +10245,39 @@ EOF
     > "$tmp/session-prelude-credentials-legacy/src/daemon/invocation/bidi/session_initiator/prelude.rs"
   if ( check_session_prelude_credentials_contract "$tmp/session-prelude-credentials-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected session prelude credential fallback gate to fail"
+  fi
+  mkdir -p "$tmp/session-prelude-hosted-owner-legacy/src/daemon/invocation/bidi/session_initiator"
+  cat >"$tmp/session-prelude-hosted-owner-legacy/src/daemon/invocation/bidi/session_initiator/prelude.rs" <<'EOF'
+async fn sync_paired_user_trust_prelude(client: &mut InvocationClient<Channel>, signer: &dyn CanonicalSigner, sync: &UserTrustSync) -> Result<UserTrustBootstrapOutcome, UserTrustBootstrapError> {
+  let Some(creds) = crate::daemon::persistence::config::load_credentials_optional()
+    .map_err(|error| UserTrustBootstrapError::CredentialsUnavailable { message: format!("load paired credentials: {error}") })? else {
+    return Ok(UserTrustBootstrapOutcome::NotRequired);
+  };
+  let user_ura = creds.user_ura()
+    .map_err(|error| UserTrustBootstrapError::CredentialsUnavailable { message: format!("project paired user URA: {error}") })?;
+  return Ok(UserTrustBootstrapOutcome::NotRequired);
+}
+fn resolved_public_keys(result: &[u8]) -> anyhow::Result<Vec<String>> { Ok(Vec::new()) }
+async fn run_hosted_agent_advertise_prelude(client: &mut InvocationClient<Channel>, phase: &mut SessionPhaseTracker, hub_endpoint: &str, signer: &dyn CanonicalSigner, ability_descriptors: &[AbilityDescriptor]) -> Result<(), SessionError> {
+  let user_segment = crate::daemon::persistence::config::load_credentials()
+    .map_err(|error| SessionError::HostedAgentPreludeFailed { endpoint: hub_endpoint.to_string(), reason: format!("load credentials for hosted-agent owner projection: {error}") })?
+    .username
+    .filter(|value| !value.is_empty())
+    .unwrap_or_default();
+  Ok(())
+}
+async fn advertise_hosted_agent_entry() {}
+#[cfg(test)]
+mod tests {
+  #[test] fn paired_user_trust_bootstrap_ignores_missing_credentials_only() {}
+  #[test] fn paired_user_trust_bootstrap_rejects_malformed_credentials() {}
+  #[test] fn hosted_agent_owner_segment_accepts_explicit_dev_override() {}
+  #[test] fn hosted_agent_owner_segment_reads_valid_paired_credentials() {}
+  #[test] fn hosted_agent_owner_segment_rejects_federation_native_credentials_without_username() {}
+}
+EOF
+  if ( check_session_prelude_credentials_contract "$tmp/session-prelude-hosted-owner-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected hosted-agent prelude owner fallback gate to fail"
   fi
   mkdir -p "$tmp/start-attach-user-signer-legacy/src/daemon/control" \
     "$tmp/start-attach-user-signer-legacy/src/bin" \
