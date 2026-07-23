@@ -264,12 +264,13 @@ def _prepared_invocation_from_json(
     request_id = _optional_string(decoded.get("request_id"), "request_id") or ""
     if require_prepared_id and prepared_id == "":
         raise _invalid_prepared("prepared_id is required")
-    descriptor_ref = (
-        _optional_string(decoded.get("descriptor_ref"), "descriptor_ref")
-        or material.descriptor_ref
-    )
+    descriptor_ref = _required_string(decoded, "descriptor_ref")
     if descriptor_ref == "":
         raise _invalid_prepared("descriptor_ref is required")
+    if descriptor_ref != material.descriptor_ref:
+        raise _invalid_prepared(
+            "signing_material.descriptor_ref must match tuple descriptor_ref"
+        )
     expires_at_unix_ms = _optional_int(
         decoded.get("expires_at_unix_ms"), "expires_at_unix_ms"
     ) or material.expires_at_unix_ms

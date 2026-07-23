@@ -10,6 +10,7 @@ import (
 
 const preparedFixture = `{
   "prepared_id": "prepared-example-1",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
   "tuple": {
     "caller_ura": "easynet:///r/example/agent/alice.sdk",
     "callee_ura": "easynet:///r/example/device/dev-a",
@@ -47,6 +48,40 @@ func TestPreparedInvocationDecodesSigningMaterialFixture(t *testing.T) {
 	}
 	if prepared.SigningMaterial().DescriptorRef() != prepared.DescriptorRef() {
 		t.Fatalf("descriptor ref mismatch")
+	}
+}
+
+func TestPreparedInvocationRejectsMissingPreparedDescriptorRef(t *testing.T) {
+	_, err := NewPreparedInvocationFromJSON([]byte(`{
+		"prepared_id": "prepared-example-1",
+		"tuple": {
+			"caller_ura": "easynet:///r/example/agent/alice.sdk",
+			"callee_ura": "easynet:///r/example/device/dev-a",
+			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"subject_ura": "easynet:///r/example/device/dev-a",
+			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+			"causal_context": {"form": "none"},
+			"args": {},
+			"content_type": "application/json",
+			"metadata": {}
+		},
+		"signing_material": {
+			"algorithm": "ed25519",
+			"canonical_bytes_base64": "ZXhhbXBsZS1jYW5vbmljYWwtYnl0ZXM=",
+			"args_digest_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+			"expires_at_unix_ms": 1783000000000
+		},
+		"submit_ready": false
+	}`))
+	if err == nil {
+		t.Fatalf("NewPreparedInvocationFromJSON synthesized missing descriptor_ref")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if !strings.Contains(err.Error(), "descriptor_ref is required") {
+		t.Fatalf("error = %v, want explicit descriptor_ref requirement", err)
 	}
 }
 
@@ -252,6 +287,7 @@ func TestPreparedInvocationRejectsSigningMaterialDescriptorMismatch(t *testing.T
 func TestPreparedInvocationRejectsCanonicalHashMismatch(t *testing.T) {
 	_, err := NewPreparedInvocationFromJSON([]byte(`{
 		"prepared_id": "prepared-example-1",
+		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"canonical_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
@@ -284,6 +320,7 @@ func TestPreparedInvocationRejectsCanonicalHashMismatch(t *testing.T) {
 func TestPreparedInvocationRejectsInvalidCanonicalBase64(t *testing.T) {
 	_, err := NewPreparedInvocationFromJSON([]byte(`{
 		"prepared_id": "prepared-example-1",
+		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"tuple": {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
 			"callee_ura": "easynet:///r/example/device/dev-a",

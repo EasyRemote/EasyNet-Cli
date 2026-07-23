@@ -24,6 +24,7 @@ from easynet_sdk import (
 
 PREPARED_FIXTURE = b"""{
   "prepared_id": "prepared-example-1",
+  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
   "tuple": {
     "caller_ura": "easynet:///r/example/agent/alice.sdk",
     "callee_ura": "easynet:///r/example/device/dev-a",
@@ -57,6 +58,36 @@ class SigningTests(unittest.TestCase):
             prepared.descriptor_ref,
         )
         self.assertTrue(prepared.signing_material.canonical_bytes_base64)
+
+    def test_prepared_invocation_rejects_missing_prepared_descriptor_ref(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            PreparedInvocation.from_json(
+                b"""{
+                    "prepared_id": "prepared-example-1",
+                    "tuple": {
+                        "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                        "callee_ura": "easynet:///r/example/device/dev-a",
+                        "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                        "subject_ura": "easynet:///r/example/device/dev-a",
+                        "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                        "causal_context": {"form": "none"},
+                        "args": {},
+                        "content_type": "application/json",
+                        "metadata": {}
+                    },
+                    "signing_material": {
+                        "algorithm": "ed25519",
+                        "canonical_bytes_base64": "ZXhhbXBsZS1jYW5vbmljYWwtYnl0ZXM=",
+                        "args_digest_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+                        "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                        "expires_at_unix_ms": 1783000000000
+                    },
+                    "submit_ready": false
+                }"""
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("descriptor_ref is required", caught.exception.message)
 
     def test_prepared_invocation_rejects_missing_canonical_bytes(self) -> None:
         with self.assertRaises(SDKError) as caught:
@@ -239,6 +270,7 @@ class SigningTests(unittest.TestCase):
             PreparedInvocation.from_json(
                 b"""{
                     "prepared_id": "prepared-example-1",
+                    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
                     "canonical_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     "tuple": {
                         "caller_ura": "easynet:///r/example/agent/alice.sdk",
@@ -265,6 +297,7 @@ class SigningTests(unittest.TestCase):
             PreparedInvocation.from_json(
                 b"""{
                     "prepared_id": "prepared-example-1",
+                    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
                     "tuple": {
                         "caller_ura": "easynet:///r/example/agent/alice.sdk",
                         "callee_ura": "easynet:///r/example/device/dev-a",
@@ -470,6 +503,7 @@ class SigningTests(unittest.TestCase):
         prepared = PreparedInvocation.from_json(
             b"""{
                 "prepared_id": "prepared-example-1",
+                "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
                 "tuple": {
                     "caller_ura": "easynet:///r/example/agent/alice.sdk",
                     "callee_ura": "easynet:///r/example/device/dev-a",

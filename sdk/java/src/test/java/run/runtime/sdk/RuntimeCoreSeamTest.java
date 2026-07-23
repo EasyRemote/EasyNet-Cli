@@ -36,6 +36,7 @@ public final class RuntimeCoreSeamTest {
           "abiIncompatibleRejectsMismatch",
           "retryHintsPreserveRetryability",
           "canonicalSigningMaterialComesFromPrepare",
+          "preparedInvocationRequiresExplicitDescriptorRef",
           "completeTupleRejectsMissingCaller",
           "completeTupleRejectsAllZeroPrincipals",
           "preparedInvocationCannotBeSubmitted",
@@ -92,6 +93,8 @@ public final class RuntimeCoreSeamTest {
       case "abiIncompatibleRejectsMismatch" -> abiIncompatibleRejectsMismatch();
       case "retryHintsPreserveRetryability" -> retryHintsPreserveRetryability();
       case "canonicalSigningMaterialComesFromPrepare" -> canonicalSigningMaterialComesFromPrepare();
+      case "preparedInvocationRequiresExplicitDescriptorRef" ->
+          preparedInvocationRequiresExplicitDescriptorRef();
       case "completeTupleRejectsMissingCaller" -> completeTupleRejectsMissingCaller();
       case "completeTupleRejectsAllZeroPrincipals" -> completeTupleRejectsAllZeroPrincipals();
       case "preparedInvocationCannotBeSubmitted" -> preparedInvocationCannotBeSubmitted();
@@ -594,6 +597,30 @@ public final class RuntimeCoreSeamTest {
     PreparedInvocation prepared = runtime.prepare(completeDraft(runtime), Map.of("deadline_ms", 1000));
     check(prepared.signingMaterial().descriptorRef().equals(DESCRIPTOR), "canonical descriptor binding");
     check(Base64.getDecoder().decode(prepared.signingMaterial().canonicalBytesBase64()).length > 0, "canonical bytes");
+  }
+
+  private static void preparedInvocationRequiresExplicitDescriptorRef() {
+    RuntimeClient runtime = new RuntimeClient(new MemoryRuntimeTransport());
+    Map<String, Object> material =
+        Map.of(
+            "algorithm", "ed25519",
+            "canonical_bytes_base64", "Y2Fub25pY2Fs",
+            "args_digest_hex", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "descriptor_ref", DESCRIPTOR,
+            "expires_at_unix_ms", 4102444800000L);
+    Map<String, Object> prepared = new LinkedHashMap<>();
+    prepared.put("prepared_id", "prepared-1");
+    prepared.put("request_id", "request-1");
+    prepared.put("tuple", JsonValueReader.object(completeDraft(runtime).toJSON(), "draft"));
+    prepared.put("signing_material", material);
+    prepared.put("descriptor_hash_hex", "");
+    prepared.put("schema_hash_hex", "");
+    prepared.put("canonical_hash_hex", "");
+    prepared.put("expires_at_unix_ms", 4102444800000L);
+    prepared.put("submit_ready", false);
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () -> PreparedInvocation.fromJSON(JsonValueWriter.object(prepared)));
   }
 
   private static void completeTupleRejectsMissingCaller() {

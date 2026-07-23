@@ -2724,6 +2724,72 @@ if py:
 PY
 }
 
+check_sdk_prepared_descriptor_ref_required_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_src="$cli_root/sdk/go/signing.go"
+  local go_test="$cli_root/sdk/go/signing_test.go"
+  local py_src="$cli_root/sdk/python/easynet_sdk/signing.py"
+  local py_test="$cli_root/sdk/python/tests/test_signing.py"
+  local node_src="$cli_root/sdk/node/index.js"
+  local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
+  local java_src="$cli_root/sdk/java/src/main/java/run/runtime/sdk/PreparedInvocation.java"
+  local java_test="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+
+  "$PYTHON_BIN" - "$go_src" "$go_test" "$py_src" "$py_test" "$node_src" "$node_test" "$java_src" "$java_test" <<'PY'
+import sys
+from pathlib import Path
+
+paths = list(map(Path, sys.argv[1:]))
+for path in paths:
+    if not path.exists():
+        raise SystemExit(f"sdk_prepared_descriptor_ref_required:missing:{path}")
+
+(
+    go_src,
+    go_test,
+    py_src,
+    py_test,
+    node_src,
+    node_test,
+    java_src,
+    java_test,
+) = [path.read_text(encoding="utf-8") for path in paths]
+
+for language, text, retired in (
+    ("go", go_src, "prepared.descriptorRef = material.DescriptorRef()"),
+    ("python", py_src, "or material.descriptor_ref"),
+    ("node", node_src, "?? this.signingMaterial.descriptorRef"),
+    ("java", java_src, "? signingMaterial.descriptorRef()"),
+):
+    if retired in text:
+        raise SystemExit(f"sdk_prepared_descriptor_ref_required:{language}:fallback_present")
+
+required_source = {
+    "go": (go_src, 'descriptorRef:    optionalPreparedString(fields, "descriptor_ref")', 'if prepared.descriptorRef == "" {\n\t\treturn PreparedInvocation{}, invalidInvocation("descriptor_ref is required", nil)\n\t}'),
+    "python": (py_src, 'descriptor_ref = _required_string(decoded, "descriptor_ref")', 'if descriptor_ref != material.descriptor_ref:'),
+    "node": (node_src, 'this.descriptorRef = requiredRuntimeString(value.descriptor_ref, "descriptor_ref");', 'if (this.descriptorRef !== this.signingMaterial.descriptorRef)'),
+    "java": (java_src, 'this.descriptorRef = required(descriptorRef, "descriptor_ref");', 'draft.inspectTuple().descriptor().equals(signingMaterial.descriptorRef())'),
+}
+for language, entries in required_source.items():
+    text, *tokens = entries
+    for token in tokens:
+        if token not in text:
+            raise SystemExit(f"sdk_prepared_descriptor_ref_required:{language}:source_missing:{token}")
+
+required_tests = {
+    "go": (go_test, "TestPreparedInvocationRejectsMissingPreparedDescriptorRef", "synthesized missing descriptor_ref", "descriptor_ref is required"),
+    "python": (py_test, "test_prepared_invocation_rejects_missing_prepared_descriptor_ref", "descriptor_ref is required"),
+    "node": (node_test, "prepared invocation requires explicit top-level descriptor ref", "delete value.descriptor_ref"),
+    "java": (java_test, "preparedInvocationRequiresExplicitDescriptorRef", "PreparedInvocation.fromJSON(JsonValueWriter.object(prepared))"),
+}
+for language, entries in required_tests.items():
+    text, *tokens = entries
+    for token in tokens:
+        if token not in text:
+            raise SystemExit(f"sdk_prepared_descriptor_ref_required:{language}:test_missing:{token}")
+PY
+}
+
 check_sdk_descriptor_resolution_error_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -12168,6 +12234,68 @@ EOF
   if ( check_sdk_history_authority_subject_contract "$tmp/sdk-history-authority-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected SDK history authority canonical-admission gate to fail"
   fi
+  mkdir -p "$tmp/sdk-prepared-descriptor-fallback/sdk/go" \
+    "$tmp/sdk-prepared-descriptor-fallback/sdk/python/easynet_sdk" \
+    "$tmp/sdk-prepared-descriptor-fallback/sdk/python/tests" \
+    "$tmp/sdk-prepared-descriptor-fallback/sdk/node/test" \
+    "$tmp/sdk-prepared-descriptor-fallback/sdk/java/src/main/java/run/runtime/sdk" \
+    "$tmp/sdk-prepared-descriptor-fallback/sdk/java/src/test/java/run/runtime/sdk"
+  printf '%s\n' \
+    'func decodePreparedInvocation() error {' \
+    '  prepared := PreparedInvocation{descriptorRef: optionalPreparedString(fields, "descriptor_ref")}' \
+    '  if prepared.descriptorRef == "" {' \
+    '    prepared.descriptorRef = material.DescriptorRef()' \
+    '  }' \
+    '  return nil' \
+    '}' \
+    > "$tmp/sdk-prepared-descriptor-fallback/sdk/go/signing.go"
+  printf '%s\n' \
+    'func TestPreparedInvocationRejectsMissingPreparedDescriptorRef(t *testing.T) {' \
+    '  t.Fatal("synthesized missing descriptor_ref")' \
+    '  _ = "descriptor_ref is required"' \
+    '}' \
+    > "$tmp/sdk-prepared-descriptor-fallback/sdk/go/signing_test.go"
+  printf '%s\n' \
+    'def _prepared_invocation_from_json(decoded):' \
+    '    descriptor_ref = _required_string(decoded, "descriptor_ref")' \
+    '    if descriptor_ref != material.descriptor_ref:' \
+    '        pass' \
+    > "$tmp/sdk-prepared-descriptor-fallback/sdk/python/easynet_sdk/signing.py"
+  printf '%s\n' \
+    'def test_prepared_invocation_rejects_missing_prepared_descriptor_ref():' \
+    '    assert "descriptor_ref is required"' \
+    > "$tmp/sdk-prepared-descriptor-fallback/sdk/python/tests/test_signing.py"
+  printf '%s\n' \
+    'class PreparedInvocation {' \
+    '  constructor(value) {' \
+    '    this.descriptorRef = requiredRuntimeString(value.descriptor_ref, "descriptor_ref");' \
+    '    if (this.descriptorRef !== this.signingMaterial.descriptorRef) {}' \
+    '  }' \
+    '}' \
+    > "$tmp/sdk-prepared-descriptor-fallback/sdk/node/index.js"
+  printf '%s\n' \
+    'test("prepared invocation requires explicit top-level descriptor ref", () => {' \
+    '  delete value.descriptor_ref' \
+    '});' \
+    > "$tmp/sdk-prepared-descriptor-fallback/sdk/node/test/runtime-core.test.mjs"
+  printf '%s\n' \
+    'final class PreparedInvocation {' \
+    '  void bind() {' \
+    '    this.descriptorRef = required(descriptorRef, "descriptor_ref");' \
+    '    draft.inspectTuple().descriptor().equals(signingMaterial.descriptorRef());' \
+    '  }' \
+    '}' \
+    > "$tmp/sdk-prepared-descriptor-fallback/sdk/java/src/main/java/run/runtime/sdk/PreparedInvocation.java"
+  printf '%s\n' \
+    'class RuntimeCoreSeamTest {' \
+    '  void preparedInvocationRequiresExplicitDescriptorRef() {' \
+    '    PreparedInvocation.fromJSON(JsonValueWriter.object(prepared));' \
+    '  }' \
+    '}' \
+    > "$tmp/sdk-prepared-descriptor-fallback/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+  if ( check_sdk_prepared_descriptor_ref_required_contract "$tmp/sdk-prepared-descriptor-fallback" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK prepared descriptor_ref fallback gate to fail"
+  fi
   mkdir -p "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/go" \
     "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/python/easynet_sdk" \
     "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/python/tests"
@@ -15247,6 +15375,7 @@ check_agent_spec_schema_contract
 check_control_discovery_schema_contract
 check_control_frame_schema_contract
 check_sdk_history_authority_subject_contract
+check_sdk_prepared_descriptor_ref_required_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_runtime_client_provider_readiness_contract
 check_sdk_ability_descriptor_not_found_vocabulary_contract

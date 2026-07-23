@@ -509,6 +509,19 @@ test("runtime events reject mismatched returned handle id", async () => {
   );
 });
 
+test("prepared invocation requires explicit top-level descriptor ref", () => {
+  const value = JSON.parse(preparedJSON(completeDraft().toJSON()));
+  delete value.descriptor_ref;
+
+  assert.throws(
+    () => sdk.PreparedInvocation.fromJSON(JSON.stringify(value)),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
+      error.message.includes("descriptor_ref"),
+  );
+});
+
 test("authority metadata is typed, delegated, and mutually exclusive", async () => {
   const delegation = delegationValue();
   const session = sessionValue();

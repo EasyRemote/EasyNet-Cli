@@ -36,12 +36,7 @@ public final class PreparedInvocation {
     }
     this.draft = java.util.Objects.requireNonNull(draft, "draft");
     this.signingMaterial = java.util.Objects.requireNonNull(signingMaterial, "signingMaterial");
-    this.descriptorRef =
-        required(
-            descriptorRef == null || descriptorRef.isBlank()
-                ? signingMaterial.descriptorRef()
-                : descriptorRef,
-            "descriptor_ref");
+    this.descriptorRef = required(descriptorRef, "descriptor_ref");
     if (!this.descriptorRef.equals(signingMaterial.descriptorRef())
         || !draft.inspectTuple().descriptor().equals(signingMaterial.descriptorRef())) {
       throw SDKError.validation(

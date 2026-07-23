@@ -1124,8 +1124,10 @@ export class PreparedInvocation {
     if (!this.preparedId && !this.requestId) {
       throw invalidRuntime("prepared_id or request_id is required");
     }
-    this.descriptorRef =
-      optionalRuntimeString(value.descriptor_ref, "descriptor_ref") ?? this.signingMaterial.descriptorRef;
+    this.descriptorRef = requiredRuntimeString(value.descriptor_ref, "descriptor_ref");
+    if (this.descriptorRef !== this.signingMaterial.descriptorRef) {
+      throw invalidRuntime("signing_material.descriptor_ref must match tuple descriptor_ref");
+    }
     this.descriptorHashHex = optionalRuntimeString(value.descriptor_hash_hex, "descriptor_hash_hex") ?? "";
     this.schemaHashHex = optionalRuntimeString(value.schema_hash_hex, "schema_hash_hex") ?? "";
     this.canonicalHashHex = optionalRuntimeString(value.canonical_hash_hex, "canonical_hash_hex") ?? "";

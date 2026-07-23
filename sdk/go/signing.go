@@ -162,14 +162,14 @@ func decodePreparedInvocation(raw []byte, requirePreparedID bool) (PreparedInvoc
 	if requirePreparedID && prepared.preparedID == "" {
 		return PreparedInvocation{}, invalidInvocation("prepared_id is required", nil)
 	}
-	if prepared.descriptorRef == "" {
-		prepared.descriptorRef = material.DescriptorRef()
-	}
 	if prepared.expiresAtUnixMS == 0 {
 		prepared.expiresAtUnixMS = material.ExpiresAtUnixMS()
 	}
 	if prepared.descriptorRef == "" {
 		return PreparedInvocation{}, invalidInvocation("descriptor_ref is required", nil)
+	}
+	if prepared.descriptorRef != material.DescriptorRef() {
+		return PreparedInvocation{}, invalidInvocation("signing_material.descriptor_ref must match tuple descriptor_ref", nil)
 	}
 	canonicalHashHex, err := validatedCanonicalMaterialHash(
 		prepared.signingMaterial.CanonicalBytesBase64(),

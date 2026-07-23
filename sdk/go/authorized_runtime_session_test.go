@@ -431,8 +431,9 @@ func (p *sessionRuntimeProviderFixture) PrepareForSigning(ctx context.Context, d
 		return PreparedInvocation{}, SigningMaterial{}, err
 	}
 	raw, err := json.Marshal(map[string]any{
-		"prepared_id": "prepared-1",
-		"tuple":       json.RawMessage(rawDraft),
+		"prepared_id":    "prepared-1",
+		"descriptor_ref": draft.DescriptorRef(),
+		"tuple":          json.RawMessage(rawDraft),
 		"signing_material": map[string]any{
 			"canonical_bytes_base64": base64.StdEncoding.EncodeToString([]byte("canonical")),
 			"args_digest_hex":        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",

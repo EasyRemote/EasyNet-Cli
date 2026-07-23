@@ -296,6 +296,7 @@ class _RuntimeProvider:
         self.prepare_calls += 1
         raw = {
             "prepared_id": "prepared-1",
+            "descriptor_ref": draft.descriptor_ref,
             "tuple": json.loads(draft.to_json()),
             "signing_material": {
                 "canonical_bytes_base64": base64.b64encode(b"canonical").decode("ascii"),
