@@ -2318,7 +2318,7 @@ if "pub(crate) fn local_device_ura() -> anyhow::Result<String>" not in text:
     raise SystemExit("local_device_identity:local_device_ura_not_fallible")
 
 start = text.find("pub(crate) fn local_device_ura()")
-end = text.find("/// Product URA owned by the local daemon process", start)
+end = text.find("pub(crate) fn local_daemon_ura()", start)
 if start < 0 or end < 0:
     raise SystemExit("local_device_identity:local_device_ura_section_missing")
 body = text[start:end]
@@ -4526,6 +4526,41 @@ guard = body.find("validate_runtime_owner_signing_ura(owner_ura)?")
 lookup = body.find("provider.public_key(owner_ura)?")
 if guard < 0 or lookup < 0 or guard > lookup:
     raise SystemExit("runtime_owner_signer_lookup_before_custody_classification")
+PY
+}
+
+check_daemon_runtime_identity_vocabulary_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local identity="$cli_root/src/daemon/identity/local_invocation.rs"
+  local authority="$cli_root/src/daemon/ability/authority/mod.rs"
+
+  "$PYTHON_BIN" - "$identity" "$authority" <<'PY'
+import sys
+from pathlib import Path
+
+identity_path, authority_path = map(Path, sys.argv[1:])
+
+for path in (identity_path, authority_path):
+    if not path.exists():
+        continue
+    text = path.read_text()
+    for forbidden in (
+        "Product URA",
+        "Product-level authority fact",
+        "product-level authority fact",
+    ):
+        if forbidden in text:
+            raise SystemExit(
+                f"daemon_runtime_identity_vocabulary_product_shape:{path}:{forbidden}"
+            )
+
+identity = identity_path.read_text() if identity_path.exists() else ""
+if identity and "Runtime-published URA owned by the local daemon process" not in identity:
+    raise SystemExit("daemon_runtime_identity_vocabulary_missing_runtime_published_identity_doc")
+
+authority = authority_path.read_text() if authority_path.exists() else ""
+if authority and "Runtime-local authority fact for a local hosted-agent call" not in authority:
+    raise SystemExit("daemon_runtime_identity_vocabulary_missing_runtime_local_authority_doc")
 PY
 }
 
@@ -6875,6 +6910,15 @@ EOF
   if ( CLI_ROOT="$tmp/runtime-owner-signer-legacy"; check_runtime_owner_signer_custody_contract ) >/dev/null 2>&1; then
     fail "self-test expected runtime-owner signer User custody gate to fail"
   fi
+  mkdir -p "$tmp/runtime-identity-vocabulary-legacy/src/daemon/identity" \
+    "$tmp/runtime-identity-vocabulary-legacy/src/daemon/ability/authority"
+  printf '/// Product URA owned by the local daemon process advertised in control.json.\n' \
+    > "$tmp/runtime-identity-vocabulary-legacy/src/daemon/identity/local_invocation.rs"
+  printf '/// Product-level authority fact for a local hosted-agent call.\n' \
+    > "$tmp/runtime-identity-vocabulary-legacy/src/daemon/ability/authority/mod.rs"
+  if ( CLI_ROOT="$tmp/runtime-identity-vocabulary-legacy"; check_daemon_runtime_identity_vocabulary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected daemon runtime identity vocabulary gate to fail"
+  fi
   run_ura_vocabulary_self_test "$tmp/ura-vocabulary"
   cp -R "$tmp/axon" "$tmp/axon-uri-vector"
   mkdir -p "$tmp/axon-uri-vector/packaging/protocol-pack/conformance-vectors"
@@ -8070,6 +8114,7 @@ EOF
   check_sdk_directory_projection_fail_closed_contract
   check_sdk_principal_projection_fail_closed_contract
   check_runtime_owner_signer_custody_contract
+  check_daemon_runtime_identity_vocabulary_contract
   check_key_custody_boundary_contract
   check_daemon_mission_eal_boundary_contract
   check_product_identity_boundary_contract
@@ -8173,6 +8218,7 @@ check_local_daemon_loopback_explicit_subject_contract
 check_sdk_directory_projection_fail_closed_contract
 check_sdk_principal_projection_fail_closed_contract
 check_runtime_owner_signer_custody_contract
+check_daemon_runtime_identity_vocabulary_contract
 check_key_custody_boundary_contract
 check_daemon_mission_eal_boundary_contract
 check_product_identity_boundary_contract

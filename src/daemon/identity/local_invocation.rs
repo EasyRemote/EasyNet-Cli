@@ -148,7 +148,8 @@ pub(crate) fn local_device_ura() -> anyhow::Result<String> {
     Ok(crate::core::ura::device_ura(&creds.realm, &creds.node_id))
 }
 
-/// Product URA owned by the local daemon process advertised in control.json.
+/// Runtime-published URA owned by the local daemon process advertised in
+/// control.json.
 ///
 /// CLI loopback calls that target the running daemon itself must be bound to
 /// that daemon's published identity. Falling back to `local_device_ura()` would

@@ -452,7 +452,7 @@ struct SignedHostedAgentDelegation {
     signature_b64: String,
 }
 
-/// Product-level authority fact for a local hosted-agent call.
+/// Runtime-local authority fact for a local hosted-agent call.
 ///
 /// Axon proves the invocation envelope. EasyNet proves that an operator
 /// invoking through the host device is allowed to act for one hosted Agent
