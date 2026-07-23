@@ -8623,7 +8623,7 @@ for (
         "list",
         "_validate_session_history_request(request)",
         "_validate_session_history_filter_binding(request.call, request.filter)",
-        "_session_authority_admits_subject(authority, subject_ura)",
+        "session_authority_admits_subject(authority, subject_ura)",
         "_session_history_authority_subject_matches(",
         cli_root / "sdk/python/tests/test_authorized_runtime_session.py",
         "test_history_allows_user_owned_resource_subject_before_receipt_provider",
@@ -8685,6 +8685,13 @@ for (
             path,
             1,
             "Retired history-only exact subject helper must not remain",
+        )
+    if path.suffix == ".py" and "def _session_authority_admits_subject(" in text:
+        add(
+            "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
+            path,
+            1,
+            "Authorized runtime session must call the canonical session authority admission helper directly",
         )
     if history_test.exists() and history_test_name not in source(history_test):
         add(

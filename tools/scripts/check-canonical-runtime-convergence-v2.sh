@@ -898,8 +898,10 @@ if py:
         "def _validate_session_history_authority_binding(",
         "def _validate_runtime_call_required(",
     )
-    if "_session_authority_admits_subject(authority, subject_ura)" not in body:
+    if "session_authority_admits_subject(authority, subject_ura)" not in body:
         raise SystemExit("sdk_python_history_authority_not_using_canonical_subject_admission")
+    if "def _session_authority_admits_subject(" in py:
+        raise SystemExit("sdk_python_history_authority_private_wrapper_retired")
     if "_session_history_authority_subject_matches(" in py:
         raise SystemExit("sdk_python_history_authority_exact_subject_helper_retired")
     require(

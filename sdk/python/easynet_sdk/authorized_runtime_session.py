@@ -866,7 +866,7 @@ def _validate_session_history_authority_binding(
             "session authority audience does not admit receipt query callee_ura",
             details,
         )
-    if not _session_authority_admits_subject(authority, subject_ura):
+    if not session_authority_admits_subject(authority, subject_ura):
         raise _session_error(
             ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
             "history",
@@ -1074,7 +1074,7 @@ def _validate_authorized_binding(
             "authority target does not match invocation target",
             details,
         )
-    if not _session_authority_admits_subject(authority, intent.subject.ura):
+    if not session_authority_admits_subject(authority, intent.subject.ura):
         raise _session_error(
             ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
             "authorize",
@@ -1088,13 +1088,6 @@ def _validate_authorized_binding(
             "authority does not admit target or ability",
             details,
         )
-
-
-def _session_authority_admits_subject(
-    authority: SessionAuthority,
-    subject_ura: str,
-) -> bool:
-    return session_authority_admits_subject(authority, subject_ura)
 
 
 def _rebuild_draft_with_metadata(
