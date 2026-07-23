@@ -45,18 +45,20 @@ use crate::support::platform::output;
 
 pub const DEFAULT_HUB_URL: &str = "http://127.0.0.1:8080";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+const ALL_ZERO_PRINCIPAL_ID: &str = "00000000-0000-0000-0000-000000000000";
 
 /// Persisted auth session. Lives at `~/.easynet/auth.json` mode 0600.
 /// Every auth-aware CLI command reads this to find the JWT bearer
 /// token + the hub URL it was minted against.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthSession {
     /// JWT access token. Bearer-prefixed when sent.
     pub token: String,
     /// Refresh token returned by the backend. Keeping the refresh credential
     /// with the access credential lets every CLI HTTP operation use the same
     /// authenticated session instead of failing after the access JWT expires.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
     /// Hub HTTP URL the token was minted against. Defaults to
     /// `http://127.0.0.1:8080` when login is run with no `--hub`.
@@ -66,14 +68,37 @@ pub struct AuthSession {
     pub email: String,
     /// User UUID from the JWT. Sourced from `/auth/login`'s
     /// `user.id` field; used by `whoami`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
+    pub user_id: String,
     /// Display nickname returned by the backend.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub nickname: Option<String>,
     /// Stable username slug used in canonical user/agent URAs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
+    pub username: String,
+}
+
+impl AuthSession {
+    fn validated(self) -> anyhow::Result<Self> {
+        validate_non_blank("token", &self.token)?;
+        validate_non_blank("hub_url", &self.hub_url)?;
+        validate_non_blank("email", &self.email)?;
+        validate_non_blank("user_id", &self.user_id)?;
+        if self
+            .user_id
+            .trim()
+            .eq_ignore_ascii_case(ALL_ZERO_PRINCIPAL_ID)
+        {
+            bail!("auth session carries all-zero user_id — run `easynet login <user>@<realm>`");
+        }
+        validate_non_blank("username", &self.username)?;
+        Ok(self)
+    }
+}
+
+fn validate_non_blank(field: &str, value: &str) -> anyhow::Result<()> {
+    if value.trim().is_empty() {
+        bail!("auth session {field} must not be blank");
+    }
+    Ok(())
 }
 
 pub(crate) fn auth_session_path() -> PathBuf {
@@ -93,10 +118,17 @@ pub fn load_session() -> anyhow::Result<Option<AuthSession>> {
     };
     let session: AuthSession =
         serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
+    let session = session
+        .validated()
+        .with_context(|| format!("validate {}", path.display()))?;
     Ok(Some(session))
 }
 
 pub(crate) fn save_session(session: &AuthSession) -> anyhow::Result<()> {
+    session
+        .clone()
+        .validated()
+        .context("validate auth session before save")?;
     let dir = state_dir();
     std::fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(session)? + "\n";
@@ -121,9 +153,8 @@ fn authenticated_session() -> anyhow::Result<AuthSession> {
     let session = load_session()?
         .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
     if let Ok(credentials) = config::load_credentials() {
-        if let (Some(session_user_id), Ok(device_user_id)) =
-            (session.user_id.as_deref(), credentials.user_id())
-        {
+        if let Ok(device_user_id) = credentials.user_id() {
+            let session_user_id = session.user_id.trim();
             if session_user_id != device_user_id {
                 bail!(
                     "authenticated user {session_user_id} does not own paired device {} (owner {device_user_id}); log in as the paired owner or rejoin the device",
@@ -142,7 +173,7 @@ fn refresh_session(session: &mut AuthSession) -> anyhow::Result<()> {
         .filter(|token| !token.trim().is_empty())
         .ok_or_else(|| anyhow!("access token expired and no refresh token is stored; run 'easynet auth login <email>'"))?;
     let url = format!("{}/api/v1/auth/refresh", session.hub_url);
-    let auth: AuthResp =
+    let auth: RefreshResp =
         http_post_json(&url, &serde_json::json!({"refresh_token": refresh_token}))?;
     session.token = auth.token;
     if auth.refresh_token.is_some() {
@@ -215,23 +246,27 @@ pub struct LoginArgs {
     pub nickname: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct AuthResp {
     token: String,
     #[serde(default)]
     refresh_token: Option<String>,
-    #[serde(default)]
-    user: Option<UserResp>,
+    user: UserResp,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct UserResp {
-    #[serde(default)]
-    id: Option<String>,
+    id: String,
     #[serde(default)]
     nickname: Option<String>,
+    username: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RefreshResp {
+    token: String,
     #[serde(default)]
-    username: Option<String>,
+    refresh_token: Option<String>,
 }
 
 pub fn run_login(args: LoginArgs) -> anyhow::Result<()> {
@@ -267,17 +302,14 @@ pub(crate) fn login_and_save(args: LoginArgs) -> anyhow::Result<AuthSession> {
         }
     };
 
-    let user_id = auth.user.as_ref().and_then(|u| u.id.clone());
-    let nickname = auth.user.as_ref().and_then(|u| u.nickname.clone());
-    let username = auth.user.as_ref().and_then(|u| u.username.clone());
     let session = AuthSession {
         token: auth.token,
         refresh_token: auth.refresh_token,
         hub_url: hub,
         email: args.email,
-        user_id,
-        nickname,
-        username,
+        user_id: auth.user.id,
+        nickname: auth.user.nickname,
+        username: auth.user.username,
     };
     save_session(&session)?;
     Ok(session)
@@ -285,9 +317,7 @@ pub(crate) fn login_and_save(args: LoginArgs) -> anyhow::Result<AuthSession> {
 
 pub(crate) fn render_login_success(session: &AuthSession) {
     println!("✓ logged in as {}", session.email);
-    if let Some(uid) = &session.user_id {
-        println!("  user_id: {uid}");
-    }
+    println!("  user_id: {}", session.user_id);
     println!("  hub:     {}", session.hub_url);
     println!("  saved to {}", auth_session_path().display());
 }
@@ -391,13 +421,11 @@ pub fn run_whoami(_args: WhoamiArgs) -> anyhow::Result<()> {
             let device_ura = creds
                 .as_ref()
                 .map(|c| ura::device_ura(c.realm_str(), &c.node_id));
-            let mut rows: Vec<(&str, &str)> = vec![("email", s.email.as_str())];
-            if let Some(uid) = s.user_id.as_deref() {
-                rows.push(("user_id", uid));
-            }
-            if let Some(username) = s.username.as_deref() {
-                rows.push(("username", username));
-            }
+            let mut rows: Vec<(&str, &str)> = vec![
+                ("email", s.email.as_str()),
+                ("user_id", s.user_id.as_str()),
+                ("username", s.username.as_str()),
+            ];
             if let Some(nick) = s.nickname.as_deref() {
                 rows.push(("nickname", nick));
             }
@@ -1064,6 +1092,19 @@ mod tests {
     use super::*;
     use crate::cli::commands::test_support::HomeGuard;
 
+    fn write_auth_session(body: &str) {
+        std::fs::create_dir_all(config::state_dir()).expect("state dir");
+        std::fs::write(auth_session_path(), body).expect("write auth session");
+    }
+
+    fn assert_auth_session_failure_contains(error: anyhow::Error, expected: &str) {
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(expected),
+            "expected {expected:?} in auth session error: {message}"
+        );
+    }
+
     #[test]
     fn auth_exec_tool_name_accepts_canonical_device_tool() {
         assert_eq!(
@@ -1152,5 +1193,120 @@ mod tests {
             error.to_string().contains("load device credentials"),
             "whoami must expose credential projection failure: {error}"
         );
+    }
+
+    #[test]
+    fn missing_auth_session_is_logged_out_state() {
+        let _home = HomeGuard::new();
+
+        let session = load_session().expect("missing auth session should be readable state");
+
+        assert!(session.is_none());
+    }
+
+    #[test]
+    fn auth_session_rejects_missing_user_id_owner_fact() {
+        let _home = HomeGuard::new();
+        write_auth_session(
+            r#"{
+  "token": "token",
+  "hub_url": "https://hub.example",
+  "email": "alice@example.test",
+  "username": "alice"
+}"#,
+        );
+
+        let error = load_session().expect_err("auth session without user_id must fail");
+
+        assert_auth_session_failure_contains(error, "missing field `user_id`");
+    }
+
+    #[test]
+    fn auth_session_rejects_missing_username_owner_fact() {
+        let _home = HomeGuard::new();
+        write_auth_session(
+            r#"{
+  "token": "token",
+  "hub_url": "https://hub.example",
+  "email": "alice@example.test",
+  "user_id": "user-alice"
+}"#,
+        );
+
+        let error = load_session().expect_err("auth session without username must fail");
+
+        assert_auth_session_failure_contains(error, "missing field `username`");
+    }
+
+    #[test]
+    fn auth_session_rejects_all_zero_user_id_owner_fact() {
+        let _home = HomeGuard::new();
+        write_auth_session(
+            r#"{
+  "token": "token",
+  "hub_url": "https://hub.example",
+  "email": "alice@example.test",
+  "user_id": "00000000-0000-0000-0000-000000000000",
+  "username": "alice"
+}"#,
+        );
+
+        let error = load_session().expect_err("auth session all-zero user_id must fail");
+
+        assert_auth_session_failure_contains(error, "all-zero user_id");
+    }
+
+    #[test]
+    fn auth_session_rejects_unknown_legacy_fields() {
+        let _home = HomeGuard::new();
+        write_auth_session(
+            r#"{
+  "token": "token",
+  "hub_url": "https://hub.example",
+  "email": "alice@example.test",
+  "user_id": "user-alice",
+  "username": "alice",
+  "legacy_subject": "alice"
+}"#,
+        );
+
+        let error = load_session().expect_err("unknown auth session fields must fail");
+
+        assert_auth_session_failure_contains(error, "unknown field `legacy_subject`");
+    }
+
+    #[test]
+    fn login_response_requires_user_owner_facts() {
+        let missing_user = serde_json::from_value::<AuthResp>(serde_json::json!({
+            "token": "token"
+        }))
+        .expect_err("login response without user must fail");
+        assert!(
+            missing_user.to_string().contains("missing field `user`"),
+            "unexpected error: {missing_user}"
+        );
+
+        let missing_username = serde_json::from_value::<AuthResp>(serde_json::json!({
+            "token": "token",
+            "user": { "id": "user-alice" }
+        }))
+        .expect_err("login response without username must fail");
+        assert!(
+            missing_username
+                .to_string()
+                .contains("missing field `username`"),
+            "unexpected error: {missing_username}"
+        );
+    }
+
+    #[test]
+    fn refresh_response_does_not_require_user_owner_facts() {
+        let response = serde_json::from_value::<RefreshResp>(serde_json::json!({
+            "token": "new-token"
+        }))
+        .expect("refresh response is token-only");
+
+        assert_eq!(response.token, "new-token");
+        assert!(response.refresh_token.is_none());
     }
 }

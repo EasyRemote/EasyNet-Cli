@@ -1320,6 +1320,107 @@ for required in (
 PY
 }
 
+check_auth_session_owner_fact_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local auth="$cli_root/src/cli/commands/auth.rs"
+  [[ -f "$auth" ]] || return 0
+
+  "$PYTHON_BIN" - "$auth" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+def item_with_attrs(kind: str, name: str) -> tuple[str, str]:
+    pattern = (
+        r"(?P<attrs>(?:#\[[^\n]+\]\n)*)"
+        + rf"{kind} {name} \{{(?P<body>.*?)\n\}}"
+    )
+    match = re.search(pattern, text, re.S)
+    if match is None:
+        raise SystemExit(f"auth_session_owner_fact:{name}:missing")
+    return match.group("attrs"), match.group("body")
+
+session_attrs, session_body = item_with_attrs("pub struct", "AuthSession")
+if "#[serde(deny_unknown_fields)]" not in session_attrs:
+    raise SystemExit("auth_session_owner_fact:AuthSession:missing_deny_unknown_fields")
+for required in (
+    "pub token: String",
+    "pub refresh_token: Option<String>",
+    "pub hub_url: String",
+    "pub email: String",
+    "pub user_id: String",
+    "pub nickname: Option<String>",
+    "pub username: String",
+):
+    if required not in session_body:
+        raise SystemExit(f"auth_session_owner_fact:AuthSession:missing_field:{required}")
+for retired in (
+    "pub user_id: Option<String>",
+    "pub username: Option<String>",
+    "#[serde(default",
+):
+    if retired in session_body:
+        raise SystemExit(f"auth_session_owner_fact:AuthSession:retired_default:{retired}")
+
+auth_attrs, auth_body = item_with_attrs("struct", "AuthResp")
+user_attrs, user_body = item_with_attrs("struct", "UserResp")
+refresh_attrs, refresh_body = item_with_attrs("struct", "RefreshResp")
+if "user: UserResp" not in auth_body:
+    raise SystemExit("auth_session_owner_fact:AuthResp:user_not_required")
+for retired in (
+    "user: Option<UserResp>",
+    "#[serde(default)]\n    user",
+):
+    if retired in auth_body:
+        raise SystemExit(f"auth_session_owner_fact:AuthResp:retired_user_fallback:{retired}")
+for required in (
+    "id: String",
+    "username: String",
+):
+    if required not in user_body:
+        raise SystemExit(f"auth_session_owner_fact:UserResp:missing_owner_fact:{required}")
+for retired in (
+    "id: Option<String>",
+    "username: Option<String>",
+    "#[serde(default)]\n    id",
+    "#[serde(default)]\n    username",
+):
+    if retired in user_body:
+        raise SystemExit(f"auth_session_owner_fact:UserResp:retired_optional_fact:{retired}")
+if "token: String" not in refresh_body:
+    raise SystemExit("auth_session_owner_fact:RefreshResp:missing_token")
+
+refresh_fn = re.search(r"fn refresh_session\(session: &mut AuthSession\) -> anyhow::Result<\(\)> \{(?P<body>.*?)\n\}", text, re.S)
+if refresh_fn is None:
+    raise SystemExit("auth_session_owner_fact:refresh_session_missing")
+if "let auth: RefreshResp" not in refresh_fn.group("body"):
+    raise SystemExit("auth_session_owner_fact:refresh_uses_login_response")
+
+for required in (
+    "fn validated(self) -> anyhow::Result<Self>",
+    "validate_non_blank(\"user_id\", &self.user_id)?",
+    "ALL_ZERO_PRINCIPAL_ID",
+    "auth session carries all-zero user_id",
+    "validate_non_blank(\"username\", &self.username)?",
+    "validate auth session before save",
+    "auth_session_rejects_missing_user_id_owner_fact",
+    "missing field `user_id`",
+    "auth_session_rejects_missing_username_owner_fact",
+    "missing field `username`",
+    "auth_session_rejects_all_zero_user_id_owner_fact",
+    "all-zero user_id",
+    "auth_session_rejects_unknown_legacy_fields",
+    "unknown field `legacy_subject`",
+    "login_response_requires_user_owner_facts",
+    "refresh_response_does_not_require_user_owner_facts",
+):
+    if required not in text:
+        raise SystemExit(f"auth_session_owner_fact:missing:{required}")
+PY
+}
+
 check_resources_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local resources="$cli_root/src/daemon/persistence/resources.rs"
@@ -10686,6 +10787,55 @@ EOF
   if ( CLI_ROOT="$tmp/profile-store-schema-legacy"; check_profile_store_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected profile store schema compatibility gate to fail"
   fi
+  mkdir -p "$tmp/auth-session-owner-fact-legacy/src/cli/commands"
+  cat >"$tmp/auth-session-owner-fact-legacy/src/cli/commands/auth.rs" <<'EOF'
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthSession {
+    pub token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
+    pub hub_url: String,
+    pub email: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AuthResp {
+    token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    user: Option<UserResp>,
+}
+
+#[derive(Deserialize)]
+struct UserResp {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    nickname: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
+}
+
+fn refresh_session(session: &mut AuthSession) -> anyhow::Result<()> {
+    let auth: AuthResp = http_post_json(&url, &serde_json::json!({}))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test] fn missing_auth_session_is_logged_out_state() {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/auth-session-owner-fact-legacy"; check_auth_session_owner_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected auth session owner fact compatibility gate to fail"
+  fi
   mkdir -p "$tmp/resources-schema-legacy/src/daemon/persistence"
   cat >"$tmp/resources-schema-legacy/src/daemon/persistence/resources.rs" <<'EOF'
 /// Resource type taxonomy — RFC-005 v3.2. The wire form is a
@@ -10995,6 +11145,7 @@ EOF
   check_chat_session_index_schema_contract
   check_local_agents_schema_contract
   check_profile_store_schema_contract
+  check_auth_session_owner_fact_contract
   check_resources_schema_contract
   check_agent_spec_schema_contract
   check_control_discovery_schema_contract
@@ -11129,6 +11280,7 @@ check_local_runtime_state_read_subject_contract
 check_runtime_state_kind_required_contract
 check_federation_realm_resolver_contract
 check_profile_store_schema_contract
+check_auth_session_owner_fact_contract
 check_resources_schema_contract
 check_agent_spec_schema_contract
 check_control_discovery_schema_contract

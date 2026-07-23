@@ -92,7 +92,7 @@ impl LoginTarget {
         let user = self
             .login_hint
             .as_deref()
-            .or(session.username.as_deref())
+            .or(Some(session.username.as_str()))
             .unwrap_or(session.email.as_str())
             .trim();
         format!("{user}@{}", self.realm)
@@ -254,7 +254,7 @@ pub(crate) fn upsert_authenticated_profile(
         realm_id: realm.realm_id.clone(),
         issuer: realm.issuer.clone(),
         login_hint: target.login_hint.clone(),
-        subject: session.user_id.clone(),
+        subject: Some(session.user_id.clone()),
         credential_ref: Some(format!(
             "local-file://{}",
             crate::cli::commands::auth::auth_session_path().display()
@@ -298,9 +298,9 @@ pub(crate) fn ensure_auth_session_owns_profile(
     }
 
     if let Some(profile_subject) = profile.subject.as_deref().and_then(non_empty) {
-        let session_subject = session.user_id.as_deref().and_then(non_empty).ok_or_else(|| {
+        let session_subject = non_empty(session.user_id.as_str()).ok_or_else(|| {
             anyhow!(
-                "active auth session has no authenticated subject for profile '{}'; run 'easynet login {}'",
+                "active auth session has blank authenticated subject for profile '{}'; run 'easynet login {}'",
                 profile.profile_name,
                 profile.profile_name
             )
@@ -346,7 +346,7 @@ fn non_empty(value: &str) -> Option<&str> {
 
 fn session_identity_candidates(session: &AuthSession) -> impl Iterator<Item = &str> {
     std::iter::once(session.email.as_str())
-        .chain(session.username.as_deref())
+        .chain(std::iter::once(session.username.as_str()))
         .filter_map(non_empty)
 }
 
