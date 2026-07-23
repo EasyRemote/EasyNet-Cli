@@ -78,7 +78,7 @@ const (
 )
 
 func IsResourceNamespace(namespace string) bool {
-	return isProductResourceNamespace(namespace)
+	return isRuntimeResourceNamespace(namespace)
 }
 
 func ParseURA(raw string) (URA, error) {
@@ -174,7 +174,7 @@ func ResourceDotURA(realm, ownerID, path string) string {
 }
 
 func ResourceURA(realm, userID, namespace, path string) string {
-	return productResourceURA(realm, userID, namespace, path)
+	return runtimeResourceURA(realm, userID, namespace, path)
 }
 
 // RuntimeResourceURA builds a resource rooted at a runtime-owned identifier.
@@ -232,7 +232,7 @@ func ParseURAParts(raw string) (ParsedURA, error) {
 }
 
 func parsedURAFromAxon(parts axonsdk.ParsedURA) ParsedURA {
-	resourceNamespace, resourcePath := projectProductResourcePath(parts.Kind, parts.Path)
+	resourceNamespace, resourcePath := projectRuntimeResourcePath(parts.Kind, parts.Path)
 	kind := URAKind(string(parts.Kind))
 	if parts.Kind == axonsdk.URAKindAuthority {
 		kind = URAKindHub

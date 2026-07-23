@@ -351,6 +351,27 @@ check_go_sdk_public_ura_alias_contract() {
   fi
 }
 
+check_go_sdk_runtime_resource_namespace_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_sdk="$cli_root/sdk/go"
+  [[ -d "$go_sdk" ]] || return 0
+  local namespace="$go_sdk/resource_namespace.go"
+  [[ -f "$namespace" ]] || return 0
+
+  if rg -n 'productResource|EasyNet'\''s provider namespace|product namespace' "$namespace" "$go_sdk/ura.go"; then
+    fail "Go SDK root resource namespace projection preserves product-shaped vocabulary"
+  fi
+  if ! rg -q 'runtimeResourceNamespaces' "$namespace"; then
+    fail "Go SDK resource namespace allowlist must be named as runtime state"
+  fi
+  if ! rg -q 'func runtimeResourceURA' "$namespace"; then
+    fail "Go SDK resource URA helper must be named runtimeResourceURA"
+  fi
+  if ! rg -q 'func projectRuntimeResourcePath' "$namespace"; then
+    fail "Go SDK parsed resource projection must be named projectRuntimeResourcePath"
+  fi
+}
+
 check_advertise_agent_ingress_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
@@ -6919,6 +6940,20 @@ EOF
   if ( check_go_sdk_public_ura_alias_contract "$tmp/go-sdk-ura-alias" ) >/dev/null 2>&1; then
     fail "self-test expected Go SDK Ura alias gate to fail"
   fi
+  mkdir -p "$tmp/go-sdk-product-resource/sdk/go"
+  printf '%s\n' \
+    'package easynet' \
+    'var productResourceNamespaces = map[ResourceNamespace]struct{}{}' \
+    'func productResourceURA(realm, userID, namespace, path string) string { return "" }' \
+    'func projectProductResourcePath(kind URAKind, path string) (ResourceNamespace, string) { return "", path }' \
+    > "$tmp/go-sdk-product-resource/sdk/go/resource_namespace.go"
+  printf '%s\n' \
+    'package easynet' \
+    'func ResourceURA(realm, userID, namespace, path string) string { return productResourceURA(realm, userID, namespace, path) }' \
+    > "$tmp/go-sdk-product-resource/sdk/go/ura.go"
+  if ( check_go_sdk_runtime_resource_namespace_contract "$tmp/go-sdk-product-resource" ) >/dev/null 2>&1; then
+    fail "self-test expected Go SDK product resource namespace gate to fail"
+  fi
   mkdir -p "$tmp/advertise-agent-legacy/src/daemon/invocation/dispatch"
   printf '%s\n' \
     '#[derive(Debug, Clone, Deserialize)]' \
@@ -7945,6 +7980,7 @@ EOF
   check_active_source_contract
   check_sdk_root_runtime_description_contract
   check_go_sdk_public_ura_alias_contract
+  check_go_sdk_runtime_resource_namespace_contract
   check_advertise_agent_ingress_contract
   check_agent_start_model_intent_contract
   check_invocation_history_get_key_contract
@@ -8044,6 +8080,7 @@ check_bidi_dispatch_default_code_policy_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract
 check_go_sdk_public_ura_alias_contract
+check_go_sdk_runtime_resource_namespace_contract
 check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract

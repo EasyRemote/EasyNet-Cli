@@ -6,7 +6,7 @@ import (
 	axonsdk "axon.run/sdk/go/axon"
 )
 
-var productResourceNamespaces = map[ResourceNamespace]struct{}{
+var runtimeResourceNamespaces = map[ResourceNamespace]struct{}{
 	ResourceNamespaceFS:      {},
 	ResourceNamespaceProcess: {},
 	ResourceNamespacePTY:     {},
@@ -14,16 +14,16 @@ var productResourceNamespaces = map[ResourceNamespace]struct{}{
 	ResourceNamespaceHTTP:    {},
 }
 
-func isProductResourceNamespace(namespace string) bool {
-	_, ok := productResourceNamespaces[ResourceNamespace(namespace)]
+func isRuntimeResourceNamespace(namespace string) bool {
+	_, ok := runtimeResourceNamespaces[ResourceNamespace(namespace)]
 	return ok
 }
 
-// productResourceURA projects EasyNet's provider namespace into Axon's
-// generic opaque resource path. Axon owns URA grammar; the product owns the
-// finite namespace vocabulary.
-func productResourceURA(realm, userID, namespace, path string) string {
-	if !isProductResourceNamespace(namespace) {
+// runtimeResourceURA projects an SDK runtime resource namespace into Axon's
+// generic opaque resource path. Axon owns URA grammar; the SDK owns the finite
+// runtime namespace vocabulary exposed by ResourceNamespace.
+func runtimeResourceURA(realm, userID, namespace, path string) string {
+	if !isRuntimeResourceNamespace(namespace) {
 		return ""
 	}
 	clean := strings.TrimPrefix(path, "/")
@@ -34,7 +34,7 @@ func productResourceURA(realm, userID, namespace, path string) string {
 	return axonsdk.ResourceDotURA(realm, userID, resourcePath)
 }
 
-func projectProductResourcePath(
+func projectRuntimeResourcePath(
 	kind axonsdk.URAKind,
 	path string,
 ) (ResourceNamespace, string) {
@@ -42,7 +42,7 @@ func projectProductResourcePath(
 		return "", path
 	}
 	namespace, remainder, hasPath := strings.Cut(path, "/")
-	if !isProductResourceNamespace(namespace) {
+	if !isRuntimeResourceNamespace(namespace) {
 		return "", path
 	}
 	if !hasPath {
