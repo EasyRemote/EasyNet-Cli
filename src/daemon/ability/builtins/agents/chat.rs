@@ -1902,12 +1902,18 @@ mod tests {
         AgentEntry::new(AgentType::ClaudeCode, None)
     }
 
+    fn agent_chat_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(
+            "easynet:///r/test/device/agent-chat",
+        )
+    }
+
     #[test]
     fn register_mounts_one_handler_per_agent() {
         // Hold the env lock: register() consults HOME-rooted registry
         // state, so a concurrent HOME-mutating test must not race it.
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = agent_chat_test_catalog();
         let mut agents = AgentRegistry::default();
         agents.agents.insert("alice".into(), entry());
         agents.agents.insert("bob".into(), entry());
@@ -1958,7 +1964,7 @@ mod tests {
         entry.root_path = Some(root);
         let mut agents = AgentRegistry::default();
         agents.agents.insert("alice".into(), entry);
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = agent_chat_test_catalog();
         register(
             &mut reg,
             &agents,
