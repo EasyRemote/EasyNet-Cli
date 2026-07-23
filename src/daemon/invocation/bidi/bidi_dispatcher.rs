@@ -606,7 +606,7 @@ pub(crate) fn validate_bidi_stream_ordering(streams: &[StreamDescriptor]) -> Res
 
 pub(crate) fn failed_dispatch_result(
     reason: impl Into<String>,
-    fallback_code: &str,
+    default_code: &str,
     retryable: bool,
 ) -> DispatchResult {
     let reason = reason.into();
@@ -615,7 +615,7 @@ pub(crate) fn failed_dispatch_result(
         result_content_type: String::new(),
         failure: Some(SessionFailure::from_reason(
             &reason,
-            fallback_code,
+            default_code,
             retryable,
         )),
         error: Some(reason),
@@ -2350,7 +2350,7 @@ pub(crate) fn build_session_request_result_frame(
             // sees a structured outcome instead of a malformed
             // frame. The id_hex stays in the eprintln below for
             // operator audit.
-            let fallback = SessionDispatch::RequestResult {
+            let synthetic_error_result = SessionDispatch::RequestResult {
                 call_id,
                 outcome: RequestOutcome::Err {
                     error: SessionRequestError::UpstreamFailure {
@@ -2358,7 +2358,8 @@ pub(crate) fn build_session_request_result_frame(
                     },
                 },
             };
-            serde_json::to_vec(&fallback).expect("typed error variant must always encode")
+            serde_json::to_vec(&synthetic_error_result)
+                .expect("typed error variant must always encode")
         }
     };
     crate::daemon::invocation::bidi::state::presence::DispatchFrame::control(InvokeBidiDown {
@@ -2805,8 +2806,8 @@ fn reverse_dispatch_frame_is_terminal(frame: &DispatchFrame) -> bool {
 }
 
 /// Terminal-result settlement shared by the JSON `Result` arm and the
-/// carrier-v1 `DispatchResult` arm: streaming map first, unary map as
-/// fallback, every miss surfaced (DEC-F004 — one settle path, not two).
+/// carrier-v1 `DispatchResult` arm: streaming map first, then unary map,
+/// every miss surfaced (DEC-F004 — one settle path, not two).
 ///
 /// Deliberately non-blocking: this runs on the session drain — the
 /// only reader of the device's whole `session.open` — so it must
@@ -3695,6 +3696,29 @@ mod tests {
             CANONICAL_SESSION_CARRIER_VERSION
         );
         assert_eq!(c.claimant_boot_nonce.len(), 16);
+    }
+
+    #[test]
+    fn failed_dispatch_result_uses_default_code_when_reason_is_unclassified() {
+        let result = failed_dispatch_result("peer stream closed", "TARGET_BUSY", true);
+        let failure = result.failure.expect("terminal failure");
+
+        assert_eq!(failure.code, "TARGET_BUSY");
+        assert_eq!(failure.message, "peer stream closed");
+        assert!(failure.retryable);
+    }
+
+    #[test]
+    fn failed_dispatch_result_preserves_specific_reason_code() {
+        let result = failed_dispatch_result(
+            "TARGET_NOT_IN_PRESENCE_REGISTRY: session owner is offline",
+            "INVOCATION_FAILED",
+            true,
+        );
+        let failure = result.failure.expect("terminal failure");
+
+        assert_eq!(failure.code, "TARGET_NOT_IN_PRESENCE_REGISTRY");
+        assert!(failure.retryable);
     }
 
     #[test]

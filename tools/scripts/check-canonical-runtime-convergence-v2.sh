@@ -115,6 +115,22 @@ check_failure_code_default_policy_contract() {
   fi
 }
 
+check_bidi_dispatch_default_code_policy_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local dispatcher="$cli_root/src/daemon/invocation/bidi/bidi_dispatcher.rs"
+  [[ -f "$dispatcher" ]] || fail "bidi dispatcher source is missing: ${dispatcher#$cli_root/}"
+
+  if rg -n 'fallback_code|let fallback =|unary map as fallback' "$dispatcher"; then
+    fail "bidi dispatch terminal failure path preserves retired fallback vocabulary"
+  fi
+  if ! rg -q 'default_code: &str' "$dispatcher"; then
+    fail "bidi dispatch failure helper must name its caller-owned default_code"
+  fi
+  if ! rg -q 'default_code,' "$dispatcher"; then
+    fail "bidi dispatch failure helper must forward default_code into SessionFailure"
+  fi
+}
+
 check_manifest_contract() {
   "$PYTHON_BIN" - \
     "$MANIFEST" \
@@ -7925,6 +7941,7 @@ EOF
   check_runtime_session_projection_accessor_contract
   check_ffi_runtime_sizing_policy_contract
   check_failure_code_default_policy_contract
+  check_bidi_dispatch_default_code_policy_contract
   check_active_source_contract
   check_sdk_root_runtime_description_contract
   check_go_sdk_public_ura_alias_contract
@@ -8023,6 +8040,7 @@ check_mcp_reflection_async_bridge_contract
 check_runtime_session_projection_accessor_contract
 check_ffi_runtime_sizing_policy_contract
 check_failure_code_default_policy_contract
+check_bidi_dispatch_default_code_policy_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract
 check_go_sdk_public_ura_alias_contract
