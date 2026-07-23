@@ -290,6 +290,12 @@ mod tests {
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
     use std::sync::OnceLock;
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/device";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
     fn executable_test_runtime() -> Arc<axon_sdk::invocation::LocalRuntime> {
         crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
@@ -579,7 +585,7 @@ mod tests {
 
     #[test]
     fn send_task_unset_registry_handle_fails_closed() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         register(
             &mut reg,
