@@ -1059,6 +1059,12 @@ mod tests {
         .expect("test Files executor authority must be declared")
     }
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/easynet.run/device/openai-test-device";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
     fn executable_test_catalog(realm: &str) -> AxonAbilityCatalog {
         let authority_context =
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
@@ -1138,7 +1144,7 @@ mod tests {
         // authority/runtime state, so a concurrent HOME-mutating test must
         // not race it (passes isolated, flakes only under parallelism).
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_test_rpc(
             &mut reg,
             "codex.chat",
@@ -1159,7 +1165,7 @@ mod tests {
 
     #[test]
     fn project_model_id_drops_chat_key_when_identity_is_missing() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_test_rpc(
             &mut reg,
             "codex.chat",
@@ -1176,7 +1182,7 @@ mod tests {
 
     #[test]
     fn project_model_id_drops_chat_key_when_user_is_missing() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_test_rpc(
             &mut reg,
             "codex.chat",
@@ -1217,7 +1223,7 @@ mod tests {
 
     #[test]
     fn project_model_id_drops_non_agent_chat_owner() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_test_rpc(
             &mut reg,
             "device.llm.chat",
