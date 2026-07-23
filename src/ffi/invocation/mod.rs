@@ -1664,7 +1664,7 @@ fn runtime_descriptor_catalog_json(
 ) -> serde_json::Value {
     match runtime_owner_ura_from_session(session) {
         Ok(owner_ura) => {
-            let catalog = runtime_descriptor_catalog_entries(session, &owner_ura);
+            let catalog = runtime_descriptor_catalog_entries(&owner_ura);
             serde_json::json!({
                 "owner_ura": owner_ura,
                 "source": "runtime_descriptor_catalog",
@@ -1882,18 +1882,11 @@ struct RuntimeDescriptorCatalog {
 }
 
 #[cfg(feature = "axon-pb")]
-fn runtime_descriptor_catalog_entries(
-    session: &crate::ffi::client::handle::ClientSession,
-    owner_ura: &str,
-) -> RuntimeDescriptorCatalog {
+fn runtime_descriptor_catalog_entries(owner_ura: &str) -> RuntimeDescriptorCatalog {
     let mut entries = Vec::new();
     let mut diagnostics = Vec::new();
     match runtime_system_descriptor_catalog_entries(owner_ura) {
         Ok(mut system_entries) => entries.append(&mut system_entries),
-        Err(error) => diagnostics.push(error),
-    }
-    match runtime_meta_descriptor_catalog_entries(session, owner_ura) {
-        Ok(mut meta_entries) => entries.append(&mut meta_entries),
         Err(error) => diagnostics.push(error),
     }
     match dedupe_descriptor_catalog_entries(entries) {
@@ -1962,7 +1955,7 @@ fn runtime_resolve_descriptor_ref_json(
         ))
     })?;
     if runtime_owner_ura == callee_ura {
-        let catalog = runtime_descriptor_catalog_entries(session, callee_ura);
+        let catalog = runtime_descriptor_catalog_entries(callee_ura);
         if let Some(resolution) = descriptor_catalog_resolution_from_entries(
             &catalog.entries,
             &ability_ura,
@@ -1977,7 +1970,7 @@ fn runtime_resolve_descriptor_ref_json(
             "descriptor_ref not found in local runtime catalog for callee_ura={callee_ura:?} ability={ability_ura:?} call_mode={call_mode:?}"
         )));
     }
-    let catalog = runtime_descriptor_catalog_entries(session, &runtime_owner_ura);
+    let catalog = runtime_descriptor_catalog_entries(&runtime_owner_ura);
     if let Some(resolution) = descriptor_catalog_resolution_from_entries(
         &catalog.entries,
         &ability_ura,
@@ -2013,66 +2006,6 @@ fn runtime_system_descriptor_catalog_entries(
         entries.push(descriptor_catalog_entry_from_descriptor(descriptor)?);
     }
     Ok(entries)
-}
-
-#[cfg(feature = "axon-pb")]
-fn runtime_meta_descriptor_catalog_entries(
-    session: &crate::ffi::client::handle::ClientSession,
-    owner_ura: &str,
-) -> std::result::Result<Vec<serde_json::Value>, String> {
-    let endpoint = invocation_endpoint_for_session(session).map_err(|error| error.to_string())?;
-    let rt = lib_runtime().map_err(|error| error.to_string())?;
-    rt.block_on(async {
-        let meta_descriptor_ref =
-            crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
-                owner_ura,
-                crate::daemon::ability::names::governance::META_LIST_ABILITIES,
-                crate::daemon::ability::CallMode::Rpc,
-            )
-            .map_err(|error| error.to_string())?;
-        let invocation = crate::daemon::DaemonInvocation::builder(
-            owner_ura,
-            owner_ura,
-            meta_descriptor_ref,
-            owner_ura,
-            crate::daemon::invocation::RootInvocationDerivationIssuer::fresh_root(),
-        )
-        .map_err(|error| error.to_string())?
-        .args_json(&serde_json::json!({
-            "scope": "realm",
-        }))
-        .map_err(|error| error.to_string())?
-        .build();
-        let signed = SessionInvocationAuthority::new(session)
-            .bind(invocation)
-            .await
-            .map_err(|error| error.to_string())?;
-        let client =
-            crate::daemon::DaemonClient::connect(endpoint).map_err(|error| error.to_string())?;
-        let response = client
-            .invoke(signed)
-            .await
-            .map_err(|error| error.to_string())?;
-        if let Some(error) = response.error {
-            return Err(format!(
-                "meta.list_abilities returned {}: {}",
-                error.code, error.message
-            ));
-        }
-        let output: serde_json::Value = serde_json::from_slice(&response.result)
-            .map_err(|error| format!("decode meta.list_abilities result: {error}"))?;
-        let abilities = output
-            .get("abilities")
-            .and_then(serde_json::Value::as_array)
-            .ok_or_else(|| "meta.list_abilities result omitted abilities array".to_string())?;
-        Ok(abilities
-            .iter()
-            .enumerate()
-            .map(|(index, value)| {
-                descriptor_catalog_entry_from_value(value, "runtime_meta_descriptor_catalog", index)
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()?)
-    })
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2116,66 +2049,6 @@ fn descriptor_catalog_entry_from_descriptor(
         "call_mode": call_mode,
         "admission_action": admission_action,
     }))
-}
-
-#[cfg(feature = "axon-pb")]
-fn descriptor_catalog_entry_from_value(
-    value: &serde_json::Value,
-    source: &str,
-    index: usize,
-) -> std::result::Result<serde_json::Value, String> {
-    let ability_ura =
-        descriptor_catalog_value_required_string(value, "ability_ura", source, index)?;
-    let owner_ura = descriptor_catalog_value_required_string(value, "owner_ura", source, index)?;
-    let name = descriptor_catalog_value_required_string(value, "name", source, index)?;
-    let version = descriptor_catalog_value_required_string(value, "version", source, index)?;
-    let call_mode = descriptor_catalog_value_required_string(value, "call_mode", source, index)?;
-    let admission_action =
-        descriptor_catalog_value_required_string(value, "admission_action", source, index)?;
-    let descriptor_hash =
-        descriptor_catalog_value_required_string(value, "descriptor_hash", source, index)?;
-    let descriptor_hash_hex = descriptor_hash
-        .strip_prefix("sha256:")
-        .unwrap_or(descriptor_hash)
-        .trim();
-    if descriptor_hash_hex.len() != 64 || hex::decode(descriptor_hash_hex).is_err() {
-        return Err(format!(
-            "descriptor catalog row {index} from {source} for ability {ability_ura:?} descriptor_hash is not canonical hex"
-        ));
-    }
-    let descriptor_ref = axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
-        "{ability_ura}@{version}#{descriptor_hash_hex}!{admission_action}"
-    ))
-    .map_err(|error| {
-        format!(
-            "descriptor catalog row {index} from {source} for ability {ability_ura:?} descriptor_ref is not canonical: {error}"
-        )
-    })?;
-    Ok(serde_json::json!({
-        "name": name,
-        "owner_ura": owner_ura,
-        "ability_ura": ability_ura,
-        "descriptor_ref": descriptor_ref,
-        "version": version,
-        "descriptor_hash": descriptor_hash,
-        "call_mode": call_mode,
-        "admission_action": admission_action,
-    }))
-}
-
-#[cfg(feature = "axon-pb")]
-fn descriptor_catalog_value_required_string<'a>(
-    value: &'a serde_json::Value,
-    field: &'static str,
-    source: &str,
-    index: usize,
-) -> std::result::Result<&'a str, String> {
-    value
-        .get(field)
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("descriptor catalog row {index} from {source} missing {field}"))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -9355,47 +9228,6 @@ mod tests {
         assert!(
             error.to_string().contains("missing descriptor_ref"),
             "unexpected descriptor catalog error: {error}"
-        );
-    }
-
-    #[cfg(feature = "axon-pb")]
-    #[test]
-    fn descriptor_catalog_ingestion_rejects_malformed_provider_rows() {
-        let row = serde_json::json!({
-            "ability_ura": "easynet:///r/localhost/ability/device.dev-a.observe.health",
-            "owner_ura": "easynet:///r/localhost/device/dev-a",
-            "name": "observe.health",
-            "version": "1.0.0",
-            "call_mode": "rpc",
-            "admission_action": "read",
-            "descriptor_hash": "not-a-canonical-hash"
-        });
-
-        let error = descriptor_catalog_entry_from_value(&row, "test_provider_catalog", 3)
-            .expect_err("malformed provider descriptor rows must fail closed");
-
-        assert!(
-            error.contains("descriptor_hash is not canonical hex"),
-            "unexpected descriptor catalog ingestion error: {error}"
-        );
-
-        let row = serde_json::json!({
-            "ability_ura": "easynet:///r/localhost/ability/device.dev-a.observe.health",
-            "owner_ura": "easynet:///r/localhost/device/dev-a",
-            "name": "observe.health",
-            "version": "1.0.0",
-            "call_mode": "rpc",
-            "descriptor_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        });
-
-        let error = descriptor_catalog_entry_from_value(&row, "test_provider_catalog", 4)
-            .expect_err("missing provider descriptor fields must fail closed");
-
-        assert!(
-            error.contains(
-                "descriptor catalog row 4 from test_provider_catalog missing admission_action"
-            ),
-            "unexpected descriptor catalog ingestion error: {error}"
         );
     }
 

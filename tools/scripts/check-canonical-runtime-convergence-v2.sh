@@ -4994,6 +4994,8 @@ for retired in (
     "RemoteInvocationCallerSigner",
     "load_remote_invocation_caller_signer(",
     "invoke_remote_target_with_caller_signer_typed(",
+    "runtime_meta_descriptor_catalog_entries",
+    "descriptor_catalog_entry_from_value",
     "runtime_meta_list_abilities",
 ):
     if retired in production:
@@ -7054,12 +7056,6 @@ for pattern, label in (
 ):
     if re.search(pattern, ffi):
         raise SystemExit(label)
-
-diagnostics = ffi.split("fn runtime_meta_descriptor_catalog_entries", 1)[1].split(
-    "fn descriptor_catalog_entry_from_descriptor", 1
-)[0]
-if ".bind(invocation)" not in diagnostics or ".invoke(signed)" not in diagnostics:
-    raise SystemExit("diagnostics_bypasses_session_invocation_authority")
 PY
 }
 
@@ -8597,6 +8593,57 @@ fn descriptor_resolution_errors_project_canonical_runtime_codes() {}
 EOF
   if ( CLI_ROOT="$tmp/cli-ffi-descriptor-owner-legacy"; check_ffi_descriptor_runtime_owner_contract ) >/dev/null 2>&1; then
     fail "self-test expected FFI descriptor runtime owner fallback gate to fail"
+  fi
+  mkdir -p "$tmp/cli-ffi-meta-descriptor-probe/src/ffi/invocation"
+  cat >"$tmp/cli-ffi-meta-descriptor-probe/src/ffi/invocation/mod.rs" <<'EOF'
+enum DescriptorResolutionError {
+    RuntimeOwnerUnavailable(String),
+    DescriptorNotFound(String),
+}
+struct ErrorProjection {
+    code: &'static str,
+}
+impl DescriptorResolutionError {
+    fn abi_projection(&self) -> (i32, ErrorProjection) {
+        let code = match self {
+            Self::RuntimeOwnerUnavailable(_) => "CALLER_IDENTITY_UNAVAILABLE",
+            Self::DescriptorNotFound(_) => "DESCRIPTOR_NOT_FOUND",
+        };
+        (0, ErrorProjection { code })
+    }
+}
+pub unsafe extern "C" fn runtime_resolve_descriptor_ref() {
+    let error = DescriptorResolutionError::DescriptorNotFound(String::new());
+    let _ = error.abi_projection();
+}
+fn runtime_resolve_descriptor_ref_json(
+    session: &crate::ffi::client::handle::ClientSession,
+    request_json: &str,
+) -> Result<serde_json::Value, DescriptorResolutionError> {
+    let _request: serde_json::Value = serde_json::from_str(request_json).unwrap();
+    let _runtime_owner_ura = runtime_owner_ura_from_session(session).map_err(|error| {
+        DescriptorResolutionError::RuntimeOwnerUnavailable(format!(
+            "resolve descriptor_ref runtime owner: {error}"
+        ))
+    })?;
+    Err(DescriptorResolutionError::DescriptorNotFound(
+        "descriptor_ref not found in runtime realm catalog".to_string(),
+    ))
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_system_descriptor_catalog_entries() {}
+fn runtime_meta_descriptor_catalog_entries() {}
+
+#[test]
+fn runtime_descriptor_resolver_requires_runtime_owner_for_realm_catalog() {}
+#[test]
+fn runtime_descriptor_resolver_does_not_remote_probe_realm_catalog_miss() {}
+#[test]
+fn descriptor_resolution_errors_project_canonical_runtime_codes() {}
+EOF
+  if ( CLI_ROOT="$tmp/cli-ffi-meta-descriptor-probe"; check_ffi_descriptor_runtime_owner_contract ) >/dev/null 2>&1; then
+    fail "self-test expected FFI meta descriptor probe gate to fail"
   fi
   mkdir -p "$tmp/cli-ffi-descriptor-notfound-vocabulary-legacy/src/ffi/invocation"
   cat >"$tmp/cli-ffi-descriptor-notfound-vocabulary-legacy/src/ffi/invocation/mod.rs" <<'EOF'
