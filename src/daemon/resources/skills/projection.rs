@@ -25,6 +25,7 @@
 //   product lifecycle abstraction.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::store::{InstallRecord, SkillSource};
 
@@ -95,6 +96,162 @@ impl SkillRemoveReceipt {
             name: name.into(),
             agent: agent.into(),
             resource_ura,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillPublishReceipt {
+    pub ok: bool,
+    pub owner_agent_id: String,
+    pub skill_name: String,
+    pub skill_dir: String,
+    pub content_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission_run_id: Option<String>,
+}
+
+impl SkillPublishReceipt {
+    pub fn success(
+        owner_agent_id: impl Into<String>,
+        skill_name: impl Into<String>,
+        skill_dir: impl Into<String>,
+        content_hash: impl Into<String>,
+        mission_run_id: Option<String>,
+    ) -> Self {
+        Self {
+            ok: true,
+            owner_agent_id: owner_agent_id.into(),
+            skill_name: skill_name.into(),
+            skill_dir: skill_dir.into(),
+            content_hash: content_hash.into(),
+            mission_run_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillUnpublishReceipt {
+    pub ok: bool,
+    pub owner_agent_id: String,
+    pub skill_name: String,
+    pub removed_dir: String,
+    pub content_hash: String,
+}
+
+impl SkillUnpublishReceipt {
+    pub fn success(
+        owner_agent_id: impl Into<String>,
+        skill_name: impl Into<String>,
+        removed_dir: impl Into<String>,
+        content_hash: impl Into<String>,
+    ) -> Self {
+        Self {
+            ok: true,
+            owner_agent_id: owner_agent_id.into(),
+            skill_name: skill_name.into(),
+            removed_dir: removed_dir.into(),
+            content_hash: content_hash.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillTreeResponse {
+    pub ok: bool,
+    pub owner_agent_id: String,
+    pub skill_name: String,
+    pub root: String,
+    pub files: Vec<Value>,
+    pub resource_ura: String,
+}
+
+impl SkillTreeResponse {
+    pub fn success(
+        owner_agent_id: impl Into<String>,
+        skill_name: impl Into<String>,
+        root: impl Into<String>,
+        files: Vec<Value>,
+        resource_ura: impl Into<String>,
+    ) -> Self {
+        Self {
+            ok: true,
+            owner_agent_id: owner_agent_id.into(),
+            skill_name: skill_name.into(),
+            root: root.into(),
+            files,
+            resource_ura: resource_ura.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillReadFileResponse {
+    pub ok: bool,
+    pub owner_agent_id: String,
+    pub skill_name: String,
+    pub path: String,
+    pub content: String,
+    pub encoding: String,
+    pub size_bytes: u64,
+    pub resource_ura: String,
+}
+
+impl SkillReadFileResponse {
+    pub fn success(
+        owner_agent_id: impl Into<String>,
+        skill_name: impl Into<String>,
+        path: impl Into<String>,
+        content: impl Into<String>,
+        size_bytes: u64,
+        resource_ura: impl Into<String>,
+    ) -> Self {
+        Self {
+            ok: true,
+            owner_agent_id: owner_agent_id.into(),
+            skill_name: skill_name.into(),
+            path: path.into(),
+            content: content.into(),
+            encoding: "utf-8".to_string(),
+            size_bytes,
+            resource_ura: resource_ura.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillWriteFileReceipt {
+    pub ok: bool,
+    pub owner_agent_id: String,
+    pub skill_name: String,
+    pub path: String,
+    pub size_bytes: u64,
+    pub content_hash: String,
+    pub resource_ura: String,
+}
+
+impl SkillWriteFileReceipt {
+    pub fn success(
+        owner_agent_id: impl Into<String>,
+        skill_name: impl Into<String>,
+        path: impl Into<String>,
+        size_bytes: u64,
+        content_hash: impl Into<String>,
+        resource_ura: impl Into<String>,
+    ) -> Self {
+        Self {
+            ok: true,
+            owner_agent_id: owner_agent_id.into(),
+            skill_name: skill_name.into(),
+            path: path.into(),
+            size_bytes,
+            content_hash: content_hash.into(),
+            resource_ura: resource_ura.into(),
         }
     }
 }
@@ -231,5 +388,58 @@ mod tests {
             error.to_string().contains("legacy_removed"),
             "strict receipt error should name unknown field: {error}"
         );
+    }
+
+    #[test]
+    fn skill_publish_and_unpublish_receipts_preserve_public_shapes() {
+        let publish = SkillPublishReceipt::success(
+            "claude",
+            "alpha",
+            "/tmp/alpha",
+            "sha256:abc",
+            Some("run-1".to_string()),
+        );
+        let publish_wire = serde_json::to_value(&publish).expect("publish receipt");
+        assert_eq!(publish_wire["ok"], true);
+        assert_eq!(publish_wire["owner_agent_id"], "claude");
+        assert_eq!(publish_wire["skill_name"], "alpha");
+        assert_eq!(publish_wire["skill_dir"], "/tmp/alpha");
+        assert_eq!(publish_wire["content_hash"], "sha256:abc");
+        assert_eq!(publish_wire["mission_run_id"], "run-1");
+
+        let unpublish =
+            SkillUnpublishReceipt::success("claude", "alpha", "/tmp/alpha", "sha256:abc");
+        let unpublish_wire = serde_json::to_value(&unpublish).expect("unpublish receipt");
+        assert_eq!(unpublish_wire["ok"], true);
+        assert_eq!(unpublish_wire["removed_dir"], "/tmp/alpha");
+        assert_eq!(unpublish_wire["content_hash"], "sha256:abc");
+    }
+
+    #[test]
+    fn skill_file_operation_responses_preserve_public_shapes() {
+        let resource = "easynet:///r/acme/resource/agent.u.alice/skill/alpha/SKILL.md";
+        let tree = SkillTreeResponse::success(
+            "alice",
+            "alpha",
+            "/tmp/alpha",
+            vec![serde_json::json!({"path": "SKILL.md", "kind": "file"})],
+            resource,
+        );
+        let tree_wire = serde_json::to_value(&tree).expect("tree response");
+        assert_eq!(tree_wire["files"][0]["path"], "SKILL.md");
+        assert_eq!(tree_wire["resource_ura"], resource);
+
+        let read =
+            SkillReadFileResponse::success("alice", "alpha", "SKILL.md", "body", 4, resource);
+        let read_wire = serde_json::to_value(&read).expect("read response");
+        assert_eq!(read_wire["encoding"], "utf-8");
+        assert_eq!(read_wire["content"], "body");
+        assert_eq!(read_wire["size_bytes"], 4);
+
+        let write =
+            SkillWriteFileReceipt::success("alice", "alpha", "SKILL.md", 4, "sha256:def", resource);
+        let write_wire = serde_json::to_value(&write).expect("write receipt");
+        assert_eq!(write_wire["content_hash"], "sha256:def");
+        assert_eq!(write_wire["resource_ura"], resource);
     }
 }

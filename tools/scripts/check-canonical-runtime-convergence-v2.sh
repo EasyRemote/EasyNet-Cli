@@ -1306,20 +1306,22 @@ check_skill_record_projection_boundary_contract() {
   local skills_mod="$cli_root/src/daemon/resources/skills/mod.rs"
   local install="$cli_root/src/daemon/ability/builtins/resources/skills/install.rs"
   local list="$cli_root/src/daemon/ability/builtins/resources/skills/list.rs"
+  local publish="$cli_root/src/daemon/ability/builtins/resources/skills/publish.rs"
   local cli_skill="$cli_root/src/cli/commands/skill.rs"
   [[ -f "$store" ]] || fail "skill install record store source is missing: $store"
   [[ -f "$projection" ]] || fail "skill projection source is missing: $projection"
   [[ -f "$skills_mod" ]] || fail "skill resources module source is missing: $skills_mod"
   [[ -f "$install" ]] || fail "skill install ability source is missing: $install"
   [[ -f "$list" ]] || fail "skill list ability source is missing: $list"
+  [[ -f "$publish" ]] || fail "skill publish ability source is missing: $publish"
   [[ -f "$cli_skill" ]] || fail "skill CLI source is missing: $cli_skill"
 
-  "$PYTHON_BIN" - "$store" "$projection" "$skills_mod" "$install" "$list" "$cli_skill" <<'PY'
+  "$PYTHON_BIN" - "$store" "$projection" "$skills_mod" "$install" "$list" "$publish" "$cli_skill" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-store, projection, skills_mod, install, list_src, cli_skill = [
+store, projection, skills_mod, install, list_src, publish, cli_skill = [
     Path(arg).read_text(encoding="utf-8") for arg in sys.argv[1:]
 ]
 
@@ -1348,12 +1350,19 @@ for required in (
     "pub struct SkillListResponse",
     "pub fn from_items(items: Vec<InstalledSkillProjection>) -> Self",
     "pub struct SkillRemoveReceipt",
+    "pub struct SkillPublishReceipt",
+    "pub struct SkillUnpublishReceipt",
+    "pub struct SkillTreeResponse",
+    "pub struct SkillReadFileResponse",
+    "pub struct SkillWriteFileReceipt",
     "pub fn success(",
     "installed_skill_projection_owns_resource_ura_without_mutating_install_record_schema",
     "installed_skill_projection_rejects_unknown_response_fields",
     "skill_record_response_preserves_public_envelope_shape",
     "skill_list_response_preserves_items_shape",
     "skill_remove_receipt_preserves_public_shape_and_rejects_unknown_fields",
+    "skill_publish_and_unpublish_receipts_preserve_public_shapes",
+    "skill_file_operation_responses_preserve_public_shapes",
 ):
     if required not in projection:
         raise SystemExit(f"skill_record_projection_boundary:projection_missing:{required}")
@@ -1371,6 +1380,13 @@ for retired in (
 ):
     if retired in list_src:
         raise SystemExit(f"skill_record_projection_boundary:list_retired:{retired}")
+for retired in (
+    'Ok(json!({',
+    "let mut receipt = json!({",
+    'receipt["resource_ura"]',
+):
+    if retired in publish:
+        raise SystemExit(f"skill_record_projection_boundary:publish_retired:{retired}")
 for required in (
     "InstalledSkillProjection::from_record(record, resource_ura)",
     "SkillRecordResponse::ok(record)",
@@ -1388,6 +1404,15 @@ for required in (
 ):
     if required not in list_src:
         raise SystemExit(f"skill_record_projection_boundary:list_missing:{required}")
+for required in (
+    "SkillPublishReceipt::success(",
+    "SkillUnpublishReceipt::success(",
+    "SkillTreeResponse::success(",
+    "SkillReadFileResponse::success(",
+    "SkillWriteFileReceipt::success(",
+):
+    if required not in publish:
+        raise SystemExit(f"skill_record_projection_boundary:publish_missing:{required}")
 for retired in (
     "store::{format_bytes, InstallRecord}",
     "anyhow::Result<InstallRecord>",
@@ -11999,6 +12024,24 @@ fn handle(rows: Vec<InstallRecord>) {
         }
         value
     }).collect();
+}
+EOF
+  cat >"$tmp/skill-record-projection-boundary-legacy/src/daemon/ability/builtins/resources/skills/publish.rs" <<'EOF'
+fn publish_handler() -> Value {
+    Ok(json!({
+        "ok": true,
+        "owner_agent_id": owner_id,
+        "skill_name": skill_name,
+    }))
+}
+
+fn tree_handler() -> Value {
+    let mut receipt = json!({
+        "ok": true,
+        "files": entries,
+    });
+    receipt["resource_ura"] = json!(resource_ura);
+    receipt
 }
 EOF
   cat >"$tmp/skill-record-projection-boundary-legacy/src/cli/commands/skill.rs" <<'EOF'

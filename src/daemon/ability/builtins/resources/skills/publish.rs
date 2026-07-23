@@ -60,6 +60,10 @@ use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::persistence::agent_aggregate::{AgentAggregateRepository, AgentSkillLayout};
+use crate::daemon::resources::skills::projection::{
+    SkillPublishReceipt, SkillReadFileResponse, SkillTreeResponse, SkillUnpublishReceipt,
+    SkillWriteFileReceipt,
+};
 
 use super::list;
 use crate::daemon::ability::dispatch::OwnerKind;
@@ -207,14 +211,13 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
         content_hash = hash,
     );
 
-    Ok(json!({
-        "ok": true,
-        "owner_agent_id": owner_id,
-        "skill_name": skill_name,
-        "skill_dir": skill_dir.display().to_string(),
-        "content_hash": hash,
-        "mission_run_id": run_id,
-    }))
+    Ok(serde_json::to_value(SkillPublishReceipt::success(
+        owner_id,
+        skill_name,
+        skill_dir.display().to_string(),
+        hash,
+        run_id,
+    ))?)
 }
 
 /// `skill.unpublish` — hard-delete a curator-published skill.
@@ -265,13 +268,12 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
         content_hash = logged_hash,
     );
 
-    Ok(json!({
-        "ok": true,
-        "owner_agent_id": owner_id,
-        "skill_name": skill_name,
-        "removed_dir": skill_dir.display().to_string(),
-        "content_hash": logged_hash,
-    }))
+    Ok(serde_json::to_value(SkillUnpublishReceipt::success(
+        owner_id,
+        skill_name,
+        skill_dir.display().to_string(),
+        logged_hash,
+    ))?)
 }
 
 fn unpublish_audit_hash(install_path: &Path) -> String {
@@ -320,15 +322,13 @@ fn tree_handler(args: Value) -> anyhow::Result<Value> {
         let bp = b["path"].as_str().unwrap_or("");
         ap.cmp(bp)
     });
-    let mut receipt = json!({
-        "ok": true,
-        "owner_agent_id": owner_id,
-        "skill_name": skill_name,
-        "root": skill_dir.display().to_string(),
-        "files": entries,
-    });
-    receipt["resource_ura"] = json!(resource_ura);
-    Ok(receipt)
+    Ok(serde_json::to_value(SkillTreeResponse::success(
+        owner_id,
+        skill_name,
+        skill_dir.display().to_string(),
+        entries,
+        resource_ura,
+    ))?)
 }
 
 /// `skill.read_file` — read a UTF-8 file inside one installed skill package.
@@ -362,17 +362,14 @@ fn read_file_handler(args: Value) -> anyhow::Result<Value> {
         )
     })?;
     let rel_wire = rel.to_string_lossy().to_string();
-    let mut receipt = json!({
-        "ok": true,
-        "owner_agent_id": owner_id,
-        "skill_name": skill_name,
-        "path": rel_wire,
-        "content": content,
-        "encoding": "utf-8",
-        "size_bytes": meta.len(),
-    });
-    receipt["resource_ura"] = json!(skill_file_resource_ura(&package_ura, &rel_wire));
-    Ok(receipt)
+    Ok(serde_json::to_value(SkillReadFileResponse::success(
+        owner_id,
+        skill_name,
+        rel_wire.clone(),
+        content,
+        meta.len(),
+        skill_file_resource_ura(&package_ura, &rel_wire),
+    ))?)
 }
 
 /// `skill.write_file` — write a UTF-8 file inside one installed skill package.
@@ -408,16 +405,14 @@ fn write_file_handler(args: Value) -> anyhow::Result<Value> {
         .map_err(|e| anyhow::anyhow!("skill.write_file: write {}: {e}", full.display()))?;
     let hash = refresh_install_record_hash(&skill_dir)?;
     let rel_wire = rel.to_string_lossy().to_string();
-    let mut receipt = json!({
-        "ok": true,
-        "owner_agent_id": owner_id,
-        "skill_name": skill_name,
-        "path": rel_wire,
-        "size_bytes": content.len() as u64,
-        "content_hash": hash,
-    });
-    receipt["resource_ura"] = json!(skill_file_resource_ura(&package_ura, &rel_wire));
-    Ok(receipt)
+    Ok(serde_json::to_value(SkillWriteFileReceipt::success(
+        owner_id,
+        skill_name,
+        rel_wire.clone(),
+        content.len() as u64,
+        hash,
+        skill_file_resource_ura(&package_ura, &rel_wire),
+    ))?)
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────
