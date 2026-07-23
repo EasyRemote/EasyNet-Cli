@@ -387,6 +387,31 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
         () -> SessionAuthority.fromMetadata(authorityMetadataValue(payload)));
+
+    Map<String, Object> creatorPayload = new LinkedHashMap<>(payload);
+    creatorPayload.put("session_owner_user_id", "alice");
+    creatorPayload.put("creator_principal_id", "00000000-0000-0000-0000-000000000000");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () -> SessionAuthority.fromMetadata(authorityMetadataValue(creatorPayload)));
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            new SessionAuthorityRequest(
+                CALLER,
+                "session-1",
+                "alice",
+                "00000000-0000-0000-0000-000000000000",
+                CALLEE,
+                "easynet:///r/example/user/alice",
+                CALLEE,
+                List.of("invoke"),
+                List.of("invoke"),
+                List.of("observe.health"),
+                10,
+                20,
+                Map.of()));
   }
 
   private static void streamAndBidiLifecyclesAreBounded() {
