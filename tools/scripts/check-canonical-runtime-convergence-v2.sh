@@ -131,6 +131,39 @@ check_bidi_dispatch_default_code_policy_contract() {
   fi
 }
 
+check_bidi_reverse_unary_terminal_state_contract() {
+  local cli_root="${1:-$ROOT}"
+  local escalation="$cli_root/src/daemon/invocation/bidi/session_escalation.rs"
+  [[ -f "$escalation" ]] || fail "bidi session escalation source is missing: ${escalation#$cli_root/}"
+
+  "$PYTHON_BIN" - "$escalation" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+legacy = """.terminal_receipt
+                .as_ref()
+                .map(|receipt| receipt.state)
+                .unwrap_or(axon_sdk::pb::axon::v1::InvocationState::Completed as i32)"""
+if legacy in text:
+    raise SystemExit("bidi_reverse_unary_terminal_state:completed_default_projection")
+required = {
+    "fn reverse_unary_terminal_state": "terminal_state_validator_missing",
+    "CANONICAL_FINALIZATION_REQUIRED": "missing_checkpoint_error_missing",
+    "CANONICAL_ADMISSION_INVALID": "admission_checkpoint_invalid_error_missing",
+    "CANONICAL_TERMINAL_RECEIPT_INVALID": "terminal_receipt_invalid_error_missing",
+    "InvocationState::Admitted.to_wire_i32()": "admission_state_machine_check_missing",
+    "state.is_terminal()": "terminal_state_machine_check_missing",
+    "reverse_unary_reply_rejects_missing_canonical_checkpoints": "missing_checkpoint_test_missing",
+    "reverse_unary_reply_rejects_non_admitted_admission_checkpoint": "non_admitted_checkpoint_test_missing",
+    "reverse_unary_reply_rejects_non_terminal_receipt_state": "non_terminal_state_test_missing",
+}
+for needle, label in required.items():
+    if needle not in text:
+        raise SystemExit(f"bidi_reverse_unary_terminal_state:{label}")
+PY
+}
+
 check_manifest_contract() {
   "$PYTHON_BIN" - \
     "$MANIFEST" \
@@ -8931,11 +8964,29 @@ EOF
   if ( CLI_ROOT="$tmp/python-sdk-bytecode-index"; check_python_sdk_bytecode_index_contract ) >/dev/null 2>&1; then
     fail "self-test expected tracked Python SDK bytecode gate to fail"
   fi
+  mkdir -p "$tmp/bidi-reverse-unary-terminal-state-legacy/src/daemon/invocation/bidi"
+  cat >"$tmp/bidi-reverse-unary-terminal-state-legacy/src/daemon/invocation/bidi/session_escalation.rs" <<'EOF'
+fn reverse_unary_reply(result: axon_sdk::pb::axon::v1::ReverseDispatchResult) -> EscalationReply {
+    let state = result
+                .terminal_receipt
+                .as_ref()
+                .map(|receipt| receipt.state)
+                .unwrap_or(axon_sdk::pb::axon::v1::InvocationState::Completed as i32);
+    EscalationReply::Canonical(Box::new(axon_sdk::pb::axon::v1::InvokeResponse {
+        state,
+        ..axon_sdk::pb::axon::v1::InvokeResponse::default()
+    }))
+}
+EOF
+  if ( check_bidi_reverse_unary_terminal_state_contract "$tmp/bidi-reverse-unary-terminal-state-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected bidi reverse unary terminal state gate to fail"
+  fi
   check_mcp_reflection_async_bridge_contract
   check_runtime_session_projection_accessor_contract
   check_ffi_runtime_sizing_policy_contract
   check_failure_code_default_policy_contract
   check_bidi_dispatch_default_code_policy_contract
+  check_bidi_reverse_unary_terminal_state_contract
   check_active_source_contract
   check_sdk_root_runtime_description_contract
   check_go_sdk_public_ura_alias_contract
@@ -9050,6 +9101,7 @@ check_runtime_session_projection_accessor_contract
 check_ffi_runtime_sizing_policy_contract
 check_failure_code_default_policy_contract
 check_bidi_dispatch_default_code_policy_contract
+check_bidi_reverse_unary_terminal_state_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract
 check_go_sdk_public_ura_alias_contract

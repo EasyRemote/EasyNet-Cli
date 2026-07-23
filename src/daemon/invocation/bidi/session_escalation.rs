@@ -662,12 +662,11 @@ enum PendingEscalationKind {
 fn reverse_unary_reply(result: axon_sdk::pb::axon::v1::ReverseDispatchResult) -> EscalationReply {
     match result.failure {
         None => {
+            let state = match reverse_unary_terminal_state(&result) {
+                Ok(state) => state,
+                Err(error) => return EscalationReply::Error(error),
+            };
             let result_content_type = result.result_content_type.trim().to_string();
-            let state = result
-                .terminal_receipt
-                .as_ref()
-                .map(|receipt| receipt.state)
-                .unwrap_or(axon_sdk::pb::axon::v1::InvocationState::Completed as i32);
             EscalationReply::Canonical(Box::new(axon_sdk::pb::axon::v1::InvokeResponse {
                 state,
                 result: result.payload,
@@ -678,6 +677,41 @@ fn reverse_unary_reply(result: axon_sdk::pb::axon::v1::ReverseDispatchResult) ->
             }))
         }
         Some(failure) => EscalationReply::Error(session_request_error_from_wire_failure(failure)),
+    }
+}
+
+fn reverse_unary_terminal_state(
+    result: &axon_sdk::pb::axon::v1::ReverseDispatchResult,
+) -> Result<i32, SessionRequestError> {
+    let (Some(admission), Some(receipt)) = (
+        result.admission_receipt.as_ref(),
+        result.terminal_receipt.as_ref(),
+    ) else {
+        return Err(reverse_unary_protocol_failure(
+            "CANONICAL_FINALIZATION_REQUIRED: successful unary reverse dispatch omitted canonical checkpoints",
+        ));
+    };
+    if admission.state != axon_sdk::invocation::InvocationState::Admitted.to_wire_i32() {
+        return Err(reverse_unary_protocol_failure(
+            "CANONICAL_ADMISSION_INVALID: unary reverse dispatch carried non-admitted admission checkpoint",
+        ));
+    }
+    let state = axon_sdk::invocation::InvocationState::try_from(receipt.state).map_err(|_| {
+        reverse_unary_protocol_failure(
+            "CANONICAL_TERMINAL_RECEIPT_INVALID: unary reverse dispatch carried unknown terminal receipt state",
+        )
+    })?;
+    if !state.is_terminal() {
+        return Err(reverse_unary_protocol_failure(
+            "CANONICAL_TERMINAL_RECEIPT_INVALID: unary reverse dispatch terminal receipt carried non-terminal state",
+        ));
+    }
+    Ok(receipt.state)
+}
+
+fn reverse_unary_protocol_failure(reason: &str) -> SessionRequestError {
+    SessionRequestError::UpstreamFailure {
+        reason: reason.to_string(),
     }
 }
 
@@ -1251,7 +1285,7 @@ mod tests {
             result_content_type: "application/json".to_string(),
             terminal: true,
             admission_receipt: Some(InvocationReceipt {
-                state: InvocationState::Running as i32,
+                state: InvocationState::Admitted as i32,
                 ..InvocationReceipt::default()
             }),
             terminal_receipt: Some(InvocationReceipt {
@@ -1268,6 +1302,82 @@ mod tests {
                 assert_eq!(response.result, br#"{"abilities":[]}"#);
             }
             other => panic!("expected canonical reverse unary reply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reverse_unary_reply_rejects_missing_canonical_checkpoints() {
+        let reply = reverse_unary_reply(axon_sdk::pb::axon::v1::ReverseDispatchResult {
+            payload: br#"{"abilities":[]}"#.to_vec(),
+            result_content_type: "application/json".to_string(),
+            terminal: true,
+            ..axon_sdk::pb::axon::v1::ReverseDispatchResult::default()
+        });
+
+        match reply {
+            EscalationReply::Error(SessionRequestError::UpstreamFailure { reason }) => {
+                assert!(
+                    reason.contains("CANONICAL_FINALIZATION_REQUIRED"),
+                    "missing checkpoints must fail closed as canonical finalization failure: {reason}"
+                );
+            }
+            other => panic!("expected canonical finalization error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reverse_unary_reply_rejects_non_admitted_admission_checkpoint() {
+        let reply = reverse_unary_reply(axon_sdk::pb::axon::v1::ReverseDispatchResult {
+            payload: br#"{"abilities":[]}"#.to_vec(),
+            result_content_type: "application/json".to_string(),
+            terminal: true,
+            admission_receipt: Some(InvocationReceipt {
+                state: InvocationState::Running as i32,
+                ..InvocationReceipt::default()
+            }),
+            terminal_receipt: Some(InvocationReceipt {
+                state: InvocationState::Completed as i32,
+                ..InvocationReceipt::default()
+            }),
+            ..axon_sdk::pb::axon::v1::ReverseDispatchResult::default()
+        });
+
+        match reply {
+            EscalationReply::Error(SessionRequestError::UpstreamFailure { reason }) => {
+                assert!(
+                    reason.contains("CANONICAL_ADMISSION_INVALID"),
+                    "non-admitted checkpoint state must fail closed: {reason}"
+                );
+            }
+            other => panic!("expected canonical admission checkpoint error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reverse_unary_reply_rejects_non_terminal_receipt_state() {
+        let reply = reverse_unary_reply(axon_sdk::pb::axon::v1::ReverseDispatchResult {
+            payload: br#"{"abilities":[]}"#.to_vec(),
+            result_content_type: "application/json".to_string(),
+            terminal: true,
+            admission_receipt: Some(InvocationReceipt {
+                state: InvocationState::Admitted as i32,
+                ..InvocationReceipt::default()
+            }),
+            terminal_receipt: Some(InvocationReceipt {
+                state: InvocationState::Running as i32,
+                ..InvocationReceipt::default()
+            }),
+            ..axon_sdk::pb::axon::v1::ReverseDispatchResult::default()
+        });
+
+        match reply {
+            EscalationReply::Error(SessionRequestError::UpstreamFailure { reason }) => {
+                assert!(
+                    reason.contains("CANONICAL_TERMINAL_RECEIPT_INVALID"),
+                    "non-terminal checkpoint state must fail closed: {reason}"
+                );
+            }
+            other => panic!("expected canonical terminal receipt error, got {other:?}"),
         }
     }
 
