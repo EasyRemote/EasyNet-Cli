@@ -88,6 +88,8 @@ mod tests {
     use super::*;
     use crate::daemon::invocation::routing::target::CallMode;
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/local";
+
     #[test]
     fn handler_returns_health_contract_and_stamps_timestamp() {
         // Spirit of "verify every layer": call the handler in
@@ -111,11 +113,12 @@ mod tests {
         // End-to-end on the local path: register, build a
         // dispatcher, dispatch a Local target, observe the echo.
         // This is the smoke path the v1 daemon's startup hits.
-        let mut reg = AxonAbilityCatalog::new_with_runtime(
+        let mut reg = AxonAbilityCatalog::new_test_runtime_for_device_authority(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                 None,
             ),
+            TEST_DEVICE_URA,
         );
         register(&mut reg);
         let dispatcher = Arc::new(reg);
