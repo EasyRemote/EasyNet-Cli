@@ -877,6 +877,7 @@ fn canonical_lifecycle_ability(ability: &str) -> Result<&'static str, Status> {
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PrincipalStore {
     principals: BTreeMap<String, PrincipalRecord>,
 }
@@ -941,6 +942,7 @@ fn principal_state_label(state: &PrincipalState) -> &'static str {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PrincipalRecord {
     principal_ura: String,
     state: PrincipalState,
@@ -1008,6 +1010,7 @@ impl PrincipalRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PublicKeyBinding {
     binding_id: String,
     principal_ura: String,
@@ -1035,6 +1038,7 @@ enum KeyBindingState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RecoveryPolicy {
     policy_ref: String,
     enabled: bool,
@@ -1042,6 +1046,7 @@ struct RecoveryPolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AuthorizationGrant {
     grant_id: String,
     principal_ura: String,
@@ -1055,6 +1060,7 @@ struct AuthorizationGrant {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EnrollmentCapability {
     enrollment_id: String,
     issuer_ura: String,
@@ -1082,16 +1088,19 @@ impl EnrollmentCapability {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RequestEnvelope {
     request: PrincipalRequest,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GetArgs {
     principal_ura: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PrincipalRequest {
     command: PrincipalCommand,
     principal_ura: String,
@@ -1322,6 +1331,7 @@ struct RevokeEnrollmentRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PrincipalCommand {
     actor_ura: String,
     idempotency_key: String,
@@ -1340,6 +1350,7 @@ impl PrincipalCommand {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct PrincipalProofRef {
     kind: String,
     reference: String,
@@ -1843,6 +1854,131 @@ mod tests {
         )
     }
 
+    fn canonical_principal_record_json() -> serde_json::Value {
+        json!({
+            "principal_ura": "easynet:///r/realm/user/alice",
+            "state": "active",
+            "version": 1,
+            "bindings": [{
+                "binding_id": "binding-1",
+                "principal_ura": "easynet:///r/realm/user/alice",
+                "key_id": "key-1",
+                "public_key_b64": b64_pubkey(1),
+                "state": "active",
+                "created_unix_ms": 1
+            }],
+            "enrollment_proof": {
+                "kind": "bootstrap",
+                "reference": "proof:create"
+            },
+            "recovery": {
+                "policy_ref": "policy:recovery",
+                "enabled": true,
+                "updated_unix_ms": 1
+            },
+            "consumed_recovery_proofs": {},
+            "enrollments": [{
+                "enrollment_id": "enrollment-1",
+                "issuer_ura": "easynet:///r/realm/user/admin",
+                "subject_principal_ura": "easynet:///r/realm/user/bob",
+                "created_unix_ms": 1
+            }],
+            "grants": [{
+                "grant_id": "grant-1",
+                "principal_ura": "easynet:///r/realm/user/alice",
+                "issuer_ura": "easynet:///r/realm/user/admin",
+                "actions": ["principal.lifecycle.get"],
+                "created_unix_ms": 1
+            }],
+            "created_unix_ms": 1,
+            "updated_unix_ms": 1,
+            "command_log": {"create": 1}
+        })
+    }
+
+    #[test]
+    fn principal_store_rejects_unknown_top_level_fields() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("principal-lifecycle.json");
+        fs::write(
+            &store_path,
+            serde_json::to_vec_pretty(&json!({
+                "principals": {},
+                "legacy_principals": {}
+            }))
+            .expect("encode noncanonical store"),
+        )
+        .expect("write noncanonical store");
+
+        let error = PrincipalStore::load_unlocked(&store_path, ABILITY_PRINCIPAL_GET)
+            .expect_err("principal store with unknown top-level fields must fail closed");
+        assert_eq!(error.code(), tonic::Code::Internal);
+        assert!(
+            error
+                .message()
+                .contains("unknown field `legacy_principals`"),
+            "unexpected unknown store field error: {error}"
+        );
+    }
+
+    #[test]
+    fn principal_store_rejects_unknown_nested_lifecycle_fields() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("principal-lifecycle.json");
+        let mut principal = canonical_principal_record_json();
+        principal
+            .as_object_mut()
+            .expect("principal object")
+            .insert("legacy_state".to_string(), json!("active"));
+        fs::write(
+            &store_path,
+            serde_json::to_vec_pretty(&json!({
+                "principals": {
+                    "easynet:///r/realm/user/alice": principal
+                }
+            }))
+            .expect("encode noncanonical principal store"),
+        )
+        .expect("write noncanonical principal store");
+
+        let error = PrincipalStore::load_unlocked(&store_path, ABILITY_PRINCIPAL_GET)
+            .expect_err("principal record with unknown fields must fail closed");
+        assert_eq!(error.code(), tonic::Code::Internal);
+        assert!(
+            error.message().contains("unknown field `legacy_state`"),
+            "unexpected unknown principal field error: {error}"
+        );
+    }
+
+    #[test]
+    fn principal_lifecycle_request_rejects_unknown_fields_before_execution() {
+        let (_dir, ctx) = context();
+        let error = ctx
+            .handle(
+                ABILITY_PRINCIPAL_CREATE,
+                serde_json::to_vec(&json!({
+                    "request": {
+                        "command": command("create-1", "bootstrap", None),
+                        "principal_ura": "easynet:///r/realm/user/alice",
+                        "legacy_subject": "alice"
+                    }
+                }))
+                .unwrap()
+                .as_slice(),
+            )
+            .expect_err("principal request with unknown fields must fail closed");
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(
+            error.message().contains("unknown field `legacy_subject`"),
+            "unexpected unknown request field error: {error}"
+        );
+        assert!(
+            !ctx.store_path.exists(),
+            "malformed request must not create the lifecycle store"
+        );
+    }
+
     #[test]
     fn principal_record_requires_idempotency_command_log_fact() {
         let dir = tempdir().expect("tempdir");
@@ -1974,10 +2110,7 @@ mod tests {
         let store_path = dir.path().join("principal-lifecycle.json");
         fs::write(
             &store_path,
-            serde_json::to_vec_pretty(&json!({
-                "schema": "legacy-without-principals"
-            }))
-            .expect("encode malformed store"),
+            serde_json::to_vec_pretty(&json!({})).expect("encode malformed store"),
         )
         .expect("write malformed store");
 

@@ -829,12 +829,21 @@ mod tests {
                 "bindings": [{
                     "binding_id": "bind-alice",
                     "principal_ura": user,
+                    "key_id": "key-alice",
                     "public_key_b64": pk_b64,
                     "state": "active",
                     "created_unix_ms": 1
                 }],
+                "enrollment_proof": {
+                    "kind": "bootstrap",
+                    "reference": "proof:create"
+                },
+                "consumed_recovery_proofs": {},
+                "enrollments": [],
+                "grants": [],
                 "created_unix_ms": 1,
-                "updated_unix_ms": 1
+                "updated_unix_ms": 1,
+                "command_log": {"create": 1}
             }),
         );
         let store_path = dir.path().join("principal-lifecycle.json");

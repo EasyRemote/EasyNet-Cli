@@ -2957,8 +2957,16 @@ mod tests {
                 "state": "active",
                 "version": 2,
                 "bindings": [],
+                "enrollment_proof": {
+                    "kind": "bootstrap",
+                    "reference": "proof:create"
+                },
+                "consumed_recovery_proofs": {},
+                "enrollments": [],
+                "grants": [],
                 "created_unix_ms": 1,
-                "updated_unix_ms": 1
+                "updated_unix_ms": 1,
+                "command_log": {"create": 1}
             }),
         );
         let store_path = dir.path().join("principal-lifecycle.json");
