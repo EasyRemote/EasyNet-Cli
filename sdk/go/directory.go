@@ -258,9 +258,6 @@ func ProjectDirectoryResolution(output map[string]any) (DirectoryResolution, err
 	if err != nil {
 		return DirectoryResolution{}, err
 	}
-	if answerKind == "" && len(negative) > 0 {
-		answerKind = "RESOLVE_ANSWER_KIND_NEGATIVE"
-	}
 	if answerKind == "" {
 		return DirectoryResolution{}, invalidDirectory("Directory answer_kind is required", nil)
 	}

@@ -5935,6 +5935,12 @@ for token, code in (
 ):
     if token not in project_body:
         raise SystemExit("go_directory_projection:" + code)
+for retired in (
+    'answerKind == "" && len(negative) > 0',
+    'answerKind = "RESOLVE_ANSWER_KIND_NEGATIVE"',
+):
+    if retired in go_directory:
+        raise SystemExit("go_directory_projection_answer_kind_fallback")
 
 map_slice = re.search(
     r"func optionalDirectoryMapSlice\(.*?\n\}",
@@ -5982,6 +5988,12 @@ if not project_resolution:
     raise SystemExit("python_directory_projection_missing")
 if "Directory answer must be an object" not in project_resolution.group(0):
     raise SystemExit("python_directory_answer_type_gate_missing")
+for retired in (
+    'if not answer_kind and _optional_mapping(output.get("negative"), "negative")',
+    'answer_kind = "RESOLVE_ANSWER_KIND_NEGATIVE"',
+):
+    if retired in py_directory:
+        raise SystemExit("python_directory_projection_answer_kind_fallback")
 
 py_sequence = re.search(
     r"def _optional_mapping_sequence\(.*?\n\n",
@@ -6001,6 +6013,8 @@ for token, code in (
 for text, name in ((go_test, "go"), (py_test, "python")):
     if "RejectsMalformedPresentFacts" not in text and "rejects_malformed_present_facts" not in text:
         raise SystemExit(f"{name}_directory_malformed_present_facts_test_missing")
+    if "RejectsNegativeWithoutAnswerKind" not in text and "rejects_negative_without_answer_kind" not in text:
+        raise SystemExit(f"{name}_directory_negative_without_answer_kind_test_missing")
     for field in (
         "answer",
         "records",

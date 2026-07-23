@@ -213,8 +213,6 @@ def _project_resolution(output: Mapping[str, object]) -> DirectoryResolution:
             raise _invalid("Directory answer must be an object")
         output = nested
     answer_kind = _mapping_text(output, "answer_kind")
-    if not answer_kind and _optional_mapping(output.get("negative"), "negative"):
-        answer_kind = "RESOLVE_ANSWER_KIND_NEGATIVE"
     if not answer_kind:
         raise _invalid("Directory answer_kind is required")
     records_raw = output.get("records", [])

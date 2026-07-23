@@ -119,6 +119,19 @@ def test_project_directory_resolution_rejects_malformed_present_facts() -> None:
             directory_module._project_resolution(payload)
 
 
+def test_project_directory_resolution_rejects_negative_without_answer_kind() -> None:
+    with pytest.raises(SDKError, match="answer_kind is required"):
+        directory_module._project_resolution(
+            {
+                "negative": {
+                    "reason": "NEGATIVE_REASON_NXDOMAIN",
+                    "detail": "owner is not online",
+                },
+                "records": [],
+            }
+        )
+
+
 def test_directory_helpers_reject_unbounded_cursor_and_surface_negative_detail() -> None:
     with pytest.raises(SDKError, match="cursor exceeds"):
         directory_module._directory_cursor("x" * 4097)

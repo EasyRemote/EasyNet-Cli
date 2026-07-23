@@ -108,6 +108,19 @@ func TestProjectDirectoryResolutionRejectsMalformedPresentFacts(t *testing.T) {
 	}
 }
 
+func TestProjectDirectoryResolutionRejectsNegativeWithoutAnswerKind(t *testing.T) {
+	_, err := ProjectDirectoryResolution(map[string]any{
+		"negative": map[string]any{
+			"reason": "NEGATIVE_REASON_NXDOMAIN",
+			"detail": "owner is not online",
+		},
+		"records": []any{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "answer_kind is required") {
+		t.Fatalf("ProjectDirectoryResolution error = %v, want explicit answer_kind rejection", err)
+	}
+}
+
 func TestDirectoryHelpersRejectUnboundedCursorAndSurfaceNegativeDetail(t *testing.T) {
 	if _, err := directoryCursor(strings.Repeat("x", maxDirectoryCursorLen+1)); err == nil {
 		t.Fatal("oversized directory cursor was accepted")
