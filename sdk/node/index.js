@@ -450,12 +450,21 @@ export class DelegationProof {
 export class SessionAuthority {
   constructor(fields) {
     const value = objectValue(fields, "session authority");
+    const normalized = normalizeSessionAuthorityPrincipals({
+      sessionOwnerUserID: authorityOptionalString(value.session_owner_user_id, "session_owner_user_id") ?? "",
+      sessionOwnerURA: authorityOptionalString(value.session_owner_ura, "session_owner_ura") ?? "",
+      creatorPrincipalID: authorityOptionalString(value.creator_principal_id, "creator_principal_id") ?? "",
+      creatorPrincipalURA: authorityOptionalString(value.creator_principal_ura, "creator_principal_ura") ?? "",
+      subjectURA: requiredAuthorityString(value.subject_ura, "subject_ura"),
+    });
     this.issuerURA = requiredAuthorityString(value.issuer_ura, "issuer_ura");
     this.sessionID = requiredAuthorityString(value.session_id, "session_id");
-    this.sessionOwnerUserID = requiredAuthorityString(value.session_owner_user_id, "session_owner_user_id");
-    this.creatorPrincipalID = requiredAuthorityString(value.creator_principal_id, "creator_principal_id");
+    this.sessionOwnerUserID = normalized.sessionOwnerUserID;
+    this.sessionOwnerURA = normalized.sessionOwnerURA;
+    this.creatorPrincipalID = normalized.creatorPrincipalID;
+    this.creatorPrincipalURA = normalized.creatorPrincipalURA;
     this.calleeURA = requiredAuthorityString(value.callee_ura, "callee_ura");
-    this.subjectURA = requiredAuthorityString(value.subject_ura, "subject_ura");
+    this.subjectURA = normalized.subjectURA;
     this.audience = requiredAuthorityString(value.audience, "audience");
     this.scopes = requiredAuthorityStringArray(value.scopes, "scopes");
     this.allowedActions = requiredAuthorityStringArray(value.allowed_actions, "allowed_actions");
@@ -497,7 +506,9 @@ export class SessionAuthority {
       issuer_ura: this.issuerURA,
       session_id: this.sessionID,
       session_owner_user_id: this.sessionOwnerUserID,
+      ...(this.sessionOwnerURA ? { session_owner_ura: this.sessionOwnerURA } : {}),
       creator_principal_id: this.creatorPrincipalID,
+      ...(this.creatorPrincipalURA ? { creator_principal_ura: this.creatorPrincipalURA } : {}),
       callee_ura: this.calleeURA,
       subject_ura: this.subjectURA,
       audience: this.audience,
@@ -542,12 +553,21 @@ export class DelegationRequest {
 export class SessionAuthorityRequest {
   constructor(fields) {
     const value = objectValue(fields, "session authority request");
+    const normalized = normalizeSessionAuthorityPrincipals({
+      sessionOwnerUserID: authorityOptionalString(value.session_owner_user_id, "session_owner_user_id") ?? "",
+      sessionOwnerURA: authorityOptionalString(value.session_owner_ura, "session_owner_ura") ?? "",
+      creatorPrincipalID: authorityOptionalString(value.creator_principal_id, "creator_principal_id") ?? "",
+      creatorPrincipalURA: authorityOptionalString(value.creator_principal_ura, "creator_principal_ura") ?? "",
+      subjectURA: requiredAuthorityString(value.subject_ura, "subject_ura"),
+    });
     this.issuerURA = requiredAuthorityString(value.issuer_ura, "issuer_ura");
     this.sessionID = requiredAuthorityString(value.session_id, "session_id");
-    this.sessionOwnerUserID = requiredAuthorityString(value.session_owner_user_id, "session_owner_user_id");
-    this.creatorPrincipalID = requiredAuthorityString(value.creator_principal_id, "creator_principal_id");
+    this.sessionOwnerUserID = normalized.sessionOwnerUserID;
+    this.sessionOwnerURA = normalized.sessionOwnerURA;
+    this.creatorPrincipalID = normalized.creatorPrincipalID;
+    this.creatorPrincipalURA = normalized.creatorPrincipalURA;
     this.calleeURA = requiredAuthorityString(value.callee_ura, "callee_ura");
-    this.subjectURA = requiredAuthorityString(value.subject_ura, "subject_ura");
+    this.subjectURA = normalized.subjectURA;
     this.audience = requiredAuthorityString(value.audience, "audience");
     this.scopes = requiredAuthorityStringArray(value.scopes, "scopes");
     this.allowedActions = requiredAuthorityStringArray(value.allowed_actions, "allowed_actions");
@@ -2504,10 +2524,13 @@ function validateDelegationProof(proof) {
 }
 
 function validateSessionAuthority(authority) {
+  validateSessionAuthorityRequiredFacts(authority);
   rejectAllZeroAuthorityFields({
     issuer_ura: authority.issuerURA,
     session_owner_user_id: authority.sessionOwnerUserID,
+    session_owner_ura: authority.sessionOwnerURA,
     creator_principal_id: authority.creatorPrincipalID,
+    creator_principal_ura: authority.creatorPrincipalURA,
     callee_ura: authority.calleeURA,
     subject_ura: authority.subjectURA,
     audience: authority.audience,
@@ -2539,10 +2562,13 @@ function validateDelegationRequest(request) {
 }
 
 function validateSessionAuthorityRequest(request) {
+  validateSessionAuthorityRequiredFacts(request);
   rejectAllZeroAuthorityFields({
     issuer_ura: request.issuerURA,
     session_owner_user_id: request.sessionOwnerUserID,
+    session_owner_ura: request.sessionOwnerURA,
     creator_principal_id: request.creatorPrincipalID,
+    creator_principal_ura: request.creatorPrincipalURA,
     callee_ura: request.calleeURA,
     subject_ura: request.subjectURA,
     audience: request.audience,
@@ -2556,6 +2582,110 @@ function validateSessionAuthorityRequest(request) {
     request.sessionOwnerUserID,
     request.sessionID,
   );
+}
+
+function validateSessionAuthorityRequiredFacts(authority) {
+  if (
+    !String(authority.issuerURA ?? "").trim() ||
+    !String(authority.sessionID ?? "").trim() ||
+    !String(authority.sessionOwnerUserID ?? "").trim() ||
+    !String(authority.creatorPrincipalID ?? "").trim() ||
+    !String(authority.calleeURA ?? "").trim() ||
+    !String(authority.subjectURA ?? "").trim() ||
+    !String(authority.audience ?? "").trim()
+  ) {
+    throw invalidAuthority(
+      "session authority must bind issuer, session id, owner, creator principal, callee, subject, and audience",
+    );
+  }
+}
+
+function normalizeSessionAuthorityPrincipals(fields) {
+  let sessionOwnerUserID = String(fields.sessionOwnerUserID ?? "").trim();
+  let sessionOwnerURA = String(fields.sessionOwnerURA ?? "").trim();
+  let creatorPrincipalID = String(fields.creatorPrincipalID ?? "").trim();
+  let creatorPrincipalURA = String(fields.creatorPrincipalURA ?? "").trim();
+  const subjectURA = requiredAuthorityString(fields.subjectURA, "subject_ura");
+
+  if (!sessionOwnerURA) {
+    sessionOwnerURA = sessionOwnerURAFromSubject(subjectURA, sessionOwnerUserID);
+  }
+  if (sessionOwnerURA) {
+    const ownerUserID = userIDFromUserURA(sessionOwnerURA, "session_owner_ura");
+    if (sessionOwnerUserID && sessionOwnerUserID !== ownerUserID) {
+      throw invalidAuthority("session_owner_user_id must match session_owner_ura user id");
+    }
+    sessionOwnerUserID = ownerUserID;
+  }
+
+  if (creatorPrincipalURA) {
+    requireCanonicalURA(creatorPrincipalURA, "creator_principal_ura");
+    if (creatorPrincipalID && creatorPrincipalID !== creatorPrincipalURA) {
+      throw invalidAuthority("creator_principal_id must match creator_principal_ura");
+    }
+    creatorPrincipalID = creatorPrincipalURA;
+  } else if (creatorPrincipalID.startsWith("easynet:///")) {
+    try {
+      requireCanonicalURA(creatorPrincipalID, "creator_principal_id");
+      creatorPrincipalURA = creatorPrincipalID;
+    } catch {
+      creatorPrincipalURA = "";
+    }
+  }
+
+  return {
+    sessionOwnerUserID,
+    sessionOwnerURA,
+    creatorPrincipalID,
+    creatorPrincipalURA,
+    subjectURA,
+  };
+}
+
+function sessionOwnerURAFromSubject(subjectURA, ownerUserID) {
+  const owner = String(ownerUserID ?? "").trim();
+  if (!owner) {
+    return "";
+  }
+  const subject = canonicalAuthoritySubject(subjectURA);
+  if (!subject || subject.ownerUserID !== owner || (subject.kind !== "user" && subject.kind !== "session")) {
+    return "";
+  }
+  return `easynet:///r/${subject.realm}/user/${owner}`;
+}
+
+function userIDFromUserURA(raw, field) {
+  const parsed = parseCanonicalURA(raw, field);
+  if (!parsed.path.startsWith("user/")) {
+    throw invalidAuthority(`${field} must be a canonical user URA`);
+  }
+  const userID = parsed.path.slice("user/".length).trim();
+  if (!userID || userID.includes("/")) {
+    throw invalidAuthority(`${field} must be a canonical user URA`);
+  }
+  return userID;
+}
+
+function requireCanonicalURA(raw, field) {
+  parseCanonicalURA(raw, field);
+  return raw;
+}
+
+function parseCanonicalURA(raw, field) {
+  const value = requiredAuthorityString(raw, field);
+  const realmPrefix = "easynet:///r/";
+  if (!value.startsWith(realmPrefix)) {
+    throw invalidAuthority(`${field} must be a canonical URA`);
+  }
+  const rest = value.slice(realmPrefix.length);
+  const slash = rest.indexOf("/");
+  if (slash <= 0 || slash === rest.length - 1) {
+    throw invalidAuthority(`${field} must be a canonical URA`);
+  }
+  return {
+    realm: rest.slice(0, slash),
+    path: rest.slice(slash + 1),
+  };
 }
 
 function validateSessionAuthoritySubjectBinding(subjectURA, sessionOwnerUserID, sessionID) {
@@ -2575,23 +2705,17 @@ function validateSessionAuthoritySubjectBinding(subjectURA, sessionOwnerUserID, 
 }
 
 function canonicalAuthoritySubject(subjectURA) {
-  const raw = String(subjectURA ?? "").trim();
-  const realmPrefix = "easynet:///r/";
-  if (!raw.startsWith(realmPrefix)) {
+  const parsed = parseCanonicalURANullable(subjectURA);
+  if (!parsed) {
     return null;
   }
-  const rest = raw.slice(realmPrefix.length);
-  const slash = rest.indexOf("/");
-  if (slash <= 0) {
-    return null;
-  }
-  const path = rest.slice(slash + 1);
+  const { realm, path } = parsed;
   if (path.startsWith("user/")) {
     const ownerUserID = path.slice("user/".length).trim();
     if (!ownerUserID || ownerUserID.includes("/")) {
       return null;
     }
-    return { kind: "user", ownerUserID };
+    return { kind: "user", realm, ownerUserID };
   }
   if (!path.startsWith("resource/user.")) {
     return null;
@@ -2613,7 +2737,24 @@ function canonicalAuthoritySubject(subjectURA) {
   ) {
     return null;
   }
-  return { kind: "session", ownerUserID, sessionID };
+  return { kind: "session", realm, ownerUserID, sessionID };
+}
+
+function parseCanonicalURANullable(raw) {
+  const value = String(raw ?? "").trim();
+  const realmPrefix = "easynet:///r/";
+  if (!value.startsWith(realmPrefix)) {
+    return null;
+  }
+  const rest = value.slice(realmPrefix.length);
+  const slash = rest.indexOf("/");
+  if (slash <= 0 || slash === rest.length - 1) {
+    return null;
+  }
+  return {
+    realm: rest.slice(0, slash),
+    path: rest.slice(slash + 1),
+  };
 }
 
 function rejectAllZeroAuthorityFields(fields) {

@@ -5229,10 +5229,17 @@ test = Path(sys.argv[2]).read_text() if Path(sys.argv[2]).exists() else ""
 
 for required in (
     "function validateSessionAuthoritySubjectBinding(",
+    "function normalizeSessionAuthorityPrincipals(",
+    "function sessionOwnerURAFromSubject(",
+    "function userIDFromUserURA(",
     "function canonicalAuthoritySubject(",
+    "session_owner_ura",
+    "creator_principal_ura",
     "session authority subject_ura must be a canonical user or session subject",
     "session authority user subject must match session_owner_user_id",
     "session authority subject_ura owner/session must match session_owner_user_id and session_id",
+    "session_owner_user_id must match session_owner_ura user id",
+    "creator_principal_id must match creator_principal_ura",
 ):
     if required not in node:
         raise SystemExit(f"node_session_authority_subject_contract_missing:{required}")
@@ -5258,6 +5265,9 @@ for name, body in (
 ):
     if "validateSessionAuthoritySubjectBinding(" not in body:
         raise SystemExit(f"node_session_authority_{name}_does_not_validate_subject_binding")
+    for owner_field in ("session_owner_ura", "creator_principal_ura"):
+        if owner_field not in body:
+            raise SystemExit(f"node_session_authority_{name}_does_not_reject_all_zero:{owner_field}")
     if "rejectAllZeroAuthorityFields(" in body and "validateSessionAuthoritySubjectBinding(" not in body:
         raise SystemExit(f"node_session_authority_{name}_stops_at_all_zero_guard")
 
@@ -5275,8 +5285,12 @@ for token in (
 
 for required_test in (
     "authority metadata binds session subject to owner and session id",
+    "authority client projects canonical principal URAs to current session wire",
+    "authority client rejects conflicting canonical principal URAs",
     "easynet:///r/example/user/bob",
     "easynet:///r/example/resource/user.alice/session/session-2",
+    "session_owner_ura",
+    "creator_principal_ura",
 ):
     if required_test not in test:
         raise SystemExit(f"missing_node_session_authority_subject_test:{required_test}")

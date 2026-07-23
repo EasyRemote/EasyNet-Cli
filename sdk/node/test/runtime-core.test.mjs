@@ -552,6 +552,8 @@ test("authority metadata is typed, delegated, and mutually exclusive", async () 
   });
   assert.equal(proof.metadataValue, delegation);
   assert.equal(sessionAuthority.metadataValue, session);
+  assert.equal(sessionAuthority.sessionOwnerURA, "easynet:///r/example/user/alice");
+  assert.equal(sessionAuthority.creatorPrincipalURA, caller);
 
   const authorized = new sdk.InvocationBuilder()
     .withCallerURA(caller)
@@ -618,6 +620,110 @@ test("authority metadata is typed, delegated, and mutually exclusive", async () 
     (error) => error instanceof sdk.SDKError && error.code === sdk.ErrorCode.INVALID_ARGUMENT,
   );
   await authority.close();
+});
+
+test("authority client projects canonical principal URAs to current session wire", async () => {
+  const payload = {
+    issuer_ura: caller,
+    session_id: "session-1",
+    session_owner_user_id: "alice",
+    creator_principal_id: "easynet:///r/example/authority",
+    callee_ura: callee,
+    subject_ura: "easynet:///r/example/resource/user.alice/session/session-1",
+    audience: callee,
+    scopes: ["device.observe.*"],
+    allowed_actions: ["read"],
+    allowed_followup_abilities: ["device.observe.health"],
+    issued_at_ms: 1000,
+    expires_at_ms: 2000,
+  };
+  let seenSession = null;
+  const authority = new sdk.AuthorityClient({
+    mintDelegationProof: () => JSON.stringify({ metadata_value: delegationValue() }),
+    mintSessionAuthority: (requestJSON) => {
+      seenSession = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
+      return JSON.stringify({
+        metadata: {
+          [sdk.SESSION_AUTHORITY_METADATA_KEY]: authorityValue(payload),
+        },
+      });
+    },
+  });
+
+  const session = await authority.mintSessionAuthority({
+    issuer_ura: caller,
+    session_id: "session-1",
+    session_owner_user_id: "",
+    session_owner_ura: "easynet:///r/example/user/alice",
+    creator_principal_id: "",
+    creator_principal_ura: "easynet:///r/example/authority",
+    callee_ura: callee,
+    subject_ura: "easynet:///r/example/resource/user.alice/session/session-1",
+    audience: callee,
+    scopes: ["device.observe.*"],
+    allowed_actions: ["read"],
+    allowed_followup_abilities: ["device.observe.health"],
+    issued_at_ms: 1000,
+    expires_at_ms: 2000,
+  });
+
+  assert.equal(session.sessionOwnerURA, "easynet:///r/example/user/alice");
+  assert.equal(session.creatorPrincipalURA, "easynet:///r/example/authority");
+  assert.equal(seenSession.session_owner_user_id, "alice");
+  assert.equal(seenSession.creator_principal_id, "easynet:///r/example/authority");
+  assert.equal(Object.hasOwn(seenSession, "session_owner_ura"), false);
+  assert.equal(Object.hasOwn(seenSession, "creator_principal_ura"), false);
+
+  await authority.close();
+});
+
+test("authority client rejects conflicting canonical principal URAs", () => {
+  const authority = new sdk.AuthorityClient({
+    mintDelegationProof: () => JSON.stringify({ metadata_value: delegationValue() }),
+    mintSessionAuthority: () => JSON.stringify({ metadata: {} }),
+  });
+
+  assert.throws(
+    () =>
+      new sdk.SessionAuthorityRequest({
+        issuer_ura: caller,
+        session_id: "session-1",
+        session_owner_user_id: "bob",
+        session_owner_ura: "easynet:///r/example/user/alice",
+        creator_principal_id: caller,
+        callee_ura: callee,
+        subject_ura: "easynet:///r/example/resource/user.alice/session/session-1",
+        audience: callee,
+        scopes: ["device.observe.*"],
+        allowed_actions: ["read"],
+        allowed_followup_abilities: ["device.observe.health"],
+        issued_at_ms: 1000,
+        expires_at_ms: 2000,
+      }),
+    /session_owner_user_id must match session_owner_ura user id/,
+  );
+
+  assert.throws(
+    () =>
+      new sdk.SessionAuthorityRequest({
+        issuer_ura: caller,
+        session_id: "session-1",
+        session_owner_user_id: "alice",
+        creator_principal_id: caller,
+        creator_principal_ura: "easynet:///r/example/authority",
+        callee_ura: callee,
+        subject_ura: "easynet:///r/example/resource/user.alice/session/session-1",
+        audience: callee,
+        scopes: ["device.observe.*"],
+        allowed_actions: ["read"],
+        allowed_followup_abilities: ["device.observe.health"],
+        issued_at_ms: 1000,
+        expires_at_ms: 2000,
+      }),
+    /creator_principal_id must match creator_principal_ura/,
+  );
+
+  authority.close();
 });
 
 test("authority metadata rejects all-zero session owners", () => {

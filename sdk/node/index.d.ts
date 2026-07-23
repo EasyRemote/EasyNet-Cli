@@ -230,7 +230,9 @@ export interface SessionAuthorityFields {
   issuer_ura: string;
   session_id: string;
   session_owner_user_id: string;
+  session_owner_ura?: string;
   creator_principal_id: string;
+  creator_principal_ura?: string;
   callee_ura: string;
   subject_ura: string;
   audience: string;
@@ -247,7 +249,9 @@ export class SessionAuthority {
   issuerURA: string;
   sessionID: string;
   sessionOwnerUserID: string;
+  sessionOwnerURA: string;
   creatorPrincipalID: string;
+  creatorPrincipalURA: string;
   calleeURA: string;
   subjectURA: string;
   audience: string;
@@ -293,7 +297,9 @@ export interface SessionAuthorityRequestFields {
   issuer_ura: string;
   session_id: string;
   session_owner_user_id: string;
+  session_owner_ura?: string;
   creator_principal_id: string;
+  creator_principal_ura?: string;
   callee_ura: string;
   subject_ura: string;
   audience: string;
@@ -309,7 +315,9 @@ export class SessionAuthorityRequest {
   issuerURA: string;
   sessionID: string;
   sessionOwnerUserID: string;
+  sessionOwnerURA: string;
   creatorPrincipalID: string;
+  creatorPrincipalURA: string;
   calleeURA: string;
   subjectURA: string;
   audience: string;
@@ -320,7 +328,10 @@ export class SessionAuthorityRequest {
   expiresAtMS: number;
   metadata: Record<string, unknown>;
   constructor(fields: SessionAuthorityRequestFields);
-  toJSON(): Required<SessionAuthorityRequestFields>;
+  toJSON(): Omit<
+    Required<SessionAuthorityRequestFields>,
+    "session_owner_ura" | "creator_principal_ura"
+  >;
 }
 
 export interface AuthorityTransport {
