@@ -96,6 +96,25 @@ check_ffi_runtime_sizing_policy_contract() {
   fi
 }
 
+check_failure_code_default_policy_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local classifier="$cli_root/src/daemon/execution/mission/failure_codes.rs"
+  [[ -f "$classifier" ]] || fail "failure code classifier source is missing: ${classifier#$cli_root/}"
+
+  if rg -n 'classify_or\(|explicit_or_reason\(|pub fn normalize\(|fallback' "$classifier"; then
+    fail "failure code classifier preserves retired fallback/default API vocabulary"
+  fi
+  if ! rg -q 'pub fn classify_or_default\(reason: &str, default_code: &str\) -> String' "$classifier"; then
+    fail "failure code classifier must expose classify_or_default"
+  fi
+  if ! rg -q 'pub fn explicit_or_reason_default' "$classifier"; then
+    fail "failure code classifier must expose explicit_or_reason_default"
+  fi
+  if ! rg -q 'pub fn normalize_or_default\(candidate: &str, default_code: &str\) -> String' "$classifier"; then
+    fail "failure code classifier must expose normalize_or_default"
+  fi
+}
+
 check_manifest_contract() {
   "$PYTHON_BIN" - \
     "$MANIFEST" \
@@ -7905,6 +7924,7 @@ EOF
   check_mcp_reflection_async_bridge_contract
   check_runtime_session_projection_accessor_contract
   check_ffi_runtime_sizing_policy_contract
+  check_failure_code_default_policy_contract
   check_active_source_contract
   check_sdk_root_runtime_description_contract
   check_go_sdk_public_ura_alias_contract
@@ -8002,6 +8022,7 @@ check_manifest_contract
 check_mcp_reflection_async_bridge_contract
 check_runtime_session_projection_accessor_contract
 check_ffi_runtime_sizing_policy_contract
+check_failure_code_default_policy_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract
 check_go_sdk_public_ura_alias_contract

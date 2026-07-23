@@ -43,12 +43,12 @@ impl SessionFailure {
         }
     }
 
-    pub fn from_reason(reason: impl Into<String>, fallback_code: &str, retryable: bool) -> Self {
+    pub fn from_reason(reason: impl Into<String>, default_code: &str, retryable: bool) -> Self {
         let message = reason.into();
         let code =
-            crate::daemon::execution::mission::failure_codes::FailureCodeClassifier::classify_or(
+            crate::daemon::execution::mission::failure_codes::FailureCodeClassifier::classify_or_default(
                 &message,
-                fallback_code,
+                default_code,
             );
         Self::from_code_and_message(code, message, retryable)
     }
@@ -59,7 +59,7 @@ impl SessionFailure {
         retryable: bool,
     ) -> Self {
         let code =
-            crate::daemon::execution::mission::failure_codes::FailureCodeClassifier::normalize(
+            crate::daemon::execution::mission::failure_codes::FailureCodeClassifier::normalize_or_default(
                 &code.into(),
                 "INVOCATION_FAILED",
             );

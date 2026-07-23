@@ -438,8 +438,8 @@ pub fn classify_boot_failure(message: &str) -> (JoinFailureCode, JoinTransition,
     }
 }
 
-fn failure_detail_code(message: &str, fallback: JoinFailureCode) -> String {
-    FailureCodeClassifier::classify_or(message, fallback.as_wire())
+fn failure_detail_code(message: &str, default_code: JoinFailureCode) -> String {
+    FailureCodeClassifier::classify_or_default(message, default_code.as_wire())
 }
 
 #[cfg(test)]

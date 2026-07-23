@@ -754,7 +754,7 @@ pub fn send_to_agent_with_depth_and_progress(
 }
 
 fn dispatch_terminal_failure_payload(message: &str, duration_ms: u64) -> serde_json::Value {
-    let code = crate::daemon::execution::mission::failure_codes::FailureCodeClassifier::classify_or(
+    let code = crate::daemon::execution::mission::failure_codes::FailureCodeClassifier::classify_or_default(
         message,
         "INVOCATION_FAILED",
     );

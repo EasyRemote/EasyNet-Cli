@@ -10,7 +10,7 @@
 //
 // Implementation Approach:
 // - Keep this as a small value object with pure functions. Callers provide the
-//   stable fallback code for their own state machine; this classifier only
+//   stable default code for their own state machine; this classifier only
 //   upgrades to a more precise proven runtime/admission code.
 //
 // Usage Contract:
@@ -162,15 +162,20 @@ impl RuntimeSecurityClass {
 pub struct FailureCodeClassifier;
 
 impl FailureCodeClassifier {
-    pub fn classify_or(reason: &str, fallback: &str) -> String {
-        Self::extract(reason).unwrap_or_else(|| Self::normalize(fallback, fallback))
+    pub fn classify_or_default(reason: &str, default_code: &str) -> String {
+        Self::extract(reason)
+            .unwrap_or_else(|| Self::normalize_or_default(default_code, default_code))
     }
 
-    pub fn explicit_or_reason(explicit: Option<&str>, reason: &str, fallback: &str) -> String {
+    pub fn explicit_or_reason_default(
+        explicit: Option<&str>,
+        reason: &str,
+        default_code: &str,
+    ) -> String {
         explicit
-            .map(|code| Self::normalize(code, fallback))
+            .map(|code| Self::normalize_or_default(code, default_code))
             .filter(|code| !code.is_empty())
-            .unwrap_or_else(|| Self::classify_or(reason, fallback))
+            .unwrap_or_else(|| Self::classify_or_default(reason, default_code))
     }
 
     pub fn extract(reason: &str) -> Option<String> {
@@ -192,13 +197,13 @@ impl FailureCodeClassifier {
 
         reason
             .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-            .map(|token| Self::normalize(token, ""))
+            .map(|token| Self::normalize_or_default(token, ""))
             .find(|token| Self::is_specific(token))
     }
 
-    pub fn normalize(candidate: &str, fallback: &str) -> String {
+    pub fn normalize_or_default(candidate: &str, default_code: &str) -> String {
         let raw = if candidate.trim().is_empty() {
-            fallback
+            default_code
         } else {
             candidate.trim()
         };
@@ -222,7 +227,7 @@ impl FailureCodeClassifier {
         }
         let trimmed = out.trim_matches('_');
         if trimmed.is_empty() {
-            fallback.to_string()
+            default_code.to_string()
         } else {
             trimmed.to_string()
         }
@@ -299,7 +304,7 @@ mod tests {
     #[test]
     fn explicit_code_wins_and_normalizes() {
         assert_eq!(
-            FailureCodeClassifier::explicit_or_reason(
+            FailureCodeClassifier::explicit_or_reason_default(
                 Some("disk full"),
                 "CALLER_SIGNATURE_INVALID",
                 "INVOCATION_FAILED",
@@ -309,9 +314,12 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_when_reason_has_no_specific_code() {
+    fn returns_default_when_reason_has_no_specific_code() {
         assert_eq!(
-            FailureCodeClassifier::classify_or("pty exited with status 1", "INVOCATION_FAILED"),
+            FailureCodeClassifier::classify_or_default(
+                "pty exited with status 1",
+                "INVOCATION_FAILED"
+            ),
             "INVOCATION_FAILED"
         );
     }
@@ -319,7 +327,7 @@ mod tests {
     #[test]
     fn ignores_invocation_field_names() {
         assert_eq!(
-            FailureCodeClassifier::classify_or(
+            FailureCodeClassifier::classify_or_default(
                 "Axon invocation_id=abc ended without terminal event",
                 "INVOCATION_FAILED",
             ),
