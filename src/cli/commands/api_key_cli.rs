@@ -70,16 +70,13 @@ fn current_user() -> anyhow::Result<String> {
     // `self.api_key.*` (which the registry no longer answers).
     if let Some(v) = std::env::var("EASYNET_PAGES_USER")
         .ok()
+        .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
     {
         return Ok(v);
     }
-    if let Some(v) = crate::daemon::persistence::config::load_credentials()
-        .ok()
-        .and_then(|c| c.username)
-        .filter(|s| !s.is_empty())
-    {
-        return Ok(v);
+    if let Some(credentials) = crate::daemon::persistence::config::load_credentials_optional()? {
+        return Ok(credentials.username_slug()?.to_string());
     }
     anyhow::bail!(
         "no user identity bound to this daemon — run 'easynet device pair' first \
@@ -174,4 +171,102 @@ fn run_revoke(a: RevokeArgs) -> anyhow::Result<()> {
         .unwrap_or(&a.id_prefix);
     println!("Revoked {revoked}.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
+    use crate::daemon::persistence::config::{save_credentials, state_dir, Credentials};
+    use std::fs;
+
+    fn paired_credentials(username: Option<&str>) -> Credentials {
+        Credentials {
+            node_id: "node".into(),
+            credential_token: "token".into(),
+            hub_endpoint: "axon://hub.example:7700".into(),
+            realm: "localhost".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: username.map(str::to_string),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        }
+    }
+
+    #[test]
+    fn current_user_accepts_explicit_dev_override() {
+        let _home = HomeGuard::new();
+        std::env::set_var("EASYNET_PAGES_USER", " alice ");
+
+        let user = current_user().expect("env override");
+
+        assert_eq!(user, "alice");
+    }
+
+    #[test]
+    fn current_user_reads_valid_paired_credentials() {
+        let _home = HomeGuard::new();
+        save_credentials(&paired_credentials(Some("alice"))).expect("save credentials");
+
+        let user = current_user().expect("paired credentials");
+
+        assert_eq!(user, "alice");
+    }
+
+    #[test]
+    fn current_user_reports_unpaired_only_when_credentials_file_is_absent() {
+        let _home = HomeGuard::new();
+
+        let error = current_user().expect_err("missing credentials");
+
+        assert!(
+            error.to_string().contains("no user identity bound"),
+            "unexpected missing-credential error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn current_user_rejects_malformed_existing_credentials() {
+        let _home = HomeGuard::new();
+        let dir = state_dir();
+        fs::create_dir_all(&dir).expect("create state dir");
+        fs::write(dir.join("credentials.json"), "{").expect("write malformed credentials");
+
+        let error = current_user().expect_err("malformed credentials");
+
+        assert!(
+            error.to_string().contains("parse credentials"),
+            "malformed credentials must fail closed instead of looking unpaired: {error:#}"
+        );
+    }
+
+    #[test]
+    fn current_user_rejects_credentials_without_username() {
+        let _home = HomeGuard::new();
+        let dir = state_dir();
+        fs::create_dir_all(&dir).expect("create state dir");
+        fs::write(
+            dir.join("credentials.json"),
+            r#"{
+  "node_id": "node",
+  "credential_token": "token",
+  "hub_endpoint": "axon://hub.example:7700",
+  "realm": "localhost",
+  "deploy_signature": "",
+  "user_id": "user-alice"
+}
+"#,
+        )
+        .expect("write incomplete credentials");
+
+        let error = current_user().expect_err("missing username");
+
+        assert!(
+            error.to_string().contains("missing username"),
+            "missing username must fail closed instead of looking unpaired: {error:#}"
+        );
+    }
 }

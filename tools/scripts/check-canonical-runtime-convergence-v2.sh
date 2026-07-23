@@ -2490,6 +2490,54 @@ for test in (
 PY
 }
 
+check_api_key_cli_identity_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local api_key_cli="$cli_root/src/cli/commands/api_key_cli.rs"
+  [[ -f "$api_key_cli" ]] || return 0
+
+  "$PYTHON_BIN" - "$api_key_cli" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+fn = re.search(
+    r"fn current_user\(\) -> anyhow::Result<String> \{(?P<body>.*?)\n\}",
+    text,
+    re.DOTALL,
+)
+if fn is None:
+    raise SystemExit("api_key_cli_identity:current_user_missing")
+body = fn.group("body")
+for retired in (
+    "load_credentials().ok()",
+    ".and_then(|c| c.username)",
+    ".and_then(|credentials| credentials.username)",
+    "unwrap_or_default()",
+):
+    if retired in body:
+        raise SystemExit(f"api_key_cli_identity:retired_credential_fallback:{retired}")
+for required in (
+    "load_credentials_optional()?",
+    "credentials.username_slug()?",
+    "no user identity bound to this daemon",
+    "EASYNET_PAGES_USER",
+    ".map(|s| s.trim().to_string())",
+):
+    if required not in body:
+        raise SystemExit(f"api_key_cli_identity:missing_strict_path:{required}")
+for test in (
+    "current_user_accepts_explicit_dev_override",
+    "current_user_reads_valid_paired_credentials",
+    "current_user_reports_unpaired_only_when_credentials_file_is_absent",
+    "current_user_rejects_malformed_existing_credentials",
+    "current_user_rejects_credentials_without_username",
+):
+    if test not in text:
+        raise SystemExit(f"api_key_cli_identity:missing_test:{test}")
+PY
+}
+
 check_api_key_store_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local api_key="$cli_root/src/daemon/ability/builtins/governance/api_key.rs"
@@ -9761,6 +9809,26 @@ EOF
   if ( check_pages_identity_credentials_contract "$tmp/pages-cli-identity-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected Pages CLI identity fallback gate to fail"
   fi
+  mkdir -p "$tmp/api-key-cli-identity-legacy/src/cli/commands"
+  cat >"$tmp/api-key-cli-identity-legacy/src/cli/commands/api_key_cli.rs" <<'EOF'
+fn current_user() -> anyhow::Result<String> {
+    crate::daemon::persistence::config::load_credentials()
+        .ok()
+        .and_then(|c| c.username)
+        .ok_or_else(|| anyhow::anyhow!("missing"))
+}
+#[cfg(test)]
+mod tests {
+    #[test] fn current_user_accepts_explicit_dev_override() {}
+    #[test] fn current_user_reads_valid_paired_credentials() {}
+    #[test] fn current_user_reports_unpaired_only_when_credentials_file_is_absent() {}
+    #[test] fn current_user_rejects_malformed_existing_credentials() {}
+    #[test] fn current_user_rejects_credentials_without_username() {}
+}
+EOF
+  if ( check_api_key_cli_identity_contract "$tmp/api-key-cli-identity-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected API key CLI identity fallback gate to fail"
+  fi
   mkdir -p "$tmp/api-key-store-schema-legacy/src/daemon/ability/builtins/governance"
   cat >"$tmp/api-key-store-schema-legacy/src/daemon/ability/builtins/governance/api_key.rs" <<'EOF'
 use serde::{Deserialize, Serialize};
@@ -11163,6 +11231,7 @@ EOF
   check_cli_credentials_optional_read_contract
   check_credentials_user_binding_validation_contract
   check_target_gate_credential_state_contract
+  check_api_key_cli_identity_contract
   check_api_key_store_schema_contract
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
@@ -11298,6 +11367,7 @@ check_pages_identity_credentials_contract
 check_cli_credentials_optional_read_contract
 check_credentials_user_binding_validation_contract
 check_target_gate_credential_state_contract
+check_api_key_cli_identity_contract
 check_api_key_store_schema_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
