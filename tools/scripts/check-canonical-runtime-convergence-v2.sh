@@ -2378,6 +2378,44 @@ for required in ("x-runtime-delegation", "x-runtime-session-authority"):
 PY
 }
 
+check_admission_authority_raw_wire_strict_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local facade="$cli_root/src/daemon/invocation/admission/admission_facade.rs"
+  [[ -f "$facade" ]] || fail "admission facade source is missing: ${facade#$cli_root/}"
+
+  "$PYTHON_BIN" - "$facade" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+for struct_name in ("DelegationProofRaw", "SessionAuthorityRaw"):
+    match = re.search(
+        rf"struct {struct_name} \{{(?P<body>.*?)\n\}}",
+        text,
+        re.S,
+    )
+    if match is None:
+        raise SystemExit(f"admission_authority_raw_wire_strict:missing:{struct_name}")
+    body = match.group("body")
+    if "#[serde(default)]" in body:
+        raise SystemExit(f"admission_authority_raw_wire_strict:serde_default_retired:{struct_name}")
+    for required in ("payload:", "signature:"):
+        if required not in body:
+            raise SystemExit(f"admission_authority_raw_wire_strict:field_missing:{struct_name}:{required}")
+
+for required in (
+    "admission_authority_raw_wire_requires_payload_and_signature",
+    "missing raw fields must not be reinterpreted as payload/signature defaults",
+    "parse_and_verify_delegation_proof(",
+    "parse_and_verify_session_authority(",
+):
+    if required not in text:
+        raise SystemExit(f"admission_authority_raw_wire_strict:test_missing:{required}")
+PY
+}
+
 check_session_prelude_credentials_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local prelude="$cli_root/src/daemon/invocation/bidi/session_initiator/prelude.rs"
@@ -8378,6 +8416,31 @@ EOF
   if ( check_node_session_authority_subject_contract "$tmp/node-session-authority-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected Node session authority subject-binding gate to fail"
   fi
+  mkdir -p "$tmp/admission-authority-raw-default-legacy/src/daemon/invocation/admission"
+  cat >"$tmp/admission-authority-raw-default-legacy/src/daemon/invocation/admission/admission_facade.rs" <<'EOF'
+#[derive(Debug, Deserialize)]
+struct DelegationProofRaw {
+    #[serde(default)]
+    payload: serde_json::Value,
+    #[serde(default)]
+    signature: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionAuthorityRaw {
+    #[serde(default)]
+    payload: serde_json::Value,
+    #[serde(default)]
+    signature: String,
+}
+
+fn parse_and_verify_delegation_proof() {}
+fn parse_and_verify_session_authority() {}
+fn admission_authority_raw_wire_requires_payload_and_signature() {}
+EOF
+  if ( check_admission_authority_raw_wire_strict_contract "$tmp/admission-authority-raw-default-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected admission authority raw wire default gate to fail"
+  fi
   mkdir -p "$tmp/session-prelude-credentials-legacy/src/daemon/invocation/bidi/session_initiator"
   printf '%s\n' \
     'async fn sync_paired_user_trust_prelude(client: &mut InvocationClient<Channel>, signer: &dyn CanonicalSigner, sync: &UserTrustSync) -> Result<UserTrustBootstrapOutcome, UserTrustBootstrapError> {' \
@@ -8910,6 +8973,7 @@ EOF
   check_shared_local_device_owner_projection_contract
   check_node_session_authority_subject_contract
   check_runtime_authority_metadata_key_neutrality_contract
+  check_admission_authority_raw_wire_strict_contract
   check_local_ability_target_subject_policy_contract
   check_session_prelude_credentials_contract
   check_session_prelude_receipt_contract
@@ -9023,6 +9087,7 @@ check_admission_owner_credentials_contract
 check_shared_local_device_owner_projection_contract
 check_node_session_authority_subject_contract
 check_runtime_authority_metadata_key_neutrality_contract
+check_admission_authority_raw_wire_strict_contract
 check_local_ability_target_subject_policy_contract
 check_session_prelude_credentials_contract
 check_start_attach_user_signer_readiness_contract

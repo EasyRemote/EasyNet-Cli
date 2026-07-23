@@ -2008,17 +2008,13 @@ fn public_ability_name_from_route(ability: &str) -> String {
 
 #[derive(Debug, Deserialize)]
 struct DelegationProofRaw {
-    #[serde(default)]
     payload: serde_json::Value,
-    #[serde(default)]
     signature: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct SessionAuthorityRaw {
-    #[serde(default)]
     payload: serde_json::Value,
-    #[serde(default)]
     signature: String,
 }
 
@@ -2668,6 +2664,83 @@ mod tests {
             }),
             ..Envelope::default()
         }
+    }
+
+    fn raw_authority_metadata(value: serde_json::Value) -> String {
+        BASE64_STANDARD.encode(serde_json::to_vec(&value).expect("authority metadata JSON"))
+    }
+
+    fn assert_raw_authority_wire_error(error: Status, missing_field: &str) {
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(
+            error.message().contains(REASON_AUTHORITY_FORMAT_INVALID)
+                && error.message().contains("JSON parse failed")
+                && error
+                    .message()
+                    .contains(&format!("missing field `{missing_field}`")),
+            "authority raw wire error must fail at strict JSON shape: {error}"
+        );
+        assert!(
+            !error.message().contains("payload parse failed")
+                && !error.message().contains("signature base64 decode failed"),
+            "missing raw fields must not be reinterpreted as payload/signature defaults: {error}"
+        );
+    }
+
+    fn require_delegation_parse_error(
+        raw: &str,
+        trust_anchor: &RealmTrustAnchor,
+        now_ms: i64,
+    ) -> Status {
+        match parse_and_verify_delegation_proof(raw, trust_anchor, now_ms) {
+            Ok(_) => panic!("delegation authority raw wire unexpectedly parsed"),
+            Err(error) => error,
+        }
+    }
+
+    fn require_session_parse_error(
+        raw: &str,
+        trust_anchor: &RealmTrustAnchor,
+        now_ms: i64,
+    ) -> Status {
+        match parse_and_verify_session_authority(raw, trust_anchor, now_ms) {
+            Ok(_) => panic!("session authority raw wire unexpectedly parsed"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn admission_authority_raw_wire_requires_payload_and_signature() {
+        let trust_anchor = RealmTrustAnchor::default();
+        let now_ms = 1_750_000_000_000;
+
+        let err = require_delegation_parse_error(
+            &raw_authority_metadata(json!({ "signature": "AA==" })),
+            &trust_anchor,
+            now_ms,
+        );
+        assert_raw_authority_wire_error(err, "payload");
+
+        let err = require_delegation_parse_error(
+            &raw_authority_metadata(json!({ "payload": {} })),
+            &trust_anchor,
+            now_ms,
+        );
+        assert_raw_authority_wire_error(err, "signature");
+
+        let err = require_session_parse_error(
+            &raw_authority_metadata(json!({ "signature": "AA==" })),
+            &trust_anchor,
+            now_ms,
+        );
+        assert_raw_authority_wire_error(err, "payload");
+
+        let err = require_session_parse_error(
+            &raw_authority_metadata(json!({ "payload": {} })),
+            &trust_anchor,
+            now_ms,
+        );
+        assert_raw_authority_wire_error(err, "signature");
     }
 
     fn assert_complete_non_self_policy(
