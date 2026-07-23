@@ -179,13 +179,12 @@ fn is_json_content_type(content_type: &str) -> bool {
 ///
 /// Minted at the transport layer where the cause is structurally known
 /// (socket probe failed, crate built without `axon-pb`), so consumers
-/// branch with [`classify_invoke_error`] instead of sniffing message
+/// branch with [`classify_invoke_failure`] instead of sniffing message
 /// text.
 #[derive(Debug, thiserror::Error)]
 pub enum LocalInvokeFailure {
     /// The daemon is not reachable (listener probe failed, or this
-    /// build has no gRPC transport). Falling back to an in-process
-    /// executor is legitimate — nothing ran.
+    /// build has no gRPC transport). No daemon-side execution occurred.
     #[error("{0}")]
     DaemonOffline(String),
     /// The daemon accepted the transport connection and rejected or failed the
@@ -269,9 +268,9 @@ impl From<tonic::Code> for LocalInvokeStatusCode {
     }
 }
 
-/// Consumer-facing classification of a local-invoke error.
+/// Consumer-facing classification of a local-invoke failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalInvokeErrorKind {
+pub enum LocalInvokeFailureClass {
     DaemonOffline,
     AbilityUnregistered,
     /// The daemon executed the request and it failed for real.
@@ -280,25 +279,24 @@ pub enum LocalInvokeErrorKind {
     Failed,
 }
 
-/// Classify a local-invoke error for fallback decisions.
+/// Classify a local-invoke failure for caller policy.
 ///
 /// Walks the anyhow chain for the transport-owned typed failure. Untyped
-/// errors are real execution/projection failures and therefore never grant a
-/// fallback executor permission to run the request again.
-pub fn classify_invoke_error(err: &anyhow::Error) -> LocalInvokeErrorKind {
+/// errors are real execution/projection failures and therefore remain terminal.
+pub fn classify_invoke_failure(err: &anyhow::Error) -> LocalInvokeFailureClass {
     for cause in err.chain() {
         if let Some(f) = cause.downcast_ref::<LocalInvokeFailure>() {
             return match f {
-                LocalInvokeFailure::DaemonOffline(_) => LocalInvokeErrorKind::DaemonOffline,
+                LocalInvokeFailure::DaemonOffline(_) => LocalInvokeFailureClass::DaemonOffline,
                 LocalInvokeFailure::DaemonStatus {
                     code: LocalInvokeStatusCode::NotFound,
                     ..
-                } => LocalInvokeErrorKind::AbilityUnregistered,
-                LocalInvokeFailure::DaemonStatus { .. } => LocalInvokeErrorKind::Failed,
+                } => LocalInvokeFailureClass::AbilityUnregistered,
+                LocalInvokeFailure::DaemonStatus { .. } => LocalInvokeFailureClass::Failed,
             };
         }
     }
-    LocalInvokeErrorKind::Failed
+    LocalInvokeFailureClass::Failed
 }
 
 /// Invoke an ability against the local daemon's Axon runtime.
@@ -783,27 +781,27 @@ mod tests {
             message: "wording may change".to_string(),
         });
         assert_eq!(
-            classify_invoke_error(&not_found),
-            LocalInvokeErrorKind::AbilityUnregistered
+            classify_invoke_failure(&not_found),
+            LocalInvokeFailureClass::AbilityUnregistered
         );
 
         let untyped = anyhow::anyhow!("unknown_ability and daemon not running are only text");
         assert_eq!(
-            classify_invoke_error(&untyped),
-            LocalInvokeErrorKind::Failed
+            classify_invoke_failure(&untyped),
+            LocalInvokeFailureClass::Failed
         );
     }
 
     #[test]
-    fn non_not_found_daemon_status_cannot_authorize_fallback_execution() {
+    fn non_not_found_daemon_status_remains_terminal() {
         let unavailable = anyhow::Error::new(LocalInvokeFailure::DaemonStatus {
             ability: "agent.start".to_string(),
             code: LocalInvokeStatusCode::Unavailable,
             message: "daemon reported a runtime failure".to_string(),
         });
         assert_eq!(
-            classify_invoke_error(&unavailable),
-            LocalInvokeErrorKind::Failed
+            classify_invoke_failure(&unavailable),
+            LocalInvokeFailureClass::Failed
         );
     }
 

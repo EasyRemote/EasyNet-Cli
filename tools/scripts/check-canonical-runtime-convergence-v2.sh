@@ -4208,8 +4208,20 @@ for token, code in (
 for token, code in (
     ("invoke_target_root_derived_subject_timeout", "daemon_system_invoke_helper_missing"),
     ("root_context_for_target", "system_context_target_helper_missing"),
+    ("pub fn classify_invoke_failure(err: &anyhow::Error) -> LocalInvokeFailureClass", "failure_classifier_missing"),
+    ("pub enum LocalInvokeFailureClass", "failure_class_missing"),
 ):
     if token not in local_invoke:
+        raise SystemExit(f"local_ability_target_subject_policy:{code}")
+
+for retired, code in (
+    ("classify_invoke_error", "retired_error_classifier_name"),
+    ("LocalInvokeErrorKind", "retired_error_kind_name"),
+    ("fallback executor", "fallback_executor_semantics"),
+    ("fallback decisions", "fallback_decision_semantics"),
+    ("Falling back to an in-process", "in_process_fallback_semantics"),
+):
+    if retired in local_invoke:
         raise SystemExit(f"local_ability_target_subject_policy:{code}")
 
 for text, code in (
@@ -6553,6 +6565,34 @@ EOF
     > "$tmp/cli-local-runtime-identity/src/daemon/execution/runtime_identity.rs"
   if ( CLI_ROOT="$tmp/cli-local-runtime-identity"; check_daemon_local_runtime_identity_contract ) >/dev/null 2>&1; then
     fail "self-test expected local runtime identity default-URA gate to fail"
+  fi
+  mkdir -p "$tmp/cli-local-invoke-fallback/src/daemon/invocation/routing" \
+    "$tmp/cli-local-invoke-fallback/src/support/platform" \
+    "$tmp/cli-local-invoke-fallback/src/daemon/ability/builtins/integrations/mcp" \
+    "$tmp/cli-local-invoke-fallback/src/daemon/ability/builtins/integrations/a2a" \
+    "$tmp/cli-local-invoke-fallback/src/daemon/ability/catalog/profiles"
+  cat > "$tmp/cli-local-invoke-fallback/src/daemon/invocation/routing/target.rs" <<'EOF'
+fn daemon_system_subject_ura_for_descriptor() {}
+pub(crate) fn daemon_system_subject_ura(&self) -> anyhow::Result<String> { todo!() }
+pub fn local_root_for_target() {}
+EOF
+  cat > "$tmp/cli-local-invoke-fallback/src/support/platform/local_invoke.rs" <<'EOF'
+pub enum LocalInvokeErrorKind { DaemonOffline }
+pub fn classify_invoke_error(err: &anyhow::Error) -> LocalInvokeErrorKind { todo!() }
+fn invoke_target_root_derived_subject_timeout() {}
+fn root_context_for_target() {}
+fn local_system_context_for_agent_target_uses_agent_owner_subject() {}
+fn local_system_context_for_hub_target_uses_ability_subject() {}
+// fallback executor permission
+EOF
+  printf 'fn bridge() { local_root_for_target(); }\n' \
+    > "$tmp/cli-local-invoke-fallback/src/daemon/ability/builtins/integrations/mcp/bridge.rs"
+  printf 'fn bridge() { local_root_for_target(); }\n' \
+    > "$tmp/cli-local-invoke-fallback/src/daemon/ability/builtins/integrations/a2a/bridge.rs"
+  printf 'fn profile() { root_context_for_target(); }\n' \
+    > "$tmp/cli-local-invoke-fallback/src/daemon/ability/catalog/profiles/mcp.rs"
+  if ( CLI_ROOT="$tmp/cli-local-invoke-fallback"; check_local_ability_target_subject_policy_contract ) >/dev/null 2>&1; then
+    fail "self-test expected local invoke fallback classifier gate to fail"
   fi
   mkdir -p "$tmp/cli-kernel-session-read-model/src/daemon/boot/kernel" \
     "$tmp/cli-kernel-session-read-model/src/daemon/execution"

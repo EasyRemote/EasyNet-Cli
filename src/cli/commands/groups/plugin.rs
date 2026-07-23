@@ -744,8 +744,8 @@ fn invoke_plugin_control_ability_via_daemon(
     ) {
         Ok(value) => Ok(Some(value)),
         Err(err)
-            if crate::support::platform::local_invoke::classify_invoke_error(&err)
-                == crate::support::platform::local_invoke::LocalInvokeErrorKind::DaemonOffline =>
+            if crate::support::platform::local_invoke::classify_invoke_failure(&err)
+                == crate::support::platform::local_invoke::LocalInvokeFailureClass::DaemonOffline =>
         {
             Ok(None)
         }

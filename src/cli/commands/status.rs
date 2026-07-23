@@ -148,8 +148,8 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
             // context is preserved.
             let inner = format!("{e}");
             if matches!(
-                crate::support::platform::local_invoke::classify_invoke_error(&e),
-                crate::support::platform::local_invoke::LocalInvokeErrorKind::DaemonOffline
+                crate::support::platform::local_invoke::classify_invoke_failure(&e),
+                crate::support::platform::local_invoke::LocalInvokeFailureClass::DaemonOffline
             ) {
                 output::warn(&inner);
             } else {
