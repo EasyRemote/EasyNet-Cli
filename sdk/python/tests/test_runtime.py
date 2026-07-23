@@ -1331,6 +1331,14 @@ class RuntimeTests(unittest.TestCase):
             )
         self.assertTrue(is_code(cleanup_caught.exception, ErrorCode.INVALID_ARGUMENT))
 
+        with self.assertRaises(SDKError) as terminal_caught:
+            RuntimeRecoveryReport.from_json(
+                b'{"recovery_id":"recovery-1","state":"runtime_started",'
+                b'"bounded_scan":true,"cleanup_complete":true,'
+                b'"events":[{"sequence":1,"kind":"orphan_reaped"}]}'
+            )
+        self.assertTrue(is_code(terminal_caught.exception, ErrorCode.INVALID_ARGUMENT))
+
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)
         with self.assertRaises(SDKError) as request_caught:

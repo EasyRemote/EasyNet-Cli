@@ -637,14 +637,14 @@ func (c *RuntimeClient) CloseHandle(ctx context.Context, handle InvocationHandle
 // NewRuntimeRecoveryReportFromJSON decodes a provider restart-recovery report.
 func NewRuntimeRecoveryReportFromJSON(raw []byte) (RuntimeRecoveryReport, error) {
 	var dto struct {
-		RecoveryID               string                 `json:"recovery_id"`
-		State                    string                 `json:"state"`
-		RecoveredInvocations     int                    `json:"recovered_invocations"`
-		ReapedOrphans            int                    `json:"reaped_orphans"`
-		ReplayedTerminalReceipts int                    `json:"replayed_terminal_receipts"`
-		BoundedScan              *bool                  `json:"bounded_scan"`
-		CleanupComplete          *bool                  `json:"cleanup_complete"`
-		Events                   []RuntimeRecoveryEvent `json:"events"`
+		RecoveryID               string                    `json:"recovery_id"`
+		State                    string                    `json:"state"`
+		RecoveredInvocations     int                       `json:"recovered_invocations"`
+		ReapedOrphans            int                       `json:"reaped_orphans"`
+		ReplayedTerminalReceipts int                       `json:"replayed_terminal_receipts"`
+		BoundedScan              *bool                     `json:"bounded_scan"`
+		CleanupComplete          *bool                     `json:"cleanup_complete"`
+		Events                   []runtimeRecoveryEventDTO `json:"events"`
 	}
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return RuntimeRecoveryReport{}, invalidRuntimePayload(fmt.Sprintf("decode runtime recovery report JSON: %v", err), err)
@@ -664,6 +664,7 @@ func NewRuntimeRecoveryReportFromJSON(raw []byte) (RuntimeRecoveryReport, error)
 	if dto.CleanupComplete == nil || !*dto.CleanupComplete {
 		return RuntimeRecoveryReport{}, invalidRuntimePayload("cleanup_complete must be true", nil)
 	}
+	events := make([]RuntimeRecoveryEvent, 0, len(dto.Events))
 	for _, event := range dto.Events {
 		if event.Sequence == 0 {
 			return RuntimeRecoveryReport{}, invalidRuntimePayload("recovery event sequence is required", nil)
@@ -671,6 +672,10 @@ func NewRuntimeRecoveryReportFromJSON(raw []byte) (RuntimeRecoveryReport, error)
 		if strings.TrimSpace(event.Kind) == "" {
 			return RuntimeRecoveryReport{}, invalidRuntimePayload("recovery event kind is required", nil)
 		}
+		if event.Terminal == nil {
+			return RuntimeRecoveryReport{}, invalidRuntimePayload("recovery event terminal is required", nil)
+		}
+		events = append(events, event.intoPublic())
 	}
 	return RuntimeRecoveryReport{
 		RecoveryID:               dto.RecoveryID,
@@ -680,8 +685,30 @@ func NewRuntimeRecoveryReportFromJSON(raw []byte) (RuntimeRecoveryReport, error)
 		ReplayedTerminalReceipts: dto.ReplayedTerminalReceipts,
 		BoundedScan:              *dto.BoundedScan,
 		CleanupComplete:          *dto.CleanupComplete,
-		Events:                   append([]RuntimeRecoveryEvent(nil), dto.Events...),
+		Events:                   events,
 	}, nil
+}
+
+type runtimeRecoveryEventDTO struct {
+	Sequence     uint64 `json:"sequence"`
+	Kind         string `json:"kind"`
+	Terminal     *bool  `json:"terminal"`
+	InvocationID string `json:"invocation_id,omitempty"`
+	State        string `json:"state,omitempty"`
+	ReceiptURA   string `json:"receipt_ura,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+func (e runtimeRecoveryEventDTO) intoPublic() RuntimeRecoveryEvent {
+	return RuntimeRecoveryEvent{
+		Sequence:     e.Sequence,
+		Kind:         e.Kind,
+		Terminal:     e.Terminal != nil && *e.Terminal,
+		InvocationID: e.InvocationID,
+		State:        e.State,
+		ReceiptURA:   e.ReceiptURA,
+		Reason:       e.Reason,
+	}
 }
 
 // Close releases the Runtime Core client transport without stopping the daemon.

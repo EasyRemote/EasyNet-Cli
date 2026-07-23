@@ -6042,6 +6042,53 @@ for text, name in ((go_test, "go"), (py_test, "python")):
 PY
 }
 
+check_sdk_runtime_recovery_event_terminal_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local go_runtime="$cli_root/sdk/go/runtime.go"
+  local go_test="$cli_root/sdk/go/runtime_test.go"
+  local py_runtime="$cli_root/sdk/python/easynet_sdk/runtime.py"
+  local py_test="$cli_root/sdk/python/tests/test_runtime.py"
+
+  for path in "$go_runtime" "$go_test" "$py_runtime" "$py_test"; do
+    [[ -f "$path" ]] || fail "SDK Runtime recovery contract source is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$go_runtime" "$go_test" "$py_runtime" "$py_test" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+go_runtime = Path(sys.argv[1]).read_text(encoding="utf-8")
+go_test = Path(sys.argv[2]).read_text(encoding="utf-8")
+py_runtime = Path(sys.argv[3]).read_text(encoding="utf-8")
+py_test = Path(sys.argv[4]).read_text(encoding="utf-8")
+
+if "type runtimeRecoveryEventDTO struct" not in go_runtime:
+    raise SystemExit("go_runtime_recovery_event_private_wire_dto_missing")
+if "Terminal     *bool  `json:\"terminal\"`" not in go_runtime:
+    raise SystemExit("go_runtime_recovery_event_terminal_pointer_missing")
+if "recovery event terminal is required" not in go_runtime:
+    raise SystemExit("go_runtime_recovery_event_terminal_required_gate_missing")
+decoder = re.search(
+    r"func NewRuntimeRecoveryReportFromJSON\(.*?\n\}",
+    go_runtime,
+    re.S,
+)
+if not decoder:
+    raise SystemExit("go_runtime_recovery_decoder_missing")
+if re.search(r"Events\s+\[\]RuntimeRecoveryEvent\s+`json:\"events\"`", decoder.group(0)):
+    raise SystemExit("go_runtime_recovery_event_public_dto_decode_fallback")
+if "_required_bool(value, \"terminal\")" not in py_runtime:
+    raise SystemExit("python_runtime_recovery_event_terminal_required_gate_missing")
+for text, name in ((go_test, "go"), (py_test, "python")):
+    if (
+        "missing recovery event terminal" not in text
+        and '"events":[{"sequence":1,"kind":"orphan_reaped"}]' not in text
+    ):
+        raise SystemExit(f"{name}_runtime_recovery_event_terminal_test_missing")
+PY
+}
+
 check_federation_directory_device_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local directory="$cli_root/src/daemon/federation/directory.rs"
@@ -11565,6 +11612,7 @@ check_invocation_wire_callee_target_contract
 check_local_session_descriptor_ref_test_authority_contract
 check_local_daemon_loopback_explicit_subject_contract
 check_sdk_directory_projection_fail_closed_contract
+check_sdk_runtime_recovery_event_terminal_contract
 check_sdk_principal_projection_fail_closed_contract
 check_runtime_owner_signer_custody_contract
 check_remote_invocation_signer_first_contract
