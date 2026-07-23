@@ -5093,6 +5093,58 @@ if skill_list_ability.exists():
         if token in production_text:
             add("R48_SKILL_LIST_AGENT_AGGREGATE_IDENTITY_FORK", skill_list_ability, 1, detail)
 
+# Rule 48b: Claude Code runtime plugin discovery must consume only the
+# runtime-owned project-local skill root. The historical agent-private
+# `<cwd>/skills/` tree may exist for public skill APIs, but it must not remain
+# a driver launch fallback.
+claude_code_driver = cli_root / "src/daemon/execution/mission/drivers/claude_code.rs"
+if claude_code_driver.exists():
+    raw_text = claude_code_driver.read_text(encoding="utf-8", errors="replace")
+    raw_production_text = raw_text.split("#[cfg(test)]", 1)[0]
+    production_text = source(claude_code_driver).split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            'cwd.join("skills")',
+            "Claude Code driver must not scan legacy <cwd>/skills as a plugin discovery fallback",
+        ),
+        (
+            "<cwd>/skills/` — legacy",
+            "Claude Code driver must not document legacy <cwd>/skills as an active runtime discovery root",
+        ),
+        (
+            "backward compatibility with skills installed",
+            "Claude Code driver must not preserve pre-cutover skill discovery compatibility",
+        ),
+    ):
+        if token in raw_production_text:
+            add(
+                "R48B_CLAUDE_PLUGIN_DISCOVERY_CANONICAL_ROOT",
+                claude_code_driver,
+                line_number(raw_text, raw_text.index(token)),
+                detail,
+            )
+    for token, detail in (
+        (
+            "fn append_claude_workspace_plugin_dirs(",
+            "Claude Code driver must expose a focused plugin discovery helper",
+        ),
+        (
+            'cwd.join(".claude").join("skills")',
+            "Claude Code driver must consume the canonical .claude/skills runtime root",
+        ),
+        (
+            "looks_like_claude_plugin_dir",
+            "Claude Code plugin discovery must keep plugin-shape filtering at the driver boundary",
+        ),
+    ):
+        if token not in production_text:
+            add(
+                "R48B_CLAUDE_PLUGIN_DISCOVERY_CANONICAL_ROOT",
+                claude_code_driver,
+                1,
+                detail,
+            )
+
 # Rule 49: skill package owner resolution consumes the Agent aggregate
 # registered-workspace projection. Package surfaces own package path layout,
 # but they must not reopen agents.json or inspect AgentRegistry rows.

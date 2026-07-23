@@ -24,7 +24,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -246,67 +246,7 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
             args.push("--mcp-config".to_string());
             args.push(mcp_json.to_string_lossy().to_string());
         }
-        // G2 — installed skills as Claude Code plugins.
-        // `skill.install` writes to <cwd>/skills/<name>/.
-        // Claude Code's `--plugin-dir <path>` accepts a directory
-        // whose subdirs each look like a plugin (containing a
-        // skills/ / commands/ / agents/ / hooks/ subtree). When
-        // an EasyNet-installed skill matches that layout — which
-        // a github:owner/repo source typically does because
-        // upstream Claude-skill repos are shaped that way — the
-        // plugin gets discovered as `/{skill-name}` and the agent
-        // can invoke it.
-        //
-        // Pre-fix the skill files were dropped on disk but the
-        // adapter never told claude to look at them. The skill
-        // was inert.
-        // Two skill directories to scan:
-        //
-        //   * `<cwd>/.claude/skills/` — the Anthropic project-local
-        //     skill convention. This is where curator publishes
-        //     (`skill.publish` for claude-code agents) and where the
-        //     workspace seed (`easynet-collaborate`) lands. Claude
-        //     Code auto-scans this path inside the running subprocess
-        //     for plain SKILL.md files; passing `--plugin-dir` for
-        //     plugin-shaped subdirs gives it the entry hint when the
-        //     skill ships extra plugin assets.
-        //   * `<cwd>/skills/` — legacy EasyNet path, kept for
-        //     backward compatibility with skills installed via
-        //     `easynet skill install` against the pre-fix layout.
-        //     Walked for plugin-shaped subdirs only.
-        //
-        // Pre-fix only `<cwd>/skills/` was scanned; the workspace
-        // seed wrote to `<cwd>/skills/` too which Claude Code's
-        // own auto-loader did not reach for SKILL-only skills.
-        // The 2026-04-29 fix routes seeds + curator publishes to
-        // `.claude/skills/`; this scan adds discovery for both.
-        for skills_dir in [cwd.join(".claude").join("skills"), cwd.join("skills")] {
-            if !skills_dir.is_dir() {
-                continue;
-            }
-            // Each subdirectory of skills/ is a candidate plugin.
-            // Only push --plugin-dir entries for ones that look
-            // plugin-shaped (contain a SKILL.md or plugin.json,
-            // or have a skills/ subdir of their own — claude's
-            // discovery is forgiving but we'd rather not point
-            // it at empty dirs that would just print a warning).
-            if let Ok(entries) = std::fs::read_dir(&skills_dir) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
-                    if !p.is_dir() {
-                        continue;
-                    }
-                    let looks_plugin_shaped = p.join("plugin.json").is_file()
-                        || p.join("SKILL.md").is_file()
-                        || p.join("skills").is_dir()
-                        || p.join("commands").is_dir();
-                    if looks_plugin_shaped {
-                        args.push("--plugin-dir".to_string());
-                        args.push(p.to_string_lossy().to_string());
-                    }
-                }
-            }
-        }
+        append_claude_workspace_plugin_dirs(&mut args, cwd);
     }
 
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -400,6 +340,39 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
     } else {
         Ok((text, final_stats))
     }
+}
+
+fn append_claude_workspace_plugin_dirs(args: &mut Vec<String>, cwd: &Path) {
+    // G2 — installed skills as Claude Code plugins.
+    //
+    // Claude Code owns a project-local skill convention:
+    // `<cwd>/.claude/skills/<name>/`. Mission workspace seeding and
+    // `skill.publish` for claude-code agents both write there. The
+    // driver consumes that runtime-owned directory only; historical
+    // `<cwd>/skills/` agent-private content must not influence process
+    // launch.
+    let skills_dir = cwd.join(".claude").join("skills");
+    if !skills_dir.is_dir() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(&skills_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if !p.is_dir() || !looks_like_claude_plugin_dir(&p) {
+            continue;
+        }
+        args.push("--plugin-dir".to_string());
+        args.push(p.to_string_lossy().to_string());
+    }
+}
+
+fn looks_like_claude_plugin_dir(path: &Path) -> bool {
+    path.join("plugin.json").is_file()
+        || path.join("SKILL.md").is_file()
+        || path.join("skills").is_dir()
+        || path.join("commands").is_dir()
 }
 
 fn format_child_exit_error(
@@ -752,7 +725,9 @@ fn run_stats_to_usage(s: &RunStats) -> AgentUsage {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_child_exit_error, handle_stream_line, RunStats};
+    use super::{
+        append_claude_workspace_plugin_dirs, format_child_exit_error, handle_stream_line, RunStats,
+    };
     use crate::daemon::execution::mission::process_runner::ChildResult;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -797,6 +772,37 @@ mod tests {
     fn child_exit_error_falls_back_to_exit_code() {
         let msg = format_child_exit_error("claude", &child("", "", 1), "");
         assert_eq!(msg, "claude exited with code 1");
+    }
+
+    #[test]
+    fn plugin_dirs_use_claude_project_skill_root_only() {
+        let workspace = tempfile::tempdir().expect("workspace");
+
+        let canonical = workspace
+            .path()
+            .join(".claude")
+            .join("skills")
+            .join("canonical");
+        std::fs::create_dir_all(&canonical).expect("canonical skill dir");
+        std::fs::write(canonical.join("SKILL.md"), "---\nname: canonical\n---\n")
+            .expect("canonical skill");
+
+        let legacy = workspace.path().join("skills").join("legacy");
+        std::fs::create_dir_all(&legacy).expect("legacy skill dir");
+        std::fs::write(legacy.join("SKILL.md"), "---\nname: legacy\n---\n").expect("legacy skill");
+
+        let mut args = Vec::new();
+        append_claude_workspace_plugin_dirs(&mut args, workspace.path());
+
+        assert_eq!(args.len(), 2, "expected one --plugin-dir pair: {args:?}");
+        assert_eq!(args[0], "--plugin-dir");
+        assert_eq!(args[1], canonical.to_string_lossy());
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.contains("/skills/legacy") || arg.ends_with("skills/legacy")),
+            "legacy workspace skills path must not affect Claude launch args: {args:?}"
+        );
     }
 
     #[test]
