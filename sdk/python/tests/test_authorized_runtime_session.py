@@ -121,6 +121,29 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
                     DescriptorResolutionState.UNAVAILABLE,
                 )
 
+    def test_descriptor_resolution_requires_typed_owner_offline(self) -> None:
+        typed = _descriptor_resolution_from_error(
+            SDKError(
+                code=ErrorCode.DESCRIPTOR_OWNER_OFFLINE,
+                stage="descriptor",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message="owner is not online",
+            )
+        )
+        self.assertEqual(typed.state, DescriptorResolutionState.OWNER_OFFLINE)
+
+        generic = _descriptor_resolution_from_error(
+            SDKError(
+                code=ErrorCode.PROVIDER_UNAVAILABLE,
+                stage="descriptor",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message="owner is offline",
+            )
+        )
+        self.assertEqual(generic.state, DescriptorResolutionState.UNAVAILABLE)
+
     def test_history_rejects_authority_subject_mismatch_before_receipt_provider(self) -> None:
         fixture = _SessionFixture()
         request = ReceiptListRequest(

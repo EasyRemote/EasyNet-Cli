@@ -952,22 +952,35 @@ go_body = section(go, "func descriptorResolutionFromError(", "func sessionIntent
 for legacy in ("ErrAbilityNotFound", "ErrNotFound"):
     if legacy in go_body:
         raise SystemExit(f"sdk_go_descriptor_resolution_legacy_not_found_projection:{legacy}")
+for classifier in ("strings.Contains", "strings.ToLower", '"offline"'):
+    if classifier in go_body:
+        raise SystemExit(f"sdk_go_descriptor_resolution_message_classifier:{classifier}")
 if "ErrDescriptorNotFound" not in go_body:
     raise SystemExit("sdk_go_descriptor_resolution_descriptor_not_found_missing")
+if "ErrDescriptorOwnerOffline" not in go_body:
+    raise SystemExit("sdk_go_descriptor_resolution_owner_offline_missing")
 go_tests = read(go_test_path)
 if "TestAuthorizedRuntimeDescriptorResolutionRequiresDescriptorVocabulary" not in go_tests:
     raise SystemExit("sdk_go_descriptor_resolution_vocabulary_test_missing")
+if "TestAuthorizedRuntimeDescriptorResolutionRequiresTypedOwnerOffline" not in go_tests:
+    raise SystemExit("sdk_go_descriptor_resolution_typed_owner_offline_test_missing")
 
 py = read(py_path)
 py_body = section(py, "def _descriptor_resolution_from_error(", "def _intent_details(")
 for legacy in ("ErrorCode.ABILITY_NOT_FOUND", "ErrorCode.NOT_FOUND"):
     if legacy in py_body:
         raise SystemExit(f"sdk_python_descriptor_resolution_legacy_not_found_projection:{legacy}")
+if '"offline" in text.lower()' in py_body or "'offline' in text.lower()" in py_body:
+    raise SystemExit("sdk_python_descriptor_resolution_message_classifier")
 if "ErrorCode.DESCRIPTOR_NOT_FOUND" not in py_body:
     raise SystemExit("sdk_python_descriptor_resolution_descriptor_not_found_missing")
+if "ErrorCode.DESCRIPTOR_OWNER_OFFLINE" not in py_body:
+    raise SystemExit("sdk_python_descriptor_resolution_owner_offline_missing")
 py_tests = read(py_test_path)
 if "test_descriptor_resolution_requires_descriptor_vocabulary" not in py_tests:
     raise SystemExit("sdk_python_descriptor_resolution_vocabulary_test_missing")
+if "test_descriptor_resolution_requires_typed_owner_offline" not in py_tests:
+    raise SystemExit("sdk_python_descriptor_resolution_typed_owner_offline_test_missing")
 PY
 }
 
@@ -7552,25 +7565,35 @@ EOF
     "$tmp/sdk-descriptor-resolution-error-legacy/sdk/python/tests"
   printf '%s\n' \
     'func descriptorResolutionFromError(err error) DescriptorResolution {' \
+    '  if strings.Contains(fmt.Sprint(err), "offline") { return DescriptorResolution{State: DescriptorOwnerOffline} }' \
     '  if IsCode(err, ErrAbilityNotFound) || IsCode(err, ErrNotFound) {' \
     '    return DescriptorResolution{State: DescriptorNotFound}' \
     '  }' \
     '  if IsCode(err, ErrDescriptorNotFound) { return DescriptorResolution{State: DescriptorNotFound} }' \
+    '  if IsCode(err, ErrDescriptorOwnerOffline) { return DescriptorResolution{State: DescriptorOwnerOffline} }' \
     '  return DescriptorResolution{State: DescriptorUnavailable}' \
     '}' \
     'func sessionIntentDetails() {}' \
     > "$tmp/sdk-descriptor-resolution-error-legacy/sdk/go/authorized_runtime_session.go"
-  printf 'func TestAuthorizedRuntimeDescriptorResolutionRequiresDescriptorVocabulary(t *testing.T) {}\n' \
+  printf '%s\n' \
+    'func TestAuthorizedRuntimeDescriptorResolutionRequiresDescriptorVocabulary(t *testing.T) {}' \
+    'func TestAuthorizedRuntimeDescriptorResolutionRequiresTypedOwnerOffline(t *testing.T) {}' \
     > "$tmp/sdk-descriptor-resolution-error-legacy/sdk/go/authorized_runtime_session_test.go"
   printf '%s\n' \
     'def _descriptor_resolution_from_error(error):' \
+    '    if "offline" in text.lower():' \
+    '        return DescriptorResolution(DescriptorResolutionState.OWNER_OFFLINE)' \
     '    if error.code in {ErrorCode.ABILITY_NOT_FOUND, ErrorCode.NOT_FOUND, ErrorCode.DESCRIPTOR_NOT_FOUND}:' \
     '        return DescriptorResolution(DescriptorResolutionState.NOT_FOUND)' \
+    '    if error.code == ErrorCode.DESCRIPTOR_OWNER_OFFLINE:' \
+    '        return DescriptorResolution(DescriptorResolutionState.OWNER_OFFLINE)' \
     '    return DescriptorResolution(DescriptorResolutionState.UNAVAILABLE)' \
     '' \
     'def _intent_details(intent): pass' \
     > "$tmp/sdk-descriptor-resolution-error-legacy/sdk/python/easynet_sdk/authorized_runtime_session.py"
-  printf 'def test_descriptor_resolution_requires_descriptor_vocabulary(): pass\n' \
+  printf '%s\n' \
+    'def test_descriptor_resolution_requires_descriptor_vocabulary(): pass' \
+    'def test_descriptor_resolution_requires_typed_owner_offline(): pass' \
     > "$tmp/sdk-descriptor-resolution-error-legacy/sdk/python/tests/test_authorized_runtime_session.py"
   if ( check_sdk_descriptor_resolution_error_vocabulary_contract "$tmp/sdk-descriptor-resolution-error-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected SDK descriptor resolution legacy not-found vocabulary gate to fail"

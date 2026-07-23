@@ -123,6 +123,30 @@ func TestAuthorizedRuntimeDescriptorResolutionRequiresDescriptorVocabulary(t *te
 	}
 }
 
+func TestAuthorizedRuntimeDescriptorResolutionRequiresTypedOwnerOffline(t *testing.T) {
+	typed := descriptorResolutionFromError(&SDKError{
+		Code:      ErrDescriptorOwnerOffline,
+		Stage:     "descriptor",
+		Retry:     RetryNever,
+		Retryable: false,
+		Message:   "owner is not online",
+	})
+	if typed.State != DescriptorOwnerOffline {
+		t.Fatalf("DESCRIPTOR_OWNER_OFFLINE state = %s, want %s", typed.State, DescriptorOwnerOffline)
+	}
+
+	generic := descriptorResolutionFromError(&SDKError{
+		Code:      ErrProviderUnavailable,
+		Stage:     "descriptor",
+		Retry:     RetryNever,
+		Retryable: false,
+		Message:   "owner is offline",
+	})
+	if generic.State != DescriptorUnavailable {
+		t.Fatalf("generic offline text state = %s, want %s", generic.State, DescriptorUnavailable)
+	}
+}
+
 func TestAuthorizedRuntimeSessionHistoryRejectsAuthoritySubjectMismatchBeforeReceiptProvider(t *testing.T) {
 	session := newAuthorizedRuntimeSessionFixture(t)
 	request := ReceiptListRequest{

@@ -1027,11 +1027,9 @@ func descriptorResolutionFromError(err error) DescriptorResolution {
 		!IsCode(err, ErrRouteUnavailable) && !IsCode(err, ErrRuntimeRouteUnavailable) &&
 		!IsCode(err, ErrDescriptorOwnerOffline) && !IsCode(err, ErrDescriptorModeUnsupported) &&
 		!IsCode(err, ErrDescriptorStale) {
-		if !strings.Contains(fmt.Sprint(err), "offline") {
-			return DescriptorResolution{State: DescriptorUnavailable, Reason: fmt.Sprint(err)}
-		}
+		return DescriptorResolution{State: DescriptorUnavailable, Reason: fmt.Sprint(err)}
 	}
-	if IsCode(err, ErrDescriptorOwnerOffline) || strings.Contains(strings.ToLower(fmt.Sprint(err)), "offline") {
+	if IsCode(err, ErrDescriptorOwnerOffline) {
 		return DescriptorResolution{State: DescriptorOwnerOffline, Reason: fmt.Sprint(err)}
 	}
 	if IsCode(err, ErrRouteUnavailable) || IsCode(err, ErrRuntimeRouteUnavailable) {
