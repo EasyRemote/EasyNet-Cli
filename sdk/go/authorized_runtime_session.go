@@ -551,20 +551,35 @@ func NewRuntimeClientSessionRuntimeProvider(client *RuntimeClient) RuntimeClient
 }
 
 func (p RuntimeClientSessionRuntimeProvider) SubmitSigned(ctx context.Context, signed SignedInvocation) (InvocationHandle, error) {
-	return p.client.SubmitSigned(ctx, signed)
+	client, err := p.requireClient("submit")
+	if err != nil {
+		return InvocationHandle{}, err
+	}
+	return client.SubmitSigned(ctx, signed)
 }
 
 func (p RuntimeClientSessionRuntimeProvider) PrepareForSigning(ctx context.Context, draft InvocationDraft, opts PrepareOptions) (PreparedInvocation, SigningMaterial, error) {
-	return p.client.Prepare(ctx, draft, opts)
+	client, err := p.requireClient("prepare")
+	if err != nil {
+		return PreparedInvocation{}, SigningMaterial{}, err
+	}
+	return client.Prepare(ctx, draft, opts)
 }
 
 func (p RuntimeClientSessionRuntimeProvider) AwaitTerminal(ctx context.Context, handle InvocationHandle) (InvocationResult, error) {
-	return p.client.Await(ctx, handle)
+	client, err := p.requireClient("await")
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	return client.Await(ctx, handle)
 }
 
 func (p RuntimeClientSessionRuntimeProvider) OpenStream(ctx context.Context, signed SignedInvocation) (*StreamHandle, error) {
 	_ = ctx
 	_ = signed
+	if _, err := p.requireClient("stream"); err != nil {
+		return nil, err
+	}
 	return nil, v3SessionError(
 		ErrProviderUnavailable,
 		"stream",
@@ -578,6 +593,9 @@ func (p RuntimeClientSessionRuntimeProvider) OpenBidi(ctx context.Context, signe
 	_ = ctx
 	_ = signed
 	_ = streams
+	if _, err := p.requireClient("bidi"); err != nil {
+		return nil, err
+	}
 	return nil, v3SessionError(
 		ErrProviderUnavailable,
 		"bidi",
@@ -588,16 +606,40 @@ func (p RuntimeClientSessionRuntimeProvider) OpenBidi(ctx context.Context, signe
 }
 
 func (p RuntimeClientSessionRuntimeProvider) Cancel(ctx context.Context, handle InvocationHandle, reason string) (InvocationCancel, error) {
-	return p.client.Cancel(ctx, handle, reason)
+	client, err := p.requireClient("cancel")
+	if err != nil {
+		return InvocationCancel{}, err
+	}
+	return client.Cancel(ctx, handle, reason)
 }
 
 func (p RuntimeClientSessionRuntimeProvider) Events(ctx context.Context, handle InvocationHandle) (InvocationHandle, error) {
-	return p.client.Events(ctx, handle)
+	client, err := p.requireClient("events")
+	if err != nil {
+		return InvocationHandle{}, err
+	}
+	return client.Events(ctx, handle)
 }
 
 func (p RuntimeClientSessionRuntimeProvider) Diagnostics(ctx context.Context) (map[string]any, error) {
 	_ = ctx
+	if _, err := p.requireClient("diagnostics"); err != nil {
+		return nil, err
+	}
 	return map[string]any{"runtime_provider": "runtime_client"}, nil
+}
+
+func (p RuntimeClientSessionRuntimeProvider) requireClient(stage string) (*RuntimeClient, error) {
+	if p.client == nil {
+		return nil, v3SessionError(
+			ErrProviderUnavailable,
+			stage,
+			"runtime client provider is not ready",
+			nil,
+			nil,
+		)
+	}
+	return p.client, nil
 }
 
 type RuntimeClientDescriptorProvider struct {
@@ -609,7 +651,11 @@ func NewRuntimeClientDescriptorProvider(client *RuntimeClient) RuntimeClientDesc
 }
 
 func (p RuntimeClientDescriptorProvider) ResolveDescriptor(ctx context.Context, request DescriptorResolutionRequest) (DescriptorResolution, error) {
-	ref, err := p.client.ResolveDescriptorRef(ctx, RuntimeDescriptorRefRequest{
+	client, readyErr := p.requireClient()
+	if readyErr != nil {
+		return DescriptorResolution{State: DescriptorUnavailable, Reason: readyErr.Error()}, nil
+	}
+	ref, err := client.ResolveDescriptorRef(ctx, RuntimeDescriptorRefRequest{
 		CalleeURA:  request.Target.URA,
 		Ability:    request.Ability.Name,
 		CallMode:   request.CallMode,
@@ -624,6 +670,19 @@ func (p RuntimeClientDescriptorProvider) ResolveDescriptor(ctx context.Context, 
 		DescriptorRef:         ref,
 		DescriptorFingerprint: descriptorFingerprint(ref),
 	}, nil
+}
+
+func (p RuntimeClientDescriptorProvider) requireClient() (*RuntimeClient, error) {
+	if p.client == nil {
+		return nil, v3SessionError(
+			ErrProviderUnavailable,
+			"descriptor",
+			"runtime client descriptor provider is not ready",
+			nil,
+			nil,
+		)
+	}
+	return p.client, nil
 }
 
 type StaticCallerIdentityProvider struct {

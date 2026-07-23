@@ -1893,6 +1893,74 @@ if "test_descriptor_resolution_requires_typed_owner_offline" not in py_tests:
 PY
 }
 
+check_sdk_runtime_client_provider_readiness_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go="$cli_root/sdk/go/authorized_runtime_session.go"
+  local go_test="$cli_root/sdk/go/authorized_runtime_session_test.go"
+  local py="$cli_root/sdk/python/easynet_sdk/authorized_runtime_session.py"
+  local py_test="$cli_root/sdk/python/tests/test_authorized_runtime_session.py"
+
+  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"sdk_runtime_client_provider_readiness_source_missing:{path}")
+    return path.read_text()
+
+def section(text: str, start: str, end: str) -> str:
+    offset = text.find(start)
+    if offset < 0:
+        raise SystemExit(f"sdk_runtime_client_provider_readiness_missing_section:{start}")
+    stop = text.find(end, offset + len(start))
+    return text[offset : stop if stop >= 0 else len(text)]
+
+go = read(go_path)
+go_runtime = section(go, "type RuntimeClientSessionRuntimeProvider struct", "type RuntimeClientDescriptorProvider struct")
+go_descriptor = section(go, "type RuntimeClientDescriptorProvider struct", "type StaticCallerIdentityProvider struct")
+if "func (p RuntimeClientSessionRuntimeProvider) requireClient(stage string) (*RuntimeClient, error)" not in go_runtime:
+    raise SystemExit("sdk_go_runtime_client_provider_readiness:runtime_guard_missing")
+if "func (p RuntimeClientDescriptorProvider) requireClient() (*RuntimeClient, error)" not in go_descriptor:
+    raise SystemExit("sdk_go_runtime_client_provider_readiness:descriptor_guard_missing")
+if "runtime client provider is not ready" not in go_runtime:
+    raise SystemExit("sdk_go_runtime_client_provider_readiness:runtime_error_missing")
+if "runtime client descriptor provider is not ready" not in go_descriptor:
+    raise SystemExit("sdk_go_runtime_client_provider_readiness:descriptor_error_missing")
+for body, label in ((go_runtime, "runtime"), (go_descriptor, "descriptor")):
+    if "ErrProviderUnavailable" not in body:
+        raise SystemExit(f"sdk_go_runtime_client_provider_readiness:{label}:provider_unavailable_missing")
+    # The only allowed reference to p.client is inside requireClient; provider
+    # methods must first bind a local checked client.
+    method_body = body.split("func (p RuntimeClientSessionRuntimeProvider) requireClient", 1)[0]
+    method_body = method_body.split("func (p RuntimeClientDescriptorProvider) requireClient", 1)[0]
+    if re.search(r"\bp\.client\.", method_body):
+        raise SystemExit(f"sdk_go_runtime_client_provider_readiness:{label}:direct_deref")
+go_tests = read(go_test_path)
+for required in (
+    "TestRuntimeClientSessionRuntimeProviderRejectsNilClientBeforeDereference",
+    "TestRuntimeClientDescriptorProviderRejectsNilClientBeforeDereference",
+):
+    if required not in go_tests:
+        raise SystemExit(f"sdk_go_runtime_client_provider_readiness:test_missing:{required}")
+
+py = read(py_path)
+py_runtime = section(py, "class RuntimeClientSessionRuntimeProvider:", "class RuntimeClientDescriptorProvider:")
+py_descriptor = section(py, "class RuntimeClientDescriptorProvider:", "class StaticCallerIdentityProvider:")
+for body, label in ((py_runtime, "runtime"), (py_descriptor, "descriptor")):
+    if "if client is None:" not in body:
+        raise SystemExit(f"sdk_python_runtime_client_provider_readiness:{label}:constructor_guard_missing")
+    if "ErrorCode.PROVIDER_UNAVAILABLE" not in body:
+        raise SystemExit(f"sdk_python_runtime_client_provider_readiness:{label}:provider_unavailable_missing")
+py_tests = read(py_test_path)
+if "test_runtime_client_providers_reject_missing_client_at_construction" not in py_tests:
+    raise SystemExit("sdk_python_runtime_client_provider_readiness:test_missing")
+PY
+}
+
 check_sdk_ability_descriptor_not_found_vocabulary_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/ability_descriptor.go"
@@ -10097,6 +10165,39 @@ EOF
   if ( check_sdk_descriptor_resolution_error_vocabulary_contract "$tmp/sdk-descriptor-resolution-error-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected SDK descriptor resolution legacy not-found vocabulary gate to fail"
   fi
+  mkdir -p "$tmp/sdk-runtime-client-provider-readiness-legacy/sdk/go" \
+    "$tmp/sdk-runtime-client-provider-readiness-legacy/sdk/python/easynet_sdk" \
+    "$tmp/sdk-runtime-client-provider-readiness-legacy/sdk/python/tests"
+  printf '%s\n' \
+    'type RuntimeClientSessionRuntimeProvider struct { client *RuntimeClient }' \
+    'func NewRuntimeClientSessionRuntimeProvider(client *RuntimeClient) RuntimeClientSessionRuntimeProvider { return RuntimeClientSessionRuntimeProvider{client: client} }' \
+    'func (p RuntimeClientSessionRuntimeProvider) SubmitSigned(ctx context.Context, signed SignedInvocation) (InvocationHandle, error) { return p.client.SubmitSigned(ctx, signed) }' \
+    'func (p RuntimeClientSessionRuntimeProvider) PrepareForSigning(ctx context.Context, draft InvocationDraft, opts PrepareOptions) (PreparedInvocation, SigningMaterial, error) { return p.client.Prepare(ctx, draft, opts) }' \
+    'func (p RuntimeClientSessionRuntimeProvider) Diagnostics(ctx context.Context) (map[string]any, error) { return map[string]any{"runtime_provider":"runtime_client"}, nil }' \
+    'type RuntimeClientDescriptorProvider struct { client *RuntimeClient }' \
+    'func NewRuntimeClientDescriptorProvider(client *RuntimeClient) RuntimeClientDescriptorProvider { return RuntimeClientDescriptorProvider{client: client} }' \
+    'func (p RuntimeClientDescriptorProvider) ResolveDescriptor(ctx context.Context, request DescriptorResolutionRequest) (DescriptorResolution, error) { ref, _ := p.client.ResolveDescriptorRef(ctx, RuntimeDescriptorRefRequest{}); _ = ref; return DescriptorResolution{}, nil }' \
+    'type StaticCallerIdentityProvider struct{}' \
+    > "$tmp/sdk-runtime-client-provider-readiness-legacy/sdk/go/authorized_runtime_session.go"
+  printf '%s\n' \
+    'func TestRuntimeClientSessionRuntimeProviderRejectsUnsignedStreamDowngrade(t *testing.T) {}' \
+    > "$tmp/sdk-runtime-client-provider-readiness-legacy/sdk/go/authorized_runtime_session_test.go"
+  printf '%s\n' \
+    'class RuntimeClientSessionRuntimeProvider:' \
+    '    def __init__(self, client):' \
+    '        self._client = client' \
+    '' \
+    'class RuntimeClientDescriptorProvider:' \
+    '    def __init__(self, client):' \
+    '        self._client = client' \
+    '' \
+    'class StaticCallerIdentityProvider: pass' \
+    > "$tmp/sdk-runtime-client-provider-readiness-legacy/sdk/python/easynet_sdk/authorized_runtime_session.py"
+  printf 'def test_runtime_client_provider_rejects_unsigned_stream_downgrade(): pass\n' \
+    > "$tmp/sdk-runtime-client-provider-readiness-legacy/sdk/python/tests/test_authorized_runtime_session.py"
+  if ( check_sdk_runtime_client_provider_readiness_contract "$tmp/sdk-runtime-client-provider-readiness-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK runtime-client provider readiness gate to fail"
+  fi
   mkdir -p "$tmp/sdk-ability-descriptor-not-found-legacy/sdk/go" \
     "$tmp/sdk-ability-descriptor-not-found-legacy/sdk/python/easynet_sdk" \
     "$tmp/sdk-ability-descriptor-not-found-legacy/sdk/python/tests"
@@ -11923,6 +12024,7 @@ EOF
   check_control_frame_schema_contract
   check_sdk_history_authority_subject_contract
   check_sdk_descriptor_resolution_error_vocabulary_contract
+  check_sdk_runtime_client_provider_readiness_contract
   check_sdk_ability_descriptor_not_found_vocabulary_contract
   check_sdk_runtime_identity_signer_not_found_contract
   check_sdk_easynet_provider_identity_alias_contract
@@ -12066,6 +12168,7 @@ check_control_discovery_schema_contract
 check_control_frame_schema_contract
 check_sdk_history_authority_subject_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
+check_sdk_runtime_client_provider_readiness_contract
 check_sdk_ability_descriptor_not_found_vocabulary_contract
 check_sdk_runtime_identity_signer_not_found_contract
 check_sdk_easynet_provider_identity_alias_contract

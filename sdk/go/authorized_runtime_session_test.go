@@ -297,6 +297,50 @@ func TestRuntimeClientSessionRuntimeProviderRejectsUnsignedStreamDowngrade(t *te
 	}
 }
 
+func TestRuntimeClientSessionRuntimeProviderRejectsNilClientBeforeDereference(t *testing.T) {
+	provider := NewRuntimeClientSessionRuntimeProvider(nil)
+	ctx := context.Background()
+
+	if _, _, err := provider.PrepareForSigning(ctx, InvocationDraft{}, PrepareOptions{}); !IsCode(err, ErrProviderUnavailable) {
+		t.Fatalf("PrepareForSigning error = %v, want %s", err, ErrProviderUnavailable)
+	}
+	if _, err := provider.SubmitSigned(ctx, SignedInvocation{}); !IsCode(err, ErrProviderUnavailable) {
+		t.Fatalf("SubmitSigned error = %v, want %s", err, ErrProviderUnavailable)
+	}
+	if _, err := provider.AwaitTerminal(ctx, InvocationHandle{}); !IsCode(err, ErrProviderUnavailable) {
+		t.Fatalf("AwaitTerminal error = %v, want %s", err, ErrProviderUnavailable)
+	}
+	if _, err := provider.Cancel(ctx, InvocationHandle{}, "test"); !IsCode(err, ErrProviderUnavailable) {
+		t.Fatalf("Cancel error = %v, want %s", err, ErrProviderUnavailable)
+	}
+	if _, err := provider.Events(ctx, InvocationHandle{}); !IsCode(err, ErrProviderUnavailable) {
+		t.Fatalf("Events error = %v, want %s", err, ErrProviderUnavailable)
+	}
+	if _, err := provider.Diagnostics(ctx); !IsCode(err, ErrProviderUnavailable) {
+		t.Fatalf("Diagnostics error = %v, want %s", err, ErrProviderUnavailable)
+	}
+	if _, err := provider.OpenStream(ctx, SignedInvocation{}); !IsCode(err, ErrProviderUnavailable) {
+		t.Fatalf("OpenStream error = %v, want %s", err, ErrProviderUnavailable)
+	}
+	if _, err := provider.OpenBidi(ctx, SignedInvocation{}, nil); !IsCode(err, ErrProviderUnavailable) {
+		t.Fatalf("OpenBidi error = %v, want %s", err, ErrProviderUnavailable)
+	}
+}
+
+func TestRuntimeClientDescriptorProviderRejectsNilClientBeforeDereference(t *testing.T) {
+	provider := NewRuntimeClientDescriptorProvider(nil)
+	resolution, err := provider.ResolveDescriptor(context.Background(), DescriptorResolutionRequest{})
+	if err != nil {
+		t.Fatalf("ResolveDescriptor returned transport error = %v", err)
+	}
+	if resolution.State != DescriptorUnavailable {
+		t.Fatalf("nil-client descriptor state = %s, want %s", resolution.State, DescriptorUnavailable)
+	}
+	if !strings.Contains(resolution.Reason, string(ErrProviderUnavailable)) {
+		t.Fatalf("nil-client descriptor reason = %q, want provider unavailable", resolution.Reason)
+	}
+}
+
 type authorizedRuntimeSessionFixture struct {
 	sdk           *AuthorizedRuntimeSession
 	runtime       *sessionRuntimeProviderFixture

@@ -19,6 +19,7 @@ from easynet_sdk import (
     ReceiptListRequest,
     PrincipalRef,
     RuntimeCallContext,
+    RuntimeClientDescriptorProvider,
     RuntimeTargetRef,
     RuntimeClientSessionRuntimeProvider,
     RetryHint,
@@ -252,6 +253,15 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         with self.assertRaises(SDKError) as bidi_error:
             provider.open_bidi(object(), ())
         self.assertTrue(is_code(bidi_error.exception, ErrorCode.PROVIDER_UNAVAILABLE))
+
+    def test_runtime_client_providers_reject_missing_client_at_construction(self) -> None:
+        with self.assertRaises(SDKError) as runtime_error:
+            RuntimeClientSessionRuntimeProvider(None)  # type: ignore[arg-type]
+        self.assertTrue(is_code(runtime_error.exception, ErrorCode.PROVIDER_UNAVAILABLE))
+
+        with self.assertRaises(SDKError) as descriptor_error:
+            RuntimeClientDescriptorProvider(None)  # type: ignore[arg-type]
+        self.assertTrue(is_code(descriptor_error.exception, ErrorCode.PROVIDER_UNAVAILABLE))
 
 
 class _SessionFixture:
