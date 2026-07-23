@@ -394,6 +394,7 @@ impl PluginPackage {
 pub type SharedPluginPackage = Arc<PluginPackage>;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawPluginAbilityDescriptor {
     schema_version: String,
     name: String,
@@ -938,6 +939,37 @@ session = "aqua"
             err,
             PluginHostError::InvalidAbilityDescriptor { .. }
         ));
+    }
+
+    #[test]
+    fn plugin_host_installed_package_rejects_unknown_descriptor_fields() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_test_package(dir.path(), "0.1.0");
+        std::fs::write(
+            dir.path().join("abilities/test.echo.ability.toml"),
+            r#"schema_version = "2"
+name = "test.echo"
+description = "test descriptor for test.echo"
+admission_action = "invoke"
+legacy_descriptor_hash = "sha256:retired"
+
+[input_schema]
+type = "object"
+additionalProperties = false
+"#,
+        )
+        .expect("descriptor with legacy field");
+
+        let err = PluginPackage::from_installed(dir.path(), None)
+            .expect_err("unknown descriptor fields must fail package indexing");
+        assert!(
+            matches!(err, PluginHostError::DescriptorParseFailed { .. }),
+            "unknown descriptor field must fail at typed parse, got: {err}"
+        );
+        assert!(
+            format!("{err}").contains("unknown field `legacy_descriptor_hash`"),
+            "parse error should name rejected descriptor field: {err}"
+        );
     }
 
     #[test]
