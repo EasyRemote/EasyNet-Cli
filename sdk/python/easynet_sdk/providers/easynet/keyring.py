@@ -25,7 +25,7 @@ from .key_service import (
     invalid_key_service_payload,
     require_response_shape,
 )
-from ...errors import SDKError
+from ...errors import ErrorCode, SDKError
 from ...signer_handle import SignerHandle
 from ...invocation import InvocationSignature
 from ...signing import SignatureProvider, SigningMaterial
@@ -195,8 +195,11 @@ def _runtime_identity_operation(operation: Callable[[], _T]) -> _T:
 
 
 def _runtime_identity_error(error: SDKError) -> SDKError:
+    code = error.code
+    if code == ErrorCode.NOT_FOUND:
+        code = ErrorCode.CALLER_SIGNER_UNAVAILABLE
     return SDKError(
-        code=error.code,
+        code=code,
         stage="runtime_identity",
         retry=error.retry,
         retryable=error.retryable,

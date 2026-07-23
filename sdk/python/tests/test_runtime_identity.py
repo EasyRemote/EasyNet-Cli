@@ -137,9 +137,11 @@ class RuntimeIdentityTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, ErrorCode.PROTOCOL)
         self.assertEqual(caught.exception.stage, "runtime_identity")
 
-    def test_rejection_compatibility_maps_not_found_and_permission(self) -> None:
+    def test_rejection_projects_missing_runtime_identity_to_caller_signer_unavailable(
+        self,
+    ) -> None:
         cases = [
-            ("not_found", ErrorCode.NOT_FOUND),
+            ("not_found", ErrorCode.CALLER_SIGNER_UNAVAILABLE),
             ("policy", ErrorCode.POLICY_DENIED),
             ("io", ErrorCode.EXECUTION_FAILED),
         ]

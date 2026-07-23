@@ -1031,6 +1031,51 @@ if "test_runtime_ability_descriptor_provider_get_reports_descriptor_not_found" n
 PY
 }
 
+check_sdk_runtime_identity_signer_not_found_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go="$cli_root/sdk/go/runtime_identity.go"
+  local go_test="$cli_root/sdk/go/runtime_identity_test.go"
+  local py="$cli_root/sdk/python/easynet_sdk/providers/easynet/keyring.py"
+  local py_test="$cli_root/sdk/python/tests/test_runtime_identity.py"
+
+  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" <<'PY'
+import sys
+from pathlib import Path
+
+go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"sdk_runtime_identity_signer_not_found_source_missing:{path}")
+    return path.read_text()
+
+def section(text: str, start: str, end: str) -> str:
+    offset = text.find(start)
+    if offset < 0:
+        raise SystemExit(f"sdk_runtime_identity_signer_not_found_missing_section:{start}")
+    stop = text.find(end, offset + len(start))
+    return text[offset : stop if stop >= 0 else len(text)]
+
+go = read(go_path)
+go_body = section(go, "func runtimeIdentityError(", "func (c runtimeKeyringClient) sign(")
+if "ErrNotFound" not in go_body or "ErrCallerSignerUnavailable" not in go_body:
+    raise SystemExit("sdk_go_runtime_identity_not_found_projection_missing")
+if go.count("runtimeIdentityError(err)") < 3:
+    raise SystemExit("sdk_go_runtime_identity_operations_not_using_projection")
+go_tests = read(go_test_path)
+if "TestRuntimeSigningIdentityProjectsMissingKeyAsCallerSignerUnavailable" not in go_tests:
+    raise SystemExit("sdk_go_runtime_identity_not_found_test_missing")
+
+py = read(py_path)
+py_body = section(py, "def _runtime_identity_error(", "\n\n")
+if "ErrorCode.NOT_FOUND" not in py_body or "ErrorCode.CALLER_SIGNER_UNAVAILABLE" not in py_body:
+    raise SystemExit("sdk_python_runtime_identity_not_found_projection_missing")
+py_tests = read(py_test_path)
+if "test_rejection_projects_missing_runtime_identity_to_caller_signer_unavailable" not in py_tests:
+    raise SystemExit("sdk_python_runtime_identity_not_found_test_missing")
+PY
+}
+
 check_sdk_runtime_failure_code_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_errors="$cli_root/sdk/go/errors.go"
@@ -7666,6 +7711,34 @@ EOF
   if ( check_sdk_ability_descriptor_not_found_vocabulary_contract "$tmp/sdk-ability-descriptor-not-found-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected SDK ability descriptor generic NOT_FOUND gate to fail"
   fi
+  mkdir -p "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/go" \
+    "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/python/easynet_sdk/providers/easynet" \
+    "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/python/tests"
+  printf '%s\n' \
+    'func LoadRuntimeSigningIdentity() error {' \
+    '  return signer.publicKey(owner)' \
+    '}' \
+    'func EnsureRuntimeSigningIdentity() error {' \
+    '  return signer.ensure(owner)' \
+    '}' \
+    'func runtimeIdentityError(err error) error {' \
+    '  return err' \
+    '}' \
+    'func (c runtimeKeyringClient) sign() {}' \
+    > "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/go/runtime_identity.go"
+  printf 'func TestRuntimeSigningIdentityProjectsMissingKeyAsCallerSignerUnavailable(t *testing.T) {}\n' \
+    > "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/go/runtime_identity_test.go"
+  printf '%s\n' \
+    'def _runtime_identity_error(error):' \
+    '    return SDKError(code=error.code, stage="runtime_identity")' \
+    '' \
+    'def load_runtime_signing_identity(): pass' \
+    > "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/python/easynet_sdk/providers/easynet/keyring.py"
+  printf 'def test_rejection_projects_missing_runtime_identity_to_caller_signer_unavailable(): pass\n' \
+    > "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/python/tests/test_runtime_identity.py"
+  if ( check_sdk_runtime_identity_signer_not_found_contract "$tmp/sdk-runtime-identity-signer-not-found-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK runtime identity signer not-found gate to fail"
+  fi
   mkdir -p "$tmp/principal-lifecycle-fallback/src/cli/commands/groups"
   printf '%s\n' \
     'fn principal_ability_realm_source(args: &Value) -> anyhow::Result<&str> {' \
@@ -8601,6 +8674,7 @@ EOF
   check_sdk_history_authority_subject_contract
   check_sdk_descriptor_resolution_error_vocabulary_contract
   check_sdk_ability_descriptor_not_found_vocabulary_contract
+  check_sdk_runtime_identity_signer_not_found_contract
   check_sdk_runtime_failure_code_contract
   check_sdk_direct_runtime_descriptor_not_found_contract
   check_principal_lifecycle_cli_schema_contract
@@ -8710,6 +8784,7 @@ check_cli_invocation_history_read_model_contract
 check_sdk_history_authority_subject_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_ability_descriptor_not_found_vocabulary_contract
+check_sdk_runtime_identity_signer_not_found_contract
 check_sdk_runtime_failure_code_contract
 check_sdk_direct_runtime_descriptor_not_found_contract
 check_principal_lifecycle_cli_schema_contract

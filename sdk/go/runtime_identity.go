@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 )
@@ -43,7 +44,11 @@ func (i RuntimeSigningIdentity) Sign(canonicalBytes []byte) ([]byte, error) {
 	if i.signer == nil {
 		return nil, invalidRuntimeClient("runtime signing identity is not initialized")
 	}
-	return i.signer.sign(i.OwnerURA, i.PublicKey, canonicalBytes)
+	signature, err := i.signer.sign(i.OwnerURA, i.PublicKey, canonicalBytes)
+	if err != nil {
+		return nil, runtimeIdentityError(err)
+	}
+	return signature, nil
 }
 
 func (i RuntimeSigningIdentity) SignCanonical(canonicalBytes []byte) ([]byte, error) {
@@ -83,7 +88,7 @@ func LoadRuntimeSigningIdentity(req RuntimeSigningIdentityRequest) (RuntimeSigni
 	}
 	publicKey, err := signer.publicKey(owner)
 	if err != nil {
-		return RuntimeSigningIdentity{}, err
+		return RuntimeSigningIdentity{}, runtimeIdentityError(err)
 	}
 	return RuntimeSigningIdentity{OwnerURA: owner, PublicKey: publicKey, signer: signer}, nil
 }
@@ -97,7 +102,7 @@ func EnsureRuntimeSigningIdentity(req EnsureRuntimeSigningIdentityRequest) (Runt
 	}
 	publicKey, err := signer.ensure(owner)
 	if err != nil {
-		return RuntimeSigningIdentity{}, err
+		return RuntimeSigningIdentity{}, runtimeIdentityError(err)
 	}
 	return RuntimeSigningIdentity{OwnerURA: owner, PublicKey: publicKey, signer: signer}, nil
 }
@@ -122,6 +127,32 @@ func newRuntimeKeyringSigner(ownerURA, socketPath string, timeout time.Duration)
 		return "", nil, err
 	}
 	return ownerURA, runtimeKeyringClient{service: service}, nil
+}
+
+func runtimeIdentityError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var sdkErr *SDKError
+	if !errors.As(err, &sdkErr) {
+		return err
+	}
+	code := sdkErr.Code
+	if code == ErrNotFound {
+		code = ErrCallerSignerUnavailable
+	}
+	return &SDKError{
+		Code:         code,
+		Stage:        "runtime_identity",
+		Retry:        sdkErr.Retry,
+		Retryable:    sdkErr.Retryable,
+		Message:      sdkErr.Message,
+		Source:       sdkErr.Source,
+		InvocationID: sdkErr.InvocationID,
+		ReceiptURA:   sdkErr.ReceiptURA,
+		Details:      sdkErr.Details,
+		Cause:        err,
+	}
 }
 
 func (c runtimeKeyringClient) sign(ownerURA string, publicKey ed25519.PublicKey, canonicalBytes []byte) ([]byte, error) {

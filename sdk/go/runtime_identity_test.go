@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -160,6 +161,34 @@ func TestEnsureRuntimeSigningIdentityDelegatesKeyGeneration(t *testing.T) {
 	}
 	if !identity.PublicKey.Equal(publicKey) {
 		t.Fatal("ensure returned the wrong public key")
+	}
+}
+
+func TestRuntimeSigningIdentityProjectsMissingKeyAsCallerSignerUnavailable(t *testing.T) {
+	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
+		if request["method"] != "derive_pubkey" {
+			t.Fatalf("unexpected request: %#v", request)
+		}
+		return map[string]any{
+			"result":  "error",
+			"kind":    "not_found",
+			"message": "keyring entry not found",
+		}
+	})
+
+	_, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{
+		OwnerURA:   "easynet:///r/acme/authority",
+		SocketPath: socketPath,
+	})
+	if !IsCode(err, ErrCallerSignerUnavailable) {
+		t.Fatalf("LoadRuntimeSigningIdentity error = %v, want CALLER_SIGNER_UNAVAILABLE", err)
+	}
+	var sdkErr *SDKError
+	if !errors.As(err, &sdkErr) {
+		t.Fatalf("LoadRuntimeSigningIdentity error = %#v, want SDKError", err)
+	}
+	if sdkErr.Stage != "runtime_identity" {
+		t.Fatalf("stage = %q, want runtime_identity", sdkErr.Stage)
 	}
 }
 
