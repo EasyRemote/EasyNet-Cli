@@ -1412,6 +1412,8 @@ mod tests {
     use super::*;
     use crate::daemon::ability::dispatch::rpc_handler_to_ability_fn;
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/localhost/device/d1";
+
     #[test]
     fn install_state_wire_strings() {
         assert_eq!(InstallState::Active.as_wire(), "ACTIVE");
@@ -1443,8 +1445,8 @@ mod tests {
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,
         );
-        let first = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(&rt)));
-        let second = Arc::new(AxonAbilityCatalog::new_with_runtime(rt));
+        let first = registrar_test_catalog(Arc::clone(&rt));
+        let second = registrar_test_catalog(rt);
 
         registrar
             .set_control_plane_catalog(Arc::downgrade(&first))
@@ -1533,12 +1535,9 @@ mod tests {
     }
 
     fn registrar_test_catalog(runtime: Arc<LocalRuntime>) -> Arc<AxonAbilityCatalog> {
-        Arc::new(AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        Arc::new(AxonAbilityCatalog::new_test_runtime_for_device_authority(
             runtime,
-            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
-                "easynet:///r/localhost/device/d1",
-            )
-            .expect("registrar test authority context"),
+            TEST_DEVICE_URA,
         ))
     }
 

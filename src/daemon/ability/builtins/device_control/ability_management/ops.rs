@@ -734,6 +734,21 @@ pub fn uninstall_ability_input_schema() -> Value {
 mod tests {
     use super::*;
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/local";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
+    fn runtime_test_catalog(
+        runtime: Arc<axon_sdk::invocation::LocalRuntime>,
+    ) -> Arc<AxonAbilityCatalog> {
+        Arc::new(AxonAbilityCatalog::new_test_runtime_for_device_authority(
+            runtime,
+            TEST_DEVICE_URA,
+        ))
+    }
+
     #[test]
     fn list_nodes_returns_at_least_self() {
         let _home = provision_local_device_credentials();
@@ -750,7 +765,7 @@ mod tests {
     #[test]
     fn registration_publishes_device_ops_manifests() {
         let _home = provision_local_device_credentials();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(
             &mut reg,
             Arc::new(empty_device_cell()),
@@ -829,7 +844,7 @@ mod tests {
 
     fn populated_catalog_cell() -> OnceLock<Arc<AxonAbilityCatalog>> {
         let cell = OnceLock::new();
-        cell.set(Arc::new(AxonAbilityCatalog::new()))
+        cell.set(Arc::new(metadata_test_catalog()))
             .expect("test catalog cell has one writer");
         cell
     }
@@ -1012,9 +1027,7 @@ mod tests {
                         crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                         None,
                     );
-                let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime(Arc::clone(
-                    &local_runtime,
-                )));
+                let catalog = runtime_test_catalog(Arc::clone(&local_runtime));
                 registrar.set_runtime(local_runtime).unwrap();
                 registrar
                     .set_control_plane_catalog(Arc::downgrade(&catalog))
