@@ -4684,6 +4684,35 @@ for required in (
 PY
 }
 
+check_mission_terminal_receipt_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local gateway="$cli_root/src/daemon/execution/mission/invocation_gateway.rs"
+  [[ -f "$gateway" ]] || fail "mission invocation gateway source is missing: ${gateway#$cli_root/}"
+
+  "$PYTHON_BIN" - "$gateway" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+if "pub(crate) fn projection(&self) -> Value" not in text:
+    raise SystemExit("mission_terminal_receipt_projection:projection_missing")
+projection = text.split("pub(crate) fn projection(&self) -> Value", 1)[1].split("#[cfg(test)]", 1)[0]
+if '"receipt": {"anchor": self.terminal_receipt.projection()}' in projection:
+    raise SystemExit("mission_terminal_receipt_projection:retired_receipt_anchor_wrapper")
+if '"terminal_receipt": self.terminal_receipt.projection()' not in projection:
+    raise SystemExit("mission_terminal_receipt_projection:terminal_receipt_field_missing")
+for required in (
+    '"dependency_receipts"',
+    "child_is_receipt_anchored_and_inherits_subject_trace_and_parent_deadline",
+    'invocation_record.get("receipt").is_none()',
+    'invocation_record["terminal_receipt"]["receipt_ura"]',
+    'invocation_record["terminal_receipt"]["receipt_hash"]',
+):
+    if required not in text:
+        raise SystemExit(f"mission_terminal_receipt_projection:missing:{required}")
+PY
+}
+
 check_retired_federation_directory_v1_stream_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   "$PYTHON_BIN" - "$cli_root/src" "$cli_root/tests" "$cli_root/ability-descriptors/system/federation" <<'PY'
@@ -11545,6 +11574,7 @@ EOF
   check_device_settings_loader_contract
   check_mission_traditional_target_conflict_contract
   check_mission_runtime_meta_identity_schema_contract
+  check_mission_terminal_receipt_projection_contract
   check_edge_adapter_policy_contract
   check_sdk_product_neutrality_contract
   check_python_sdk_bytecode_index_contract
@@ -11684,6 +11714,7 @@ check_session_prelude_receipt_contract
 check_device_settings_loader_contract
 check_mission_traditional_target_conflict_contract
 check_mission_runtime_meta_identity_schema_contract
+check_mission_terminal_receipt_projection_contract
 check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_python_sdk_bytecode_index_contract

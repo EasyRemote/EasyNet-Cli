@@ -259,7 +259,7 @@ impl MissionInvocationRecord {
             "dependency_receipts": self.dependency_receipts.iter()
                 .map(MissionReceiptReference::projection)
                 .collect::<Vec<_>>(),
-            "receipt": {"anchor": self.terminal_receipt.projection()},
+            "terminal_receipt": self.terminal_receipt.projection(),
         })
     }
 
@@ -1339,10 +1339,11 @@ mod tests {
             .as_str()
             .expect("child record has canonical Invocation URA");
         assert!(child_invocation_ura.starts_with("easynet:///"));
-        assert!(invocation_record["receipt"]["anchor"]["receipt_ura"]
+        assert!(invocation_record.get("receipt").is_none());
+        assert!(invocation_record["terminal_receipt"]["receipt_ura"]
             .as_str()
             .is_some_and(|receipt_ura| receipt_ura.starts_with(child_invocation_ura)));
-        assert!(invocation_record["receipt"]["anchor"]["receipt_hash"]
+        assert!(invocation_record["terminal_receipt"]["receipt_hash"]
             .as_str()
             .is_some_and(|receipt_hash| receipt_hash.len() == 64));
 
