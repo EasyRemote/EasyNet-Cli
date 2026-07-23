@@ -295,6 +295,10 @@ impl RemoteAbilityInvocationTarget {
         &self.public_ability
     }
 
+    pub(crate) fn public_ability(&self) -> &str {
+        &self.public_ability
+    }
+
     pub(crate) fn callee_ura(&self) -> &str {
         &self.callee_ura
     }
@@ -367,6 +371,7 @@ impl RemoteInvocationNonce {
 /// subject, nonce, and causal derivation policy explicit before lowering into
 /// `RemoteInvocationRequest`, which then enters the existing descriptor-bound
 /// runtime path.
+#[derive(Debug)]
 pub(crate) struct RemoteInvocationTuplePlan<'a> {
     target: &'a RemoteAbilityInvocationTarget,
     caller_ura: String,
@@ -486,13 +491,13 @@ impl<'a> RemoteInvocationTuplePlan<'a> {
 pub(crate) struct RemoteSystemInvocationIssuer;
 
 impl RemoteSystemInvocationIssuer {
-    pub(crate) fn root_plan<'a>(
+    pub(crate) fn target_owned_root_plan<'a>(
         target: &'a RemoteAbilityInvocationTarget,
         caller_ura: impl Into<String>,
-        subject: RemoteInvocationSubject,
         args: Value,
         timeout: Duration,
     ) -> anyhow::Result<RemoteInvocationTuplePlan<'a>> {
+        let subject = target_owned_remote_system_subject(target)?;
         RemoteInvocationTuplePlan::system_root_with_explicit_nonce(
             target,
             caller_ura,
@@ -502,6 +507,39 @@ impl RemoteSystemInvocationIssuer {
             timeout,
         )
     }
+}
+
+fn target_owned_remote_system_subject(
+    target: &RemoteAbilityInvocationTarget,
+) -> anyhow::Result<RemoteInvocationSubject> {
+    if is_receipt_history_ability(target.public_ability()) {
+        anyhow::bail!(
+            "receipt history ability `{}` is not a target-owned remote system ability; \
+             use the canonical invocation history read path",
+            target.public_ability()
+        );
+    }
+    let callee = crate::core::ura::parse_ura(target.callee_ura())
+        .map_err(|error| anyhow!("remote system callee URA is invalid: {error}"))?;
+    let subject_ura = match callee.kind {
+        crate::core::ura::URAKind::Device => target.callee_ura().to_string(),
+        crate::core::ura::URAKind::Authority => target.as_str().to_string(),
+        other => anyhow::bail!(
+            "target-owned remote system ability requires Device or Hub callee, got {other}"
+        ),
+    };
+    Ok(RemoteInvocationSubject::DaemonTargetOwned(subject_ura))
+}
+
+fn is_receipt_history_ability(ability: &str) -> bool {
+    matches!(
+        ability.trim(),
+        crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
+            | crate::daemon::ability::names::governance::INVOCATION_HISTORY_GET
+            | crate::daemon::ability::names::governance::INVOCATION_HISTORY_PATH
+            | crate::daemon::ability::names::governance::INVOCATION_RECORD_GET
+            | crate::daemon::ability::names::governance::INVOCATION_TRACE_GET
+    )
 }
 
 /// Issuer for child/continuation remote calls spawned from admitted runtime
@@ -1551,10 +1589,9 @@ mod tests {
             "federation.resolve",
         )
         .expect("target");
-        let plan = RemoteSystemInvocationIssuer::root_plan(
+        let plan = RemoteSystemInvocationIssuer::target_owned_root_plan(
             &target,
             "easynet:///r/realm/device/caller",
-            RemoteInvocationSubject::DaemonTargetOwned(target.as_str().to_string()),
             Value::Null,
             Duration::from_secs(30),
         )
@@ -1571,6 +1608,30 @@ mod tests {
         assert_eq!(request.subject_ura, target.as_str());
         assert_ne!(request.invocation_nonce, [0; 16]);
         assert_eq!(request.causal_context, CausalContext::None);
+    }
+
+    #[test]
+    fn remote_system_issuer_rejects_receipt_history_as_target_owned() {
+        let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
+            "easynet:///r/realm/device/node-a",
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+        )
+        .expect("target");
+
+        let error = RemoteSystemInvocationIssuer::target_owned_root_plan(
+            &target,
+            "easynet:///r/realm/device/caller",
+            json!({"limit": 5}),
+            Duration::from_secs(30),
+        )
+        .expect_err("receipt history must not use target-owned remote system dispatch");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("receipt history ability `invocation.history.list`")
+                && message.contains("canonical invocation history read path"),
+            "wrong error: {message}"
+        );
     }
 
     #[test]

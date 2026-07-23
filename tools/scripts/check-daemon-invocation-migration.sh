@@ -347,7 +347,7 @@ for path in sorted((root / "src").rglob("*.rs")):
         function = enclosing_function_name(production, match.start())
         if (rel, function) not in {
             ("src/support/platform/local_invoke.rs", "root_context"),
-            ("src/daemon/invocation/routing/remote_invoke.rs", "root_plan"),
+            ("src/daemon/invocation/routing/remote_invoke.rs", "target_owned_root_plan"),
             ("src/daemon/invocation/routing/remote_invoke.rs", "child_plan"),
         }:
             violations.append(
@@ -397,7 +397,7 @@ for token, detail in (
     ("pub(crate) struct RemoteInvocationTuplePlan", "inspectable remote tuple plan"),
     ("pub(crate) fn public_explicit", "public explicit tuple constructor"),
     ("pub(crate) struct RemoteSystemInvocationIssuer", "daemon-system remote issuer"),
-    ("pub(crate) fn root_plan", "daemon-system remote root issuer constructor"),
+    ("pub(crate) fn target_owned_root_plan", "daemon-system target-owned remote root issuer constructor"),
     ("pub(crate) struct RemoteChildInvocationIssuer", "runtime child remote issuer"),
     ("pub(crate) fn child_plan", "runtime child remote issuer constructor"),
     ("InvocationCausalContext::daemon_system_root()", "shared daemon-system causal policy"),

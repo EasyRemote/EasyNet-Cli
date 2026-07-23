@@ -6266,9 +6266,20 @@ for required in (
     "RemoteInvocationSubject::CallerDeclared(subject_ura.into())",
     "Self::CallerDeclared(value) => (value, \"caller-declared subject\")",
     "Self::DaemonTargetOwned(value) => (value, \"daemon target-owned subject\")",
+    "pub(crate) fn target_owned_root_plan<'a>(",
+    "fn target_owned_remote_system_subject(",
+    "fn is_receipt_history_ability(",
+    "canonical invocation history read path",
 ):
     if required not in remote:
         raise SystemExit(f"remote_invocation_subject_provenance:missing_remote_state:{required}")
+
+for retired in (
+    "pub(crate) fn root_plan<'a>(",
+    "RemoteSystemInvocationIssuer::root_plan(",
+):
+    if retired in production:
+        raise SystemExit(f"remote_invocation_subject_provenance:retired_system_subject_callsite:{retired}")
 
 for retired in (
     "RemoteDescriptorCatalogProbe",
@@ -6281,6 +6292,7 @@ for retired in (
 for required_test in (
     'assert_eq!(plan.subject.policy_name(), "CallerDeclared")',
     'assert_eq!(plan.subject.policy_name(), "DaemonTargetOwned")',
+    "remote_system_issuer_rejects_receipt_history_as_target_owned",
 ):
     if required_test not in remote:
         raise SystemExit(f"remote_invocation_subject_provenance:missing_test:{required_test}")
