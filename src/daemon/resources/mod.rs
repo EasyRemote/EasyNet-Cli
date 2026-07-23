@@ -8,4 +8,5 @@ pub mod context;
 pub mod files;
 pub mod media;
 pub mod pages;
+pub mod projection;
 pub mod skills;

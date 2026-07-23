@@ -46,7 +46,8 @@ use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
-use crate::daemon::persistence::resources::{self, filter_by_kinds, ResourceEntry, ResourceType};
+use crate::daemon::persistence::resources::{self, filter_by_kinds, ResourceType};
+use crate::daemon::resources::projection::ResourceListResponse;
 
 pub const ABILITY_META_LIST_RESOURCES: &str =
     crate::daemon::ability::names::resources::META_LIST_RESOURCES;
@@ -82,8 +83,9 @@ fn handler(args: Value) -> anyhow::Result<Value> {
     let kinds = parse_kinds(args.get("types"))?;
     let file = resources::load()?;
     let entries = filter_by_kinds(&file, &kinds);
-    let wire: Vec<Value> = entries.iter().map(|e| project(e)).collect();
-    Ok(json!({ "resources": wire }))
+    Ok(serde_json::to_value(ResourceListResponse::from_entries(
+        entries,
+    ))?)
 }
 
 /// Parse the optional `types` arg into a typed `ResourceType`
@@ -110,23 +112,6 @@ fn parse_kinds(raw: Option<&Value>) -> anyhow::Result<Vec<ResourceType>> {
             .collect(),
         other => anyhow::bail!("`types` must be an array of strings, got {other}"),
     }
-}
-
-/// Project a single `ResourceEntry` to the per-resource wire
-/// shape. Only the public fields go on the wire — `first_seen_at`
-/// and `hardware_id` are audit fields that stay file-local
-/// (operator-inspectable via `cat ~/.easynet/resources.json` but
-/// not protocol-exposed; `hardware_id` would leak the platform
-/// device-naming scheme to remote callers).
-fn project(e: &ResourceEntry) -> Value {
-    json!({
-        "resource_ura": e.resource_ura,
-        "owner_agent":  e.owner_agent,
-        "type":         e.kind.as_str(),
-        "binding":      e.binding.as_str(),
-        "display_name": e.display_name,
-        "metadata":     e.metadata,
-    })
 }
 
 /// JSON Schema for `args`. The `enum` for `types[]` derives from

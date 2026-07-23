@@ -1445,6 +1445,79 @@ for required in (
 PY
 }
 
+check_resource_list_projection_boundary_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local projection="$cli_root/src/daemon/resources/projection.rs"
+  local resources_mod="$cli_root/src/daemon/resources/mod.rs"
+  local list="$cli_root/src/daemon/ability/builtins/resources/list.rs"
+  [[ -f "$projection" ]] || fail "daemon resource projection source is missing: $projection"
+  [[ -f "$resources_mod" ]] || fail "daemon resources module source is missing: $resources_mod"
+  [[ -f "$list" ]] || fail "meta.list_resources ability source is missing: $list"
+
+  "$PYTHON_BIN" - "$projection" "$resources_mod" "$list" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+projection, resources_mod, list_src = [
+    Path(arg).read_text(encoding="utf-8") for arg in sys.argv[1:]
+]
+
+if "pub mod projection;" not in resources_mod:
+    raise SystemExit("resource_list_projection_boundary:projection_module_not_exported")
+
+for struct_name in ("ResourceListEntry", "ResourceListResponse"):
+    struct = re.search(
+        rf"(?P<attrs>(?:#\[[^\n]+\]\n)*)pub struct {struct_name} \{{(?P<body>.*?)\n\}}",
+        projection,
+        re.S,
+    )
+    if struct is None:
+        raise SystemExit(f"resource_list_projection_boundary:struct_missing:{struct_name}")
+    if "#[serde(deny_unknown_fields)]" not in struct.group("attrs"):
+        raise SystemExit(f"resource_list_projection_boundary:struct_not_strict:{struct_name}")
+
+for required in (
+    "pub struct ResourceListEntry",
+    "pub resource_ura: String",
+    "pub owner_agent: String",
+    '#[serde(rename = "type")]',
+    "pub entry_type: String",
+    "pub binding: String",
+    "pub display_name: String",
+    "pub metadata: Value",
+    "pub fn from_resource_entry(entry: &ResourceEntry) -> Self",
+    "pub struct ResourceListResponse",
+    "pub resources: Vec<ResourceListEntry>",
+    "pub fn from_entries",
+    "ResourceListEntry::from_resource_entry",
+    "resource_list_entry_preserves_public_shape_without_persistence_fields",
+    "resource_list_response_preserves_public_shape",
+    "resource_list_entry_rejects_unknown_fields",
+    "resource_list_response_rejects_unknown_fields",
+):
+    if required not in projection:
+        raise SystemExit(f"resource_list_projection_boundary:projection_missing:{required}")
+
+for retired in (
+    "fn project(",
+    "ResourceEntry",
+    'Ok(json!({ "resources": wire }))',
+    "Vec<Value> = entries.iter().map",
+):
+    if retired in list_src:
+        raise SystemExit(f"resource_list_projection_boundary:list_retired:{retired}")
+
+for required in (
+    "ResourceListResponse::from_entries(",
+    "serde_json::to_value(ResourceListResponse::from_entries(",
+    "handler_with_no_args_returns_resources_field",
+):
+    if required not in list_src:
+        raise SystemExit(f"resource_list_projection_boundary:list_missing:{required}")
+PY
+}
+
 check_local_agents_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local local_agents="$cli_root/src/daemon/persistence/local_agents.rs"
@@ -12065,6 +12138,32 @@ EOF
   if ( CLI_ROOT="$tmp/skill-record-projection-boundary-legacy"; check_skill_record_projection_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected skill record projection boundary gate to fail"
   fi
+  mkdir -p "$tmp/resource-list-projection-boundary-legacy/src/daemon/resources"
+  mkdir -p "$tmp/resource-list-projection-boundary-legacy/src/daemon/ability/builtins/resources"
+  cat >"$tmp/resource-list-projection-boundary-legacy/src/daemon/resources/mod.rs" <<'EOF'
+pub mod media;
+EOF
+  cat >"$tmp/resource-list-projection-boundary-legacy/src/daemon/resources/projection.rs" <<'EOF'
+pub struct ResourceListResponse {
+    pub resources: Vec<serde_json::Value>,
+}
+EOF
+  cat >"$tmp/resource-list-projection-boundary-legacy/src/daemon/ability/builtins/resources/list.rs" <<'EOF'
+fn project(e: &ResourceEntry) -> Value {
+    json!({
+        "resource_ura": e.resource_ura,
+        "type": e.kind.as_str(),
+    })
+}
+
+fn handler(entries: Vec<ResourceEntry>) -> Value {
+    let wire: Vec<Value> = entries.iter().map(|e| project(e)).collect();
+    Ok(json!({ "resources": wire }))
+}
+EOF
+  if ( CLI_ROOT="$tmp/resource-list-projection-boundary-legacy"; check_resource_list_projection_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected resource list projection boundary gate to fail"
+  fi
   mkdir -p "$tmp/local-agents-schema-legacy/src/daemon/persistence"
   cat >"$tmp/local-agents-schema-legacy/src/daemon/persistence/local_agents.rs" <<'EOF'
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -12505,6 +12604,7 @@ EOF
   check_chat_session_index_schema_contract
   check_skill_install_record_schema_contract
   check_skill_record_projection_boundary_contract
+  check_resource_list_projection_boundary_contract
   check_local_agents_schema_contract
   check_profile_store_schema_contract
   check_auth_session_owner_fact_contract
@@ -12654,6 +12754,7 @@ check_runtime_state_kind_required_contract
 check_federation_realm_resolver_contract
 check_skill_install_record_schema_contract
 check_skill_record_projection_boundary_contract
+check_resource_list_projection_boundary_contract
 check_profile_store_schema_contract
 check_auth_session_owner_fact_contract
 check_resources_schema_contract
