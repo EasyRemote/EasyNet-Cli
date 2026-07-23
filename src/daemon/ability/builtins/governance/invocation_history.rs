@@ -1070,9 +1070,18 @@ fn filter_schema() -> Value {
 mod tests {
     use super::*;
 
+    fn invocation_history_test_catalog() -> AxonAbilityCatalog {
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                "easynet:///r/test/device/invocation-history",
+            )
+            .expect("explicit invocation-history test Device authority must be canonical");
+        AxonAbilityCatalog::new_metadata_only_with_authority_context(authority_context)
+    }
+
     #[test]
     fn registration_makes_invocation_history_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = invocation_history_test_catalog();
         register(&mut reg, None);
         assert!(reg.get_rpc(ABILITY_HISTORY_LIST).is_some());
         assert!(reg.get_rpc(ABILITY_HISTORY_GET).is_some());
@@ -1105,7 +1114,7 @@ mod tests {
 
     #[test]
     fn registration_publishes_invocation_history_manifests() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = invocation_history_test_catalog();
         register(&mut reg, None);
 
         for ability in [
