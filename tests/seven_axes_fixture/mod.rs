@@ -90,6 +90,10 @@ pub struct SevenAxesHome {
     /// the daemon while the database (like all state) belongs to the
     /// HOME, not to the process.
     pub ledger: Arc<axon_sdk::invocation::InvocationLedger>,
+    /// HOME-owned transport-boundary attempt ledger path. Production boot
+    /// refuses to serve Invocation without this audit sidecar; the fixture
+    /// constructs the service directly, so it must pass the same boot fact.
+    attempt_ledger_path: PathBuf,
     /// Canonical URA of the second seeded agent (`zlearner` — named
     /// to sort AFTER `testbot` so ladder resolution and self-tier
     /// attribution in the W1 assertions stay put). Publishes no
@@ -213,7 +217,7 @@ impl SevenAxesHome {
         std::fs::create_dir_all(&agent_root).expect("agent root");
         std::fs::write(
             agent_root.join("agent.toml"),
-            "name = \"testbot\"\nruntime = \"claude-code\"\n",
+            "schema_version = \"1\"\nname = \"testbot\"\nruntime = \"claude-code\"\n",
         )
         .expect("write minimal agent.toml");
 
@@ -221,7 +225,7 @@ impl SevenAxesHome {
         std::fs::create_dir_all(learner_root.join("abilities")).expect("learner root");
         std::fs::write(
             learner_root.join("agent.toml"),
-            "name = \"zlearner\"\nruntime = \"claude-code\"\n",
+            "schema_version = \"1\"\nname = \"zlearner\"\nruntime = \"claude-code\"\n",
         )
         .expect("write learner agent.toml");
 
@@ -332,6 +336,9 @@ added_at_unix_ms = 0
 
         let ledger_path = easynet_cli::daemon::persistence::daemon_config::default_ledger_dir()
             .join("invocations.redb");
+        let attempt_ledger_path =
+            easynet_cli::daemon::persistence::daemon_config::default_ledger_dir()
+                .join("invocation-attempts.jsonl");
         let ledger = Arc::new(
             axon_sdk::invocation::InvocationLedger::open(&ledger_path).expect("open test ledger"),
         );
@@ -370,6 +377,7 @@ added_at_unix_ms = 0
             testbot_ura,
             zlearner_ura,
             ledger,
+            attempt_ledger_path,
             descriptor_refs,
         }
     }
@@ -537,6 +545,7 @@ added_at_unix_ms = 0
             vec![self.testbot_ura.clone(), self.zlearner_ura.clone()],
             Arc::clone(&self.descriptor_refs),
             Arc::clone(&self.ledger),
+            self.attempt_ledger_path.clone(),
             true,
         )
     }
@@ -555,6 +564,7 @@ added_at_unix_ms = 0
             vec![self.testbot_ura.clone(), self.zlearner_ura.clone()],
             Arc::clone(&self.descriptor_refs),
             Arc::clone(&self.ledger),
+            self.attempt_ledger_path.clone(),
             false,
         )
     }
@@ -916,6 +926,7 @@ fn start_daemon_at(
     hosted_agent_uras: Vec<String>,
     descriptor_refs: DescriptorRefIndex,
     ledger: Arc<axon_sdk::invocation::InvocationLedger>,
+    attempt_ledger_path: PathBuf,
     publish_hosted_projection: bool,
 ) -> TestDaemon {
     let agents = easynet_cli::daemon::persistence::agent_registry::load_agents()
@@ -1037,6 +1048,8 @@ fn start_daemon_at(
         .with_local_ability_catalog(Arc::clone(&catalog))
         .with_daemon_runtime(daemon_runtime)
         .with_invocation_ledger(ledger)
+        .with_invocation_attempt_ledger_path(attempt_ledger_path)
+        .expect("wire seven-axes invocation attempt audit ledger")
         .with_register_pubkey("cli", trust_path, shared_trust_anchor);
     futures::executor::block_on(
         service.register_daemon_unary_routes_for_owners(&[daemon_ura.clone(), hub_ura.clone()]),
