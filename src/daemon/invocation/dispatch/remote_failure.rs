@@ -34,6 +34,9 @@ pub(crate) fn is_admission_denial_message(message: &str) -> bool {
 
 fn status_code_for_failure(raw_code: &str, detail: &str) -> Code {
     let code = raw_code.trim().to_ascii_uppercase();
+    if is_route_unavailable_message(&code, detail) {
+        return Code::Unavailable;
+    }
     if is_admission_denial_message(detail)
         || code == "PERMISSION_DENIED"
         || code.starts_with("AUTHORITY_")
@@ -83,6 +86,16 @@ fn status_code_for_failure(raw_code: &str, detail: &str) -> Code {
     Code::FailedPrecondition
 }
 
+fn is_route_unavailable_message(code: &str, detail: &str) -> bool {
+    let detail = detail.to_ascii_uppercase();
+    code == "ROUTE_UNAVAILABLE"
+        || code == "RUNTIME_ROUTE_UNAVAILABLE"
+        || code == "ROUTE_NEGATIVE"
+        || detail.contains("ROUTE_NEGATIVE")
+        || detail.contains("NEGATIVE_REASON_NXDOMAIN")
+        || detail.contains("OWNER IS NOT ONLINE")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +137,21 @@ mod tests {
             None,
         );
         assert_eq!(status.code(), Code::PermissionDenied);
+    }
+
+    #[test]
+    fn route_negative_owner_offline_is_route_unavailable_not_ability_absent() {
+        let failure = failure(
+            "ABILITY_NOT_FOUND",
+            "ROUTE_NEGATIVE: namespace.resolve negative for \
+             `easynet:///r/localhost/ability/device.dev-a.meta.list_abilities`: \
+             NEGATIVE_REASON_NXDOMAIN: owner is not online",
+        );
+
+        let status = status_from_remote_failure("remote Invoke", "ignored", Some(&failure));
+
+        assert_eq!(status.code(), Code::Unavailable);
+        assert!(status.message().contains("ROUTE_NEGATIVE"));
+        assert!(status.message().contains("owner is not online"));
     }
 }

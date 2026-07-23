@@ -155,6 +155,33 @@ check_bidi_dispatch_default_code_policy_contract() {
   fi
 }
 
+check_remote_failure_route_negative_classification_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local classifier="$cli_root/src/daemon/invocation/dispatch/remote_failure.rs"
+  [[ -f "$classifier" ]] || fail "remote failure classifier source is missing: ${classifier#$cli_root/}"
+
+  "$PYTHON_BIN" - "$classifier" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+required = {
+    "fn is_route_unavailable_message": "route_unavailable_helper_missing",
+    "detail.contains(\"ROUTE_NEGATIVE\")": "route_negative_detail_missing",
+    "detail.contains(\"NEGATIVE_REASON_NXDOMAIN\")": "nxdomain_detail_missing",
+    "detail.contains(\"OWNER IS NOT ONLINE\")": "owner_offline_detail_missing",
+    "route_negative_owner_offline_is_route_unavailable_not_ability_absent": "route_negative_test_missing",
+}
+for needle, marker in required.items():
+    if needle not in text:
+        raise SystemExit(f"remote_failure_route_negative:{marker}")
+route_index = text.find("is_route_unavailable_message(&code, detail)")
+not_found_index = text.find('matches!(code.as_str(), "NOT_FOUND" | "ABILITY_NOT_FOUND")')
+if route_index < 0 or not_found_index < 0 or route_index > not_found_index:
+    raise SystemExit("remote_failure_route_negative:not_found_checked_before_route_negative")
+PY
+}
+
 check_bidi_reverse_unary_terminal_state_contract() {
   local cli_root="${1:-$ROOT}"
   local escalation="$cli_root/src/daemon/invocation/bidi/session_escalation.rs"
@@ -15810,6 +15837,7 @@ check_ffi_runtime_sizing_policy_contract
 check_ffi_init_typed_connect_error_contract
 check_failure_code_default_policy_contract
 check_bidi_dispatch_default_code_policy_contract
+check_remote_failure_route_negative_classification_contract
 check_bidi_reverse_unary_terminal_state_contract
 check_cabi_bidi_cancel_reason_contract
 check_session_failure_wire_facts_contract
