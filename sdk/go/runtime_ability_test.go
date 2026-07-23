@@ -57,6 +57,29 @@ func TestRuntimeAbilityClientBuildRequiresExplicitCallMode(t *testing.T) {
 	}
 }
 
+func TestRuntimeAbilityClientRejectsAllZeroRuntimeCallPrincipalBeforeDescriptorResolution(t *testing.T) {
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(context.Context, []byte) ([]byte, error) {
+			t.Fatal("descriptor resolver transport must not be called for an all-zero runtime call tuple")
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	call := runtimeAbilityTestContext()
+	call.SubjectURA = "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history"
+
+	_, err = client.Build(context.Background(), call, "namespace.resolve", map[string]any{"name": "alice"})
+	if err == nil || !strings.Contains(err.Error(), "subject_ura must not be all-zero") {
+		t.Fatalf("Build error = %v, want all-zero subject rejection", err)
+	}
+}
+
 func TestRuntimeAbilityClientBuildsCompleteCanonicalDraft(t *testing.T) {
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
 		ResolveDescriptorRefFunc: testResolveDescriptorRef(t),

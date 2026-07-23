@@ -200,6 +200,23 @@ def test_runtime_ability_builds_complete_canonical_draft() -> None:
     assert draft.metadata == {"request_id": "call-1"}
 
 
+def test_runtime_ability_rejects_all_zero_runtime_call_principal_before_descriptor_resolution() -> None:
+    client, transport = _client()
+    call = RuntimeCallContext(
+        caller_ura=_call().caller_ura,
+        callee_ura=_call().callee_ura,
+        subject_ura="easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history",
+        nonce_base64=_call().nonce_base64,
+        causal_context=_call().causal_context,
+        metadata=_call().metadata,
+    )
+
+    with pytest.raises(SDKError, match="subject_ura must not be all-zero"):
+        client.build(call, "namespace.resolve", {"name": "alice"})
+
+    assert transport.descriptor_requests == []
+
+
 def test_runtime_ability_invokes_object_result() -> None:
     client, transport = _client()
     assert client.invoke(_call(), "namespace.resolve", {"name": "alice"}) == {

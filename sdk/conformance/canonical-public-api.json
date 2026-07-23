@@ -14879,7 +14879,7 @@
           "identity": "ability_invocation_facade",
           "owner_path": "sdk/go/",
           "path": "sdk/go/runtime_ability.go",
-          "sha256": "a245a7fcea394b6a34d3447dd34a615a37ed3b4e35a224be4ffa4841606685e2",
+          "sha256": "4d51412551f236d6ca2c526ae08c00b1f519187fd5cd596132879e19cddb2eb8",
           "interface": "RuntimeAbilityClient",
           "revision": "dd9152570d83d1f6f382d6a464898316600a31a3"
         },
@@ -18413,9 +18413,9 @@
       "AuthorizedRuntimeSession.prepare": "a6568cfe9c2ac2a3483b11fdf6faab17ae87d3497702567e58ca84ffa6a941bb",
       "AuthorizedRuntimeSession.sign": "597257733b9757419c6da061cc212c3f35e67c07f4b2b8d750871dbb013379c9",
       "AuthorizedRuntimeSession.submit": "ca34c6771cb481c583eb2124650a2a3952921e513706f703ebb0711996cccf6d",
-      "AxonAddressingTransport": "94946a924bd306fb56630eeee8755add8da11f9ddadb314a52aba0a596eb5433",
+      "AxonAddressingTransport": "b9988695e673bfa0f011313ed37cf049e76099f22f4fefbc7e1e69f0f26b4260",
       "AxonAddressingTransport.build_descriptor_ref": "123bbcafebad6921ba3719ecfd773e3638254f5bc48ff6092e414c3077703dcf",
-      "AxonAddressingTransport.build_ura": "2fb810c0f0b551f7893780454d17e7d502bcb0521dab957daba0175bf6a3fef3",
+      "AxonAddressingTransport.build_ura": "d340e69e6afa76e31da8281aba97fbccec3579c41c7c66bb830c5a506b2a3dce",
       "AxonAddressingTransport.close": "a5cbc63f606a2f1d00d0ddd107d98a028930221ccb5e3eff66763a0d57c98832",
       "AxonAddressingTransport.project_descriptor_ref": "a5b444e506fe22532cd7c7fcf756486765bcde7f52d9b5f167a241cd61ed6cdb",
       "AxonAddressingTransport.project_identity": "ff08338a24825d18ba2aa0700e6970b8dea4568d0763f199b7b188965c328c6a",
@@ -22028,10 +22028,10 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/runtime_ability.go",
-      "sha256": "a245a7fcea394b6a34d3447dd34a615a37ed3b4e35a224be4ffa4841606685e2",
+      "sha256": "4d51412551f236d6ca2c526ae08c00b1f519187fd5cd596132879e19cddb2eb8",
       "interface": "RuntimeAbilityClient",
       "interface_path": "sdk/go/runtime_ability.go",
-      "interface_sha256": "a245a7fcea394b6a34d3447dd34a615a37ed3b4e35a224be4ffa4841606685e2",
+      "interface_sha256": "4d51412551f236d6ca2c526ae08c00b1f519187fd5cd596132879e19cddb2eb8",
       "capability_ids": [
         "ability_invocation_facade"
       ],

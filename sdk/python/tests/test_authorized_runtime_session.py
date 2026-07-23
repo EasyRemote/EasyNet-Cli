@@ -112,6 +112,25 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.AUTHORITY_SUBJECT_MISMATCH))
         self.assertEqual(fixture.receipts.list_calls, 0)
 
+    def test_history_rejects_all_zero_subject_before_receipt_provider(self) -> None:
+        fixture = _SessionFixture()
+        request = ReceiptListRequest(
+            call=RuntimeCallContext(
+                caller_ura="easynet:///r/example/agent/backend",
+                callee_ura="easynet:///r/example/device/dev-a",
+                subject_ura="easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history",
+                nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                causal_context={"form": "none"},
+                authority=_session_authority(),
+            ),
+            limit=10,
+        )
+
+        with self.assertRaisesRegex(SDKError, "subject_ura must not be all-zero"):
+            fixture.session.history.list(request)
+
+        self.assertEqual(fixture.receipts.list_calls, 0)
+
     def test_history_allows_user_owned_resource_subject_before_receipt_provider(self) -> None:
         fixture = _SessionFixture()
         request = ReceiptListRequest(

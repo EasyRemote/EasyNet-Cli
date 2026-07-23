@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -114,6 +115,32 @@ func TestAuthorizedRuntimeSessionHistoryRejectsAuthoritySubjectMismatchBeforeRec
 	}
 	if session.receipts.listCalls != 0 {
 		t.Fatalf("receipt provider called after mismatch: %d", session.receipts.listCalls)
+	}
+}
+
+func TestAuthorizedRuntimeSessionHistoryRejectsAllZeroSubjectBeforeReceiptProvider(t *testing.T) {
+	session := newAuthorizedRuntimeSessionFixture(t)
+	request := ReceiptListRequest{
+		Call: RuntimeCallContext{
+			CallerURA:     "easynet:///r/example/agent/backend",
+			CalleeURA:     "easynet:///r/example/device/dev-a",
+			SubjectURA:    "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history",
+			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
+			CausalContext: map[string]any{"form": "none"},
+			Authority: sessionAuthorityFixture(t, map[string]any{
+				"scopes":                     []string{"invocation.history.list"},
+				"allowed_followup_abilities": []string{"invocation.history.list"},
+			}),
+		},
+		Limit: 10,
+	}
+
+	_, err := session.sdk.History().List(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "subject_ura must not be all-zero") {
+		t.Fatalf("history list error = %v, want all-zero subject rejection", err)
+	}
+	if session.receipts.listCalls != 0 {
+		t.Fatalf("receipt provider called after all-zero subject: %d", session.receipts.listCalls)
 	}
 }
 

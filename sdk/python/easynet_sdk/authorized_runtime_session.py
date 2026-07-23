@@ -39,7 +39,11 @@ from .runtime import (
     RuntimeReceipt,
     StreamHandle,
 )
-from .runtime_ability import RuntimeCallContext, RuntimeInvocationAuthority
+from .runtime_ability import (
+    RuntimeCallContext,
+    RuntimeInvocationAuthority,
+    _validate_runtime_call_context,
+)
 from ._session_authority_subjects import session_authority_admits_subject
 from .signing import PreparedInvocation, SignedInvocation, Signer, SigningMaterial
 
@@ -714,23 +718,16 @@ def _validate_session_history_request(request: ReceiptListRequest) -> None:
 
 
 def _validate_session_history_call(call: RuntimeCallContext) -> None:
-    if not isinstance(call, RuntimeCallContext):
+    try:
+        _validate_runtime_call_context(call)
+    except SDKError as error:
         raise _session_error(
             ErrorCode.INVALID_INVOCATION,
             "history",
-            "runtime call context is required",
-        )
-    _validate_runtime_call_required(call.caller_ura, "caller_ura")
-    _validate_runtime_call_required(call.callee_ura, "callee_ura")
-    _validate_runtime_call_required(call.subject_ura, "subject_ura")
-    _validate_runtime_call_required(call.nonce_base64, "nonce_base64")
-    if not isinstance(call.causal_context, Mapping):
-        raise _session_error(
-            ErrorCode.INVALID_INVOCATION,
-            "history",
-            "causal_context is required",
-            _runtime_call_details(call),
-        )
+            error.message,
+            _runtime_call_details(call) if isinstance(call, RuntimeCallContext) else None,
+            error,
+        ) from error
     authority = _runtime_call_authority(call)
     if authority is None:
         raise _session_error(
@@ -880,15 +877,6 @@ def _validate_session_history_authority_binding(
             "session authority scopes do not admit invocation.history.list",
             details,
         )
-
-def _validate_runtime_call_required(value: str, field_name: str) -> None:
-    if not value.strip():
-        raise _session_error(
-            ErrorCode.INVALID_INVOCATION,
-            "history",
-            f"{field_name} is required",
-        )
-
 
 def _runtime_call_details(call: RuntimeCallContext) -> dict[str, object]:
     return {

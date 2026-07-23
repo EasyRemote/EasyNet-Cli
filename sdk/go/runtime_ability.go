@@ -311,6 +311,9 @@ func validateRuntimeCallContext(call RuntimeCallContext) error {
 		if strings.TrimSpace(field.value) == "" {
 			return invalidRuntimePayload(field.name+" is required", nil)
 		}
+		if field.name != "nonce_base64" && containsAllZeroPrincipal(field.value) {
+			return invalidRuntimePayload(field.name+" must not be all-zero", nil)
+		}
 	}
 	if call.CausalContext == nil {
 		return invalidRuntimePayload("causal_context is required", nil)

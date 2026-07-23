@@ -7,6 +7,7 @@ import binascii
 from dataclasses import dataclass, field
 from typing import Mapping, TypeAlias
 
+from ._identity_guards import contains_all_zero_principal
 from .axon_addressing import AddressingClient, AddressingProjection
 from .authority import (
     DELEGATION_METADATA_KEY,
@@ -165,17 +166,27 @@ class RuntimeAbilityClient:
 
 
 def _validate_call(call: RuntimeCallContext) -> None:
-    if not isinstance(call, RuntimeCallContext):
-        raise _invalid("runtime call context is required")
-    _required_text(call.caller_ura, "caller_ura")
-    _required_text(call.callee_ura, "callee_ura")
-    _required_text(call.subject_ura, "subject_ura")
+    _validate_runtime_call_context(call)
     nonce = _required_text(call.nonce_base64, "nonce_base64")
     try:
         if not base64.b64decode(nonce, validate=True):
             raise ValueError("empty nonce")
     except (ValueError, binascii.Error) as error:
         raise _invalid("nonce_base64 must be canonical base64", error) from error
+
+
+def _validate_runtime_call_context(call: RuntimeCallContext) -> None:
+    if not isinstance(call, RuntimeCallContext):
+        raise _invalid("runtime call context is required")
+    for field_name, value in (
+        ("caller_ura", call.caller_ura),
+        ("callee_ura", call.callee_ura),
+        ("subject_ura", call.subject_ura),
+        ("nonce_base64", call.nonce_base64),
+    ):
+        _required_text(value, field_name)
+        if field_name != "nonce_base64" and contains_all_zero_principal(value):
+            raise _invalid(f"{field_name} must not be all-zero")
     if not isinstance(call.causal_context, Mapping):
         raise _invalid("causal_context is required")
 
