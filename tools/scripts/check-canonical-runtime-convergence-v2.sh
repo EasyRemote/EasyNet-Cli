@@ -854,6 +854,53 @@ for retired in (
 PY
 }
 
+check_runtime_state_kind_required_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local config_rs="$cli_root/src/daemon/persistence/config.rs"
+  [[ -f "$config_rs" ]] || fail "daemon persistence config source is missing: $config_rs"
+
+  "$PYTHON_BIN" - "$config_rs" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+runtime_kind = re.search(
+    r"(?P<derive>#\[derive\([^\]]*\)\]\s*)#\[serde\(rename_all = \"snake_case\"\)\]\s*pub enum RuntimeKind \{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if runtime_kind is None:
+    raise SystemExit("runtime_state_kind_required:runtime_kind_enum_missing")
+if "Default" in runtime_kind.group("derive") or "#[default]" in runtime_kind.group("body"):
+    raise SystemExit("runtime_state_kind_required:runtime_kind_default_retired")
+
+state = re.search(
+    r"pub struct RuntimeState \{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if state is None:
+    raise SystemExit("runtime_state_kind_required:runtime_state_missing")
+state_body = state.group("body")
+if "pub runtime_kind: RuntimeKind" not in state_body:
+    raise SystemExit("runtime_state_kind_required:runtime_kind_field_missing")
+runtime_kind_offset = state_body.find("pub runtime_kind: RuntimeKind")
+field_prefix = state_body[max(0, runtime_kind_offset - 80):runtime_kind_offset]
+if "#[serde(default)]" in field_prefix:
+    raise SystemExit("runtime_state_kind_required:serde_default_retired")
+if "runtime_state_defaults_to_daemon_when_kind_missing" in text:
+    raise SystemExit("runtime_state_kind_required:legacy_default_test_retired")
+for required in (
+    "runtime_state_rejects_missing_runtime_kind",
+    "missing field `runtime_kind`",
+):
+    if required not in text:
+        raise SystemExit(f"runtime_state_kind_required:missing_test:{required}")
+PY
+}
+
 check_sdk_history_authority_subject_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -7756,6 +7803,27 @@ EOF
   if ( check_local_runtime_state_read_subject_contract "$tmp/local-runtime-state-read-subject-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected local runtime-state read subject gate to fail"
   fi
+  mkdir -p "$tmp/runtime-state-kind-default-legacy/src/daemon/persistence"
+  cat >"$tmp/runtime-state-kind-default-legacy/src/daemon/persistence/config.rs" <<'EOF'
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeKind {
+    #[default]
+    DaemonOnly,
+}
+
+pub struct RuntimeState {
+    pub endpoint: String,
+    #[serde(default)]
+    pub runtime_kind: RuntimeKind,
+    pub pid: Option<u32>,
+}
+
+fn runtime_state_defaults_to_daemon_when_kind_missing() {}
+EOF
+  if ( check_runtime_state_kind_required_contract "$tmp/runtime-state-kind-default-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected runtime-state runtime_kind default gate to fail"
+  fi
   mkdir -p "$tmp/sdk-history-authority-legacy/sdk/go" \
     "$tmp/sdk-history-authority-legacy/sdk/python/easynet_sdk" \
     "$tmp/sdk-history-authority-legacy/sdk/python/tests"
@@ -8819,6 +8887,7 @@ EOF
   check_invocation_history_filter_scope_contract
   check_cli_invocation_history_read_model_contract
   check_local_runtime_state_read_subject_contract
+  check_runtime_state_kind_required_contract
   check_sdk_history_authority_subject_contract
   check_sdk_descriptor_resolution_error_vocabulary_contract
   check_sdk_ability_descriptor_not_found_vocabulary_contract
@@ -8931,6 +9000,7 @@ check_resolve_key_request_dto_contract
 check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
 check_local_runtime_state_read_subject_contract
+check_runtime_state_kind_required_contract
 check_sdk_history_authority_subject_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_ability_descriptor_not_found_vocabulary_contract

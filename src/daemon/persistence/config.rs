@@ -265,18 +265,16 @@ pub const DEFAULT_TENANT: &str = "easynet-platform";
 pub const DEFAULT_BIND: &str = "0.0.0.0:50051";
 
 /// Process shape recorded by the runtime session projection.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeKind {
     /// Unified EasyNet daemon. `state.endpoint` is the local Invocation UDS.
-    #[default]
     DaemonOnly,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeState {
     pub endpoint: String,
-    #[serde(default)]
     pub runtime_kind: RuntimeKind,
     pub pid: Option<u32>,
     pub hub: Option<String>,
@@ -1023,16 +1021,19 @@ mod tests {
     }
 
     #[test]
-    fn runtime_state_defaults_to_daemon_when_kind_missing() {
-        let state: RuntimeState = serde_json::from_str(
+    fn runtime_state_rejects_missing_runtime_kind() {
+        let err = serde_json::from_str::<RuntimeState>(
             r#"{
                 "endpoint": "/tmp/easynet-daemon.sock",
                 "pid": 7,
                 "tenant": "tenant-a"
             }"#,
         )
-        .expect("deserialize runtime state");
-        assert_eq!(state.runtime_kind, RuntimeKind::DaemonOnly);
+        .expect_err("runtime projection must carry explicit runtime_kind");
+        assert!(
+            err.to_string().contains("missing field `runtime_kind`"),
+            "unexpected runtime projection error: {err}"
+        );
     }
 
     #[test]
