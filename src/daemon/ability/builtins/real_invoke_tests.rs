@@ -385,22 +385,26 @@ fn terminal_followup_target(
     action: &str,
 ) -> InvocationTarget {
     use base64::Engine;
+    const SESSION_OWNER_USER_ID: &str = "real-invoke-test-user";
+
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock after epoch")
         .as_millis() as i64;
-    let callee = crate::core::ura::device_ura("default", "local");
+    let callee = authority_fixture_device_ura();
+    let subject_owner = format!("user.{SESSION_OWNER_USER_ID}");
+    let subject_ura = crate::core::ura::resource_dot_ura(
+        "localhost",
+        &subject_owner,
+        &format!("session/{session_id}"),
+    );
     let payload = json!({
         "issuer_ura": crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
         "session_id": session_id,
-        "session_owner_user_id": "real-invoke-test-user",
+        "session_owner_user_id": SESSION_OWNER_USER_ID,
         "creator_principal_id": crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
         "callee_ura": callee,
-        "subject_ura": crate::core::ura::resource_dot_ura(
-            "default",
-            "user.real-invoke-test-user",
-            &format!("session/{session_id}"),
-        ),
+        "subject_ura": subject_ura,
         "audience": callee,
         "scopes": [name],
         "allowed_actions": [action],
