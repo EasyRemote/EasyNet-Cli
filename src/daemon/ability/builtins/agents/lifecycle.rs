@@ -2580,28 +2580,6 @@ fn decorate_purge_publication_response(
         "publication_error".to_string(),
         json!(own_publication_error.clone()),
     );
-    let legacy_publication_state = if !committed.publication_required {
-        "not_applicable"
-    } else if reconciliation_required {
-        "failed"
-    } else if publication_pending {
-        "pending"
-    } else {
-        "succeeded"
-    };
-    object.insert(
-        "hub_tombstone_state".to_string(),
-        json!(legacy_publication_state),
-    );
-    object.insert(
-        "hub_tombstone_error".to_string(),
-        json!(own_publication_error.clone()),
-    );
-    object.insert(
-        "hub_revoke_state".to_string(),
-        json!(legacy_publication_state),
-    );
-    object.insert("hub_revoke_error".to_string(), json!(own_publication_error));
     Ok(())
 }
 
@@ -2643,10 +2621,8 @@ fn stop_agent_locked(
             "ack": false,
             "runtime_removed": 0,
             "removed_entry": Value::Null,
-            "hub_tombstone_state": "not_applicable",
-            "hub_tombstone_error": Value::Null,
-            "hub_revoke_state": "not_applicable",
-            "hub_revoke_error": Value::Null,
+            "publication_state": "not_applicable",
+            "publication_error": Value::Null,
         }));
     };
     let registrar = require_hot_registrar(hot_registrar, operation)?;
@@ -2752,10 +2728,8 @@ fn stop_agent_locked(
             "ack": true,
             "runtime_removed": runtime_removed,
             "removed_entry": removed_entry,
-            "hub_tombstone_state": "pending",
-            "hub_tombstone_error": Value::Null,
-            "hub_revoke_state": "pending",
-            "hub_revoke_error": Value::Null,
+            "publication_state": "pending",
+            "publication_error": Value::Null,
         }));
     }
 
@@ -2766,10 +2740,8 @@ fn stop_agent_locked(
     // (removed = old − ∅), and we drop the local cursor so the owner
     // leaves the heartbeat refresh batch. Best-effort: failures degrade
     // to "reconciles on next boot/heartbeat" + an op_event.
-    let mut hub_tombstone_state = "not_configured";
-    let mut hub_tombstone_error: Option<String> = None;
-    let mut hub_revoke_state = "not_configured";
-    let mut hub_revoke_error: Option<String> = None;
+    let mut publication_state = "not_applicable";
+    let mut publication_error: Option<String> = None;
     let mut revoke_generation: Option<u64> = None;
     if let Some(host_device_ura) = config::load_credentials()
         .ok()
@@ -2811,14 +2783,9 @@ fn stop_agent_locked(
                             delivery_fence: 1,
                             abilities_payload: payload,
                         });
-                        hub_tombstone_state =
-                            if outcome.state() == HotAgentAdvertiseState::Succeeded {
-                                "succeeded"
-                            } else {
-                                "failed"
-                            };
-                        hub_tombstone_error = outcome.error().map(str::to_string);
                         if let Some(err) = outcome.error() {
+                            publication_state = "reconciliation_required";
+                            publication_error = Some(err.to_string());
                             crate::op_event!(
                                 component = agent_lifecycle,
                                 kind = hot_agent_stop_tombstone_soft_failed,
@@ -2829,19 +2796,23 @@ fn stop_agent_locked(
                                                tombstone advertise failed; hub reconciles \
                                                on next heartbeat refresh",
                             );
+                        } else if outcome.state() == HotAgentAdvertiseState::Succeeded {
+                            publication_state = "pending";
                         }
                     }
-                    (Ok(_), None) => {}
+                    (Ok(_), None) => {
+                        publication_state = "pending";
+                    }
                     (Err(error), _) => {
-                        hub_tombstone_state = "failed";
-                        hub_tombstone_error = Some(error);
+                        publication_state = "reconciliation_required";
+                        publication_error = Some(error);
                     }
                 }
             }
-            Ok(None) => hub_tombstone_state = "not_applicable",
+            Ok(None) => publication_state = "not_applicable",
             Err(err) => {
-                hub_tombstone_state = "failed";
-                hub_tombstone_error = Some(err.clone());
+                publication_state = "reconciliation_required";
+                publication_error = Some(err.clone());
                 crate::op_event!(
                     component = agent_lifecycle,
                     kind = hot_agent_stop_tombstone_build_failed,
@@ -2874,13 +2845,9 @@ fn stop_agent_locked(
                     delivery_fence: 1,
                 },
             );
-            hub_revoke_state = if outcome.state() == HotAgentAdvertiseState::Succeeded {
-                "succeeded"
-            } else {
-                "failed"
-            };
-            hub_revoke_error = outcome.error().map(str::to_string);
             if let Some(err) = outcome.error() {
+                publication_state = "reconciliation_required";
+                publication_error = Some(err.to_string());
                 crate::op_event!(
                     component = agent_lifecycle,
                     kind = hot_agent_stop_revoke_soft_failed,
@@ -2891,6 +2858,10 @@ fn stop_agent_locked(
                                    failed; the agent record may linger in the hub \
                                    directory until operator revoke or hub restart",
                 );
+            } else if outcome.state() == HotAgentAdvertiseState::Succeeded
+                && publication_state != "reconciliation_required"
+            {
+                publication_state = "published";
             }
         }
     }
@@ -2899,10 +2870,8 @@ fn stop_agent_locked(
         "ack": true,
         "runtime_removed": runtime_removed,
         "removed_entry": removed_entry,
-        "hub_tombstone_state": hub_tombstone_state,
-        "hub_tombstone_error": hub_tombstone_error,
-        "hub_revoke_state": hub_revoke_state,
-        "hub_revoke_error": hub_revoke_error,
+        "publication_state": publication_state,
+        "publication_error": publication_error,
     }))
 }
 

@@ -1021,6 +1021,48 @@ for required_test in (
 PY
 }
 
+check_agent_purge_publication_state_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local lifecycle="$cli_root/src/daemon/ability/builtins/agents/lifecycle.rs"
+  [[ -f "$lifecycle" ]] || return 0
+
+  "$PYTHON_BIN" - "$lifecycle" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+production = text.split("#[cfg(test)]\nmod tests", 1)[0]
+
+for retired in (
+    "hub_tombstone_state",
+    "hub_tombstone_error",
+    "hub_revoke_state",
+    "hub_revoke_error",
+    "legacy_publication_state",
+):
+    if retired in production:
+        raise SystemExit(f"agent_purge_publication_state:retired_hub_projection:{retired}")
+
+for required in (
+    '"publication_state"',
+    '"publication_error"',
+    '"not_applicable"',
+    '"reconciliation_required"',
+    '"pending"',
+    '"published"',
+):
+    if required not in production:
+        raise SystemExit(f"agent_purge_publication_state:missing_canonical_projection:{required}")
+
+for required_test in (
+    'assert_eq!(response["publication_state"], "pending")',
+    'assert_eq!(response["publication_state"], "published")',
+):
+    if required_test not in text:
+        raise SystemExit(f"agent_purge_publication_state:missing_canonical_test:{required_test}")
+PY
+}
+
 check_local_runtime_state_read_subject_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local local_invoke="$cli_root/src/support/platform/local_invoke.rs"
@@ -10104,6 +10146,27 @@ EOF
   if ( check_cli_invocation_history_read_model_contract "$tmp/cli-invocation-history-read-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected CLI invocation history read-model gate to fail"
   fi
+  mkdir -p "$tmp/agent-purge-publication-state-legacy/src/daemon/ability/builtins/agents"
+  cat >"$tmp/agent-purge-publication-state-legacy/src/daemon/ability/builtins/agents/lifecycle.rs" <<'EOF'
+fn attach_publication_state(object: &mut serde_json::Map<String, serde_json::Value>) {
+    object.insert("publication_state".to_string(), json!("pending"));
+    object.insert("publication_error".to_string(), json!(null));
+    let legacy_publication_state = "succeeded";
+    object.insert("hub_tombstone_state".to_string(), json!(legacy_publication_state));
+    object.insert("hub_tombstone_error".to_string(), json!(null));
+    object.insert("hub_revoke_state".to_string(), json!(legacy_publication_state));
+    object.insert("hub_revoke_error".to_string(), json!(null));
+}
+
+#[cfg(test)]
+mod tests {
+    fn pending() { assert_eq!(response["publication_state"], "pending"); }
+    fn published() { assert_eq!(response["publication_state"], "published"); }
+}
+EOF
+  if ( check_agent_purge_publication_state_contract "$tmp/agent-purge-publication-state-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected agent purge publication-state gate to fail"
+  fi
   mkdir -p "$tmp/local-runtime-state-read-subject-legacy/src/support/platform"
   cat >"$tmp/local-runtime-state-read-subject-legacy/src/support/platform/local_invoke.rs" <<'EOF'
 pub struct LocalRuntimeStateReadIssuer;
@@ -12094,6 +12157,7 @@ EOF
   check_resolve_key_request_dto_contract
   check_invocation_history_filter_scope_contract
   check_cli_invocation_history_read_model_contract
+  check_agent_purge_publication_state_contract
   check_local_runtime_state_read_subject_contract
   check_runtime_state_kind_required_contract
   check_federation_realm_resolver_contract
@@ -12242,6 +12306,7 @@ check_core_ura_realm_projection_contract
 check_resolve_key_request_dto_contract
 check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
+check_agent_purge_publication_state_contract
 check_local_runtime_state_read_subject_contract
 check_runtime_state_kind_required_contract
 check_federation_realm_resolver_contract
