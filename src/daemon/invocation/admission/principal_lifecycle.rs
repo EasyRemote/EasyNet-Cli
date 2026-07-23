@@ -878,7 +878,6 @@ fn canonical_lifecycle_ability(ability: &str) -> Result<&'static str, Status> {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct PrincipalStore {
-    #[serde(default)]
     principals: BTreeMap<String, PrincipalRecord>,
 }
 
@@ -1867,6 +1866,28 @@ mod tests {
         assert!(
             error.message().contains("missing field `command_log`"),
             "unexpected missing command_log error: {error}"
+        );
+    }
+
+    #[test]
+    fn existing_principal_store_requires_principals_fact() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("principal-lifecycle.json");
+        fs::write(
+            &store_path,
+            serde_json::to_vec_pretty(&json!({
+                "schema": "legacy-without-principals"
+            }))
+            .expect("encode malformed store"),
+        )
+        .expect("write malformed store");
+
+        let error = PrincipalStore::load_unlocked(&store_path, ABILITY_PRINCIPAL_GET)
+            .expect_err("existing principal store without principals must fail closed");
+        assert_eq!(error.code(), tonic::Code::Internal);
+        assert!(
+            error.message().contains("missing field `principals`"),
+            "unexpected missing principals error: {error}"
         );
     }
 

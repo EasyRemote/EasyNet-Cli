@@ -1454,6 +1454,16 @@ import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text()
+store = re.search(r"(?s)struct PrincipalStore \{(?P<body>.*?)\n\}", text)
+if store is None:
+    raise SystemExit("principal_lifecycle_store_schema_missing")
+store_body = store.group("body")
+principals = re.search(r"(?s)((?:#\[[^\]]*\]\s*)*)principals: BTreeMap<String, PrincipalRecord>,", store_body)
+if principals is None:
+    raise SystemExit("principal_lifecycle_store_principals_missing")
+if "#[serde(default" in principals.group(0):
+    raise SystemExit("principal_lifecycle_store_principals_legacy_default")
+
 record = re.search(r"(?s)struct PrincipalRecord \{(?P<body>.*?)\n\}", text)
 if record is None:
     raise SystemExit("principal_lifecycle_record_schema_missing")
@@ -1465,6 +1475,9 @@ if "#[serde(default" in command_log.group(0):
     raise SystemExit("principal_lifecycle_command_log_legacy_default")
 
 for required in (
+    "existing_principal_store_requires_principals_fact",
+    "missing field `principals`",
+    "existing principal store without principals must fail closed",
     "principal_record_requires_idempotency_command_log_fact",
     "missing field `command_log`",
     "principal record without command_log must fail closed",
@@ -8600,10 +8613,17 @@ EOF
   fi
   mkdir -p "$tmp/principal-lifecycle-command-log-legacy/src/daemon/invocation/admission"
   printf '%s\n' \
+    'struct PrincipalStore {' \
+    '  #[serde(default)]' \
+    '  principals: BTreeMap<String, PrincipalRecord>,' \
+    '}' \
     'struct PrincipalRecord {' \
     '  #[serde(default)]' \
     '  command_log: BTreeMap<String, u64>,' \
     '}' \
+    'fn existing_principal_store_requires_principals_fact() {}' \
+    'const STORE_MESSAGE: &str = "missing field `principals`";' \
+    'const STORE_FAIL_CLOSED: &str = "existing principal store without principals must fail closed";' \
     'fn principal_record_requires_idempotency_command_log_fact() {}' \
     'const MESSAGE: &str = "missing field `command_log`";' \
     'const FAIL_CLOSED: &str = "principal record without command_log must fail closed";' \
