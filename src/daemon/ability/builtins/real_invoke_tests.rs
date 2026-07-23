@@ -255,10 +255,7 @@ fn registry_with_voice_temp_home() -> (
     (reg, guard, voice)
 }
 
-fn registry_with_joined_temp_home() -> (
-    Arc<AxonAbilityCatalog>,
-    crate::cli::commands::test_support::HomeGuard,
-) {
+fn provision_joined_device_home() -> crate::cli::commands::test_support::HomeGuard {
     let guard = crate::cli::commands::test_support::HomeGuard::new();
     crate::daemon::persistence::config::save_credentials(
         &crate::daemon::persistence::config::Credentials {
@@ -272,6 +269,14 @@ fn registry_with_joined_temp_home() -> (
         },
     )
     .expect("seed joined credentials before authority-context assembly");
+    guard
+}
+
+fn registry_with_joined_device_home() -> (
+    Arc<AxonAbilityCatalog>,
+    crate::cli::commands::test_support::HomeGuard,
+) {
+    let guard = provision_joined_device_home();
     let authority_context =
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
             authority_fixture_device_ura(),
@@ -729,7 +734,7 @@ fn real_mission_cancel_returns_an_error_for_an_unknown_run_id() {
 
 #[test]
 fn real_device_node_list_returns_local_view_envelope() {
-    let (reg, _g) = registry_with_temp_home();
+    let (reg, _g) = registry_with_joined_device_home();
     let resp = dispatcher_for(reg)
         .execute_rpc(target("node.list", json!({})))
         .expect("node.list");
@@ -742,7 +747,7 @@ fn real_device_node_list_returns_local_view_envelope() {
 
 #[test]
 fn real_device_node_describe_via_invoke_helper_returns_self_envelope() {
-    let (reg, _g) = registry_with_temp_home();
+    let (reg, _g) = registry_with_joined_device_home();
     let resp = dispatcher_for(reg)
         .execute_rpc(target("node.describe", json!({ "node_id": "local" })))
         .expect("node.describe local");
@@ -751,7 +756,7 @@ fn real_device_node_describe_via_invoke_helper_returns_self_envelope() {
 
 #[test]
 fn real_device_node_remove_refuses_to_remove_self() {
-    let (reg, _g) = registry_with_temp_home();
+    let (reg, _g) = registry_with_joined_device_home();
     let err = dispatcher_for(reg)
         .execute_rpc(target("node.remove", json!({ "node_id": "local" })))
         .expect_err("node.remove must refuse to remove self");
@@ -760,7 +765,7 @@ fn real_device_node_remove_refuses_to_remove_self() {
 
 #[test]
 fn real_device_ability_deploy_validates_resource_ref_argument() {
-    let (reg, _g) = registry_with_temp_home();
+    let (reg, _g) = registry_with_joined_device_home();
     let err = dispatcher_for(reg)
         .execute_rpc(target("ability.deploy", json!({})))
         .expect_err("ability.deploy must require `resource_ref`");
@@ -769,7 +774,7 @@ fn real_device_ability_deploy_validates_resource_ref_argument() {
 
 #[test]
 fn real_device_ability_uninstall_refuses_unwired_runtime() {
-    let (reg, _g) = registry_with_temp_home();
+    let (reg, _g) = registry_with_joined_device_home();
     let err = dispatcher_for(reg)
         .execute_rpc(target(
             "ability.uninstall",
@@ -1066,6 +1071,7 @@ fn real_admin_status_reports_components_under_temp_home() {
 /// after itself.
 #[test]
 fn real_fs_write_round_trips_through_real_disk() {
+    let _g = provision_joined_device_home();
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let scratch = manifest
         .join("target")
@@ -1211,6 +1217,7 @@ fn real_shell_run_destructive_rejection_visible_in_response() {
 /// of the test fixture and the test only reads it.
 #[test]
 fn real_fs_read_reads_this_crates_cargo_toml() {
+    let _g = provision_joined_device_home();
     // CARGO_MANIFEST_DIR is set by cargo for every test run; it
     // is the absolute path of the directory containing
     // Cargo.toml. Using it makes this test work both when run
@@ -1246,7 +1253,7 @@ fn real_fs_read_reads_this_crates_cargo_toml() {
 
 #[test]
 fn real_fs_read_reads_an_actual_file() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let _g = provision_joined_device_home();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-read-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("hello.txt");
@@ -1268,7 +1275,7 @@ fn real_fs_read_reads_an_actual_file() {
 
 #[test]
 fn real_fs_stat_reports_file_metadata() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let _g = provision_joined_device_home();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-stat-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("metadata.txt");
@@ -1306,7 +1313,7 @@ fn real_fs_stat_reports_file_metadata() {
 
 #[test]
 fn real_fs_write_creates_a_file_with_expected_content() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let _g = provision_joined_device_home();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-write-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("out.txt");
@@ -1327,7 +1334,7 @@ fn real_fs_write_creates_a_file_with_expected_content() {
 
 #[test]
 fn real_fs_list_lists_directory_entries() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let _g = provision_joined_device_home();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-list-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     std::fs::write(dir.join("a.txt"), "a").unwrap();
@@ -1382,7 +1389,7 @@ fn real_fs_list_lists_directory_entries() {
 
 #[test]
 fn real_fs_edit_replaces_a_unique_match() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let _g = provision_joined_device_home();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-edit-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("config.txt");
@@ -1685,7 +1692,7 @@ fn real_device_session_list_returns_empty_under_temp_home() {
 
 #[test]
 fn real_device_agent_start_then_stop_agent_round_trip() {
-    let (reg, _g) = registry_with_joined_temp_home();
+    let (reg, _g) = registry_with_joined_device_home();
     let d = dispatcher_for(reg);
     let start = d
         .execute_rpc(target(
@@ -1710,7 +1717,7 @@ fn real_device_agent_start_then_stop_agent_round_trip() {
 
 #[test]
 fn real_device_agent_ability_put_commits_live_executable_publication() {
-    let (reg, _g) = registry_with_joined_temp_home();
+    let (reg, _g) = registry_with_joined_device_home();
     let d = dispatcher_for(reg);
     let start = d
         .execute_rpc(target(
@@ -1770,7 +1777,7 @@ fn real_device_agent_ability_put_commits_live_executable_publication() {
 
 #[test]
 fn real_device_agent_purge_missing_agent_is_idempotent() {
-    let (reg, _g) = registry_with_joined_temp_home();
+    let (reg, _g) = registry_with_joined_device_home();
     let response = dispatcher_for(reg)
         .execute_rpc(target(
             "agent.purge",
@@ -1784,7 +1791,7 @@ fn real_device_agent_purge_missing_agent_is_idempotent() {
 
 #[test]
 fn real_device_agent_purge_reconcile_routes_to_authorized_handler() {
-    let (reg, _g) = registry_with_joined_temp_home();
+    let (reg, _g) = registry_with_joined_device_home();
     let error = dispatcher_for(reg)
         .execute_rpc(target("agent.purge.reconcile", json!({})))
         .expect_err("agent.purge.reconcile requires an admitted reconciliation command");
@@ -1799,7 +1806,7 @@ fn real_device_agent_purge_reconcile_routes_to_authorized_handler() {
 
 #[test]
 fn real_device_invocation_cancel_routes_to_lifecycle_handler() {
-    let (reg, _g) = registry_with_joined_temp_home();
+    let (reg, _g) = registry_with_joined_device_home();
     let error = dispatcher_for(reg)
         .execute_rpc(target("invocation.cancel", json!({})))
         .expect_err("invocation.cancel requires a target lifecycle hash");
@@ -1820,7 +1827,7 @@ fn real_device_agent_refresh_scans_agents_through_wired_registrar() {
     // case — it scans the persisted agents through the registrar and
     // returns `ok=true`. A hosted agent with no runtime row to sync simply
     // reports `runtime_registered=0` without failing.
-    let (reg, _g) = registry_with_joined_temp_home();
+    let (reg, _g) = registry_with_joined_device_home();
     let d = dispatcher_for(reg);
     d.execute_rpc(target(
         "agent.start",
@@ -2970,7 +2977,7 @@ async fn real_device_terminal_attach_returns_a_bidi_source() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
     use base64::Engine;
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let _g = provision_joined_device_home();
     let mut reg = runtime_attached_catalog();
     file_transfer_ability::register(&mut reg);
     let d = dispatcher_for(Arc::new(reg));
@@ -3026,7 +3033,7 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
     use base64::Engine;
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let _g = provision_joined_device_home();
     let mut reg = runtime_attached_catalog();
     file_transfer_ability::register(&mut reg);
     let d = dispatcher_for(Arc::new(reg));
@@ -3493,8 +3500,10 @@ fn real_meta_list_resources_returns_resources_array() {
 
 #[test]
 fn real_device_node_describe_local_returns_self_envelope() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let resp = invoke("node.describe", json!({"node_id": "local"}));
+    let (reg, _g) = registry_with_joined_device_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("node.describe", json!({"node_id": "local"})))
+        .expect("node.describe local");
     assert!(
         resp.get("node_id").is_some(),
         "node.describe receipt must carry `node_id`; got {resp}"
