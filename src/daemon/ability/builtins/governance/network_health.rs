@@ -166,7 +166,9 @@ mod tests {
 
     #[test]
     fn registration_makes_ability_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_test_metadata_for_device_authority(
+            "easynet:///r/test/device/network-health",
+        );
         register(
             &mut reg,
             Arc::new(

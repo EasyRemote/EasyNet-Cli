@@ -117,7 +117,9 @@ mod tests {
 
     #[test]
     fn registration_makes_admin_status_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_test_metadata_for_device_authority(
+            "easynet:///r/test/device/admin-status",
+        );
         register(&mut reg, || 0);
         assert!(reg.get_rpc(ABILITY_ADMIN_STATUS).is_some());
     }

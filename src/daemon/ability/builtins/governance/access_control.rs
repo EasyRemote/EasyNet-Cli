@@ -1169,7 +1169,9 @@ mod tests {
 
     #[test]
     fn registration_makes_rfc014_abilities_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_test_metadata_for_device_authority(
+            "easynet:///r/test/device/access-control",
+        );
         register(&mut reg);
         for ability in [
             AUTHORITY_BINDING_GRANT,
