@@ -2543,16 +2543,26 @@ PY
 check_sdk_history_authority_subject_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
+  local go_runtime="$cli_root/sdk/go/runtime_ability.go"
+  local go_helper="$cli_root/sdk/go/session_authority_subjects.go"
   local go_test="$cli_root/sdk/go/authorized_runtime_session_test.go"
   local py="$cli_root/sdk/python/easynet_sdk/authorized_runtime_session.py"
   local py_helper="$cli_root/sdk/python/easynet_sdk/_session_authority_subjects.py"
   local py_test="$cli_root/sdk/python/tests/test_authorized_runtime_session.py"
 
-  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_helper" "$py_test" <<'PY'
+  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_test" "$py" "$py_helper" "$py_test" <<'PY'
 import sys
 from pathlib import Path
 
-go_path, go_test_path, py_path, py_helper_path, py_test_path = map(Path, sys.argv[1:])
+(
+    go_path,
+    go_runtime_path,
+    go_helper_path,
+    go_test_path,
+    py_path,
+    py_helper_path,
+    py_test_path,
+) = map(Path, sys.argv[1:])
 
 def read(path: Path) -> str:
     return path.read_text() if path.exists() else ""
@@ -2570,6 +2580,23 @@ def section(text: str, start: str, end: str) -> str:
 
 go = read(go_path)
 if go:
+    go_runtime = read(go_runtime_path)
+    go_helper = read(go_helper_path)
+    require(
+        go_helper_path,
+        "func runtimeSessionAuthorityAdmitsSubject(",
+        "sdk_go_authority_subject_shared_helper_missing",
+    )
+    for token in (
+        "ParseURAParts(strings.TrimSpace(subjectURA))",
+        "parts.Kind != URAKindResource",
+        "strings.HasPrefix(ownerID, \"user.\")",
+        "strings.HasPrefix(ownerID, \"agent.\")",
+    ):
+        if token not in go_helper:
+            raise SystemExit(f"sdk_go_authority_subject_structured_owner_missing:{token}")
+    if "func runtimeSessionAuthorityAdmitsSubject(" in go_runtime:
+        raise SystemExit("sdk_go_runtime_ability_owns_authority_subject_helper")
     body = section(
         go,
         "func validateSessionHistorySessionBinding(",
@@ -11653,6 +11680,54 @@ EOF
     > "$tmp/sdk-history-authority-legacy/sdk/python/tests/test_authorized_runtime_session.py"
   if ( check_sdk_history_authority_subject_contract "$tmp/sdk-history-authority-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected SDK history authority canonical-admission gate to fail"
+  fi
+  mkdir -p "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/go" \
+    "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/python/easynet_sdk" \
+    "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/python/tests"
+  printf '%s\n' \
+    'type SessionAuthority struct{}' \
+    'func validateSessionHistorySessionBinding(authority *SessionAuthority, subjectURA string) error {' \
+    '  if !runtimeSessionAuthorityAdmitsSubject(authority, subjectURA) { return nil }' \
+    '  return nil' \
+    '}' \
+    'func runtimeCallDetails() {}' \
+    > "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/go/authorized_runtime_session.go"
+  printf '%s\n' \
+    'func runtimeSessionAuthorityAdmitsSubject(authority *SessionAuthority, subjectURA string) bool {' \
+    '  parts, _ := ParseURAParts(strings.TrimSpace(subjectURA))' \
+    '  ownerID := strings.TrimSpace(parts.OwnerID)' \
+    '  return parts.Kind == URAKindResource && (strings.HasPrefix(ownerID, "user.") || strings.HasPrefix(ownerID, "agent."))' \
+    '}' \
+    > "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/go/runtime_ability.go"
+  printf '%s\n' \
+    'func TestAuthorizedRuntimeSessionHistoryAllowsUserOwnedResourceSubjectBeforeReceiptProvider() {}' \
+    'func TestAuthorizedRuntimeSessionHistoryRejectsPathSubstringOwnerSubjectBeforeReceiptProvider() {}' \
+    'func TestAuthorizedRuntimeSessionRejectsPathSubstringOwnerSubjectBeforeDispatch() {}' \
+    > "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/go/authorized_runtime_session_test.go"
+  printf '%s\n' \
+    'from ._session_authority_subjects import session_authority_admits_subject' \
+    'def _validate_session_history_authority_binding(authority, subject_ura):' \
+    '    if not session_authority_admits_subject(authority, subject_ura):' \
+    '        return None' \
+    'def _validate_runtime_call_required(value, field_name):' \
+    '    return None' \
+    'def _validate_session_history_filter_binding():' \
+    '    return None' \
+    > "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/python/easynet_sdk/authorized_runtime_session.py"
+  printf '%s\n' \
+    'def session_authority_admits_subject(authority, subject_ura):' \
+    '    subject = parse_ura(subject_ura.strip())' \
+    '    owner_id = subject.components.get("owner_id")' \
+    '    owner_user_id = authority.session_owner_user_id.strip()' \
+    '    return owner_id == f"user.{owner_user_id}" or owner_id.startswith("agent.")' \
+    > "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/python/easynet_sdk/_session_authority_subjects.py"
+  printf '%s\n' \
+    'def test_history_allows_user_owned_resource_subject_before_receipt_provider(): pass' \
+    'def test_history_rejects_path_substring_owner_subject_before_receipt_provider(): pass' \
+    'def test_rejects_path_substring_owner_subject_before_dispatch(): pass' \
+    > "$tmp/sdk-go-authority-subject-helper-embedded-legacy/sdk/python/tests/test_authorized_runtime_session.py"
+  if ( check_sdk_history_authority_subject_contract "$tmp/sdk-go-authority-subject-helper-embedded-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected embedded Go authority subject helper gate to fail"
   fi
   mkdir -p "$tmp/sdk-descriptor-resolution-error-legacy/sdk/go" \
     "$tmp/sdk-descriptor-resolution-error-legacy/sdk/python/easynet_sdk" \

@@ -485,36 +485,6 @@ func validateRuntimeSessionBinding(
 	return nil
 }
 
-func runtimeSessionAuthorityAdmitsSubject(
-	authority *SessionAuthority,
-	subjectURA string,
-) bool {
-	if authority == nil {
-		return false
-	}
-	if strings.TrimSpace(authority.SubjectURA) == strings.TrimSpace(subjectURA) {
-		return true
-	}
-	parts, err := ParseURAParts(strings.TrimSpace(subjectURA))
-	if err != nil || parts.Kind != URAKindResource {
-		return false
-	}
-	ownerID := strings.TrimSpace(parts.OwnerID)
-	ownerUserID := strings.TrimSpace(authority.SessionOwnerUserID)
-	if ownerUserID == "" {
-		return false
-	}
-	if strings.TrimPrefix(ownerID, "user.") == ownerUserID && strings.HasPrefix(ownerID, "user.") {
-		return true
-	}
-	if !strings.HasPrefix(ownerID, "agent.") {
-		return false
-	}
-	agentOwner := strings.TrimPrefix(ownerID, "agent.")
-	userID, _, found := strings.Cut(agentOwner, ".")
-	return found && userID == ownerUserID
-}
-
 func (c AbilityChildContext) childCall(call RuntimeCallContext) (RuntimeCallContext, error) {
 	if c.client == nil {
 		return RuntimeCallContext{}, invalidRuntimeClient("ability child context is not initialized")
