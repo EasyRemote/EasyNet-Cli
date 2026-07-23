@@ -724,18 +724,13 @@ mod tests {
     #[test]
     fn schedule_entry_round_trips_with_prompt_field() {
         // Verify the new ScheduleEntry.prompt field serialises
-        // and deserialises as Option<String>. Serde should treat
-        // a missing field on read as None (legacy entries
-        // pre-prompt remain readable).
+        // and deserialises as Option<String>. Disk store schema
+        // validation owns missing-field rejection.
         let mut e = entry("0 9 * * *", MisfirePolicy::Skip);
         e.prompt = Some("hi {{target_agent}}".into());
         let json = serde_json::to_string(&e).unwrap();
         assert!(json.contains("\"prompt\":\"hi {{target_agent}}\""));
         let back: ScheduleEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(back.prompt.as_deref(), Some("hi {{target_agent}}"));
-        // Legacy entry without the prompt field should parse with prompt=None.
-        let legacy_json = json.replace(",\"prompt\":\"hi {{target_agent}}\"", "");
-        let legacy: ScheduleEntry = serde_json::from_str(&legacy_json).unwrap();
-        assert!(legacy.prompt.is_none());
     }
 }

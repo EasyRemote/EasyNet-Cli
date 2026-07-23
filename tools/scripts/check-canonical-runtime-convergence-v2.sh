@@ -3481,6 +3481,58 @@ for required in (
 PY
 }
 
+check_schedule_store_current_schema_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local schedule="$cli_root/src/daemon/execution/schedule/mod.rs"
+  local store="$cli_root/src/daemon/execution/schedule/store.rs"
+  [[ -f "$schedule" ]] || fail "schedule service source is missing: ${schedule#$cli_root/}"
+  [[ -f "$store" ]] || fail "schedule store source is missing: ${store#$cli_root/}"
+
+  "$PYTHON_BIN" - "$schedule" "$store" <<'PY'
+import sys
+from pathlib import Path
+
+schedule = Path(sys.argv[1]).read_text()
+store = Path(sys.argv[2]).read_text()
+store_prod = store.split("#[cfg(test)]", 1)[0]
+
+for retired in (
+    "default_schema_version",
+    "#[serde(default = \"default_schema_version\")]",
+    "readers tolerate a missing field",
+    "absent as `1`",
+):
+    if retired in store_prod:
+        raise SystemExit(f"schedule_store_legacy_schema_version_default:{retired}")
+
+for retired in (
+    "Legacy entry without the prompt field should parse",
+    "pre-prompt remain readable",
+):
+    if retired in schedule:
+        raise SystemExit(f"schedule_entry_legacy_prompt_read_test:{retired}")
+
+for required in (
+    "fn parse_on_disk_schedule(",
+    "schedule record missing explicit schema_version",
+    "schedule record missing explicit prompt field",
+    "schema_version {schema_version} is not supported",
+    "fn serialize_on_disk_schedule(",
+    ".entry(\"prompt\".to_string())",
+    ".or_insert(serde_json::Value::Null)",
+):
+    if required not in store:
+        raise SystemExit(f"schedule_store_current_schema_missing:{required}")
+
+for required_test in (
+    "load_all_skips_records_missing_current_schema_facts",
+    "parse_on_disk_schedule_rejects_unsupported_schema_version",
+):
+    if required_test not in store:
+        raise SystemExit(f"schedule_store_current_schema_missing_test:{required_test}")
+PY
+}
+
 check_retired_federation_directory_v1_stream_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   "$PYTHON_BIN" - "$cli_root/src" "$cli_root/tests" <<'PY'
@@ -7834,6 +7886,26 @@ EOF
   if ( CLI_ROOT="$tmp/cli-tenant-store-binding"; check_daemon_runtime_tenant_store_binding_contract ) >/dev/null 2>&1; then
     fail "self-test expected daemon runtime tenant-store default gate to fail"
   fi
+  mkdir -p "$tmp/schedule-store-current-schema-legacy/src/daemon/execution/schedule"
+  cat >"$tmp/schedule-store-current-schema-legacy/src/daemon/execution/schedule/mod.rs" <<'EOF'
+fn schedule_entry_round_trips_with_prompt_field() {
+    // Legacy entry without the prompt field should parse with prompt=None.
+}
+EOF
+  cat >"$tmp/schedule-store-current-schema-legacy/src/daemon/execution/schedule/store.rs" <<'EOF'
+#[derive(Debug, Serialize, Deserialize)]
+struct OnDisk {
+    #[serde(default = "default_schema_version")]
+    schema_version: u32,
+    #[serde(flatten)]
+    entry: ScheduleEntry,
+}
+
+fn default_schema_version() -> u32 { 1 }
+EOF
+  if ( CLI_ROOT="$tmp/schedule-store-current-schema-legacy"; check_schedule_store_current_schema_contract ) >/dev/null 2>&1; then
+    fail "self-test expected schedule store current-schema gate to fail"
+  fi
   mkdir -p "$tmp/cli-directory-fallback/sdk/go" \
     "$tmp/cli-directory-fallback/sdk/python/easynet_sdk" \
     "$tmp/cli-directory-fallback/sdk/python/tests"
@@ -9527,6 +9599,7 @@ EOF
   check_daemon_runtime_session_binding_contract
   check_daemon_runtime_discuss_binding_contract
   check_daemon_runtime_tenant_store_binding_contract
+  check_schedule_store_current_schema_contract
   check_route_resolver_descriptor_ref_selector_contract
   check_namespace_resolver_authority_projection_contract
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
@@ -9650,6 +9723,7 @@ check_kernel_runtime_session_read_model_contract
 check_daemon_runtime_session_binding_contract
 check_daemon_runtime_discuss_binding_contract
 check_daemon_runtime_tenant_store_binding_contract
+check_schedule_store_current_schema_contract
 check_retired_federation_directory_v1_stream_contract
 check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract
