@@ -77,6 +77,7 @@ mod passphrase;
 pub mod resolver;
 pub mod service;
 pub mod user_binding_chain;
+pub mod user_binding_projection;
 
 /// Ed25519 seed length (32 bytes per RFC 8032 §5.1.5).
 pub const ED25519_SEED_LEN: usize = 32;

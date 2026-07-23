@@ -23,7 +23,7 @@
 // Copyright (c) 2026-2027 easynet. All rights reserved.
 
 use anyhow::{anyhow, Result};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::sync::Arc;
 
 use super::federated_bindings::{FederatedBindingsStore, FederatedUserBinding};
@@ -31,6 +31,7 @@ use super::user_binding_chain::{
     verify_user_binding_signature, UserBindingError, UserBindingToken, ED25519_PUBKEY_LEN,
     USER_BINDING_FRESHNESS_MS, USER_BINDING_NONCE_LEN,
 };
+use super::user_binding_projection::{UserBindingConsumeResponse, UserBindingIssueResponse};
 use super::{ManagedPeer, ManagedSigningKeyProjection, ManagedSigningStatus};
 use crate::core::ura::user_realm_from_ura;
 use crate::daemon::ability::descriptors::AdmissionAction;
@@ -320,10 +321,9 @@ pub fn handle_federate_user_identity_token(
     let sig = provider.sign(&signing_entry.key_id, &canonical)?;
     token.signature = sig.to_bytes().to_vec();
 
-    Ok(json!({
-        "token": token,
-        "transport_hint": "jwt-custom-claim",
-    }))
+    Ok(serde_json::to_value(UserBindingIssueResponse::issued(
+        token,
+    ))?)
 }
 
 /// **PR-N4 commit 3/N**. `device.keyring.consume_federate_user_token`
@@ -442,14 +442,10 @@ pub fn handle_consume_federate_user_token(
         local_user_id: local_user_id.clone(),
         bound_at_unix_ms: i64::try_from(now_ms).unwrap_or(i64::MAX),
     };
+    let response = UserBindingConsumeResponse::recorded(&binding);
     bindings.record_binding(binding, nonce_b64)?;
 
-    Ok(json!({
-        "binding_recorded": true,
-        "source_realm":     token.source_realm,
-        "source_user_ura":  token.source_user_ura,
-        "local_user_id":    local_user_id,
-    }))
+    Ok(serde_json::to_value(response)?)
 }
 
 pub fn handle_rotate(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
@@ -621,6 +617,7 @@ pub fn register_federated_consume_for_owner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     struct TestProvider(std::sync::Mutex<super::super::Vault>);
 
@@ -853,6 +850,8 @@ mod tests {
         )
         .expect("token issued");
         assert_eq!(resp["transport_hint"], json!("jwt-custom-claim"));
+        assert!(resp.get("managed_key_id").is_none());
+        assert!(resp.get("source_user_pubkey_b64").is_none());
         let token = &resp["token"];
         assert_eq!(token["source_realm"], json!("realm-a"));
         assert_eq!(
@@ -1033,6 +1032,8 @@ mod tests {
         assert_eq!(resp["binding_recorded"], json!(true));
         assert_eq!(resp["source_realm"], json!("realm-a"));
         assert_eq!(resp["local_user_id"], json!("user-c-on-realm-b"));
+        assert!(resp.get("source_user_pubkey_b64").is_none());
+        assert!(resp.get("bound_at_unix_ms").is_none());
         // Binding was actually written.
         let bound = bindings
             .find_local_user("realm-a", "easynet:///r/realm-a/user/user-c")
@@ -1189,6 +1190,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resp["binding_recorded"], json!(true));
+        assert!(resp.get("source_user_pubkey_b64").is_none());
+        assert!(resp.get("bound_at_unix_ms").is_none());
         // Realm B can now look up the cross-realm user.
         let local_id = bindings
             .find_local_user("realm-a", "easynet:///r/realm-a/user/user-c")

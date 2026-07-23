@@ -4042,6 +4042,101 @@ for required in (
 PY
 }
 
+check_user_binding_response_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local abilities="$cli_root/src/daemon/keyring/abilities.rs"
+  local projection="$cli_root/src/daemon/keyring/user_binding_projection.rs"
+  local keyring_mod="$cli_root/src/daemon/keyring/mod.rs"
+  [[ -f "$abilities" ]] || return 0
+  [[ -f "$projection" ]] || fail "user binding response projection source is missing: $projection"
+
+  "$PYTHON_BIN" - "$abilities" "$projection" "$keyring_mod" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+abilities = Path(sys.argv[1]).read_text(encoding="utf-8")
+projection = Path(sys.argv[2]).read_text(encoding="utf-8")
+keyring_mod = Path(sys.argv[3]).read_text(encoding="utf-8") if Path(sys.argv[3]).exists() else ""
+abilities_code = "\n".join(
+    line for line in abilities.splitlines() if not line.lstrip().startswith("//")
+)
+
+if "pub mod user_binding_projection;" not in keyring_mod:
+    raise SystemExit("user_binding_response_projection:module_not_exported")
+
+def struct_with_attrs(name: str) -> tuple[str, str]:
+    match = re.search(
+        r"(?P<attrs>(?:#\[[^\n]+\]\n)*)"
+        + rf"pub struct {name} \{{(?P<body>.*?)\n\}}",
+        projection,
+        re.S,
+    )
+    if match is None:
+        raise SystemExit(f"user_binding_response_projection:{name}:missing")
+    attrs = match.group("attrs")
+    body = match.group("body")
+    if "#[serde(deny_unknown_fields)]" not in attrs:
+        raise SystemExit(f"user_binding_response_projection:{name}:missing_deny_unknown_fields")
+    return attrs, body
+
+_, issue_body = struct_with_attrs("UserBindingIssueResponse")
+_, consume_body = struct_with_attrs("UserBindingConsumeResponse")
+
+for field in (
+    "pub token: UserBindingToken",
+    "pub transport_hint: String",
+):
+    if field not in issue_body:
+        raise SystemExit(f"user_binding_response_projection:issue_missing_field:{field}")
+for field in (
+    "pub binding_recorded: bool",
+    "pub source_realm: String",
+    "pub source_user_ura: String",
+    "pub local_user_id: String",
+):
+    if field not in consume_body:
+        raise SystemExit(f"user_binding_response_projection:consume_missing_field:{field}")
+if "source_user_pubkey_b64" in issue_body or "managed_key_id" in issue_body:
+    raise SystemExit("user_binding_response_projection:issue_leaks_internal_fields")
+if "source_user_pubkey_b64" in consume_body or "bound_at_unix_ms" in consume_body:
+    raise SystemExit("user_binding_response_projection:consume_leaks_persistence_fields")
+
+for required in (
+    "USER_BINDING_TRANSPORT_HINT_JWT_CUSTOM_CLAIM",
+    "UserBindingIssueResponse::issued(",
+    "UserBindingConsumeResponse::recorded(",
+    "user_binding_issue_response_preserves_public_shape",
+    "user_binding_consume_response_preserves_public_shape",
+    "user_binding_response_dtos_reject_unknown_fields",
+):
+    if required not in projection:
+        raise SystemExit(f"user_binding_response_projection:projection_missing:{required}")
+
+for retired in (
+    '"transport_hint": "jwt-custom-claim"',
+    '"binding_recorded": true',
+    '"source_realm":     token.source_realm',
+    '"source_user_ura":  token.source_user_ura',
+    '"local_user_id":    local_user_id',
+):
+    if retired in abilities_code:
+        raise SystemExit(f"user_binding_response_projection:handler_retired:{retired}")
+
+for required in (
+    "UserBindingIssueResponse::issued(",
+    "UserBindingConsumeResponse::recorded(",
+    "federate_user_identity_token_happy_path",
+    "consume_federate_user_token_happy_path",
+    'resp.get("managed_key_id").is_none()',
+    'resp.get("source_user_pubkey_b64").is_none()',
+    'resp.get("bound_at_unix_ms").is_none()',
+):
+    if required not in abilities:
+        raise SystemExit(f"user_binding_response_projection:handler_missing:{required}")
+PY
+}
+
 check_cli_credentials_optional_read_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local src_root="$cli_root/src"
@@ -11879,6 +11974,58 @@ EOF
   if ( check_managed_signing_response_projection_contract "$tmp/managed-signing-lifecycle-response-projection-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected managed signing lifecycle response projection gate to fail"
   fi
+  mkdir -p "$tmp/user-binding-response-projection-legacy/src/daemon/keyring"
+  cat >"$tmp/user-binding-response-projection-legacy/src/daemon/keyring/mod.rs" <<'EOF'
+pub mod abilities;
+pub mod user_binding_projection;
+EOF
+  cat >"$tmp/user-binding-response-projection-legacy/src/daemon/keyring/user_binding_projection.rs" <<'EOF'
+pub const USER_BINDING_TRANSPORT_HINT_JWT_CUSTOM_CLAIM: &str = "jwt-custom-claim";
+#[serde(deny_unknown_fields)]
+pub struct UserBindingIssueResponse {
+    pub token: UserBindingToken,
+    pub transport_hint: String,
+}
+#[serde(deny_unknown_fields)]
+pub struct UserBindingConsumeResponse {
+    pub binding_recorded: bool,
+    pub source_realm: String,
+    pub source_user_ura: String,
+    pub local_user_id: String,
+}
+// UserBindingIssueResponse::issued(
+// UserBindingConsumeResponse::recorded(
+// user_binding_issue_response_preserves_public_shape
+// user_binding_consume_response_preserves_public_shape
+// user_binding_response_dtos_reject_unknown_fields
+EOF
+  cat >"$tmp/user-binding-response-projection-legacy/src/daemon/keyring/abilities.rs" <<'EOF'
+fn federate_user_identity_token_happy_path() {
+    UserBindingIssueResponse::issued();
+    UserBindingConsumeResponse::recorded();
+    resp.get("managed_key_id").is_none();
+    resp.get("source_user_pubkey_b64").is_none();
+    resp.get("bound_at_unix_ms").is_none();
+}
+fn consume_federate_user_token_happy_path() {}
+fn handle_federate_user_identity_token() -> Value {
+    Ok(json!({
+        "token": token,
+        "transport_hint": "jwt-custom-claim",
+    }))
+}
+fn handle_consume_federate_user_token() -> Value {
+    Ok(json!({
+        "binding_recorded": true,
+        "source_realm":     token.source_realm,
+        "source_user_ura":  token.source_user_ura,
+        "local_user_id":    local_user_id,
+    }))
+}
+EOF
+  if ( check_user_binding_response_projection_contract "$tmp/user-binding-response-projection-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected user binding response projection gate to fail"
+  fi
   mkdir -p "$tmp/local-api-key-cache-legacy/src/daemon/ability/builtins/governance" \
     "$tmp/local-api-key-cache-legacy/src/cli/commands"
   printf '%s\n' \
@@ -13691,6 +13838,7 @@ EOF
   check_api_key_store_schema_contract
   check_api_key_response_projection_contract
   check_managed_signing_response_projection_contract
+  check_user_binding_response_projection_contract
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
   check_runtime_trust_user_key_inventory_scope_contract
@@ -13848,6 +13996,7 @@ check_api_key_cli_identity_contract
 check_api_key_store_schema_contract
 check_api_key_response_projection_contract
 check_managed_signing_response_projection_contract
+check_user_binding_response_projection_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_runtime_trust_user_key_inventory_scope_contract
