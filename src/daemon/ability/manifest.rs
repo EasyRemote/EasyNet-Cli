@@ -200,6 +200,7 @@ pub const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["1", "2"];
 // be surprising to a reader expecting `HashMap<AbilityManifest, _>` or
 // `BTreeSet<AbilityManifest>` to compile.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AbilityManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     schema_version: Option<String>,
@@ -278,6 +279,7 @@ pub struct AbilityManifest {
 /// requests") so the LLM and the auditor see the real-world rate
 /// rather than just the bucket name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CostMeta {
     /// Coarse cost bucket. Must be one of the `CostKind` variants;
     /// unknown strings are rejected at parse time by serde.
@@ -391,6 +393,7 @@ pub enum ManifestAccessScope {
 /// `*` is reserved for future glob support but is not interpreted
 /// in v1 — it's just an unusual literal name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct AccessPolicy {
     /// Discoverability + invocation tier. Default `ManifestAccessScope::Device`.
     /// See `ManifestAccessScope` doc for the trust model.
@@ -546,6 +549,7 @@ pub enum AbilityExec {
 /// 4. EOF (socket close) before `terminal`/`error` is `STREAM_TRUNCATED`,
 ///    NOT a clean terminal.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HostStreamExec {
     /// AF_UNIX path to the external warm host's stream socket.
     pub host_socket: String,
@@ -597,6 +601,7 @@ fn is_host_stream_function_token(function: &str) -> bool {
 
 /// Configuration for the `shell` executor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ShellExec {
     /// Argv vector. argv[0] is the program; subsequent elements are
     /// arguments. Each element is independently rendered as a
@@ -634,6 +639,7 @@ pub struct ShellExec {
 
 /// Configuration for the `http` executor.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpExec {
     /// HTTP method. Validated case-insensitively against the small
     /// safe-methods set (GET / POST / PUT / DELETE / PATCH /
@@ -681,6 +687,7 @@ pub struct HttpExec {
 /// common manifest mistake than a deliberately large EAL
 /// program.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EalExec {
     /// EAL source, with `{{ name }}` placeholders substituted
     /// against the caller's `args` JSON before the parser runs.
@@ -698,6 +705,7 @@ pub struct EalExec {
 /// must match one row in `~/.easynet/mcp_clients.json`; `tool` is the
 /// upstream MCP tool name exactly as returned by `tools/list`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct McpExec {
     /// Operator-chosen upstream server name from mcp_clients.json.
     pub server: String,
@@ -712,6 +720,7 @@ pub struct McpExec {
 /// runs with no invocation args in scope, so placeholders would have
 /// nothing to bind against.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BootSpec {
     /// Argv vector. argv[0] is the program (absolute path when the
     /// daemon's PATH cannot be assumed); subsequent elements are
@@ -730,6 +739,7 @@ pub struct BootSpec {
 /// Docker `HEALTHCHECK` and Kubernetes exec probes, so an operator
 /// can paste an existing probe command unchanged.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HealthSpec {
     /// Argv vector for the probe (e.g. `["curl", "-fsS", "-m", "5",
     /// "http://127.0.0.1:5678/healthz"]`). Run verbatim — no
@@ -1671,6 +1681,46 @@ mod tests {
 
         let err = AbilityManifest::from_json_slice(&raw).unwrap_err();
         assert!(format!("{err}").contains("must not contain `.`"));
+    }
+
+    #[test]
+    fn from_json_slice_rejects_unknown_top_level_fields() {
+        let raw = serde_json::to_vec(&json!({
+            "schema_version": "1",
+            "name": "weather",
+            "description": "strict manifest",
+            "input_schema": {"type": "object"},
+            "namespace": "er",
+        }))
+        .unwrap();
+
+        let err = AbilityManifest::from_json_slice(&raw).unwrap_err();
+        assert!(
+            format!("{err}").contains("unknown field `namespace`"),
+            "canonical manifest must not silently absorb deploy-envelope fields: {err}"
+        );
+    }
+
+    #[test]
+    fn from_toml_str_rejects_unknown_nested_exec_fields() {
+        let toml = r#"
+name = "weather"
+description = "strict manifest"
+
+[input_schema]
+type = "object"
+
+[exec]
+kind = "shell"
+argv = ["echo", "hi"]
+tool_name = "legacy-provider-field"
+"#;
+
+        let err = AbilityManifest::from_toml_str(toml).unwrap_err();
+        assert!(
+            format!("{err}").contains("unknown field `tool_name`"),
+            "executor metadata must be explicitly modeled, not ignored: {err}"
+        );
     }
 
     #[test]

@@ -394,12 +394,13 @@ struct AbilityBundle {
     display_path: String,
     /// Absolute path to the bundle's `ability.json` (durable store key).
     manifest_path: String,
-    /// Raw manifest bytes (for the durable manifest_hash).
+    /// Canonical manifest bytes (for the durable manifest_hash). The deploy
+    /// envelope's `namespace` field is intentionally removed before hashing,
+    /// storing, restoring, or binding descriptors.
     manifest_bytes: Vec<u8>,
-    /// The deserialized manifest. External bundle authors may include provider
-    /// metadata (`category`, `command`, `tool_name`, …); `AbilityManifest` has
-    /// no `deny_unknown_fields`, so provider metadata is ignored, and the
-    /// canonical `name` / `input_schema` / `exec` come through typed.
+    /// The deserialized canonical manifest. The deploy bundle may carry
+    /// `namespace` beside it; arbitrary provider metadata is not part of the
+    /// runtime manifest and fails closed before registrar mutation.
     manifest: crate::daemon::ability::manifest::AbilityManifest,
     /// Verb-only local name (`generate`); namespace is separate.
     public_name: String,
@@ -424,25 +425,9 @@ impl AbilityBundle {
             );
         }
 
-        let manifest_bytes = std::fs::read(&manifest_file)?;
-        let manifest =
-            crate::daemon::ability::manifest::AbilityManifest::from_json_slice(&manifest_bytes)
-                .map_err(|e| {
-                    anyhow::anyhow!("invalid ability.json at {display_path}/ability.json: {e}")
-                })?;
-
-        // External bundles may carry the namespace separately; the manifest
-        // `name` is the verb only (AbilityManifest.name forbids dots).
-        let namespace = AbilityNamespace::parse(
-            serde_json::from_slice::<Value>(&manifest_bytes)
-                .ok()
-                .and_then(|v| {
-                    v.get("namespace")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-                .as_deref(),
-        )?;
+        let raw_manifest_bytes = std::fs::read(&manifest_file)?;
+        let (manifest, namespace, manifest_bytes) =
+            parse_device_ability_bundle_manifest(&raw_manifest_bytes, &display_path)?;
 
         Ok(Self {
             display_path,
@@ -460,6 +445,39 @@ impl AbilityBundle {
     fn wire_key(&self) -> String {
         self.namespace.wire_key(&self.public_name)
     }
+}
+
+fn parse_device_ability_bundle_manifest(
+    bytes: &[u8],
+    display_path: &str,
+) -> anyhow::Result<(
+    crate::daemon::ability::manifest::AbilityManifest,
+    AbilityNamespace,
+    Vec<u8>,
+)> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|e| anyhow::anyhow!("invalid ability.json at {display_path}/ability.json: {e}"))?;
+    let Value::Object(mut object) = value else {
+        anyhow::bail!("invalid ability.json at {display_path}/ability.json: expected JSON object");
+    };
+
+    let namespace_value = object.remove("namespace");
+    let namespace = match namespace_value {
+        Some(Value::String(namespace)) => AbilityNamespace::parse(Some(namespace.as_str()))?,
+        Some(_) => anyhow::bail!("ability.deploy: ability.json `namespace` must be a string"),
+        None => AbilityNamespace::parse(None)?,
+    };
+
+    let canonical_value = Value::Object(object);
+    let canonical_manifest_bytes = serde_json::to_vec(&canonical_value).map_err(|e| {
+        anyhow::anyhow!("invalid ability.json at {display_path}/ability.json: serialize canonical manifest: {e}")
+    })?;
+    let manifest = crate::daemon::ability::manifest::AbilityManifest::from_json_slice(
+        &canonical_manifest_bytes,
+    )
+    .map_err(|e| anyhow::anyhow!("invalid ability.json at {display_path}/ability.json: {e}"))?;
+
+    Ok((manifest, namespace, canonical_manifest_bytes))
 }
 
 fn deploy_ability_handler(
@@ -978,6 +996,52 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{err}").contains("reserved"), "{err}");
+    }
+
+    #[test]
+    fn deploy_ability_bundle_parser_strips_namespace_from_canonical_manifest_bytes() {
+        let raw = br#"{"name":"weather","namespace":"er","description":"w",
+            "input_schema":{"type":"object"},
+            "exec":{"kind":"shell","argv":["echo","hi"]}}"#;
+
+        let (manifest, namespace, canonical_bytes) =
+            parse_device_ability_bundle_manifest(raw, "/tmp/bundle").unwrap();
+        assert_eq!(manifest.name(), "weather");
+        assert_eq!(namespace.as_str(), "er");
+        let canonical: Value = serde_json::from_slice(&canonical_bytes).unwrap();
+        assert!(
+            canonical.get("namespace").is_none(),
+            "canonical manifest bytes must not retain deploy-envelope namespace: {canonical}"
+        );
+        crate::daemon::ability::manifest::AbilityManifest::from_json_slice(&canonical_bytes)
+            .expect("canonical bytes must parse as strict AbilityManifest");
+    }
+
+    #[test]
+    fn deploy_ability_rejects_unknown_provider_metadata_before_registrar() {
+        let _home = provision_local_device_credentials();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ability.json"),
+            r#"{"name":"weather","namespace":"er","description":"w",
+                "input_schema":{"type":"object"},
+                "tool_name":"legacy-provider-field",
+                "exec":{"kind":"shell","argv":["echo","hi"]}}"#,
+        )
+        .unwrap();
+        let resource_ref =
+            filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
+                .unwrap();
+        let err = deploy_ability_handler(
+            local_device_env(),
+            json!({ "resource_ref": resource_ref, "node_id": "local" }),
+            &empty_device_cell(),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("unknown field `tool_name`"),
+            "provider metadata must fail at bundle parse before registrar mutation: {err}"
+        );
     }
 
     #[test]
