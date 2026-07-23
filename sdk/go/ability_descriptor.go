@@ -345,7 +345,7 @@ func invalidAbilityDescriptor(message string, cause error) error {
 
 func abilityDescriptorNotFound(abilityURA string) error {
 	return &SDKError{
-		Code:      ErrNotFound,
+		Code:      ErrDescriptorNotFound,
 		Stage:     "ability_descriptor",
 		Retry:     RetryNever,
 		Retryable: false,

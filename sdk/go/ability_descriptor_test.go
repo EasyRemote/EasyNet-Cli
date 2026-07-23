@@ -195,3 +195,20 @@ func TestRuntimeAbilityDescriptorProviderGetRejectsAmbiguousDescriptors(t *testi
 		t.Fatalf("version = %q", got.Version)
 	}
 }
+
+func TestRuntimeAbilityDescriptorProviderGetReportsDescriptorNotFound(t *testing.T) {
+	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+		return runtimeAbilityResultJSON(true, `{"abilities":[]}`, "", false), nil
+	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
+	runtime, _ := NewRuntimeClient(transport)
+	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	provider, _ := NewRuntimeAbilityDescriptorProvider(ability)
+
+	_, err := provider.Get(context.Background(), AbilityDescriptorGetRequest{
+		Call:       runtimeAbilityTestContext(),
+		AbilityURA: "easynet:///r/example/ability/authority.observe.health",
+	})
+	if !IsCode(err, ErrDescriptorNotFound) {
+		t.Fatalf("descriptor miss error = %v, want DESCRIPTOR_NOT_FOUND", err)
+	}
+}

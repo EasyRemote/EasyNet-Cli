@@ -190,3 +190,18 @@ def test_runtime_ability_descriptor_provider_get_rejects_ambiguous_descriptors()
         )
     )
     assert descriptor.version == "2.0.0"
+
+
+def test_runtime_ability_descriptor_provider_get_reports_descriptor_not_found() -> None:
+    provider, transport = _provider()
+    transport.output_json = {"abilities": []}
+
+    with pytest.raises(SDKError) as caught:
+        provider.get(
+            AbilityDescriptorGetRequest(
+                call=_call(),
+                ability_ura="easynet:///r/example/ability/authority.observe.health",
+            )
+        )
+
+    assert is_code(caught.value, ErrorCode.DESCRIPTOR_NOT_FOUND)

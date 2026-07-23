@@ -332,7 +332,7 @@ def _invalid_descriptor(
 
 def _not_found(ability_ura: str) -> SDKError:
     return SDKError(
-        code=ErrorCode.NOT_FOUND,
+        code=ErrorCode.DESCRIPTOR_NOT_FOUND,
         stage="ability_descriptor",
         retry=RetryHint.NEVER,
         retryable=False,

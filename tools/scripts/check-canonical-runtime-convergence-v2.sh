@@ -984,6 +984,53 @@ if "test_descriptor_resolution_requires_typed_owner_offline" not in py_tests:
 PY
 }
 
+check_sdk_ability_descriptor_not_found_vocabulary_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go="$cli_root/sdk/go/ability_descriptor.go"
+  local go_test="$cli_root/sdk/go/ability_descriptor_test.go"
+  local py="$cli_root/sdk/python/easynet_sdk/ability_descriptor.py"
+  local py_test="$cli_root/sdk/python/tests/test_ability_descriptor.py"
+
+  "$PYTHON_BIN" - "$go" "$go_test" "$py" "$py_test" <<'PY'
+import sys
+from pathlib import Path
+
+go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"sdk_ability_descriptor_not_found_source_missing:{path}")
+    return path.read_text()
+
+def section(text: str, start: str, end: str) -> str:
+    offset = text.find(start)
+    if offset < 0:
+        raise SystemExit(f"sdk_ability_descriptor_not_found_missing_section:{start}")
+    stop = text.find(end, offset + len(start))
+    return text[offset : stop if stop >= 0 else len(text)]
+
+go = read(go_path)
+go_body = section(go, "func abilityDescriptorNotFound(", "\n}")
+if "ErrNotFound" in go_body:
+    raise SystemExit("sdk_go_ability_descriptor_generic_not_found_projection")
+if "ErrDescriptorNotFound" not in go_body:
+    raise SystemExit("sdk_go_ability_descriptor_descriptor_not_found_missing")
+go_tests = read(go_test_path)
+if "TestRuntimeAbilityDescriptorProviderGetReportsDescriptorNotFound" not in go_tests:
+    raise SystemExit("sdk_go_ability_descriptor_not_found_test_missing")
+
+py = read(py_path)
+py_body = section(py, "def _not_found(", "\n\n")
+if "ErrorCode.NOT_FOUND" in py_body:
+    raise SystemExit("sdk_python_ability_descriptor_generic_not_found_projection")
+if "ErrorCode.DESCRIPTOR_NOT_FOUND" not in py_body:
+    raise SystemExit("sdk_python_ability_descriptor_descriptor_not_found_missing")
+py_tests = read(py_test_path)
+if "test_runtime_ability_descriptor_provider_get_reports_descriptor_not_found" not in py_tests:
+    raise SystemExit("sdk_python_ability_descriptor_not_found_test_missing")
+PY
+}
+
 check_sdk_runtime_failure_code_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_errors="$cli_root/sdk/go/errors.go"
@@ -7598,6 +7645,27 @@ EOF
   if ( check_sdk_descriptor_resolution_error_vocabulary_contract "$tmp/sdk-descriptor-resolution-error-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected SDK descriptor resolution legacy not-found vocabulary gate to fail"
   fi
+  mkdir -p "$tmp/sdk-ability-descriptor-not-found-legacy/sdk/go" \
+    "$tmp/sdk-ability-descriptor-not-found-legacy/sdk/python/easynet_sdk" \
+    "$tmp/sdk-ability-descriptor-not-found-legacy/sdk/python/tests"
+  printf '%s\n' \
+    'func abilityDescriptorNotFound(abilityURA string) error {' \
+    '  return &SDKError{Code: ErrNotFound}' \
+    '}' \
+    > "$tmp/sdk-ability-descriptor-not-found-legacy/sdk/go/ability_descriptor.go"
+  printf 'func TestRuntimeAbilityDescriptorProviderGetReportsDescriptorNotFound(t *testing.T) {}\n' \
+    > "$tmp/sdk-ability-descriptor-not-found-legacy/sdk/go/ability_descriptor_test.go"
+  printf '%s\n' \
+    'def _not_found(ability_ura):' \
+    '    return SDKError(code=ErrorCode.NOT_FOUND)' \
+    '' \
+    'def _invalid_descriptor(): pass' \
+    > "$tmp/sdk-ability-descriptor-not-found-legacy/sdk/python/easynet_sdk/ability_descriptor.py"
+  printf 'def test_runtime_ability_descriptor_provider_get_reports_descriptor_not_found(): pass\n' \
+    > "$tmp/sdk-ability-descriptor-not-found-legacy/sdk/python/tests/test_ability_descriptor.py"
+  if ( check_sdk_ability_descriptor_not_found_vocabulary_contract "$tmp/sdk-ability-descriptor-not-found-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK ability descriptor generic NOT_FOUND gate to fail"
+  fi
   mkdir -p "$tmp/principal-lifecycle-fallback/src/cli/commands/groups"
   printf '%s\n' \
     'fn principal_ability_realm_source(args: &Value) -> anyhow::Result<&str> {' \
@@ -8532,6 +8600,7 @@ EOF
   check_cli_invocation_history_read_model_contract
   check_sdk_history_authority_subject_contract
   check_sdk_descriptor_resolution_error_vocabulary_contract
+  check_sdk_ability_descriptor_not_found_vocabulary_contract
   check_sdk_runtime_failure_code_contract
   check_sdk_direct_runtime_descriptor_not_found_contract
   check_principal_lifecycle_cli_schema_contract
@@ -8640,6 +8709,7 @@ check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
 check_sdk_history_authority_subject_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
+check_sdk_ability_descriptor_not_found_vocabulary_contract
 check_sdk_runtime_failure_code_contract
 check_sdk_direct_runtime_descriptor_not_found_contract
 check_principal_lifecycle_cli_schema_contract
