@@ -1443,6 +1443,37 @@ for test in (
 PY
 }
 
+check_principal_lifecycle_store_idempotency_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local lifecycle="$cli_root/src/daemon/invocation/admission/principal_lifecycle.rs"
+  [[ -f "$lifecycle" ]] || return 0
+
+  "$PYTHON_BIN" - "$lifecycle" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+record = re.search(r"(?s)struct PrincipalRecord \{(?P<body>.*?)\n\}", text)
+if record is None:
+    raise SystemExit("principal_lifecycle_record_schema_missing")
+body = record.group("body")
+command_log = re.search(r"(?s)((?:#\[[^\]]*\]\s*)*)command_log: BTreeMap<String, u64>,", body)
+if command_log is None:
+    raise SystemExit("principal_lifecycle_command_log_missing")
+if "#[serde(default" in command_log.group(0):
+    raise SystemExit("principal_lifecycle_command_log_legacy_default")
+
+for required in (
+    "principal_record_requires_idempotency_command_log_fact",
+    "missing field `command_log`",
+    "principal record without command_log must fail closed",
+):
+    if required not in text:
+        raise SystemExit(f"principal_lifecycle_command_log_test_missing:{required}")
+PY
+}
+
 check_auth_agents_backend_shape_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local auth="$cli_root/src/cli/commands/auth.rs"
@@ -8567,6 +8598,19 @@ EOF
   if ( check_auth_agents_backend_shape_contract "$tmp/auth-agents-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected auth agents retired row alias gate to fail"
   fi
+  mkdir -p "$tmp/principal-lifecycle-command-log-legacy/src/daemon/invocation/admission"
+  printf '%s\n' \
+    'struct PrincipalRecord {' \
+    '  #[serde(default)]' \
+    '  command_log: BTreeMap<String, u64>,' \
+    '}' \
+    'fn principal_record_requires_idempotency_command_log_fact() {}' \
+    'const MESSAGE: &str = "missing field `command_log`";' \
+    'const FAIL_CLOSED: &str = "principal record without command_log must fail closed";' \
+    > "$tmp/principal-lifecycle-command-log-legacy/src/daemon/invocation/admission/principal_lifecycle.rs"
+  if ( check_principal_lifecycle_store_idempotency_schema_contract "$tmp/principal-lifecycle-command-log-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected principal lifecycle command_log legacy default gate to fail"
+  fi
   mkdir -p "$tmp/pages-identity-legacy/src/daemon/ability/builtins/resources/pages"
   printf '%s\n' \
     'pub struct PagesIdentity { pub user: Option<String>, pub realm: Option<String>, pub listener_port: Option<u16> }' \
@@ -9656,6 +9700,7 @@ EOF
   check_sdk_runtime_failure_code_contract
   check_sdk_direct_runtime_descriptor_not_found_contract
   check_principal_lifecycle_cli_schema_contract
+  check_principal_lifecycle_store_idempotency_schema_contract
   check_auth_agents_backend_shape_contract
   check_pages_identity_credentials_contract
   check_cli_credentials_optional_read_contract
@@ -9780,6 +9825,7 @@ check_sdk_runtime_identity_signer_not_found_contract
 check_sdk_runtime_failure_code_contract
 check_sdk_direct_runtime_descriptor_not_found_contract
 check_principal_lifecycle_cli_schema_contract
+check_principal_lifecycle_store_idempotency_schema_contract
 check_auth_agents_backend_shape_contract
 check_pages_identity_credentials_contract
 check_cli_credentials_optional_read_contract

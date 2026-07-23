@@ -959,7 +959,6 @@ struct PrincipalRecord {
     grants: Vec<AuthorizationGrant>,
     created_unix_ms: i64,
     updated_unix_ms: i64,
-    #[serde(default)]
     command_log: BTreeMap<String, u64>,
 }
 
@@ -1838,6 +1837,37 @@ mod tests {
             dir,
             PrincipalLifecycleContext::new_for_test(runtime_trust, store_path),
         )
+    }
+
+    #[test]
+    fn principal_record_requires_idempotency_command_log_fact() {
+        let dir = tempdir().expect("tempdir");
+        let store_path = dir.path().join("principal-lifecycle.json");
+        fs::write(
+            &store_path,
+            serde_json::to_vec_pretty(&json!({
+                "principals": {
+                    "easynet:///r/realm/user/alice": {
+                        "principal_ura": "easynet:///r/realm/user/alice",
+                        "state": "active",
+                        "version": 1,
+                        "bindings": [],
+                        "created_unix_ms": 1,
+                        "updated_unix_ms": 1
+                    }
+                }
+            }))
+            .expect("encode legacy store"),
+        )
+        .expect("write legacy store");
+
+        let error = PrincipalStore::load_unlocked(&store_path, ABILITY_PRINCIPAL_GET)
+            .expect_err("principal record without command_log must fail closed");
+        assert_eq!(error.code(), tonic::Code::Internal);
+        assert!(
+            error.message().contains("missing field `command_log`"),
+            "unexpected missing command_log error: {error}"
+        );
     }
 
     fn command(id: &str, kind: &str, expected_version: Option<u64>) -> serde_json::Value {
