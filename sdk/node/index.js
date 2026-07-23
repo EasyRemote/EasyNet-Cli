@@ -2579,7 +2579,13 @@ function canonicalAuthoritySubject(subjectURA) {
   }
   const ownerUserID = resource.slice(0, sessionIndex).trim();
   const sessionID = resource.slice(sessionIndex + sessionMarker.length).trim();
-  if (!ownerUserID || ownerUserID.includes("/") || !sessionID || sessionID.includes("/")) {
+  if (
+    !ownerUserID ||
+    ownerUserID.includes(".") ||
+    ownerUserID.includes("/") ||
+    !sessionID ||
+    sessionID.includes("/")
+  ) {
     return null;
   }
   return { kind: "session", ownerUserID, sessionID };

@@ -112,6 +112,65 @@ class AuthorityTests(unittest.TestCase):
         with self.assertRaisesRegex(SDKError, "session_owner_user_id must not be all-zero"):
             SessionAuthority.from_metadata(value)
 
+    def test_session_authority_binds_canonical_subject(self) -> None:
+        payload = _session_authority_payload()
+        payload["subject_ura"] = "easynet:///r/example/user/bob"
+        value = _authority_metadata(payload, b"session-signature")
+
+        with self.assertRaisesRegex(
+            SDKError, "session authority user subject must match session_owner_user_id"
+        ):
+            SessionAuthority.from_metadata(value)
+
+        payload = _session_authority_payload()
+        payload["subject_ura"] = (
+            "easynet:///r/example/resource/user.alice/session/session-2"
+        )
+        value = _authority_metadata(payload, b"session-signature")
+
+        with self.assertRaisesRegex(
+            SDKError,
+            "session authority subject_ura owner/session must match session_owner_user_id and session_id",
+        ):
+            SessionAuthority.from_metadata(value)
+
+        payload = _session_authority_payload()
+        payload["session_owner_user_id"] = "teamalice"
+        payload["subject_ura"] = (
+            "easynet:///r/example/resource/user.team.alice/session/session-1"
+        )
+        value = _authority_metadata(payload, b"session-signature")
+
+        with self.assertRaisesRegex(
+            SDKError,
+            "session authority subject_ura must be a canonical user or session subject",
+        ):
+            SessionAuthority.from_metadata(value)
+
+        transport = _MemoryAuthorityTransport()
+        client = AuthorityClient(transport)
+        with self.assertRaisesRegex(
+            SDKError,
+            "session authority subject_ura must be a canonical user or session subject",
+        ):
+            client.mint_session_authority(
+                SessionAuthorityRequest(
+                    issuer_ura="easynet:///r/example/agent/backend",
+                    session_id="session-1",
+                    session_owner_user_id="alice",
+                    creator_principal_id="easynet:///r/example/agent/backend",
+                    callee_ura="easynet:///r/example/device/dev-a",
+                    subject_ura="easynet:///r/example/device/dev-a",
+                    audience="easynet:///r/example/device/dev-a",
+                    scopes=("device.observe.*",),
+                    allowed_actions=("read",),
+                    allowed_followup_abilities=("device.observe.health",),
+                    issued_at_ms=1000,
+                    expires_at_ms=2000,
+                )
+            )
+        self.assertEqual(transport.session_calls, 0)
+
     def test_invocation_builder_attaches_one_authority_metadata(self) -> None:
         proof = DelegationProof.from_metadata(
             _authority_metadata(

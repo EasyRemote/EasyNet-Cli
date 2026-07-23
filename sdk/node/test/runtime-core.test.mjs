@@ -684,6 +684,26 @@ test("authority metadata binds session subject to owner and session id", () => {
   );
 
   assert.throws(
+    () => sdk.SessionAuthority.fromMetadata(
+      authorityValue({
+        issuer_ura: caller,
+        session_id: "session-1",
+        session_owner_user_id: "teamalice",
+        creator_principal_id: caller,
+        callee_ura: callee,
+        subject_ura: "easynet:///r/example/resource/user.team.alice/session/session-1",
+        audience: callee,
+        scopes: ["invoke"],
+        allowed_actions: ["invoke"],
+        allowed_followup_abilities: ["observe.health"],
+        issued_at_ms: 10,
+        expires_at_ms: 20,
+      }),
+    ),
+    /session authority subject_ura must be a canonical user or session subject/,
+  );
+
+  assert.throws(
     () => new sdk.SessionAuthorityRequest({
       issuer_ura: caller,
       session_id: "session-1",

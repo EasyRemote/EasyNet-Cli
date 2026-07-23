@@ -210,6 +210,7 @@ final class AuthoritySupport {
     String ownerUserID = resource.substring(0, markerIndex).trim();
     String authoritySessionID = resource.substring(markerIndex + marker.length()).trim();
     if (ownerUserID.isEmpty()
+        || ownerUserID.contains(".")
         || ownerUserID.contains("/")
         || authoritySessionID.isEmpty()
         || authoritySessionID.contains("/")) {

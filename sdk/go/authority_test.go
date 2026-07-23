@@ -73,6 +73,58 @@ func TestSessionAuthorityRejectsAllZeroOwner(t *testing.T) {
 	}
 }
 
+func TestSessionAuthorityBindsCanonicalSubject(t *testing.T) {
+	payload := sessionAuthorityPayloadFixture()
+	payload["subject_ura"] = "easynet:///r/example/user/bob"
+	value := authorityMetadataFixture(t, payload, []byte("session-signature"))
+
+	_, err := NewSessionAuthorityFromMetadata(value)
+	if err == nil || !strings.Contains(err.Error(), "session authority user subject must match session_owner_user_id") {
+		t.Fatalf("user subject mismatch error = %v", err)
+	}
+
+	payload = sessionAuthorityPayloadFixture()
+	payload["subject_ura"] = "easynet:///r/example/resource/user.alice/session/session-2"
+	value = authorityMetadataFixture(t, payload, []byte("session-signature"))
+
+	_, err = NewSessionAuthorityFromMetadata(value)
+	if err == nil || !strings.Contains(err.Error(), "session authority subject_ura owner/session must match session_owner_user_id and session_id") {
+		t.Fatalf("session subject mismatch error = %v", err)
+	}
+
+	payload = sessionAuthorityPayloadFixture()
+	payload["session_owner_user_id"] = "teamalice"
+	payload["subject_ura"] = "easynet:///r/example/resource/user.team.alice/session/session-1"
+	value = authorityMetadataFixture(t, payload, []byte("session-signature"))
+
+	_, err = NewSessionAuthorityFromMetadata(value)
+	if err == nil || !strings.Contains(err.Error(), "session authority subject_ura must be a canonical user or session subject") {
+		t.Fatalf("dotted owner subject error = %v", err)
+	}
+
+	client, err := NewAuthorityClient(&memoryAuthorityTransport{sessionJSON: []byte(`{"metadata":{}}`)})
+	if err != nil {
+		t.Fatalf("NewAuthorityClient: %v", err)
+	}
+	_, err = client.MintSessionAuthority(context.Background(), SessionAuthorityRequest{
+		IssuerURA:                "easynet:///r/example/agent/backend",
+		SessionID:                "session-1",
+		SessionOwnerUserID:       "alice",
+		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
+		CalleeURA:                "easynet:///r/example/device/dev-a",
+		SubjectURA:               "easynet:///r/example/device/dev-a",
+		Audience:                 "easynet:///r/example/device/dev-a",
+		Scopes:                   []string{"device.observe.*"},
+		AllowedActions:           []string{"read"},
+		AllowedFollowupAbilities: []string{"device.observe.health"},
+		IssuedAtMS:               1000,
+		ExpiresAtMS:              2000,
+	})
+	if err == nil || !strings.Contains(err.Error(), "session authority subject_ura must be a canonical user or session subject") {
+		t.Fatalf("non-session subject error = %v", err)
+	}
+}
+
 func TestSessionAuthorityRawSigningRoundTrip(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(nil)
 	if err != nil {

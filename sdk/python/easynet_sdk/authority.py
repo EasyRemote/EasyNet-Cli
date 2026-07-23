@@ -820,20 +820,69 @@ def _session_owner_ura_from_subject(subject_ura: str, owner_user_id: str) -> str
     if not owner_user_id:
         return ""
     try:
-        projection = parse_ura(subject_ura.strip())
+        kind, subject_owner_user_id, _ = _canonical_session_authority_subject(
+            subject_ura
+        )
     except SDKError:
         return ""
-    if (
-        projection.kind == "user"
-        and projection.components.get("user_id") == owner_user_id
-    ):
-        return projection.ura
-    if (
-        projection.kind == "resource"
-        and projection.components.get("owner_id") == f"user.{owner_user_id}"
-    ):
+    if subject_owner_user_id != owner_user_id:
+        return ""
+    if kind in {"user", "session"}:
+        try:
+            projection = parse_ura(subject_ura.strip())
+        except SDKError:
+            return ""
         return user_ura(projection.realm, owner_user_id)
     return ""
+
+
+def _validate_session_authority_subject_binding(
+    subject_ura: str, session_owner_user_id: str, session_id: str
+) -> None:
+    kind, owner_user_id, authority_session_id = _canonical_session_authority_subject(
+        subject_ura
+    )
+    owner = session_owner_user_id.strip()
+    if owner_user_id != owner:
+        raise _invalid_authority(
+            "session authority user subject must match session_owner_user_id"
+        )
+    if kind == "session" and authority_session_id != session_id.strip():
+        raise _invalid_authority(
+            "session authority subject_ura owner/session must match session_owner_user_id and session_id"
+        )
+
+
+def _canonical_session_authority_subject(subject_ura: str) -> tuple[str, str, str]:
+    try:
+        projection = parse_ura(subject_ura.strip())
+    except SDKError as exc:
+        raise _invalid_authority(
+            "session authority subject_ura must be a canonical user or session subject",
+            exc,
+        ) from exc
+    if projection.kind == "user":
+        user_id = projection.components.get("user_id")
+        if isinstance(user_id, str) and user_id.strip():
+            return ("user", user_id.strip(), "")
+    if projection.kind == "resource":
+        owner_id = projection.components.get("owner_id")
+        path = projection.components.get("path")
+        if isinstance(owner_id, str) and isinstance(path, str):
+            owner_user_id = owner_id.removeprefix("user.")
+            session_id = path.removeprefix("session/")
+            if (
+                owner_user_id != owner_id
+                and owner_user_id.strip()
+                and "." not in owner_user_id
+                and session_id != path
+                and session_id.strip()
+                and "/" not in session_id
+            ):
+                return ("session", owner_user_id.strip(), session_id.strip())
+    raise _invalid_authority(
+        "session authority subject_ura must be a canonical user or session subject"
+    )
 
 
 def _user_id_from_user_ura(value: str, field_name: str) -> str:
@@ -946,6 +995,9 @@ def _validate_session_authority(authority: SessionAuthority) -> None:
         )
     if not authority.signature:
         raise _invalid_authority("session authority signature is required")
+    _validate_session_authority_subject_binding(
+        authority.subject_ura, authority.session_owner_user_id, authority.session_id
+    )
 
 
 def _reject_all_zero_authority_fields(fields: Mapping[str, str]) -> None:

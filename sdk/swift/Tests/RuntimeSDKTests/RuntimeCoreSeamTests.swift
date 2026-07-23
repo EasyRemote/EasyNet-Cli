@@ -303,6 +303,25 @@ final class RuntimeCoreSeamTests: XCTestCase {
             _ = try SessionAuthority.fromMetadata(sessionMismatch)
         }
 
+        let dottedOwner = try authorityMetadataValue([
+            "issuer_ura": caller,
+            "session_id": "session-1",
+            "session_owner_user_id": "teamalice",
+            "creator_principal_id": caller,
+            "callee_ura": callee,
+            "subject_ura": "easynet:///r/example/resource/user.team.alice/session/session-1",
+            "audience": callee,
+            "scopes": ["invoke"],
+            "allowed_actions": ["invoke"],
+            "allowed_followup_abilities": ["observe.health"],
+            "issued_at_ms": 10,
+            "expires_at_ms": 20,
+        ])
+
+        expectSyncSDKError(.invalidArgument, "session authority subject_ura must be a canonical user or session subject") {
+            _ = try SessionAuthority.fromMetadata(dottedOwner)
+        }
+
         expectSyncSDKError(.invalidArgument, "session authority subject_ura must be a canonical user or session subject") {
             _ = try SessionAuthorityRequest(
                 issuerURA: caller,

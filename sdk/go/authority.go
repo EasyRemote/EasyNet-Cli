@@ -774,7 +774,60 @@ func validateSessionAuthority(authority SessionAuthority) error {
 	if len(authority.Signature) == 0 {
 		return invalidInvocation("session authority signature is required", nil)
 	}
+	if err := validateSessionAuthoritySubjectBinding(authority.SubjectURA, authority.SessionOwnerUserID, authority.SessionID); err != nil {
+		return err
+	}
 	return nil
+}
+
+type sessionAuthoritySubject struct {
+	kind        string
+	ownerUserID string
+	sessionID   string
+}
+
+func validateSessionAuthoritySubjectBinding(subjectURA string, sessionOwnerUserID string, sessionID string) error {
+	subject, err := canonicalSessionAuthoritySubject(subjectURA)
+	if err != nil {
+		return err
+	}
+	owner := strings.TrimSpace(sessionOwnerUserID)
+	if subject.ownerUserID != owner {
+		return invalidInvocation("session authority user subject must match session_owner_user_id", nil)
+	}
+	if subject.kind == "session" && subject.sessionID != strings.TrimSpace(sessionID) {
+		return invalidInvocation("session authority subject_ura owner/session must match session_owner_user_id and session_id", nil)
+	}
+	return nil
+}
+
+func canonicalSessionAuthoritySubject(subjectURA string) (sessionAuthoritySubject, error) {
+	parts, err := ParseURAParts(strings.TrimSpace(subjectURA))
+	if err != nil {
+		return sessionAuthoritySubject{}, invalidInvocation("session authority subject_ura must be a canonical user or session subject", err)
+	}
+	switch parts.Kind {
+	case URAKindUser:
+		if strings.TrimSpace(parts.UserID) == "" {
+			break
+		}
+		return sessionAuthoritySubject{kind: "user", ownerUserID: strings.TrimSpace(parts.UserID)}, nil
+	case URAKindResource:
+		ownerUserID := strings.TrimPrefix(strings.TrimSpace(parts.OwnerID), "user.")
+		if ownerUserID == strings.TrimSpace(parts.OwnerID) || ownerUserID == "" || strings.Contains(ownerUserID, ".") || strings.Contains(ownerUserID, "/") {
+			break
+		}
+		sessionID, ok := strings.CutPrefix(strings.TrimSpace(parts.Path), "session/")
+		if !ok || strings.TrimSpace(sessionID) == "" || strings.Contains(sessionID, "/") {
+			break
+		}
+		return sessionAuthoritySubject{
+			kind:        "session",
+			ownerUserID: ownerUserID,
+			sessionID:   strings.TrimSpace(sessionID),
+		}, nil
+	}
+	return sessionAuthoritySubject{}, invalidInvocation("session authority subject_ura must be a canonical user or session subject", nil)
 }
 
 func normalizeSessionAuthority(authority SessionAuthority) (SessionAuthority, error) {

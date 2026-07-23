@@ -443,6 +443,15 @@ public final class RuntimeCoreSeamTest {
         "session authority subject_ura owner/session must match session_owner_user_id and session_id",
         () -> SessionAuthority.fromMetadata(authorityMetadataValue(sessionPayload)));
 
+    Map<String, Object> dottedOwnerPayload = new LinkedHashMap<>(payload);
+    dottedOwnerPayload.put("session_owner_user_id", "teamalice");
+    dottedOwnerPayload.put(
+        "subject_ura", "easynet:///r/example/resource/user.team.alice/session/session-1");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "session authority subject_ura must be a canonical user or session subject",
+        () -> SessionAuthority.fromMetadata(authorityMetadataValue(dottedOwnerPayload)));
+
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
         "session authority subject_ura must be a canonical user or session subject",

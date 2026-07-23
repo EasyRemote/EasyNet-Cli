@@ -497,7 +497,7 @@ private func canonicalAuthoritySubject(_ subjectURA: String) throws -> Authority
     }
     let ownerUserID = String(resource[..<markerRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
     let authoritySessionID = String(resource[markerRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !ownerUserID.isEmpty, !ownerUserID.contains("/"), !authoritySessionID.isEmpty, !authoritySessionID.contains("/") else {
+    guard !ownerUserID.isEmpty, !ownerUserID.contains("."), !ownerUserID.contains("/"), !authoritySessionID.isEmpty, !authoritySessionID.contains("/") else {
         return nil
     }
     return AuthoritySubject(kind: "session", ownerUserID: ownerUserID, sessionID: authoritySessionID)
