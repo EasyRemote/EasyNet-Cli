@@ -112,7 +112,13 @@ fn canonical_test_runtime() -> Arc<axon_sdk::invocation::LocalRuntime> {
 }
 
 fn runtime_attached_catalog() -> AxonAbilityCatalog {
-    AxonAbilityCatalog::new_with_runtime(canonical_test_runtime())
+    AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        canonical_test_runtime(),
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+            authority_fixture_device_ura(),
+        )
+        .expect("build explicit real-invoke authority context"),
+    )
 }
 
 fn runtime_attached_catalog_for_realm(realm: &str) -> AxonAbilityCatalog {
@@ -1408,12 +1414,7 @@ fn real_consent_decide_records_a_decision() {
     // unknown id rather than panicking.
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let perms = Arc::new(crate::daemon::execution::permission::PermissionService::new());
-    let mut reg = AxonAbilityCatalog::new_with_runtime(
-        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-            None,
-        ),
-    );
+    let mut reg = runtime_attached_catalog();
     permission_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
     let result = d.execute_rpc(target(
@@ -3812,12 +3813,7 @@ fn real_test_api_key_create_then_list_then_revoke_round_trip() {
     // wired in — invoking them through a private dispatcher hits
     // the same code paths the production registration would.
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let mut reg = AxonAbilityCatalog::new_with_runtime(
-        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-            None,
-        ),
-    );
+    let mut reg = runtime_attached_catalog();
     crate::daemon::ability::builtins::governance::api_key::register(&mut reg, "test", "default");
     let d = dispatcher_for(Arc::new(reg));
 
