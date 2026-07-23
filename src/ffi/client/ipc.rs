@@ -47,6 +47,19 @@ use tokio::net::UnixStream;
 use crate::daemon::control::discovery::{self, ControlDiscovery, IpcVersionRange, IPC_VERSION_V1};
 use crate::daemon::control::frames::{IncomingFrame, OutgoingFrame};
 
+#[derive(Debug, thiserror::Error)]
+pub enum IpcConnectError {
+    #[error("{0}")]
+    DaemonUnavailable(#[from] anyhow::Error),
+    #[error(
+        "FFI client: IPC version negotiation failed. lib supports {lib_range:?}, daemon supports {daemon_range:?}"
+    )]
+    VersionIncompatible {
+        lib_range: IpcVersionRange,
+        daemon_range: IpcVersionRange,
+    },
+}
+
 /// Open IPC connection to the daemon, owned by a `ClientSession`.
 ///
 /// We hold the framed stream behind the type alias for readability;
@@ -96,12 +109,11 @@ pub fn supported_versions() -> IpcVersionRange {
 /// `IpcClient`.
 ///
 /// Errors:
-/// - control.json missing or unreadable (`ERR_DAEMON_DOWN`-mapped
-///   message in caller).
-/// - control.json reports no UDS path for a Unix build.
-/// - version ranges do not overlap (`ERR_VERSION_INCOMPATIBLE`).
-/// - connect refused (`ERR_DAEMON_DOWN`).
-pub async fn connect(control_json_path: &Path) -> anyhow::Result<IpcClient> {
+/// - control.json missing or unreadable (`DaemonUnavailable`).
+/// - control.json reports no UDS path for a Unix build (`DaemonUnavailable`).
+/// - version ranges do not overlap (`VersionIncompatible`).
+/// - connect refused (`DaemonUnavailable`).
+pub async fn connect(control_json_path: &Path) -> Result<IpcClient, IpcConnectError> {
     let disc = discovery::read(control_json_path)?.ok_or_else(|| {
         anyhow::anyhow!(
             "FFI client: control.json not found at {} — is `easynet-daemon` running?",
@@ -113,16 +125,12 @@ pub async fn connect(control_json_path: &Path) -> anyhow::Result<IpcClient> {
     // via `supported_versions()`; intersect with the daemon's
     // `supported_ipc_versions` field. No overlap = hard failure.
     let lib_range = supported_versions();
-    let chosen = lib_range
-        .overlap(disc.supported_ipc_versions)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "FFI client: IPC version negotiation failed. \
-                 lib supports {:?}, daemon supports {:?}",
-                lib_range,
-                disc.supported_ipc_versions,
-            )
-        })?;
+    let chosen = lib_range.overlap(disc.supported_ipc_versions).ok_or(
+        IpcConnectError::VersionIncompatible {
+            lib_range,
+            daemon_range: disc.supported_ipc_versions,
+        },
+    )?;
     // Pick the highest version both sides support — `IpcVersionRange::overlap`
     // returns the intersection range; `max` is the agreed protocol version.
     let chosen_version = chosen.max;

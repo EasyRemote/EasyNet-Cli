@@ -3,4 +3,4 @@
 pub mod handle;
 pub(crate) mod ipc;
 
-pub(crate) use ipc::{connect, IpcClient};
+pub(crate) use ipc::{connect, IpcClient, IpcConnectError};

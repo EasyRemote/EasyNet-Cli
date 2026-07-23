@@ -96,6 +96,30 @@ check_ffi_runtime_sizing_policy_contract() {
   fi
 }
 
+check_ffi_init_typed_connect_error_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local ffi_mod="$cli_root/src/ffi/mod.rs"
+  local ipc="$cli_root/src/ffi/client/ipc.rs"
+  [[ -f "$ffi_mod" ]] || fail "FFI module source is missing: ${ffi_mod#$cli_root/}"
+  [[ -f "$ipc" ]] || fail "FFI IPC client source is missing: ${ipc#$cli_root/}"
+
+  if rg -n 'msg\.contains\("version negotiation failed"\)|version negotiation failed.*ERR_VERSION_INCOMPATIBLE|Fall back to\s+ERR_DAEMON_DOWN' "$ffi_mod"; then
+    fail "runtime_init preserves retired string-scanned IPC version fallback"
+  fi
+  if ! rg -q 'pub enum IpcConnectError' "$ipc"; then
+    fail "FFI IPC connect must expose typed connect errors"
+  fi
+  if ! rg -q 'VersionIncompatible' "$ipc"; then
+    fail "FFI IPC connect must expose typed version incompatibility"
+  fi
+  if ! rg -q 'IpcConnectError::VersionIncompatible' "$ffi_mod"; then
+    fail "runtime_init must map typed IPC version incompatibility"
+  fi
+  if ! rg -q 'init_returns_typed_version_incompatible_without_message_fallback' "$ffi_mod"; then
+    fail "runtime_init typed IPC version incompatibility regression test is missing"
+  fi
+}
+
 check_failure_code_default_policy_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local classifier="$cli_root/src/daemon/execution/mission/failure_codes.rs"
@@ -9417,9 +9441,28 @@ EOF
   if ( check_session_failure_wire_facts_contract "$tmp/session-failure-wire-facts-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected session failure wire facts gate to fail"
   fi
+  mkdir -p "$tmp/ffi-init-connect-error-legacy/src/ffi/client" "$tmp/ffi-init-connect-error-legacy/src/ffi"
+  cat >"$tmp/ffi-init-connect-error-legacy/src/ffi/client/ipc.rs" <<'EOF'
+pub async fn connect(path: &std::path::Path) -> anyhow::Result<IpcClient> {
+    Ok(IpcClient {})
+}
+EOF
+  cat >"$tmp/ffi-init-connect-error-legacy/src/ffi/mod.rs" <<'EOF'
+pub unsafe extern "C" fn runtime_init() -> i32 {
+    let msg = "FFI client: IPC version negotiation failed";
+    if msg.contains("version negotiation failed") {
+        return ERR_VERSION_INCOMPATIBLE;
+    }
+    ERR_DAEMON_DOWN
+}
+EOF
+  if ( CLI_ROOT="$tmp/ffi-init-connect-error-legacy"; check_ffi_init_typed_connect_error_contract ) >/dev/null 2>&1; then
+    fail "self-test expected FFI init typed connect error gate to fail"
+  fi
   check_mcp_reflection_async_bridge_contract
   check_runtime_session_projection_accessor_contract
   check_ffi_runtime_sizing_policy_contract
+  check_ffi_init_typed_connect_error_contract
   check_failure_code_default_policy_contract
   check_bidi_dispatch_default_code_policy_contract
   check_bidi_reverse_unary_terminal_state_contract
@@ -9541,6 +9584,7 @@ check_manifest_contract
 check_mcp_reflection_async_bridge_contract
 check_runtime_session_projection_accessor_contract
 check_ffi_runtime_sizing_policy_contract
+check_ffi_init_typed_connect_error_contract
 check_failure_code_default_policy_contract
 check_bidi_dispatch_default_code_policy_contract
 check_bidi_reverse_unary_terminal_state_contract

@@ -181,20 +181,14 @@ pub unsafe extern "C" fn runtime_init(
     // Block on the connect; the runtime is single-thread so this is
     // a serial dial, which is what we want — `runtime_init` is a
     // setup call, not on the hot path.
-    let connect_result = rt.block_on(ipc_client::connect(&path));
-    let client = match connect_result {
+    let client = match rt.block_on(ipc_client::connect(&path)) {
         Ok(c) => c,
-        Err(e) => {
-            let msg = format!("{e:#}");
-            // Distinguish version-incompat from "no daemon" so Client
-            // bindings can branch on the right code. Fall back to
-            // ERR_DAEMON_DOWN for everything else (refused connect,
-            // missing control.json, IO error).
-            if msg.contains("version negotiation failed") {
-                set_last_error_code(ERR_VERSION_INCOMPATIBLE, format!("runtime_init: {msg}"));
-                return ERR_VERSION_INCOMPATIBLE;
-            }
-            set_last_error_code(ERR_DAEMON_DOWN, format!("runtime_init: {msg}"));
+        Err(err @ ipc_client::IpcConnectError::VersionIncompatible { .. }) => {
+            set_last_error_code(ERR_VERSION_INCOMPATIBLE, format!("runtime_init: {err}"));
+            return ERR_VERSION_INCOMPATIBLE;
+        }
+        Err(ipc_client::IpcConnectError::DaemonUnavailable(err)) => {
+            set_last_error_code(ERR_DAEMON_DOWN, format!("runtime_init: {err:#}"));
             return ERR_DAEMON_DOWN;
         }
     };
@@ -319,6 +313,46 @@ mod tests {
         let code = unsafe { runtime_init(bogus.as_ptr(), &mut h) };
         assert_eq!(code, ERR_DAEMON_DOWN);
         assert_eq!(h, 0, "out_handle must be zeroed on the failure path");
+    }
+
+    #[test]
+    fn init_returns_typed_version_incompatible_without_message_fallback() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path = dir
+            .path()
+            .join(crate::daemon::control::discovery::CONTROL_JSON_FILENAME);
+        crate::daemon::control::discovery::write(
+            &control_path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(dir.path().join("unreachable-control.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("unreachable-daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: Some("version-incompatible-node".to_string()),
+                }),
+                pid: 1,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    crate::daemon::control::discovery::IPC_VERSION_V1 + 1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write incompatible control discovery");
+
+        let raw_path = std::ffi::CString::new(control_path.display().to_string()).unwrap();
+        let mut h: RuntimeHandle = 999;
+        let code = unsafe { runtime_init(raw_path.as_ptr(), &mut h) };
+
+        assert_eq!(code, ERR_VERSION_INCOMPATIBLE);
+        assert_eq!(h, 0, "out_handle must be zeroed on the failure path");
+        let error = read_last_error_json();
+        assert_eq!(error["code"], "VERSION_MISMATCH");
+        assert_eq!(error["details"]["abi_code"], ERR_VERSION_INCOMPATIBLE);
+        assert_eq!(error["details"]["abi_symbol"], "ERR_VERSION_INCOMPATIBLE");
     }
 
     #[test]
