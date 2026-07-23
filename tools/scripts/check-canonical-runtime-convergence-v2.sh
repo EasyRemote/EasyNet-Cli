@@ -4192,6 +4192,73 @@ for required in (
 PY
 }
 
+check_user_binding_consume_state_machine_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local abilities="$cli_root/src/daemon/keyring/abilities.rs"
+  local consume="$cli_root/src/daemon/keyring/user_binding_consume.rs"
+  local keyring_mod="$cli_root/src/daemon/keyring/mod.rs"
+  [[ -f "$abilities" ]] || return 0
+  [[ -f "$consume" ]] || fail "user binding consume state-machine source is missing: $consume"
+
+  "$PYTHON_BIN" - "$abilities" "$consume" "$keyring_mod" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+abilities = Path(sys.argv[1]).read_text(encoding="utf-8")
+consume = Path(sys.argv[2]).read_text(encoding="utf-8")
+keyring_mod = Path(sys.argv[3]).read_text(encoding="utf-8") if Path(sys.argv[3]).exists() else ""
+
+if "pub mod user_binding_consume;" not in keyring_mod:
+    raise SystemExit("user_binding_consume_state_machine:module_not_exported")
+
+for required in (
+    "pub struct UserBindingConsumeRequest",
+    "pub struct UserBindingConsumeStateMachine",
+    "pub fn execute(self) -> Result<FederatedUserBinding>",
+    "fn ensure_target_realm(&self) -> Result<()>",
+    "fn ensure_freshness(&self) -> Result<()>",
+    "fn ensure_signature(&self) -> Result<()>",
+    "fn ensure_not_replayed(&self, nonce_b64: &str) -> Result<()>",
+    "fn record_binding(self, nonce_b64: String) -> Result<FederatedUserBinding>",
+    "verify_user_binding_signature(&self.request.token)",
+    ".nonce_seen(&self.request.token.source_realm, nonce_b64)",
+    ".record_binding(binding.clone(), nonce_b64)",
+    "consume_state_machine_records_binding_after_all_checks",
+    "consume_state_machine_rejects_wrong_target_before_recording",
+    "consume_state_machine_rejects_replay_before_second_recording",
+):
+    if required not in consume:
+        raise SystemExit(f"user_binding_consume_state_machine:missing:{required}")
+
+handler_start = abilities.find("pub fn handle_consume_federate_user_token(")
+handler_end = abilities.find("\npub fn handle_rotate(", handler_start)
+if handler_start < 0 or handler_end < 0:
+    raise SystemExit("user_binding_consume_state_machine:handler_missing")
+body = abilities[handler_start:handler_end]
+for required in (
+    "UserBindingConsumeRequest::new(",
+    "UserBindingConsumeStateMachine::new(",
+    ".execute()?",
+    "UserBindingConsumeResponse::recorded(&binding)",
+):
+    if required not in body:
+        raise SystemExit(f"user_binding_consume_state_machine:handler_missing:{required}")
+for retired in (
+    "UserBindingError::WrongTargetRealm",
+    "UserBindingError::ExpiredToken",
+    "UserBindingError::ReplayDetected",
+    "verify_user_binding_signature(",
+    ".nonce_seen(",
+    ".record_binding(",
+    "FederatedUserBinding {",
+    "USER_BINDING_FRESHNESS_MS",
+):
+    if retired in body:
+        raise SystemExit(f"user_binding_consume_state_machine:handler_retired:{retired}")
+PY
+}
+
 check_cli_credentials_optional_read_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local src_root="$cli_root/src"
@@ -12102,6 +12169,51 @@ EOF
   if ( check_user_binding_token_wire_strictness_contract "$tmp/user-binding-token-permissive-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected user binding token strict wire gate to fail"
   fi
+  mkdir -p "$tmp/user-binding-consume-inline-legacy/src/daemon/keyring"
+  cat >"$tmp/user-binding-consume-inline-legacy/src/daemon/keyring/mod.rs" <<'EOF'
+pub mod abilities;
+pub mod user_binding_consume;
+EOF
+  cat >"$tmp/user-binding-consume-inline-legacy/src/daemon/keyring/user_binding_consume.rs" <<'EOF'
+pub struct UserBindingConsumeRequest;
+pub struct UserBindingConsumeStateMachine;
+impl UserBindingConsumeStateMachine {
+  pub fn execute(self) -> Result<FederatedUserBinding> {}
+  fn ensure_target_realm(&self) -> Result<()> {}
+  fn ensure_freshness(&self) -> Result<()> {}
+  fn ensure_signature(&self) -> Result<()> { verify_user_binding_signature(&self.request.token); }
+  fn ensure_not_replayed(&self, nonce_b64: &str) -> Result<()> { self.bindings.nonce_seen(&self.request.token.source_realm, nonce_b64); }
+  fn record_binding(self, nonce_b64: String) -> Result<FederatedUserBinding> { self.bindings.record_binding(binding.clone(), nonce_b64); }
+}
+fn consume_state_machine_records_binding_after_all_checks() {}
+fn consume_state_machine_rejects_wrong_target_before_recording() {}
+fn consume_state_machine_rejects_replay_before_second_recording() {}
+EOF
+  cat >"$tmp/user-binding-consume-inline-legacy/src/daemon/keyring/abilities.rs" <<'EOF'
+pub fn handle_consume_federate_user_token(bindings: &FederatedBindingsStore, args: Value) -> Result<Value> {
+    let token: UserBindingToken = serde_json::from_value(args["token"].clone())?;
+    if token.target_realm != self_realm {
+        let err = UserBindingError::WrongTargetRealm { expected: self_realm.clone(), actual: token.target_realm.clone() };
+        return Err(anyhow!("{}", err));
+    }
+    if now_ms.saturating_sub(token.issued_at_ms) > USER_BINDING_FRESHNESS_MS {
+        let err = UserBindingError::ExpiredToken { issued_at_ms: token.issued_at_ms, now_ms };
+        return Err(anyhow!("{}", err));
+    }
+    verify_user_binding_signature(&token)?;
+    if bindings.nonce_seen(&token.source_realm, &nonce_b64) {
+        return Err(anyhow!("{}", UserBindingError::ReplayDetected));
+    }
+    let binding = FederatedUserBinding { source_realm: token.source_realm.clone() };
+    bindings.record_binding(binding, nonce_b64)?;
+    let response = UserBindingConsumeResponse::recorded(&binding);
+    Ok(serde_json::to_value(response)?)
+}
+pub fn handle_rotate() {}
+EOF
+  if ( check_user_binding_consume_state_machine_contract "$tmp/user-binding-consume-inline-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected user binding consume inline lifecycle gate to fail"
+  fi
   mkdir -p "$tmp/local-api-key-cache-legacy/src/daemon/ability/builtins/governance" \
     "$tmp/local-api-key-cache-legacy/src/cli/commands"
   printf '%s\n' \
@@ -13916,6 +14028,7 @@ EOF
   check_managed_signing_response_projection_contract
   check_user_binding_response_projection_contract
   check_user_binding_token_wire_strictness_contract
+  check_user_binding_consume_state_machine_contract
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
   check_runtime_trust_user_key_inventory_scope_contract
@@ -14075,6 +14188,7 @@ check_api_key_response_projection_contract
 check_managed_signing_response_projection_contract
 check_user_binding_response_projection_contract
 check_user_binding_token_wire_strictness_contract
+check_user_binding_consume_state_machine_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_runtime_trust_user_key_inventory_scope_contract

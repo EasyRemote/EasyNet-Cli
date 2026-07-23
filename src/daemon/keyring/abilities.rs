@@ -26,11 +26,9 @@ use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::sync::Arc;
 
-use super::federated_bindings::{FederatedBindingsStore, FederatedUserBinding};
-use super::user_binding_chain::{
-    verify_user_binding_signature, UserBindingError, UserBindingToken, ED25519_PUBKEY_LEN,
-    USER_BINDING_FRESHNESS_MS, USER_BINDING_NONCE_LEN,
-};
+use super::federated_bindings::FederatedBindingsStore;
+use super::user_binding_chain::{UserBindingToken, ED25519_PUBKEY_LEN, USER_BINDING_NONCE_LEN};
+use super::user_binding_consume::{UserBindingConsumeRequest, UserBindingConsumeStateMachine};
 use super::user_binding_projection::{UserBindingConsumeResponse, UserBindingIssueResponse};
 use super::{ManagedPeer, ManagedSigningKeyProjection, ManagedSigningStatus};
 use crate::core::ura::user_realm_from_ura;
@@ -398,52 +396,12 @@ pub fn handle_consume_federate_user_token(
     )
     .map_err(|err| anyhow!("token JSON shape: {err}"))?;
 
-    // ── Check 1: target_realm matches us ──
-    if token.target_realm != self_realm {
-        let err = UserBindingError::WrongTargetRealm {
-            expected: self_realm.clone(),
-            actual: token.target_realm.clone(),
-        };
-        return Err(anyhow!("{}", err));
-    }
-
-    // ── Check 2: freshness window ──
-    if now_ms.saturating_sub(token.issued_at_ms) > USER_BINDING_FRESHNESS_MS {
-        let err = UserBindingError::ExpiredToken {
-            issued_at_ms: token.issued_at_ms,
-            now_ms,
-        };
-        return Err(anyhow!("{}", err));
-    }
-    // Future-dated tokens are also rejected; an issuer with a
-    // wildly skewed clock cannot extend the window arbitrarily.
-    if token.issued_at_ms > now_ms.saturating_add(USER_BINDING_FRESHNESS_MS) {
-        let err = UserBindingError::ExpiredToken {
-            issued_at_ms: token.issued_at_ms,
-            now_ms,
-        };
-        return Err(anyhow!("future-dated token: {}", err));
-    }
-
-    // ── Check 3: signature verifies ──
-    verify_user_binding_signature(&token).map_err(|err| anyhow!("{}", err))?;
-
-    // ── Check 4: replay ──
-    let nonce_b64 = b64_encode(&token.nonce);
-    if bindings.nonce_seen(&token.source_realm, &nonce_b64) {
-        return Err(anyhow!("{}", UserBindingError::ReplayDetected));
-    }
-
-    // All checks passed — record.
-    let binding = FederatedUserBinding {
-        source_realm: token.source_realm.clone(),
-        source_user_ura: token.source_user_ura.clone(),
-        source_user_pubkey_b64: b64_encode(&token.source_user_pubkey),
-        local_user_id: local_user_id.clone(),
-        bound_at_unix_ms: i64::try_from(now_ms).unwrap_or(i64::MAX),
-    };
+    let binding = UserBindingConsumeStateMachine::new(
+        bindings,
+        UserBindingConsumeRequest::new(token, self_realm, local_user_id, now_ms)?,
+    )
+    .execute()?;
     let response = UserBindingConsumeResponse::recorded(&binding);
-    bindings.record_binding(binding, nonce_b64)?;
 
     Ok(serde_json::to_value(response)?)
 }
