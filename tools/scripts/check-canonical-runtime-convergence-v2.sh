@@ -2495,6 +2495,43 @@ for required in (
 PY
 }
 
+check_peer_envelope_signer_subject_profile_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local signer="$cli_root/src/daemon/invocation/admission/peer_envelope_signer.rs"
+  [[ -f "$signer" ]] || fail "peer envelope signer source is missing: ${signer#$cli_root/}"
+
+  "$PYTHON_BIN" - "$signer" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+match = re.search(
+    r"pub\(crate\) async fn sign_peer_request_envelope\s*\([^)]*\)\s*->\s*Result<String, Status>\s*\{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if match is None:
+    raise SystemExit("peer_envelope_signer_subject_profile:signer_body_missing")
+body = match.group("body")
+for retired in (
+    "DEFAULT_URA_PROFILE",
+    "unwrap_or_else(|| crate::daemon::invocation::DEFAULT_URA_PROFILE.to_string())",
+):
+    if retired in body:
+        raise SystemExit(f"peer_envelope_signer_subject_profile:retired_signing_fallback:{retired}")
+for required in (
+    "required_subject_profile(envelope)?",
+    "explicit subject profile before descriptor subject normalization",
+    "fn required_subject_profile(envelope: &Envelope) -> Result<String, Status>",
+    "sign_peer_request_rejects_missing_subject_profile_before_normalization",
+):
+    if required not in text:
+        raise SystemExit(f"peer_envelope_signer_subject_profile:missing:{required}")
+PY
+}
+
 check_session_prelude_credentials_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local prelude="$cli_root/src/daemon/invocation/bidi/session_initiator/prelude.rs"
@@ -8595,6 +8632,30 @@ EOF
   if ( check_admission_authority_raw_wire_strict_contract "$tmp/admission-authority-raw-default-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected admission authority raw wire default gate to fail"
   fi
+  mkdir -p "$tmp/peer-envelope-subject-profile-legacy/src/daemon/invocation/admission"
+  cat >"$tmp/peer-envelope-subject-profile-legacy/src/daemon/invocation/admission/peer_envelope_signer.rs" <<'EOF'
+pub(crate) async fn sign_peer_request_envelope(
+    envelope: &mut Envelope,
+    ability: &str,
+    descriptor_ref: &str,
+    arguments: &[u8],
+    local_realm: Option<&str>,
+    hub_signer: Option<&dyn CanonicalSigner>,
+) -> Result<String, Status> {
+    let descriptor_subject_ura = descriptor_subject_ura_for("callee", "subject", ability)?;
+    let profile = envelope
+        .subject
+        .as_ref()
+        .map(|subject| subject.profile.clone())
+        .filter(|profile| !profile.trim().is_empty())
+        .unwrap_or_else(|| crate::daemon::invocation::DEFAULT_URA_PROFILE.to_string());
+    envelope.subject = Some(SubjectIdentity { ura: descriptor_subject_ura, profile });
+    Ok(String::new())
+}
+EOF
+  if ( check_peer_envelope_signer_subject_profile_contract "$tmp/peer-envelope-subject-profile-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected peer envelope signer subject profile fallback gate to fail"
+  fi
   mkdir -p "$tmp/session-prelude-credentials-legacy/src/daemon/invocation/bidi/session_initiator"
   printf '%s\n' \
     'async fn sync_paired_user_trust_prelude(client: &mut InvocationClient<Channel>, signer: &dyn CanonicalSigner, sync: &UserTrustSync) -> Result<UserTrustBootstrapOutcome, UserTrustBootstrapError> {' \
@@ -9164,6 +9225,7 @@ EOF
   check_node_session_authority_subject_contract
   check_runtime_authority_metadata_key_neutrality_contract
   check_admission_authority_raw_wire_strict_contract
+  check_peer_envelope_signer_subject_profile_contract
   check_local_ability_target_subject_policy_contract
   check_session_prelude_credentials_contract
   check_session_prelude_receipt_contract
@@ -9281,6 +9343,7 @@ check_shared_local_device_owner_projection_contract
 check_node_session_authority_subject_contract
 check_runtime_authority_metadata_key_neutrality_contract
 check_admission_authority_raw_wire_strict_contract
+check_peer_envelope_signer_subject_profile_contract
 check_local_ability_target_subject_policy_contract
 check_session_prelude_credentials_contract
 check_start_attach_user_signer_readiness_contract

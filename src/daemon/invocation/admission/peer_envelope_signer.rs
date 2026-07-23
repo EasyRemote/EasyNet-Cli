@@ -257,12 +257,7 @@ pub(crate) async fn sign_peer_request_envelope(
             ))
         })?;
     if descriptor_subject_ura != subject_ura {
-        let profile = envelope
-            .subject
-            .as_ref()
-            .map(|subject| subject.profile.clone())
-            .filter(|profile| !profile.trim().is_empty())
-            .unwrap_or_else(|| crate::daemon::invocation::DEFAULT_URA_PROFILE.to_string());
+        let profile = required_subject_profile(envelope)?;
         envelope.subject = Some(SubjectIdentity {
             ura: descriptor_subject_ura.clone(),
             profile,
@@ -353,6 +348,20 @@ fn descriptor_subject_ura_for(
              cannot own ability `{ability}`"
         )
     })
+}
+
+fn required_subject_profile(envelope: &Envelope) -> Result<String, Status> {
+    envelope
+        .subject
+        .as_ref()
+        .map(|subject| subject.profile.trim())
+        .filter(|profile| !profile.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            Status::invalid_argument(
+                "cross-hub canonical_invoke signing requires explicit subject profile before descriptor subject normalization",
+            )
+        })
 }
 
 #[cfg(test)]
@@ -573,6 +582,50 @@ mod tests {
             env.causal_context.and_then(|ctx| ctx.form),
             Some(axon_sdk::pb::axon::v1::causal_context::Form::Scalar(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn sign_peer_request_rejects_missing_subject_profile_before_normalization() {
+        let signer = test_hub_signer("local");
+        let descriptor_ref = peer_discover_descriptor_ref();
+        let mut env = Envelope {
+            caller: Some(AgentIdentity {
+                ura: crate::core::ura::hub_ura("local"),
+                profile: crate::daemon::invocation::DEFAULT_URA_PROFILE.to_string(),
+            }),
+            callee: Some(AgentIdentity {
+                ura: crate::core::ura::hub_ura("peer"),
+                profile: crate::daemon::invocation::DEFAULT_URA_PROFILE.to_string(),
+            }),
+            subject: Some(SubjectIdentity {
+                ura: crate::core::ura::hub_ura("origin"),
+                profile: String::new(),
+            }),
+            invocation_nonce: vec![9u8; 16],
+            ..Envelope::default()
+        };
+
+        let error = sign_peer_request_envelope(
+            &mut env,
+            "federation.discover",
+            &descriptor_ref,
+            br#"{"q":"chat"}"#,
+            Some("local"),
+            Some(signer.as_ref()),
+        )
+        .await
+        .expect_err("signing must not repair missing subject profile");
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(
+            error.message().contains("explicit subject profile"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            env.subject.expect("subject remains available").ura,
+            crate::core::ura::hub_ura("origin"),
+            "failed normalization must not rewrite subject"
+        );
     }
 
     #[tokio::test]
