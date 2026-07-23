@@ -188,6 +188,50 @@ for needle, label in required.items():
 PY
 }
 
+check_ffi_callback_terminal_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local invocation="$cli_root/src/ffi/invocation/mod.rs"
+  [[ -f "$invocation" ]] || fail "FFI invocation source is missing: ${invocation#$cli_root/}"
+
+  "$PYTHON_BIN" - "$invocation" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
+
+legacy = 'projection["terminal"].as_bool().unwrap_or(false)'
+if legacy in production:
+    raise SystemExit("ffi_callback_terminal_projection:json_terminal_default")
+
+required = {
+    "struct CallbackFrameProjection": "projection_value_object_missing",
+    "enum CallbackFrameLifecycle": "projection_lifecycle_state_missing",
+    "CallbackFrameLifecycle::CanonicalTerminal": "canonical_terminal_state_missing",
+    "fn is_canonical_terminal(&self) -> bool": "terminal_accessor_missing",
+    "fn into_json_bytes(self) -> Vec<u8>": "json_serialization_boundary_missing",
+    "projection.is_canonical_terminal()": "reader_terminal_accessor_missing",
+    "callback_frame_projection_terminality_is_not_inferred_from_json_shape": "json_independence_test_missing",
+}
+for needle, label in required.items():
+    if needle not in text:
+        raise SystemExit(f"ffi_callback_terminal_projection:{label}")
+
+for fn_name in ("run_stream_reader", "run_bidi_down_reader"):
+    match = re.search(rf"async fn {fn_name}\b.*?\n\}}\n", production, re.S)
+    if not match:
+        raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_missing")
+    body = match.group(0)
+    if 'projection["terminal"]' in body or ".as_bool().unwrap_or(false)" in body:
+        raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_json_terminal_lookup")
+    if "projection.is_canonical_terminal()" not in body:
+        raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_typed_terminal_missing")
+    if "projection.into_json_bytes()" not in body:
+        raise SystemExit(f"ffi_callback_terminal_projection:{fn_name}_json_boundary_missing")
+PY
+}
+
 check_cabi_bidi_cancel_reason_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local cabi="$cli_root/sdk/go/cabi_runtime.go"
@@ -10248,6 +10292,25 @@ EOF
   if ( CLI_ROOT="$tmp/cli-ffi-json-legacy"; check_ffi_invocation_json_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected FFI JSON projection downgrade gate to fail"
   fi
+  mkdir -p "$tmp/cli-ffi-terminal-json-legacy/src/ffi/invocation"
+  cat >"$tmp/cli-ffi-terminal-json-legacy/src/ffi/invocation/mod.rs" <<'EOF'
+async fn run_stream_reader() {
+    let projection = stream_chunk_json().unwrap();
+    let terminal = projection["terminal"].as_bool().unwrap_or(false);
+    let bytes = projection.to_string().into_bytes();
+    if terminal {}
+}
+
+async fn run_bidi_down_reader() {
+    let projection = bidi_down_frame_json().unwrap();
+    let terminal = projection["terminal"].as_bool().unwrap_or(false);
+    let bytes = projection.to_string().into_bytes();
+    if terminal {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/cli-ffi-terminal-json-legacy"; check_ffi_callback_terminal_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected FFI callback terminal JSON lookup gate to fail"
+  fi
   mkdir -p "$tmp/cli-ffi-last-error-legacy/src/ffi/errors"
   cat >"$tmp/cli-ffi-last-error-legacy/src/ffi/errors/mod.rs" <<'EOF'
 struct LastErrorRecord {
@@ -15169,6 +15232,7 @@ check_ffi_descriptor_runtime_owner_contract
 check_ffi_descriptor_probe_not_found_vocabulary_contract
 check_cli_discover_candidate_projection_contract
 check_ffi_invocation_json_projection_contract
+check_ffi_callback_terminal_projection_contract
 check_ffi_last_error_typed_tls_contract
 check_canonical_ability_catalog_projection_contract
 check_daemon_runtime_assembly_contract

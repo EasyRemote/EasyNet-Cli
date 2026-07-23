@@ -4901,8 +4901,8 @@ async fn run_stream_reader(
                             break;
                         }
                     };
-                    let terminal = projection["terminal"].as_bool().unwrap_or(false);
-                    let bytes = projection.to_string().into_bytes();
+                    let terminal = projection.is_canonical_terminal();
+                    let bytes = projection.into_json_bytes();
                     let sent = send_callback_frame_or_backpressure(
                         &tx,
                         bytes,
@@ -4954,8 +4954,8 @@ async fn run_bidi_down_reader(
                             break;
                         }
                     };
-                    let terminal = projection["terminal"].as_bool().unwrap_or(false);
-                    let bytes = projection.to_string().into_bytes();
+                    let terminal = projection.is_canonical_terminal();
+                    let bytes = projection.into_json_bytes();
                     let sent = send_callback_frame_or_backpressure(
                         &tx,
                         bytes,
@@ -6341,10 +6341,47 @@ fn runtime_error_json(error: crate::daemon::RuntimeErrorSummary) -> serde_json::
 }
 
 #[cfg(feature = "axon-pb")]
+#[derive(Clone, Debug)]
+struct CallbackFrameProjection {
+    frame_json: serde_json::Value,
+    lifecycle: CallbackFrameLifecycle,
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CallbackFrameLifecycle {
+    Continue,
+    CanonicalTerminal,
+}
+
+#[cfg(feature = "axon-pb")]
+impl CallbackFrameProjection {
+    fn new(frame_json: serde_json::Value, lifecycle: CallbackFrameLifecycle) -> Self {
+        Self {
+            frame_json,
+            lifecycle,
+        }
+    }
+
+    fn is_canonical_terminal(&self) -> bool {
+        self.lifecycle == CallbackFrameLifecycle::CanonicalTerminal
+    }
+
+    #[cfg(test)]
+    fn json(&self) -> &serde_json::Value {
+        &self.frame_json
+    }
+
+    fn into_json_bytes(self) -> Vec<u8> {
+        self.frame_json.to_string().into_bytes()
+    }
+}
+
+#[cfg(feature = "axon-pb")]
 fn stream_chunk_json(
     verifier: &mut InboundReceiptCheckpointVerifier,
     chunk: axon_sdk::pb::axon::v1::InvokeStreamChunk,
-) -> Result<serde_json::Value, String> {
+) -> Result<CallbackFrameProjection, String> {
     use base64::Engine;
     let payload_base64 = base64::engine::general_purpose::STANDARD.encode(&chunk.payload);
     let payload_json =
@@ -6358,22 +6395,30 @@ fn stream_chunk_json(
         .map(|receipt| verifier.verify_terminal(receipt))
         .transpose()?;
     let proven_terminal = terminal_receipt.is_some();
-    Ok(serde_json::json!({
-        "ok": chunk.error.is_none(),
-        "kind": if proven_terminal { "terminal" } else { "data" },
-        "invocation_id": chunk.invocation_id,
-        "state": chunk.state,
-        "sequence": chunk.sequence,
-        "terminal": proven_terminal,
-        "elapsed_ms": chunk.elapsed_ms,
-        "payload_content_type": chunk.content_type,
-        "payload_base64": payload_base64,
-        "payload_json": payload_json,
-        "admission_receipt": admission_receipt,
-        "terminal_receipt": terminal_receipt,
-        "proof_error": chunk.proof_error.as_ref().map(protocol_error_json),
-        "error": chunk.error.as_ref().map(protocol_error_json),
-    }))
+    let lifecycle = if proven_terminal {
+        CallbackFrameLifecycle::CanonicalTerminal
+    } else {
+        CallbackFrameLifecycle::Continue
+    };
+    Ok(CallbackFrameProjection::new(
+        serde_json::json!({
+            "ok": chunk.error.is_none(),
+            "kind": if proven_terminal { "terminal" } else { "data" },
+            "invocation_id": chunk.invocation_id,
+            "state": chunk.state,
+            "sequence": chunk.sequence,
+            "terminal": proven_terminal,
+            "elapsed_ms": chunk.elapsed_ms,
+            "payload_content_type": chunk.content_type,
+            "payload_base64": payload_base64,
+            "payload_json": payload_json,
+            "admission_receipt": admission_receipt,
+            "terminal_receipt": terminal_receipt,
+            "proof_error": chunk.proof_error.as_ref().map(protocol_error_json),
+            "error": chunk.error.as_ref().map(protocol_error_json),
+        }),
+        lifecycle,
+    ))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -6393,7 +6438,7 @@ fn stream_status_error_json(status: tonic::Status, sequence: u64) -> serde_json:
 fn bidi_down_frame_json(
     verifier: &mut InboundReceiptCheckpointVerifier,
     frame: axon_sdk::pb::axon::v1::InvokeBidiDown,
-) -> Result<serde_json::Value, String> {
+) -> Result<CallbackFrameProjection, String> {
     use axon_sdk::pb::axon::v1::invoke_bidi_down::Payload;
     use base64::Engine;
     let mac_base64 = base64::engine::general_purpose::STANDARD.encode(&frame.mac);
@@ -6409,64 +6454,84 @@ fn bidi_down_frame_json(
                 } else {
                     return Err("bidi receipt is neither admission nor terminal checkpoint".into());
                 };
-            Ok(serde_json::json!({
-                "ok": true,
-                "kind": "receipt",
-                "sequence": frame.sequence,
-                "mac_base64": mac_base64,
-                "admission_receipt": is_admission.then(|| summary.clone()),
-                "terminal_receipt": is_terminal.then(|| summary.clone()),
-                "terminal": is_terminal,
-            }))
+            let lifecycle = if is_terminal {
+                CallbackFrameLifecycle::CanonicalTerminal
+            } else {
+                CallbackFrameLifecycle::Continue
+            };
+            Ok(CallbackFrameProjection::new(
+                serde_json::json!({
+                    "ok": true,
+                    "kind": "receipt",
+                    "sequence": frame.sequence,
+                    "mac_base64": mac_base64,
+                    "admission_receipt": is_admission.then(|| summary.clone()),
+                    "terminal_receipt": is_terminal.then(|| summary.clone()),
+                    "terminal": is_terminal,
+                }),
+                lifecycle,
+            ))
         }
         Some(Payload::BinaryChunk(chunk)) => {
             let payload_base64 = base64::engine::general_purpose::STANDARD.encode(&chunk.data);
-            Ok(serde_json::json!({
-                "ok": true,
-                "kind": "data",
-                "sequence": frame.sequence,
-                "mac_base64": mac_base64,
-                "stream_id": chunk.stream_id,
-                "payload_base64": payload_base64,
-                "pts": chunk.pts,
-                "terminal": false,
-            }))
+            Ok(CallbackFrameProjection::new(
+                serde_json::json!({
+                    "ok": true,
+                    "kind": "data",
+                    "sequence": frame.sequence,
+                    "mac_base64": mac_base64,
+                    "stream_id": chunk.stream_id,
+                    "payload_base64": payload_base64,
+                    "pts": chunk.pts,
+                    "terminal": false,
+                }),
+                CallbackFrameLifecycle::Continue,
+            ))
         }
         Some(Payload::Control(control)) => {
-            Ok(serde_json::json!({
-                "ok": true,
-                "kind": "control",
-                "sequence": frame.sequence,
-                "mac_base64": mac_base64,
-                "control": bidi_control_json(control),
-                // A down-direction EOF is a remote half-close signal, not the
-                // canonical invocation terminal state. The terminal state is
-                // carried by the cleanup-complete receipt so SDK consumers can
-                // keep draining until the authoritative outcome arrives.
-                "terminal": false,
-            }))
+            Ok(CallbackFrameProjection::new(
+                serde_json::json!({
+                    "ok": true,
+                    "kind": "control",
+                    "sequence": frame.sequence,
+                    "mac_base64": mac_base64,
+                    "control": bidi_control_json(control),
+                    // A down-direction EOF is a remote half-close signal, not the
+                    // canonical invocation terminal state. The terminal state is
+                    // carried by the cleanup-complete receipt so SDK consumers can
+                    // keep draining until the authoritative outcome arrives.
+                    "terminal": false,
+                }),
+                CallbackFrameLifecycle::Continue,
+            ))
         }
         // Carrier-v1 frames (DEC-F004): the FFI JSON projection learns
         // these shapes when dual-read lands (T2.1 steps 2-3); until
         // then they surface as an explicit unsupported event.
         Some(Payload::DispatchCall(_)) | Some(Payload::ReverseDispatchResult(_)) => {
-            Ok(serde_json::json!({
+            Ok(CallbackFrameProjection::new(
+                serde_json::json!({
+                    "ok": false,
+                    "kind": "unsupported_frame",
+                    "sequence": frame.sequence,
+                    "mac_base64": mac_base64,
+                    "message": "carrier-v1 dispatch frame before dual-read support",
+                    "terminal": false,
+                }),
+                CallbackFrameLifecycle::Continue,
+            ))
+        }
+        None => Ok(CallbackFrameProjection::new(
+            serde_json::json!({
                 "ok": false,
-                "kind": "unsupported_frame",
+                "kind": "unknown",
                 "sequence": frame.sequence,
                 "mac_base64": mac_base64,
-                "message": "carrier-v1 dispatch frame before dual-read support",
+                "message": "InvokeBidiDown frame has no payload",
                 "terminal": false,
-            }))
-        }
-        None => Ok(serde_json::json!({
-            "ok": false,
-            "kind": "unknown",
-            "sequence": frame.sequence,
-            "mac_base64": mac_base64,
-            "message": "InvokeBidiDown frame has no payload",
-            "terminal": false,
-        })),
+            }),
+            CallbackFrameLifecycle::Continue,
+        )),
     }
 }
 
@@ -10246,7 +10311,10 @@ mod tests {
             terminal: true,
             ..axon_sdk::pb::axon::v1::InvokeStreamChunk::default()
         };
-        let value = stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
+        let projection =
+            stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
+        let value = projection.json();
+        assert!(!projection.is_canonical_terminal());
         assert_eq!(value["ok"], true);
         assert_eq!(value["kind"], "data");
         assert_eq!(value["sequence"], 7);
@@ -10273,6 +10341,20 @@ mod tests {
             .expect_err("declared JSON stream payload must fail closed");
         assert!(error.contains("payload_json declares JSON content type"));
         assert!(error.contains("payload is not valid JSON"));
+    }
+
+    #[test]
+    fn callback_frame_projection_terminality_is_not_inferred_from_json_shape() {
+        let projection = CallbackFrameProjection::new(
+            serde_json::json!({
+                "kind": "data",
+                "terminal": false
+            }),
+            CallbackFrameLifecycle::CanonicalTerminal,
+        );
+
+        assert!(projection.is_canonical_terminal());
+        assert_eq!(projection.json()["terminal"], false);
     }
 
     #[test]
@@ -10345,8 +10427,10 @@ mod tests {
             ),
             ..axon_sdk::pb::axon::v1::InvokeBidiDown::default()
         };
-        let value =
+        let projection =
             bidi_down_frame_json(&mut InboundReceiptCheckpointVerifier::new(), frame).unwrap();
+        let value = projection.json();
+        assert!(!projection.is_canonical_terminal());
         assert_eq!(value["ok"], true);
         assert_eq!(value["kind"], "data");
         assert_eq!(value["sequence"], 3);
@@ -10367,8 +10451,10 @@ mod tests {
             )),
             ..axon_sdk::pb::axon::v1::InvokeBidiDown::default()
         };
-        let value =
+        let projection =
             bidi_down_frame_json(&mut InboundReceiptCheckpointVerifier::new(), frame).unwrap();
+        let value = projection.json();
+        assert!(!projection.is_canonical_terminal());
         assert_eq!(value["ok"], true);
         assert_eq!(value["kind"], "control");
         assert_eq!(value["sequence"], 4);
