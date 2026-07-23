@@ -1033,6 +1033,52 @@ for required_test in (
 PY
 }
 
+check_chat_session_index_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local sessions_rs="$cli_root/src/daemon/persistence/chat_sessions.rs"
+  [[ -f "$sessions_rs" ]] || fail "chat session persistence source is missing: $sessions_rs"
+
+  "$PYTHON_BIN" - "$sessions_rs" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+index = re.search(
+    r"pub struct SessionIndex \{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if index is None:
+    raise SystemExit("chat_session_index_schema:session_index_missing")
+body = index.group("body")
+for field in ("pub latest: String", "pub lifelong: String", "pub sessions: Vec<SessionDescriptor>"):
+    if field not in body:
+        raise SystemExit(f"chat_session_index_schema:missing_field:{field}")
+if "#[serde(default)]" in body:
+    raise SystemExit("chat_session_index_schema:field_default_retired")
+for retired in (
+    "index_without_lifelong_field_deserializes",
+    "back-compat parse",
+    "pre-existing index files",
+    "serde default = empty string",
+):
+    if retired in text:
+        raise SystemExit(f"chat_session_index_schema:retired_compat:{retired}")
+for required in (
+    "existing_index_without_lifelong_field_fails_closed",
+    "missing field `lifelong`",
+    "existing_index_without_latest_field_fails_closed",
+    "missing field `latest`",
+    "existing_index_without_sessions_field_fails_closed",
+    "missing field `sessions`",
+    "Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SessionIndex::default())",
+):
+    if required not in text:
+        raise SystemExit(f"chat_session_index_schema:missing:{required}")
+PY
+}
+
 check_sdk_history_authority_subject_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -9879,6 +9925,32 @@ EOF
   if ( CLI_ROOT="$tmp/daemon-config-mode-default-legacy"; check_daemon_config_mode_required_contract ) >/dev/null 2>&1; then
     fail "self-test expected daemon config mode default gate to fail"
   fi
+  mkdir -p "$tmp/chat-session-index-default-legacy/src/daemon/persistence"
+  cat >"$tmp/chat-session-index-default-legacy/src/daemon/persistence/chat_sessions.rs" <<'EOF'
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionIndex {
+    #[serde(default)]
+    pub latest: String,
+    #[serde(default)]
+    pub lifelong: String,
+    #[serde(default)]
+    pub sessions: Vec<SessionDescriptor>,
+}
+
+pub fn load_index(agent: &str) -> anyhow::Result<SessionIndex> {
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SessionIndex::default())
+}
+
+#[cfg(test)]
+mod tests {
+    fn index_without_lifelong_field_deserializes() {
+        let idx: SessionIndex = serde_json::from_str(raw).expect("back-compat parse");
+    }
+}
+EOF
+  if ( CLI_ROOT="$tmp/chat-session-index-default-legacy"; check_chat_session_index_schema_contract ) >/dev/null 2>&1; then
+    fail "self-test expected chat session index default gate to fail"
+  fi
   mkdir -p "$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing" \
     "$tmp/remote-subject-provenance-legacy/src/ffi/invocation"
   cat >"$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
@@ -9985,6 +10057,7 @@ EOF
   check_local_runtime_state_read_subject_contract
   check_runtime_state_kind_required_contract
   check_daemon_config_mode_required_contract
+  check_chat_session_index_schema_contract
   check_sdk_history_authority_subject_contract
   check_sdk_descriptor_resolution_error_vocabulary_contract
   check_sdk_ability_descriptor_not_found_vocabulary_contract

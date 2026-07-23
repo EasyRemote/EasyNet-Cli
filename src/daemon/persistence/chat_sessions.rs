@@ -75,8 +75,8 @@ const PREVIEW_BYTE_CAP: usize = 80;
 
 /// One JSONL line representing a single chat turn. The wire shape
 /// is duck-typed by `agent sessions show` and other consumers, so
-/// adding fields is a non-breaking change as long as
-/// `serde(default)` covers them.
+/// adding fields is a non-breaking change only when the line reader
+/// owns an explicit projection for the new state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnRecord {
     /// Always `"turn"`. Lets a future writer add other line types
@@ -130,19 +130,17 @@ pub struct SessionIndex {
     /// Most recently touched session id. `--follow` resumes this.
     /// Empty on a fresh agent or when every session has been
     /// pruned.
-    #[serde(default)]
     pub latest: String,
     /// The agent's lifelong (default) session id. The chat ability
     /// binds it on the first turn sent with the `lifelong` sentinel
     /// and resumes it on every later sentinel turn, so the agent
-    /// keeps one continuous default thread across reloads. Empty
-    /// until the first lifelong turn (pre-existing index files
-    /// deserialize with the field empty).
-    #[serde(default)]
+    /// keeps one continuous default thread across reloads. Empty until
+    /// the first lifelong turn. Existing index files must carry this
+    /// field explicitly; missing-file handling is the only place that
+    /// constructs an empty index.
     pub lifelong: String,
     /// One entry per session, sorted most-recent-first. The picker
     /// for `--resume` reads this directly.
-    #[serde(default)]
     pub sessions: Vec<SessionDescriptor>,
 }
 
@@ -671,13 +669,36 @@ mod tests {
     }
 
     #[test]
-    fn index_without_lifelong_field_deserializes() {
-        // Pre-lifelong index.json files have no `lifelong` key; they
-        // must keep loading (serde default = empty string → None).
+    fn existing_index_without_lifelong_field_fails_closed() {
         let raw = r#"{"latest": "a", "sessions": []}"#;
-        let idx: SessionIndex = serde_json::from_str(raw).expect("back-compat parse");
-        assert_eq!(idx.latest, "a");
-        assert!(idx.lifelong.is_empty());
+        let error =
+            serde_json::from_str::<SessionIndex>(raw).expect_err("missing lifelong must fail");
+        assert!(
+            error.to_string().contains("missing field `lifelong`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn existing_index_without_latest_field_fails_closed() {
+        let raw = r#"{"lifelong": "", "sessions": []}"#;
+        let error =
+            serde_json::from_str::<SessionIndex>(raw).expect_err("missing latest must fail");
+        assert!(
+            error.to_string().contains("missing field `latest`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn existing_index_without_sessions_field_fails_closed() {
+        let raw = r#"{"latest": "a", "lifelong": ""}"#;
+        let error =
+            serde_json::from_str::<SessionIndex>(raw).expect_err("missing sessions must fail");
+        assert!(
+            error.to_string().contains("missing field `sessions`"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
