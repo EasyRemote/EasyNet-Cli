@@ -2483,7 +2483,7 @@ mod tests {
                 }),
                 chat_options,
             ),
-            crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
         )
         .expect("register runtime chat ability");
         let kernel = Kernel::new();

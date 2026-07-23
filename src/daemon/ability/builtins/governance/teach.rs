@@ -2197,7 +2197,7 @@ mod tests {
                 .expect("runtime key");
         let live = crate::support::async_bridge::run_blocking(
             runtime.has_ability(&runtime_key),
-            crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
         );
         assert!(
             !live,
@@ -2243,7 +2243,7 @@ mod tests {
         assert!(
             !crate::support::async_bridge::run_blocking(
                 runtime.has_ability(&runtime_key),
-                crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+                crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
             ),
             "declaration-only acquired ability must not be a live runtime handler"
         );
@@ -2263,7 +2263,7 @@ mod tests {
         assert!(
             !crate::support::async_bridge::run_blocking(
                 runtime.has_ability(&runtime_key),
-                crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+                crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
             ),
             "forget must reconcile stale live LocalRuntime rows"
         );

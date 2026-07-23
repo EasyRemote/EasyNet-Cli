@@ -339,7 +339,7 @@ where
 {
     crate::support::async_bridge::run_blocking(
         f(),
-        crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+        crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
     )
 }
 
@@ -490,7 +490,7 @@ impl KernelApi for Kernel {
                 )
                 .map_err(|err| anyhow::anyhow!("{err}"))
             },
-            crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
         )
     }
 
@@ -683,7 +683,7 @@ mod tests {
                     )
                     .await
             },
-            crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
         )
         .expect("register descriptor-bound echo ability");
         kernel.set_local_runtime(runtime);

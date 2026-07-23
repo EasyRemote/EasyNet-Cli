@@ -645,7 +645,7 @@ tokio 基础，围绕**一个 gRPC service trait** + receipt-投影事件流 + �
 
 **BACKPRESSURE：** `BackpressurePolicy`（Unbounded 从 receipts 重放 | Block(capacity,max_wait) 有界 mpsc）构造时钉死。server `invoke_slots` Semaphore 界定并发，带 queue-timeout admission。
 
-**SYNC/ASYNC 桥（CLI，load-bearing）：** EAL 在 `tokio::task::spawn_blocking` 内跑同步 handler；mission PHASE 经 `rayon::scope` work-stealing + crossbeam SegQueue 收集，每 worker 拿 `dispatcher.clone_for_thread()`。`run_blocking`/`try_run_blocking_in_tokio`（`src/support/async_bridge.rs`）配 `NoRuntimeFallback` enum（UseFuturesExecutor | BuildCurrentThreadTokio）是**唯一获认可的 sync←async 配方**——future+output 必须 Send，无 lifetime 跨界。
+**SYNC/ASYNC 桥（CLI，load-bearing）：** EAL 在 `tokio::task::spawn_blocking` 内跑同步 handler；mission PHASE 经 `rayon::scope` work-stealing + crossbeam SegQueue 收集，每 worker 拿 `dispatcher.clone_for_thread()`。`run_blocking`/`try_run_blocking_in_tokio`（`src/support/async_bridge.rs`）配 `SyncBridgeRuntimePolicy` enum（UseFuturesExecutor | BuildCurrentThreadTokio）是**唯一获认可的 sync←async 配方**——future+output 必须 Send，无 lifetime 跨界。
 
 **并发安全不变量：** handler 闭包**按值捕获**（String/Arc clone），永不 `Rc<RefCell>`——安全并发由构造保证；唯一共享可变性走类型化内部可变层。
 

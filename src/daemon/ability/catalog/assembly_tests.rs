@@ -1084,7 +1084,7 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
     assert!(
         crate::support::async_bridge::run_blocking(
             runtime.ability_options(&hub_meta),
-            crate::support::async_bridge::NoRuntimeFallback::UseFuturesExecutor,
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::UseFuturesExecutor,
         )
         .is_some(),
         "Hub LocalRuntime must retain Hub meta.list_abilities"
@@ -1098,7 +1098,7 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
     assert!(
         crate::support::async_bridge::run_blocking(
             runtime.ability_options(&hub_voice_list),
-            crate::support::async_bridge::NoRuntimeFallback::UseFuturesExecutor,
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::UseFuturesExecutor,
         )
         .is_none(),
         "Hub LocalRuntime must not expose voice.list_calls without a realm provider"
@@ -1113,7 +1113,7 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
     assert!(
         crate::support::async_bridge::run_blocking(
             runtime.ability_options(&device_observe),
-            crate::support::async_bridge::NoRuntimeFallback::UseFuturesExecutor,
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::UseFuturesExecutor,
         )
         .is_none(),
         "Hub LocalRuntime must not contain rows under the former synthetic Device root"

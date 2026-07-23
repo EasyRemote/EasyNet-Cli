@@ -49,7 +49,7 @@ use crate::daemon::ability::manifest::AbilityManifest;
 use crate::daemon::ability::{AbilityImplSource, AuthorityScope, RuntimeEnv};
 use crate::daemon::execution::mcp::McpClientService;
 use crate::support::async_bridge::{
-    spawn_current_thread_tokio, try_run_blocking, NoRuntimeFallback,
+    spawn_current_thread_tokio, try_run_blocking, SyncBridgeRuntimePolicy,
 };
 
 /// Stable prefix stamped into `AbilityDescriptor.source` for every
@@ -338,7 +338,7 @@ impl McpReflectionSupervisor {
         let fut = async move { this.attach_refresh_sinks(&snapshot).await };
         if let Err(e) = try_run_blocking(
             fut,
-            NoRuntimeFallback::BuildCurrentThreadTokio,
+            SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
             "build mcp-refresh-sink runtime",
         ) {
             crate::op_event!(
@@ -412,7 +412,7 @@ pub fn run_eager_blocking(
     };
     match try_run_blocking(
         fut,
-        NoRuntimeFallback::BuildCurrentThreadTokio,
+        SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
         "build mcp-reflect runtime",
     ) {
         Ok(report) => {
@@ -938,7 +938,7 @@ async fn refresh_server_inner<W: RegistryWriter>(
 /// `notifications/tools/list_changed` push after the registry has
 /// been frozen behind `Arc<AxonAbilityCatalog>` at daemon boot.
 ///
-/// The hot path's lookup order is static → dynamic → fallback, so
+/// The hot path's lookup order is static → dynamic → policy, so
 /// a dynamic-side rewrite is invisible to any boot-registered
 /// ability: a hot-listed tool whose name happens to collide with a
 /// system ability is silently shadowed by the static entry. See

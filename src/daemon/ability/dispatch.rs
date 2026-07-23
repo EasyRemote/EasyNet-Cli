@@ -44,7 +44,7 @@ use crate::daemon::persistence::agent_aggregate::{
 /// Module-local sync→async bridge for the ability-dispatch registry
 /// path. These calls sit on catalogue construction and discovery,
 /// not per-frame dispatch, so correctness under all runtime hosts is
-/// more important than the cheapest possible no-runtime fallback.
+/// more important than the cheapest possible no-runtime policy.
 ///
 /// In particular, feature-expanded registration can enter SDK-backed
 /// paths that rely on tokio wakeups. Driving those futures with
@@ -59,7 +59,7 @@ where
 {
     crate::support::async_bridge::run_blocking(
         future,
-        crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+        crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
     )
 }
 

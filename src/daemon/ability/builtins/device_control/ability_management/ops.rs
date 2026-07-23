@@ -52,7 +52,7 @@ use crate::daemon::ability::builtins::integrations::federation_probe;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
 use crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
 use crate::daemon::resources::files::{self as filesystem, FilesystemResourceCapability};
-use crate::support::async_bridge::{run_blocking, NoRuntimeFallback};
+use crate::support::async_bridge::{run_blocking, SyncBridgeRuntimePolicy};
 
 /// Shared, late-wired cell holding the device-ability registrar.
 /// Constructed pending at registry-build time; boot attaches the live
@@ -626,7 +626,7 @@ where
     T: Send + 'static,
     F: std::future::Future<Output = anyhow::Result<T>> + Send + 'static,
 {
-    run_blocking(fut, NoRuntimeFallback::BuildCurrentThreadTokio)
+    run_blocking(fut, SyncBridgeRuntimePolicy::BuildCurrentThreadTokio)
         .map_err(|e| anyhow::anyhow!("{surface}: {e}"))
 }
 

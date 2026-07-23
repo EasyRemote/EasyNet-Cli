@@ -59,7 +59,7 @@ use easynet_cli::daemon::invocation::routing::target::{
 use easynet_cli::daemon::resources::files::{
     resource_ref_for_local_path, FilesystemResourceCapability,
 };
-use easynet_cli::support::async_bridge::{run_blocking, NoRuntimeFallback};
+use easynet_cli::support::async_bridge::{run_blocking, SyncBridgeRuntimePolicy};
 
 fn target(ability: &str, args: Value) -> InvocationTarget {
     SystemInvocationTargetIssuer::local_root(ability, args, CallMode::Rpc)
@@ -235,7 +235,7 @@ impl RuntimeSmoke {
         }
         run_blocking(
             open_local_stream(Arc::clone(&self.runtime), target),
-            NoRuntimeFallback::BuildCurrentThreadTokio,
+            SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
         )
         .map_err(|err| anyhow::anyhow!("{err}"))
     }

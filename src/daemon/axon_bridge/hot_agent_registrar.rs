@@ -38,7 +38,7 @@ where
 {
     crate::support::async_bridge::run_blocking(
         future,
-        crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+        crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
     )
 }
 

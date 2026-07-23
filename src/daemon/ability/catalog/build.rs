@@ -1155,7 +1155,7 @@ fn build_registry_with_services_result_inner(
             for (agent_name, entry) in replay_agents.agents.iter() {
                 crate::support::async_bridge::run_blocking(
                     hot_registrar.register_agent(agent_name, entry),
-                    crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+                    crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
                 )
                 .with_context(|| {
                     format!("replay hosted-Agent {agent_name:?} into live catalog/runtime")

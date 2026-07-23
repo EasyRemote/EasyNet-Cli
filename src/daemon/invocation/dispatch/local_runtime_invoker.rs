@@ -146,16 +146,16 @@ pub fn is_not_found_error(msg: &str) -> bool {
 
 // `block_on_runtime` used to live here as a one-line wrapper around
 // `crate::support::async_bridge::run_blocking` pinned to the
-// `BuildCurrentThreadTokio` fallback. The wrapper hid the policy
+// `BuildCurrentThreadTokio` policy. The wrapper hid the policy
 // choice from the call site, and a second helper with a generic
 // name made `git grep block_on` return adjacent-but-different
 // shapes. Per the 2026-05-29 industrial-textbook review, every
 // call site that drives a LocalRuntime future from sync code now
 // reaches for `support::async_bridge::run_blocking(future,
-// NoRuntimeFallback::BuildCurrentThreadTokio)` directly. The
-// fallback choice is non-obvious enough (`UseFuturesExecutor`
-// deadlocks against tokio resources) that exposing it at the call
-// site is the honest shape.
+// SyncBridgeRuntimePolicy::BuildCurrentThreadTokio)` directly. The
+// policy choice is non-obvious enough (`UseFuturesExecutor` deadlocks
+// against tokio resources) that exposing it at the call site is the
+// honest shape.
 
 pub fn ensure_local_target(target: &InvocationTarget) -> Result<(), String> {
     match &target.scope {
@@ -207,7 +207,7 @@ pub fn invoke_local_rpc_sync(
 ) -> Result<Value, String> {
     crate::support::async_bridge::run_blocking(
         invoke_local_rpc(runtime, target),
-        crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+        crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
     )
 }
 

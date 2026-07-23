@@ -22,8 +22,13 @@ check_mcp_reflection_async_bridge_contract() {
   local cli_root="${1:-$ROOT}"
   local reflective="$cli_root/src/daemon/ability/builtins/integrations/mcp/reflective_registry.rs"
   local bridge="$cli_root/src/support/async_bridge/mod.rs"
+  local local_invoker="$cli_root/src/daemon/invocation/dispatch/local_runtime_invoker.rs"
+  local device_ops="$cli_root/src/daemon/ability/builtins/device_control/ability_management/ops.rs"
+  local real_smoke="$cli_root/src/bin/real-user-smoke.rs"
+  local source_root="$cli_root/src"
   [[ -e "$reflective" ]] || fail "MCP reflective registry source not found"
   [[ -e "$bridge" ]] || fail "canonical async bridge source not found"
+  [[ -e "$local_invoker" ]] || fail "LocalRuntime invoker source not found"
 
   if rg -n 'fn\s+run_blocking\s*<|tokio::runtime::Builder::new_current_thread\(\)' "$reflective"; then
     fail "MCP reflective registry must not own a private async runtime bridge"
@@ -39,6 +44,16 @@ check_mcp_reflection_async_bridge_contract() {
   fi
   if ! rg -q 'pub fn spawn_current_thread_tokio' "$bridge"; then
     fail "canonical async bridge must expose a detached current-thread runtime spawner"
+  fi
+  if ! rg -q 'pub enum SyncBridgeRuntimePolicy' "$bridge"; then
+    fail "canonical async bridge must expose explicit sync bridge runtime policy"
+  fi
+  if rg -n 'NoRuntimeFallback' "$source_root"; then
+    fail "canonical async bridge preserves retired NoRuntimeFallback policy type"
+  fi
+  if rg -n 'fallback policy|no-runtime fallback|build-tokio fallback|honors_build_tokio_fallback|BuildCurrentThreadTokio` fallback|BuildCurrentThreadTokio fallback' \
+    "$bridge" "$local_invoker" "$reflective" "$device_ops" "$real_smoke"; then
+    fail "canonical async bridge preserves retired fallback policy vocabulary"
   fi
 }
 

@@ -841,7 +841,7 @@ impl MissionInvocationGateway for DaemonMissionInvocationGateway {
     ) -> anyhow::Result<MissionInvocationOutcome> {
         crate::support::async_bridge::run_blocking(
             self.invoke_child(request),
-            crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
         )
     }
 }

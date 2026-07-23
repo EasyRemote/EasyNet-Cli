@@ -9,12 +9,12 @@
 // the agent lifecycle system ability (`block_on_hot_registrar`),
 // and `daemon/invocation/local_runtime_invoker.rs` (`block_on_runtime`). They
 // disagreed on what to do when called from outside a tokio runtime —
-// `block_on_runtime_sync` fell back to `futures::executor::block_on`,
+// `block_on_runtime_sync` used `futures::executor::block_on`,
 // `block_on_hot_registrar` returned `None`, and `block_on_runtime`
 // built a fresh current-thread runtime.
 //
 // Industrial-textbook reason to unify: the three differed only in
-// fallback policy. Putting the policy in an enum and the dispatch in
+// runtime policy. Putting the policy in an enum and the dispatch in
 // one helper means the next caller that wants this recipe doesn't
 // invent a fourth slightly-different shape.
 //
@@ -37,7 +37,7 @@ use std::future::Future;
 /// answer; the enum makes the choice visible at the call site
 /// rather than buried inside three separately-evolving helpers.
 #[derive(Debug, Clone, Copy)]
-pub enum NoRuntimeFallback {
+pub enum SyncBridgeRuntimePolicy {
     /// Drive the future on the calling thread via
     /// `futures::executor::block_on`. Cheapest; safe when the
     /// future does no I/O that requires a tokio reactor (handler
@@ -54,15 +54,15 @@ pub enum NoRuntimeFallback {
     BuildCurrentThreadTokio,
 }
 
-/// Run `future` to completion from sync code, with explicit
-/// fallback policy. Inside a multi-threaded tokio runtime, defers
+/// Run `future` to completion from sync code, with an explicit
+/// runtime policy. Inside a multi-threaded tokio runtime, defers
 /// to `block_in_place` so the current worker isn't pinned. Inside a
-/// current-thread tokio runtime, applies `fallback`: callers that
+/// current-thread tokio runtime, applies `policy`: callers that
 /// only need in-memory futures can keep the cheap futures executor,
 /// while callers that await tokio resources get a fresh tokio runtime
 /// on a separate scoped thread. Outside tokio entirely, applies the
-/// same explicit fallback policy on the calling thread.
-pub fn run_blocking<F>(future: F, fallback: NoRuntimeFallback) -> F::Output
+/// same explicit runtime policy on the calling thread.
+pub fn run_blocking<F>(future: F, policy: SyncBridgeRuntimePolicy) -> F::Output
 where
     F: Future,
     F::Output: Send,
@@ -70,7 +70,7 @@ where
 {
     try_run_blocking(
         future,
-        fallback,
+        policy,
         "build current-thread tokio runtime for sync bridge",
     )
     .expect("sync bridge runtime construction failed")
@@ -84,7 +84,7 @@ where
 /// identify the exact bridge call site from logs without stack traces.
 pub fn try_run_blocking<F>(
     future: F,
-    fallback: NoRuntimeFallback,
+    policy: SyncBridgeRuntimePolicy,
     bridge_label: &str,
 ) -> Result<F::Output, String>
 where
@@ -104,16 +104,16 @@ where
         // Single-thread tokio context. `handle.block_on(future)` is
         // illegal — tokio rejects re-entering its own runtime. Honor
         // the call site's explicit policy instead of guessing.
-        Ok(_) => match fallback {
-            NoRuntimeFallback::UseFuturesExecutor => Ok(futures::executor::block_on(future)),
-            NoRuntimeFallback::BuildCurrentThreadTokio => {
+        Ok(_) => match policy {
+            SyncBridgeRuntimePolicy::UseFuturesExecutor => Ok(futures::executor::block_on(future)),
+            SyncBridgeRuntimePolicy::BuildCurrentThreadTokio => {
                 block_on_fresh_current_thread_tokio_on_thread(future)
                     .map_err(|error| format!("{bridge_label}: {error}"))
             }
         },
-        Err(_) => match fallback {
-            NoRuntimeFallback::UseFuturesExecutor => Ok(futures::executor::block_on(future)),
-            NoRuntimeFallback::BuildCurrentThreadTokio => {
+        Err(_) => match policy {
+            SyncBridgeRuntimePolicy::UseFuturesExecutor => Ok(futures::executor::block_on(future)),
+            SyncBridgeRuntimePolicy::BuildCurrentThreadTokio => {
                 block_on_fresh_current_thread_tokio(future)
                     .map_err(|error| format!("{bridge_label}: {error}"))
             }
@@ -147,7 +147,7 @@ where
 /// Try to drive `future` from sync code when a tokio runtime is
 /// already present, returning `None` if there is no tokio handle at
 /// all. Used by call sites that explicitly want the "no tokio -> skip"
-/// semantics rather than either no-runtime fallback in
+/// semantics rather than either no-runtime policy in
 /// [`run_blocking`].
 ///
 /// Current-thread tokio runtimes cannot be re-entered, and
@@ -242,20 +242,26 @@ mod tests {
     #[test]
     fn run_blocking_outside_tokio_uses_futures_executor() {
         // No tokio runtime; futures executor must drive the future.
-        let v = run_blocking(async { 42_u32 }, NoRuntimeFallback::UseFuturesExecutor);
+        let v = run_blocking(
+            async { 42_u32 },
+            SyncBridgeRuntimePolicy::UseFuturesExecutor,
+        );
         assert_eq!(v, 42);
     }
 
     #[test]
     fn run_blocking_outside_tokio_can_build_current_thread() {
-        // The build-tokio fallback must also work when called with
+        // The build-tokio policy must also work when called with
         // no ambient runtime — used by CLI bridge code.
-        let v = run_blocking(async { 7_u32 }, NoRuntimeFallback::BuildCurrentThreadTokio);
+        let v = run_blocking(
+            async { 7_u32 },
+            SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
+        );
         assert_eq!(v, 7);
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn run_blocking_inside_current_thread_runtime_honors_build_tokio_fallback() {
+    async fn run_blocking_inside_current_thread_runtime_honors_build_tokio_policy() {
         // This future requires a tokio reactor. A plain
         // futures::executor::block_on from the current-thread runtime
         // would panic or wedge; BuildCurrentThreadTokio must move it
@@ -265,7 +271,7 @@ mod tests {
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
                 11_u32
             },
-            NoRuntimeFallback::BuildCurrentThreadTokio,
+            SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
         );
         assert_eq!(v, 11);
     }
@@ -280,7 +286,7 @@ mod tests {
     fn try_run_blocking_outside_tokio_returns_result() {
         let v = try_run_blocking(
             async { 17_u32 },
-            NoRuntimeFallback::BuildCurrentThreadTokio,
+            SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
             "test bridge",
         )
         .expect("bridge result");
@@ -313,7 +319,10 @@ mod tests {
         // defer to block_in_place + handle.block_on. The future
         // returns synchronously, so this just exercises the path.
         let v = tokio::task::spawn_blocking(|| {
-            run_blocking(async { 99_u32 }, NoRuntimeFallback::UseFuturesExecutor)
+            run_blocking(
+                async { 99_u32 },
+                SyncBridgeRuntimePolicy::UseFuturesExecutor,
+            )
         })
         .await
         .unwrap();
