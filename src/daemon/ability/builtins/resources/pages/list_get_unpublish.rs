@@ -17,14 +17,14 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use anyhow::Context;
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::resources::projection::{
-    PagesProjectDetailResponse, PagesProjectListItem, PagesProjectListResponse,
-    PagesUnpublishResponse,
+    PagesHealthCheck, PagesHealthResponse, PagesProjectDetailResponse, PagesProjectListItem,
+    PagesProjectListResponse, PagesUnpublishResponse,
 };
 
 use super::state::{persist_registry_for_user, ProjectHandle, PUBLISHED_PROJECTS};
@@ -123,34 +123,17 @@ pub fn handle_health(user: &str, realm: &str, args: Value) -> anyhow::Result<Val
         .unwrap_or_else(|| {
             crate::core::ura::resource_dot_ura(realm, &format!("{user}.pages"), "/")
         });
-    Ok(json!({
-        "state": state,
-        "ready": ready,
-        "owner_ura": owner_ura,
-        "surface_ref": surface_ref,
-        "page_count": page_count,
-        "checks": [
-            {
-                "name": "pages_registry",
-                "state": "ready",
-                "ready": true,
-                "message": null,
-                "latency_ms": 0,
-                "metadata": {"source": "PUBLISHED_PROJECTS"}
-            },
-            {
-                "name": "project",
-                "state": if project_found { "ready" } else { "missing" },
-                "ready": project_found,
-                "message": if project_found { Value::Null } else { json!("project is not published") },
-                "latency_ms": 0,
-                "metadata": {
-                    "project_id": project_id,
-                    "requested": project_id.is_some()
-                }
-            }
-        ]
-    }))
+    Ok(serde_json::to_value(PagesHealthResponse::new(
+        state,
+        ready,
+        owner_ura,
+        surface_ref,
+        page_count,
+        vec![
+            PagesHealthCheck::pages_registry(),
+            PagesHealthCheck::project(project_id, project_found),
+        ],
+    ))?)
 }
 
 /// `pages.unpublish` — remove the project. Drops the
@@ -390,6 +373,30 @@ mod tests {
             health["surface_ref"],
             "easynet:///r/example/resource/health-missing-user.docs"
         );
+    }
+
+    #[test]
+    fn handle_health_reports_project_present_as_ready_projection() {
+        let user = "health-ready-user";
+        let (_root, key) = publish_test_project(user, "docs-health");
+
+        let health = handle_health(user, "example", json!({"project_id": "docs-health"})).unwrap();
+        remove_test_project(&key);
+
+        assert_eq!(health["state"], "ready");
+        assert_eq!(health["ready"], true);
+        assert_eq!(health["page_count"], 1);
+        assert_eq!(
+            health["surface_ref"],
+            "easynet:///r/example/resource/health-ready-user.docs-health"
+        );
+        assert_eq!(health["checks"][0]["name"], "pages_registry");
+        assert_eq!(health["checks"][1]["name"], "project");
+        assert_eq!(health["checks"][1]["state"], "ready");
+        assert_eq!(health["checks"][1]["ready"], true);
+        assert_eq!(health["checks"][1]["message"], Value::Null);
+        assert_eq!(health["checks"][1]["metadata"]["project_id"], "docs-health");
+        assert_eq!(health["checks"][1]["metadata"]["requested"], true);
     }
 
     #[test]

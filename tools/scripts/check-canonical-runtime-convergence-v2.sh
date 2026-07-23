@@ -1672,6 +1672,72 @@ for required in (
 PY
 }
 
+check_pages_health_response_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local projection="$cli_root/src/daemon/resources/projection.rs"
+  local handlers="$cli_root/src/daemon/ability/builtins/resources/pages/list_get_unpublish.rs"
+  [[ -f "$projection" ]] || fail "daemon resource projection source is missing: $projection"
+  [[ -f "$handlers" ]] || fail "pages health source is missing: $handlers"
+
+  "$PYTHON_BIN" - "$projection" "$handlers" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+projection, handlers = [Path(arg).read_text(encoding="utf-8") for arg in sys.argv[1:]]
+
+for struct_name in ("PagesHealthCheck", "PagesHealthResponse"):
+    struct = re.search(
+        rf"(?P<attrs>(?:#\[[^\n]+\]\n)*)pub struct {struct_name} \{{(?P<body>.*?)\n\}}",
+        projection,
+        re.S,
+    )
+    if struct is None:
+        raise SystemExit(f"pages_health_response_projection:struct_missing:{struct_name}")
+    if "#[serde(deny_unknown_fields)]" not in struct.group("attrs"):
+        raise SystemExit(f"pages_health_response_projection:struct_not_strict:{struct_name}")
+
+for required in (
+    "pub struct PagesHealthCheck",
+    "pub name: String",
+    "pub state: String",
+    "pub ready: bool",
+    "pub message: Option<String>",
+    "pub latency_ms: u64",
+    "pub metadata: Value",
+    "pub fn pages_registry() -> Self",
+    "pub fn project(project_id: Option<&str>, project_found: bool) -> Self",
+    "pub struct PagesHealthResponse",
+    "pub owner_ura: String",
+    "pub surface_ref: String",
+    "pub page_count: usize",
+    "pub checks: Vec<PagesHealthCheck>",
+    "pages_health_response_preserves_public_shape",
+    "pages_health_response_dtos_reject_unknown_fields",
+):
+    if required not in projection:
+        raise SystemExit(f"pages_health_response_projection:projection_missing:{required}")
+
+for retired in (
+    'Ok(json!({',
+    '"checks": [',
+    '"project is not published"',
+    'serde_json::{json, Value}',
+):
+    if retired in handlers:
+        raise SystemExit(f"pages_health_response_projection:handler_retired:{retired}")
+
+for required in (
+    "PagesHealthResponse::new(",
+    "PagesHealthCheck::pages_registry()",
+    "PagesHealthCheck::project(project_id, project_found)",
+    "handle_health_reports_project_present_as_ready_projection",
+):
+    if required not in handlers:
+        raise SystemExit(f"pages_health_response_projection:handler_missing:{required}")
+PY
+}
+
 check_local_agents_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local local_agents="$cli_root/src/daemon/persistence/local_agents.rs"
@@ -12406,6 +12472,50 @@ EOF
   if ( CLI_ROOT="$tmp/pages-management-response-projection-legacy"; check_pages_management_response_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected pages management response projection gate to fail"
   fi
+  mkdir -p "$tmp/pages-health-response-projection-legacy/src/daemon/resources"
+  mkdir -p "$tmp/pages-health-response-projection-legacy/src/daemon/ability/builtins/resources/pages"
+  cat >"$tmp/pages-health-response-projection-legacy/src/daemon/resources/projection.rs" <<'EOF'
+pub struct PagesHealthResponse {
+    pub checks: Vec<serde_json::Value>,
+}
+EOF
+  cat >"$tmp/pages-health-response-projection-legacy/src/daemon/ability/builtins/resources/pages/list_get_unpublish.rs" <<'EOF'
+use serde_json::{json, Value};
+
+fn handle_health() -> Value {
+    Ok(json!({
+        "state": state,
+        "ready": ready,
+        "owner_ura": owner_ura,
+        "surface_ref": surface_ref,
+        "page_count": page_count,
+        "checks": [
+            {
+                "name": "pages_registry",
+                "state": "ready",
+                "ready": true,
+                "message": null,
+                "latency_ms": 0,
+                "metadata": {"source": "PUBLISHED_PROJECTS"}
+            },
+            {
+                "name": "project",
+                "state": if project_found { "ready" } else { "missing" },
+                "ready": project_found,
+                "message": if project_found { Value::Null } else { json!("project is not published") },
+                "latency_ms": 0,
+                "metadata": {
+                    "project_id": project_id,
+                    "requested": project_id.is_some()
+                }
+            }
+        ]
+    }))
+}
+EOF
+  if ( CLI_ROOT="$tmp/pages-health-response-projection-legacy"; check_pages_health_response_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected pages health response projection gate to fail"
+  fi
   mkdir -p "$tmp/local-agents-schema-legacy/src/daemon/persistence"
   cat >"$tmp/local-agents-schema-legacy/src/daemon/persistence/local_agents.rs" <<'EOF'
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -12849,6 +12959,7 @@ EOF
   check_resource_list_projection_boundary_contract
   check_files_store_response_projection_contract
   check_pages_management_response_projection_contract
+  check_pages_health_response_projection_contract
   check_local_agents_schema_contract
   check_profile_store_schema_contract
   check_auth_session_owner_fact_contract
@@ -13001,6 +13112,7 @@ check_skill_record_projection_boundary_contract
 check_resource_list_projection_boundary_contract
 check_files_store_response_projection_contract
 check_pages_management_response_projection_contract
+check_pages_health_response_projection_contract
 check_profile_store_schema_contract
 check_auth_session_owner_fact_contract
 check_resources_schema_contract

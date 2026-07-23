@@ -274,6 +274,90 @@ impl PagesUnpublishResponse {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PagesHealthCheck {
+    pub name: String,
+    pub state: String,
+    pub ready: bool,
+    pub message: Option<String>,
+    pub latency_ms: u64,
+    pub metadata: Value,
+}
+
+impl PagesHealthCheck {
+    pub fn new(
+        name: impl Into<String>,
+        state: impl Into<String>,
+        ready: bool,
+        message: Option<String>,
+        metadata: Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            state: state.into(),
+            ready,
+            message,
+            latency_ms: 0,
+            metadata,
+        }
+    }
+
+    pub fn pages_registry() -> Self {
+        Self::new(
+            "pages_registry",
+            "ready",
+            true,
+            None,
+            serde_json::json!({"source": "PUBLISHED_PROJECTS"}),
+        )
+    }
+
+    pub fn project(project_id: Option<&str>, project_found: bool) -> Self {
+        Self::new(
+            "project",
+            if project_found { "ready" } else { "missing" },
+            project_found,
+            (!project_found).then(|| "project is not published".to_string()),
+            serde_json::json!({
+                "project_id": project_id,
+                "requested": project_id.is_some()
+            }),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PagesHealthResponse {
+    pub state: String,
+    pub ready: bool,
+    pub owner_ura: String,
+    pub surface_ref: String,
+    pub page_count: usize,
+    pub checks: Vec<PagesHealthCheck>,
+}
+
+impl PagesHealthResponse {
+    pub fn new(
+        state: impl Into<String>,
+        ready: bool,
+        owner_ura: impl Into<String>,
+        surface_ref: impl Into<String>,
+        page_count: usize,
+        checks: Vec<PagesHealthCheck>,
+    ) -> Self {
+        Self {
+            state: state.into(),
+            ready,
+            owner_ura: owner_ura.into(),
+            surface_ref: surface_ref.into(),
+            page_count,
+            checks,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,6 +641,85 @@ mod tests {
         assert!(
             unpublish_error.to_string().contains("registry_path"),
             "strict pages unpublish response error should name unknown field: {unpublish_error}"
+        );
+    }
+
+    #[test]
+    fn pages_health_response_preserves_public_shape() {
+        let response = PagesHealthResponse::new(
+            "ready",
+            true,
+            "easynet:///r/example/agent/alice.pages",
+            "easynet:///r/example/resource/alice.pages",
+            1,
+            vec![
+                PagesHealthCheck::new(
+                    "pages_registry",
+                    "ready",
+                    true,
+                    None,
+                    json!({"source": "PUBLISHED_PROJECTS"}),
+                ),
+                PagesHealthCheck::new(
+                    "project",
+                    "ready",
+                    true,
+                    None,
+                    json!({"project_id": "docs", "requested": true}),
+                ),
+            ],
+        );
+        let wire = serde_json::to_value(&response).expect("pages health response serializes");
+
+        assert_eq!(wire["state"], "ready");
+        assert_eq!(wire["ready"], true);
+        assert_eq!(wire["owner_ura"], "easynet:///r/example/agent/alice.pages");
+        assert_eq!(
+            wire["surface_ref"],
+            "easynet:///r/example/resource/alice.pages"
+        );
+        assert_eq!(wire["page_count"], 1);
+        assert_eq!(wire["checks"][0]["name"], "pages_registry");
+        assert_eq!(wire["checks"][0]["message"], Value::Null);
+        assert_eq!(wire["checks"][0]["latency_ms"], 0);
+        assert_eq!(
+            wire["checks"][0]["metadata"]["source"],
+            "PUBLISHED_PROJECTS"
+        );
+        assert_eq!(wire["checks"][1]["metadata"]["project_id"], "docs");
+        assert_eq!(wire["checks"][1]["metadata"]["requested"], true);
+    }
+
+    #[test]
+    fn pages_health_response_dtos_reject_unknown_fields() {
+        let check_error = serde_json::from_value::<PagesHealthCheck>(json!({
+            "name": "project",
+            "state": "missing",
+            "ready": false,
+            "message": "project is not published",
+            "latency_ms": 0,
+            "metadata": {},
+            "registry_path": "/tmp/pages-published-alice.json"
+        }))
+        .expect_err("pages health check must reject registry path leaks");
+        assert!(
+            check_error.to_string().contains("registry_path"),
+            "strict pages health check error should name unknown field: {check_error}"
+        );
+
+        let response_error = serde_json::from_value::<PagesHealthResponse>(json!({
+            "state": "ready",
+            "ready": true,
+            "owner_ura": "easynet:///r/example/agent/alice.pages",
+            "surface_ref": "easynet:///r/example/resource/alice.pages",
+            "page_count": 1,
+            "checks": [],
+            "legacy_checks": []
+        }))
+        .expect_err("pages health response must reject legacy check envelopes");
+        assert!(
+            response_error.to_string().contains("legacy_checks"),
+            "strict pages health response error should name unknown field: {response_error}"
         );
     }
 }
