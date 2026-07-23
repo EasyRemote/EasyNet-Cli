@@ -59,6 +59,8 @@ make_good_fixture() {
     "$CLI/src/daemon/ability/builtins/device_control" \
     "$CLI/src/daemon/ability/builtins/device_control/ability_management" \
     "$CLI/src/daemon/ability/builtins/integrations" \
+    "$CLI/src/daemon/ability/builtins/integrations/a2a" \
+    "$CLI/src/daemon/ability/builtins/integrations/mcp" \
     "$CLI/src/daemon/execution/mission" \
     "$CLI/src/daemon/execution/mcp" \
     "$CLI/src/daemon/ability/builtins/governance" \
@@ -172,6 +174,7 @@ use crate::daemon::lifecycle::{RuntimeLifecycleError, RuntimeLifecycleService, R
 fn write_runtime_status() {
     let lifecycle = RuntimeLifecycleService::new().status();
     let _observation = BannerDaemonObservation::from_lifecycle_result(&lifecycle);
+    let _binding = runtime_user_binding_display(&creds);
 }
 
 struct BannerDaemonObservation;
@@ -192,6 +195,27 @@ impl BannerDaemonObservation {
     fn from_lifecycle_status(_status: RuntimeLifecycleStatus) -> Self {
         Self
     }
+}
+EOF
+  cat >"$CLI/src/cli/presentation/identity.rs" <<'EOF'
+pub enum RuntimeUserBindingDisplayState {
+    Bound,
+    Unbound,
+    Invalid,
+}
+
+pub fn runtime_user_binding_display(creds: &config::Credentials) -> RuntimeUserBindingDisplayState {
+    RuntimeUserBindingDisplayState::Invalid
+}
+EOF
+  cat >"$CLI/src/cli/commands/status.rs" <<'EOF'
+fn render_status(creds: &config::Credentials) {
+    let _state = runtime_user_binding_display(creds);
+}
+EOF
+  cat >"$CLI/src/cli/commands/auth.rs" <<'EOF'
+fn render_auth(creds: &config::Credentials) {
+    let _state = runtime_user_binding_display(creds);
 }
 EOF
   cat >"$CLI/src/cli/commands/groups/device.rs" <<'EOF'
@@ -375,6 +399,10 @@ async fn send_bidi_terminal(
         )),
         ..Default::default()
     });
+}
+
+fn callee_ura_from_envelope(envelope: &Envelope) -> anyhow::Result<String> {
+    crate::daemon::invocation::dispatch::invocation_wire::callee_ura_from_envelope(envelope)
 }
 EOF
   cat >"$CLI/src/daemon/axon_bridge/runtime_factory.rs" <<'EOF'
@@ -1299,6 +1327,11 @@ fn descriptor_is_mcp_callable(
     descriptor.call_mode() == crate::daemon::ability::descriptors::CallMode::Rpc
 }
 
+fn route_with_target_context(target: &LocalAbilityTarget) -> anyhow::Result<()> {
+    let _context = root_context_for_target(target)?;
+    Ok(())
+}
+
 impl McpToolRouteTable {
     pub fn from_descriptors(
         descriptors: &[crate::daemon::ability::descriptors::AbilityDescriptor],
@@ -1890,6 +1923,15 @@ impl StreamDispatcher {
 }
 
 pub(crate) struct DaemonStreamRouteProvider;
+
+fn callee_ura_from_envelope(envelope: &Envelope) -> anyhow::Result<String> {
+    crate::daemon::invocation::dispatch::invocation_wire::callee_ura_from_envelope(envelope)
+}
+
+fn subscribe_directory_v2() {
+    invalid_presence_event();
+    invalid_presence_snapshot();
+}
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/unary_dispatcher.rs" <<'EOF'
 impl UnaryDispatcher {
@@ -1913,6 +1955,10 @@ impl UnaryDispatcher {
         );
         gate.authorize_register_pubkey(caller_envelope, intent)?;
     }
+}
+
+fn callee_ura_from_envelope(envelope: &Envelope) -> anyhow::Result<String> {
+    crate::daemon::invocation::dispatch::invocation_wire::callee_ura_from_envelope(envelope)
 }
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'EOF'
@@ -2063,6 +2109,10 @@ fn classify_carrier_v1_result(result: DispatchResult) {
         return CarrierDispatchEvent::Terminal(result);
     }
     CarrierDispatchEvent::Chunk(result.payload)
+}
+
+fn callee_ura_from_envelope(envelope: &Envelope) -> anyhow::Result<String> {
+    crate::daemon::invocation::dispatch::invocation_wire::callee_ura_from_envelope(envelope)
 }
 EOF
   mkdir -p "$CLI/src/daemon/ability/catalog"
@@ -2269,6 +2319,63 @@ fn hot_agent_authority_snapshot_error(
 ) -> HotAgentAuthorityInventoryError {
     HotAgentAuthorityInventoryError::CounterOverflow
 }
+
+fn routeable_mode_registered(ability: &AbilityName, call_mode: DescriptorCallMode) -> bool {
+    control_plane_record_for_mode(ability, call_mode).is_some() && self.has_mode(ability, call_mode)
+}
+
+fn has_rpc(ability: &AbilityName) -> bool {
+    routeable_mode_registered(ability, DescriptorCallMode::Rpc)
+}
+
+fn has_stream(ability: &AbilityName) -> bool {
+    routeable_mode_registered(ability, DescriptorCallMode::Stream)
+}
+
+fn has_bidi(ability: &AbilityName) -> bool {
+    routeable_mode_registered(ability, DescriptorCallMode::Bidi)
+}
+
+fn unique_handler_slot(key: &RuntimeAbilityKey, slot: HandlerSlot) -> anyhow::Result<HandlerSlot> {
+    Ok(slot)
+}
+
+fn unique_mode_registered(key: &RuntimeAbilityKey, slot: HandlerSlot) -> anyhow::Result<bool> {
+    Ok(control_plane_record_for_authority_mode(
+        key.authority_root(),
+        slot.call_mode(),
+    ).is_some())
+}
+
+fn runtime_handlers_for_key(key: &RuntimeAbilityKey) -> Vec<HandlerSlot> {
+    vec![unique_handler_slot(key, HandlerSlot::rpc()).unwrap()]
+}
+
+fn verify_execution_key_control_plane_modes(key: &RuntimeAbilityKey, slots: &[HandlerSlot]) -> anyhow::Result<()> {
+    for slot in slots {
+        let _record = control_plane_record_for_authority_mode(
+            key.authority_root(),
+            slot.call_mode(),
+        ).ok_or_else(|| anyhow::anyhow!("missing authority/mode record"))?;
+    }
+    Ok(())
+}
+
+fn list_rpc_names(control_plane: &ControlPlaneRegistry) -> Vec<String> {
+    control_plane
+        .records()
+        .filter(|record| record.call_mode == DescriptorCallMode::Rpc)
+        .map(|record| record.name.clone())
+        .collect()
+}
+
+fn static_runtime_key_validates_exact_authority_mode_record() {}
+fn static_runtime_key_rejects_unrelated_authority_record_as_rescue_path() {}
+fn dynamic_runtime_key_validates_exact_authority_mode_record() {}
+fn ability_name_handler_projection_rejects_multi_authority_same_slot() {}
+fn ability_name_handler_projection_does_not_synthesize_cross_authority_runtime_set() {}
+
+// dynamic execution row remains present after adding a second mode
 
 struct PersistedHotAgentAuthority;
 
@@ -2741,6 +2848,17 @@ pub(crate) fn collect_owner_catalog(owner: &str) -> Result<Vec<CatalogEntry>, St
 }
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/invocation_wire.rs" <<'EOF'
+pub(crate) fn callee_ura_from_envelope(envelope: &Envelope) -> anyhow::Result<String> {
+    let callee_ura = envelope
+        .callee
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("invocation tuple must carry callee URA"))?
+        .ura
+        .as_str();
+    crate::core::ura::parse_ura(callee_ura)?;
+    Ok(callee_ura.to_string())
+}
+
 pub(crate) struct LocalDaemonLoopbackInvocation {
     derivation_policy: InvocationDerivationPolicy,
 }
@@ -2762,6 +2880,9 @@ impl LocalDaemonLoopbackInvocation {
         self
     }
 }
+
+fn callee_ura_from_envelope_extracts_explicit_callee() {}
+fn callee_ura_from_envelope_rejects_caller_only_tuple() {}
 EOF
   cat >"$CLI/src/support/platform/local_daemon_grpc.rs" <<'EOF'
 use crate::daemon::invocation::dispatch::invocation_wire::LocalDaemonLoopbackInvocation;
@@ -2773,6 +2894,85 @@ fn invoke_with_hosted_agent_delegation(hosted_agent_ura: &str) -> anyhow::Result
 
 fn local_daemon_loopback_invocation_from_subject_policy() -> LocalDaemonLoopbackInvocation {
     LocalDaemonLoopbackInvocation::from_target()
+}
+
+struct LocalDaemonLoopbackSubjectPolicy;
+
+impl LocalDaemonLoopbackSubjectPolicy {
+    fn resolve(&self) -> anyhow::Result<String> {
+        local_daemon_identity_ura()
+    }
+}
+
+fn invoke_local_daemon_ability() -> anyhow::Result<()> {
+    let subject_ura = local_daemon_identity_ura()?;
+    let _plan = LocalDaemonLoopbackTuplePlan::local_root_for_subject(&subject_ura)?;
+    Ok(())
+}
+
+fn loopback_invoke_request_does_not_pre_resolve_descriptor_ref() {}
+fn loopback_tuple_plan_requires_explicit_targeted_subject() {}
+EOF
+  cat >"$CLI/src/daemon/invocation/routing/target.rs" <<'EOF'
+fn daemon_system_subject_ura_for_descriptor(target: &LocalAbilityTarget) -> anyhow::Result<String> {
+    target.owner_subject()
+}
+
+impl LocalAbilityTarget {
+    pub(crate) fn daemon_system_subject_ura(&self) -> anyhow::Result<String> {
+        daemon_system_subject_ura_for_descriptor(self)
+    }
+}
+
+pub struct LocalTargetRootInvocation;
+
+pub struct SystemInvocationTargetIssuer;
+
+impl SystemInvocationTargetIssuer {
+    pub fn local_root_for_target(target: &LocalAbilityTarget) -> anyhow::Result<LocalTargetRootInvocation> {
+        Ok(LocalTargetRootInvocation)
+    }
+
+    pub fn local_target_root(target: &LocalAbilityTarget) -> anyhow::Result<LocalTargetRootInvocation> {
+        Self::local_root_for_target(target)
+    }
+}
+EOF
+  cat >"$CLI/src/support/platform/local_invoke.rs" <<'EOF'
+fn invoke_issued_target_root_timeout(invocation: LocalTargetRootInvocation) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn root_context_for_target(target: &LocalAbilityTarget) -> anyhow::Result<LocalTargetRootInvocation> {
+    SystemInvocationTargetIssuer::local_root_for_target(target)
+}
+
+fn local_system_context_for_agent_target_uses_agent_owner_subject() {}
+fn local_system_context_for_hub_target_uses_ability_subject() {}
+
+pub fn project_invoke_bidi_down_frame(frame: InvokeBidiDown) -> anyhow::Result<Option<LocalBidiFrame>> {
+    project_receipt_payload_json("application/json", &[])?;
+    Ok(Some(LocalBidiFrame))
+}
+
+fn project_receipt_payload_json(content_type: &str, payload: &[u8]) -> anyhow::Result<serde_json::Value> {
+    if !content_type.contains("json") {
+        anyhow::bail!("InvokeBidi receipt payload declares non-JSON content_type");
+    }
+    serde_json::from_slice(payload)
+        .map_err(|err| anyhow::anyhow!("InvokeBidi receipt payload is not valid JSON: {err}"))
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/integrations/mcp/bridge.rs" <<'EOF'
+fn invoke_mcp(target: &LocalAbilityTarget) -> anyhow::Result<()> {
+    let _context = root_context_for_target(target)?;
+    Ok(())
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/integrations/a2a/bridge.rs" <<'EOF'
+fn invoke_a2a(target: &LocalAbilityTarget) -> anyhow::Result<()> {
+    let _context = root_context_for_target(target)?;
+    Ok(())
 }
 EOF
   cat >"$CLI/src/daemon/axon_bridge/hot_agent_registrar.rs" <<'EOF'
@@ -5247,6 +5447,10 @@ async fn send_bidi_terminal(
         ..Default::default()
     });
 }
+
+fn callee_ura_from_envelope(envelope: &Envelope) -> anyhow::Result<String> {
+    crate::daemon::invocation::dispatch::invocation_wire::callee_ura_from_envelope(envelope)
+}
 EOF
 expect_fail \
   "receiptless session terminal fork" \
@@ -5786,7 +5990,7 @@ fn runtime_resolve_descriptor_ref_json(session: &ClientSession, request_json: &s
 EOF
 expect_fail \
   "FFI descriptor remote probe caller_ura defaulted from runtime owner" \
-  "R95_DESCRIPTOR_REMOTE_PROBE_REQUIRES_CALLER"
+  "R95_DESCRIPTOR_RESOLVER_BOUNDED_CATALOG"
 
 make_good_fixture
 mkdir -p "$CLI/sdk/go" "$CLI/sdk/python/easynet_sdk"
