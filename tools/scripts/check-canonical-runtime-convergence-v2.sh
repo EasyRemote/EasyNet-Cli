@@ -1186,6 +1186,82 @@ for required in (
 PY
 }
 
+check_resources_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local resources="$cli_root/src/daemon/persistence/resources.rs"
+  [[ -f "$resources" ]] || fail "resources persistence source is missing: $resources"
+
+  "$PYTHON_BIN" - "$resources" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+def struct_with_attrs(name: str) -> tuple[str, str]:
+    pattern = (
+        r"(?P<attrs>(?:#\[[^\n]+\]\n)*)"
+        + rf"pub struct {name} \{{(?P<body>.*?)\n\}}"
+    )
+    match = re.search(pattern, text, re.S)
+    if match is None:
+        raise SystemExit(f"resources_schema:{name}:missing")
+    return match.group("attrs"), match.group("body")
+
+file_attrs, file_body = struct_with_attrs("ResourcesFile")
+entry_attrs, entry_body = struct_with_attrs("ResourceEntry")
+for name, attrs in (
+    ("ResourcesFile", file_attrs),
+    ("ResourceEntry", entry_attrs),
+):
+    if "#[serde(deny_unknown_fields)]" not in attrs:
+        raise SystemExit(f"resources_schema:{name}:missing_deny_unknown_fields")
+if "#[serde(default)]" in file_body:
+    raise SystemExit("resources_schema:ResourcesFile:retired_default")
+if "#[serde(default)]" in entry_body:
+    raise SystemExit("resources_schema:ResourceEntry:retired_default")
+for field in (
+    "pub resources: Vec<ResourceEntry>",
+):
+    if field not in file_body:
+        raise SystemExit(f"resources_schema:ResourcesFile:missing_field:{field}")
+for field in (
+    "pub resource_ura: String",
+    "pub owner_agent: String",
+    "pub kind: ResourceType",
+    "pub binding: ResourceBinding",
+    "pub hardware_id: String",
+    "pub display_name: String",
+    "pub metadata: Value",
+    "pub first_seen_at: String",
+):
+    if field not in entry_body:
+        raise SystemExit(f"resources_schema:ResourceEntry:missing_field:{field}")
+for retired in (
+    "forward-compat: a future deployment",
+    "invents `gpu` lands without a schema migration",
+    "resources.json must tolerate missing owner_agent",
+    "resources.json must tolerate missing metadata",
+):
+    if retired in text:
+        raise SystemExit(f"resources_schema:retired_compat:{retired}")
+for required in (
+    "existing_resources_file_requires_resources_field",
+    "missing field `resources`",
+    "existing_resource_entry_requires_owner_agent_display_name_and_metadata",
+    "missing field `owner_agent`",
+    "missing field `display_name`",
+    "missing field `metadata`",
+    "existing_resources_file_rejects_unknown_fields",
+    "unknown field `legacy_owner`",
+    "unknown field `legacy_subject`",
+    "return Ok(ResourcesFile::default())",
+):
+    if required not in text:
+        raise SystemExit(f"resources_schema:missing:{required}")
+PY
+}
+
 check_sdk_history_authority_subject_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -10091,6 +10167,45 @@ EOF
   if ( CLI_ROOT="$tmp/local-agents-schema-legacy"; check_local_agents_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected local agents schema compatibility gate to fail"
   fi
+  mkdir -p "$tmp/resources-schema-legacy/src/daemon/persistence"
+  cat >"$tmp/resources-schema-legacy/src/daemon/persistence/resources.rs" <<'EOF'
+/// Resource type taxonomy — RFC-005 v3.2. The wire form is a
+/// lowercase string (forward-compat: a future deployment that
+/// invents `gpu` lands without a schema migration), but every
+/// known v1 type is enumerated here.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResourcesFile {
+    #[serde(default)]
+    pub resources: Vec<ResourceEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResourceEntry {
+    pub resource_ura: String,
+    #[serde(default)]
+    pub owner_agent: String,
+    pub kind: ResourceType,
+    pub binding: ResourceBinding,
+    pub hardware_id: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub metadata: Value,
+    pub first_seen_at: String,
+}
+
+pub fn load() -> anyhow::Result<ResourcesFile> {
+    return Ok(ResourcesFile::default());
+}
+
+#[cfg(test)]
+mod tests {
+    fn round_trip_through_json_preserves_fields() {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/resources-schema-legacy"; check_resources_schema_contract ) >/dev/null 2>&1; then
+    fail "self-test expected resources schema compatibility gate to fail"
+  fi
   mkdir -p "$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing" \
     "$tmp/remote-subject-provenance-legacy/src/ffi/invocation"
   cat >"$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
@@ -10232,6 +10347,7 @@ EOF
   check_daemon_config_mode_required_contract
   check_chat_session_index_schema_contract
   check_local_agents_schema_contract
+  check_resources_schema_contract
   check_sdk_history_authority_subject_contract
   check_sdk_descriptor_resolution_error_vocabulary_contract
   check_sdk_ability_descriptor_not_found_vocabulary_contract
@@ -10359,6 +10475,7 @@ check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
 check_local_runtime_state_read_subject_contract
 check_runtime_state_kind_required_contract
+check_resources_schema_contract
 check_sdk_history_authority_subject_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_ability_descriptor_not_found_vocabulary_contract

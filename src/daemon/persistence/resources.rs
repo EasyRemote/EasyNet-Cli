@@ -62,10 +62,8 @@ use super::config::{atomic_write_with_permissions, state_dir, WritePermissions};
 pub(crate) const FILE_NAME: &str = "resources.json";
 
 /// Resource type taxonomy — RFC-005 v3.2. The wire form is a
-/// lowercase string (forward-compat: a future deployment that
-/// invents `gpu` lands without a schema migration), but every
-/// known v1 type is enumerated here so callers cannot typo
-/// `"camera"` as `"cammera"` and silently misclassify.
+/// lowercase string, and every accepted v1 type is enumerated here so callers
+/// cannot typo `"camera"` as `"cammera"` and silently misclassify.
 ///
 /// `as_str` is the single source of truth: both the on-disk
 /// JSON shape and the `meta.list_resources` ability schema's
@@ -158,14 +156,15 @@ impl ResourceBinding {
 /// On-disk shape of `~/.easynet/resources.json`. Field names must remain
 /// stable, but only canonical current resource subjects are accepted.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ResourcesFile {
     /// All known resources held by this host. Order is insertion
     /// order; readers MUST NOT rely on order.
-    #[serde(default)]
     pub resources: Vec<ResourceEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ResourceEntry {
     /// Canonical resource URA. Device-local media resources must use shape
     /// `easynet:///r/<realm>/resource/device.<device-id>/streams/<type>.<id>`.
@@ -176,7 +175,6 @@ pub struct ResourceEntry {
     /// Owner Agent's URA. Device-local media resources require this to be the
     /// hosting device URA at insert/update time; pre-join local-device rows are
     /// no longer persisted.
-    #[serde(default)]
     pub owner_agent: String,
     /// Resource type (renamed from `type` to a Rust-idiomatic
     /// `kind` so call sites avoid the `r#type` raw-identifier
@@ -206,12 +204,10 @@ pub struct ResourceEntry {
     /// `meta.list_resources` UX. Free-form, may change between
     /// boots (e.g. user renamed display in System Preferences)
     /// without affecting `resource_ura`.
-    #[serde(default)]
     pub display_name: String,
     /// Open-ended bag for codec hints, capabilities, max-
     /// resolution, supported sample rates, etc. Read by media
     /// handlers when negotiating args defaults.
-    #[serde(default)]
     pub metadata: Value,
     /// RFC 3339 timestamp; useful for operator triage when an
     /// entry references hardware that's no longer present.
@@ -695,6 +691,84 @@ mod tests {
         assert_eq!(parsed.resources[0].kind, ResourceType::Camera);
         assert_eq!(parsed.resources[0].binding, ResourceBinding::LocalDevice);
         assert_eq!(parsed.resources[0].metadata["max_fps"], 60);
+    }
+
+    #[test]
+    fn existing_resources_file_requires_resources_field() {
+        let error = serde_json::from_str::<ResourcesFile>(r#"{}"#)
+            .expect_err("existing resources.json must declare resources");
+        assert!(
+            error.to_string().contains("missing field `resources`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn existing_resource_entry_requires_owner_agent_display_name_and_metadata() {
+        let base = serde_json::json!({
+            "resource_ura": "easynet:///r/acme/resource/device.01DEV/streams/mic.01RES",
+            "owner_agent": "easynet:///r/acme/device/01DEV",
+            "type": "mic",
+            "binding": "local_device",
+            "hardware_id": "BuiltInMic-AAPL-0001",
+            "display_name": "Built-in Microphone",
+            "metadata": {},
+            "first_seen_at": "2026-07-23T00:00:00Z"
+        });
+
+        for (field, expected) in [
+            ("owner_agent", "missing field `owner_agent`"),
+            ("display_name", "missing field `display_name`"),
+            ("metadata", "missing field `metadata`"),
+        ] {
+            let mut entry = base.clone();
+            entry
+                .as_object_mut()
+                .expect("entry object")
+                .remove(field)
+                .expect("field exists in base entry");
+            let file = serde_json::json!({ "resources": [entry] });
+            let error = serde_json::from_value::<ResourcesFile>(file)
+                .expect_err(&format!("missing {field} must fail"));
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected error for missing {field}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn existing_resources_file_rejects_unknown_fields() {
+        let top_level_error =
+            serde_json::from_str::<ResourcesFile>(r#"{"resources":[],"legacy_owner":""}"#)
+                .expect_err("unknown top-level fields must fail");
+        assert!(
+            top_level_error
+                .to_string()
+                .contains("unknown field `legacy_owner`"),
+            "unexpected top-level error: {top_level_error}"
+        );
+
+        let row_error = serde_json::from_value::<ResourcesFile>(serde_json::json!({
+            "resources": [{
+                "resource_ura": "easynet:///r/acme/resource/device.01DEV/streams/mic.01RES",
+                "owner_agent": "easynet:///r/acme/device/01DEV",
+                "type": "mic",
+                "binding": "local_device",
+                "hardware_id": "BuiltInMic-AAPL-0001",
+                "display_name": "Built-in Microphone",
+                "metadata": {},
+                "first_seen_at": "2026-07-23T00:00:00Z",
+                "legacy_subject": "device"
+            }]
+        }))
+        .expect_err("unknown resource-row fields must fail");
+        assert!(
+            row_error
+                .to_string()
+                .contains("unknown field `legacy_subject`"),
+            "unexpected row error: {row_error}"
+        );
     }
 
     #[test]
