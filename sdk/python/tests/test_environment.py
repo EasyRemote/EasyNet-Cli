@@ -15,7 +15,7 @@ from easynet_sdk import (
     default_environment,
     is_code,
 )
-from easynet_sdk._cabi import CLILibrary
+from easynet_sdk._cabi import EXPECTED_ABI_VERSION, CLILibrary
 from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
 from easynet_sdk.runtime_ability import RuntimeCallContext
 
@@ -35,14 +35,14 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertIn("runtime provider is required", caught.exception.message)
 
-    def test_feature_set_reports_generic_v5_runtime(self) -> None:
+    def test_feature_set_reports_generic_cabi_runtime(self) -> None:
         raw = FakeRawCABI()
         with _load_patch(raw):
             env = default_environment()
             features = env.feature_set()
             env.close()
 
-        self.assertEqual(features.abi_version, 5)
+        self.assertEqual(features.abi_version, EXPECTED_ABI_VERSION)
         self.assertEqual(features.profiles, {"runtime_core": "provider-backed"})
 
     def test_native_runtime_owns_runtime_and_health(self) -> None:
@@ -118,7 +118,7 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertEqual(raw.daemon_detaches, [707])
         self.assertEqual(raw.shutdown_handles, [808])
 
-    def test_runtime_connection_uses_v5_connector_and_closes_runtime(self) -> None:
+    def test_runtime_connection_uses_generic_cabi_connector_and_closes_runtime(self) -> None:
         raw = FakeRawCABI()
         with tempfile.TemporaryDirectory() as tmp:
             control_path = _write_control_discovery(tmp)

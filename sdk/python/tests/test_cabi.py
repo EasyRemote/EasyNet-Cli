@@ -184,7 +184,7 @@ class CABIEventProjectionTests(unittest.TestCase):
 
 
 class FakeRawCABI:
-    """Strict generic-v5 fake: product-specific symbol lookups cannot succeed."""
+    """Strict generic C ABI fake: product-specific symbol lookups cannot succeed."""
 
     def __init__(self) -> None:
         self.buffers: dict[int, ctypes.Array[ctypes.c_char]] = {}
