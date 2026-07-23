@@ -1708,12 +1708,14 @@ mod tests {
         let silan_profile = profile::ProfileEntry {
             profile_name: "silan@acme".to_string(),
             realm_alias: "acme".to_string(),
+            realm_id: None,
             issuer: "https://hub.acme.internal".to_string(),
             login_hint: Some("silan".to_string()),
             subject: Some("usr_silan".to_string()),
+            credential_ref: None,
+            trust_anchor: None,
             account_session: profile::ProfileAccountSessionState::Authenticated,
             device_membership: "enrolled".to_string(),
-            ..Default::default()
         };
         let admin_profile = profile::ProfileEntry {
             profile_name: "admin@acme".to_string(),

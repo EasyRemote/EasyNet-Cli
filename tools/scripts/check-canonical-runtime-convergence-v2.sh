@@ -1241,6 +1241,85 @@ for required in (
 PY
 }
 
+check_profile_store_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local profile="$cli_root/src/cli/commands/profile.rs"
+  [[ -f "$profile" ]] || return 0
+
+  "$PYTHON_BIN" - "$profile" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+def struct_with_attrs(name: str) -> tuple[str, str]:
+    pattern = (
+        r"(?P<attrs>(?:#\[[^\n]+\]\n)*)"
+        + rf"pub\(crate\) struct {name} \{{(?P<body>.*?)\n\}}"
+    )
+    match = re.search(pattern, text, re.S)
+    if match is None:
+        raise SystemExit(f"profile_store_schema:{name}:missing")
+    return match.group("attrs"), match.group("body")
+
+entry_attrs, entry_body = struct_with_attrs("ProfileEntry")
+store_attrs, store_body = struct_with_attrs("ProfileStore")
+for name, attrs in (
+    ("ProfileEntry", entry_attrs),
+    ("ProfileStore", store_attrs),
+):
+    if "#[serde(deny_unknown_fields)]" not in attrs:
+        raise SystemExit(f"profile_store_schema:{name}:missing_deny_unknown_fields")
+if "Default" in entry_attrs:
+    raise SystemExit("profile_store_schema:ProfileEntry:retired_default_derive")
+for name, body in (
+    ("ProfileEntry", entry_body),
+    ("ProfileStore", store_body),
+):
+    if "#[serde(default" in body:
+        raise SystemExit(f"profile_store_schema:{name}:retired_serde_default")
+for field in (
+    "pub current_profile: Option<String>",
+    "pub profiles: BTreeMap<String, ProfileEntry>",
+):
+    if field not in store_body:
+        raise SystemExit(f"profile_store_schema:ProfileStore:missing_field:{field}")
+for field in (
+    "pub profile_name: String",
+    "pub realm_alias: String",
+    "pub realm_id: Option<String>",
+    "pub issuer: String",
+    "pub login_hint: Option<String>",
+    "pub subject: Option<String>",
+    "pub credential_ref: Option<String>",
+    "pub trust_anchor: Option<String>",
+    "pub account_session: ProfileAccountSessionState",
+    "pub device_membership: String",
+):
+    if field not in entry_body:
+        raise SystemExit(f"profile_store_schema:ProfileEntry:missing_field:{field}")
+if "impl Default for ProfileAccountSessionState" in text:
+    raise SystemExit("profile_store_schema:retired_account_session_default_impl")
+for required in (
+    "missing_profile_store_is_fresh_install_empty_state",
+    "return Ok(ProfileStore::default())",
+    "existing_profile_store_requires_profiles_field",
+    "missing field `profiles`",
+    "existing_profile_store_rejects_unknown_fields",
+    "unknown field `legacy_current_user`",
+    "existing_profile_entry_requires_account_session",
+    "missing field `account_session`",
+    "existing_profile_entry_requires_device_membership",
+    "missing field `device_membership`",
+    "existing_profile_entry_rejects_unknown_fields",
+    "unknown field `legacy_device_id`",
+):
+    if required not in text:
+        raise SystemExit(f"profile_store_schema:missing:{required}")
+PY
+}
+
 check_resources_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local resources="$cli_root/src/daemon/persistence/resources.rs"
@@ -10560,6 +10639,53 @@ EOF
   if ( CLI_ROOT="$tmp/local-agents-schema-legacy"; check_local_agents_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected local agents schema compatibility gate to fail"
   fi
+  mkdir -p "$tmp/profile-store-schema-legacy/src/cli/commands"
+  cat >"$tmp/profile-store-schema-legacy/src/cli/commands/profile.rs" <<'EOF'
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProfileAccountSessionState { Authenticated, LoggedOut }
+
+impl Default for ProfileAccountSessionState {
+    fn default() -> Self { Self::LoggedOut }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProfileEntry {
+    pub profile_name: String,
+    pub realm_alias: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realm_id: Option<String>,
+    pub issuer: String,
+    #[serde(default)]
+    pub account_session: ProfileAccountSessionState,
+    #[serde(default)]
+    pub device_membership: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProfileStore {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_profile: Option<String>,
+    #[serde(default)]
+    pub profiles: BTreeMap<String, ProfileEntry>,
+}
+
+pub(crate) fn load_store() -> anyhow::Result<ProfileStore> {
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        return Ok(ProfileStore::default());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn missing_profile_store_is_fresh_install_empty_state() {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/profile-store-schema-legacy"; check_profile_store_schema_contract ) >/dev/null 2>&1; then
+    fail "self-test expected profile store schema compatibility gate to fail"
+  fi
   mkdir -p "$tmp/resources-schema-legacy/src/daemon/persistence"
   cat >"$tmp/resources-schema-legacy/src/daemon/persistence/resources.rs" <<'EOF'
 /// Resource type taxonomy — RFC-005 v3.2. The wire form is a
@@ -10868,6 +10994,7 @@ EOF
   check_daemon_config_mode_required_contract
   check_chat_session_index_schema_contract
   check_local_agents_schema_contract
+  check_profile_store_schema_contract
   check_resources_schema_contract
   check_agent_spec_schema_contract
   check_control_discovery_schema_contract
@@ -11001,6 +11128,7 @@ check_cli_invocation_history_read_model_contract
 check_local_runtime_state_read_subject_contract
 check_runtime_state_kind_required_contract
 check_federation_realm_resolver_contract
+check_profile_store_schema_contract
 check_resources_schema_contract
 check_agent_spec_schema_contract
 check_control_discovery_schema_contract

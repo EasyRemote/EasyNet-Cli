@@ -106,12 +106,6 @@ pub(crate) enum ProfileAccountSessionState {
     LoggedOut,
 }
 
-impl Default for ProfileAccountSessionState {
-    fn default() -> Self {
-        Self::LoggedOut
-    }
-}
-
 impl ProfileAccountSessionState {
     fn as_str(&self) -> &'static str {
         match self {
@@ -121,34 +115,31 @@ impl ProfileAccountSessionState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProfileEntry {
     pub profile_name: String,
     pub realm_alias: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub realm_id: Option<String>,
     pub issuer: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub login_hint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub credential_ref: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub trust_anchor: Option<String>,
-    #[serde(default)]
     pub account_session: ProfileAccountSessionState,
-    #[serde(default)]
     pub device_membership: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProfileStore {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub current_profile: Option<String>,
-    #[serde(default)]
     pub profiles: BTreeMap<String, ProfileEntry>,
 }
 
@@ -499,6 +490,26 @@ fn run_remove(args: ProfileRemoveArgs) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
+
+    fn write_profile_store(body: &str) {
+        let path = profile_store_path();
+        std::fs::create_dir_all(path.parent().expect("profile store parent"))
+            .expect("create isolated profile store dir");
+        std::fs::write(path, body).expect("write profile store");
+    }
+
+    fn assert_profile_store_parse_failure_contains(error: anyhow::Error, expected: &str) {
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("parse"),
+            "unexpected profile store error: {message}"
+        );
+        assert!(
+            message.contains(expected),
+            "expected {expected:?} in profile store error: {message}"
+        );
+    }
 
     #[test]
     fn parses_user_at_realm_as_login_hint() {
@@ -513,5 +524,100 @@ mod tests {
             LoginTarget::from_cli(None, Some("silan.hu@company.com"), Some("acme")).unwrap();
         assert_eq!(target.login_hint.as_deref(), Some("silan.hu@company.com"));
         assert_eq!(target.realm, "acme");
+    }
+
+    #[test]
+    fn missing_profile_store_is_fresh_install_empty_state() {
+        let _home = HomeGuard::new();
+
+        let store = load_store().expect("missing profile store should be fresh install");
+
+        assert!(store.current_profile.is_none());
+        assert!(store.profiles.is_empty());
+    }
+
+    #[test]
+    fn existing_profile_store_requires_profiles_field() {
+        let _home = HomeGuard::new();
+        write_profile_store("{}");
+
+        let error = load_store().expect_err("existing profile store without profiles must fail");
+
+        assert_profile_store_parse_failure_contains(error, "missing field `profiles`");
+    }
+
+    #[test]
+    fn existing_profile_store_rejects_unknown_fields() {
+        let _home = HomeGuard::new();
+        write_profile_store(r#"{"profiles":{},"legacy_current_user":"alice"}"#);
+
+        let error = load_store().expect_err("unknown profile store fields must fail");
+
+        assert_profile_store_parse_failure_contains(error, "unknown field `legacy_current_user`");
+    }
+
+    #[test]
+    fn existing_profile_entry_requires_account_session() {
+        let _home = HomeGuard::new();
+        write_profile_store(
+            r#"{
+  "profiles": {
+    "alice@example": {
+      "profile_name": "alice@example",
+      "realm_alias": "example",
+      "issuer": "https://example.test",
+      "device_membership": "enrolled"
+    }
+  }
+}"#,
+        );
+
+        let error = load_store().expect_err("profile entry without account_session must fail");
+
+        assert_profile_store_parse_failure_contains(error, "missing field `account_session`");
+    }
+
+    #[test]
+    fn existing_profile_entry_requires_device_membership() {
+        let _home = HomeGuard::new();
+        write_profile_store(
+            r#"{
+  "profiles": {
+    "alice@example": {
+      "profile_name": "alice@example",
+      "realm_alias": "example",
+      "issuer": "https://example.test",
+      "account_session": "authenticated"
+    }
+  }
+}"#,
+        );
+
+        let error = load_store().expect_err("profile entry without device_membership must fail");
+
+        assert_profile_store_parse_failure_contains(error, "missing field `device_membership`");
+    }
+
+    #[test]
+    fn existing_profile_entry_rejects_unknown_fields() {
+        let _home = HomeGuard::new();
+        write_profile_store(
+            r#"{
+  "profiles": {
+    "alice@example": {
+      "profile_name": "alice@example",
+      "realm_alias": "example",
+      "issuer": "https://example.test",
+      "account_session": "authenticated",
+      "device_membership": "enrolled",
+      "legacy_device_id": "device-a"
+    }
+  }
+}"#,
+        );
+
+        let error = load_store().expect_err("unknown profile entry fields must fail");
+
+        assert_profile_store_parse_failure_contains(error, "unknown field `legacy_device_id`");
     }
 }
