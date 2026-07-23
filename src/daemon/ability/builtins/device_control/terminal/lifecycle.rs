@@ -415,9 +415,15 @@ mod tests {
         }
     }
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/terminal-lifecycle";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
     #[test]
     fn registration_makes_both_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(&mut reg, fresh_service(), None);
         assert!(reg.get_rpc(ABILITY_PTY_SESSION_CREATE).is_some());
         assert!(reg.get_rpc(ABILITY_PTY_SESSION_LIST).is_some());
