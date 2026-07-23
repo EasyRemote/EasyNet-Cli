@@ -7466,6 +7466,18 @@ for retired in (
 ):
     if retired in production:
         raise SystemExit(f"ffi_descriptor_runtime_owner:retired_remote_probe_path:{retired}")
+catalog_entry = re.search(
+    r"fn descriptor_catalog_entry_from_descriptor\([^)]*\)\s*->\s*std::result::Result<serde_json::Value,\s*String>\s*\{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn descriptor_catalog_resolution_from_entries",
+    text,
+    re.S,
+)
+if catalog_entry is None:
+    raise SystemExit("ffi_descriptor_runtime_owner:catalog_entry_function_missing")
+catalog_entry_body = catalog_entry.group("body")
+if "descriptor.descriptor_ref()" not in catalog_entry_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:catalog_entry_not_using_descriptor_owner")
+if "canonical_ability_descriptor_ref(&format!(" in catalog_entry_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:catalog_entry_recomputes_descriptor_ref")
 if "descriptor_ref not found in runtime realm catalog" not in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:realm_catalog_miss_error_missing")
 if "target_owned_descriptor_catalog_subject_ura" in production:

@@ -2031,10 +2031,7 @@ fn descriptor_catalog_entry_from_descriptor(
     let version = descriptor.version.clone();
     let call_mode = descriptor.call_mode().as_str();
     let admission_action = descriptor.admission_action().as_str();
-    let descriptor_ref = axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
-        "{ability_ura}@{version}#{descriptor_hash_hex}!{admission_action}",
-    ))
-    .map_err(|error| {
+    let descriptor_ref = descriptor.descriptor_ref().map_err(|error| {
         format!(
             "system descriptor catalog row {ability_ura:?} descriptor_ref is not canonical: {error}"
         )
