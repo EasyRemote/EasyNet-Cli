@@ -80,7 +80,7 @@ type RuntimeHostStopOptions struct {
 	Force             bool  `json:"force,omitempty"`
 }
 
-// Endpoints are daemon control and Invocation transport locators.
+// Endpoints are runtime control and Invocation transport locators.
 type Endpoints struct {
 	ControlEndpoint    string `json:"control_endpoint,omitempty"`
 	InvocationEndpoint string `json:"invocation_endpoint,omitempty"`
@@ -129,42 +129,42 @@ type RuntimeLifecycleTransportFunc struct {
 
 func (f RuntimeLifecycleTransportFunc) Discover(ctx context.Context, optionsJSON []byte) ([]byte, error) {
 	if f.DiscoverFunc == nil {
-		return nil, invalidRuntimeClient("daemon discover transport function is required")
+		return nil, invalidRuntimeClient("runtime host discover transport function is required")
 	}
 	return f.DiscoverFunc(ctx, optionsJSON)
 }
 
 func (f RuntimeLifecycleTransportFunc) Start(ctx context.Context, configJSON []byte) ([]byte, error) {
 	if f.StartFunc == nil {
-		return nil, invalidRuntimeClient("daemon start transport function is required")
+		return nil, invalidRuntimeClient("runtime host start transport function is required")
 	}
 	return f.StartFunc(ctx, configJSON)
 }
 
 func (f RuntimeLifecycleTransportFunc) Attach(ctx context.Context, optionsJSON []byte) ([]byte, error) {
 	if f.AttachFunc == nil {
-		return nil, invalidRuntimeClient("daemon attach transport function is required")
+		return nil, invalidRuntimeClient("runtime host attach transport function is required")
 	}
 	return f.AttachFunc(ctx, optionsJSON)
 }
 
 func (f RuntimeLifecycleTransportFunc) Status(ctx context.Context, handleID string) ([]byte, error) {
 	if f.StatusFunc == nil {
-		return nil, invalidRuntimeClient("daemon status transport function is required")
+		return nil, invalidRuntimeClient("runtime host status transport function is required")
 	}
 	return f.StatusFunc(ctx, handleID)
 }
 
 func (f RuntimeLifecycleTransportFunc) OpenRuntime(ctx context.Context, handleID string, optionsJSON []byte) (RuntimeTransport, []byte, error) {
 	if f.OpenRuntimeFunc == nil {
-		return nil, nil, invalidRuntimeClient("daemon open-runtime transport function is required")
+		return nil, nil, invalidRuntimeClient("runtime host open-runtime transport function is required")
 	}
 	return f.OpenRuntimeFunc(ctx, handleID, optionsJSON)
 }
 
 func (f RuntimeLifecycleTransportFunc) Stop(ctx context.Context, handleID string, optionsJSON []byte) ([]byte, error) {
 	if f.StopFunc == nil {
-		return nil, invalidRuntimeClient("daemon stop transport function is required")
+		return nil, invalidRuntimeClient("runtime host stop transport function is required")
 	}
 	return f.StopFunc(ctx, handleID, optionsJSON)
 }
@@ -192,7 +192,7 @@ type RuntimeHost struct {
 // NewRuntimeHost creates a runtime lifecycle facade over a transport seam.
 func NewRuntimeHost(transport RuntimeLifecycleTransport) (*RuntimeHost, error) {
 	if transport == nil {
-		return nil, invalidRuntimeClient("daemon transport is required")
+		return nil, invalidRuntimeClient("runtime lifecycle transport is required")
 	}
 	return &RuntimeHost{transport: transport}, nil
 }
@@ -200,7 +200,7 @@ func NewRuntimeHost(transport RuntimeLifecycleTransport) (*RuntimeHost, error) {
 // DiscoverRuntime returns provider-advertised endpoints without implicit synthesis.
 func (h *RuntimeHost) DiscoverRuntime(ctx context.Context, request RuntimeHostDiscoverRequest) (Endpoints, error) {
 	if h == nil || h.transport == nil {
-		return Endpoints{}, invalidRuntimeClient("daemon control is not initialized")
+		return Endpoints{}, invalidRuntimeClient("runtime host lifecycle is not initialized")
 	}
 	if ctx == nil {
 		return Endpoints{}, invalidRuntimeClient("context is required")
@@ -214,7 +214,7 @@ func (h *RuntimeHost) DiscoverRuntime(ctx context.Context, request RuntimeHostDi
 	}
 	raw, err := h.transport.Discover(ctx, optionsJSON)
 	if err != nil {
-		return Endpoints{}, wrapRuntimeLifecycleTransportError("daemon discover failed", err)
+		return Endpoints{}, wrapRuntimeLifecycleTransportError("runtime host discover failed", err)
 	}
 	return NewEndpointsFromJSON(raw, true)
 }
@@ -222,7 +222,7 @@ func (h *RuntimeHost) DiscoverRuntime(ctx context.Context, request RuntimeHostDi
 // StartRuntime starts or adopts a runtime lifecycle handle once runtime traffic is ready.
 func (h *RuntimeHost) StartRuntime(ctx context.Context, request RuntimeHostStartRequest) (*RuntimeHandle, error) {
 	if h == nil || h.transport == nil {
-		return nil, invalidRuntimeClient("daemon control is not initialized")
+		return nil, invalidRuntimeClient("runtime host lifecycle is not initialized")
 	}
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
@@ -239,7 +239,7 @@ func (h *RuntimeHost) StartRuntime(ctx context.Context, request RuntimeHostStart
 	}
 	raw, err := h.transport.Start(ctx, configJSON)
 	if err != nil {
-		return nil, wrapRuntimeLifecycleTransportError("daemon start failed", err)
+		return nil, wrapRuntimeLifecycleTransportError("runtime host start failed", err)
 	}
 	status, err := NewRuntimeLifecycleStatusFromJSON(raw)
 	if err != nil {
@@ -254,7 +254,7 @@ func (h *RuntimeHost) StartRuntime(ctx context.Context, request RuntimeHostStart
 // AttachRuntime attaches to an existing runtime host only when Invocation traffic is ready.
 func (h *RuntimeHost) AttachRuntime(ctx context.Context, opts RuntimeHostAttachOptions) (*RuntimeHandle, error) {
 	if h == nil || h.transport == nil {
-		return nil, invalidRuntimeClient("daemon control is not initialized")
+		return nil, invalidRuntimeClient("runtime host lifecycle is not initialized")
 	}
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
@@ -265,7 +265,7 @@ func (h *RuntimeHost) AttachRuntime(ctx context.Context, opts RuntimeHostAttachO
 	}
 	raw, err := h.transport.Attach(ctx, optionsJSON)
 	if err != nil {
-		return nil, wrapRuntimeLifecycleTransportError("daemon attach failed", err)
+		return nil, wrapRuntimeLifecycleTransportError("runtime host attach failed", err)
 	}
 	status, err := NewRuntimeLifecycleStatusFromJSON(raw)
 	if err != nil {
@@ -277,11 +277,11 @@ func (h *RuntimeHost) AttachRuntime(ctx context.Context, opts RuntimeHostAttachO
 	return newRuntimeHandle(h.transport, status)
 }
 
-// ConnectLocal discovers a runtime-ready daemon, opens its Invocation runtime,
-// and detaches the lifecycle handle without stopping the daemon.
+// ConnectLocal discovers a runtime-ready host, opens its Invocation runtime,
+// and detaches the lifecycle handle without stopping the runtime host.
 func (h *RuntimeHost) ConnectLocal(ctx context.Context, opts ConnectOptions) (*RuntimeClient, error) {
 	if h == nil || h.transport == nil {
-		return nil, invalidRuntimeClient("daemon control is not initialized")
+		return nil, invalidRuntimeClient("runtime host lifecycle is not initialized")
 	}
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
@@ -346,7 +346,7 @@ func (h *RuntimeHandle) Status(ctx context.Context) (RuntimeLifecycleStatus, err
 	}
 	raw, err := h.transport.Status(ctx, h.handleID)
 	if err != nil {
-		return RuntimeLifecycleStatus{}, wrapRuntimeLifecycleTransportError("daemon status failed", err)
+		return RuntimeLifecycleStatus{}, wrapRuntimeLifecycleTransportError("runtime host status failed", err)
 	}
 	status, err := NewRuntimeLifecycleStatusFromJSON(raw)
 	if err != nil {
@@ -374,7 +374,7 @@ func (h *RuntimeHandle) OpenRuntime(ctx context.Context, opts ConnectOptions) (*
 		return nil, invalidRuntimeClient("context is required")
 	}
 	if !runtimeLifecycleReady(h.status.State) {
-		return nil, invalidRuntimePayload("daemon invocation endpoint is not ready", nil)
+		return nil, invalidRuntimePayload("runtime invocation endpoint is not ready", nil)
 	}
 	optionsJSON, err := json.Marshal(opts)
 	if err != nil {
@@ -382,7 +382,7 @@ func (h *RuntimeHandle) OpenRuntime(ctx context.Context, opts ConnectOptions) (*
 	}
 	transport, _, err := h.transport.OpenRuntime(ctx, h.handleID, optionsJSON)
 	if err != nil {
-		return nil, wrapRuntimeLifecycleTransportError("daemon open runtime failed", err)
+		return nil, wrapRuntimeLifecycleTransportError("runtime open failed", err)
 	}
 	if transport == nil {
 		return nil, invalidRuntimeClient("runtime transport is required")
@@ -406,7 +406,7 @@ func (h *RuntimeHandle) StopRuntime(ctx context.Context, opts RuntimeHostStopOpt
 	}
 	raw, err := h.transport.Stop(ctx, h.handleID, optionsJSON)
 	if err != nil {
-		return wrapRuntimeLifecycleTransportError("daemon stop failed", err)
+		return wrapRuntimeLifecycleTransportError("runtime host stop failed", err)
 	}
 	status, err := NewRuntimeLifecycleStatusFromJSON(raw)
 	if err != nil {
@@ -421,7 +421,7 @@ func (h *RuntimeHandle) StopRuntime(ctx context.Context, opts RuntimeHostStopOpt
 
 func (h *RuntimeHandle) Detach(ctx context.Context) error {
 	if h == nil || h.transport == nil {
-		return invalidRuntimeClient("daemon handle is not initialized")
+		return invalidRuntimeClient("runtime handle is not initialized")
 	}
 	if h.detached {
 		return nil
@@ -430,7 +430,7 @@ func (h *RuntimeHandle) Detach(ctx context.Context) error {
 		return invalidRuntimeClient("context is required")
 	}
 	if err := h.transport.Detach(ctx, h.handleID); err != nil {
-		return wrapRuntimeLifecycleTransportError("daemon detach failed", err)
+		return wrapRuntimeLifecycleTransportError("runtime host detach failed", err)
 	}
 	h.detached = true
 	return nil
@@ -452,7 +452,7 @@ func (h *RuntimeHandle) State() RuntimeLifecycleState {
 
 func (h *RuntimeHandle) requireAttached() error {
 	if h == nil || h.transport == nil {
-		return invalidRuntimeClient("daemon handle is not initialized")
+		return invalidRuntimeClient("runtime handle is not initialized")
 	}
 	if h.detached {
 		return &SDKError{
@@ -460,7 +460,7 @@ func (h *RuntimeHandle) requireAttached() error {
 			Stage:     "sdk",
 			Retry:     RetryNever,
 			Retryable: false,
-			Message:   "daemon handle is detached",
+			Message:   "runtime handle is detached",
 		}
 	}
 	return nil
@@ -512,10 +512,10 @@ func requireRuntimeLifecycleReady(status RuntimeLifecycleStatus) error {
 			Stage:     "runtime_lifecycle",
 			Retry:     RetrySafe,
 			Retryable: true,
-			Message:   "daemon control endpoint is ready but invocation endpoint is not ready",
+			Message:   "runtime control endpoint is ready but invocation endpoint is not ready",
 		}
 	}
-	return invalidRuntimePayload("daemon invocation endpoint is not ready", nil)
+	return invalidRuntimePayload("runtime invocation endpoint is not ready", nil)
 }
 
 func runtimeLifecycleReady(state RuntimeLifecycleState) bool {
@@ -525,7 +525,7 @@ func runtimeLifecycleReady(state RuntimeLifecycleState) bool {
 func NewEndpointsFromJSON(raw []byte, requireInvocation bool) (Endpoints, error) {
 	var endpoints Endpoints
 	if err := json.Unmarshal(raw, &endpoints); err != nil {
-		return Endpoints{}, invalidRuntimePayload(fmt.Sprintf("decode daemon endpoints JSON: %v", err), err)
+		return Endpoints{}, invalidRuntimePayload(fmt.Sprintf("decode runtime host endpoints JSON: %v", err), err)
 	}
 	if requireInvocation && endpoints.InvocationEndpoint == "" {
 		return Endpoints{}, invalidRuntimePayload("invocation_endpoint is required", nil)
@@ -536,13 +536,13 @@ func NewEndpointsFromJSON(raw []byte, requireInvocation bool) (Endpoints, error)
 func NewRuntimeLifecycleStatusFromJSON(raw []byte) (RuntimeLifecycleStatus, error) {
 	var status RuntimeLifecycleStatus
 	if err := json.Unmarshal(raw, &status); err != nil {
-		return RuntimeLifecycleStatus{}, invalidRuntimePayload(fmt.Sprintf("decode daemon status JSON: %v", err), err)
+		return RuntimeLifecycleStatus{}, invalidRuntimePayload(fmt.Sprintf("decode runtime host status JSON: %v", err), err)
 	}
 	if status.State == "" {
 		return RuntimeLifecycleStatus{}, invalidRuntimePayload("state is required", nil)
 	}
 	if !validRuntimeLifecycleState(status.State) {
-		return RuntimeLifecycleStatus{}, invalidRuntimePayload("invalid daemon lifecycle state", nil)
+		return RuntimeLifecycleStatus{}, invalidRuntimePayload("invalid runtime lifecycle state", nil)
 	}
 	return status, nil
 }

@@ -552,6 +552,32 @@ for path in files:
 PY
 }
 
+check_go_sdk_runtime_lifecycle_neutrality_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local lifecycle="$cli_root/sdk/go/runtime_lifecycle.go"
+  [[ -f "$lifecycle" ]] || return 0
+
+  if rg -n \
+    'daemon (discover|start|attach|status|open-runtime|open runtime|stop|detach|transport|control|handle|invocation endpoint|endpoints|status JSON|lifecycle state)|daemon control|daemon handle|decode daemon|invalid daemon|runtime-ready daemon' \
+    "$lifecycle"; then
+    fail "Go SDK canonical runtime lifecycle preserves daemon vocabulary outside the EasyNet provider package"
+  fi
+
+  for token in \
+    "runtime host discover transport function is required" \
+    "runtime lifecycle transport is required" \
+    "runtime host lifecycle is not initialized" \
+    "runtime invocation endpoint is not ready" \
+    "runtime control endpoint is ready but invocation endpoint is not ready" \
+    "decode runtime host endpoints JSON" \
+    "invalid runtime lifecycle state"
+  do
+    if ! rg -Fq "$token" "$lifecycle"; then
+      fail "Go SDK canonical runtime lifecycle is missing neutral diagnostic: $token"
+    fi
+  done
+}
+
 check_go_sdk_public_ura_alias_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_sdk="$cli_root/sdk/go"
@@ -12079,6 +12105,19 @@ EOF
   if ( check_go_sdk_public_ura_alias_contract "$tmp/go-sdk-ura-alias" ) >/dev/null 2>&1; then
     fail "self-test expected Go SDK Ura alias gate to fail"
   fi
+  mkdir -p "$tmp/go-sdk-lifecycle-daemon-vocabulary/sdk/go"
+  printf '%s\n' \
+    'package easynet' \
+    'func f() string { return "daemon control is not initialized" }' \
+    'func g() string { return "runtime host lifecycle is not initialized" }' \
+    'func h() string { return "runtime invocation endpoint is not ready" }' \
+    'func i() string { return "runtime control endpoint is ready but invocation endpoint is not ready" }' \
+    'func j() string { return "decode runtime host endpoints JSON" }' \
+    'func k() string { return "invalid runtime lifecycle state" }' \
+    > "$tmp/go-sdk-lifecycle-daemon-vocabulary/sdk/go/runtime_lifecycle.go"
+  if ( check_go_sdk_runtime_lifecycle_neutrality_contract "$tmp/go-sdk-lifecycle-daemon-vocabulary" ) >/dev/null 2>&1; then
+    fail "self-test expected Go SDK runtime lifecycle daemon-vocabulary gate to fail"
+  fi
   mkdir -p "$tmp/go-sdk-product-resource/sdk/go"
   printf '%s\n' \
     'package easynet' \
@@ -15427,6 +15466,7 @@ EOF
   check_active_source_contract
   check_sdk_root_runtime_description_contract
   check_go_sdk_public_ura_alias_contract
+  check_go_sdk_runtime_lifecycle_neutrality_contract
   check_go_sdk_runtime_resource_namespace_contract
   check_python_sdk_runtime_addressing_kind_contract
   check_advertise_agent_ingress_contract
@@ -15594,6 +15634,7 @@ check_session_failure_wire_facts_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract
 check_go_sdk_public_ura_alias_contract
+check_go_sdk_runtime_lifecycle_neutrality_contract
 check_go_sdk_runtime_resource_namespace_contract
 check_python_sdk_runtime_addressing_kind_contract
 check_advertise_agent_ingress_contract

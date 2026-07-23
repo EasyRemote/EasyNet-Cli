@@ -517,6 +517,39 @@ for sdk_subroot in (
         runtime_facade_files.extend(production_files(sdk_subroot))
 runtime_facade_files = sorted(set(runtime_facade_files))
 
+go_runtime_lifecycle = cli_root / "sdk/go/runtime_lifecycle.go"
+if go_runtime_lifecycle.exists():
+    text = source(go_runtime_lifecycle)
+    forbidden_lifecycle_vocabulary = re.compile(
+        r"daemon (?:discover|start|attach|status|open-runtime|open runtime|"
+        r"stop|detach|transport|control|handle|invocation endpoint|"
+        r"endpoints|status JSON|lifecycle state)|daemon control|"
+        r"daemon handle|decode daemon|invalid daemon|runtime-ready daemon"
+    )
+    for match in forbidden_lifecycle_vocabulary.finditer(text):
+        add(
+            "R3_SDK_RUNTIME_LIFECYCLE_NEUTRALITY",
+            go_runtime_lifecycle,
+            line_number(text, match.start()),
+            "Go SDK canonical runtime lifecycle must use runtime-host vocabulary; daemon binding belongs in provider/easynet",
+        )
+    for token in (
+        "runtime host discover transport function is required",
+        "runtime lifecycle transport is required",
+        "runtime host lifecycle is not initialized",
+        "runtime invocation endpoint is not ready",
+        "runtime control endpoint is ready but invocation endpoint is not ready",
+        "decode runtime host endpoints JSON",
+        "invalid runtime lifecycle state",
+    ):
+        if token not in text:
+            add(
+                "R3_SDK_RUNTIME_LIFECYCLE_NEUTRALITY",
+                go_runtime_lifecycle,
+                1,
+                f"Go SDK canonical runtime lifecycle is missing neutral diagnostic {token!r}",
+            )
+
 axon_protocol_root = axon_root / "sdk/rust/src"
 axon_protocol_files = production_files(axon_protocol_root)
 ura_vocabulary_files = sorted(set(runtime_facade_files + axon_protocol_files))
