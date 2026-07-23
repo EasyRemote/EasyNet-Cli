@@ -117,6 +117,28 @@ class AxonAddressingProviderTests(unittest.TestCase):
         )
         environment.close()
 
+    def test_runtime_projection_maps_authority_to_hub(self) -> None:
+        environment = SdkEnvironment()
+        addressing = environment.addressing_client()
+
+        hub = addressing.parse_ura(addressing.hub_ura("example"))
+        self.assertEqual(hub.kind, "hub")
+        self.assertEqual(hub.components["realm"], "example")
+
+        descriptor = addressing.project_descriptor_ref(
+            addressing.owner_ability_descriptor_ref(
+                "easynet:///r/example/authority",
+                "network.health",
+                "1.0.0",
+            )
+        )
+        self.assertEqual(descriptor.components["owner_kind"], "hub")
+        self.assertEqual(
+            descriptor.components["owner_ura"],
+            "easynet:///r/example/authority",
+        )
+        environment.close()
+
     def test_provider_rejects_non_publisher(self) -> None:
         environment = SdkEnvironment()
         addressing = environment.addressing_client()

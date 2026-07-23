@@ -372,6 +372,22 @@ check_go_sdk_runtime_resource_namespace_contract() {
   fi
 }
 
+check_python_sdk_runtime_addressing_kind_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local addressing="$cli_root/sdk/python/easynet_sdk/axon_addressing.py"
+  [[ -f "$addressing" ]] || return 0
+
+  if rg -n '_product_ura_kind|_product_ability_owner_kind' "$addressing"; then
+    fail "Python SDK Addressing root preserves product-shaped kind projection helpers"
+  fi
+  if ! rg -q 'def _runtime_ura_kind\(canonical_kind: str\) -> str:' "$addressing"; then
+    fail "Python SDK Addressing must name URA kind projection as runtime state"
+  fi
+  if ! rg -q 'def _runtime_ability_owner_kind\(canonical_kind: str\) -> str:' "$addressing"; then
+    fail "Python SDK Addressing must name ability owner projection as runtime state"
+  fi
+}
+
 check_advertise_agent_ingress_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
@@ -6954,6 +6970,16 @@ EOF
   if ( check_go_sdk_runtime_resource_namespace_contract "$tmp/go-sdk-product-resource" ) >/dev/null 2>&1; then
     fail "self-test expected Go SDK product resource namespace gate to fail"
   fi
+  mkdir -p "$tmp/python-sdk-product-addressing/sdk/python/easynet_sdk"
+  printf '%s\n' \
+    'def _product_ura_kind(canonical_kind: str) -> str:' \
+    '    return "hub" if canonical_kind == "authority" else canonical_kind' \
+    'def _product_ability_owner_kind(canonical_kind: str) -> str:' \
+    '    return "hub" if canonical_kind == "authority" else canonical_kind' \
+    > "$tmp/python-sdk-product-addressing/sdk/python/easynet_sdk/axon_addressing.py"
+  if ( check_python_sdk_runtime_addressing_kind_contract "$tmp/python-sdk-product-addressing" ) >/dev/null 2>&1; then
+    fail "self-test expected Python SDK product addressing-kind gate to fail"
+  fi
   mkdir -p "$tmp/advertise-agent-legacy/src/daemon/invocation/dispatch"
   printf '%s\n' \
     '#[derive(Debug, Clone, Deserialize)]' \
@@ -7981,6 +8007,7 @@ EOF
   check_sdk_root_runtime_description_contract
   check_go_sdk_public_ura_alias_contract
   check_go_sdk_runtime_resource_namespace_contract
+  check_python_sdk_runtime_addressing_kind_contract
   check_advertise_agent_ingress_contract
   check_agent_start_model_intent_contract
   check_invocation_history_get_key_contract
@@ -8081,6 +8108,7 @@ check_active_source_contract
 check_sdk_root_runtime_description_contract
 check_go_sdk_public_ura_alias_contract
 check_go_sdk_runtime_resource_namespace_contract
+check_python_sdk_runtime_addressing_kind_contract
 check_advertise_agent_ingress_contract
 check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract

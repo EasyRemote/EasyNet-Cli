@@ -388,7 +388,7 @@ class AxonAddressingTransport:
             parsed = self._addressing.parse_ura(raw)
         except ParseError as exc:
             _invalid_addressing(f"build {kind} URA: {exc}", exc)
-        if _product_ura_kind(parsed.kind) != kind:
+        if _runtime_ura_kind(parsed.kind) != kind:
             _invalid_addressing(
                 f"built URA kind {parsed.kind!r} does not match {kind!r}"
             )
@@ -480,7 +480,7 @@ def _descriptor_projection(
                 "ability_ura": ref.ability_ura,
                 "descriptor_version": ref.version,
                 "owner_ura": owner_ura,
-                "owner_kind": _product_ability_owner_kind(ability.owner.kind),
+                "owner_kind": _runtime_ability_owner_kind(ability.owner.kind),
                 "public_name": public_name,
                 "local_registry_ability": public_name,
             },
@@ -492,7 +492,7 @@ def _descriptor_projection(
 def _ura_projection(addressing: CanonicalUraFacade, parsed: ParsedURA) -> bytes:
     components: dict[str, object] = {"realm": parsed.realm}
     projection: dict[str, object] = {
-        "kind": _product_ura_kind(parsed.kind),
+        "kind": _runtime_ura_kind(parsed.kind),
         "valid": True,
         "ura": parsed.raw,
         "realm": parsed.realm,
@@ -507,7 +507,7 @@ def _ura_projection(addressing: CanonicalUraFacade, parsed: ParsedURA) -> bytes:
         components.update(
             {
                 "owner_ura": addressing.owner_ura_for_ability(parsed.raw),
-                "owner_kind": _product_ability_owner_kind(ability.owner.kind),
+                "owner_kind": _runtime_ability_owner_kind(ability.owner.kind),
                 "ability_name": public_name,
                 "public_name": public_name,
                 "local_registry_ability": public_name,
@@ -541,11 +541,11 @@ def _ura_projection(addressing: CanonicalUraFacade, parsed: ParsedURA) -> bytes:
     return _json_bytes(projection)
 
 
-def _product_ura_kind(canonical_kind: str) -> str:
+def _runtime_ura_kind(canonical_kind: str) -> str:
     return "hub" if canonical_kind == "authority" else canonical_kind
 
 
-def _product_ability_owner_kind(canonical_kind: str) -> str:
+def _runtime_ability_owner_kind(canonical_kind: str) -> str:
     return "hub" if canonical_kind == "authority" else canonical_kind
 
 
