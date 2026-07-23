@@ -281,6 +281,8 @@ mod tests {
     };
     use std::sync::OnceLock;
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/local";
+
     fn d(name: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(
             name.to_string(),
@@ -309,11 +311,12 @@ mod tests {
     }
 
     fn executable_test_catalog() -> AxonAbilityCatalog {
-        AxonAbilityCatalog::new_with_runtime(
+        AxonAbilityCatalog::new_test_runtime_for_device_authority(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                 None,
             ),
+            TEST_DEVICE_URA,
         )
     }
 
