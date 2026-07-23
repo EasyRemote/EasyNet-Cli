@@ -2113,6 +2113,61 @@ if 'self.assertIn("payload_content_type", event)' not in tests:
 PY
 }
 
+check_sdk_python_invocation_result_adapter_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local transport="$cli_root/sdk/python/easynet_sdk/transport.py"
+  local tests="$cli_root/sdk/python/tests/test_transport.py"
+
+  "$PYTHON_BIN" - "$transport" "$tests" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+transport_path, tests_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"sdk_python_invocation_result_adapter_projection_source_missing:{path}")
+    return path.read_text()
+
+transport = read(transport_path)
+match = re.search(
+    r"def _result_response_dict\(result: Mapping\[str, object\]\) -> dict\[str, object\]:\n(?P<body>.*?)(?=\n\ndef |\Z)",
+    transport,
+    re.DOTALL,
+)
+if match is None:
+    raise SystemExit("sdk_python_invocation_result_adapter_projection_helper_missing")
+body = match.group("body")
+if "if result.get(\"ok\") is not True:" not in body or "raise SDKError(" not in body:
+    raise SystemExit("sdk_python_invocation_result_adapter_failure_projection_missing")
+if "return dict(result)" not in body:
+    raise SystemExit("sdk_python_invocation_result_adapter_canonical_passthrough_missing")
+for forbidden in (
+    '"result_content_type"',
+    '"result_base64"',
+    '"result_json"',
+    '"sdk_runtime_result"',
+    '"state": _terminal_state_code',
+    "_terminal_state_name(",
+    "_terminal_state_code(",
+    "_TERMINAL_STATE_CODES",
+):
+    if forbidden in body or forbidden in transport:
+        raise SystemExit(f"sdk_python_invocation_result_adapter_legacy_wrapper:{forbidden}")
+tests = read(tests_path)
+for required in (
+    'self.assertEqual(result["output_content_type"], "application/json")',
+    'self.assertNotIn("result_content_type", result)',
+    'self.assertNotIn("result_base64", result)',
+    'self.assertNotIn("result_json", result)',
+    'self.assertNotIn("sdk_runtime_result", result)',
+):
+    if required not in tests:
+        raise SystemExit(f"sdk_python_invocation_result_adapter_test_missing:{required}")
+PY
+}
+
 check_sdk_runtime_failure_code_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go_errors="$cli_root/sdk/go/errors.go"
@@ -10047,6 +10102,35 @@ EOF
   if ( check_sdk_python_transport_stream_event_projection_contract "$tmp/sdk-python-transport-stream-content-type-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected SDK Python transport stream content-type alias gate to fail"
   fi
+  mkdir -p "$tmp/sdk-python-invocation-result-adapter-legacy/sdk/python/easynet_sdk" \
+    "$tmp/sdk-python-invocation-result-adapter-legacy/sdk/python/tests"
+  printf '%s\n' \
+    'def _result_response_dict(result: Mapping[str, object]) -> dict[str, object]:' \
+    '    if result.get("ok") is not True:' \
+    '        raise SDKError()' \
+    '    terminal_state = _terminal_state_name(result.get("terminal_state"))' \
+    '    return {' \
+    '        "state": _terminal_state_code(terminal_state),' \
+    '        "result_content_type": result.get("output_content_type"),' \
+    '        "result_base64": result.get("output_base64"),' \
+    '        "result_json": result.get("output_json"),' \
+    '        "sdk_runtime_result": dict(result),' \
+    '    }' \
+    '' \
+    '_TERMINAL_STATE_CODES = {"completed": 5}' \
+    '' \
+    'def _terminal_state_name(value): return value or "Unspecified"' \
+    '' \
+    'def _terminal_state_code(value): return _TERMINAL_STATE_CODES.get(value, 0)' \
+    > "$tmp/sdk-python-invocation-result-adapter-legacy/sdk/python/easynet_sdk/transport.py"
+  printf '%s\n' \
+    'def test_invocation_result_adapter_projects_runtime_result_shape(self):' \
+    '    self.assertEqual(result["result_content_type"], "application/json")' \
+    '    self.assertEqual(result["sdk_runtime_result"]["terminal_state"], "Completed")' \
+    > "$tmp/sdk-python-invocation-result-adapter-legacy/sdk/python/tests/test_transport.py"
+  if ( check_sdk_python_invocation_result_adapter_projection_contract "$tmp/sdk-python-invocation-result-adapter-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK Python invocation result adapter legacy wrapper gate to fail"
+  fi
   mkdir -p "$tmp/principal-lifecycle-fallback/src/cli/commands/groups"
   printf '%s\n' \
     'fn principal_ability_realm_source(args: &Value) -> anyhow::Result<&str> {' \
@@ -11718,6 +11802,7 @@ EOF
   check_sdk_runtime_identity_signer_not_found_contract
   check_sdk_easynet_provider_identity_alias_contract
   check_sdk_python_transport_stream_event_projection_contract
+  check_sdk_python_invocation_result_adapter_projection_contract
   check_sdk_runtime_failure_code_contract
   check_sdk_direct_runtime_descriptor_not_found_contract
   check_principal_lifecycle_cli_schema_contract
@@ -11859,6 +11944,7 @@ check_sdk_ability_descriptor_not_found_vocabulary_contract
 check_sdk_runtime_identity_signer_not_found_contract
 check_sdk_easynet_provider_identity_alias_contract
 check_sdk_python_transport_stream_event_projection_contract
+check_sdk_python_invocation_result_adapter_projection_contract
 check_sdk_runtime_failure_code_contract
 check_sdk_direct_runtime_descriptor_not_found_contract
 check_principal_lifecycle_cli_schema_contract

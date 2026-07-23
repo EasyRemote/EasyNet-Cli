@@ -1369,54 +1369,7 @@ def _result_response_dict(result: Mapping[str, object]) -> dict[str, object]:
             message=message,
             details={"runtime_result": dict(result)},
         )
-    admission_receipt = result.get("admission_receipt")
-    terminal_receipt = result.get("terminal_receipt")
-    terminal_state = _terminal_state_name(result.get("terminal_state"))
-    response: dict[str, object] = {
-        "ok": result.get("ok") is True,
-        "state": _terminal_state_code(terminal_state),
-        "terminal_state": terminal_state,
-        "result_content_type": _string_or_empty(result.get("output_content_type")),
-        "result_base64": _string_or_empty(result.get("output_base64")),
-        "result_json": result.get("output_json"),
-        "elapsed_ms": _non_negative_int(result.get("elapsed_ms")),
-        "admission_receipt": (
-            dict(admission_receipt) if isinstance(admission_receipt, Mapping) else None
-        ),
-        "terminal_receipt": (
-            dict(terminal_receipt) if isinstance(terminal_receipt, Mapping) else None
-        ),
-        "sdk_runtime_result": dict(result),
-    }
-    if result.get("error") is not None:
-        response["error"] = result["error"]
-    return response
-
-
-def _terminal_state_name(value: object) -> str:
-    if isinstance(value, str) and value:
-        return value
-    return "Unspecified"
-
-
-_TERMINAL_STATE_CODES = {
-    "unspecified": 0,
-    "accepted": 1,
-    "admitted": 2,
-    "dispatched": 3,
-    "running": 4,
-    "completed": 5,
-    "failed": 6,
-    "timed_out": 7,
-    "timedout": 7,
-    "cancelled": 8,
-    "canceled": 8,
-}
-
-
-def _terminal_state_code(value: str) -> int:
-    normalized = value.replace("-", "_").lower()
-    return _TERMINAL_STATE_CODES.get(normalized, 0)
+    return dict(result)
 
 
 def _runtime_receipt_dict(receipt: RuntimeReceipt) -> dict[str, object]:
@@ -1552,16 +1505,6 @@ def _optional_string(value: object, field_name: str) -> str:
     if not isinstance(value, str):
         raise _invalid_transport(f"{field_name} must be a string or null")
     return value
-
-
-def _string_or_empty(value: object) -> str:
-    return value if isinstance(value, str) else ""
-
-
-def _non_negative_int(value: object) -> int:
-    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-        return value
-    return 0
 
 
 def _invalid_transport(message: str) -> SDKError:

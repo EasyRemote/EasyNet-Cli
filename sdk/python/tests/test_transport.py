@@ -84,16 +84,19 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
         result = adapter.invoke(complete_draft().to_json_dict())
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["state"], 5)
         self.assertEqual(result["terminal_state"], "Completed")
-        self.assertEqual(result["result_json"], {"ready": True})
-        self.assertEqual(result["result_base64"], "eyJyZWFkeSI6dHJ1ZX0=")
-        self.assertEqual(result["result_content_type"], "application/json")
+        self.assertEqual(result["output_json"], {"ready": True})
+        self.assertEqual(result["output_base64"], "eyJyZWFkeSI6dHJ1ZX0=")
+        self.assertEqual(result["output_content_type"], "application/json")
         self.assertEqual(result["elapsed_ms"], 12)
         self.assertEqual(result["admission_receipt"]["invocation_id"], "inv-runtime-1")
         self.assertEqual(result["terminal_receipt"]["invocation_id"], "inv-runtime-1")
         self.assertIn("authority_proof", result["terminal_receipt"])
-        self.assertEqual(result["sdk_runtime_result"]["terminal_state"], "Completed")
+        self.assertNotIn("state", result)
+        self.assertNotIn("result_json", result)
+        self.assertNotIn("result_base64", result)
+        self.assertNotIn("result_content_type", result)
+        self.assertNotIn("sdk_runtime_result", result)
 
     def test_invocation_result_adapter_context_manager_uses_transport_lifecycle(
         self,
@@ -142,7 +145,8 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["terminal_state"], "Completed")
-        self.assertEqual(result["state"], 5)
+        self.assertIn("output_content_type", result)
+        self.assertNotIn("state", result)
         self.assertEqual(runtime.seen_options, {})
         self.assertEqual(runtime.seen_await_id, 7)
         self.assertEqual(runtime.seen_free_id, 7)
