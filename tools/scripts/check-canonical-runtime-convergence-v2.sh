@@ -10331,6 +10331,10 @@ if "export class RuntimeReceipt" not in types:
     raise SystemExit("node_runtime_receipt_projection:runtime_receipt_declaration_missing")
 for fragment, label in {
     "validateRuntimeReceiptProofFacts": "proof_fact_validator_missing",
+    "validateRuntimeReceiptAuthorityProofHash": "authority_proof_hash_validator_missing",
+    "canonicalRuntimeAuthorityBytes": "authority_binding_projection_missing",
+    "authority_proof_hash_mismatch": "authority_proof_hash_mismatch_missing",
+    "hosted runtime receipt is missing host_attestation_base64": "hosted_signer_attestation_missing",
     "raw.authority_proof": "authority_proof_required_missing",
     "requireRuntimeReceiptParents(raw.parent_receipts)": "parent_receipts_required_missing",
     "canonicalRuntimeReceiptState": "lifecycle_state_machine_missing",
@@ -10356,6 +10360,9 @@ for forbidden, label in {
 for required_test in (
     "runtime receipt proof facts are mandatory",
     "canonicalRuntimeReceipt",
+    "authorityBindingProofHashSelf",
+    "authority_proof_hash_mismatch",
+    "hosted runtime receipt is missing host_attestation_base64",
     "delete missingProof.authority_proof",
     "receipt_type",
     "retired receipt alias is not accepted",

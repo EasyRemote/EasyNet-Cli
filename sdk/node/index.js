@@ -1902,7 +1902,7 @@ function validatedTerminalReceipt(value, terminalState, ok) {
 
 function validateRuntimeReceiptProofFacts(raw) {
   requireRuntimeReceiptAgentBinding(raw.caller_binding, "caller_binding");
-  requireRuntimeReceiptAgentBinding(raw.callee_binding, "callee_binding");
+  const calleeBinding = requireRuntimeReceiptAgentBinding(raw.callee_binding, "callee_binding");
   requireRuntimeReceiptAgentBinding(raw.subject_binding, "subject_binding");
   validateRuntimeBase64(
     requiredRuntimeString(raw.invocation_nonce_base64, "invocation_nonce_base64"),
@@ -1913,7 +1913,8 @@ function validateRuntimeReceiptProofFacts(raw) {
   const causalKind = requiredRuntimeString(raw.causal_binding_kind, "causal_binding_kind");
   validateRuntimeReceiptCausalBinding(causalKind, objectValue(raw.causal_binding, "causal_binding"));
   requireRuntimeReceiptSignature(raw.callee_signature, "callee_signature");
-  requireRuntimeReceiptAgentBinding(raw.signer_binding, "signer_binding");
+  const signerBinding = requireRuntimeReceiptAgentBinding(raw.signer_binding, "signer_binding");
+  validateRuntimeReceiptSigningModel(calleeBinding, signerBinding, stringValue(raw.host_attestation_base64, "host_attestation_base64", true));
   const authorityKind = requiredRuntimeString(raw.authority_binding_kind, "authority_binding_kind");
   const authorityBinding = requireRuntimeReceiptAuthorityBinding(raw.authority_binding, "authority_binding");
   if (authorityBinding.kind !== authorityKind) {
@@ -1935,18 +1936,46 @@ function validateRuntimeReceiptProofFacts(raw) {
   if (stableRuntimeObjectJSON(proofBinding) !== stableRuntimeObjectJSON(authorityBinding)) {
     throw invalidRuntime("runtime receipt authority_proof binding does not match authority_binding");
   }
-  validateRuntimeBase64(
+  const proofPayload = validateRuntimeBase64(
     stringValue(proof.proof_payload_base64, "authority_proof.proof_payload_base64", true),
     "authority_proof.proof_payload_base64",
     null,
     true,
   );
-  runtimeReceiptHash(proof.proof_hash_hex, "authority_proof.proof_hash_hex", false);
-  requireRuntimeReceiptAgentBinding(proof.issuer, "authority_proof.issuer");
-  requireRuntimeReceiptSignature(proof.signature, "authority_proof.signature");
+  const proofHash = runtimeReceiptHash(proof.proof_hash_hex, "authority_proof.proof_hash_hex", false);
+  validateRuntimeReceiptAuthorityProofHash(proofPayload, proofBinding, proofHash);
+  const issuer = requireRuntimeReceiptAgentBinding(proof.issuer, "authority_proof.issuer");
+  requireRuntimeReceiptSameIdentity(issuer, calleeBinding);
+  if (proof.signature !== undefined && proof.signature !== null) {
+    requireRuntimeReceiptSignature(proof.signature, "authority_proof.signature");
+  }
+  requiredRuntimeString(proof.admission_hook, "authority_proof.admission_hook");
   runtimeReceiptHash(raw.input_hash_hex, "input_hash_hex", false);
   runtimeReceiptHash(raw.output_hash_hex, "output_hash_hex", false);
   requireRuntimeReceiptParents(raw.parent_receipts);
+}
+
+function validateRuntimeReceiptSigningModel(calleeBinding, signerBinding, hostAttestationBase64) {
+  if (signerBinding.ura === calleeBinding.ura) {
+    if (hostAttestationBase64 !== "") {
+      throw invalidRuntime("self-signed runtime receipt must not carry host_attestation_base64");
+    }
+    return;
+  }
+  if (hostAttestationBase64 === "") {
+    throw invalidRuntime("hosted runtime receipt is missing host_attestation_base64");
+  }
+  validateRuntimeBase64(hostAttestationBase64, "host_attestation_base64", 64, false);
+}
+
+function validateRuntimeReceiptAuthorityProofHash(proofPayload, proofBinding, proofHash) {
+  const expected =
+    proofPayload.length > 0
+      ? sha256Bytes(proofPayload)
+      : sha256Bytes(canonicalRuntimeAuthorityBytes(proofBinding, "authority_proof.binding"));
+  if (expected.equals(Buffer.alloc(32)) || proofHash.equals(Buffer.alloc(32)) || !proofHash.equals(expected)) {
+    throw invalidRuntime("runtime receipt proof facts are not canonical: authority_proof_hash_mismatch");
+  }
 }
 
 function canonicalRuntimeReceiptState(value) {
@@ -2061,23 +2090,70 @@ function requireRuntimeReceiptParents(value) {
 
 function requireRuntimeReceiptAgentBinding(value, field) {
   const binding = objectValue(value, field);
-  requiredRuntimeString(binding.ura, `${field}.ura`);
-  requiredRuntimeString(binding.profile, `${field}.profile`);
+  const out = {
+    ura: requiredRuntimeText(binding.ura, `${field}.ura`),
+    profile: requiredRuntimeText(binding.profile, `${field}.profile`),
+  };
+  validateRuntimeReceiptURAProfile(out.profile, `${field}.profile`);
+  return out;
 }
 
 function requireRuntimeReceiptEntityRef(value, field) {
   const ref = objectValue(value, field);
-  if (!Number.isInteger(ref.kind) || ref.kind < 1 || ref.kind > 4) {
+  if (!Number.isInteger(ref.kind) || ref.kind < 1 || ref.kind > 7) {
     throw invalidRuntime(`${field}.kind is not canonical`);
   }
-  requiredRuntimeString(ref.ura, `${field}.ura`);
-  requiredRuntimeString(ref.profile, `${field}.profile`);
+  requiredRuntimeText(ref.ura, `${field}.ura`);
+  validateRuntimeReceiptURAProfile(requiredRuntimeText(ref.profile, `${field}.profile`), `${field}.profile`);
 }
 
 function requireRuntimeReceiptAuthorityBinding(value, field) {
   const binding = objectValue(value, field);
-  requiredRuntimeString(binding.kind, `${field}.kind`);
-  return binding;
+  const kind = requiredRuntimeText(binding.kind, `${field}.kind`);
+  if (kind === "self") {
+    return { kind, principal_ura: requiredRuntimeText(binding.principal_ura, `${field}.principal_ura`) };
+  }
+  if (kind === "delegation") {
+    return {
+      kind,
+      issuer_ura: requiredRuntimeText(binding.issuer_ura, `${field}.issuer_ura`),
+      subject_ura: requiredRuntimeText(binding.subject_ura, `${field}.subject_ura`),
+      caller_ura: requiredRuntimeText(binding.caller_ura, `${field}.caller_ura`),
+      audience: requiredRuntimeText(binding.audience, `${field}.audience`),
+      scopes: requiredRuntimeStringList(binding.scopes, `${field}.scopes`),
+      issued_at_ms: requiredRuntimeNonNegativeInteger(binding.issued_at_ms, `${field}.issued_at_ms`),
+      expires_at_ms: requiredRuntimeNonNegativeInteger(binding.expires_at_ms, `${field}.expires_at_ms`),
+      signature_base64: requiredRuntimeBase64String(binding.signature_base64, `${field}.signature_base64`, 64),
+    };
+  }
+  if (kind === "capability") {
+    return { kind, capability_ura: requiredRuntimeText(binding.capability_ura, `${field}.capability_ura`) };
+  }
+  if (kind === "policy") {
+    return { kind, policy_ura: requiredRuntimeText(binding.policy_ura, `${field}.policy_ura`) };
+  }
+  if (kind === "session") {
+    return {
+      kind,
+      backend_ura: requiredRuntimeText(binding.backend_ura, `${field}.backend_ura`),
+      user_ura: requiredRuntimeText(binding.user_ura, `${field}.user_ura`),
+      session_id: requiredRuntimeText(binding.session_id, `${field}.session_id`),
+      scopes: requiredRuntimeStringList(binding.scopes, `${field}.scopes`),
+      audiences: requiredRuntimeStringList(binding.audiences, `${field}.audiences`),
+      issued_at_ms: requiredRuntimeNonNegativeInteger(binding.issued_at_ms, `${field}.issued_at_ms`),
+      expires_at_ms: requiredRuntimeNonNegativeInteger(binding.expires_at_ms, `${field}.expires_at_ms`),
+      signature_base64: requiredRuntimeBase64String(binding.signature_base64, `${field}.signature_base64`, 64),
+    };
+  }
+  if (kind === "bootstrap") {
+    return {
+      kind,
+      principal_ura: requiredRuntimeText(binding.principal_ura, `${field}.principal_ura`),
+      realm: requiredRuntimeText(binding.realm, `${field}.realm`),
+      ability: requiredRuntimeText(binding.ability, `${field}.ability`),
+    };
+  }
+  throw invalidRuntime(`${field}.kind is not canonical: ${kind}`);
 }
 
 function requireRuntimeReceiptSignature(value, field) {
@@ -2095,6 +2171,104 @@ function runtimeReceiptHash(value, field, allowZero) {
   if (!allowZero && /^0{64}$/i.test(text)) {
     throw invalidRuntime(`${field} must not be all-zero`);
   }
+  return Buffer.from(text, "hex");
+}
+
+function canonicalRuntimeAuthorityBytes(binding, field) {
+  const chunks = [];
+  if (binding.kind === "self") {
+    chunks.push(Buffer.from([0x01]), runtimeLengthPrefixedText(binding.principal_ura));
+  } else if (binding.kind === "delegation") {
+    chunks.push(
+      Buffer.from([0x02]),
+      runtimeLengthPrefixedText(binding.issuer_ura),
+      runtimeLengthPrefixedText(binding.subject_ura),
+      runtimeLengthPrefixedText(binding.caller_ura),
+      runtimeLengthPrefixedText(binding.audience),
+      runtimeU32(binding.scopes.length),
+      ...binding.scopes.map(runtimeLengthPrefixedText),
+      runtimeI64(binding.issued_at_ms),
+      runtimeI64(binding.expires_at_ms),
+      runtimeLengthPrefixedBytes(Buffer.from(binding.signature_base64, "base64")),
+    );
+  } else if (binding.kind === "capability") {
+    chunks.push(Buffer.from([0x03]), runtimeLengthPrefixedText(binding.capability_ura));
+  } else if (binding.kind === "policy") {
+    chunks.push(Buffer.from([0x04]), runtimeLengthPrefixedText(binding.policy_ura));
+  } else if (binding.kind === "session") {
+    chunks.push(
+      Buffer.from([0x05]),
+      runtimeLengthPrefixedText(binding.backend_ura),
+      runtimeLengthPrefixedText(binding.user_ura),
+      runtimeLengthPrefixedText(binding.session_id),
+      runtimeU32(binding.scopes.length),
+      ...binding.scopes.map(runtimeLengthPrefixedText),
+      runtimeU32(binding.audiences.length),
+      ...binding.audiences.map(runtimeLengthPrefixedText),
+      runtimeI64(binding.issued_at_ms),
+      runtimeI64(binding.expires_at_ms),
+      runtimeLengthPrefixedBytes(Buffer.from(binding.signature_base64, "base64")),
+    );
+  } else if (binding.kind === "bootstrap") {
+    chunks.push(
+      Buffer.from([0x06]),
+      runtimeLengthPrefixedText(binding.principal_ura),
+      runtimeLengthPrefixedText(binding.realm),
+      runtimeLengthPrefixedText(binding.ability),
+    );
+  } else {
+    throw invalidRuntime(`${field}.kind is not canonical: ${binding.kind}`);
+  }
+  return Buffer.concat(chunks);
+}
+
+function runtimeLengthPrefixedText(value) {
+  return runtimeLengthPrefixedBytes(Buffer.from(value, "utf8"));
+}
+
+function runtimeLengthPrefixedBytes(value) {
+  return Buffer.concat([runtimeU32(value.length), value]);
+}
+
+function runtimeU32(value) {
+  const out = Buffer.alloc(4);
+  out.writeUInt32BE(value);
+  return out;
+}
+
+function runtimeI64(value) {
+  const out = Buffer.alloc(8);
+  out.writeBigUInt64BE(BigInt(value));
+  return out;
+}
+
+function sha256Bytes(value) {
+  return createHash("sha256").update(value).digest();
+}
+
+function requireRuntimeReceiptSameIdentity(left, right) {
+  if (left.ura !== right.ura || left.profile !== right.profile) {
+    throw invalidRuntime("runtime receipt authority_proof issuer does not match callee_binding");
+  }
+}
+
+function validateRuntimeReceiptURAProfile(profile, field) {
+  if (!["axon-strict-v2", "axon-legacy-v1", "opaque"].includes(profile)) {
+    throw invalidRuntime(`${field} is not canonical`);
+  }
+}
+
+function requiredRuntimeStringList(value, field) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw invalidRuntime(`${field} must be a non-empty array`);
+  }
+  return value.map((item, index) => requiredRuntimeText(item, `${field}[${index}]`));
+}
+
+function requiredRuntimeBase64String(value, field, expectedLength) {
+  const text = requiredRuntimeText(value, field);
+  validateRuntimeBase64(text, field, expectedLength, false);
+  return text;
 }
 
 function stableRuntimeObjectJSON(value) {
@@ -2136,11 +2310,25 @@ function optionalRuntimeNonNegativeInteger(value, field) {
   return value;
 }
 
+function requiredRuntimeNonNegativeInteger(value, field) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw invalidRuntime(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
 function requiredRuntimeString(value, field) {
   if (typeof value !== "string" || value === "") {
     throw invalidRuntime(`${field} must be a non-empty string`);
   }
   return value;
+}
+
+function requiredRuntimeText(value, field) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw invalidRuntime(`${field} must be a non-empty string`);
+  }
+  return value.trim();
 }
 
 function optionalRuntimeString(value, field) {
@@ -2270,6 +2458,7 @@ function validateRuntimeBase64(value, field, expectedLength = null, allowEmpty =
   if (expectedLength !== null && raw.length !== expectedLength) {
     throw invalidRuntime(`${field} must decode to exactly ${expectedLength} bytes`);
   }
+  return raw;
 }
 
 function validateRuntimeHex(value, field, expectedLength = null) {

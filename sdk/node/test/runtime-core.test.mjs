@@ -223,6 +223,28 @@ const canonicalRuntimeReceipt = (invocationId, receiptType, state, index) => {
   };
 };
 
+const mutableAuthorityProof = (receipt) => {
+  const proof = { ...receipt.authority_proof, binding: { ...receipt.authority_proof.binding } };
+  receipt.authority_proof = proof;
+  return proof;
+};
+
+const authorityBindingProofHashSelf = (principalURA) => {
+  const principal = Buffer.from(principalURA, "utf8");
+  const canonical = Buffer.concat([
+    Buffer.from([0x01]),
+    runtimeU32(principal.length),
+    principal,
+  ]);
+  return createHash("sha256").update(canonical).digest("hex");
+};
+
+const runtimeU32 = (value) => {
+  const out = Buffer.alloc(4);
+  out.writeUInt32BE(value);
+  return out;
+};
+
 test("runtime package exports exactly the generic public surface", async () => {
   assert.deepEqual(Object.keys(sdk).sort(), expectedExports);
 
@@ -455,6 +477,63 @@ test("runtime receipt proof facts are mandatory", () => {
       error instanceof sdk.SDKError
       && error.code === sdk.ErrorCode.INVALID_ARGUMENT
       && error.message.includes("receipt_type"),
+  );
+
+  const mismatchedProofHash = { ...complete };
+  mutableAuthorityProof(mismatchedProofHash).proof_hash_hex = "ff".repeat(32);
+  assert.throws(
+    () => sdk.RuntimeReceipt.fromObject(mismatchedProofHash),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("authority_proof_hash_mismatch"),
+  );
+
+  const bindingHashProof = { ...complete };
+  const proof = mutableAuthorityProof(bindingHashProof);
+  proof.proof_payload_base64 = "";
+  proof.proof_hash_hex = authorityBindingProofHashSelf(callee);
+  delete proof.signature;
+  assert.equal(sdk.RuntimeReceipt.fromObject(bindingHashProof).lifecycleState(), "COMPLETED");
+
+  const wrongIssuer = { ...complete };
+  mutableAuthorityProof(wrongIssuer).issuer = {
+    ura: "easynet:///r/example/device/other",
+    profile: "axon-strict-v2",
+  };
+  assert.throws(
+    () => sdk.RuntimeReceipt.fromObject(wrongIssuer),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("authority_proof issuer does not match callee_binding"),
+  );
+
+  const hostedSignerWithoutAttestation = {
+    ...complete,
+    signer_binding: {
+      ura: "easynet:///r/example/device/runtime-host",
+      profile: "axon-strict-v2",
+    },
+  };
+  assert.throws(
+    () => sdk.RuntimeReceipt.fromObject(hostedSignerWithoutAttestation),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("hosted runtime receipt is missing host_attestation_base64"),
+  );
+
+  const selfSignerWithAttestation = {
+    ...complete,
+    host_attestation_base64: Buffer.alloc(64, 0x73).toString("base64"),
+  };
+  assert.throws(
+    () => sdk.RuntimeReceipt.fromObject(selfSignerWithAttestation),
+    (error) =>
+      error instanceof sdk.SDKError
+      && error.code === sdk.ErrorCode.INVALID_ARGUMENT
+      && error.message.includes("self-signed runtime receipt must not carry host_attestation_base64"),
   );
 });
 
