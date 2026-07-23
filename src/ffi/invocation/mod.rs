@@ -2151,7 +2151,8 @@ impl RemoteDescriptorCatalogProbe {
                     "prepare remote descriptor catalog probe target: {error}"
                 ))
             })?;
-        let subject_ura = target_owned_descriptor_catalog_subject_ura(callee_ura, target.as_str())?;
+        let subject_ura =
+            DescriptorCatalogProbeSubject::from_callee(callee_ura, target.as_str())?.into_ura();
         Ok(Self {
             target,
             caller_ura,
@@ -2192,21 +2193,50 @@ impl RemoteDescriptorCatalogProbe {
 }
 
 #[cfg(feature = "axon-pb")]
-fn target_owned_descriptor_catalog_subject_ura(
-    callee_ura: &str,
-    ability_ura: &str,
-) -> Result<String, DescriptorResolutionError> {
-    let parsed = crate::core::ura::parse_ura(callee_ura).map_err(|error| {
-        DescriptorResolutionError::invalid_request(format!(
-            "remote descriptor callee URA is invalid: {error}"
-        ))
-    })?;
-    match parsed.kind {
-        crate::core::ura::URAKind::Device => Ok(callee_ura.to_string()),
-        crate::core::ura::URAKind::Authority => Ok(ability_ura.to_string()),
-        other => Err(DescriptorResolutionError::invalid_request(format!(
-            "target-owned descriptor catalogue requires Device or Hub callee, got {other}"
-        ))),
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DescriptorCatalogProbeSubject {
+    DeviceOwner { device_ura: String },
+    AuthorityOwner { meta_ability_ura: String },
+}
+
+#[cfg(feature = "axon-pb")]
+impl DescriptorCatalogProbeSubject {
+    fn from_callee(
+        callee_ura: &str,
+        meta_ability_ura: &str,
+    ) -> Result<Self, DescriptorResolutionError> {
+        let callee_ura = callee_ura.trim();
+        let parsed = crate::core::ura::parse_ura(callee_ura).map_err(|error| {
+            DescriptorResolutionError::invalid_request(format!(
+                "remote descriptor callee URA is invalid: {error}"
+            ))
+        })?;
+        match parsed.kind {
+            crate::core::ura::URAKind::Device => Ok(Self::DeviceOwner {
+                device_ura: callee_ura.to_string(),
+            }),
+            crate::core::ura::URAKind::Authority => {
+                let meta_ability_ura = meta_ability_ura.trim();
+                crate::core::ura::parse_ura(meta_ability_ura).map_err(|error| {
+                    DescriptorResolutionError::invalid_request(format!(
+                        "remote descriptor meta ability URA is invalid: {error}"
+                    ))
+                })?;
+                Ok(Self::AuthorityOwner {
+                    meta_ability_ura: meta_ability_ura.to_string(),
+                })
+            }
+            other => Err(DescriptorResolutionError::invalid_request(format!(
+                "descriptor catalog probe subject requires Device or Hub callee, got {other}"
+            ))),
+        }
+    }
+
+    fn into_ura(self) -> String {
+        match self {
+            Self::DeviceOwner { device_ura } => device_ura,
+            Self::AuthorityOwner { meta_ability_ura } => meta_ability_ura,
+        }
     }
 }
 
@@ -9631,6 +9661,46 @@ mod tests {
         assert!(
             error.contains("missing descriptor_ref before dedupe"),
             "unexpected descriptor catalog dedupe error: {error}"
+        );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn descriptor_catalog_probe_subject_is_explicit_owner_state() {
+        let device_subject = DescriptorCatalogProbeSubject::from_callee(
+            "easynet:///r/localhost/device/dev-a",
+            "easynet:///r/localhost/ability/device.dev-a.meta.list_abilities",
+        )
+        .expect("device callee subject")
+        .into_ura();
+        assert_eq!(device_subject, "easynet:///r/localhost/device/dev-a");
+
+        let hub_subject = DescriptorCatalogProbeSubject::from_callee(
+            "easynet:///r/localhost/authority",
+            "easynet:///r/localhost/ability/authority.meta.list_abilities",
+        )
+        .expect("authority callee subject")
+        .into_ura();
+        assert_eq!(
+            hub_subject,
+            "easynet:///r/localhost/ability/authority.meta.list_abilities"
+        );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn descriptor_catalog_probe_subject_rejects_non_owner_callee_kind() {
+        let error = DescriptorCatalogProbeSubject::from_callee(
+            "easynet:///r/localhost/user/alice",
+            "easynet:///r/localhost/ability/authority.meta.list_abilities",
+        )
+        .expect_err("user callees are not descriptor catalog owners");
+
+        assert!(
+            error
+                .to_string()
+                .contains("descriptor catalog probe subject requires Device or Hub callee"),
+            "unexpected descriptor probe subject error: {error}"
         );
     }
 

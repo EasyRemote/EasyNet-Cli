@@ -3092,7 +3092,7 @@ if "invoke_remote_target)" in resolve_body or ".and_then(remote_invoke::invoke_r
     raise SystemExit("ffi_descriptor_runtime_owner:remote_probe_implicit_invoke")
 
 probe = re.search(
-    r"struct RemoteDescriptorCatalogProbe \{(?P<struct>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nimpl RemoteDescriptorCatalogProbe \{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nfn target_owned_descriptor_catalog_subject_ura",
+    r"struct RemoteDescriptorCatalogProbe \{(?P<struct>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nimpl RemoteDescriptorCatalogProbe \{(?P<body>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\n#\[derive\(Debug, Clone, PartialEq, Eq\)\]\nenum DescriptorCatalogProbeSubject",
     text,
     re.S,
 )
@@ -3115,6 +3115,33 @@ for required in (
 ):
     if required not in probe_body:
         raise SystemExit(f"ffi_descriptor_runtime_owner:remote_probe_state_missing:{required}")
+
+subject_state = re.search(
+    r"enum DescriptorCatalogProbeSubject \{(?P<enum>.*?)\n\}\n\n#\[cfg\(feature = \"axon-pb\"\)\]\nimpl DescriptorCatalogProbeSubject \{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if subject_state is None:
+    raise SystemExit("ffi_descriptor_runtime_owner:probe_subject_state_missing")
+subject_enum = subject_state.group("enum")
+subject_body = subject_state.group("body")
+for required in (
+    "DeviceOwner { device_ura: String }",
+    "AuthorityOwner { meta_ability_ura: String }",
+):
+    if required not in subject_enum:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:probe_subject_variant_missing:{required}")
+for required in (
+    "fn from_callee(",
+    "URAKind::Device",
+    "URAKind::Authority",
+    "parse_ura(meta_ability_ura)",
+    "fn into_ura(self) -> String",
+):
+    if required not in subject_body:
+        raise SystemExit(f"ffi_descriptor_runtime_owner:probe_subject_state_missing:{required}")
+if "target_owned_descriptor_catalog_subject_ura" in production:
+    raise SystemExit("ffi_descriptor_runtime_owner:retired_target_owned_subject_helper")
 
 if "fn descriptor_resolution_error_projection(" in production:
     raise SystemExit("ffi_descriptor_runtime_owner:retired_message_projection_classifier")
@@ -3154,6 +3181,8 @@ if "format!(\"runtime_resolve_descriptor_ref: {error:#}\")" in entry:
     raise SystemExit("ffi_descriptor_runtime_owner:ffi_entry_formats_error_before_projection")
 
 for required_test in (
+    "descriptor_catalog_probe_subject_is_explicit_owner_state",
+    "descriptor_catalog_probe_subject_rejects_non_owner_callee_kind",
     "runtime_descriptor_remote_probe_requires_runtime_owner_identity",
     "runtime_descriptor_remote_probe_requires_caller_signer_before_daemon_io",
     "descriptor_resolution_errors_project_canonical_runtime_codes",
