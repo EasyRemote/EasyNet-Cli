@@ -482,7 +482,8 @@ class RuntimeInvocationTransportTests(unittest.TestCase):
         adapter.close()
 
         self.assertTrue(event["terminal"])
-        self.assertIn("content_type", event)
+        self.assertIn("payload_content_type", event)
+        self.assertNotIn("content_type", event)
         self.assertEqual(ack["sequence"], 1)
         self.assertEqual(runtime.close_calls, 1)
 
