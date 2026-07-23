@@ -230,7 +230,7 @@ fn verify_invocation_binding(
             return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
         }
     }
-    if is_request_scoped_one_time_proof(proof) && !proof_binds_invocation_identity(proof) {
+    if request_scoped_one_time_authority_proof(proof) && !proof_binds_invocation_identity(proof) {
         return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
     }
     Ok(())
@@ -276,7 +276,7 @@ fn normalized_followup_abilities(abilities: &[String]) -> Vec<String> {
     abilities
 }
 
-fn is_request_scoped_one_time_proof(proof: &AuthorityProof) -> bool {
+pub(crate) fn request_scoped_one_time_authority_proof(proof: &AuthorityProof) -> bool {
     proof.permission_request_id.is_some() && proof.grant_id.is_none() && proof.session_id.is_none()
 }
 

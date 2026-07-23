@@ -53,8 +53,8 @@ use crate::daemon::invocation::admission::authority_metadata::{
     SESSION_AUTHORITY_METADATA_KEY,
 };
 use crate::daemon::invocation::admission::authority_proof::{
-    AuthorityProof, AuthorityProofDenyReason, AuthorityProofIssuerResolver,
-    AuthorityProofVerificationContext, AuthorityProofVerifier,
+    request_scoped_one_time_authority_proof, AuthorityProof, AuthorityProofDenyReason,
+    AuthorityProofIssuerResolver, AuthorityProofVerificationContext, AuthorityProofVerifier,
 };
 use crate::daemon::invocation::admission::bootstrap_authority::{
     BootstrapAuthorityDecision, BootstrapAuthorityVerifier,
@@ -1853,10 +1853,6 @@ fn authority_proof_from_metadata(
 
 fn authority_proof_status(reason: AuthorityProofDenyReason) -> Status {
     Status::permission_denied(reason.as_str().to_string())
-}
-
-fn request_scoped_one_time_authority_proof(proof: &AuthorityProof) -> bool {
-    proof.permission_request_id.is_some() && proof.grant_id.is_none() && proof.session_id.is_none()
 }
 
 fn invocation_nonce_for_proof(envelope: &Envelope) -> Option<String> {

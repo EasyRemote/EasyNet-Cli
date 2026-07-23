@@ -2165,14 +2165,17 @@ PY
 check_authority_proof_session_fact_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local proof="$cli_root/src/daemon/invocation/admission/authority_proof.rs"
+  local facade="$cli_root/src/daemon/invocation/admission/admission_facade.rs"
   [[ -f "$proof" ]] || return 0
 
-  "$PYTHON_BIN" - "$proof" <<'PY'
+  "$PYTHON_BIN" - "$proof" "$facade" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
+facade_path = Path(sys.argv[2])
+facade = facade_path.read_text(encoding="utf-8") if facade_path.exists() else ""
 
 for required in (
     "fn verify_session_binding_facts(",
@@ -2182,6 +2185,8 @@ for required in (
     "verifier_rejects_session_proof_without_session_owner_fact",
     "proof.session_owner_user_id = None",
     "session proof must bind session owner",
+    "pub(crate) fn request_scoped_one_time_authority_proof(proof: &AuthorityProof) -> bool",
+    "request_scoped_one_time_authority_proof(proof) && !proof_binds_invocation_identity(proof)",
 ):
     if required not in text:
         raise SystemExit(f"authority_proof_session_fact:missing:{required}")
@@ -2216,6 +2221,22 @@ legacy_inline = (
 )
 if legacy_inline in binding.group("body"):
     raise SystemExit("authority_proof_session_fact:legacy_optional_inline_check")
+
+if "request_scoped_one_time_authority_proof" not in facade:
+    raise SystemExit("authority_proof_scope_classifier:facade_missing_domain_predicate")
+facade_funcs = re.findall(
+    r"fn\s+(?P<name>\w*request_scoped\w*authority_proof\w*)\([^)]*\)\s*->\s*bool\s*\{(?P<body>.*?)\n\}",
+    facade,
+    re.S,
+)
+if facade_funcs:
+    raise SystemExit(
+        "authority_proof_scope_classifier:facade_owns_duplicate_predicate:"
+        + ",".join(name for name, _ in facade_funcs)
+    )
+facade_duplicate = "proof.permission_request_id.is_some() && proof.grant_id.is_none() && proof.session_id.is_none()"
+if facade_duplicate in facade:
+    raise SystemExit("authority_proof_scope_classifier:facade_duplicate_condition")
 PY
 }
 
@@ -13931,6 +13952,59 @@ mod tests {
 EOF
   if ( CLI_ROOT="$tmp/authority-proof-session-fact-legacy"; check_authority_proof_session_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected authority proof session fact compatibility gate to fail"
+  fi
+  mkdir -p "$tmp/authority-proof-scope-classifier-legacy/src/daemon/invocation/admission"
+  cat >"$tmp/authority-proof-scope-classifier-legacy/src/daemon/invocation/admission/authority_proof.rs" <<'EOF'
+pub struct AuthorityProof {
+    pub permission_request_id: Option<String>,
+    pub grant_id: Option<String>,
+    pub session_id: Option<String>,
+    pub session_owner_user_id: Option<String>,
+}
+pub struct AuthorityProofVerificationContext<'a> {
+    pub session_owner_user_id: Option<&'a str>,
+}
+fn verify_invocation_binding(
+    proof: &AuthorityProof,
+    context: &AuthorityProofVerificationContext<'_>,
+) -> Result<(), AuthorityProofDenyReason> {
+    verify_session_binding_facts(proof, context)?;
+    if request_scoped_one_time_authority_proof(proof) && !proof_binds_invocation_identity(proof) {
+        return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
+    Ok(())
+}
+fn verify_session_binding_facts(
+    proof: &AuthorityProof,
+    context: &AuthorityProofVerificationContext<'_>,
+) -> Result<(), AuthorityProofDenyReason> {
+    if proof.session_id.is_some() {
+        let proof_owner = proof.session_owner_user_id.as_deref().map(str::trim).filter(|owner| !owner.is_empty()).ok_or(AuthorityProofDenyReason::AuthorityProofMismatch)?;
+        let context_owner = context.session_owner_user_id.map(str::trim).filter(|owner| !owner.is_empty()).ok_or(AuthorityProofDenyReason::AuthorityProofMismatch)?;
+    }
+    Ok(())
+}
+pub(crate) fn request_scoped_one_time_authority_proof(proof: &AuthorityProof) -> bool {
+    proof.permission_request_id.is_some() && proof.grant_id.is_none() && proof.session_id.is_none()
+}
+fn normalized_followup_abilities() {}
+fn proof_binds_invocation_identity(proof: &AuthorityProof) -> bool { true }
+#[cfg(test)]
+mod tests {
+    fn verifier_rejects_session_proof_without_session_owner_fact() {
+        proof.session_owner_user_id = None;
+        let _ = "session proof must bind session owner";
+    }
+}
+EOF
+  cat >"$tmp/authority-proof-scope-classifier-legacy/src/daemon/invocation/admission/admission_facade.rs" <<'EOF'
+use crate::daemon::invocation::admission::authority_proof::request_scoped_one_time_authority_proof;
+fn request_scoped_one_time_authority_proof(proof: &AuthorityProof) -> bool {
+    proof.permission_request_id.is_some() && proof.grant_id.is_none() && proof.session_id.is_none()
+}
+EOF
+  if ( CLI_ROOT="$tmp/authority-proof-scope-classifier-legacy"; check_authority_proof_session_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected authority proof scope classifier duplication gate to fail"
   fi
   mkdir -p "$tmp/resources-schema-legacy/src/daemon/persistence"
   cat >"$tmp/resources-schema-legacy/src/daemon/persistence/resources.rs" <<'EOF'
