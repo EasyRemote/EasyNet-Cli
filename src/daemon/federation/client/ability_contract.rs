@@ -41,12 +41,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// RFC-002 §5.1 federation.resolve_key argument shape.
-#[derive(Debug, Clone, Serialize)]
-pub struct ResolveKeyArgs {
-    pub agent_ura: String,
-}
-
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct ResolveKeyReceipt {
     #[serde(default)]

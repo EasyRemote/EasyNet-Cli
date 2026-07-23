@@ -158,6 +158,30 @@ pub struct ResolveKeyRequest {
     pub presented_pubkey_hex: Option<String>,
 }
 
+impl ResolveKeyRequest {
+    #[must_use]
+    pub fn new(agent_ura: impl Into<String>) -> Self {
+        Self {
+            agent_ura: agent_ura.into(),
+            presented_pubkey_b64: None,
+            presented_pubkey_hex: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_presented_pubkey_b64(mut self, presented_pubkey_b64: impl Into<String>) -> Self {
+        let presented_pubkey_b64 = presented_pubkey_b64.into().trim().to_string();
+        if !presented_pubkey_b64.is_empty() {
+            self.presented_pubkey_b64 = Some(presented_pubkey_b64);
+        }
+        self
+    }
+
+    pub fn to_arguments_bytes(&self) -> serde_json::Result<Vec<u8>> {
+        serde_json::to_vec(self)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResolveKeyResponse {
     pub public_key_b64: String,
@@ -183,6 +207,38 @@ mod tests {
             status: "active".into(),
             ability_count: 3,
         }
+    }
+
+    #[test]
+    fn resolve_key_request_encodes_absent_presented_pubkey_as_absent_field() {
+        let request =
+            ResolveKeyRequest::new("easynet:///r/acme/user/alice").with_presented_pubkey_b64("   ");
+        let value: serde_json::Value =
+            serde_json::from_slice(&request.to_arguments_bytes().expect("encode")).expect("decode");
+
+        assert_eq!(value["agent_ura"], "easynet:///r/acme/user/alice");
+        assert!(
+            value.get("presented_pubkey_b64").is_none(),
+            "blank presented key must not be serialized as compatibility data: {value}"
+        );
+        assert!(
+            value.get("presented_pubkey_hex").is_none(),
+            "hex pin is inbound-only unless explicitly supplied by a deserialized caller: {value}"
+        );
+    }
+
+    #[test]
+    fn resolve_key_request_encodes_presented_pubkey_pin() {
+        let request = ResolveKeyRequest::new("easynet:///r/acme/user/alice")
+            .with_presented_pubkey_b64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+        let value: serde_json::Value =
+            serde_json::from_slice(&request.to_arguments_bytes().expect("encode")).expect("decode");
+
+        assert_eq!(value["agent_ura"], "easynet:///r/acme/user/alice");
+        assert_eq!(
+            value["presented_pubkey_b64"],
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        );
     }
 
     #[test]

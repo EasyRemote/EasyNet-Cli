@@ -622,6 +622,44 @@ check_core_ura_realm_projection_contract() {
   fi
 }
 
+check_resolve_key_request_dto_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local wire="$cli_root/src/daemon/federation/wire_contract.rs"
+  local resolver="$cli_root/src/daemon/invocation/admission/federated_key_resolver.rs"
+  local client_contract="$cli_root/src/daemon/federation/client/ability_contract.rs"
+  local join="$cli_root/src/cli/commands/join.rs"
+
+  [[ -f "$wire" ]] || fail "federation wire contract source is missing: ${wire#$cli_root/}"
+  [[ -f "$resolver" ]] || fail "federated key resolver source is missing: ${resolver#$cli_root/}"
+  [[ -f "$client_contract" ]] || fail "federation client ability contract source is missing: ${client_contract#$cli_root/}"
+  [[ -f "$join" ]] || fail "join command source is missing: ${join#$cli_root/}"
+
+  if ! rg -q 'impl ResolveKeyRequest' "$wire"; then
+    fail "ResolveKeyRequest must own request construction and encoding"
+  fi
+  if ! rg -q 'pub fn new\(agent_ura: impl Into<String>\) -> Self' "$wire"; then
+    fail "ResolveKeyRequest must expose a canonical constructor"
+  fi
+  if ! rg -q 'pub fn to_arguments_bytes\(&self\) -> serde_json::Result<Vec<u8>>' "$wire"; then
+    fail "ResolveKeyRequest must expose deterministic argument encoding"
+  fi
+  if rg -n 'struct\s+ResolveKeyArgs|pub struct ResolveKeyArgs' "$client_contract"; then
+    fail "federation client contract preserves duplicate ResolveKeyArgs DTO"
+  fi
+  if rg -n 'serde_json::json!\s*\(\s*\{\s*"agent_ura"\s*:' "$resolver"; then
+    fail "federated key resolver must not hand-write resolve_key request JSON"
+  fi
+  if rg -n 'presented_pubkey_b64"\]\s*=|insert\("presented_pubkey_b64"' "$resolver"; then
+    fail "federated key resolver must not mutate resolve_key presented-key JSON fields"
+  fi
+  if ! rg -q 'ResolveKeyRequest::new\(agent_ura\)' "$resolver"; then
+    fail "federated key resolver must construct outbound requests through ResolveKeyRequest"
+  fi
+  if ! rg -q 'ResolveKeyRequest::new\(target\.hub_ura\.clone\(\)\)' "$join"; then
+    fail "join command must construct resolve_key arguments through ResolveKeyRequest"
+  fi
+}
+
 check_invocation_history_filter_scope_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local history="$cli_root/src/daemon/ability/builtins/governance/invocation_history.rs"
@@ -7274,6 +7312,36 @@ EOF
   if ( check_core_ura_realm_projection_contract "$tmp/core-ura-realm-projection-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected core URA realm projection gate to fail"
   fi
+  mkdir -p "$tmp/resolve-key-request-dto-legacy/src/daemon/federation/client" \
+    "$tmp/resolve-key-request-dto-legacy/src/daemon/invocation/admission" \
+    "$tmp/resolve-key-request-dto-legacy/src/cli/commands"
+  printf '%s\n' \
+    '#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]' \
+    'pub struct ResolveKeyRequest {' \
+    '  pub agent_ura: String,' \
+    '  pub presented_pubkey_b64: Option<String>,' \
+    '}' \
+    > "$tmp/resolve-key-request-dto-legacy/src/daemon/federation/wire_contract.rs"
+  printf '%s\n' \
+    '#[derive(Debug, Clone, Serialize)]' \
+    'pub struct ResolveKeyArgs {' \
+    '  pub agent_ura: String,' \
+    '}' \
+    > "$tmp/resolve-key-request-dto-legacy/src/daemon/federation/client/ability_contract.rs"
+  printf '%s\n' \
+    'fn resolve_federated(agent_ura: &str, pk: Option<&str>) {' \
+    '  let mut args = serde_json::json!({ "agent_ura": agent_ura });' \
+    '  if let Some(pk) = pk { args["presented_pubkey_b64"] = serde_json::Value::String(pk.to_string()); }' \
+    '}' \
+    > "$tmp/resolve-key-request-dto-legacy/src/daemon/invocation/admission/federated_key_resolver.rs"
+  printf '%s\n' \
+    'fn join(target: Target) {' \
+    '  let resolve_args = crate::daemon::federation::client::ability_contract::ResolveKeyArgs { agent_ura: target.hub_ura.clone() };' \
+    '}' \
+    > "$tmp/resolve-key-request-dto-legacy/src/cli/commands/join.rs"
+  if ( check_resolve_key_request_dto_contract "$tmp/resolve-key-request-dto-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected resolve_key request DTO ownership gate to fail"
+  fi
   mkdir -p "$tmp/invocation-history-filter-legacy/src/daemon/ability/builtins/governance"
   cat >"$tmp/invocation-history-filter-legacy/src/daemon/ability/builtins/governance/invocation_history.rs" <<'EOF'
 fn fetch_key_from_value(value: &Value) -> anyhow::Result<InvocationLedgerFetchKey> {
@@ -8273,6 +8341,7 @@ EOF
   check_invocation_history_get_key_contract
   check_invocation_history_ledger_ura_contract
   check_core_ura_realm_projection_contract
+  check_resolve_key_request_dto_contract
   check_invocation_history_filter_scope_contract
   check_cli_invocation_history_read_model_contract
   check_sdk_history_authority_subject_contract
@@ -8378,6 +8447,7 @@ check_agent_start_model_intent_contract
 check_invocation_history_get_key_contract
 check_invocation_history_ledger_ura_contract
 check_core_ura_realm_projection_contract
+check_resolve_key_request_dto_contract
 check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
 check_sdk_history_authority_subject_contract

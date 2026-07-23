@@ -894,11 +894,9 @@ async fn do_federation_join_and_resolve_hub_key_async(
 
     let membership_device_id = membership_ura_device_id(membership_ura)?;
     let (_, signer, _) = ensure_device_runtime_identity(&target.realm, &membership_device_id)?;
-    let resolve_args = crate::daemon::federation::client::ability_contract::ResolveKeyArgs {
-        agent_ura: target.hub_ura.clone(),
-    };
     let resolve_arguments =
-        crate::daemon::federation::client::ability_contract::args_to_bytes(&resolve_args);
+        crate::daemon::federation::wire_contract::ResolveKeyRequest::new(target.hub_ura.clone())
+            .to_arguments_bytes()?;
     let subject = crate::core::ura::owner_ability_ura(
         &target.hub_ura,
         crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,

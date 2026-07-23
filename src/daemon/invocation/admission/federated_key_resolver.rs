@@ -227,8 +227,8 @@ impl FederatedKeyResolver {
     }
 
     /// Attach the public key presented by the envelope currently being
-    /// admitted. Empty input is ignored so non-user callers keep the
-    /// legacy `{agent_ura}` resolve-key request shape.
+    /// admitted. Empty input remains absent on the wire; the
+    /// `ResolveKeyRequest` DTO owns the request projection.
     #[must_use]
     pub fn with_presented_pubkey_b64(mut self, presented_pubkey_b64: impl Into<String>) -> Self {
         let trimmed = presented_pubkey_b64.into().trim().to_string();
@@ -508,16 +508,13 @@ impl FederatedKeyResolver {
             return Err(caller_key_not_found(agent_ura, "no_hub_endpoint_for_realm"));
         };
 
-        // Build the cross-hub `federation.resolve_key` request.
-        // The peer-side ability handler is a thin RFC-002 wrap
-        // around its local trust anchor; we forward the caller
-        // URA verbatim and parse the response as a JSON
-        // `{"public_key_b64": "<base64-32-bytes>"}` shape.
-        let mut args = serde_json::json!({ "agent_ura": agent_ura });
-        if let Some(pk) = self.presented_pubkey_b64.as_deref() {
-            args["presented_pubkey_b64"] = serde_json::Value::String(pk.to_string());
+        let mut resolve_key_request =
+            crate::daemon::federation::wire_contract::ResolveKeyRequest::new(agent_ura);
+        if let Some(presented_pubkey_b64) = self.presented_pubkey_b64.as_deref() {
+            resolve_key_request =
+                resolve_key_request.with_presented_pubkey_b64(presented_pubkey_b64);
         }
-        let args_bytes = serde_json::to_vec(&args).map_err(|e| {
+        let args_bytes = resolve_key_request.to_arguments_bytes().map_err(|e| {
             AxonError::new(AxonErrorKind::Internal)
                 .with_reason("resolve_key_args_encode")
                 .with_message(format!("agent_ura:{agent_ura}:{e}"))
