@@ -449,7 +449,6 @@ for section in ("languages", "members"):
             )
 
 quarantine = manifest.get("non_canonical", {})
-metadata = manifest.get("legacy_quarantine", {})
 for section in ("languages", "members"):
     graph = quarantine.get(section, {})
     for language, values in graph.items():
@@ -462,9 +461,7 @@ for section in ("languages", "members"):
     graph = quarantine.get(section, {})
     for language, values in graph.items():
         for helper in sorted(fallback_signer_helpers & set(values)):
-            reason = metadata.get(section, {}).get(language, {}).get(helper, {}).get("reason", "")
-            if "Process-local signer fallback" not in reason:
-                raise SystemExit(f"fallback_signer_reason_not_bound:{section}:{language}:{helper}")
+            raise SystemExit(f"fallback_signer_legacy_export:{language}:{section}:{helper}")
 PY
 }
 
@@ -10655,6 +10652,35 @@ if fallback & set(manifest["languages"]["go"]):
 PY
   then
     fail "self-test expected fallback signer leak to fail"
+  fi
+  cp "$MANIFEST" "$tmp/fallback-legacy-manifest.json"
+  "$PYTHON_BIN" - "$tmp/fallback-legacy-manifest.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["non_canonical"]["languages"]["go"].append("GeneratedSubjectAuth")
+data["non_canonical"]["languages"]["go"].sort()
+data["legacy_quarantine"]["languages"]["go"]["GeneratedSubjectAuth"] = {
+    "canonical_replacement": ["capability_inventory.runtime_invocation_signing"],
+    "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
+    "removal_phase": "quarantined",
+    "reason": "Process-local signer fallback is prohibited; canonical SDK signing uses an explicit signer handle or daemon KeyService authority.",
+}
+path.write_text(json.dumps(data))
+PY
+  if "$PYTHON_BIN" - "$tmp/fallback-legacy-manifest.json" "$tmp/matrix.json" <<'PY' >/dev/null 2>&1
+import json
+import sys
+from pathlib import Path
+manifest = json.loads(Path(sys.argv[1]).read_text())
+fallback = {"GeneratedSubjectAuth"}
+if fallback & set(manifest["non_canonical"]["languages"]["go"]):
+    raise SystemExit("fallback_signer_legacy_export")
+PY
+  then
+    fail "self-test expected fallback signer legacy export to fail"
   fi
   mkdir -p "$tmp/axon/sdk/node/src/invocation"
   mkdir -p "$tmp/axon/sdk/java/src/main/java/run/axon/sdk/invocation"

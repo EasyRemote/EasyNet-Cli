@@ -21,6 +21,7 @@ from edge_adapter_policy import (
 from sdk_public_surface_policy import (
     PRODUCT_NEUTRAL_CUTOVER_REF,
     canonical_quarantine_reason,
+    is_fallback_signer_item,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -244,6 +245,8 @@ def validate_schema(
             if set(metadata.get(language, {})) != set(legacy):
                 fail(f"legacy_metadata_not_closed:{language}:{section}")
             for value, entry in metadata.get(language, {}).items():
+                if is_fallback_signer_item(value):
+                    fail(f"fallback_signer_legacy_export:{language}:{section}:{value}")
                 required = {
                     "canonical_replacement",
                     "consumer_cutover_ref",
@@ -950,6 +953,17 @@ def self_test(tmp: Path) -> None:
             fail(f"self_test_quarantine_policy:{item}:{reason}")
     if canonical_quarantine_reason("ParsedURA.DeviceID") is not None:
         fail("self_test_ura_grammar_quarantine")
+
+    fallback_quarantine = copy.deepcopy(concepts)
+    fallback_quarantine["non_canonical"]["languages"]["go"].append("GeneratedSubjectAuth")
+    fallback_quarantine["non_canonical"]["languages"]["go"].sort()
+    fallback_quarantine["legacy_quarantine"]["languages"]["go"]["GeneratedSubjectAuth"] = {
+        "canonical_replacement": ["capability_inventory.runtime_signing"],
+        "consumer_cutover_ref": PRODUCT_NEUTRAL_CUTOVER_REF,
+        "removal_phase": "quarantined",
+        "reason": canonical_quarantine_reason("GeneratedSubjectAuth"),
+    }
+    expect(fallback_quarantine, "fallback_signer_legacy_export")
 
     bad_status_names = copy.deepcopy(concepts)
     bad_status_names["status_canonical_names"]["seam"] = "PublicSeam"
