@@ -356,6 +356,19 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testCompleteTupleRejectsAllZeroPrincipals() {
+        let placeholder = "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history"
+        for mutate in [
+            { self.completeBuilder().withCallerURA(placeholder) },
+            { self.completeBuilder().withCalleeURA(placeholder) },
+            { self.completeBuilder().withSubjectURA(placeholder) },
+        ] {
+            expectSyncSDKError(.invalidArgument) {
+                _ = try mutate().inspect()
+            }
+        }
+    }
+
     func testPreparedInvocationCannotBeSubmitted() async throws {
         let runtime = RuntimeClient(transport: MemoryRuntimeTransport(descriptor: descriptor))
         let prepared = try await runtime.prepare(completeDraft(runtime), options: ["deadline_ms": 1000])

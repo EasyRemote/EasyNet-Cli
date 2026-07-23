@@ -35,6 +35,7 @@ public final class RuntimeCoreSeamTest {
           "retryHintsPreserveRetryability",
           "canonicalSigningMaterialComesFromPrepare",
           "completeTupleRejectsMissingCaller",
+          "completeTupleRejectsAllZeroPrincipals",
           "preparedInvocationCannotBeSubmitted",
           "streamAndBidiBackpressureAreBounded",
           "streamOrderAndTerminalArePreserved");
@@ -86,6 +87,7 @@ public final class RuntimeCoreSeamTest {
       case "retryHintsPreserveRetryability" -> retryHintsPreserveRetryability();
       case "canonicalSigningMaterialComesFromPrepare" -> canonicalSigningMaterialComesFromPrepare();
       case "completeTupleRejectsMissingCaller" -> completeTupleRejectsMissingCaller();
+      case "completeTupleRejectsAllZeroPrincipals" -> completeTupleRejectsAllZeroPrincipals();
       case "preparedInvocationCannotBeSubmitted" -> preparedInvocationCannotBeSubmitted();
       case "streamAndBidiBackpressureAreBounded" -> streamAndBidiBackpressureAreBounded();
       case "streamOrderAndTerminalArePreserved" -> streamOrderAndTerminalArePreserved();
@@ -472,6 +474,20 @@ public final class RuntimeCoreSeamTest {
 
   private static void completeTupleRejectsMissingCaller() {
     expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> new InvocationBuilder().callee(CALLEE).descriptor(DESCRIPTOR).subject(CALLEE).nonce(NONCE).causalContext("{\"form\":\"none\"}").argsJson("{}").inspect());
+  }
+
+  private static void completeTupleRejectsAllZeroPrincipals() {
+    String placeholder =
+        "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history";
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () -> completeBuilder().caller(placeholder).inspect());
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () -> completeBuilder().callee(placeholder).inspect());
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () -> completeBuilder().subject(placeholder).inspect());
   }
 
   private static void preparedInvocationCannotBeSubmitted() {

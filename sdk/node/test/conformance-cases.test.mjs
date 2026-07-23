@@ -149,6 +149,20 @@ test("conformance complete tuple rejects a missing field", () => {
   assert.throws(() => new sdk.InvocationBuilder().withCalleeURA(callee).withDescriptorRef(descriptor).withSubjectURA(callee).withNonceBase64(nonce).withCausalContext({ form: "none" }).withJSONArgs({}).withContentType("application/json").build(), (error) => error.code === sdk.ErrorCode.INVALID_ARGUMENT);
 });
 
+test("conformance complete tuple rejects all-zero principals", () => {
+  const placeholder = "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history";
+  for (const [field, mutate] of [
+    ["caller_ura", (value) => value.withCallerURA(placeholder)],
+    ["callee_ura", (value) => value.withCalleeURA(placeholder)],
+    ["subject_ura", (value) => value.withSubjectURA(placeholder)],
+  ]) {
+    assert.throws(
+      () => mutate(builder()).build(),
+      (error) => error.code === sdk.ErrorCode.INVALID_ARGUMENT && new RegExp(`${field} must not be all-zero`).test(error.message),
+    );
+  }
+});
+
 test("conformance prepare exposes delegated canonical material", async () => {
   const prepared = await runtime().prepare(builder().build());
   assert.equal(Buffer.from(prepared.signingMaterial.canonicalBytesBase64, "base64").toString(), "canonical");

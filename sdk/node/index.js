@@ -616,10 +616,10 @@ export class AuthorityClient {
 
 export class InvocationDraft {
   constructor(fields) {
-    this.callerURA = requiredBuilderString(fields.callerURA, "caller_ura");
-    this.calleeURA = requiredBuilderString(fields.calleeURA, "callee_ura");
+    this.callerURA = requiredBuilderPrincipalString(fields.callerURA, "caller_ura");
+    this.calleeURA = requiredBuilderPrincipalString(fields.calleeURA, "callee_ura");
     this.descriptorRef = requiredBuilderString(fields.descriptorRef, "descriptor_ref");
-    this.subjectURA = requiredBuilderString(fields.subjectURA, "subject_ura");
+    this.subjectURA = requiredBuilderPrincipalString(fields.subjectURA, "subject_ura");
     this.nonceBase64 = requiredBuilderString(fields.nonceBase64, "nonce_base64");
     this.causalContext = objectValue(fields.causalContext, "causal_context");
     this.contentType = requiredBuilderString(fields.contentType, "content_type");
@@ -2283,6 +2283,14 @@ function requiredBuilderString(value, field) {
     throw invalidInvocation(`${field} is required`);
   }
   return value;
+}
+
+function requiredBuilderPrincipalString(value, field) {
+  const cleaned = requiredBuilderString(value, field);
+  if (cleaned.trim().toLowerCase().includes("00000000-0000-0000-0000-000000000000")) {
+    throw invalidInvocation(`${field} must not be all-zero`);
+  }
+  return cleaned;
 }
 
 function requiredWireString(value, field) {

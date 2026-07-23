@@ -20,10 +20,10 @@ public struct InvocationTuple: Sendable, Equatable {
         argsJSON: String?,
         metadata: [String: JSONValue] = [:]
     ) throws {
-        self.caller = try InvocationTuple.required(caller, "caller")
-        self.callee = try InvocationTuple.required(callee, "callee")
+        self.caller = try InvocationTuple.requiredPrincipal(caller, "caller")
+        self.callee = try InvocationTuple.requiredPrincipal(callee, "callee")
         self.descriptorRef = try InvocationTuple.required(descriptorRef, "descriptorRef")
-        self.subject = try InvocationTuple.required(subject, "subject")
+        self.subject = try InvocationTuple.requiredPrincipal(subject, "subject")
         self.nonce = try InvocationTuple.required(nonce, "nonce")
         self.causalContext = try InvocationTuple.required(causalContext, "causalContext")
         self.argsJSON = try InvocationTuple.required(argsJSON, "argsJSON")
@@ -35,6 +35,17 @@ public struct InvocationTuple: Sendable, Equatable {
             throw SDKError.validation("invocation", "\(field) is required")
         }
         return value
+    }
+
+    private static func requiredPrincipal(_ value: String?, _ field: String) throws -> String {
+        let cleaned = try required(value, field)
+        if cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .contains("00000000-0000-0000-0000-000000000000")
+        {
+            throw SDKError.validation("invocation", "\(field) must not be all-zero")
+        }
+        return cleaned
     }
 
     func wireObject() throws -> [String: Any] {

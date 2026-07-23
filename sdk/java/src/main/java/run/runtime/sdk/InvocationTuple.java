@@ -25,10 +25,10 @@ public record InvocationTuple(
   }
 
   public InvocationTuple {
-    caller = required(caller, "caller");
-    callee = required(callee, "callee");
+    caller = requiredPrincipal(caller, "caller");
+    callee = requiredPrincipal(callee, "callee");
     descriptor = required(descriptor, "descriptor");
-    subject = required(subject, "subject");
+    subject = requiredPrincipal(subject, "subject");
     nonce = required(nonce, "nonce");
     causalContext = required(causalContext, "causalContext");
     argsJson = required(argsJson, "argsJson");
@@ -109,5 +109,13 @@ public record InvocationTuple(
       throw SDKError.validation("invocation", field + " is required");
     }
     return value;
+  }
+
+  private static String requiredPrincipal(String value, String field) {
+    String cleaned = required(value, field);
+    if (cleaned.trim().toLowerCase().contains("00000000-0000-0000-0000-000000000000")) {
+      throw SDKError.validation("invocation", field + " must not be all-zero");
+    }
+    return cleaned;
   }
 }
