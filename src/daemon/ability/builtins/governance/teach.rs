@@ -2201,7 +2201,7 @@ mod tests {
         );
         assert!(
             !live,
-            "manifest without [exec] must remain discovery-only, not a runtime fallback"
+            "manifest without [exec] must remain discovery-only, not a runtime binding"
         );
     }
 

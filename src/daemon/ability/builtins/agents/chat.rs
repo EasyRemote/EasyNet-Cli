@@ -1932,7 +1932,7 @@ mod tests {
     }
 
     #[test]
-    fn register_does_not_mount_unbound_manifest_as_chat_fallback() {
+    fn register_does_not_mount_unbound_manifest_as_chat_route() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let root = crate::daemon::persistence::config::agents_root().join("alice");
         let abilities_dir = root.join("abilities");

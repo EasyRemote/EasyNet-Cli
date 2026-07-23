@@ -3800,6 +3800,45 @@ check_ability_deploy_product_neutrality_contract() {
   fi
 }
 
+check_ability_manifest_exec_absence_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local manifest="$cli_root/src/daemon/ability/manifest.rs"
+  local authoring="$cli_root/src/daemon/ability/builtins/agents/authoring.rs"
+  local chat="$cli_root/src/daemon/ability/builtins/agents/chat.rs"
+  local teach="$cli_root/src/daemon/ability/builtins/governance/teach.rs"
+
+  for path in "$manifest" "$authoring" "$chat" "$teach"; do
+    [[ -f "$path" ]] || fail "ability manifest exec-absence contract source is missing: ${path#$cli_root/}"
+  done
+
+  "$PYTHON_BIN" - "$manifest" "$authoring" "$chat" "$teach" <<'PY'
+import sys
+from pathlib import Path
+
+manifest, authoring, chat, teach = [
+    Path(arg).read_text(encoding="utf-8", errors="replace") for arg in sys.argv[1:]
+]
+
+for retired in (
+    "owning agent's chat handler\" (legacy default)",
+    "legacy default",
+    "runtime fallback",
+):
+    if retired in manifest:
+        raise SystemExit(f"ability_manifest_exec_absence:retired_manifest_model:{retired}")
+
+required = (
+    (manifest, "discovery-only metadata and has no executable runtime binding", "manifest_doc_missing"),
+    (authoring, "no executable binding and cannot enter the live capability catalog", "authoring_reject_missing"),
+    (chat, "manifest without [exec] must not be routed through an LLM-mediated handler", "chat_reject_missing"),
+    (teach, "manifest without [exec] must remain discovery-only, not a runtime binding", "teach_runtime_binding_reject_missing"),
+)
+for text, token, code in required:
+    if token not in text:
+        raise SystemExit(f"ability_manifest_exec_absence:{code}")
+PY
+}
+
 check_sdk_directory_projection_fail_closed_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local go_directory="$cli_root/sdk/go/directory.go"
@@ -6554,6 +6593,20 @@ EOF
   if ( CLI_ROOT="$tmp/cli-ability-deploy-product"; check_ability_deploy_product_neutrality_contract ) >/dev/null 2>&1; then
     fail "self-test expected ability.deploy product vocabulary gate to fail"
   fi
+  mkdir -p "$tmp/cli-ability-manifest-exec/src/daemon/ability/builtins/agents" \
+    "$tmp/cli-ability-manifest-exec/src/daemon/ability/builtins/governance" \
+    "$tmp/cli-ability-manifest-exec/src/daemon/ability"
+  printf 'fn exec() { /* owning agent'\''s chat handler" (legacy default) */ }\n' \
+    > "$tmp/cli-ability-manifest-exec/src/daemon/ability/manifest.rs"
+  printf 'no executable binding and cannot enter the live capability catalog\n' \
+    > "$tmp/cli-ability-manifest-exec/src/daemon/ability/builtins/agents/authoring.rs"
+  printf 'manifest without [exec] must not be routed through an LLM-mediated handler\n' \
+    > "$tmp/cli-ability-manifest-exec/src/daemon/ability/builtins/agents/chat.rs"
+  printf 'manifest without [exec] must remain discovery-only, not a runtime binding\n' \
+    > "$tmp/cli-ability-manifest-exec/src/daemon/ability/builtins/governance/teach.rs"
+  if ( CLI_ROOT="$tmp/cli-ability-manifest-exec"; check_ability_manifest_exec_absence_contract ) >/dev/null 2>&1; then
+    fail "self-test expected ability manifest exec absence gate to fail"
+  fi
   mkdir -p "$tmp/cli-local-runtime-identity/src/bin" \
     "$tmp/cli-local-runtime-identity/src/daemon/execution/loop_instance" \
     "$tmp/cli-local-runtime-identity/src/daemon/execution"
@@ -7854,6 +7907,7 @@ EOF
   check_plugin_sidecar_helper_matrix_contract
   check_retired_browser_mock_surface_contract
   check_ability_deploy_product_neutrality_contract
+  check_ability_manifest_exec_absence_contract
   check_runtime_wire_target_state_contract
   check_invocation_wire_callee_target_contract
   check_local_daemon_loopback_explicit_subject_contract
@@ -7950,6 +8004,7 @@ check_federation_directory_device_projection_contract
 check_plugin_sidecar_helper_matrix_contract
 check_retired_browser_mock_surface_contract
 check_ability_deploy_product_neutrality_contract
+check_ability_manifest_exec_absence_contract
 check_runtime_wire_target_state_contract
 check_invocation_wire_callee_target_contract
 check_local_daemon_loopback_explicit_subject_contract

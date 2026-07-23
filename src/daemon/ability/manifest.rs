@@ -947,8 +947,8 @@ impl AbilityManifest {
         self.output_schema.as_ref()
     }
 
-    /// The optional executor binding. `None` means "fulfil via the
-    /// owning agent's chat handler" (legacy default).
+    /// The optional executor binding. `None` means the manifest is
+    /// discovery-only metadata and has no executable runtime binding.
     pub fn exec(&self) -> Option<&AbilityExec> {
         self.exec.as_ref()
     }
