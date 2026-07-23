@@ -60,7 +60,7 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
     // block scoped to mode + transport + pid.
     let mut rows: Vec<(&str, String)> = Vec::new();
     if let Some(projection) = report.projection() {
-        let state = projection.as_runtime_state();
+        let state = projection.state();
         rows.push(("Mode", "daemon-only".to_string()));
         rows.push(("gRPC socket", state.endpoint.clone()));
         rows.push((
@@ -96,10 +96,7 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
     ) {
         output::warn("Runtime projection is missing, but daemon facts are present.");
     }
-    if let Some(state) = report
-        .projection()
-        .map(|projection| projection.as_runtime_state())
-    {
+    if let Some(state) = report.projection().map(|projection| projection.state()) {
         if state.credential_verified == Some(false) {
             output::info("Credential: NOT VERIFIED (Hub was unreachable at startup)");
         }

@@ -96,7 +96,7 @@ fn run_status() -> anyhow::Result<()> {
 
 fn render_lifecycle_details(report: &RuntimeStatusReport) {
     if let Some(projection) = report.projection() {
-        let state = projection.as_runtime_state();
+        let state = projection.state();
         output::detail("mode", "daemon-only");
         output::detail("grpc_socket", &state.endpoint);
         output::detail("tenant", state.tenant.as_deref().unwrap_or("default"));

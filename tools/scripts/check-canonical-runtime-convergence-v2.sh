@@ -42,6 +42,26 @@ check_mcp_reflection_async_bridge_contract() {
   fi
 }
 
+check_runtime_session_projection_accessor_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local projection="$cli_root/src/daemon/boot/lifecycle/projection.rs"
+  local lifecycle="$cli_root/src/daemon/boot/lifecycle"
+  local status="$cli_root/src/cli/commands/status.rs"
+  local mcp="$cli_root/src/cli/commands/groups/mcp.rs"
+  [[ -f "$projection" ]] || fail "runtime session projection source is missing: ${projection#$cli_root/}"
+
+  if rg -n 'as_runtime_state|legacy CLI renderers|on-disk compatibility shape|compatibility contract' \
+    "$projection" "$lifecycle" "$status" "$mcp"; then
+    fail "runtime session projection preserves retired legacy/compatibility accessor vocabulary"
+  fi
+  if ! rg -q 'pub fn state\(&self\) -> &config::RuntimeState' "$projection"; then
+    fail "RuntimeSessionProjection must expose the persisted projection through state()"
+  fi
+  if ! rg -q 'pub fn into_runtime_state\(self\) -> config::RuntimeState' "$projection"; then
+    fail "RuntimeSessionProjection must keep the explicit consuming persistence conversion"
+  fi
+}
+
 check_manifest_contract() {
   "$PYTHON_BIN" - \
     "$MANIFEST" \
@@ -7849,6 +7869,7 @@ EOF
     fail "self-test expected CLI discover candidate projection fallback gate to fail"
   fi
   check_mcp_reflection_async_bridge_contract
+  check_runtime_session_projection_accessor_contract
   check_active_source_contract
   check_sdk_root_runtime_description_contract
   check_go_sdk_public_ura_alias_contract
@@ -7944,6 +7965,7 @@ fi
 check_lifecycle_evidence_freshness_contract
 check_manifest_contract
 check_mcp_reflection_async_bridge_contract
+check_runtime_session_projection_accessor_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract
 check_go_sdk_public_ura_alias_contract

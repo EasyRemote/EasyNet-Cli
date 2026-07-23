@@ -52,9 +52,7 @@ pub struct RuntimeStopPlan {
 impl RuntimeStopPlan {
     /// Build a stop plan from a lifecycle status report.
     pub fn from_report(report: &RuntimeStatusReport) -> Self {
-        let state = report
-            .projection()
-            .map(|projection| projection.as_runtime_state());
+        let state = report.projection().map(|projection| projection.state());
         let shape = match state {
             None if report.daemon().has_daemon_fact() => RuntimeStopShape::DaemonOnly,
             None => RuntimeStopShape::Stateless,

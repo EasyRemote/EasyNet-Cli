@@ -9,8 +9,8 @@
 //!   process authority.
 //!
 //! Implementation Approach:
-//! - Wraps the existing persisted `RuntimeState` and exposes lifecycle-domain
-//!   names without changing the on-disk compatibility shape.
+//! - Wraps the persisted `RuntimeState` and exposes lifecycle-domain names
+//!   while preserving the public `runtime.json` schema.
 //!
 //! Usage Contract:
 //! - Mutations go through `RuntimeLifecycleService` so projection commit and
@@ -34,7 +34,7 @@ use crate::daemon::persistence::config;
 /// 2. Saves and removals are process-local filesystem side effects
 ///    owned by the lifecycle service, not by pure state classifiers.
 /// 3. The on-disk wire shape remains `RuntimeState` until the public
-///    compatibility contract is intentionally revised.
+///    projection schema is intentionally revised.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RuntimeProjectionStore;
 
@@ -80,8 +80,8 @@ impl RuntimeSessionProjection {
         Ok(config::load_optional_runtime_state()?.map(Self::from_state))
     }
 
-    /// Borrow the underlying projection for legacy CLI renderers.
-    pub fn as_runtime_state(&self) -> &config::RuntimeState {
+    /// Borrow the persisted runtime session projection state.
+    pub fn state(&self) -> &config::RuntimeState {
         &self.state
     }
 
