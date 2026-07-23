@@ -23,16 +23,46 @@ cat >"$SB/src/support/platform/local_invoke.rs" <<'RS'
 pub struct LocalRuntimeStateReadIssuer;
 
 impl LocalRuntimeStateReadIssuer {
+    fn invoke(_ability: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        let _ = Self::subject_ura()?;
+        Ok(serde_json::json!({}))
+    }
+
     fn subject_ura() -> anyhow::Result<String> {
-        crate::daemon::identity::local_invocation::local_daemon_ura()
+        LocalRuntimeStateReadSubject::from_credentials_file().map(|subject| subject.into_ura())
+    }
+}
+
+struct LocalRuntimeStateReadSubject {
+    ura: String,
+}
+
+impl LocalRuntimeStateReadSubject {
+    fn from_credentials_file() -> anyhow::Result<Self> {
+        let credentials = crate::daemon::persistence::config::load_credentials()?;
+        let user_id = credentials.user_id()?;
+        Ok(Self {
+            ura: format!("easynet:///r/acme/resource/user.{user_id}/runtime-state/read"),
+        })
+    }
+
+    fn into_ura(self) -> String {
+        self.ura
     }
 }
 
 #[test]
-fn runtime_state_read_subject_requires_control_discovery_identity() {}
+fn runtime_state_read_subject_uses_user_owned_resource_not_daemon_identity() {}
+
+#[test]
+fn runtime_state_read_subject_rejects_missing_user_id_before_device_fallback() {}
 RS
 
 for target in \
+  "$SB/src/cli/commands/ability_record.rs" \
+  "$SB/src/cli/commands/discover.rs" \
+  "$SB/src/cli/commands/doctor.rs" \
+  "$SB/src/cli/commands/groups/mcp.rs" \
   "$SB/src/cli/commands/status.rs" \
   "$SB/src/cli/daemon_client/ability_catalog.rs" \
   "$SB/src/cli/commands/groups/invocation.rs" \

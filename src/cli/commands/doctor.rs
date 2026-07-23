@@ -25,6 +25,8 @@ use crate::cli::commands::agent_cli_probe::LocalAgentCliProbe;
 use crate::cli::daemon_client::agent_view::{self, AgentRuntimeKind, DaemonAgentRow};
 use crate::daemon::boot::join_connection_state;
 use crate::daemon::persistence::config;
+use crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer;
+
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
     /// Emit JSON instead of the human-readable report.
@@ -206,7 +208,7 @@ fn check_user_signing_key() -> Check {
         }
     };
 
-    match crate::support::platform::local_invoke::invoke_local_ability(
+    match LocalRuntimeStateReadIssuer::invoke(
         "identity.list_user_pubkeys",
         serde_json::json!({ "user_ura": user_ura }),
     ) {
@@ -244,25 +246,25 @@ fn check_user_signing_key() -> Check {
 
 fn check_runtime() -> Check {
     match config::load() {
-        Ok(state) => match crate::support::platform::local_invoke::invoke_local_ability(
-                "observe.health",
-                serde_json::json!({"source": "doctor"}),
-            ) {
-                Ok(_) => Check {
-                    name: "local runtime".to_string(),
-                    status: CheckStatus::Ok,
-                    detail: format!("daemon up at {}", state.endpoint),
-                    hint: None,
-                },
-                Err(e) => Check {
-                    name: "local runtime".to_string(),
-                    status: CheckStatus::Fail,
-                    detail: format!("metadata present, but observe.health failed: {e}"),
-                    hint: Some(
-                        "The runtime metadata exists, but the local daemon/control socket is not healthy.",
-                    ),
-                },
+        Ok(state) => match LocalRuntimeStateReadIssuer::invoke(
+            "observe.health",
+            serde_json::json!({"source": "doctor"}),
+        ) {
+            Ok(_) => Check {
+                name: "local runtime".to_string(),
+                status: CheckStatus::Ok,
+                detail: format!("daemon up at {}", state.endpoint),
+                hint: None,
             },
+            Err(e) => Check {
+                name: "local runtime".to_string(),
+                status: CheckStatus::Fail,
+                detail: format!("metadata present, but observe.health failed: {e}"),
+                hint: Some(
+                    "The runtime metadata exists, but the local daemon/control socket is not healthy.",
+                ),
+            },
+        },
         Err(_) => Check {
             name: "local runtime".to_string(),
             status: CheckStatus::Warn,

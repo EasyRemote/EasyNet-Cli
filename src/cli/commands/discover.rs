@@ -55,7 +55,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::ura::AbilitySelector;
 use crate::support::platform::local_invoke::{
-    invoke_local_ability, invoke_local_ability_target_with_invocation_meta, LocalAbilityTarget,
+    invoke_local_ability_target_with_invocation_meta, LocalAbilityTarget,
+    LocalRuntimeStateReadIssuer,
 };
 
 /// Narrow re-export so integration tests (and other `pub` consumers
@@ -942,7 +943,7 @@ fn resolve_ladder_target(as_agent: Option<&str>) -> anyhow::Result<DiscoverLadde
     let Some(requested_agent) = as_agent.map(str::trim).filter(|agent| !agent.is_empty()) else {
         return DiscoverLadderTarget::device_aggregate();
     };
-    let value = invoke_local_ability("agent.list", json!({}))
+    let value = LocalRuntimeStateReadIssuer::invoke("agent.list", json!({}))
         .context("resolve discover entry from the agent registry")?;
     let agent_ura = value
         .get("agents")

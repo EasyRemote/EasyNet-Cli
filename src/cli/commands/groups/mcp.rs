@@ -34,7 +34,7 @@ use serde_json::json;
 use crate::cli::commands::skill_install;
 use crate::cli::mcp::{install as mcp_install, server as mcp_server};
 use crate::daemon::lifecycle::RuntimeStatusReport;
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer;
 use crate::support::platform::output;
 
 #[derive(Debug, Args)]
@@ -70,7 +70,7 @@ pub fn run(args: McpArgs) -> anyhow::Result<()> {
 
 fn run_status() -> anyhow::Result<()> {
     let report = crate::daemon::lifecycle::RuntimeLifecycleService::new().status()?;
-    match invoke_local_ability("observe.health", json!({"source": "mcp.status"})) {
+    match LocalRuntimeStateReadIssuer::invoke("observe.health", json!({"source": "mcp.status"})) {
         Ok(_) => {
             output::success("local daemon MCP surface reachable");
             render_lifecycle_details(&report);

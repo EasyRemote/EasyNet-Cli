@@ -23,7 +23,8 @@ use crate::daemon::persistence::config::{
     atomic_write_with_permissions, state_dir, WritePermissions,
 };
 use crate::support::platform::local_invoke::{
-    invoke_local_ability, LocalAbilityTarget, LocalDaemonSystemAbilityIssuer, LocalStreamFrame,
+    LocalAbilityTarget, LocalDaemonSystemAbilityIssuer, LocalRuntimeStateReadIssuer,
+    LocalStreamFrame,
 };
 use crate::support::platform::{output, timeouts};
 
@@ -310,9 +311,11 @@ fn camera_start_arguments(plan: &RecordingPlan) -> anyhow::Result<Value> {
 
 fn default_resource_ura(kind: MediaRecordingKind) -> anyhow::Result<String> {
     let resource_type = kind.resource_type();
-    let response =
-        invoke_local_ability("meta.list_resources", json!({"types": [resource_type]}))
-            .with_context(|| format!("invoke meta.list_resources(types=[\"{resource_type}\"])"))?;
+    let response = LocalRuntimeStateReadIssuer::invoke(
+        "meta.list_resources",
+        json!({"types": [resource_type]}),
+    )
+    .with_context(|| format!("invoke meta.list_resources(types=[\"{resource_type}\"])"))?;
     select_default_resource_ura(kind, &response)
 }
 
