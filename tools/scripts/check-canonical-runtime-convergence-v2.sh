@@ -6909,6 +6909,14 @@ if "descriptor_ref not found in runtime realm catalog" not in resolve_body:
     raise SystemExit("ffi_descriptor_runtime_owner:realm_catalog_miss_error_missing")
 if "target_owned_descriptor_catalog_subject_ura" in production:
     raise SystemExit("ffi_descriptor_runtime_owner:retired_target_owned_subject_helper")
+if "AbilitySelector::parse(ability)" in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:local_ability_selector_parse")
+if "owner_ability_ura(callee_ura, ability)" in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:local_owner_ability_projection")
+if "derive ability URA for" in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:retired_local_ability_projection_error")
+if "descriptor_ref::ability_ura_for_wire(\n        callee_ura, ability," not in resolve_body:
+    raise SystemExit("ffi_descriptor_runtime_owner:callee_bound_ability_resolver_missing")
 
 if "fn descriptor_resolution_error_projection(" in production:
     raise SystemExit("ffi_descriptor_runtime_owner:retired_message_projection_classifier")
@@ -6946,6 +6954,7 @@ if "format!(\"runtime_resolve_descriptor_ref: {error:#}\")" in entry:
 for required_test in (
     "runtime_descriptor_resolver_requires_runtime_owner_for_realm_catalog",
     "runtime_descriptor_resolver_does_not_remote_probe_realm_catalog_miss",
+    "runtime_descriptor_resolver_rejects_ability_owner_mismatch_before_catalog_lookup",
     "descriptor_resolution_errors_project_canonical_runtime_codes",
 ):
     if required_test not in text:
@@ -10780,6 +10789,65 @@ fn descriptor_resolution_errors_project_canonical_runtime_codes() {}
 EOF
   if ( CLI_ROOT="$tmp/cli-ffi-meta-descriptor-probe"; check_ffi_descriptor_runtime_owner_contract ) >/dev/null 2>&1; then
     fail "self-test expected FFI meta descriptor probe gate to fail"
+  fi
+  mkdir -p "$tmp/cli-ffi-descriptor-local-ability-parse/src/ffi/invocation"
+  cat >"$tmp/cli-ffi-descriptor-local-ability-parse/src/ffi/invocation/mod.rs" <<'EOF'
+enum DescriptorResolutionError {
+    RuntimeOwnerUnavailable(String),
+    DescriptorNotFound(String),
+}
+struct ErrorProjection {
+    code: &'static str,
+}
+impl DescriptorResolutionError {
+    fn abi_projection(&self) -> (i32, ErrorProjection) {
+        let code = match self {
+            Self::RuntimeOwnerUnavailable(_) => "CALLER_IDENTITY_UNAVAILABLE",
+            Self::DescriptorNotFound(_) => "DESCRIPTOR_NOT_FOUND",
+        };
+        (0, ErrorProjection { code })
+    }
+}
+pub unsafe extern "C" fn runtime_resolve_descriptor_ref() {
+    let error = DescriptorResolutionError::DescriptorNotFound(String::new());
+    let _ = error.abi_projection();
+}
+fn runtime_resolve_descriptor_ref_json(
+    session: &crate::ffi::client::handle::ClientSession,
+    request_json: &str,
+) -> Result<serde_json::Value, DescriptorResolutionError> {
+    let request: serde_json::Value = serde_json::from_str(request_json).unwrap();
+    let object = request.as_object().unwrap();
+    let callee_ura = object.get("callee_ura").and_then(serde_json::Value::as_str).unwrap();
+    let ability = object.get("ability").and_then(serde_json::Value::as_str).unwrap();
+    let ability_ura = match crate::core::ura::AbilitySelector::parse(ability) {
+        Ok(selector) => selector.ability_ura().to_string(),
+        Err(_) => crate::core::ura::owner_ability_ura(callee_ura, ability).unwrap(),
+    };
+    let _runtime_owner_ura = runtime_owner_ura_from_session(session).map_err(|error| {
+        DescriptorResolutionError::RuntimeOwnerUnavailable(format!(
+            "resolve descriptor_ref runtime owner: {error}"
+        ))
+    })?;
+    Err(DescriptorResolutionError::DescriptorNotFound(format!(
+        "descriptor_ref not found in runtime realm catalog for ability={ability_ura:?}"
+    )))
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_system_descriptor_catalog_entries() {}
+
+#[test]
+fn runtime_descriptor_resolver_requires_runtime_owner_for_realm_catalog() {}
+#[test]
+fn runtime_descriptor_resolver_does_not_remote_probe_realm_catalog_miss() {}
+#[test]
+fn runtime_descriptor_resolver_rejects_ability_owner_mismatch_before_catalog_lookup() {}
+#[test]
+fn descriptor_resolution_errors_project_canonical_runtime_codes() {}
+EOF
+  if ( CLI_ROOT="$tmp/cli-ffi-descriptor-local-ability-parse"; check_ffi_descriptor_runtime_owner_contract ) >/dev/null 2>&1; then
+    fail "self-test expected FFI descriptor local ability parse gate to fail"
   fi
   mkdir -p "$tmp/cli-ffi-descriptor-notfound-vocabulary-legacy/src/ffi/invocation"
   cat >"$tmp/cli-ffi-descriptor-notfound-vocabulary-legacy/src/ffi/invocation/mod.rs" <<'EOF'

@@ -1941,14 +1941,14 @@ fn runtime_resolve_descriptor_ref_json(
         .ok_or_else(|| {
             DescriptorResolutionError::invalid_request("descriptor_ref request missing call_mode")
         })?;
-    let ability_ura = match crate::core::ura::AbilitySelector::parse(ability) {
-        Ok(selector) => selector.ability_ura().to_string(),
-        Err(_) => crate::core::ura::owner_ability_ura(callee_ura, ability).ok_or_else(|| {
-            DescriptorResolutionError::invalid_request(format!(
-                "derive ability URA for `{callee_ura}` `{ability}`"
-            ))
-        })?,
-    };
+    let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        callee_ura, ability,
+    )
+    .map_err(|error| {
+        DescriptorResolutionError::invalid_request(format!(
+            "resolve descriptor_ref ability for callee_ura={callee_ura:?} ability={ability:?}: {error}"
+        ))
+    })?;
     let runtime_owner_ura = runtime_owner_ura_from_session(session).map_err(|error| {
         DescriptorResolutionError::runtime_owner_unavailable(format!(
             "resolve descriptor_ref runtime owner: {error}"
@@ -9149,6 +9149,45 @@ mod tests {
                 .to_string()
                 .contains("descriptor_ref request missing call_mode"),
             "unexpected error: {error:#}"
+        );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_descriptor_resolver_rejects_ability_owner_mismatch_before_catalog_lookup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing_control_path = dir.path().join("missing-control.json");
+        let callee_ura = crate::core::ura::device_ura("localhost", "callee-device");
+        let other_ura = crate::core::ura::device_ura("localhost", "other-device");
+        let other_ability = crate::core::ura::owner_ability_ura(&other_ura, "meta.list_abilities")
+            .expect("other ability URA");
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            missing_control_path.display().to_string(),
+            Some(dir.path().join("offline-daemon.sock").display().to_string()),
+        );
+
+        let error = runtime_resolve_descriptor_ref_json(
+            &session,
+            &serde_json::json!({
+                "callee_ura": callee_ura,
+                "caller_ura": callee_ura,
+                "subject_ura": callee_ura,
+                "ability": other_ability,
+                "call_mode": "rpc",
+            })
+            .to_string(),
+        )
+        .expect_err("ability owner mismatch must fail before runtime owner lookup");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("does not match callee"),
+            "unexpected descriptor resolver error: {message}"
+        );
+        assert!(
+            !message.contains("resolve descriptor_ref runtime owner")
+                && !message.contains("descriptor_ref not found"),
+            "owner mismatch must not be reclassified through runtime owner or catalog lookup: {message}"
         );
     }
 
