@@ -387,7 +387,7 @@ impl AbilityListScope {
             .ok_or_else(|| anyhow::anyhow!("meta.list_abilities: args must be a JSON object"))?;
         for key in object.keys() {
             match key.as_str() {
-                "scope" | "agent_ura" | "subject_ura" => {}
+                "scope" | "owner_ura" | "ability_ura" => {}
                 other => {
                     anyhow::bail!("meta.list_abilities: unsupported field `{other}`")
                 }
@@ -403,14 +403,13 @@ impl AbilityListScope {
                 )
             }
         };
-        let owner_from_agent = string_arg(object, "agent_ura")
-            .map(|ura| parse_owner_scope("agent_ura", &ura).map(|_| ura))
+        let owner_ura = string_arg(object, "owner_ura")
+            .map(|ura| parse_owner_scope("owner_ura", &ura).map(|_| ura))
             .transpose()?;
-        let subject = string_arg(object, "subject_ura")
-            .map(|ura| AbilitySubjectScope::parse(&ura))
+        let ability_ura = string_arg(object, "ability_ura")
+            .map(|ura| parse_ability_scope(&ura))
             .transpose()?;
-        let owner_ura = merge_owner_scope(owner_from_agent, subject.as_ref())?;
-        let ability_ura = subject.and_then(|scope| scope.ability_ura);
+        validate_ability_scope_owner(owner_ura.as_deref(), ability_ura.as_deref())?;
 
         Ok(Self {
             include_realm,
@@ -457,36 +456,6 @@ impl AbilityListScope {
     }
 }
 
-struct AbilitySubjectScope {
-    owner_ura: Option<String>,
-    ability_ura: Option<String>,
-}
-
-impl AbilitySubjectScope {
-    fn parse(subject_ura: &str) -> anyhow::Result<Self> {
-        let parsed = crate::core::ura::parse_ura(subject_ura).map_err(|e| {
-            anyhow::anyhow!("meta.list_abilities: invalid subject_ura {subject_ura:?}: {e}")
-        })?;
-        match parsed.kind {
-            crate::core::ura::URAKind::Ability => Ok(Self {
-                owner_ura: None,
-                ability_ura: Some(subject_ura.to_string()),
-            }),
-            crate::core::ura::URAKind::Agent
-            | crate::core::ura::URAKind::Device
-            | crate::core::ura::URAKind::Authority
-            | crate::core::ura::URAKind::User => Ok(Self {
-                owner_ura: Some(subject_ura.to_string()),
-                ability_ura: None,
-            }),
-            other => anyhow::bail!(
-                "meta.list_abilities: subject_ura must be an owner URA or Ability URA, got {:?}",
-                other
-            ),
-        }
-    }
-}
-
 fn string_arg(object: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
     object
         .get(key)
@@ -494,6 +463,18 @@ fn string_arg(object: &serde_json::Map<String, Value>, key: &str) -> Option<Stri
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+fn parse_ability_scope(ura: &str) -> anyhow::Result<String> {
+    let parsed = crate::core::ura::parse_ura(ura)
+        .map_err(|e| anyhow::anyhow!("meta.list_abilities: invalid ability_ura {ura:?}: {e}"))?;
+    match parsed.kind {
+        crate::core::ura::URAKind::Ability => Ok(ura.to_string()),
+        other => anyhow::bail!(
+            "meta.list_abilities: ability_ura must be an Ability URA, got {:?}",
+            other
+        ),
+    }
 }
 
 fn parse_owner_scope(field: &str, ura: &str) -> anyhow::Result<()> {
@@ -511,35 +492,19 @@ fn parse_owner_scope(field: &str, ura: &str) -> anyhow::Result<()> {
     }
 }
 
-fn merge_owner_scope(
-    owner_ura: Option<String>,
-    subject: Option<&AbilitySubjectScope>,
-) -> anyhow::Result<Option<String>> {
-    match (owner_ura, subject) {
-        (Some(owner_ura), Some(subject)) => {
-            if let Some(subject_owner) = subject.owner_ura.as_deref() {
-                if owner_ura != subject_owner {
-                    anyhow::bail!(
-                        "meta.list_abilities: agent_ura and subject_ura owner must match"
-                    );
-                }
-            }
-            if let Some(ability_ura) = subject.ability_ura.as_deref() {
-                let matches_owner =
-                    crate::core::ura::public_ability_name_from_ability_ura(&owner_ura, ability_ura)
-                        .is_some();
-                if !matches_owner {
-                    anyhow::bail!(
-                        "meta.list_abilities: agent_ura and subject_ura ability owner must match"
-                    );
-                }
-            }
-            Ok(Some(owner_ura))
-        }
-        (Some(owner_ura), None) => Ok(Some(owner_ura)),
-        (None, Some(subject)) => Ok(subject.owner_ura.clone()),
-        (None, None) => Ok(None),
+fn validate_ability_scope_owner(
+    owner_ura: Option<&str>,
+    ability_ura: Option<&str>,
+) -> anyhow::Result<()> {
+    let (Some(owner_ura), Some(ability_ura)) = (owner_ura, ability_ura) else {
+        return Ok(());
+    };
+    let matches_owner =
+        crate::core::ura::public_ability_name_from_ability_ura(owner_ura, ability_ura).is_some();
+    if !matches_owner {
+        anyhow::bail!("meta.list_abilities: owner_ura and ability_ura owner must match");
     }
+    Ok(())
 }
 
 // ── Discovery surfaces ────────────────────────────────────────
@@ -571,13 +536,13 @@ pub fn list_abilities_input_schema() -> Value {
                      `realm` adds hub-published abilities the realm hub \
                      broadcast at join + heartbeat (RFC-001 v4.1.7)."
             },
-            "agent_ura": {
+            "owner_ura": {
                 "type": "string",
                 "description": "Canonical owner URA. Filters the catalogue to abilities published by that owner."
             },
-            "subject_ura": {
+            "ability_ura": {
                 "type": "string",
-                "description": "Owner URA or full Ability URA. Owner URAs filter by publisher; Ability URAs filter to one canonical ability."
+                "description": "Canonical Ability URA. Filters the catalogue to one exact ability descriptor set."
             }
         },
         "additionalProperties": false,
@@ -1171,7 +1136,7 @@ mod tests {
     }
 
     #[test]
-    fn list_abilities_filters_by_agent_ura_and_ability_subject() {
+    fn list_abilities_filters_by_owner_ura_and_ability_ura() {
         let alice = "easynet:///r/test-realm/agent/user-1.alice";
         let bob = "easynet:///r/test-realm/agent/user-1.bob";
         let mut reg = metadata_test_catalog();
@@ -1189,29 +1154,29 @@ mod tests {
         let by_owner = invoke_list(
             &reg,
             "easynet:///r/test-realm/device/test-device",
-            json!({ "agent_ura": alice }),
+            json!({ "owner_ura": alice }),
         )
         .unwrap();
         let abilities = by_owner["abilities"].as_array().unwrap();
         assert_eq!(
             abilities.len(),
             2,
-            "agent_ura must scope to the selected owner: {by_owner}"
+            "owner_ura must scope to the selected owner: {by_owner}"
         );
         assert!(abilities.iter().all(|a| a["owner_ura"] == alice));
 
-        let subject = crate::core::ura::owner_ability_ura(alice, "chat").unwrap();
-        let by_subject = invoke_list(
+        let ability_ura = crate::core::ura::owner_ability_ura(alice, "chat").unwrap();
+        let by_ability = invoke_list(
             &reg,
             "easynet:///r/test-realm/device/test-device",
-            json!({ "subject_ura": subject }),
+            json!({ "ability_ura": ability_ura }),
         )
         .unwrap();
-        let abilities = by_subject["abilities"].as_array().unwrap();
+        let abilities = by_ability["abilities"].as_array().unwrap();
         assert_eq!(
             abilities.len(),
             1,
-            "full Ability URA subject must scope to one ability: {by_subject}"
+            "full Ability URA must scope to one ability: {by_ability}"
         );
         assert_eq!(abilities[0]["name"], "chat");
         assert_eq!(abilities[0]["owner_ura"], alice);
@@ -1220,8 +1185,8 @@ mod tests {
             &reg,
             "easynet:///r/test-realm/device/test-device",
             json!({
-                "agent_ura": bob,
-                "subject_ura": crate::core::ura::owner_ability_ura(alice, "chat").unwrap(),
+                "owner_ura": bob,
+                "ability_ura": crate::core::ura::owner_ability_ura(alice, "chat").unwrap(),
             }),
         )
         .unwrap_err()
@@ -1241,6 +1206,22 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("unsupported field"), "got {err}");
+    }
+
+    #[test]
+    fn list_abilities_rejects_retired_agent_and_subject_scope_fields() {
+        let mut reg = metadata_test_catalog();
+        register(&mut reg, Vec::new, empty_registry_handle());
+
+        for legacy in [
+            json!({ "agent_ura": "easynet:///r/test/device/01DEV" }),
+            json!({ "subject_ura": "easynet:///r/test/ability/device.01DEV.meta.list_abilities" }),
+        ] {
+            let err = invoke_list(&reg, "easynet:///r/test/device/01DEV", legacy)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("unsupported field"), "got {err}");
+        }
     }
 
     #[test]

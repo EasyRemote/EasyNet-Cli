@@ -156,7 +156,7 @@
     {
       "language": "go",
       "case_id": "ability/descriptor_projection",
-      "selector": "TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors",
+      "selector": "TestRuntimeAbilityDescriptorProviderListsRuntimeDescriptors",
       "evidence": [
         "sdk/go/ability_descriptor_test.go"
       ]
@@ -860,7 +860,7 @@
     {
       "language": "python",
       "case_id": "ability/descriptor_projection",
-      "selector": "test_runtime_ability_descriptor_provider_lists_daemon_descriptors",
+      "selector": "test_runtime_ability_descriptor_provider_lists_runtime_descriptors",
       "evidence": [
         "sdk/python/tests/test_ability_descriptor.py"
       ]

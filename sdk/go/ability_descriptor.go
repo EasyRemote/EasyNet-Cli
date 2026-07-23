@@ -128,10 +128,10 @@ func (p *RuntimeAbilityDescriptorProvider) List(ctx context.Context, request Abi
 		args["scope"] = scope
 	}
 	if ownerURA := strings.TrimSpace(request.OwnerURA); ownerURA != "" {
-		args["agent_ura"] = ownerURA
+		args["owner_ura"] = ownerURA
 	}
 	if abilityURA := strings.TrimSpace(request.AbilityURA); abilityURA != "" {
-		args["subject_ura"] = abilityURA
+		args["ability_ura"] = abilityURA
 	}
 	output, err := p.ability.Invoke(ctx, request.Call, abilityDescriptorListAbility, args)
 	if err != nil {

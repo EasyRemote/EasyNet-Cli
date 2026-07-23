@@ -550,6 +550,55 @@ if go_runtime_lifecycle.exists():
                 f"Go SDK canonical runtime lifecycle is missing neutral diagnostic {token!r}",
             )
 
+descriptor_catalog_scope_files = {
+    cli_root / "src/daemon/ability/builtins/governance/meta.rs": (
+        '"owner_ura"',
+        '"ability_ura"',
+    ),
+    cli_root / "src/cli/daemon_client/ability_catalog.rs": (
+        '"owner_ura"',
+        '"ability_ura"',
+    ),
+    cli_root / "sdk/go/ability_descriptor.go": (
+        'args["owner_ura"] = ownerURA',
+        'args["ability_ura"] = abilityURA',
+    ),
+    cli_root / "sdk/python/easynet_sdk/ability_descriptor.py": (
+        'args["owner_ura"] = request.owner_ura.strip()',
+        'args["ability_ura"] = request.ability_ura.strip()',
+    ),
+}
+for path, required_tokens in descriptor_catalog_scope_files.items():
+    if not path.exists():
+        continue
+    text = source(path)
+    production_text = text.split("\n#[cfg(test)]", 1)[0].split("\nmod tests {", 1)[0]
+    for token in required_tokens:
+        if token not in production_text:
+            add(
+                "R3_RUNTIME_DESCRIPTOR_CATALOG_SCOPE",
+                path,
+                1,
+                f"runtime descriptor catalog scope must retain canonical field {token}",
+            )
+    for token in (
+        'args["agent_ura"]',
+        'args["subject_ura"]',
+        '"agent_ura".to_string()',
+        '"subject_ura".to_string()',
+        '"scope" | "agent_ura" | "subject_ura"',
+        "AbilitySubjectScope",
+        "merge_owner_scope(",
+    ):
+        index = production_text.find(token)
+        if index >= 0:
+            add(
+                "R3_RUNTIME_DESCRIPTOR_CATALOG_SCOPE",
+                path,
+                line_number(text, index),
+                "runtime descriptor catalog scope must not lower canonical owner/ability filters to retired agent_ura/subject_ura fields",
+            )
+
 axon_protocol_root = axon_root / "sdk/rust/src"
 axon_protocol_files = production_files(axon_protocol_root)
 ura_vocabulary_files = sorted(set(runtime_facade_files + axon_protocol_files))

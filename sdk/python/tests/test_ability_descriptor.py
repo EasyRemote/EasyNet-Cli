@@ -95,7 +95,7 @@ def test_project_ability_descriptor_merges_nested_descriptor() -> None:
     assert projection.metadata["tool_name"] == "skill.list"
 
 
-def test_runtime_ability_descriptor_provider_lists_daemon_descriptors() -> None:
+def test_runtime_ability_descriptor_provider_lists_runtime_descriptors() -> None:
     provider, transport = _provider()
     transport.output_json = {
         "abilities": [
@@ -133,7 +133,7 @@ def test_runtime_ability_descriptor_provider_lists_daemon_descriptors() -> None:
     )
     assert transport.seen["args"] == {
         "scope": "realm",
-        "agent_ura": "easynet:///r/example/authority",
+        "owner_ura": "easynet:///r/example/authority",
     }
     assert len(page.descriptors) == 1
     descriptor = page.descriptors[0]

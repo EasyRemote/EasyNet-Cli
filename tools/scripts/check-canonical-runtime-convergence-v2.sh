@@ -3174,6 +3174,79 @@ if "test_runtime_ability_descriptor_provider_get_reports_descriptor_not_found" n
 PY
 }
 
+check_runtime_descriptor_catalog_scope_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local meta="$cli_root/src/daemon/ability/builtins/governance/meta.rs"
+  local cli_catalog="$cli_root/src/cli/daemon_client/ability_catalog.rs"
+  local go="$cli_root/sdk/go/ability_descriptor.go"
+  local go_test="$cli_root/sdk/go/ability_descriptor_test.go"
+  local py="$cli_root/sdk/python/easynet_sdk/ability_descriptor.py"
+  local py_test="$cli_root/sdk/python/tests/test_ability_descriptor.py"
+
+  "$PYTHON_BIN" - "$meta" "$cli_catalog" "$go" "$go_test" "$py" "$py_test" <<'PY'
+import sys
+from pathlib import Path
+
+meta_path, cli_path, go_path, go_test_path, py_path, py_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"runtime_descriptor_catalog_scope_source_missing:{path}")
+    return path.read_text()
+
+def production(text: str) -> str:
+    return text.split("\n#[cfg(test)]", 1)[0].split("\nmod tests {", 1)[0]
+
+meta = read(meta_path)
+meta_prod = production(meta)
+if '"owner_ura"' not in meta_prod or '"ability_ura"' not in meta_prod:
+    raise SystemExit("runtime_descriptor_catalog_scope:meta_canonical_fields_missing")
+for retired in ('"agent_ura"', '"subject_ura"', "AbilitySubjectScope", "merge_owner_scope("):
+    if retired in meta_prod:
+        raise SystemExit(f"runtime_descriptor_catalog_scope:meta_retired_scope:{retired}")
+for required_test in (
+    "list_abilities_filters_by_owner_ura_and_ability_ura",
+    "list_abilities_rejects_retired_agent_and_subject_scope_fields",
+):
+    if required_test not in meta:
+        raise SystemExit(f"runtime_descriptor_catalog_scope:meta_test_missing:{required_test}")
+
+cli = read(cli_path)
+cli_prod = production(cli)
+if '"owner_ura"' not in cli_prod or '"ability_ura"' not in cli_prod:
+    raise SystemExit("runtime_descriptor_catalog_scope:cli_canonical_fields_missing")
+for retired in ('"agent_ura"', '"subject_ura"', "pub(crate) fn agent_ura", "pub(crate) fn subject_ura"):
+    if retired in cli_prod:
+        raise SystemExit(f"runtime_descriptor_catalog_scope:cli_retired_scope:{retired}")
+
+go = read(go_path)
+if 'args["owner_ura"] = ownerURA' not in go or 'args["ability_ura"] = abilityURA' not in go:
+    raise SystemExit("runtime_descriptor_catalog_scope:go_canonical_lowering_missing")
+for retired in ('args["agent_ura"]', 'args["subject_ura"]'):
+    if retired in go:
+        raise SystemExit(f"runtime_descriptor_catalog_scope:go_retired_lowering:{retired}")
+go_tests = read(go_test_path)
+if "TestRuntimeAbilityDescriptorProviderListsRuntimeDescriptors" not in go_tests:
+    raise SystemExit("runtime_descriptor_catalog_scope:go_runtime_descriptor_test_missing")
+if "TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors" in go_tests:
+    raise SystemExit("runtime_descriptor_catalog_scope:go_daemon_descriptor_test_retired")
+
+py = read(py_path)
+if 'args["owner_ura"] = request.owner_ura.strip()' not in py:
+    raise SystemExit("runtime_descriptor_catalog_scope:python_owner_lowering_missing")
+if 'args["ability_ura"] = request.ability_ura.strip()' not in py:
+    raise SystemExit("runtime_descriptor_catalog_scope:python_ability_lowering_missing")
+for retired in ('args["agent_ura"]', 'args["subject_ura"]', "daemon descriptor row"):
+    if retired in py:
+        raise SystemExit(f"runtime_descriptor_catalog_scope:python_retired_lowering:{retired}")
+py_tests = read(py_test_path)
+if "test_runtime_ability_descriptor_provider_lists_runtime_descriptors" not in py_tests:
+    raise SystemExit("runtime_descriptor_catalog_scope:python_runtime_descriptor_test_missing")
+if "test_runtime_ability_descriptor_provider_lists_daemon_descriptors" in py_tests:
+    raise SystemExit("runtime_descriptor_catalog_scope:python_daemon_descriptor_test_retired")
+PY
+}
+
 check_sdk_runtime_identity_signer_not_found_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/runtime_identity.go"
@@ -12677,10 +12750,39 @@ EOF
     > "$tmp/sdk-ability-descriptor-not-found-legacy/sdk/python/easynet_sdk/ability_descriptor.py"
   printf 'def test_runtime_ability_descriptor_provider_get_reports_descriptor_not_found(): pass\n' \
     > "$tmp/sdk-ability-descriptor-not-found-legacy/sdk/python/tests/test_ability_descriptor.py"
-  if ( check_sdk_ability_descriptor_not_found_vocabulary_contract "$tmp/sdk-ability-descriptor-not-found-legacy" ) >/dev/null 2>&1; then
-    fail "self-test expected SDK ability descriptor generic NOT_FOUND gate to fail"
-  fi
-  mkdir -p "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/go" \
+	  if ( check_sdk_ability_descriptor_not_found_vocabulary_contract "$tmp/sdk-ability-descriptor-not-found-legacy" ) >/dev/null 2>&1; then
+	    fail "self-test expected SDK ability descriptor generic NOT_FOUND gate to fail"
+	  fi
+	  mkdir -p "$tmp/runtime-descriptor-catalog-scope-legacy/src/daemon/ability/builtins/governance" \
+	    "$tmp/runtime-descriptor-catalog-scope-legacy/src/cli/daemon_client" \
+	    "$tmp/runtime-descriptor-catalog-scope-legacy/sdk/go" \
+	    "$tmp/runtime-descriptor-catalog-scope-legacy/sdk/python/easynet_sdk" \
+	    "$tmp/runtime-descriptor-catalog-scope-legacy/sdk/python/tests"
+	  printf '%s\n' \
+	    'fn from_args() { match key { "scope" | "agent_ura" | "subject_ura" => {} } }' \
+	    'fn list_abilities_filters_by_owner_ura_and_ability_ura() {}' \
+	    'fn list_abilities_rejects_retired_agent_and_subject_scope_fields() {}' \
+	    > "$tmp/runtime-descriptor-catalog-scope-legacy/src/daemon/ability/builtins/governance/meta.rs"
+	  printf '%s\n' \
+	    'pub(crate) fn agent_ura(&self) -> Option<&str> { None }' \
+	    'fn to_request() { body.insert("agent_ura".to_string(), value); }' \
+	    > "$tmp/runtime-descriptor-catalog-scope-legacy/src/cli/daemon_client/ability_catalog.rs"
+	  printf '%s\n' \
+	    'func f() { args["agent_ura"] = ownerURA; args["subject_ura"] = abilityURA }' \
+	    > "$tmp/runtime-descriptor-catalog-scope-legacy/sdk/go/ability_descriptor.go"
+	  printf 'func TestRuntimeAbilityDescriptorProviderListsRuntimeDescriptors(t *testing.T) {}\n' \
+	    > "$tmp/runtime-descriptor-catalog-scope-legacy/sdk/go/ability_descriptor_test.go"
+	  printf '%s\n' \
+	    'def list(request):' \
+	    '    args["agent_ura"] = request.owner_ura.strip()' \
+	    '    args["subject_ura"] = request.ability_ura.strip()' \
+	    > "$tmp/runtime-descriptor-catalog-scope-legacy/sdk/python/easynet_sdk/ability_descriptor.py"
+	  printf 'def test_runtime_ability_descriptor_provider_lists_runtime_descriptors(): pass\n' \
+	    > "$tmp/runtime-descriptor-catalog-scope-legacy/sdk/python/tests/test_ability_descriptor.py"
+	  if ( check_runtime_descriptor_catalog_scope_contract "$tmp/runtime-descriptor-catalog-scope-legacy" ) >/dev/null 2>&1; then
+	    fail "self-test expected runtime descriptor catalog legacy scope gate to fail"
+	  fi
+	  mkdir -p "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/go" \
     "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/python/easynet_sdk/providers/easynet" \
     "$tmp/sdk-runtime-identity-signer-not-found-legacy/sdk/python/tests"
   printf '%s\n' \
@@ -15503,10 +15605,11 @@ EOF
   check_sdk_control_discovery_strict_wire_contract
   check_control_frame_schema_contract
   check_sdk_history_authority_subject_contract
-  check_sdk_descriptor_resolution_error_vocabulary_contract
-  check_sdk_runtime_client_provider_readiness_contract
-  check_sdk_ability_descriptor_not_found_vocabulary_contract
-  check_sdk_runtime_identity_signer_not_found_contract
+	  check_sdk_descriptor_resolution_error_vocabulary_contract
+	  check_sdk_runtime_client_provider_readiness_contract
+	  check_sdk_ability_descriptor_not_found_vocabulary_contract
+	  check_runtime_descriptor_catalog_scope_contract
+	  check_sdk_runtime_identity_signer_not_found_contract
   check_sdk_easynet_provider_identity_alias_contract
   check_sdk_python_transport_stream_event_projection_contract
   check_sdk_python_invocation_result_adapter_projection_contract
@@ -15672,6 +15775,7 @@ check_sdk_prepared_descriptor_ref_required_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_runtime_client_provider_readiness_contract
 check_sdk_ability_descriptor_not_found_vocabulary_contract
+check_runtime_descriptor_catalog_scope_contract
 check_sdk_runtime_identity_signer_not_found_contract
 check_sdk_easynet_provider_identity_alias_contract
 check_sdk_python_transport_stream_event_projection_contract

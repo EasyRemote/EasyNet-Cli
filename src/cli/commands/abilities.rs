@@ -44,9 +44,9 @@
 //   --agent-ura <URA>  Canonical owner URA scope; required for remote
 //                      owner filtering.
 //   --subject-ura <URA>
-//                      Owner URA or full Ability URA. Owner URAs
-//                      filter by publisher; Ability URAs filter to one
-//                      canonical ability.
+//                      Public compatibility flag. Owner URAs are projected to
+//                      canonical owner_ura; Ability URAs are projected to
+//                      canonical ability_ura.
 //   --pattern <glob>   Glob filter on the fully qualified name. `*`
 //                      matches anything but `.`; `**` matches across
 //                      `.` boundaries.
@@ -120,7 +120,7 @@ pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
     }
 
     if filtered.is_empty() {
-        let scope = scope_label(query.agent_ura(), query.subject_ura(), &args.pattern);
+        let scope = scope_label(query.owner_ura(), query.ability_ura(), &args.pattern);
         output::warn(&format!(
             "no abilities matched {scope} on the local node. Use \
              `easynet ability list --format json` to see the full catalogue, \
@@ -173,8 +173,40 @@ impl AbilityCatalogueQuery {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string);
+        let (subject_owner_ura, ability_ura) = classify_catalogue_subject_scope(subject_ura)?;
+        let owner_ura = merge_catalogue_owner_scope(agent_ura, subject_owner_ura)?;
 
-        Ok(Self::new(agent_ura, subject_ura))
+        Ok(Self::new(owner_ura, ability_ura))
+    }
+}
+
+fn classify_catalogue_subject_scope(
+    subject_ura: Option<String>,
+) -> anyhow::Result<(Option<String>, Option<String>)> {
+    let Some(subject_ura) = subject_ura else {
+        return Ok((None, None));
+    };
+    let parsed = parse_ura(&subject_ura)?;
+    match parsed.kind {
+        URAKind::Ability => Ok((None, Some(subject_ura))),
+        URAKind::Agent | URAKind::Device | URAKind::Authority | URAKind::User => {
+            Ok((Some(subject_ura), None))
+        }
+        other => bail!("--subject-ura must be an owner URA or Ability URA, got {other:?}"),
+    }
+}
+
+fn merge_catalogue_owner_scope(
+    explicit_owner_ura: Option<String>,
+    subject_owner_ura: Option<String>,
+) -> anyhow::Result<Option<String>> {
+    match (explicit_owner_ura, subject_owner_ura) {
+        (Some(explicit), Some(subject)) if explicit != subject => {
+            bail!("--agent/--agent-ura owner scope does not match --subject-ura owner scope")
+        }
+        (Some(explicit), _) => Ok(Some(explicit)),
+        (None, Some(subject)) => Ok(Some(subject)),
+        (None, None) => Ok(None),
     }
 }
 
@@ -568,17 +600,17 @@ fn split_qualified(name: &str) -> (&str, &str) {
     }
 }
 
-fn scope_label(agent_ura: Option<&str>, subject_ura: Option<&str>, pattern: &str) -> String {
-    match (agent_ura, subject_ura, pattern.is_empty()) {
+fn scope_label(owner_ura: Option<&str>, ability_ura: Option<&str>, pattern: &str) -> String {
+    match (owner_ura, ability_ura, pattern.is_empty()) {
         (None, None, true) => "anything".to_string(),
         (None, None, false) => format!("pattern {pattern:?}"),
-        (Some(a), None, true) => format!("agent_ura {a:?}"),
-        (Some(a), None, false) => format!("agent_ura {a:?} + pattern {pattern:?}"),
-        (None, Some(s), true) => format!("subject_ura {s:?}"),
-        (None, Some(s), false) => format!("subject_ura {s:?} + pattern {pattern:?}"),
-        (Some(a), Some(s), true) => format!("agent_ura {a:?} + subject_ura {s:?}"),
+        (Some(a), None, true) => format!("owner_ura {a:?}"),
+        (Some(a), None, false) => format!("owner_ura {a:?} + pattern {pattern:?}"),
+        (None, Some(s), true) => format!("ability_ura {s:?}"),
+        (None, Some(s), false) => format!("ability_ura {s:?} + pattern {pattern:?}"),
+        (Some(a), Some(s), true) => format!("owner_ura {a:?} + ability_ura {s:?}"),
         (Some(a), Some(s), false) => {
-            format!("agent_ura {a:?} + subject_ura {s:?} + pattern {pattern:?}")
+            format!("owner_ura {a:?} + ability_ura {s:?} + pattern {pattern:?}")
         }
     }
 }
@@ -611,7 +643,7 @@ mod tests {
         assert_eq!(
             out.len(),
             4,
-            "owner scope belongs to meta.list_abilities agent_ura/subject_ura, not CLI name-prefix filtering"
+            "owner scope belongs to meta.list_abilities owner_ura/ability_ura, not CLI name-prefix filtering"
         );
     }
 
@@ -686,11 +718,46 @@ mod tests {
         })
         .unwrap();
         let body = query.to_request();
-        assert_eq!(body["agent_ura"], "easynet:///r/test/agent/user-1.alice");
+        assert_eq!(body["owner_ura"], "easynet:///r/test/agent/user-1.alice");
         assert_eq!(
-            body["subject_ura"],
+            body["ability_ura"],
             "easynet:///r/test/ability/user-1.alice.chat"
         );
+    }
+
+    #[test]
+    fn catalogue_query_projects_subject_owner_to_owner_scope() {
+        let query = AbilityCatalogueQuery::from_args(&AbilitiesArgs {
+            agent: None,
+            agent_ura: None,
+            subject_ura: Some("easynet:///r/test/device/dev-1".into()),
+            node: None,
+            pattern: String::new(),
+            format: OutputFormat::Json,
+        })
+        .unwrap();
+        let body = query.to_request();
+
+        assert_eq!(body["owner_ura"], "easynet:///r/test/device/dev-1");
+        assert!(body.get("ability_ura").is_none());
+        assert!(body.get("subject_ura").is_none());
+        assert!(body.get("agent_ura").is_none());
+    }
+
+    #[test]
+    fn catalogue_query_rejects_conflicting_subject_owner_scope() {
+        let err = AbilityCatalogueQuery::from_args(&AbilitiesArgs {
+            agent: None,
+            agent_ura: Some("easynet:///r/test/device/dev-1".into()),
+            subject_ura: Some("easynet:///r/test/device/dev-2".into()),
+            node: None,
+            pattern: String::new(),
+            format: OutputFormat::Json,
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("does not match"), "got {err}");
     }
 
     #[test]

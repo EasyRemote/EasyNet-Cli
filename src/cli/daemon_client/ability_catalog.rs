@@ -16,35 +16,35 @@ use crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AbilityCatalogueQuery {
-    agent_ura: Option<String>,
-    subject_ura: Option<String>,
+    owner_ura: Option<String>,
+    ability_ura: Option<String>,
 }
 
 impl AbilityCatalogueQuery {
-    pub(crate) fn new(agent_ura: Option<String>, subject_ura: Option<String>) -> Self {
+    pub(crate) fn new(owner_ura: Option<String>, ability_ura: Option<String>) -> Self {
         Self {
-            agent_ura,
-            subject_ura,
+            owner_ura,
+            ability_ura,
         }
     }
 
-    pub(crate) fn agent_ura(&self) -> Option<&str> {
-        self.agent_ura.as_deref()
+    pub(crate) fn owner_ura(&self) -> Option<&str> {
+        self.owner_ura.as_deref()
     }
 
-    pub(crate) fn subject_ura(&self) -> Option<&str> {
-        self.subject_ura.as_deref()
+    pub(crate) fn ability_ura(&self) -> Option<&str> {
+        self.ability_ura.as_deref()
     }
 
     pub(crate) fn to_request(&self) -> Value {
         let mut body = serde_json::Map::new();
-        if let Some(agent_ura) = self.agent_ura.as_ref() {
-            body.insert("agent_ura".to_string(), Value::String(agent_ura.clone()));
+        if let Some(owner_ura) = self.owner_ura.as_ref() {
+            body.insert("owner_ura".to_string(), Value::String(owner_ura.clone()));
         }
-        if let Some(subject_ura) = self.subject_ura.as_ref() {
+        if let Some(ability_ura) = self.ability_ura.as_ref() {
             body.insert(
-                "subject_ura".to_string(),
-                Value::String(subject_ura.clone()),
+                "ability_ura".to_string(),
+                Value::String(ability_ura.clone()),
             );
         }
         Value::Object(body)

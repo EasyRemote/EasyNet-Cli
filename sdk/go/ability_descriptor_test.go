@@ -94,14 +94,14 @@ func TestParseAbilityDescriptorRefUsesCanonicalAxonProjection(t *testing.T) {
 	}
 }
 
-func TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors(t *testing.T) {
+func TestRuntimeAbilityDescriptorProviderListsRuntimeDescriptors(t *testing.T) {
 	var seen map[string]any
 	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
 		if err := json.Unmarshal(raw, &seen); err != nil {
 			return nil, err
 		}
 		args := seen["args"].(map[string]any)
-		if args["agent_ura"] != "easynet:///r/example/authority" || args["scope"] != "realm" {
+		if args["owner_ura"] != "easynet:///r/example/authority" || args["scope"] != "realm" {
 			t.Fatalf("provider did not lower filters to runtime catalog args: %#v", args)
 		}
 		return runtimeAbilityResultJSON(true, `{"abilities":[{
@@ -160,9 +160,9 @@ func TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors(t *testing.T) {
 		got.SchemaSummary["input"] == nil ||
 		got.InputSchema["type"] != "object" ||
 		got.Metadata["stable"] != "true" {
-		t.Fatalf("descriptor projection lost daemon facts: %#v", got)
+			t.Fatalf("descriptor projection lost runtime facts: %#v", got)
+		}
 	}
-}
 
 func TestRuntimeAbilityDescriptorProviderGetRejectsAmbiguousDescriptors(t *testing.T) {
 	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {

@@ -134,9 +134,9 @@ class RuntimeAbilityDescriptorProvider:
         if request.scope.strip():
             args["scope"] = request.scope.strip()
         if request.owner_ura.strip():
-            args["agent_ura"] = request.owner_ura.strip()
+            args["owner_ura"] = request.owner_ura.strip()
         if request.ability_ura.strip():
-            args["subject_ura"] = request.ability_ura.strip()
+            args["ability_ura"] = request.ability_ura.strip()
         output = self._ability.invoke(request.call, _ABILITY_DESCRIPTOR_LIST_ABILITY, args)
         raw_abilities = output.get("abilities")
         if not isinstance(raw_abilities, list):
@@ -228,7 +228,7 @@ def parse_ability_descriptor_ref(
 
 
 def project_ability_descriptor(raw: Mapping[str, object]) -> AbilityDescriptorProjection:
-    """Project one daemon descriptor row without deriving governed facts."""
+    """Project one runtime descriptor row without deriving governed facts."""
 
     values = _merge_descriptor(raw)
     name = _text(values.get("name"))
