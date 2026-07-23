@@ -39,11 +39,13 @@ use anyhow::Context as _;
 use once_cell::sync::Lazy;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::daemon::ability::descriptors::AdmissionAction;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler};
+
+use super::api_key_projection::{ApiKeyCreateResponse, ApiKeyListResponse, ApiKeyRevokeResponse};
 
 /// Process-wide lock around the api_keys.toml read-modify-write
 /// cycle. Without it, two concurrent `mint_api_key` invocations
@@ -173,37 +175,18 @@ pub fn handle_create(user: &str, realm: &str, args: Value) -> anyhow::Result<Val
         crate::core::ura::resource_dot_ura(realm, &format!("api_key.{id}"), "")
     };
 
-    Ok(json!({
-        "token":          token,                          // ONLY returned here
-        "key_ura":        key_ura,
-        "id_prefix":      entry.id_prefix,
-        "user_ura":       entry.user_ura,
-        "label":          entry.label,
-        "created_at":     entry.created_at,
-        "warning":        "Save the token now. It is the only time we will show it.",
-    }))
+    Ok(serde_json::to_value(ApiKeyCreateResponse::one_time_token(
+        token, key_ura, &entry,
+    ))?)
 }
 
 /// List keys (without exposing tokens).
 pub fn handle_list(user: &str, realm: &str, _args: Value) -> anyhow::Result<Value> {
     let store = load_store()?;
     let user_ura = crate::core::ura::user_ura(realm, user);
-    let mine: Vec<_> = store
-        .keys
-        .iter()
-        .filter(|k| k.user_ura == user_ura)
-        .map(|k| {
-            json!({
-                "id_prefix":     k.id_prefix,
-                "label":         k.label,
-                "created_at":    k.created_at,
-                "last_used_at":  k.last_used_at,
-                "revoked":       k.revoked_at.is_some(),
-                "revoked_at":    k.revoked_at,
-            })
-        })
-        .collect();
-    Ok(json!({ "keys": mine }))
+    Ok(serde_json::to_value(ApiKeyListResponse::from_entries(
+        store.keys.iter().filter(|key| key.user_ura == user_ura),
+    ))?)
 }
 
 /// Revoke a key by id_prefix.
@@ -231,7 +214,9 @@ pub fn handle_revoke(user: &str, realm: &str, args: Value) -> anyhow::Result<Val
         anyhow::bail!("key {id_prefix} not found for user {user}");
     }
     save_store(&store)?;
-    Ok(json!({ "revoked": id_prefix }))
+    Ok(serde_json::to_value(ApiKeyRevokeResponse::revoked(
+        id_prefix,
+    ))?)
 }
 
 /// Resolve a Bearer token to a user URA, mutating last_used_at.
@@ -353,6 +338,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, user: &str, realm: &str) {
 mod tests {
     use super::*;
     use crate::cli::commands::test_support::HomeGuard;
+    use serde_json::json;
 
     fn seed_malformed_store() {
         let path = store_path();
@@ -486,6 +472,44 @@ legacy_scope = "all"
                 .starts_with("easynet:///r/custom-realm/resource/api_key."),
             "key URA should use registered realm: {created}"
         );
+    }
+
+    #[test]
+    fn create_list_revoke_return_typed_public_shapes_without_secret_leaks() {
+        let _home = HomeGuard::new();
+
+        let created =
+            handle_create("alice", "example", json!({"label": "dev"})).expect("create API key");
+        let id_prefix = created["id_prefix"]
+            .as_str()
+            .expect("created id_prefix")
+            .to_string();
+
+        assert!(created["token"]
+            .as_str()
+            .expect("one-time token")
+            .starts_with("easynet-sk-"));
+        assert_eq!(created["label"], "dev");
+        assert!(created.get("token_hash").is_none());
+
+        let listed = handle_list("alice", "example", json!({})).expect("list API keys");
+        assert_eq!(listed["keys"].as_array().expect("keys array").len(), 1);
+        assert_eq!(listed["keys"][0]["id_prefix"], id_prefix);
+        assert_eq!(listed["keys"][0]["label"], "dev");
+        assert_eq!(listed["keys"][0]["revoked"], false);
+        assert!(listed["keys"][0].get("token").is_none());
+        assert!(listed["keys"][0].get("token_hash").is_none());
+        assert!(listed["keys"][0].get("user_ura").is_none());
+
+        let revoked = handle_revoke("alice", "example", json!({"id_prefix": id_prefix}))
+            .expect("revoke API key");
+        assert_eq!(revoked["revoked"], created["id_prefix"]);
+        assert!(revoked.get("user_ura").is_none());
+
+        let listed_after_revoke =
+            handle_list("alice", "example", json!({})).expect("list revoked API key");
+        assert_eq!(listed_after_revoke["keys"][0]["revoked"], true);
+        assert!(listed_after_revoke["keys"][0]["revoked_at"].is_number());
     }
 
     #[test]

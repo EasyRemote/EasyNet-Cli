@@ -3774,6 +3774,106 @@ for required in (
 PY
 }
 
+check_api_key_response_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local api_key="$cli_root/src/daemon/ability/builtins/governance/api_key.rs"
+  local projection="$cli_root/src/daemon/ability/builtins/governance/api_key_projection.rs"
+  local governance_mod="$cli_root/src/daemon/ability/builtins/governance/mod.rs"
+  [[ -f "$api_key" ]] || return 0
+  [[ -f "$projection" ]] || fail "API key response projection source is missing: $projection"
+
+  "$PYTHON_BIN" - "$api_key" "$projection" "$governance_mod" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+api_key, projection = [Path(arg).read_text(encoding="utf-8") for arg in sys.argv[1:3]]
+governance_mod = Path(sys.argv[3]).read_text(encoding="utf-8") if Path(sys.argv[3]).exists() else ""
+
+if "pub mod api_key_projection;" not in governance_mod:
+    raise SystemExit("api_key_response_projection:module_not_exported")
+
+def struct_with_attrs(name: str) -> tuple[str, str]:
+    match = re.search(
+        r"(?P<attrs>(?:#\[[^\n]+\]\n)*)"
+        + rf"pub struct {name} \{{(?P<body>.*?)\n\}}",
+        projection,
+        re.S,
+    )
+    if match is None:
+        raise SystemExit(f"api_key_response_projection:{name}:missing")
+    attrs = match.group("attrs")
+    body = match.group("body")
+    if "#[serde(deny_unknown_fields)]" not in attrs:
+        raise SystemExit(f"api_key_response_projection:{name}:missing_deny_unknown_fields")
+    return attrs, body
+
+_, create_body = struct_with_attrs("ApiKeyCreateResponse")
+_, list_item_body = struct_with_attrs("ApiKeyListItem")
+_, list_body = struct_with_attrs("ApiKeyListResponse")
+_, revoke_body = struct_with_attrs("ApiKeyRevokeResponse")
+
+for field in (
+    "pub token: String",
+    "pub key_ura: String",
+    "pub id_prefix: String",
+    "pub user_ura: String",
+    "pub label: Option<String>",
+    "pub created_at: u64",
+    "pub warning: String",
+):
+    if field not in create_body:
+        raise SystemExit(f"api_key_response_projection:create_missing_field:{field}")
+for field in (
+    "pub id_prefix: String",
+    "pub label: Option<String>",
+    "pub created_at: u64",
+    "pub last_used_at: Option<u64>",
+    "pub revoked: bool",
+    "pub revoked_at: Option<u64>",
+):
+    if field not in list_item_body:
+        raise SystemExit(f"api_key_response_projection:list_item_missing_field:{field}")
+if "pub keys: Vec<ApiKeyListItem>" not in list_body:
+    raise SystemExit("api_key_response_projection:list_missing_keys")
+if "pub revoked: String" not in revoke_body:
+    raise SystemExit("api_key_response_projection:revoke_missing_revoked")
+if "token_hash" in list_item_body or "pub token:" in list_item_body or "user_ura" in list_item_body:
+    raise SystemExit("api_key_response_projection:list_item_leaks_secret_or_owner")
+
+for required in (
+    "ApiKeyCreateResponse::one_time_token(",
+    "ApiKeyListResponse::from_entries(",
+    "ApiKeyRevokeResponse::revoked(",
+    "api_key_create_response_preserves_public_shape_without_hash",
+    "api_key_list_response_preserves_public_shape_without_secret_material",
+    "api_key_revoke_response_preserves_public_shape",
+    "api_key_response_dtos_reject_unknown_fields",
+):
+    if required not in projection:
+        raise SystemExit(f"api_key_response_projection:projection_missing:{required}")
+
+for retired in (
+    '"token":          token',
+    '"key_ura":        key_ura',
+    '"id_prefix":     k.id_prefix',
+    'Ok(json!({ "keys": mine }))',
+    'Ok(json!({ "revoked": id_prefix }))',
+):
+    if retired in api_key:
+        raise SystemExit(f"api_key_response_projection:handler_retired:{retired}")
+
+for required in (
+    "ApiKeyCreateResponse::one_time_token(",
+    "ApiKeyListResponse::from_entries(",
+    "ApiKeyRevokeResponse::revoked(",
+    "create_list_revoke_return_typed_public_shapes_without_secret_leaks",
+):
+    if required not in api_key:
+        raise SystemExit(f"api_key_response_projection:handler_missing:{required}")
+PY
+}
+
 check_cli_credentials_optional_read_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local src_root="$cli_root/src"
@@ -11415,6 +11515,42 @@ EOF
   if ( check_api_key_store_schema_contract "$tmp/api-key-store-schema-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected API key store schema compatibility gate to fail"
   fi
+  mkdir -p "$tmp/api-key-response-projection-legacy/src/daemon/ability/builtins/governance"
+  cat >"$tmp/api-key-response-projection-legacy/src/daemon/ability/builtins/governance/mod.rs" <<'EOF'
+pub mod api_key;
+EOF
+  cat >"$tmp/api-key-response-projection-legacy/src/daemon/ability/builtins/governance/api_key_projection.rs" <<'EOF'
+pub struct ApiKeyListItem {
+    pub id_prefix: String,
+    pub token_hash: String,
+}
+EOF
+  cat >"$tmp/api-key-response-projection-legacy/src/daemon/ability/builtins/governance/api_key.rs" <<'EOF'
+fn handle_create() -> Value {
+    Ok(json!({
+        "token":          token,
+        "key_ura":        key_ura,
+        "id_prefix":      entry.id_prefix,
+        "user_ura":       entry.user_ura,
+        "label":          entry.label,
+        "created_at":     entry.created_at,
+        "warning":        "Save the token now. It is the only time we will show it.",
+    }))
+}
+fn handle_list() -> Value {
+    let mine: Vec<_> = store.keys.iter().map(|k| json!({
+        "id_prefix":     k.id_prefix,
+        "token_hash":    k.token_hash,
+    })).collect();
+    Ok(json!({ "keys": mine }))
+}
+fn handle_revoke() -> Value {
+    Ok(json!({ "revoked": id_prefix }))
+}
+EOF
+  if ( check_api_key_response_projection_contract "$tmp/api-key-response-projection-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected API key response projection gate to fail"
+  fi
   mkdir -p "$tmp/local-api-key-cache-legacy/src/daemon/ability/builtins/governance" \
     "$tmp/local-api-key-cache-legacy/src/cli/commands"
   printf '%s\n' \
@@ -13225,6 +13361,7 @@ EOF
   check_target_gate_credential_state_contract
   check_api_key_cli_identity_contract
   check_api_key_store_schema_contract
+  check_api_key_response_projection_contract
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
   check_runtime_trust_user_key_inventory_scope_contract
@@ -13380,6 +13517,7 @@ check_credentials_user_binding_validation_contract
 check_target_gate_credential_state_contract
 check_api_key_cli_identity_contract
 check_api_key_store_schema_contract
+check_api_key_response_projection_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_runtime_trust_user_key_inventory_scope_contract

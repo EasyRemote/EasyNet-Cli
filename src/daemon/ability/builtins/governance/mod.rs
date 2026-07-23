@@ -1,6 +1,7 @@
 pub mod access_control;
 pub mod admin_status;
 pub mod api_key;
+pub mod api_key_projection;
 pub mod consent;
 pub mod health;
 #[cfg(feature = "axon-pb")]
