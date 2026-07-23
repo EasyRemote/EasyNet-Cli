@@ -7846,6 +7846,47 @@ for required_test in (
 PY
 }
 
+check_swift_sdk_runtime_receipt_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local runtime="$cli_root/sdk/swift/Sources/RuntimeSDK/Runtime.swift"
+  local tests="$cli_root/sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+  [[ -f "$runtime" ]] || fail "Swift Runtime source is missing: ${runtime#$cli_root/}"
+  [[ -f "$tests" ]] || fail "Swift runtime tests are missing: ${tests#$cli_root/}"
+
+  "$PYTHON_BIN" - "$runtime" "$tests" <<'PY'
+import sys
+from pathlib import Path
+
+runtime = Path(sys.argv[1]).read_text(encoding="utf-8")
+tests = Path(sys.argv[2]).read_text(encoding="utf-8")
+
+if 'object.keys.contains("receipt")' not in runtime or "retired receipt alias is not accepted" not in runtime:
+    raise SystemExit("swift_runtime_receipt_projection:retired_receipt_alias_not_rejected")
+if "runtimeRequiredTerminalReceipt(object)" not in runtime:
+    raise SystemExit("swift_runtime_receipt_projection:terminal_receipt_not_required")
+if "terminal_receipt is required" not in runtime:
+    raise SystemExit("swift_runtime_receipt_projection:terminal_receipt_required_error_missing")
+if "terminal_receipt must be an object" not in runtime:
+    raise SystemExit("swift_runtime_receipt_projection:terminal_receipt_type_error_missing")
+for retired, label in {
+    "runtimeStringMap(object[\"terminal_receipt\"])": "optional_terminal_receipt_decoder",
+    "private func runtimeStringMap(_ value: Any?) -> [String: String]": "malformed_terminal_receipt_downgrade",
+    "private func runtimeRequiredStringMap(_ object: [String: Any], _ field: String, _ label: String)": "generic_terminal_receipt_projection",
+    "XCTAssertTrue(legacyOnly.terminalReceipt.isEmpty)": "retired_alias_empty_projection_test",
+}.items():
+    if retired in runtime or retired in tests:
+        raise SystemExit(f"swift_runtime_receipt_projection:{label}")
+for required_test in (
+    "testInvocationResultUsesTerminalReceipt",
+    '"receipt":{"receipt_ref":"legacy-only"}',
+    '"terminal_state":"Completed"}',
+    '"terminal_receipt":"bad"',
+):
+    if required_test not in tests:
+        raise SystemExit(f"swift_runtime_receipt_projection:missing_test:{required_test}")
+PY
+}
+
 check_sdk_runtime_receipt_type_state_binding_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local go_runtime="$cli_root/sdk/go/runtime.go"
@@ -11567,6 +11608,7 @@ EOF
   check_receipt_proof_fact_contract
   check_java_sdk_runtime_receipt_projection_contract
   check_node_sdk_runtime_receipt_projection_contract
+  check_swift_sdk_runtime_receipt_projection_contract
   check_sdk_runtime_receipt_type_state_binding_contract
   check_start_attach_user_signer_readiness_contract
   echo "canonical-runtime-convergence-v2 self-test ok"
@@ -11707,5 +11749,6 @@ check_cli_signed_submission_boundary_contract
 check_receipt_proof_fact_contract
 check_java_sdk_runtime_receipt_projection_contract
 check_node_sdk_runtime_receipt_projection_contract
+check_swift_sdk_runtime_receipt_projection_contract
 check_sdk_runtime_receipt_type_state_binding_contract
 echo "canonical-runtime-convergence-v2: OK"

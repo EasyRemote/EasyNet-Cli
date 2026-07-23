@@ -37,6 +37,9 @@ public struct InvocationResult: Sendable {
 
     static func fromJSON(_ raw: Data) throws -> InvocationResult {
         let object = try runtimeJSONObject(raw, "invocation_result")
+        if object.keys.contains("receipt") {
+            throw SDKError.validation("invocation_result", "retired receipt alias is not accepted")
+        }
         let terminalState = try InvocationTerminalState(
             rawValue: runtimeRequiredString(object, "terminal_state", "invocation_result")
         ).unwrap("terminal_state")
@@ -45,7 +48,7 @@ public struct InvocationResult: Sendable {
             terminalState: terminalState,
             outputJSON: runtimeOptionalJSONObjectString(object["output_json"]),
             error: nil,
-            terminalReceipt: runtimeStringMap(object["terminal_receipt"])
+            terminalReceipt: try runtimeRequiredTerminalReceipt(object)
         )
     }
 }
@@ -333,11 +336,14 @@ private func runtimeRequiredInt64(_ object: [String: Any], _ field: String, _ la
     throw SDKError.validation(label, "\(field) must be an integer")
 }
 
-private func runtimeStringMap(_ value: Any?) -> [String: String] {
-    guard let object = value as? [String: Any] else {
-        return [:]
+private func runtimeRequiredTerminalReceipt(_ object: [String: Any]) throws -> [String: String] {
+    guard let value = object["terminal_receipt"] else {
+        throw SDKError.validation("invocation_result", "terminal_receipt is required")
     }
-    return object.compactMapValues { $0 as? String }
+    guard let map = value as? [String: Any] else {
+        throw SDKError.validation("invocation_result", "terminal_receipt must be an object")
+    }
+    return map.compactMapValues { $0 as? String }
 }
 
 private func runtimeOptionalJSONObjectString(_ value: Any?) throws -> String {

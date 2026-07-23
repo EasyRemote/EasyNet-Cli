@@ -158,13 +158,24 @@ final class RuntimeCoreSeamTests: XCTestCase {
         )
         XCTAssertEqual(canonical.terminalReceipt["receipt_ref"], "canonical-terminal")
 
-        let legacyOnly = try InvocationResult.fromJSON(
-            Data(
-                #"{"ok":true,"terminal_state":"Completed","receipt":{"receipt_ref":"legacy-only"}}"#
-                    .utf8
+        expectSyncSDKError(.invalidArgument) {
+            _ = try InvocationResult.fromJSON(
+                Data(
+                    #"{"ok":true,"terminal_state":"Completed","receipt":{"receipt_ref":"legacy-only"}}"#
+                        .utf8
+                )
             )
-        )
-        XCTAssertTrue(legacyOnly.terminalReceipt.isEmpty)
+        }
+        expectSyncSDKError(.invalidArgument) {
+            _ = try InvocationResult.fromJSON(
+                Data(#"{"ok":true,"terminal_state":"Completed"}"#.utf8)
+            )
+        }
+        expectSyncSDKError(.invalidArgument) {
+            _ = try InvocationResult.fromJSON(
+                Data(#"{"ok":true,"terminal_state":"Completed","terminal_receipt":"bad"}"#.utf8)
+            )
+        }
     }
 
     func testAuthorityMetadataIsTypedAndMutuallyExclusive() async throws {
