@@ -68,6 +68,7 @@ for target in \
   "$SB/src/cli/daemon_client/ability_catalog.rs" \
   "$SB/src/cli/commands/groups/invocation.rs" \
   "$SB/src/cli/commands/invocation_watch.rs" \
+  "$SB/src/cli/commands/user_signing_identity.rs" \
   "$SB/src/daemon/ability/catalog/profiles/mcp.rs"
 do
   mkdir -p "$(dirname "$target")"

@@ -20,6 +20,7 @@ TARGETS=(
   "src/cli/daemon_client/ability_catalog.rs"
   "src/cli/commands/groups/invocation.rs"
   "src/cli/commands/invocation_watch.rs"
+  "src/cli/commands/user_signing_identity.rs"
   "src/daemon/ability/catalog/profiles/mcp.rs"
 )
 
