@@ -121,16 +121,22 @@ mod tests {
         AgentAggregateSnapshot::new(registry, LocalAgentsFile::default())
     }
 
+    fn agent_list_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(
+            "easynet:///r/test/device/agent-list",
+        )
+    }
+
     #[test]
     fn registration_makes_list_agents_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = agent_list_test_catalog();
         register(&mut reg, || Ok(snapshot(AgentRegistry::default())));
         assert!(reg.get_rpc(ABILITY_LIST_AGENTS).is_some());
     }
 
     #[test]
     fn list_agents_empty_registry_returns_empty_array() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = agent_list_test_catalog();
         register(&mut reg, || Ok(snapshot(AgentRegistry::default())));
         let handler = reg.get_rpc(ABILITY_LIST_AGENTS).unwrap();
         let resp = handler(json!({})).unwrap();
@@ -139,7 +145,7 @@ mod tests {
 
     #[test]
     fn list_agents_propagates_registry_load_failure() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = agent_list_test_catalog();
         register(&mut reg, || anyhow::bail!("durable registry is unreadable"));
         let handler = reg.get_rpc(ABILITY_LIST_AGENTS).unwrap();
 
@@ -156,7 +162,7 @@ mod tests {
         entry.with_label(Some("primary".to_string()));
         registry.agents.insert("claude".to_string(), entry);
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = agent_list_test_catalog();
         let registry_snapshot = registry.clone();
         register(&mut reg, move || Ok(snapshot(registry_snapshot.clone())));
         let handler = reg.get_rpc(ABILITY_LIST_AGENTS).unwrap();
@@ -199,7 +205,7 @@ mod tests {
             registered_entry(AgentType::Codex, None, "minimal"),
         );
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = agent_list_test_catalog();
         let registry_snapshot = registry.clone();
         register(&mut reg, move || Ok(snapshot(registry_snapshot.clone())));
         let handler = reg.get_rpc(ABILITY_LIST_AGENTS).unwrap();
