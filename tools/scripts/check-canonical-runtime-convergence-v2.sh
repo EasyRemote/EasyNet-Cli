@@ -3912,6 +3912,12 @@ _, create_body = struct_with_attrs("ManagedSigningCreateResponse")
 _, list_entry_body = struct_with_attrs("ManagedSigningListEntry")
 _, list_body = struct_with_attrs("ManagedSigningListResponse")
 _, public_body = struct_with_attrs("ManagedSigningPublicResponse")
+_, rotate_body = struct_with_attrs("ManagedSigningRotateResponse")
+_, revoke_body = struct_with_attrs("ManagedSigningRevokeResponse")
+_, ack_body = struct_with_attrs("ManagedSigningAckResponse")
+_, peer_add_body = struct_with_attrs("ManagedSigningPeerAddResponse")
+_, peer_list_entry_body = struct_with_attrs("ManagedSigningPeerListEntry")
+_, peer_list_body = struct_with_attrs("ManagedSigningPeerListResponse")
 
 for field in (
     "pub key_id: String",
@@ -3945,17 +3951,56 @@ for field in (
 ):
     if field not in public_body:
         raise SystemExit(f"managed_signing_response_projection:public_missing_field:{field}")
+for field in (
+    "pub new_key_id: String",
+    "pub retired_key_id: String",
+    "pub rotation_epoch: u64",
+):
+    if field not in rotate_body:
+        raise SystemExit(f"managed_signing_response_projection:rotate_missing_field:{field}")
+if "pub tombstone_unix_ms: i64" not in revoke_body:
+    raise SystemExit("managed_signing_response_projection:revoke_missing_tombstone")
+if "pub ok: bool" not in ack_body:
+    raise SystemExit("managed_signing_response_projection:ack_missing_ok")
+if "pub added: bool" not in peer_add_body:
+    raise SystemExit("managed_signing_response_projection:peer_add_missing_added")
+for field in (
+    "pub peer_ura: String",
+    "pub fingerprint: String",
+    "pub public_key: String",
+    "pub status: String",
+    "pub via_hub: Option<String>",
+    "pub added_unix_ms: i64",
+    "pub last_seen_unix_ms: i64",
+):
+    if field not in peer_list_entry_body:
+        raise SystemExit(f"managed_signing_response_projection:peer_list_entry_missing_field:{field}")
+if "pub peers: Vec<ManagedSigningPeerListEntry>" not in peer_list_body:
+    raise SystemExit("managed_signing_response_projection:peer_list_missing_peers")
 if "public_key" in list_entry_body or "public_key_b64" in list_entry_body or "signer_policy_ref" in list_entry_body or "seed_hex" in list_entry_body:
     raise SystemExit("managed_signing_response_projection:list_entry_leaks_key_material")
+if "fingerprint_b64" in peer_list_entry_body or "public_key_b64" in peer_list_entry_body:
+    raise SystemExit("managed_signing_response_projection:peer_list_entry_leaks_persistence_field_names")
 
 for required in (
     "ManagedSigningCreateResponse::new(",
     "ManagedSigningListResponse::from_entries(",
     "ManagedSigningPublicResponse::new(",
+    "ManagedSigningRotateResponse::from_successor(",
+    "ManagedSigningRevokeResponse::revoked(",
+    "ManagedSigningAckResponse::ok(",
+    "ManagedSigningPeerAddResponse::from_added(",
+    "ManagedSigningPeerListResponse::from_peers(",
     "managed_signing_create_response_preserves_public_shape",
     "managed_signing_list_response_preserves_public_shape_without_key_material",
     "managed_signing_public_response_preserves_public_shape",
     "managed_signing_response_dtos_reject_unknown_fields",
+    "managed_signing_rotate_response_preserves_public_shape",
+    "managed_signing_revoke_response_preserves_public_shape",
+    "managed_signing_ack_response_preserves_public_shape",
+    "managed_signing_peer_add_response_preserves_public_shape",
+    "managed_signing_peer_list_response_preserves_public_shape",
+    "managed_signing_lifecycle_response_dtos_reject_unknown_fields",
 ):
     if required not in projection:
         raise SystemExit(f"managed_signing_response_projection:projection_missing:{required}")
@@ -3966,6 +4011,12 @@ for retired in (
     '"public_key":     entry.public_key_b64',
     '"fingerprint":    b64_encode(&fp)',
     'Ok(json!({ "entries": entries }))',
+    '"new_key_id":     successor.key_id',
+    'Ok(json!({ "tombstone_unix_ms": ts }))',
+    'Ok(json!({ "ok": true }))',
+    'Ok(json!({ "added": added }))',
+    'Ok(json!({ "peers": peers }))',
+    '"peer_ura":       p.peer_ura',
 ):
     if retired in abilities:
         raise SystemExit(f"managed_signing_response_projection:handler_retired:{retired}")
@@ -3974,9 +4025,17 @@ for required in (
     "ManagedSigningCreateResponse::new(",
     "ManagedSigningListResponse::from_entries(",
     "ManagedSigningPublicResponse::new(",
+    "ManagedSigningRotateResponse::from_successor(",
+    "ManagedSigningRevokeResponse::revoked(",
+    "ManagedSigningAckResponse::ok(",
+    "ManagedSigningPeerAddResponse::from_added(",
+    "ManagedSigningPeerListResponse::from_peers(",
     "create_then_list_then_get_public",
+    "rotate_then_revoke_round_trip",
+    "peer_add_then_list_round_trip",
     "entries[0].get(\"public_key\").is_none()",
     "entries[0].get(\"signer_policy_ref\").is_none()",
+    "peers[0].get(\"public_key_b64\").is_none()",
 ):
     if required not in abilities:
         raise SystemExit(f"managed_signing_response_projection:handler_missing:{required}")
@@ -11691,6 +11750,134 @@ fn handle_list() -> Value {
 EOF
   if ( check_managed_signing_response_projection_contract "$tmp/managed-signing-response-projection-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected managed signing response projection gate to fail"
+  fi
+  mkdir -p "$tmp/managed-signing-lifecycle-response-projection-legacy/src/daemon/keyring"
+  cat >"$tmp/managed-signing-lifecycle-response-projection-legacy/src/daemon/keyring/mod.rs" <<'EOF'
+pub mod abilities;
+pub mod managed_signing_projection;
+EOF
+  cat >"$tmp/managed-signing-lifecycle-response-projection-legacy/src/daemon/keyring/managed_signing_projection.rs" <<'EOF'
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningCreateResponse {
+    pub key_id: String,
+    pub public_key: String,
+    pub fingerprint: String,
+    pub rotation_epoch: u64,
+}
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningListEntry {
+    pub key_id: String,
+    pub algo: String,
+    pub purpose: String,
+    pub status: String,
+    pub rotation_epoch: u64,
+    pub bound_subject: Option<String>,
+    pub rotated_from: Option<String>,
+    pub created_unix_ms: i64,
+    pub expires_unix_ms: Option<i64>,
+    pub revoked_unix_ms: Option<i64>,
+}
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningListResponse {
+    pub entries: Vec<ManagedSigningListEntry>,
+}
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningPublicResponse {
+    pub public_key: String,
+    pub fingerprint: String,
+    pub status: String,
+    pub rotation_epoch: u64,
+}
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningRotateResponse {
+    pub new_key_id: String,
+    pub retired_key_id: String,
+    pub rotation_epoch: u64,
+}
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningRevokeResponse {
+    pub tombstone_unix_ms: i64,
+}
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningAckResponse {
+    pub ok: bool,
+}
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningPeerAddResponse {
+    pub added: bool,
+}
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningPeerListEntry {
+    pub peer_ura: String,
+    pub fingerprint: String,
+    pub public_key: String,
+    pub status: String,
+    pub via_hub: Option<String>,
+    pub added_unix_ms: i64,
+    pub last_seen_unix_ms: i64,
+}
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningPeerListResponse {
+    pub peers: Vec<ManagedSigningPeerListEntry>,
+}
+// ManagedSigningCreateResponse::new(
+// ManagedSigningListResponse::from_entries(
+// ManagedSigningPublicResponse::new(
+// ManagedSigningRotateResponse::from_successor(
+// ManagedSigningRevokeResponse::revoked(
+// ManagedSigningAckResponse::ok(
+// ManagedSigningPeerAddResponse::from_added(
+// ManagedSigningPeerListResponse::from_peers(
+// managed_signing_create_response_preserves_public_shape
+// managed_signing_list_response_preserves_public_shape_without_key_material
+// managed_signing_public_response_preserves_public_shape
+// managed_signing_response_dtos_reject_unknown_fields
+// managed_signing_rotate_response_preserves_public_shape
+// managed_signing_revoke_response_preserves_public_shape
+// managed_signing_ack_response_preserves_public_shape
+// managed_signing_peer_add_response_preserves_public_shape
+// managed_signing_peer_list_response_preserves_public_shape
+// managed_signing_lifecycle_response_dtos_reject_unknown_fields
+EOF
+  cat >"$tmp/managed-signing-lifecycle-response-projection-legacy/src/daemon/keyring/abilities.rs" <<'EOF'
+fn create_then_list_then_get_public() {
+    ManagedSigningCreateResponse::new();
+    ManagedSigningListResponse::from_entries();
+    ManagedSigningPublicResponse::new();
+    ManagedSigningRotateResponse::from_successor();
+    ManagedSigningRevokeResponse::revoked();
+    ManagedSigningAckResponse::ok();
+    ManagedSigningPeerAddResponse::from_added();
+    ManagedSigningPeerListResponse::from_peers();
+    entries[0].get("public_key").is_none();
+    entries[0].get("signer_policy_ref").is_none();
+    peers[0].get("public_key_b64").is_none();
+}
+fn rotate_then_revoke_round_trip() {}
+fn peer_add_then_list_round_trip() {}
+fn handle_rotate() -> Value {
+    Ok(json!({
+        "new_key_id":     successor.key_id,
+        "retired_key_id": key_id,
+        "rotation_epoch": successor.rotation_epoch,
+    }))
+}
+fn handle_revoke() -> Value {
+    Ok(json!({ "tombstone_unix_ms": ts }))
+}
+fn handle_expire_set() -> Value {
+    Ok(json!({ "ok": true }))
+}
+fn handle_peer_add() -> Value {
+    Ok(json!({ "added": added }))
+}
+fn handle_peer_list() -> Value {
+    let peers = vec![json!({ "peer_ura":       p.peer_ura })];
+    Ok(json!({ "peers": peers }))
+}
+EOF
+  if ( check_managed_signing_response_projection_contract "$tmp/managed-signing-lifecycle-response-projection-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected managed signing lifecycle response projection gate to fail"
   fi
   mkdir -p "$tmp/local-api-key-cache-legacy/src/daemon/ability/builtins/governance" \
     "$tmp/local-api-key-cache-legacy/src/cli/commands"

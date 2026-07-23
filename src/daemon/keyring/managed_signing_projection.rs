@@ -30,7 +30,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ManagedSigningKeyProjection, ManagedSigningStatus};
+use super::{ManagedPeer, ManagedSigningKeyProjection, ManagedSigningStatus};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -123,6 +123,108 @@ impl ManagedSigningPublicResponse {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningRotateResponse {
+    pub new_key_id: String,
+    pub retired_key_id: String,
+    pub rotation_epoch: u64,
+}
+
+impl ManagedSigningRotateResponse {
+    pub fn from_successor(
+        successor: &ManagedSigningKeyProjection,
+        retired_key_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            new_key_id: successor.key_id.clone(),
+            retired_key_id: retired_key_id.into(),
+            rotation_epoch: successor.rotation_epoch,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningRevokeResponse {
+    pub tombstone_unix_ms: i64,
+}
+
+impl ManagedSigningRevokeResponse {
+    pub const fn revoked(tombstone_unix_ms: i64) -> Self {
+        Self { tombstone_unix_ms }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningAckResponse {
+    pub ok: bool,
+}
+
+impl ManagedSigningAckResponse {
+    pub const fn ok() -> Self {
+        Self { ok: true }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningPeerAddResponse {
+    pub added: bool,
+}
+
+impl ManagedSigningPeerAddResponse {
+    pub const fn from_added(added: bool) -> Self {
+        Self { added }
+    }
+}
+
+pub const MANAGED_SIGNING_PEER_STATUS_TRUSTED: &str = "trusted";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningPeerListEntry {
+    pub peer_ura: String,
+    pub fingerprint: String,
+    pub public_key: String,
+    pub status: String,
+    pub via_hub: Option<String>,
+    pub added_unix_ms: i64,
+    pub last_seen_unix_ms: i64,
+}
+
+impl ManagedSigningPeerListEntry {
+    pub fn from_peer(peer: &ManagedPeer) -> Self {
+        Self {
+            peer_ura: peer.peer_ura.clone(),
+            fingerprint: peer.fingerprint_b64.clone(),
+            public_key: peer.public_key_b64.clone(),
+            status: MANAGED_SIGNING_PEER_STATUS_TRUSTED.to_string(),
+            via_hub: peer.via_hub.clone(),
+            added_unix_ms: peer.added_unix_ms,
+            last_seen_unix_ms: peer.last_seen_unix_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedSigningPeerListResponse {
+    pub peers: Vec<ManagedSigningPeerListEntry>,
+}
+
+impl ManagedSigningPeerListResponse {
+    pub fn from_peers<'a>(peers: impl IntoIterator<Item = &'a ManagedPeer>) -> Self {
+        Self {
+            peers: peers
+                .into_iter()
+                .map(ManagedSigningPeerListEntry::from_peer)
+                .collect(),
+        }
+    }
+}
+
 pub const fn managed_signing_status_wire(status: ManagedSigningStatus) -> &'static str {
     match status {
         ManagedSigningStatus::Active => "active",
@@ -149,6 +251,17 @@ mod tests {
             created_unix_ms: 42,
             expires_unix_ms: None,
             revoked_unix_ms: None,
+        }
+    }
+
+    fn peer() -> ManagedPeer {
+        ManagedPeer {
+            peer_ura: "easynet:///r/example/agent/alice.node".to_string(),
+            fingerprint_b64: "fingerprint".to_string(),
+            public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            via_hub: Some("easynet:///r/example/authority".to_string()),
+            added_unix_ms: 42,
+            last_seen_unix_ms: 84,
         }
     }
 
@@ -204,6 +317,73 @@ mod tests {
     }
 
     #[test]
+    fn managed_signing_rotate_response_preserves_public_shape() {
+        let mut successor = entry();
+        successor.key_id = "key-2".to_string();
+        successor.rotation_epoch = 1;
+        successor.rotated_from = Some("key-1".to_string());
+
+        let response = ManagedSigningRotateResponse::from_successor(&successor, "key-1");
+        let wire = serde_json::to_value(&response).expect("rotate response serializes");
+
+        assert_eq!(wire["new_key_id"], "key-2");
+        assert_eq!(wire["retired_key_id"], "key-1");
+        assert_eq!(wire["rotation_epoch"], 1);
+        assert!(wire.get("public_key").is_none());
+        assert!(wire.get("signer_policy_ref").is_none());
+    }
+
+    #[test]
+    fn managed_signing_revoke_response_preserves_public_shape() {
+        let response = ManagedSigningRevokeResponse::revoked(123);
+        let wire = serde_json::to_value(&response).expect("revoke response serializes");
+
+        assert_eq!(wire["tombstone_unix_ms"], 123);
+        assert!(wire.get("ok").is_none());
+    }
+
+    #[test]
+    fn managed_signing_ack_response_preserves_public_shape() {
+        let response = ManagedSigningAckResponse::ok();
+        let wire = serde_json::to_value(&response).expect("ack response serializes");
+
+        assert_eq!(wire["ok"], true);
+    }
+
+    #[test]
+    fn managed_signing_peer_add_response_preserves_public_shape() {
+        let response = ManagedSigningPeerAddResponse::from_added(true);
+        let wire = serde_json::to_value(&response).expect("peer add response serializes");
+
+        assert_eq!(wire["added"], true);
+    }
+
+    #[test]
+    fn managed_signing_peer_list_response_preserves_public_shape() {
+        let response = ManagedSigningPeerListResponse::from_peers([&peer()]);
+        let wire = serde_json::to_value(&response).expect("peer list response serializes");
+
+        assert_eq!(
+            wire["peers"][0]["peer_ura"],
+            "easynet:///r/example/agent/alice.node"
+        );
+        assert_eq!(wire["peers"][0]["fingerprint"], "fingerprint");
+        assert_eq!(
+            wire["peers"][0]["public_key"],
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        );
+        assert_eq!(wire["peers"][0]["status"], "trusted");
+        assert_eq!(
+            wire["peers"][0]["via_hub"],
+            "easynet:///r/example/authority"
+        );
+        assert_eq!(wire["peers"][0]["added_unix_ms"], 42);
+        assert_eq!(wire["peers"][0]["last_seen_unix_ms"], 84);
+        assert!(wire["peers"][0].get("fingerprint_b64").is_none());
+        assert!(wire["peers"][0].get("public_key_b64").is_none());
+    }
+
+    #[test]
     fn managed_signing_response_dtos_reject_unknown_fields() {
         let create_error = serde_json::from_value::<ManagedSigningCreateResponse>(json!({
             "key_id": "key-1",
@@ -250,6 +430,69 @@ mod tests {
         assert!(
             public_error.to_string().contains("signer_policy_ref"),
             "strict public response error should name unknown field: {public_error}"
+        );
+    }
+
+    #[test]
+    fn managed_signing_lifecycle_response_dtos_reject_unknown_fields() {
+        let rotate_error = serde_json::from_value::<ManagedSigningRotateResponse>(json!({
+            "new_key_id": "key-2",
+            "retired_key_id": "key-1",
+            "rotation_epoch": 1,
+            "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        }))
+        .expect_err("rotate response must reject public key leakage");
+        assert!(
+            rotate_error.to_string().contains("public_key"),
+            "strict rotate response error should name unknown field: {rotate_error}"
+        );
+
+        let revoke_error = serde_json::from_value::<ManagedSigningRevokeResponse>(json!({
+            "tombstone_unix_ms": 123,
+            "ok": true
+        }))
+        .expect_err("revoke response must reject ack aliases");
+        assert!(
+            revoke_error.to_string().contains("ok"),
+            "strict revoke response error should name unknown field: {revoke_error}"
+        );
+
+        let ack_error = serde_json::from_value::<ManagedSigningAckResponse>(json!({
+            "ok": true,
+            "legacy": true
+        }))
+        .expect_err("ack response must reject legacy fields");
+        assert!(
+            ack_error.to_string().contains("legacy"),
+            "strict ack response error should name unknown field: {ack_error}"
+        );
+
+        let peer_add_error = serde_json::from_value::<ManagedSigningPeerAddResponse>(json!({
+            "added": true,
+            "peer_ura": "easynet:///r/example/agent/alice.node"
+        }))
+        .expect_err("peer add response must reject request echo fields");
+        assert!(
+            peer_add_error.to_string().contains("peer_ura"),
+            "strict peer add response error should name unknown field: {peer_add_error}"
+        );
+
+        let peer_list_error = serde_json::from_value::<ManagedSigningPeerListResponse>(json!({
+            "peers": [{
+                "peer_ura": "easynet:///r/example/agent/alice.node",
+                "fingerprint": "fingerprint",
+                "public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                "status": "trusted",
+                "via_hub": "easynet:///r/example/authority",
+                "added_unix_ms": 42,
+                "last_seen_unix_ms": 84,
+                "public_key_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            }]
+        }))
+        .expect_err("peer list response must reject persistence field names");
+        assert!(
+            peer_list_error.to_string().contains("public_key_b64"),
+            "strict peer list response error should name unknown field: {peer_list_error}"
         );
     }
 }

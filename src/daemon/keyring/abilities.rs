@@ -37,7 +37,9 @@ use crate::daemon::ability::descriptors::AdmissionAction;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::identity::self_identity::KeyringClient;
 use crate::daemon::keyring::managed_signing_projection::{
-    ManagedSigningCreateResponse, ManagedSigningListResponse, ManagedSigningPublicResponse,
+    ManagedSigningAckResponse, ManagedSigningCreateResponse, ManagedSigningListResponse,
+    ManagedSigningPeerAddResponse, ManagedSigningPeerListResponse, ManagedSigningPublicResponse,
+    ManagedSigningRevokeResponse, ManagedSigningRotateResponse,
 };
 
 /// Provider boundary used by daemon abilities. Production is always backed by
@@ -453,17 +455,17 @@ pub fn handle_consume_federate_user_token(
 pub fn handle_rotate(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
     let key_id = require_str(&args, "key_id")?;
     let successor = provider.rotate(key_id)?;
-    Ok(json!({
-        "new_key_id":     successor.key_id,
-        "retired_key_id": key_id,
-        "rotation_epoch": successor.rotation_epoch,
-    }))
+    Ok(serde_json::to_value(
+        ManagedSigningRotateResponse::from_successor(&successor, key_id),
+    )?)
 }
 
 pub fn handle_revoke(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
     let key_id = require_str(&args, "key_id")?;
     let ts = provider.revoke(key_id)?;
-    Ok(json!({ "tombstone_unix_ms": ts }))
+    Ok(serde_json::to_value(
+        ManagedSigningRevokeResponse::revoked(ts),
+    )?)
 }
 
 pub fn handle_expire_set(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
@@ -473,14 +475,14 @@ pub fn handle_expire_set(provider: &dyn ManagedSigningProvider, args: Value) -> 
         .and_then(|v| v.as_i64())
         .ok_or_else(|| anyhow!("missing required i64 field `expires_unix_ms`"))?;
     provider.set_expiry(key_id, expires_unix_ms)?;
-    Ok(json!({ "ok": true }))
+    Ok(serde_json::to_value(ManagedSigningAckResponse::ok())?)
 }
 
 pub fn handle_bind_subject(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
     let key_id = require_str(&args, "key_id")?;
     let subject_id = require_str(&args, "subject_id")?;
     provider.bind_subject(key_id, subject_id)?;
-    Ok(json!({ "ok": true }))
+    Ok(serde_json::to_value(ManagedSigningAckResponse::ok())?)
 }
 
 pub fn handle_peer_add(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
@@ -497,26 +499,16 @@ pub fn handle_peer_add(provider: &dyn ManagedSigningProvider, args: Value) -> Re
         .and_then(|v| v.as_str())
         .map(str::to_string);
     let added = provider.peer_add(peer_ura, public_key, via_hub)?;
-    Ok(json!({ "added": added }))
+    Ok(serde_json::to_value(
+        ManagedSigningPeerAddResponse::from_added(added),
+    )?)
 }
 
 pub fn handle_peer_list(provider: &dyn ManagedSigningProvider, _args: Value) -> Result<Value> {
-    let peers: Vec<Value> = provider
-        .peer_list()?
-        .into_iter()
-        .map(|p| {
-            json!({
-                "peer_ura":       p.peer_ura,
-                "fingerprint":    p.fingerprint_b64,
-                "public_key":     p.public_key_b64,
-                "status":         "trusted",
-                "via_hub":        p.via_hub,
-                "added_unix_ms":  p.added_unix_ms,
-                "last_seen_unix_ms": p.last_seen_unix_ms,
-            })
-        })
-        .collect();
-    Ok(json!({ "peers": peers }))
+    let peers = provider.peer_list()?;
+    Ok(serde_json::to_value(
+        ManagedSigningPeerListResponse::from_peers(peers.iter()),
+    )?)
 }
 
 /// Register key administration projections under `<owner>.keyring.<verb>`.
@@ -753,10 +745,14 @@ mod tests {
         let k1 = c["key_id"].as_str().unwrap().to_string();
         let r = handle_rotate(&h, json!({"key_id": k1})).unwrap();
         let k2 = r["new_key_id"].as_str().unwrap().to_string();
+        assert_eq!(r["retired_key_id"], json!(k1));
         assert_eq!(r["rotation_epoch"], json!(1));
+        assert!(r.get("public_key").is_none());
+        assert!(r.get("signer_policy_ref").is_none());
         // Revoke the new one too:
         let rev = handle_revoke(&h, json!({"key_id": k2, "reason": "compromise"})).unwrap();
         assert!(rev["tombstone_unix_ms"].as_i64().unwrap() > 0);
+        assert!(rev.get("ok").is_none());
         // Cannot sign with revoked.
         assert!(h.sign(&k2, b"x").is_err());
     }
@@ -776,6 +772,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(added["added"], json!(true));
+        assert!(added.get("peer_ura").is_none());
         let listed = handle_peer_list(&h, json!({})).unwrap();
         let peers = listed["peers"].as_array().unwrap();
         assert_eq!(peers.len(), 1);
@@ -784,6 +781,8 @@ mod tests {
             json!("easynet:///r/alice.localhost/agent/alice.node")
         );
         assert_eq!(peers[0]["status"], json!("trusted"));
+        assert!(peers[0].get("fingerprint_b64").is_none());
+        assert!(peers[0].get("public_key_b64").is_none());
     }
 
     #[test]
@@ -802,16 +801,18 @@ mod tests {
         let (h, _d) = handle();
         let created = handle_create(&h, json!({"purpose": "x"})).unwrap();
         let key_id = created["key_id"].as_str().unwrap();
-        handle_expire_set(
+        let expire_response = handle_expire_set(
             &h,
             json!({"key_id": key_id, "expires_unix_ms": 9_999_999_999i64}),
         )
         .unwrap();
-        handle_bind_subject(
+        assert_eq!(expire_response["ok"], json!(true));
+        let bind_response = handle_bind_subject(
             &h,
             json!({"key_id": key_id, "subject_id": "easynet:///r/acme/agent/foo.sdk"}),
         )
         .unwrap();
+        assert_eq!(bind_response["ok"], json!(true));
         let listed = handle_list(&h, json!({})).unwrap();
         let e = &listed["entries"][0];
         assert_eq!(e["expires_unix_ms"], json!(9_999_999_999i64));
