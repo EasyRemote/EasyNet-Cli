@@ -359,11 +359,11 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     {
         anyhow::bail!("pairing credentials missing hub_public_key_b64");
     }
-    use crate::daemon::identity::self_identity::{CanonicalSigner as _, RuntimeSigningIdentity};
+    use crate::daemon::identity::self_identity::load_runtime_caller_signer;
     use base64::Engine as _;
 
     let agent_ura = facts.device_ura();
-    let identity = RuntimeSigningIdentity::load_default(agent_ura.clone())
+    let identity = load_runtime_caller_signer(agent_ura.clone())
         .map_err(|error| anyhow::anyhow!("resolve joined Device runtime identity: {error}"))?;
     let public_key = identity
         .signing_public_key()

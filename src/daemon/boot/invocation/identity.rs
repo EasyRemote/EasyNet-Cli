@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 
-use crate::daemon::identity::self_identity::{CanonicalSigner, RuntimeSigningIdentity};
+use crate::daemon::identity::self_identity::{load_runtime_caller_signer, CanonicalSigner};
 use crate::daemon::persistence::daemon_config::DaemonMode;
 
 use super::paths::expand_home;
@@ -131,10 +131,8 @@ pub(super) fn load_daemon_identity_for_mode(
 }
 
 pub(super) fn load_runtime_signer(owner_ura: &str) -> anyhow::Result<Arc<dyn CanonicalSigner>> {
-    Ok(Arc::new(
-        RuntimeSigningIdentity::load_default(owner_ura.to_string())
-            .map_err(|error| anyhow::anyhow!("bind runtime signer for `{owner_ura}`: {error}"))?,
-    ))
+    load_runtime_caller_signer(owner_ura.to_string())
+        .map_err(|error| anyhow::anyhow!("bind runtime signer for `{owner_ura}`: {error}"))
 }
 
 pub(super) fn canonical_caller_ura_from_stored_identity(

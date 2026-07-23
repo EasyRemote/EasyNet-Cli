@@ -9020,9 +9020,11 @@ check_runtime_owner_signer_custody_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local self_identity="$cli_root/src/daemon/identity/self_identity.rs"
   local managed_user="$cli_root/src/daemon/identity/self_identity/managed_user_signing.rs"
+  local boot_identity="$cli_root/src/daemon/boot/invocation/identity.rs"
+  local federation_wire="$cli_root/src/cli/commands/federation_wire.rs"
   [[ -f "$self_identity" ]] || return 0
 
-  "$PYTHON_BIN" - "$self_identity" "$managed_user" <<'PY'
+  "$PYTHON_BIN" - "$self_identity" "$managed_user" "$boot_identity" "$federation_wire" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -9030,6 +9032,10 @@ from pathlib import Path
 text = Path(sys.argv[1]).read_text()
 managed_path = Path(sys.argv[2])
 managed = managed_path.read_text() if managed_path.exists() else ""
+boot_path = Path(sys.argv[3])
+boot_identity = boot_path.read_text() if boot_path.exists() else ""
+federation_path = Path(sys.argv[4])
+federation_wire = federation_path.read_text() if federation_path.exists() else ""
 for token in (
     "mod managed_user_signing;",
     "pub use managed_user_signing::{",
@@ -9074,6 +9080,16 @@ for token in (
 ):
     if token not in managed:
         raise SystemExit(f"managed_user_signer_custody_missing:{token}")
+
+for name, source in (
+    ("boot_identity", boot_identity),
+    ("federation_wire", federation_wire),
+):
+    if source:
+        if "load_runtime_caller_signer" not in source:
+            raise SystemExit(f"runtime_signer_loader_convergence:{name}:canonical_loader_missing")
+        if "RuntimeSigningIdentity::load_default" in source:
+            raise SystemExit(f"runtime_signer_loader_convergence:{name}:concrete_owner_loader_leaked")
 PY
 }
 
