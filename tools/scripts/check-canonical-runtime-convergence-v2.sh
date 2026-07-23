@@ -1386,6 +1386,70 @@ for required in (
 PY
 }
 
+check_control_frame_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local frames="$cli_root/src/daemon/control/frames.rs"
+  [[ -f "$frames" ]] || fail "control frame source is missing: $frames"
+
+  "$PYTHON_BIN" - "$frames" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+def enum_with_attrs(name: str) -> tuple[str, str]:
+    pattern = (
+        r"(?P<attrs>(?:#\[[^\n]+\]\n)*)"
+        + rf"pub enum {name} \{{(?P<body>.*?)\n\}}"
+    )
+    match = re.search(pattern, text, re.S)
+    if match is None:
+        raise SystemExit(f"control_frame_schema:{name}:missing")
+    return match.group("attrs"), match.group("body")
+
+incoming_attrs, incoming_body = enum_with_attrs("IncomingFrame")
+outgoing_attrs, outgoing_body = enum_with_attrs("OutgoingFrame")
+for name, attrs in (
+    ("IncomingFrame", incoming_attrs),
+    ("OutgoingFrame", outgoing_attrs),
+):
+    if "deny_unknown_fields" not in attrs:
+        raise SystemExit(f"control_frame_schema:{name}:missing_deny_unknown_fields")
+for required in (
+    "Subscribe {",
+    "subscription_id: String",
+    "ability: String",
+    "args: Value",
+    "Cancel { subscription_id: String }",
+):
+    if required not in incoming_body:
+        raise SystemExit(f"control_frame_schema:IncomingFrame:missing:{required}")
+if "#[serde(default)]\n        args: Value" in incoming_body:
+    raise SystemExit("control_frame_schema:IncomingFrame:retired_default_args")
+for required in (
+    "Frame {",
+    "Terminal {",
+    "Error {",
+    "subscription_id: Option<String>",
+    "code: String",
+    "message: String",
+):
+    if required not in outgoing_body:
+        raise SystemExit(f"control_frame_schema:OutgoingFrame:missing:{required}")
+for required in (
+    "retired_product_incoming_variant_fails_to_parse",
+    "incoming_frame_rejects_unknown_fields_and_missing_subscribe_args",
+    "unknown field `legacy_route`",
+    "missing field `args`",
+    "outgoing_frame_rejects_unknown_fields",
+    "unknown field `legacy_status`",
+):
+    if required not in text:
+        raise SystemExit(f"control_frame_schema:missing:{required}")
+PY
+}
+
 check_sdk_history_authority_subject_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local go="$cli_root/sdk/go/authorized_runtime_session.go"
@@ -10416,6 +10480,47 @@ EOF
   if ( CLI_ROOT="$tmp/control-discovery-schema-legacy"; check_control_discovery_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected control discovery schema compatibility gate to fail"
   fi
+  mkdir -p "$tmp/control-frame-schema-legacy/src/daemon/control"
+  cat >"$tmp/control-frame-schema-legacy/src/daemon/control/frames.rs" <<'EOF'
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum IncomingFrame {
+    Subscribe {
+        subscription_id: String,
+        ability: String,
+        #[serde(default)]
+        args: Value,
+    },
+    Cancel { subscription_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OutgoingFrame {
+    Frame {
+        subscription_id: String,
+        frame: Value,
+    },
+    Terminal {
+        subscription_id: String,
+        reason: String,
+    },
+    Error {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subscription_id: Option<String>,
+        code: String,
+        message: String,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    fn retired_product_incoming_variant_fails_to_parse() {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/control-frame-schema-legacy"; check_control_frame_schema_contract ) >/dev/null 2>&1; then
+    fail "self-test expected control frame schema compatibility gate to fail"
+  fi
   mkdir -p "$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing" \
     "$tmp/remote-subject-provenance-legacy/src/ffi/invocation"
   cat >"$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
@@ -10560,6 +10665,7 @@ EOF
   check_resources_schema_contract
   check_agent_spec_schema_contract
   check_control_discovery_schema_contract
+  check_control_frame_schema_contract
   check_sdk_history_authority_subject_contract
   check_sdk_descriptor_resolution_error_vocabulary_contract
   check_sdk_ability_descriptor_not_found_vocabulary_contract
@@ -10690,6 +10796,7 @@ check_runtime_state_kind_required_contract
 check_resources_schema_contract
 check_agent_spec_schema_contract
 check_control_discovery_schema_contract
+check_control_frame_schema_contract
 check_sdk_history_authority_subject_contract
 check_sdk_descriptor_resolution_error_vocabulary_contract
 check_sdk_ability_descriptor_not_found_vocabulary_contract

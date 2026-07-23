@@ -20,7 +20,7 @@ use serde_json::Value;
 
 /// One inbound boot/status control envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum IncomingFrame {
     /// Subscribe to a daemon control stream.
     ///
@@ -29,7 +29,6 @@ pub enum IncomingFrame {
     Subscribe {
         subscription_id: String,
         ability: String,
-        #[serde(default)]
         args: Value,
     },
     /// Early-terminate an in-flight control subscription.
@@ -38,7 +37,7 @@ pub enum IncomingFrame {
 
 /// One outbound boot/status control envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OutgoingFrame {
     /// One control stream frame.
     Frame {
@@ -123,6 +122,35 @@ mod tests {
     }
 
     #[test]
+    fn incoming_frame_rejects_unknown_fields_and_missing_subscribe_args() {
+        let unknown = r#"{
+            "type": "subscribe",
+            "subscription_id": "sub-42",
+            "ability": "system.watch_boot",
+            "args": {},
+            "legacy_route": "invoke"
+        }"#;
+        let err = serde_json::from_str::<IncomingFrame>(unknown)
+            .expect_err("unknown inbound control frame fields must fail closed");
+        assert!(
+            err.to_string().contains("unknown field `legacy_route`"),
+            "unexpected unknown-field error: {err}"
+        );
+
+        let missing_args = r#"{
+            "type": "subscribe",
+            "subscription_id": "sub-42",
+            "ability": "system.watch_boot"
+        }"#;
+        let err = serde_json::from_str::<IncomingFrame>(missing_args)
+            .expect_err("subscribe args must be explicit");
+        assert!(
+            err.to_string().contains("missing field `args`"),
+            "unexpected missing-args error: {err}"
+        );
+    }
+
+    #[test]
     fn frame_and_terminal_preserve_subscription_id() {
         let frame = OutgoingFrame::Frame {
             subscription_id: "sub-1".into(),
@@ -139,5 +167,22 @@ mod tests {
         let s = serde_json::to_string(&terminal).unwrap();
         assert!(s.contains("\"type\":\"terminal\""));
         assert!(s.contains("\"subscription_id\":\"sub-1\""));
+    }
+
+    #[test]
+    fn outgoing_frame_rejects_unknown_fields() {
+        let raw = r#"{
+            "type": "error",
+            "subscription_id": "sub-42",
+            "code": "protocol",
+            "message": "bad frame",
+            "legacy_status": "failed"
+        }"#;
+        let err = serde_json::from_str::<OutgoingFrame>(raw)
+            .expect_err("unknown outbound control frame fields must fail closed");
+        assert!(
+            err.to_string().contains("unknown field `legacy_status`"),
+            "unexpected unknown outbound field error: {err}"
+        );
     }
 }
