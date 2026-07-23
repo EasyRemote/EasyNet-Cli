@@ -1155,6 +1155,66 @@ for retired in (
 PY
 }
 
+check_invocation_history_placeholder_negative_only_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+
+  "$PYTHON_BIN" - "$cli_root" <<'PY'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+placeholder = "resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history"
+allowed = {
+    "src/ffi/invocation/mod.rs",
+    "sdk/go/authorized_runtime_session_test.go",
+    "sdk/go/runtime_ability_test.go",
+    "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+    "sdk/node/test/conformance-cases.test.mjs",
+    "sdk/python/tests/test_authorized_runtime_session.py",
+    "sdk/python/tests/test_runtime_ability.py",
+    "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+}
+hits = []
+for path in root.rglob("*"):
+    if not path.is_file():
+        continue
+    rel = path.relative_to(root).as_posix()
+    if rel.startswith((".git/", "target/", ".codegraph/")):
+        continue
+    if rel == "tools/scripts/check-canonical-runtime-convergence-v2.sh":
+        continue
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        continue
+    if placeholder in text:
+        hits.append((rel, text))
+
+if not hits:
+    raise SystemExit("invocation_history_placeholder_negative_only:no_negative_vector")
+
+for rel, text in hits:
+    if rel not in allowed:
+        raise SystemExit(f"invocation_history_placeholder_negative_only:unexpected_placeholder:{rel}")
+    if rel == "src/ffi/invocation/mod.rs":
+        production = text.split("\n    #[test]", 1)[0]
+        if placeholder in production:
+            raise SystemExit("invocation_history_placeholder_negative_only:ffi_production_placeholder")
+    negative_markers = (
+        "rejects",
+        "expect_err",
+        "raises",
+        "assert.throws",
+        "expectSDKError",
+        "expectSyncSDKError",
+        "subject_ura must not be all-zero",
+        "AUTHORITY_SUBJECT_MISMATCH",
+    )
+    if not any(marker in text for marker in negative_markers):
+        raise SystemExit(f"invocation_history_placeholder_negative_only:not_negative_context:{rel}")
+PY
+}
+
 check_runtime_state_kind_required_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local config_rs="$cli_root/src/daemon/persistence/config.rs"
@@ -12222,6 +12282,15 @@ EOF
   if ( check_cli_invocation_history_read_model_contract "$tmp/cli-invocation-history-read-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected CLI invocation history read-model gate to fail"
   fi
+  mkdir -p "$tmp/history-placeholder-positive/src/product"
+  cat >"$tmp/history-placeholder-positive/src/product/history.rs" <<'EOF'
+fn subject() -> &'static str {
+    "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history"
+}
+EOF
+  if ( check_invocation_history_placeholder_negative_only_contract "$tmp/history-placeholder-positive" ) >/dev/null 2>&1; then
+    fail "self-test expected invocation history placeholder positive fixture gate to fail"
+  fi
   mkdir -p "$tmp/agent-purge-publication-state-legacy/src/daemon/ability/builtins/agents"
   cat >"$tmp/agent-purge-publication-state-legacy/src/daemon/ability/builtins/agents/lifecycle.rs" <<'EOF'
 fn attach_publication_state(object: &mut serde_json::Map<String, serde_json::Value>) {
@@ -15323,6 +15392,7 @@ EOF
   check_resolve_key_request_dto_contract
   check_invocation_history_filter_scope_contract
   check_cli_invocation_history_read_model_contract
+  check_invocation_history_placeholder_negative_only_contract
   check_agent_purge_publication_state_contract
   check_local_runtime_state_read_subject_contract
   check_runtime_state_kind_required_contract
@@ -15489,6 +15559,7 @@ check_core_ura_realm_projection_contract
 check_resolve_key_request_dto_contract
 check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
+check_invocation_history_placeholder_negative_only_contract
 check_agent_purge_publication_state_contract
 check_local_runtime_state_read_subject_contract
 check_runtime_state_kind_required_contract
