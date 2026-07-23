@@ -8617,6 +8617,34 @@ if ffi_invocation.exists():
             "runtime_resolve_descriptor_ref_json must remain inspectable",
         )
 
+descriptor_dir = cli_root / "ability-descriptors/system/device_control"
+if descriptor_dir.exists():
+    for descriptor in sorted(descriptor_dir.glob("browser.*.ability.toml")):
+        add(
+            "R95B_RETIRED_BROWSER_DESCRIPTOR_SURFACE",
+            descriptor,
+            1,
+            "retired browser mock descriptors must not remain in active system inventory",
+        )
+    for descriptor in sorted(descriptor_dir.glob("*.ability.toml")):
+        descriptor_text = descriptor.read_text(encoding="utf-8", errors="replace")
+        for token in (
+            "browser.open_session",
+            "browser.capture_viewport",
+            "browser.send_input",
+            "browser.close_session",
+            "browser.attach_session",
+            "V0 MOCK",
+            "PLACEHOLDER",
+        ):
+            if token in descriptor_text:
+                add(
+                    "R95B_RETIRED_BROWSER_DESCRIPTOR_SURFACE",
+                    descriptor,
+                    line_number(descriptor_text, descriptor_text.find(token)),
+                    "active system descriptors must not advertise retired browser mock surface",
+                )
+
 
 # Rule 96: Authorized runtime history reads must bind the authority-bearing
 # call tuple while keeping receipt filters as post-admission ledger predicates.

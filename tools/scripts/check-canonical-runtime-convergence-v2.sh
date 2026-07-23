@@ -5794,6 +5794,7 @@ PY
 
 check_retired_browser_mock_surface_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
+  local descriptor_dir="$cli_root/ability-descriptors/system/device_control"
   local active_paths=(
     "$cli_root/src/daemon/ability/builtins/device_control/mod.rs"
     "$cli_root/src/daemon/ability/catalog/build.rs"
@@ -5817,6 +5818,14 @@ check_retired_browser_mock_surface_contract() {
   fi
   if [[ -e "$cli_root/tests/scripts/test_check_browser_session_service_boundary.sh" ]]; then
     fail "retired browser placeholder boundary self-test is still present"
+  fi
+  if [[ -d "$descriptor_dir" ]] && find "$descriptor_dir" -name 'browser.*.ability.toml' -print -quit | grep -q .; then
+    fail "retired browser placeholder descriptors are still present"
+  fi
+  if [[ -d "$descriptor_dir" ]] && rg -n \
+    'browser\.(open_session|send_input|capture_viewport|close_session|attach_session)|V0 MOCK|PLACEHOLDER|DeviceBrowser|BrowserSessionService' \
+    "$descriptor_dir"; then
+    fail "retired browser placeholder vocabulary leaked into active descriptor inventory"
   fi
   for path in "${active_paths[@]}"; do
     [[ -f "$path" ]] || continue
@@ -8847,6 +8856,7 @@ EOF
     fail "self-test expected naked sidecar frame template gate to fail"
   fi
   mkdir -p "$tmp/cli-browser-mock/src/daemon/ability/builtins/device_control" \
+    "$tmp/cli-browser-mock/ability-descriptors/system/device_control" \
     "$tmp/cli-browser-mock/src/daemon/ability/catalog" \
     "$tmp/cli-browser-mock/src/daemon/ability/names" \
     "$tmp/cli-browser-mock/src/daemon/ability/wire" \
@@ -8865,6 +8875,8 @@ EOF
     > "$tmp/cli-browser-mock/src/daemon/ability/names/device_control.rs"
   printf 'const PLACEHOLDER_WEBP: &[u8] = &[]; // is_placeholder V0 MOCK\n' \
     > "$tmp/cli-browser-mock/src/daemon/ability/builtins/device_control/browser.rs"
+  printf 'name = "browser.open_session"\ndescription = "[V0 MOCK]"\ncapability_state = "cutover_ready"\n' \
+    > "$tmp/cli-browser-mock/ability-descriptors/system/device_control/browser.open_session.ability.toml"
   printf '#!/usr/bin/env bash\n' \
     > "$tmp/cli-browser-mock/tools/scripts/check-browser-session-service-boundary.sh"
   if ( CLI_ROOT="$tmp/cli-browser-mock"; check_retired_browser_mock_surface_contract ) >/dev/null 2>&1; then
