@@ -430,12 +430,17 @@ private func requiredAuthorityPrincipalID(_ value: String, _ field: String) thro
 }
 
 private func rejectAllZeroAuthorityField(_ value: String, _ field: String) throws {
-    if value.trimmingCharacters(in: .whitespacesAndNewlines)
-        .lowercased()
-        .contains("00000000-0000-0000-0000-000000000000")
-    {
+    if containsAllZeroPrincipal(value) {
         throw invalidAuthority("\(field) must not be all-zero")
     }
+}
+
+private let allZeroPrincipalID = "00000000-0000-0000-0000-000000000000"
+
+func containsAllZeroPrincipal(_ value: String) -> Bool {
+    value.trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+        .contains(allZeroPrincipalID)
 }
 
 private func requiredAuthorityBase64(_ value: String, _ field: String) throws -> String {

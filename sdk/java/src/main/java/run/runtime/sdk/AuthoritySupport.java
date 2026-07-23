@@ -11,6 +11,7 @@ final class AuthoritySupport {
   static final String SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority";
   static final String DELEGATION_KIND = "delegation";
   static final String SESSION_AUTHORITY_KIND = "session_authority";
+  private static final String ALL_ZERO_PRINCIPAL_ID = "00000000-0000-0000-0000-000000000000";
 
   private AuthoritySupport() {}
 
@@ -82,9 +83,13 @@ final class AuthoritySupport {
   }
 
   private static void rejectAllZero(String value, String field) {
-    if (value.trim().toLowerCase().contains("00000000-0000-0000-0000-000000000000")) {
+    if (containsAllZeroPrincipal(value)) {
       throw invalid(field + " must not be all-zero");
     }
+  }
+
+  static boolean containsAllZeroPrincipal(String value) {
+    return value != null && value.trim().toLowerCase().contains(ALL_ZERO_PRINCIPAL_ID);
   }
 
   static String requiredBase64(String value, String field) {

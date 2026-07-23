@@ -2287,7 +2287,7 @@ function requiredBuilderString(value, field) {
 
 function requiredBuilderPrincipalString(value, field) {
   const cleaned = requiredBuilderString(value, field);
-  if (cleaned.trim().toLowerCase().includes("00000000-0000-0000-0000-000000000000")) {
+  if (containsAllZeroPrincipal(cleaned)) {
     throw invalidInvocation(`${field} must not be all-zero`);
   }
   return cleaned;
@@ -2587,10 +2587,14 @@ function canonicalAuthoritySubject(subjectURA) {
 
 function rejectAllZeroAuthorityFields(fields) {
   for (const [field, value] of Object.entries(fields)) {
-    if (String(value ?? "").trim().toLowerCase().includes("00000000-0000-0000-0000-000000000000")) {
+    if (containsAllZeroPrincipal(String(value ?? ""))) {
       throw invalidAuthority(`${field} must not be all-zero`);
     }
   }
+}
+
+function containsAllZeroPrincipal(value) {
+  return String(value ?? "").trim().toLowerCase().includes("00000000-0000-0000-0000-000000000000");
 }
 
 function rejectAuthorityPrivateKeyMetadata(metadata) {
