@@ -389,7 +389,9 @@ remote = "src/daemon/invocation/routing/remote_invoke.rs"
 remote_text = read(remote)
 for token, detail in (
     ("pub(crate) enum RemoteInvocationSubject", "named remote subject derivation state"),
-    ("TargetOwnedSystem", "daemon system subject derivation policy"),
+    ("CallerDeclared", "public caller-declared remote subject provenance"),
+    ("DaemonTargetOwned", "daemon target-owned remote subject provenance"),
+    ("no public subject omission, callee substitution, or descriptor substitution", "remote subject omission exclusion"),
     ("pub(crate) enum RemoteInvocationNonce", "explicit remote nonce state"),
     ("RemoteInvocationNonce::Explicit", "public explicit nonce state"),
     ("pub(crate) struct RemoteInvocationTuplePlan", "inspectable remote tuple plan"),

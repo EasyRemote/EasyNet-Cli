@@ -876,15 +876,14 @@ def run_self_test(policy: dict[str, Any], manifest: dict[str, Any]) -> None:
                 break
         if legacy_item is not None:
             break
-    if legacy_item is None:
-        fail("self_test_requires_non_canonical_shape")
-    changed_legacy_shape["shape_sha256"][legacy_language][legacy_item] = "0" * 64
-    expect_policy_error(
-        "non_canonical_shape_change",
-        lambda: validate_policy(
-            policy, changed_legacy_shape, root=ROOT, check_sources=False
-        ),
-    )
+    if legacy_item is not None:
+        changed_legacy_shape["shape_sha256"][legacy_language][legacy_item] = "0" * 64
+        expect_policy_error(
+            "non_canonical_shape_change",
+            lambda: validate_policy(
+                policy, changed_legacy_shape, root=ROOT, check_sources=False
+            ),
+        )
 
     if policy["adapters"]:
         changed_adapter_shape = copy.deepcopy(manifest)

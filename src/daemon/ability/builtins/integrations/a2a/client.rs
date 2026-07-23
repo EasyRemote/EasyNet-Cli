@@ -262,7 +262,7 @@ fn send_task_handler(
         let request = match crate::daemon::invocation::routing::remote_invoke::RemoteChildInvocationIssuer::child_plan(
             &target_call,
             _env.callee(),
-            RemoteInvocationSubject::Explicit(target_call.callee_ura().to_string()),
+            RemoteInvocationSubject::DaemonTargetOwned(target_call.callee_ura().to_string()),
             causal_context,
             task_args,
             Duration::from_secs(30),

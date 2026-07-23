@@ -544,7 +544,7 @@ fn probe_remote_device(agent_ura: &str) -> ProbeOutcome {
         let request = RemoteSystemInvocationIssuer::root_plan(
             &target,
             crate::daemon::identity::local_invocation::local_daemon_ura()?,
-            RemoteInvocationSubject::TargetOwnedSystem(target.callee_ura().to_string()),
+            RemoteInvocationSubject::DaemonTargetOwned(target.callee_ura().to_string()),
             json!({
                 "source": "node.list",
                 "probe": "alive",

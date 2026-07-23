@@ -2299,6 +2299,55 @@ check_daemon_tuple_route_contract() {
   bash "$ROOT/tools/scripts/check-daemon-invocation-migration.sh" >/dev/null
 }
 
+check_remote_invocation_subject_provenance_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local remote="$cli_root/src/daemon/invocation/routing/remote_invoke.rs"
+  local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+
+  [[ -f "$remote" ]] || fail "remote invocation routing source is missing"
+  [[ -f "$ffi_invocation" ]] || fail "FFI invocation source is missing"
+
+  "$PYTHON_BIN" - "$remote" "$ffi_invocation" <<'PY'
+import sys
+from pathlib import Path
+
+remote = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+ffi_invocation = Path(sys.argv[2]).read_text(encoding="utf-8", errors="replace")
+production = remote.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
+
+for retired in (
+    "Public compatibility may still offer ergonomic subject omission",
+    "TargetOwnedSystem",
+    "RemoteInvocationSubject::Explicit",
+    'Self::Explicit(value) => (value, "explicit subject")',
+):
+    if retired in production or retired in ffi_invocation:
+        raise SystemExit(f"remote_invocation_subject_provenance:retired_subject_policy:{retired}")
+
+for required in (
+    "enum RemoteInvocationSubject",
+    "CallerDeclared(String)",
+    "DaemonTargetOwned(String)",
+    "no public subject omission, callee substitution, or descriptor substitution",
+    "RemoteInvocationSubject::CallerDeclared(subject_ura.into())",
+    "Self::CallerDeclared(value) => (value, \"caller-declared subject\")",
+    "Self::DaemonTargetOwned(value) => (value, \"daemon target-owned subject\")",
+):
+    if required not in remote:
+        raise SystemExit(f"remote_invocation_subject_provenance:missing_remote_state:{required}")
+
+if "RemoteInvocationSubject::DaemonTargetOwned(" not in ffi_invocation:
+    raise SystemExit("remote_invocation_subject_provenance:ffi_descriptor_probe_not_daemon_target_owned")
+
+for required_test in (
+    'assert_eq!(plan.subject.policy_name(), "CallerDeclared")',
+    'assert_eq!(plan.subject.policy_name(), "DaemonTargetOwned")',
+):
+    if required_test not in remote:
+        raise SystemExit(f"remote_invocation_subject_provenance:missing_test:{required_test}")
+PY
+}
+
 check_daemon_runtime_route_inventory_contract() {
   bash "$ROOT/tools/scripts/check-architecture-convergence.sh" >/dev/null
 }
@@ -8071,6 +8120,25 @@ EOF
   if ( CLI_ROOT="$tmp/cli-discover-candidate-legacy"; check_cli_discover_candidate_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected CLI discover candidate projection fallback gate to fail"
   fi
+  mkdir -p "$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing" \
+    "$tmp/remote-subject-provenance-legacy/src/ffi/invocation"
+  cat >"$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
+/// Named subject derivation for a remote invocation tuple.
+///
+/// Public compatibility may still offer ergonomic subject omission, but the
+/// selected subject must be materialized under one of these labels before
+/// dispatch so RF-8 cannot regress to silent callee/descriptor substitution.
+pub(crate) enum RemoteInvocationSubject {
+    Explicit(String),
+    TargetOwnedSystem(String),
+}
+EOF
+  printf '%s\n' \
+    'RemoteInvocationSubject::TargetOwnedSystem(target.as_str().to_string());' \
+    > "$tmp/remote-subject-provenance-legacy/src/ffi/invocation/mod.rs"
+  if ( CLI_ROOT="$tmp/remote-subject-provenance-legacy"; check_remote_invocation_subject_provenance_contract ) >/dev/null 2>&1; then
+    fail "self-test expected remote invocation subject provenance gate to fail"
+  fi
   check_mcp_reflection_async_bridge_contract
   check_runtime_session_projection_accessor_contract
   check_ffi_runtime_sizing_policy_contract
@@ -8113,6 +8181,7 @@ EOF
   check_edge_adapter_policy_contract
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
+  check_remote_invocation_subject_provenance_contract
   check_daemon_runtime_route_inventory_contract
   check_daemon_local_device_identity_contract
   check_filesystem_resource_owner_contract
@@ -8216,6 +8285,7 @@ check_mission_traditional_target_conflict_contract
 check_edge_adapter_policy_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
+check_remote_invocation_subject_provenance_contract
 check_daemon_runtime_route_inventory_contract
 check_daemon_local_device_identity_contract
 check_filesystem_resource_owner_contract

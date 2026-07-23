@@ -2173,7 +2173,7 @@ impl RemoteDescriptorCatalogProbe {
         crate::daemon::invocation::routing::remote_invoke::RemoteSystemInvocationIssuer::root_plan(
             &target,
             caller_ura,
-            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationSubject::TargetOwnedSystem(
+            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationSubject::DaemonTargetOwned(
                 subject_ura,
             ),
             serde_json::json!({ "subject_ura": ability_ura }),

@@ -111,7 +111,7 @@ fn invoke_target_owned_system_ability(
     let request = RemoteSystemInvocationIssuer::root_plan(
         &target_call,
         caller_ura,
-        RemoteInvocationSubject::TargetOwnedSystem(subject_ura),
+        RemoteInvocationSubject::DaemonTargetOwned(subject_ura),
         args,
         std::time::Duration::from_secs(30),
     )?

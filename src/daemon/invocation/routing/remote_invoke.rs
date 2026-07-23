@@ -324,22 +324,24 @@ pub(crate) struct RemoteInvocationRequest<'a> {
     timeout: Duration,
 }
 
-/// Named subject derivation for a remote invocation tuple.
+/// Subject provenance for a remote invocation tuple.
 ///
-/// Public compatibility may still offer ergonomic subject omission, but the
-/// selected subject must be materialized under one of these labels before
-/// dispatch so RF-8 cannot regress to silent callee/descriptor substitution.
+/// Public ingress uses [`RemoteInvocationSubject::CallerDeclared`]. Daemon
+/// system/root issuers may use [`RemoteInvocationSubject::DaemonTargetOwned`]
+/// only after they have selected a target-owned subject explicitly. There is
+/// no public subject omission, callee substitution, or descriptor substitution
+/// policy in this state machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RemoteInvocationSubject {
-    Explicit(String),
-    TargetOwnedSystem(String),
+    CallerDeclared(String),
+    DaemonTargetOwned(String),
 }
 
 impl RemoteInvocationSubject {
     fn resolve(&self) -> anyhow::Result<String> {
         let (value, field) = match self {
-            Self::Explicit(value) => (value, "explicit subject"),
-            Self::TargetOwnedSystem(value) => (value, "target-owned system subject"),
+            Self::CallerDeclared(value) => (value, "caller-declared subject"),
+            Self::DaemonTargetOwned(value) => (value, "daemon target-owned subject"),
         };
         checked_remote_invocation_ura(value.clone(), field)
     }
@@ -347,8 +349,8 @@ impl RemoteInvocationSubject {
     #[cfg(test)]
     fn policy_name(&self) -> &'static str {
         match self {
-            Self::Explicit(_) => "Explicit",
-            Self::TargetOwnedSystem(_) => "TargetOwnedSystem",
+            Self::CallerDeclared(_) => "CallerDeclared",
+            Self::DaemonTargetOwned(_) => "DaemonTargetOwned",
         }
     }
 }
@@ -400,7 +402,7 @@ impl<'a> RemoteInvocationTuplePlan<'a> {
         Self::new(
             target,
             caller_ura,
-            RemoteInvocationSubject::Explicit(subject_ura.into()),
+            RemoteInvocationSubject::CallerDeclared(subject_ura.into()),
             RemoteInvocationNonce::Explicit(invocation_nonce),
             InvocationCausalContext::explicit(causal_context),
             args,
@@ -1512,7 +1514,7 @@ mod tests {
         )
         .expect("tuple plan");
 
-        assert_eq!(plan.subject.policy_name(), "Explicit");
+        assert_eq!(plan.subject.policy_name(), "CallerDeclared");
         assert_eq!(plan.nonce, RemoteInvocationNonce::Explicit([0x41; 16]));
         assert_eq!(
             plan.causal_context,
@@ -1567,13 +1569,13 @@ mod tests {
         let plan = RemoteSystemInvocationIssuer::root_plan(
             &target,
             "easynet:///r/realm/device/caller",
-            RemoteInvocationSubject::TargetOwnedSystem(target.as_str().to_string()),
+            RemoteInvocationSubject::DaemonTargetOwned(target.as_str().to_string()),
             Value::Null,
             Duration::from_secs(30),
         )
         .expect("tuple plan");
 
-        assert_eq!(plan.subject.policy_name(), "TargetOwnedSystem");
+        assert_eq!(plan.subject.policy_name(), "DaemonTargetOwned");
         assert_eq!(
             plan.causal_context,
             InvocationCausalContext::daemon_system_root()
