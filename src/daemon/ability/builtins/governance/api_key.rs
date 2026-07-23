@@ -53,6 +53,7 @@ use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler};
 static STORE_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApiKeyEntry {
     /// First 12 chars of the token — for `list` display so the
     /// operator can identify which key without printing the
@@ -69,8 +70,8 @@ pub struct ApiKeyEntry {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApiKeyStore {
-    #[serde(default)]
     pub keys: Vec<ApiKeyEntry>,
 }
 
@@ -360,6 +361,13 @@ mod tests {
         std::fs::write(path, "keys = [").expect("write malformed api key store");
     }
 
+    fn write_store_body(body: &str) {
+        let path = store_path();
+        std::fs::create_dir_all(path.parent().expect("api key store parent"))
+            .expect("create isolated api key state dir");
+        std::fs::write(path, body).expect("write api key store");
+    }
+
     fn write_local_default_cache(body: &str) {
         let path = local_default_token_path().expect("local default token path");
         std::fs::create_dir_all(path.parent().expect("local cache parent"))
@@ -375,6 +383,18 @@ mod tests {
         );
     }
 
+    fn assert_store_parse_failure_contains(error: anyhow::Error, expected: &str) {
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("parse API key store"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains(expected),
+            "expected {expected:?} in error: {message}"
+        );
+    }
+
     #[test]
     fn missing_store_is_fresh_install_empty_state() {
         let _home = HomeGuard::new();
@@ -383,6 +403,45 @@ mod tests {
             handle_list("alice", "example", json!({})).expect("missing store lists as empty");
 
         assert_eq!(listed["keys"].as_array().expect("keys array").len(), 0);
+    }
+
+    #[test]
+    fn api_key_store_rejects_existing_file_without_keys() {
+        let _home = HomeGuard::new();
+        write_store_body("# legacy empty authority file\n");
+
+        let error = load_store().expect_err("existing API key store without keys must fail");
+
+        assert_store_parse_failure_contains(error, "missing field `keys`");
+    }
+
+    #[test]
+    fn api_key_store_rejects_unknown_top_level_fields() {
+        let _home = HomeGuard::new();
+        write_store_body("keys = []\nlegacy = true\n");
+
+        let error = load_store().expect_err("unknown top-level API key store fields must fail");
+
+        assert_store_parse_failure_contains(error, "unknown field `legacy`");
+    }
+
+    #[test]
+    fn api_key_store_rejects_unknown_entry_fields() {
+        let _home = HomeGuard::new();
+        write_store_body(
+            r#"
+[[keys]]
+id_prefix = "abc123"
+token_hash = "hash"
+user_ura = "easynet:///r/example/user/alice"
+created_at = 1
+legacy_scope = "all"
+"#,
+        );
+
+        let error = load_store().expect_err("unknown API key entry fields must fail");
+
+        assert_store_parse_failure_contains(error, "unknown field `legacy_scope`");
     }
 
     #[test]

@@ -2255,6 +2255,93 @@ for test in (
 PY
 }
 
+check_api_key_store_schema_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local api_key="$cli_root/src/daemon/ability/builtins/governance/api_key.rs"
+  [[ -f "$api_key" ]] || return 0
+
+  "$PYTHON_BIN" - "$api_key" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+def struct_with_attrs(name: str) -> tuple[str, str]:
+    pattern = (
+        r"(?P<attrs>(?:#\[[^\n]+\]\n)*)"
+        + rf"pub struct {name} \{{(?P<body>.*?)\n\}}"
+    )
+    match = re.search(pattern, text, re.S)
+    if match is None:
+        raise SystemExit(f"api_key_store_schema:{name}:missing")
+    return match.group("attrs"), match.group("body")
+
+entry_attrs, entry_body = struct_with_attrs("ApiKeyEntry")
+store_attrs, store_body = struct_with_attrs("ApiKeyStore")
+for name, attrs in (
+    ("ApiKeyEntry", entry_attrs),
+    ("ApiKeyStore", store_attrs),
+):
+    if "#[serde(deny_unknown_fields)]" not in attrs:
+        raise SystemExit(f"api_key_store_schema:{name}:missing_deny_unknown_fields")
+
+if "#[serde(default)]" in store_body:
+    raise SystemExit("api_key_store_schema:ApiKeyStore:retired_default_keys")
+if "pub keys: Vec<ApiKeyEntry>" not in store_body:
+    raise SystemExit("api_key_store_schema:ApiKeyStore:missing_keys")
+for field in (
+    "pub id_prefix: String",
+    "pub token_hash: String",
+    "pub user_ura: String",
+    "pub label: Option<String>",
+    "pub created_at: u64",
+    "pub revoked_at: Option<u64>",
+    "pub last_used_at: Option<u64>",
+):
+    if field not in entry_body:
+        raise SystemExit(f"api_key_store_schema:ApiKeyEntry:missing_field:{field}")
+
+load_store = re.search(
+    r"fn load_store\(\) -> anyhow::Result<ApiKeyStore> \{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if load_store is None:
+    raise SystemExit("api_key_store_schema:load_store:missing")
+load_body = load_store.group("body")
+for required in (
+    "Err(error) if error.kind() == std::io::ErrorKind::NotFound",
+    "return Ok(ApiKeyStore::default())",
+    "parse API key store",
+):
+    if required not in load_body:
+        raise SystemExit(f"api_key_store_schema:load_store:missing:{required}")
+for retired in (
+    "toml::from_str(&text).unwrap_or_default()",
+    "toml::from_str(&text).unwrap_or_else",
+    ".unwrap_or_default()",
+    ".ok().unwrap_or_default()",
+):
+    if retired in load_body:
+        raise SystemExit(f"api_key_store_schema:load_store:retired_compat:{retired}")
+
+for required in (
+    "missing_store_is_fresh_install_empty_state",
+    "api_key_store_rejects_existing_file_without_keys",
+    "missing field `keys`",
+    "api_key_store_rejects_unknown_top_level_fields",
+    "unknown field `legacy`",
+    "api_key_store_rejects_unknown_entry_fields",
+    "unknown field `legacy_scope`",
+    "bearer_resolution_rejects_malformed_store_instead_of_unknown_token",
+    "malformed credential authority must not be projected as unknown token",
+):
+    if required not in text:
+        raise SystemExit(f"api_key_store_schema:missing:{required}")
+PY
+}
+
 check_cli_credentials_optional_read_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local src_root="$cli_root/src"
@@ -9407,6 +9494,37 @@ EOF
   if ( check_pages_identity_credentials_contract "$tmp/pages-cli-identity-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected Pages CLI identity fallback gate to fail"
   fi
+  mkdir -p "$tmp/api-key-store-schema-legacy/src/daemon/ability/builtins/governance"
+  cat >"$tmp/api-key-store-schema-legacy/src/daemon/ability/builtins/governance/api_key.rs" <<'EOF'
+use serde::{Deserialize, Serialize};
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKeyEntry {
+    pub id_prefix: String,
+    pub token_hash: String,
+    pub user_ura: String,
+    pub label: Option<String>,
+    pub created_at: u64,
+    pub revoked_at: Option<u64>,
+    pub last_used_at: Option<u64>,
+}
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ApiKeyStore {
+    #[serde(default)]
+    pub keys: Vec<ApiKeyEntry>,
+}
+fn load_store() -> anyhow::Result<ApiKeyStore> {
+    let text = std::fs::read_to_string("api_keys.toml").unwrap_or_default();
+    Ok(toml::from_str(&text).unwrap_or_default())
+}
+#[cfg(test)]
+mod tests {
+    #[test] fn missing_store_is_fresh_install_empty_state() {}
+    #[test] fn bearer_resolution_rejects_malformed_store_instead_of_unknown_token() {}
+}
+EOF
+  if ( check_api_key_store_schema_contract "$tmp/api-key-store-schema-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected API key store schema compatibility gate to fail"
+  fi
   mkdir -p "$tmp/local-api-key-cache-legacy/src/daemon/ability/builtins/governance" \
     "$tmp/local-api-key-cache-legacy/src/cli/commands"
   printf '%s\n' \
@@ -10679,6 +10797,7 @@ EOF
   check_cli_credentials_optional_read_contract
   check_credentials_user_binding_validation_contract
   check_target_gate_credential_state_contract
+  check_api_key_store_schema_contract
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
   check_runtime_trust_user_key_inventory_scope_contract
@@ -10810,6 +10929,7 @@ check_pages_identity_credentials_contract
 check_cli_credentials_optional_read_contract
 check_credentials_user_binding_validation_contract
 check_target_gate_credential_state_contract
+check_api_key_store_schema_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_runtime_trust_user_key_inventory_scope_contract
