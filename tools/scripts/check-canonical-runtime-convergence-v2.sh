@@ -1852,6 +1852,64 @@ for required in (
 PY
 }
 
+check_pages_api_response_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local projection="$cli_root/src/daemon/resources/projection.rs"
+  local api="$cli_root/src/daemon/ability/builtins/resources/pages/api.rs"
+  [[ -f "$projection" ]] || fail "daemon resource projection source is missing: $projection"
+  [[ -f "$api" ]] || fail "pages api source is missing: $api"
+
+  "$PYTHON_BIN" - "$projection" "$api" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+projection, api = [Path(arg).read_text(encoding="utf-8") for arg in sys.argv[1:]]
+
+struct = re.search(
+    r"(?P<attrs>(?:#\[[^\n]+\]\n)*)pub struct PagesApiResponse \{(?P<body>.*?)\n\}",
+    projection,
+    re.S,
+)
+if struct is None:
+    raise SystemExit("pages_api_response_projection:struct_missing")
+if "#[serde(deny_unknown_fields)]" not in struct.group("attrs"):
+    raise SystemExit("pages_api_response_projection:struct_not_strict")
+
+for required in (
+    "pub struct PagesApiResponse",
+    "pub status: u16",
+    "pub body: Value",
+    "pub content_type: String",
+    "PagesApiResponse::json_ok(",
+    "pages_api_response_preserves_public_shape",
+    "pages_api_response_rejects_unknown_fields",
+):
+    if required not in projection:
+        raise SystemExit(f"pages_api_response_projection:projection_missing:{required}")
+
+for retired in (
+    'Ok(json!({\n                "status":       200,',
+    '"body":         resp',
+    '"body":         merged',
+    '"body":         result',
+    '                "content_type": "application/json; charset=utf-8",',
+):
+    if retired in api:
+        raise SystemExit(f"pages_api_response_projection:handler_retired:{retired}")
+
+for required in (
+    "PagesApiResponse::json_ok(body)",
+    "fn api_response(body: Value) -> anyhow::Result<Value>",
+    "static_json_manifest_returns_typed_payload_projection_shape",
+    "echo_manifest_returns_typed_payload_projection_shape",
+    "ability_manifest_invokes_registry_handler",
+):
+    if required not in api:
+        raise SystemExit(f"pages_api_response_projection:handler_missing:{required}")
+PY
+}
+
 check_local_agents_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local local_agents="$cli_root/src/daemon/persistence/local_agents.rs"
@@ -12673,6 +12731,25 @@ EOF
   if ( CLI_ROOT="$tmp/pages-publish-response-projection-legacy"; check_pages_publish_response_projection_contract ) >/dev/null 2>&1; then
     fail "self-test expected pages publish response projection gate to fail"
   fi
+  mkdir -p "$tmp/pages-api-response-projection-legacy/src/daemon/resources"
+  mkdir -p "$tmp/pages-api-response-projection-legacy/src/daemon/ability/builtins/resources/pages"
+  cat >"$tmp/pages-api-response-projection-legacy/src/daemon/resources/projection.rs" <<'EOF'
+pub struct PagesApiResponse {
+    pub payload: serde_json::Value,
+}
+EOF
+  cat >"$tmp/pages-api-response-projection-legacy/src/daemon/ability/builtins/resources/pages/api.rs" <<'EOF'
+fn handle_api() -> Value {
+    Ok(json!({
+                "status":       200,
+                "body":         resp,
+                "content_type": "application/json; charset=utf-8",
+    }))
+}
+EOF
+  if ( CLI_ROOT="$tmp/pages-api-response-projection-legacy"; check_pages_api_response_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected pages api response projection gate to fail"
+  fi
   mkdir -p "$tmp/local-agents-schema-legacy/src/daemon/persistence"
   cat >"$tmp/local-agents-schema-legacy/src/daemon/persistence/local_agents.rs" <<'EOF'
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
@@ -13119,6 +13196,7 @@ EOF
   check_pages_health_response_projection_contract
   check_pages_fetch_response_projection_contract
   check_pages_publish_response_projection_contract
+  check_pages_api_response_projection_contract
   check_local_agents_schema_contract
   check_profile_store_schema_contract
   check_auth_session_owner_fact_contract
@@ -13274,6 +13352,7 @@ check_pages_management_response_projection_contract
 check_pages_health_response_projection_contract
 check_pages_fetch_response_projection_contract
 check_pages_publish_response_projection_contract
+check_pages_api_response_projection_contract
 check_profile_store_schema_contract
 check_auth_session_owner_fact_contract
 check_resources_schema_contract

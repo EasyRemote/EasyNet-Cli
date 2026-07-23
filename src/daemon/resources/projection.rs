@@ -414,6 +414,24 @@ impl PagesPublishResponse {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PagesApiResponse {
+    pub status: u16,
+    pub body: Value,
+    pub content_type: String,
+}
+
+impl PagesApiResponse {
+    pub fn json_ok(body: Value) -> Self {
+        Self {
+            status: 200,
+            body,
+            content_type: "application/json; charset=utf-8".to_string(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -851,6 +869,32 @@ mod tests {
         assert!(
             error.to_string().contains("canonical_root"),
             "strict pages publish response error should name unknown field: {error}"
+        );
+    }
+
+    #[test]
+    fn pages_api_response_preserves_public_shape() {
+        let response = PagesApiResponse::json_ok(json!({"pong": true}));
+        let wire = serde_json::to_value(&response).expect("pages api response serializes");
+
+        assert_eq!(wire["status"], 200);
+        assert_eq!(wire["body"]["pong"], true);
+        assert_eq!(wire["content_type"], "application/json; charset=utf-8");
+    }
+
+    #[test]
+    fn pages_api_response_rejects_unknown_fields() {
+        let error = serde_json::from_value::<PagesApiResponse>(json!({
+            "status": 200,
+            "body": {"pong": true},
+            "content_type": "application/json; charset=utf-8",
+            "manifest_path": "/tmp/site/api/ping.toml"
+        }))
+        .expect_err("pages api response must reject manifest path leaks");
+
+        assert!(
+            error.to_string().contains("manifest_path"),
+            "strict pages api response error should name unknown field: {error}"
         );
     }
 }

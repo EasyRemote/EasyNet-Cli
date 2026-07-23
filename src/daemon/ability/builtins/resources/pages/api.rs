@@ -55,6 +55,7 @@ use crate::core::ura::AbilitySelector;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::ability::AuthorityScope;
 use crate::daemon::invocation::routing::target::CallMode;
+use crate::daemon::resources::projection::PagesApiResponse;
 
 /// Process-wide handle to the live ability registry. Set once at
 /// boot by `pages::register`; read by the `kind="ability"` branch
@@ -148,6 +149,10 @@ fn toml_to_json(t: toml::Value) -> Value {
     }
 }
 
+fn api_response(body: Value) -> anyhow::Result<Value> {
+    Ok(serde_json::to_value(PagesApiResponse::json_ok(body))?)
+}
+
 /// Top-level API handler. Dispatches on the manifest's `kind`.
 ///
 /// args:
@@ -173,11 +178,7 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
     match manifest.kind.as_str() {
         "static_json" => {
             let resp = manifest.response.map(toml_to_json).unwrap_or(Value::Null);
-            Ok(json!({
-                "status":       200,
-                "body":         resp,
-                "content_type": "application/json; charset=utf-8",
-            }))
+            api_response(resp)
         }
         "echo" => {
             let body = args.get("body").cloned().unwrap_or(Value::Null);
@@ -203,11 +204,7 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
                 }
                 (other, _) => other,
             };
-            Ok(json!({
-                "status":       200,
-                "body":         merged,
-                "content_type": "application/json; charset=utf-8",
-            }))
+            api_response(merged)
         }
         "ability" => {
             // The manifest forwards the request to a real EasyNet
@@ -248,11 +245,7 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
                     selector.local_registry_ability()
                 )
             })?;
-            Ok(json!({
-                "status":       200,
-                "body":         result,
-                "content_type": "application/json; charset=utf-8",
-            }))
+            api_response(result)
         }
         other => anyhow::bail!("unsupported api manifest kind: {other:?}"),
     }
@@ -459,6 +452,67 @@ mod tests {
         });
     }
 
+    fn assert_api_projection_shape(resp: &Value) {
+        assert_eq!(resp["status"], 200);
+        assert_eq!(resp["content_type"], "application/json; charset=utf-8");
+        assert!(resp.get("manifest_path").is_none());
+        assert!(resp.get("canonical_root").is_none());
+    }
+
+    #[test]
+    fn static_json_manifest_returns_typed_payload_projection_shape() {
+        let user = "alice-static-api";
+        let project_id = "todo-static-api";
+        let key = (user.to_string(), project_id.to_string());
+        let _dir = publish_project_with_manifest(
+            user,
+            project_id,
+            "ping",
+            "kind = \"static_json\"\n[response]\npong = true\n",
+        );
+
+        let resp = handle_api(
+            user,
+            project_id,
+            "ping",
+            json!({"body": {}, "method": "GET"}),
+        )
+        .expect("static api response");
+
+        assert_api_projection_shape(&resp);
+        assert_eq!(resp["body"]["pong"], true);
+        PUBLISHED_PROJECTS.remove(&key);
+    }
+
+    #[test]
+    fn echo_manifest_returns_typed_payload_projection_shape() {
+        let user = "alice-echo-api";
+        let project_id = "todo-echo-api";
+        let key = (user.to_string(), project_id.to_string());
+        let _dir = publish_project_with_manifest(
+            user,
+            project_id,
+            "submit",
+            "kind = \"echo\"\n[extra]\naccepted = true\n",
+        );
+
+        let resp = handle_api(
+            user,
+            project_id,
+            "submit",
+            json!({
+                "body": {"task": "ship projection"},
+                "method": "POST"
+            }),
+        )
+        .expect("echo api response");
+
+        assert_api_projection_shape(&resp);
+        assert_eq!(resp["body"]["task"], "ship projection");
+        assert_eq!(resp["body"]["accepted"], true);
+        PUBLISHED_PROJECTS.remove(&key);
+    }
+
     #[test]
     fn ability_manifest_invokes_registry_handler() {
         install_dispatch_registry_once();
@@ -483,7 +537,7 @@ mod tests {
         )
         .expect("handle_api ok");
 
-        assert_eq!(resp["status"], 200);
+        assert_api_projection_shape(&resp);
         assert_eq!(resp["body"]["ok"], true);
         assert_eq!(resp["body"]["echo"]["task"], "ship windows support");
 
