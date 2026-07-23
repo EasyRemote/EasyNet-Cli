@@ -2512,22 +2512,24 @@ mod tests {
         use crate::daemon::execution::schedule::ScheduleService;
         use crate::daemon::execution::session::SessionService;
         let agents = Default::default();
-        let mut config = crate::daemon::ability::catalog::RegistryBuildConfig::new(
-            crate::daemon::ability::catalog::RegistryBuildServices::new(
-                Arc::new(SessionService::new()),
-                Arc::new(PermissionService::new()),
-                Arc::new(DiscussService::new()),
-                Arc::new(ScheduleService::new()),
-                Arc::new(LoopService::new()),
-            ),
-            &agents,
-        );
-        config.local_runtime = local_runtime;
-        config.authority_context =
+        let authority_context =
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
                 TEST_DEVICE_URA,
             )
             .expect("test device URA is a valid device authority root");
+        let mut config =
+            crate::daemon::ability::catalog::RegistryBuildConfig::new_with_authority_context(
+                crate::daemon::ability::catalog::RegistryBuildServices::new(
+                    Arc::new(SessionService::new()),
+                    Arc::new(PermissionService::new()),
+                    Arc::new(DiscussService::new()),
+                    Arc::new(ScheduleService::new()),
+                    Arc::new(LoopService::new()),
+                ),
+                &agents,
+                authority_context,
+            );
+        config.local_runtime = local_runtime;
         crate::daemon::ability::catalog::build_registry_with_services_result(config)
             .expect("assemble local session dispatcher test catalog")
             .catalog

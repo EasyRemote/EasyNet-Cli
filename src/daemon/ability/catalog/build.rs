@@ -429,13 +429,28 @@ pub struct RegistryDaemonBuildConfig {
 impl RegistryDaemonBuildConfig {
     #[must_use]
     pub fn new(services: RegistryBuildServices) -> Self {
+        Self::new_with_authority_context(
+            services,
+            AbilityAuthorityContext::from_local_environment(),
+        )
+    }
+
+    /// Construct daemon registry assembly from an already-resolved authority
+    /// snapshot. Test fixtures and daemon mode selectors use this path when
+    /// the authority state is explicit; it must not read ambient local
+    /// credentials before the caller-owned authority context is installed.
+    #[must_use]
+    pub fn new_with_authority_context(
+        services: RegistryBuildServices,
+        authority_context: AbilityAuthorityContext,
+    ) -> Self {
         Self {
             services,
             invocation_ledger: None,
             loaders: None,
             pages_identity: PagesIdentity::default(),
             local_runtime: None,
-            authority_context: AbilityAuthorityContext::from_local_environment(),
+            authority_context,
             hot_agent_registrar_cell: Arc::new(
                 agent_lifecycle_ability::SharedHotRegistrarCell::new(),
             ),

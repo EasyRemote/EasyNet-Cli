@@ -253,7 +253,13 @@ mod tests {
     /// dispatch will silently miss them.
     #[test]
     fn registration_makes_all_three_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                crate::core::ura::device_ura("localhost", "skill-install-test-device"),
+            )
+            .expect("build explicit skill-install test Device authority");
+        let mut reg =
+            AxonAbilityCatalog::new_metadata_only_with_authority_context(authority_context);
         register(&mut reg);
         assert!(reg.get_rpc(ABILITY_INSTALL).is_some());
         assert!(reg.get_rpc(ABILITY_REMOVE).is_some());

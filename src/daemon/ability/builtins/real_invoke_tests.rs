@@ -204,10 +204,11 @@ fn registry_with_temp_home_for_profile(
     let guard = crate::cli::commands::test_support::HomeGuard::new();
     // build_registry_for_daemon_result does the agent-registry load that
     // some abilities need (agent.list, chat-per-agent etc).
-    let mut config = crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new(
-        crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
-    );
-    config.authority_context = authority_context_for_real_invoke(profile);
+    let mut config =
+        crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new_with_authority_context(
+            crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
+            authority_context_for_real_invoke(profile),
+        );
     config.local_runtime = Some(canonical_test_runtime());
     config.loaders = Some(Arc::new(Vec::new()));
     let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)
@@ -233,13 +234,13 @@ fn registry_with_voice_temp_home() -> (
 ) {
     let guard = crate::cli::commands::test_support::HomeGuard::new();
     let voice = SharedVoiceProviderFixture::new("localhost");
-    let mut config = crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new(
-        crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
-    );
+    let mut config =
+        crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new_with_authority_context(
+            crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
+            authority_context_for_real_invoke(RealInvokeAuthorityProfile::CombinedDeviceHub),
+        );
     config.shared_stores = crate::daemon::ability::catalog::RegistrySharedStores::default()
         .with_voice_call_provider_assembly(voice.provider());
-    config.authority_context =
-        authority_context_for_real_invoke(RealInvokeAuthorityProfile::CombinedDeviceHub);
     config.local_runtime = Some(canonical_test_runtime());
     config.loaders = Some(Arc::new(Vec::new()));
     let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)
@@ -265,15 +266,17 @@ fn registry_with_joined_temp_home() -> (
         },
     )
     .expect("seed joined credentials before authority-context assembly");
-    let mut config = crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new(
-        crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
-    );
-    config.authority_context =
+    let authority_context =
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
             authority_fixture_device_ura(),
             std::iter::empty::<String>(),
         )
         .expect("build joined Device authority fixture with hot hosted-Agent inventory");
+    let mut config =
+        crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new_with_authority_context(
+            crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
+            authority_context,
+        );
     config.local_runtime = Some(canonical_test_runtime());
     config.loaders = Some(Arc::new(Vec::new()));
     let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)
