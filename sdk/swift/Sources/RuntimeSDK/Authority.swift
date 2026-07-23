@@ -130,6 +130,7 @@ public struct SessionAuthority: Sendable, Equatable {
         guard expiresAtMS > issuedAtMS else {
             throw invalidAuthority("session authority expires_at_ms must be greater than issued_at_ms")
         }
+        try validateSessionAuthoritySubjectBinding(subjectURA: self.subjectURA, sessionOwnerUserID: self.sessionOwnerUserID, sessionID: self.sessionID)
         self.issuedAtMS = issuedAtMS
         self.expiresAtMS = expiresAtMS
         self.signatureBase64 = try requiredAuthorityBase64(signatureBase64, "signature_base64")
@@ -229,6 +230,7 @@ public struct SessionAuthorityRequest: Sendable, Equatable {
         guard expiresAtMS > issuedAtMS else {
             throw invalidAuthority("session authority request expires_at_ms must be greater than issued_at_ms")
         }
+        try validateSessionAuthoritySubjectBinding(subjectURA: self.subjectURA, sessionOwnerUserID: self.sessionOwnerUserID, sessionID: self.sessionID)
         self.issuedAtMS = issuedAtMS
         self.expiresAtMS = expiresAtMS
         self.metadata = metadata
@@ -441,6 +443,64 @@ func containsAllZeroPrincipal(_ value: String) -> Bool {
     value.trimmingCharacters(in: .whitespacesAndNewlines)
         .lowercased()
         .contains(allZeroPrincipalID)
+}
+
+private struct AuthoritySubject {
+    let kind: String
+    let ownerUserID: String
+    let sessionID: String
+}
+
+private func validateSessionAuthoritySubjectBinding(subjectURA: String, sessionOwnerUserID: String, sessionID: String) throws {
+    guard let subject = try canonicalAuthoritySubject(subjectURA) else {
+        throw invalidAuthority("session authority subject_ura must be a canonical user or session subject")
+    }
+    let owner = try requiredAuthorityPrincipalID(sessionOwnerUserID, "session_owner_user_id")
+    guard subject.ownerUserID == owner else {
+        throw invalidAuthority("session authority user subject must match session_owner_user_id")
+    }
+    if subject.kind == "session" {
+        let expectedSessionID = try requiredAuthorityString(sessionID, "session_id")
+        guard subject.sessionID == expectedSessionID else {
+            throw invalidAuthority("session authority subject_ura owner/session must match session_owner_user_id and session_id")
+        }
+    }
+}
+
+private func canonicalAuthoritySubject(_ subjectURA: String) throws -> AuthoritySubject? {
+    let raw = try requiredAuthorityURA(subjectURA, "subject_ura")
+    let realmPrefix = "easynet:///r/"
+    guard raw.hasPrefix(realmPrefix) else {
+        return nil
+    }
+    let rest = String(raw.dropFirst(realmPrefix.count))
+    guard let slash = rest.firstIndex(of: "/"), slash != rest.startIndex else {
+        return nil
+    }
+    let path = String(rest[rest.index(after: slash)...])
+    let userPrefix = "user/"
+    if path.hasPrefix(userPrefix) {
+        let ownerUserID = String(path.dropFirst(userPrefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !ownerUserID.isEmpty, !ownerUserID.contains("/") else {
+            return nil
+        }
+        return AuthoritySubject(kind: "user", ownerUserID: ownerUserID, sessionID: "")
+    }
+    let resourcePrefix = "resource/user."
+    guard path.hasPrefix(resourcePrefix) else {
+        return nil
+    }
+    let resource = String(path.dropFirst(resourcePrefix.count))
+    let marker = "/session/"
+    guard let markerRange = resource.range(of: marker), markerRange.lowerBound != resource.startIndex else {
+        return nil
+    }
+    let ownerUserID = String(resource[..<markerRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+    let authoritySessionID = String(resource[markerRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !ownerUserID.isEmpty, !ownerUserID.contains("/"), !authoritySessionID.isEmpty, !authoritySessionID.contains("/") else {
+        return nil
+    }
+    return AuthoritySubject(kind: "session", ownerUserID: ownerUserID, sessionID: authoritySessionID)
 }
 
 private func requiredAuthorityBase64(_ value: String, _ field: String) throws -> String {

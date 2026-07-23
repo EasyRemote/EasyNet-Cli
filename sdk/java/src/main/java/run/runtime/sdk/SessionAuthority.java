@@ -32,6 +32,7 @@ public record SessionAuthority(
     if (expiresAtMS <= issuedAtMS) {
       throw AuthoritySupport.invalid("session authority expires_at_ms must be greater than issued_at_ms");
     }
+    AuthoritySupport.validateSessionAuthoritySubjectBinding(subjectURA, sessionOwnerUserID, sessionID);
     signatureBase64 = AuthoritySupport.requiredBase64(signatureBase64, "signature_base64");
     metadataValue = AuthoritySupport.requiredString(metadataValue, "metadata_value");
   }

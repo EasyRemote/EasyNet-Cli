@@ -26,6 +26,7 @@ public final class RuntimeCoreSeamTest {
           "runtimeReceiptProofFactsAreMandatory",
           "authorityMetadataIsTypedAndMutuallyExclusive",
           "authorityMetadataRejectsAllZeroSessionOwners",
+          "authorityMetadataBindsSessionAuthoritySubjects",
           "streamAndBidiLifecyclesAreBounded",
           "bidiFrame0IsRequiredBeforeRuntimeSessionEntry",
           "asyncRuntimeDelegatesToTheSameRuntimeStateMachine",
@@ -76,6 +77,8 @@ public final class RuntimeCoreSeamTest {
           authorityMetadataIsTypedAndMutuallyExclusive();
       case "authorityMetadataRejectsAllZeroSessionOwners" ->
           authorityMetadataRejectsAllZeroSessionOwners();
+      case "authorityMetadataBindsSessionAuthoritySubjects" ->
+          authorityMetadataBindsSessionAuthoritySubjects();
       case "streamAndBidiLifecyclesAreBounded" -> streamAndBidiLifecyclesAreBounded();
       case "bidiFrame0IsRequiredBeforeRuntimeSessionEntry" ->
           bidiFrame0IsRequiredBeforeRuntimeSessionEntry();
@@ -405,6 +408,52 @@ public final class RuntimeCoreSeamTest {
                 "00000000-0000-0000-0000-000000000000",
                 CALLEE,
                 "easynet:///r/example/user/alice",
+                CALLEE,
+                List.of("invoke"),
+                List.of("invoke"),
+                List.of("observe.health"),
+                10,
+                20,
+                Map.of()));
+  }
+
+  private static void authorityMetadataBindsSessionAuthoritySubjects() {
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("issuer_ura", CALLER);
+    payload.put("session_id", "session-1");
+    payload.put("session_owner_user_id", "alice");
+    payload.put("creator_principal_id", CALLER);
+    payload.put("callee_ura", CALLEE);
+    payload.put("subject_ura", "easynet:///r/example/user/bob");
+    payload.put("audience", CALLEE);
+    payload.put("scopes", List.of("invoke"));
+    payload.put("allowed_actions", List.of("invoke"));
+    payload.put("allowed_followup_abilities", List.of("observe.health"));
+    payload.put("issued_at_ms", 10);
+    payload.put("expires_at_ms", 20);
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "session authority user subject must match session_owner_user_id",
+        () -> SessionAuthority.fromMetadata(authorityMetadataValue(payload)));
+
+    Map<String, Object> sessionPayload = new LinkedHashMap<>(payload);
+    sessionPayload.put("subject_ura", "easynet:///r/example/resource/user.alice/session/session-2");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "session authority subject_ura owner/session must match session_owner_user_id and session_id",
+        () -> SessionAuthority.fromMetadata(authorityMetadataValue(sessionPayload)));
+
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "session authority subject_ura must be a canonical user or session subject",
+        () ->
+            new SessionAuthorityRequest(
+                CALLER,
+                "session-1",
+                "alice",
+                CALLER,
+                CALLEE,
+                CALLEE,
                 CALLEE,
                 List.of("invoke"),
                 List.of("invoke"),

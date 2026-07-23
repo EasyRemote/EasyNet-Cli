@@ -82,6 +82,23 @@ final class AuthoritySupport {
     return cleaned;
   }
 
+  static void validateSessionAuthoritySubjectBinding(
+      String subjectURA, String sessionOwnerUserID, String sessionID) {
+    AuthoritySubject subject = canonicalAuthoritySubject(subjectURA);
+    if (subject == null) {
+      throw invalid("session authority subject_ura must be a canonical user or session subject");
+    }
+    String owner = requiredPrincipalID(sessionOwnerUserID, "session_owner_user_id");
+    if (!subject.ownerUserID.equals(owner)) {
+      throw invalid("session authority user subject must match session_owner_user_id");
+    }
+    if ("session".equals(subject.kind)
+        && !subject.sessionID.equals(requiredString(sessionID, "session_id"))) {
+      throw invalid(
+          "session authority subject_ura owner/session must match session_owner_user_id and session_id");
+    }
+  }
+
   private static void rejectAllZero(String value, String field) {
     if (containsAllZeroPrincipal(value)) {
       throw invalid(field + " must not be all-zero");
@@ -159,6 +176,49 @@ final class AuthoritySupport {
     Object value = metadata.get(key);
     return value instanceof String string && !string.isBlank();
   }
+
+  private static AuthoritySubject canonicalAuthoritySubject(String subjectURA) {
+    String raw = requiredURA(subjectURA, "subject_ura");
+    String prefix = "easynet:///r/";
+    if (!raw.startsWith(prefix)) {
+      return null;
+    }
+    String rest = raw.substring(prefix.length());
+    int slash = rest.indexOf('/');
+    if (slash <= 0) {
+      return null;
+    }
+    String path = rest.substring(slash + 1);
+    String userPrefix = "user/";
+    if (path.startsWith(userPrefix)) {
+      String ownerUserID = path.substring(userPrefix.length()).trim();
+      if (ownerUserID.isEmpty() || ownerUserID.contains("/")) {
+        return null;
+      }
+      return new AuthoritySubject("user", ownerUserID, "");
+    }
+    String resourcePrefix = "resource/user.";
+    if (!path.startsWith(resourcePrefix)) {
+      return null;
+    }
+    String resource = path.substring(resourcePrefix.length());
+    String marker = "/session/";
+    int markerIndex = resource.indexOf(marker);
+    if (markerIndex <= 0) {
+      return null;
+    }
+    String ownerUserID = resource.substring(0, markerIndex).trim();
+    String authoritySessionID = resource.substring(markerIndex + marker.length()).trim();
+    if (ownerUserID.isEmpty()
+        || ownerUserID.contains("/")
+        || authoritySessionID.isEmpty()
+        || authoritySessionID.contains("/")) {
+      return null;
+    }
+    return new AuthoritySubject("session", ownerUserID, authoritySessionID);
+  }
+
+  private record AuthoritySubject(String kind, String ownerUserID, String sessionID) {}
 
   record DecodedAuthority(Map<String, Object> payload, String signatureBase64) {}
 }

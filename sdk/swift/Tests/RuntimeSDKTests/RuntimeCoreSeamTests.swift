@@ -264,6 +264,63 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testAuthorityMetadataBindsSessionAuthoritySubjects() throws {
+        let userMismatch = try authorityMetadataValue([
+            "issuer_ura": caller,
+            "session_id": "session-1",
+            "session_owner_user_id": "alice",
+            "creator_principal_id": caller,
+            "callee_ura": callee,
+            "subject_ura": "easynet:///r/example/user/bob",
+            "audience": callee,
+            "scopes": ["invoke"],
+            "allowed_actions": ["invoke"],
+            "allowed_followup_abilities": ["observe.health"],
+            "issued_at_ms": 10,
+            "expires_at_ms": 20,
+        ])
+
+        expectSyncSDKError(.invalidArgument, "session authority user subject must match session_owner_user_id") {
+            _ = try SessionAuthority.fromMetadata(userMismatch)
+        }
+
+        let sessionMismatch = try authorityMetadataValue([
+            "issuer_ura": caller,
+            "session_id": "session-1",
+            "session_owner_user_id": "alice",
+            "creator_principal_id": caller,
+            "callee_ura": callee,
+            "subject_ura": "easynet:///r/example/resource/user.alice/session/session-2",
+            "audience": callee,
+            "scopes": ["invoke"],
+            "allowed_actions": ["invoke"],
+            "allowed_followup_abilities": ["observe.health"],
+            "issued_at_ms": 10,
+            "expires_at_ms": 20,
+        ])
+
+        expectSyncSDKError(.invalidArgument, "session authority subject_ura owner/session must match session_owner_user_id and session_id") {
+            _ = try SessionAuthority.fromMetadata(sessionMismatch)
+        }
+
+        expectSyncSDKError(.invalidArgument, "session authority subject_ura must be a canonical user or session subject") {
+            _ = try SessionAuthorityRequest(
+                issuerURA: caller,
+                sessionID: "session-1",
+                sessionOwnerUserID: "alice",
+                creatorPrincipalID: caller,
+                calleeURA: callee,
+                subjectURA: callee,
+                audience: callee,
+                scopes: ["invoke"],
+                allowedActions: ["invoke"],
+                allowedFollowupAbilities: ["observe.health"],
+                issuedAtMS: 10,
+                expiresAtMS: 20
+            )
+        }
+    }
+
     func testStreamAndBidiStateMachinesAreBounded() async throws {
         let stream = StreamHandle(source: CountingStreamSource())
         for _ in 0...StreamHandle.maxRetainedEvents {
@@ -735,6 +792,7 @@ private func object(_ data: Data) throws -> [String: Any] {
 
 private func expectSyncSDKError(
     _ code: SDKErrorCode,
+    _ messageFragment: String = "",
     operation: () throws -> Void
 ) {
     do {
@@ -742,6 +800,12 @@ private func expectSyncSDKError(
         XCTFail("expected SDKError \(code.rawValue)")
     } catch let error as SDKError {
         XCTAssertEqual(error.code, code)
+        if !messageFragment.isEmpty {
+            XCTAssertTrue(
+                error.message.contains(messageFragment),
+                "expected error message to contain \(messageFragment), got \(error.message)"
+            )
+        }
     } catch {
         XCTFail("expected SDKError, got \(error)")
     }
