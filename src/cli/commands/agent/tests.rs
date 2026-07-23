@@ -53,6 +53,16 @@ impl AgentCommandGateway for AgentCommandFixtureGateway {
     }
 }
 
+impl AgentStateReadGateway for AgentCommandFixtureGateway {
+    fn invoke_read(
+        &self,
+        ability: &str,
+        args: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        invoke_agent_command_fixture(ability, args)
+    }
+}
+
 fn invoke_agent_command_fixture(
     ability: &str,
     args: serde_json::Value,
@@ -163,6 +173,7 @@ fn invoke_agent_command_fixture(
 struct JoinedHome {
     _home: HomeGuard,
     _gateway: crate::cli::daemon_client::agent_gateway::TestAgentCommandGatewayGuard,
+    _state_gateway: crate::cli::daemon_client::agent_gateway::TestAgentStateReadGatewayGuard,
 }
 
 /// Build the AddArgs shape the CLI surface would construct
@@ -198,12 +209,18 @@ fn seed_joined_credentials() {
 fn joined_home() -> JoinedHome {
     let home = HomeGuard::new();
     seed_joined_credentials();
+    let fixture_gateway = Arc::new(AgentCommandFixtureGateway);
     let gateway = crate::cli::daemon_client::agent_gateway::install_test_agent_command_gateway(
-        Arc::new(AgentCommandFixtureGateway),
+        fixture_gateway.clone(),
     );
+    let state_gateway =
+        crate::cli::daemon_client::agent_gateway::install_test_agent_state_read_gateway(
+            fixture_gateway,
+        );
     JoinedHome {
         _home: home,
         _gateway: gateway,
+        _state_gateway: state_gateway,
     }
 }
 
@@ -594,12 +611,16 @@ fn set_args(name: &str, model: Option<&str>) -> SetArgs {
 }
 
 #[derive(Default)]
-struct MissingRootAgentGateway {
+struct MissingRootAgentStateReadGateway {
     calls: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
 }
 
-impl AgentCommandGateway for MissingRootAgentGateway {
-    fn invoke(&self, ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+impl AgentStateReadGateway for MissingRootAgentStateReadGateway {
+    fn invoke_read(
+        &self,
+        ability: &str,
+        args: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
         self.calls.lock().unwrap().push((ability.to_string(), args));
         match ability {
             "agent.list" => Ok(serde_json::json!({
@@ -719,9 +740,9 @@ fn run_set_rejects_unknown_agent_with_actionable_message() {
 #[test]
 fn run_set_missing_root_path_fails_before_agent_start_is_sent() {
     let _home = HomeGuard::new();
-    let gateway = Arc::new(MissingRootAgentGateway::default());
-    let _gateway_guard =
-        crate::cli::daemon_client::agent_gateway::install_test_agent_command_gateway(
+    let gateway = Arc::new(MissingRootAgentStateReadGateway::default());
+    let _state_gateway_guard =
+        crate::cli::daemon_client::agent_gateway::install_test_agent_state_read_gateway(
             gateway.clone(),
         );
 

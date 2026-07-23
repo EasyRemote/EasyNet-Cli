@@ -16,7 +16,9 @@
 
 use clap::{Args, Subcommand, ValueEnum};
 
-use crate::cli::daemon_client::agent_gateway::{agent_command_gateway, AgentCommandGateway};
+use crate::cli::daemon_client::agent_gateway::{
+    agent_command_gateway, agent_state_read_gateway, AgentCommandGateway, AgentStateReadGateway,
+};
 use crate::cli::daemon_client::agent_view::{AgentRuntimeKind, DaemonAgentRow};
 use crate::daemon::execution::mission::directory::AgentDirectory;
 use crate::support::platform::timeouts;
@@ -390,18 +392,18 @@ use publish::*;
 use send::*;
 
 // ── Shared daemon-registry helpers ──────────────────────────────────
-// Every Agent subcommand reads and mutates daemon-owned state through the
-// command gateway. Filesystem access below is limited to a root path already
-// authorized and projected by `agent.list`.
+// Every Agent subcommand reads daemon-owned state through the state-read
+// gateway and mutates through the command gateway. Filesystem access below is
+// limited to a root path already authorized and projected by `agent.list`.
 
 pub(super) fn invoke_daemon_agent_list_required(
-    gateway: &dyn AgentCommandGateway,
+    gateway: &dyn AgentStateReadGateway,
 ) -> anyhow::Result<Vec<DaemonAgentRow>> {
     crate::cli::daemon_client::agent_view::list_agents_with_gateway(gateway)
 }
 
 pub(super) fn daemon_agent_row(
-    gateway: &dyn AgentCommandGateway,
+    gateway: &dyn AgentStateReadGateway,
     name: &str,
 ) -> anyhow::Result<DaemonAgentRow> {
     invoke_daemon_agent_list_required(gateway)?
@@ -424,7 +426,7 @@ pub(super) fn daemon_row_root(row: &DaemonAgentRow) -> anyhow::Result<std::path:
 }
 
 pub(super) fn open_registered_agent(name: &str) -> anyhow::Result<AgentDirectory> {
-    let gateway = agent_command_gateway();
+    let gateway = agent_state_read_gateway();
     let row = daemon_agent_row(gateway.as_ref(), name)?;
     let root = daemon_row_root(&row)?;
     if !root.exists() {

@@ -149,7 +149,7 @@ fn render_agent_stop_runtime_outcome(name: &str, resp: &serde_json::Value) {
 }
 
 pub(super) fn run_list() -> anyhow::Result<()> {
-    let gateway = agent_command_gateway();
+    let gateway = agent_state_read_gateway();
     let rows = invoke_daemon_agent_list_required(gateway.as_ref())?;
 
     if rows.is_empty() {
@@ -278,12 +278,13 @@ pub(super) fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
 /// operator can restore from `~/.easynet/agents.json.v1.bak` if
 /// they never completed a v2 save.
 pub(super) fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
-    let gateway = agent_command_gateway();
+    let action_gateway = agent_command_gateway();
+    let state_gateway = agent_state_read_gateway();
 
     // Identify rows whose daemon-projected registered root is missing.
     // A row without root_path is rejected by daemon_row_root below; the CLI
     // does not derive a persistence path from the agent name.
-    let rows = invoke_daemon_agent_list_required(gateway.as_ref())?;
+    let rows = invoke_daemon_agent_list_required(state_gateway.as_ref())?;
     let orphans: Vec<DaemonAgentRow> = rows
         .into_iter()
         .filter(|row| row.root_exists == Some(false))
@@ -315,7 +316,7 @@ pub(super) fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
     }
 
     for row in &orphans {
-        let resp = invoke_daemon_agent_stop_required(gateway.as_ref(), &row.name)?;
+        let resp = invoke_daemon_agent_stop_required(action_gateway.as_ref(), &row.name)?;
         if !resp
             .get("ack")
             .and_then(serde_json::Value::as_bool)
@@ -372,8 +373,9 @@ pub(super) fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
 /// EasyNet to chase upstream releases. Validation belongs at
 /// invocation time. See `SetArgs::model` doc.
 pub(super) fn run_set(args: SetArgs) -> anyhow::Result<()> {
-    let gateway = agent_command_gateway();
-    let row = daemon_agent_row(gateway.as_ref(), &args.name)?;
+    let state_gateway = agent_state_read_gateway();
+    let action_gateway = agent_command_gateway();
+    let row = daemon_agent_row(state_gateway.as_ref(), &args.name)?;
 
     // The clap surface lets us tell "flag absent" from "flag empty
     // string" via Option<String>. An empty string is the explicit
@@ -398,7 +400,7 @@ pub(super) fn run_set(args: SetArgs) -> anyhow::Result<()> {
     let root_path = daemon_row_root(&row)?.to_string_lossy().to_string();
     let model_for_request = new_model.clone();
     let daemon_response = invoke_daemon_agent_start_required(
-        gateway.as_ref(),
+        action_gateway.as_ref(),
         serde_json::json!({
             "name": name,
             "agent_type": runtime,

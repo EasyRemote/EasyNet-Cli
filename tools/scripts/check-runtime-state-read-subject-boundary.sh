@@ -15,10 +15,12 @@ TARGETS=(
   "src/cli/commands/discover.rs"
   "src/cli/commands/doctor.rs"
   "src/cli/commands/groups/mcp.rs"
+  "src/cli/commands/groups/device.rs"
   "src/cli/commands/status.rs"
   "src/cli/daemon_client/ability_catalog.rs"
   "src/cli/commands/groups/invocation.rs"
   "src/cli/commands/invocation_watch.rs"
+  "src/daemon/ability/catalog/profiles/mcp.rs"
 )
 
 [[ -f "$ISSUER" ]] || fail "missing $ISSUER"
@@ -64,5 +66,33 @@ for target in "${TARGETS[@]}"; do
     fail "$target must not use generic invoke_local_ability for runtime-state reads"
   fi
 done
+
+AGENT_GATEWAY="src/cli/daemon_client/agent_gateway.rs"
+AGENT_VIEW="src/cli/daemon_client/agent_view.rs"
+AGENT_PUBLISH="src/cli/commands/agent/publish.rs"
+
+[[ -f "$AGENT_GATEWAY" ]] || fail "missing $AGENT_GATEWAY"
+[[ -f "$AGENT_VIEW" ]] || fail "missing $AGENT_VIEW"
+[[ -f "$AGENT_PUBLISH" ]] || fail "missing $AGENT_PUBLISH"
+
+if ! rg -n 'trait AgentStateReadGateway' "$AGENT_GATEWAY" >/dev/null; then
+  fail "agent.list must have a dedicated AgentStateReadGateway"
+fi
+
+if ! rg -n 'LocalRuntimeStateReadIssuer::invoke' "$AGENT_GATEWAY" >/dev/null; then
+  fail "production AgentStateReadGateway must use LocalRuntimeStateReadIssuer"
+fi
+
+if ! rg -n 'AgentStateReadGateway' "$AGENT_VIEW" >/dev/null; then
+  fail "agent view must depend on AgentStateReadGateway, not AgentCommandGateway"
+fi
+
+if rg -n 'AgentCommandGateway|agent_command_gateway|\.invoke\s*\(\s*"agent\.list"' "$AGENT_VIEW"; then
+  fail "agent view must not read agent.list through the command gateway"
+fi
+
+if rg -n '\.invoke\s*\(\s*"(agent\.list|meta\.list_abilities)"' "$AGENT_PUBLISH"; then
+  fail "agent publish read projections must not use the command gateway"
+fi
 
 echo "check-runtime-state-read-subject-boundary: ok"

@@ -63,11 +63,14 @@ for target in \
   "$SB/src/cli/commands/discover.rs" \
   "$SB/src/cli/commands/doctor.rs" \
   "$SB/src/cli/commands/groups/mcp.rs" \
+  "$SB/src/cli/commands/groups/device.rs" \
   "$SB/src/cli/commands/status.rs" \
   "$SB/src/cli/daemon_client/ability_catalog.rs" \
   "$SB/src/cli/commands/groups/invocation.rs" \
-  "$SB/src/cli/commands/invocation_watch.rs"
+  "$SB/src/cli/commands/invocation_watch.rs" \
+  "$SB/src/daemon/ability/catalog/profiles/mcp.rs"
 do
+  mkdir -p "$(dirname "$target")"
   cat >"$target" <<'RS'
 use crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer;
 
@@ -76,6 +79,41 @@ fn read_runtime_state() {
 }
 RS
 done
+
+mkdir -p "$SB/src/cli/commands/agent" "$SB/src/cli/daemon_client"
+cat >"$SB/src/cli/daemon_client/agent_gateway.rs" <<'RS'
+pub trait AgentCommandGateway {
+    fn invoke(&self, ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value>;
+}
+
+pub trait AgentStateReadGateway {
+    fn invoke_read(&self, ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value>;
+}
+
+struct DaemonAgentStateReadGateway;
+
+impl AgentStateReadGateway for DaemonAgentStateReadGateway {
+    fn invoke_read(&self, ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer::invoke(ability, args)
+    }
+}
+RS
+
+cat >"$SB/src/cli/daemon_client/agent_view.rs" <<'RS'
+use crate::cli::daemon_client::agent_gateway::AgentStateReadGateway;
+
+fn read_agents(gateway: &dyn AgentStateReadGateway) -> anyhow::Result<serde_json::Value> {
+    gateway.invoke_read("agent.list", serde_json::json!({}))
+}
+RS
+
+cat >"$SB/src/cli/commands/agent/publish.rs" <<'RS'
+use crate::cli::daemon_client::agent_gateway::AgentStateReadGateway;
+
+fn publish_view(gateway: &dyn AgentStateReadGateway) -> anyhow::Result<serde_json::Value> {
+    gateway.invoke_read("meta.list_abilities", serde_json::json!({}))
+}
+RS
 
 (
   cd "$SB"
@@ -96,5 +134,17 @@ set +e
 rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "generic runtime-state read should exit 1 (got $rc)"
+
+perl -0pi -e 's/\Qgateway.invoke_read("agent.list"\E/gateway.invoke("agent.list"/' \
+  "$SB/src/cli/daemon_client/agent_view.rs"
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-runtime-state-read-subject-boundary.sh
+) >/tmp/check-runtime-state-read-subject-boundary-agent.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "agent.list command-gateway regression should exit 1 (got $rc)"
 
 echo "test_check_runtime_state_read_subject_boundary.sh: all cases passed"

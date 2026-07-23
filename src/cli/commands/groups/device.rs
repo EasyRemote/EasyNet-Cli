@@ -309,7 +309,7 @@ fn invoke_revoke(target_ura: &str, _reason: &str, _caller_ura: &str) -> anyhow::
 fn describe_target(node_id: &str) -> anyhow::Result<Value> {
     let trimmed = node_id.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("local") {
-        return crate::support::platform::local_invoke::invoke_local_ability(
+        return crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer::invoke(
             "node.describe",
             serde_json::json!({"node_id": "local"}),
         )
@@ -318,11 +318,13 @@ fn describe_target(node_id: &str) -> anyhow::Result<Value> {
 
     let local_identity = load_local_device_identity("device show")?;
     match classify_device_show_target(trimmed, &local_identity)? {
-        DeviceShowTarget::Local => crate::support::platform::local_invoke::invoke_local_ability(
-            "node.describe",
-            serde_json::json!({"node_id": "local"}),
-        )
-        .context("invoke node.describe (local)"),
+        DeviceShowTarget::Local => {
+            crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer::invoke(
+                "node.describe",
+                serde_json::json!({"node_id": "local"}),
+            )
+            .context("invoke node.describe (local)")
+        }
         DeviceShowTarget::RemoteDevice(target_ura) => invoke_remote_describe(&target_ura),
     }
 }

@@ -641,7 +641,7 @@ impl AbilityCatalogReader for DaemonAbilityCatalogReader {
     fn read(&self) -> anyhow::Result<Vec<crate::daemon::ability::descriptors::AbilityDescriptor>> {
         use anyhow::Context;
 
-        let response = crate::support::platform::local_invoke::invoke_local_ability(
+        let response = crate::support::platform::local_invoke::LocalRuntimeStateReadIssuer::invoke(
             "meta.list_abilities",
             serde_json::json!({"scope": "local"}),
         )

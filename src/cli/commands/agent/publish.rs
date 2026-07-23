@@ -10,12 +10,13 @@ use serde_json::{json, Value};
 use super::*;
 
 pub(super) fn run_publish(args: PublishArgs) -> anyhow::Result<()> {
-    let gateway = agent_command_gateway();
-    let owner_ura = resolve_agent_owner_ura(gateway.as_ref(), &args.name)?;
+    let action_gateway = agent_command_gateway();
+    let state_gateway = agent_state_read_gateway();
+    let owner_ura = resolve_agent_owner_ura(state_gateway.as_ref(), &args.name)?;
     if !args.dry_run {
-        gateway.invoke("agent.refresh", json!({"name": &args.name}))?;
+        action_gateway.invoke("agent.refresh", json!({"name": &args.name}))?;
     }
-    let response = gateway.invoke(
+    let response = state_gateway.invoke_read(
         "meta.list_abilities",
         json!({
             "scope": "local",
@@ -107,10 +108,10 @@ pub(super) fn run_publish(args: PublishArgs) -> anyhow::Result<()> {
 }
 
 fn resolve_agent_owner_ura(
-    gateway: &dyn AgentCommandGateway,
+    gateway: &dyn AgentStateReadGateway,
     name: &str,
 ) -> anyhow::Result<String> {
-    let response = gateway.invoke("agent.list", json!({}))?;
+    let response = gateway.list_agents()?;
     response
         .get("agents")
         .and_then(Value::as_array)

@@ -343,7 +343,7 @@ fn resolve_agent_selector(selector: &str) -> anyhow::Result<String> {
 }
 
 pub(crate) fn preview_agent_directory(name: &str) -> anyhow::Result<AgentDirectory> {
-    let gateway = crate::cli::daemon_client::agent_gateway::agent_command_gateway();
+    let gateway = crate::cli::daemon_client::agent_gateway::agent_state_read_gateway();
     let row = crate::cli::commands::agent::daemon_agent_row(gateway.as_ref(), name)?;
     let root = crate::cli::daemon_client::agent_view::agent_root(&row)?;
     if row.root_exists == Some(false) || !root.is_dir() {
