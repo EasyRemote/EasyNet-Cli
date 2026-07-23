@@ -131252,6 +131252,10 @@
           "sha256": "f1640b81ea004927993d16944b5056207ba0f7316d77b19f28f40e3962aff28f"
         },
         {
+          "item": "RuntimeStateReadSubjectURA",
+          "sha256": "af9425853733582f726de12c21ee2349164ed28174f7fbaff0b9a2ba6e7778ce"
+        },
+        {
           "item": "NativeRuntimeHandle.AbilityClient",
           "sha256": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2"
         },
@@ -131403,6 +131407,10 @@
               "sha256": "f1640b81ea004927993d16944b5056207ba0f7316d77b19f28f40e3962aff28f"
             },
             {
+              "item": "RuntimeStateReadSubjectURA",
+              "sha256": "af9425853733582f726de12c21ee2349164ed28174f7fbaff0b9a2ba6e7778ce"
+            },
+            {
               "item": "NativeRuntimeHandle.AbilityClient",
               "sha256": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2"
             },
@@ -131552,6 +131560,10 @@
             {
               "item": "RuntimeSessionTerminal",
               "sha256": "f1640b81ea004927993d16944b5056207ba0f7316d77b19f28f40e3962aff28f"
+            },
+            {
+              "item": "RuntimeStateReadSubjectURA",
+              "sha256": "af9425853733582f726de12c21ee2349164ed28174f7fbaff0b9a2ba6e7778ce"
             },
             {
               "item": "NativeRuntimeHandle.AbilityClient",
@@ -131705,6 +131717,10 @@
               "sha256": "f1640b81ea004927993d16944b5056207ba0f7316d77b19f28f40e3962aff28f"
             },
             {
+              "item": "RuntimeStateReadSubjectURA",
+              "sha256": "af9425853733582f726de12c21ee2349164ed28174f7fbaff0b9a2ba6e7778ce"
+            },
+            {
               "item": "NativeRuntimeHandle.AbilityClient",
               "sha256": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2"
             },
@@ -131854,6 +131870,10 @@
             {
               "item": "RuntimeSessionTerminal",
               "sha256": "f1640b81ea004927993d16944b5056207ba0f7316d77b19f28f40e3962aff28f"
+            },
+            {
+              "item": "RuntimeStateReadSubjectURA",
+              "sha256": "af9425853733582f726de12c21ee2349164ed28174f7fbaff0b9a2ba6e7778ce"
             },
             {
               "item": "NativeRuntimeHandle.AbilityClient",
@@ -132007,6 +132027,10 @@
               "sha256": "f1640b81ea004927993d16944b5056207ba0f7316d77b19f28f40e3962aff28f"
             },
             {
+              "item": "RuntimeStateReadSubjectURA",
+              "sha256": "af9425853733582f726de12c21ee2349164ed28174f7fbaff0b9a2ba6e7778ce"
+            },
+            {
               "item": "NativeRuntimeHandle.AbilityClient",
               "sha256": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2"
             },
@@ -132156,6 +132180,10 @@
             {
               "item": "RuntimeSessionTerminal",
               "sha256": "f1640b81ea004927993d16944b5056207ba0f7316d77b19f28f40e3962aff28f"
+            },
+            {
+              "item": "RuntimeStateReadSubjectURA",
+              "sha256": "af9425853733582f726de12c21ee2349164ed28174f7fbaff0b9a2ba6e7778ce"
             },
             {
               "item": "NativeRuntimeHandle.AbilityClient",
@@ -132309,6 +132337,10 @@
               "sha256": "f1640b81ea004927993d16944b5056207ba0f7316d77b19f28f40e3962aff28f"
             },
             {
+              "item": "RuntimeStateReadSubjectURA",
+              "sha256": "af9425853733582f726de12c21ee2349164ed28174f7fbaff0b9a2ba6e7778ce"
+            },
+            {
               "item": "NativeRuntimeHandle.AbilityClient",
               "sha256": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2"
             },
@@ -132458,6 +132490,10 @@
             {
               "item": "RuntimeSessionTerminal",
               "sha256": "f1640b81ea004927993d16944b5056207ba0f7316d77b19f28f40e3962aff28f"
+            },
+            {
+              "item": "RuntimeStateReadSubjectURA",
+              "sha256": "af9425853733582f726de12c21ee2349164ed28174f7fbaff0b9a2ba6e7778ce"
             },
             {
               "item": "NativeRuntimeHandle.AbilityClient",
@@ -132597,6 +132633,10 @@
           "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
         },
         {
+          "item": "runtime_state_read_subject_ura",
+          "sha256": "4c878a4d663616e92873eb375d7fc572cc2bf21975416893fc0cf7a6df83a8cd"
+        },
+        {
           "item": "NativeRuntimeHandle.ability_client",
           "sha256": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0"
         },
@@ -132706,6 +132746,10 @@
             {
               "item": "RuntimeProvider",
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
+            },
+            {
+              "item": "runtime_state_read_subject_ura",
+              "sha256": "4c878a4d663616e92873eb375d7fc572cc2bf21975416893fc0cf7a6df83a8cd"
             },
             {
               "item": "NativeRuntimeHandle.ability_client",
@@ -132819,6 +132863,10 @@
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
             },
             {
+              "item": "runtime_state_read_subject_ura",
+              "sha256": "4c878a4d663616e92873eb375d7fc572cc2bf21975416893fc0cf7a6df83a8cd"
+            },
+            {
               "item": "NativeRuntimeHandle.ability_client",
               "sha256": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0"
             },
@@ -132928,6 +132976,10 @@
             {
               "item": "RuntimeProvider",
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
+            },
+            {
+              "item": "runtime_state_read_subject_ura",
+              "sha256": "4c878a4d663616e92873eb375d7fc572cc2bf21975416893fc0cf7a6df83a8cd"
             },
             {
               "item": "NativeRuntimeHandle.ability_client",
@@ -133041,6 +133093,10 @@
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
             },
             {
+              "item": "runtime_state_read_subject_ura",
+              "sha256": "4c878a4d663616e92873eb375d7fc572cc2bf21975416893fc0cf7a6df83a8cd"
+            },
+            {
               "item": "NativeRuntimeHandle.ability_client",
               "sha256": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0"
             },
@@ -133150,6 +133206,10 @@
             {
               "item": "RuntimeProvider",
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
+            },
+            {
+              "item": "runtime_state_read_subject_ura",
+              "sha256": "4c878a4d663616e92873eb375d7fc572cc2bf21975416893fc0cf7a6df83a8cd"
             },
             {
               "item": "NativeRuntimeHandle.ability_client",
@@ -133263,6 +133323,10 @@
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
             },
             {
+              "item": "runtime_state_read_subject_ura",
+              "sha256": "4c878a4d663616e92873eb375d7fc572cc2bf21975416893fc0cf7a6df83a8cd"
+            },
+            {
               "item": "NativeRuntimeHandle.ability_client",
               "sha256": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0"
             },
@@ -133374,6 +133438,10 @@
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
             },
             {
+              "item": "runtime_state_read_subject_ura",
+              "sha256": "4c878a4d663616e92873eb375d7fc572cc2bf21975416893fc0cf7a6df83a8cd"
+            },
+            {
               "item": "NativeRuntimeHandle.ability_client",
               "sha256": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0"
             },
@@ -133483,6 +133551,10 @@
             {
               "item": "RuntimeProvider",
               "sha256": "bd48b3eb6cac0af7453913cf74fd8f8beb5ea532e3c0895d981b6f819856934b"
+            },
+            {
+              "item": "runtime_state_read_subject_ura",
+              "sha256": "4c878a4d663616e92873eb375d7fc572cc2bf21975416893fc0cf7a6df83a8cd"
             },
             {
               "item": "NativeRuntimeHandle.ability_client",
@@ -133595,6 +133667,10 @@
           "sha256": "cbd6b65fecd8a78c4c00a65f3717d2b34985f896cc84305dfc2242e0e6903d5e"
         },
         {
+          "item": "runtimeStateReadSubjectURA",
+          "sha256": "568e8cec37b2455d0875e68c9e2f76dcbfb50483569dc2339b34052792e24cee"
+        },
+        {
           "item": "RuntimeTransport.awaitHandle",
           "sha256": "a63f15e44c8292c8ebec607f901a7cb813ed4c64333a8a18c31bb941b3cb86aa"
         },
@@ -133644,6 +133720,10 @@
             {
               "item": "RuntimeTransport",
               "sha256": "cbd6b65fecd8a78c4c00a65f3717d2b34985f896cc84305dfc2242e0e6903d5e"
+            },
+            {
+              "item": "runtimeStateReadSubjectURA",
+              "sha256": "568e8cec37b2455d0875e68c9e2f76dcbfb50483569dc2339b34052792e24cee"
             },
             {
               "item": "RuntimeTransport.awaitHandle",
@@ -133697,6 +133777,10 @@
               "sha256": "cbd6b65fecd8a78c4c00a65f3717d2b34985f896cc84305dfc2242e0e6903d5e"
             },
             {
+              "item": "runtimeStateReadSubjectURA",
+              "sha256": "568e8cec37b2455d0875e68c9e2f76dcbfb50483569dc2339b34052792e24cee"
+            },
+            {
               "item": "RuntimeTransport.awaitHandle",
               "sha256": "a63f15e44c8292c8ebec607f901a7cb813ed4c64333a8a18c31bb941b3cb86aa"
             },
@@ -133746,6 +133830,10 @@
             {
               "item": "RuntimeTransport",
               "sha256": "cbd6b65fecd8a78c4c00a65f3717d2b34985f896cc84305dfc2242e0e6903d5e"
+            },
+            {
+              "item": "runtimeStateReadSubjectURA",
+              "sha256": "568e8cec37b2455d0875e68c9e2f76dcbfb50483569dc2339b34052792e24cee"
             },
             {
               "item": "RuntimeTransport.awaitHandle",
@@ -133799,6 +133887,10 @@
               "sha256": "cbd6b65fecd8a78c4c00a65f3717d2b34985f896cc84305dfc2242e0e6903d5e"
             },
             {
+              "item": "runtimeStateReadSubjectURA",
+              "sha256": "568e8cec37b2455d0875e68c9e2f76dcbfb50483569dc2339b34052792e24cee"
+            },
+            {
               "item": "RuntimeTransport.awaitHandle",
               "sha256": "a63f15e44c8292c8ebec607f901a7cb813ed4c64333a8a18c31bb941b3cb86aa"
             },
@@ -133848,6 +133940,10 @@
             {
               "item": "RuntimeTransport",
               "sha256": "cbd6b65fecd8a78c4c00a65f3717d2b34985f896cc84305dfc2242e0e6903d5e"
+            },
+            {
+              "item": "runtimeStateReadSubjectURA",
+              "sha256": "568e8cec37b2455d0875e68c9e2f76dcbfb50483569dc2339b34052792e24cee"
             },
             {
               "item": "RuntimeTransport.awaitHandle",
@@ -133901,6 +133997,10 @@
               "sha256": "cbd6b65fecd8a78c4c00a65f3717d2b34985f896cc84305dfc2242e0e6903d5e"
             },
             {
+              "item": "runtimeStateReadSubjectURA",
+              "sha256": "568e8cec37b2455d0875e68c9e2f76dcbfb50483569dc2339b34052792e24cee"
+            },
+            {
               "item": "RuntimeTransport.awaitHandle",
               "sha256": "a63f15e44c8292c8ebec607f901a7cb813ed4c64333a8a18c31bb941b3cb86aa"
             },
@@ -133952,6 +134052,10 @@
               "sha256": "cbd6b65fecd8a78c4c00a65f3717d2b34985f896cc84305dfc2242e0e6903d5e"
             },
             {
+              "item": "runtimeStateReadSubjectURA",
+              "sha256": "568e8cec37b2455d0875e68c9e2f76dcbfb50483569dc2339b34052792e24cee"
+            },
+            {
               "item": "RuntimeTransport.awaitHandle",
               "sha256": "a63f15e44c8292c8ebec607f901a7cb813ed4c64333a8a18c31bb941b3cb86aa"
             },
@@ -134001,6 +134105,10 @@
             {
               "item": "RuntimeTransport",
               "sha256": "cbd6b65fecd8a78c4c00a65f3717d2b34985f896cc84305dfc2242e0e6903d5e"
+            },
+            {
+              "item": "runtimeStateReadSubjectURA",
+              "sha256": "568e8cec37b2455d0875e68c9e2f76dcbfb50483569dc2339b34052792e24cee"
             },
             {
               "item": "RuntimeTransport.awaitHandle",
@@ -239383,6 +239491,10 @@
           "sha256": "4cae6fe9bed6f081b2c1e5a4a424d6a3edbb6f056dfbef871e041e90c5cee9f1"
         },
         {
+          "item": "RuntimeReceiptProofFacts",
+          "sha256": "e7db0d7b5e3880dcd92c6935ddf1efae38c8b339bd3f47889f1827dc1260c329"
+        },
+        {
           "item": "RuntimeReceipt.fromMap",
           "sha256": "41c4516ae537b3a00d83ebab162d9aa47a412bfb29c0affa69fc7f00ab78975b"
         },
@@ -239420,6 +239532,10 @@
             {
               "item": "RuntimeReceipt",
               "sha256": "4cae6fe9bed6f081b2c1e5a4a424d6a3edbb6f056dfbef871e041e90c5cee9f1"
+            },
+            {
+              "item": "RuntimeReceiptProofFacts",
+              "sha256": "e7db0d7b5e3880dcd92c6935ddf1efae38c8b339bd3f47889f1827dc1260c329"
             },
             {
               "item": "RuntimeReceipt.fromMap",
@@ -239461,6 +239577,10 @@
               "sha256": "4cae6fe9bed6f081b2c1e5a4a424d6a3edbb6f056dfbef871e041e90c5cee9f1"
             },
             {
+              "item": "RuntimeReceiptProofFacts",
+              "sha256": "e7db0d7b5e3880dcd92c6935ddf1efae38c8b339bd3f47889f1827dc1260c329"
+            },
+            {
               "item": "RuntimeReceipt.fromMap",
               "sha256": "41c4516ae537b3a00d83ebab162d9aa47a412bfb29c0affa69fc7f00ab78975b"
             },
@@ -239498,6 +239618,10 @@
             {
               "item": "RuntimeReceipt",
               "sha256": "4cae6fe9bed6f081b2c1e5a4a424d6a3edbb6f056dfbef871e041e90c5cee9f1"
+            },
+            {
+              "item": "RuntimeReceiptProofFacts",
+              "sha256": "e7db0d7b5e3880dcd92c6935ddf1efae38c8b339bd3f47889f1827dc1260c329"
             },
             {
               "item": "RuntimeReceipt.fromMap",
@@ -239539,6 +239663,10 @@
               "sha256": "4cae6fe9bed6f081b2c1e5a4a424d6a3edbb6f056dfbef871e041e90c5cee9f1"
             },
             {
+              "item": "RuntimeReceiptProofFacts",
+              "sha256": "e7db0d7b5e3880dcd92c6935ddf1efae38c8b339bd3f47889f1827dc1260c329"
+            },
+            {
               "item": "RuntimeReceipt.fromMap",
               "sha256": "41c4516ae537b3a00d83ebab162d9aa47a412bfb29c0affa69fc7f00ab78975b"
             },
@@ -239578,6 +239706,10 @@
               "sha256": "4cae6fe9bed6f081b2c1e5a4a424d6a3edbb6f056dfbef871e041e90c5cee9f1"
             },
             {
+              "item": "RuntimeReceiptProofFacts",
+              "sha256": "e7db0d7b5e3880dcd92c6935ddf1efae38c8b339bd3f47889f1827dc1260c329"
+            },
+            {
               "item": "RuntimeReceipt.fromMap",
               "sha256": "41c4516ae537b3a00d83ebab162d9aa47a412bfb29c0affa69fc7f00ab78975b"
             },
@@ -239615,6 +239747,10 @@
             {
               "item": "RuntimeReceipt",
               "sha256": "4cae6fe9bed6f081b2c1e5a4a424d6a3edbb6f056dfbef871e041e90c5cee9f1"
+            },
+            {
+              "item": "RuntimeReceiptProofFacts",
+              "sha256": "e7db0d7b5e3880dcd92c6935ddf1efae38c8b339bd3f47889f1827dc1260c329"
             },
             {
               "item": "RuntimeReceipt.fromMap",
@@ -239659,8 +239795,248 @@
         "invocation/terminal_receipt_facts"
       ],
       "unproven_requirement_ids": [],
-      "shape_evidence": [],
-      "step_shape_evidence": [],
+      "shape_evidence": [
+        {
+          "item": "RuntimeReceipt",
+          "sha256": "37acd468ff17fcf1fa00545b1d5a30f084793a0540062028bc8457ba9d922e3a"
+        },
+        {
+          "item": "RuntimeReceipt.init(_:)",
+          "sha256": "1d70568f6347aa93b6991ab623d181c76e9d1d78bb3b2713dd5a568e3e5e1c2b"
+        },
+        {
+          "item": "RuntimeReceipt.invocationId",
+          "sha256": "7c2646ecd4999b9c7768ea05bcd11ac85baf31f399933b055a6676c7a7f020d0"
+        },
+        {
+          "item": "RuntimeReceipt.lifecycleState()",
+          "sha256": "094e9103c6763fb6cbdd3331fbb8a1cbab6f879652948f2eaff03690f3d01539"
+        },
+        {
+          "item": "RuntimeReceipt.projection()",
+          "sha256": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1"
+        },
+        {
+          "item": "RuntimeReceipt.receiptType",
+          "sha256": "97b197f6a353401363ff9ea551519ed16b2925d05310b4d567318dfb5cf8afc0"
+        },
+        {
+          "item": "RuntimeReceipt.state",
+          "sha256": "bf23e7ee7f973af41d634f5285fffe47cfa595e7734f583e70803971dea30f2c"
+        }
+      ],
+      "step_shape_evidence": [
+        {
+          "case_id": "invocation/receipt_proof_required",
+          "action": "decode_complete_receipt_with_proof_facts",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "37acd468ff17fcf1fa00545b1d5a30f084793a0540062028bc8457ba9d922e3a"
+            },
+            {
+              "item": "RuntimeReceipt.init(_:)",
+              "sha256": "1d70568f6347aa93b6991ab623d181c76e9d1d78bb3b2713dd5a568e3e5e1c2b"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "7c2646ecd4999b9c7768ea05bcd11ac85baf31f399933b055a6676c7a7f020d0"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState()",
+              "sha256": "094e9103c6763fb6cbdd3331fbb8a1cbab6f879652948f2eaff03690f3d01539"
+            },
+            {
+              "item": "RuntimeReceipt.projection()",
+              "sha256": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "97b197f6a353401363ff9ea551519ed16b2925d05310b4d567318dfb5cf8afc0"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "bf23e7ee7f973af41d634f5285fffe47cfa595e7734f583e70803971dea30f2c"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/receipt_proof_required",
+          "action": "reject_missing_authority_proof",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "37acd468ff17fcf1fa00545b1d5a30f084793a0540062028bc8457ba9d922e3a"
+            },
+            {
+              "item": "RuntimeReceipt.init(_:)",
+              "sha256": "1d70568f6347aa93b6991ab623d181c76e9d1d78bb3b2713dd5a568e3e5e1c2b"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "7c2646ecd4999b9c7768ea05bcd11ac85baf31f399933b055a6676c7a7f020d0"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState()",
+              "sha256": "094e9103c6763fb6cbdd3331fbb8a1cbab6f879652948f2eaff03690f3d01539"
+            },
+            {
+              "item": "RuntimeReceipt.projection()",
+              "sha256": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "97b197f6a353401363ff9ea551519ed16b2925d05310b4d567318dfb5cf8afc0"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "bf23e7ee7f973af41d634f5285fffe47cfa595e7734f583e70803971dea30f2c"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/receipt_proof_required",
+          "action": "require_descriptor_binding",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "37acd468ff17fcf1fa00545b1d5a30f084793a0540062028bc8457ba9d922e3a"
+            },
+            {
+              "item": "RuntimeReceipt.init(_:)",
+              "sha256": "1d70568f6347aa93b6991ab623d181c76e9d1d78bb3b2713dd5a568e3e5e1c2b"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "7c2646ecd4999b9c7768ea05bcd11ac85baf31f399933b055a6676c7a7f020d0"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState()",
+              "sha256": "094e9103c6763fb6cbdd3331fbb8a1cbab6f879652948f2eaff03690f3d01539"
+            },
+            {
+              "item": "RuntimeReceipt.projection()",
+              "sha256": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "97b197f6a353401363ff9ea551519ed16b2925d05310b4d567318dfb5cf8afc0"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "bf23e7ee7f973af41d634f5285fffe47cfa595e7734f583e70803971dea30f2c"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/receipt_proof_required",
+          "action": "require_parent_receipts_binding",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "37acd468ff17fcf1fa00545b1d5a30f084793a0540062028bc8457ba9d922e3a"
+            },
+            {
+              "item": "RuntimeReceipt.init(_:)",
+              "sha256": "1d70568f6347aa93b6991ab623d181c76e9d1d78bb3b2713dd5a568e3e5e1c2b"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "7c2646ecd4999b9c7768ea05bcd11ac85baf31f399933b055a6676c7a7f020d0"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState()",
+              "sha256": "094e9103c6763fb6cbdd3331fbb8a1cbab6f879652948f2eaff03690f3d01539"
+            },
+            {
+              "item": "RuntimeReceipt.projection()",
+              "sha256": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "97b197f6a353401363ff9ea551519ed16b2925d05310b4d567318dfb5cf8afc0"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "bf23e7ee7f973af41d634f5285fffe47cfa595e7734f583e70803971dea30f2c"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/terminal_receipt_facts",
+          "action": "project_terminal_invocation_result",
+          "execution_case_bound": true,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "37acd468ff17fcf1fa00545b1d5a30f084793a0540062028bc8457ba9d922e3a"
+            },
+            {
+              "item": "RuntimeReceipt.init(_:)",
+              "sha256": "1d70568f6347aa93b6991ab623d181c76e9d1d78bb3b2713dd5a568e3e5e1c2b"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "7c2646ecd4999b9c7768ea05bcd11ac85baf31f399933b055a6676c7a7f020d0"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState()",
+              "sha256": "094e9103c6763fb6cbdd3331fbb8a1cbab6f879652948f2eaff03690f3d01539"
+            },
+            {
+              "item": "RuntimeReceipt.projection()",
+              "sha256": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "97b197f6a353401363ff9ea551519ed16b2925d05310b4d567318dfb5cf8afc0"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "bf23e7ee7f973af41d634f5285fffe47cfa595e7734f583e70803971dea30f2c"
+            }
+          ]
+        },
+        {
+          "case_id": "invocation/terminal_receipt_facts",
+          "action": "preserve_opaque_receipt_facts",
+          "execution_case_bound": true,
+          "items": [
+            {
+              "item": "RuntimeReceipt",
+              "sha256": "37acd468ff17fcf1fa00545b1d5a30f084793a0540062028bc8457ba9d922e3a"
+            },
+            {
+              "item": "RuntimeReceipt.init(_:)",
+              "sha256": "1d70568f6347aa93b6991ab623d181c76e9d1d78bb3b2713dd5a568e3e5e1c2b"
+            },
+            {
+              "item": "RuntimeReceipt.invocationId",
+              "sha256": "7c2646ecd4999b9c7768ea05bcd11ac85baf31f399933b055a6676c7a7f020d0"
+            },
+            {
+              "item": "RuntimeReceipt.lifecycleState()",
+              "sha256": "094e9103c6763fb6cbdd3331fbb8a1cbab6f879652948f2eaff03690f3d01539"
+            },
+            {
+              "item": "RuntimeReceipt.projection()",
+              "sha256": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1"
+            },
+            {
+              "item": "RuntimeReceipt.receiptType",
+              "sha256": "97b197f6a353401363ff9ea551519ed16b2925d05310b4d567318dfb5cf8afc0"
+            },
+            {
+              "item": "RuntimeReceipt.state",
+              "sha256": "bf23e7ee7f973af41d634f5285fffe47cfa595e7734f583e70803971dea30f2c"
+            }
+          ]
+        }
+      ],
       "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/terminal_receipt_facts",
       "provider_proof_ref": null
     },

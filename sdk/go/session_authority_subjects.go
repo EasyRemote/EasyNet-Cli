@@ -2,6 +2,34 @@ package easynet
 
 import "strings"
 
+const runtimeStateReadSubjectPath = "runtime-state/read"
+
+// RuntimeStateReadSubjectURA builds the canonical subject for runtime-state
+// read projections owned by one authenticated user.
+//
+// Products pass realm/user identity into this helper instead of defaulting
+// read-only invocations to the target device. Admission still validates the
+// resulting tuple; this helper only centralizes the product-neutral subject
+// projection used by history, catalogue, and status reads.
+func RuntimeStateReadSubjectURA(realm string, userID string) (string, error) {
+	realm = strings.TrimSpace(realm)
+	userID = strings.TrimSpace(userID)
+	if realm == "" {
+		return "", invalidInvocation("runtime-state read subject realm is required", nil)
+	}
+	if userID == "" {
+		return "", invalidInvocation("runtime-state read subject user_id is required", nil)
+	}
+	if containsAllZeroPrincipal(userID) {
+		return "", invalidInvocation("runtime-state read subject user_id must not be all-zero", nil)
+	}
+	subject := ResourceDotURA(realm, "user."+userID, runtimeStateReadSubjectPath)
+	if _, err := ParseURA(subject); err != nil {
+		return "", invalidInvocation("runtime-state read subject_ura must be canonical", err)
+	}
+	return subject, nil
+}
+
 // runtimeSessionAuthorityAdmitsSubject is the Go SDK's canonical
 // session-authority subject admission predicate. Runtime ability calls and
 // invocation-history queries both consume this helper; neither path owns a

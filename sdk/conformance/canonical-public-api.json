@@ -942,6 +942,7 @@
       "RuntimeSigningTransport",
       "RuntimeStartFailed",
       "RuntimeStarting",
+      "RuntimeStateReadSubjectURA",
       "RuntimeStateRoot",
       "RuntimeStopped",
       "RuntimeStopping",
@@ -1326,6 +1327,7 @@
       "retryable_for_hint",
       "runtime_credentials_path",
       "runtime_identity_projection_from_json",
+      "runtime_state_read_subject_ura",
       "runtime_state_root",
       "signer_handle_provenance_error",
       "start_runtime_host",
@@ -1409,7 +1411,8 @@
       "StreamHandle",
       "StreamTransport",
       "profileErrorDetails",
-      "profileSourceRef"
+      "profileSourceRef",
+      "runtimeStateReadSubjectURA"
     ],
     "java": [
       "AsyncRuntimeClient",
@@ -1450,6 +1453,7 @@
       "RuntimeFuture",
       "RuntimeHealth",
       "RuntimeReceipt",
+      "RuntimeReceiptProofFacts",
       "RuntimeTransport",
       "SDKError",
       "SessionAuthority",
@@ -1492,6 +1496,7 @@
       "RetryHint",
       "RuntimeClient",
       "RuntimeHealth",
+      "RuntimeReceipt",
       "RuntimeTransport",
       "SDKError",
       "SDKErrorClass",
@@ -6229,6 +6234,12 @@
       "RuntimeHealth.runtimeReady",
       "RuntimeHealth.trustReady",
       "RuntimeHealth.version",
+      "RuntimeReceipt.init(_:)",
+      "RuntimeReceipt.invocationId",
+      "RuntimeReceipt.lifecycleState()",
+      "RuntimeReceipt.projection()",
+      "RuntimeReceipt.receiptType",
+      "RuntimeReceipt.state",
       "RuntimeTransport.awaitHandle(_:)",
       "RuntimeTransport.awaitHandle(_:)#a327c83e",
       "RuntimeTransport.cancelHandle(_:reason:)",
@@ -9883,7 +9894,8 @@
           "RuntimeSessionAuthorized",
           "RuntimeSessionIntent",
           "RuntimeSessionSubmitted",
-          "RuntimeSessionTerminal"
+          "RuntimeSessionTerminal",
+          "RuntimeStateReadSubjectURA"
         ],
         "members": [
           "NativeRuntimeHandle.AbilityClient",
@@ -9919,7 +9931,8 @@
         "symbols": [
           "NativeRuntimeHandle",
           "RuntimeInvocationTransport",
-          "RuntimeProvider"
+          "RuntimeProvider",
+          "runtime_state_read_subject_ura"
         ],
         "members": [
           "NativeRuntimeHandle.ability_client",
@@ -9949,7 +9962,8 @@
       },
       "node": {
         "symbols": [
-          "RuntimeTransport"
+          "RuntimeTransport",
+          "runtimeStateReadSubjectURA"
         ],
         "members": [
           "RuntimeTransport.awaitHandle",
@@ -13091,7 +13105,8 @@
       },
       "java": {
         "symbols": [
-          "RuntimeReceipt"
+          "RuntimeReceipt",
+          "RuntimeReceiptProofFacts"
         ],
         "members": [
           "RuntimeReceipt.fromMap",
@@ -13104,8 +13119,17 @@
         ]
       },
       "swift": {
-        "symbols": [],
-        "members": []
+        "symbols": [
+          "RuntimeReceipt"
+        ],
+        "members": [
+          "RuntimeReceipt.init(_:)",
+          "RuntimeReceipt.invocationId",
+          "RuntimeReceipt.lifecycleState()",
+          "RuntimeReceipt.projection()",
+          "RuntimeReceipt.receiptType",
+          "RuntimeReceipt.state"
+        ]
       }
     },
     "typed_errors": {
@@ -17854,6 +17878,7 @@
       "RuntimeSigningTransport.SubmitSigned": "8185c3e79c7b79bd565db9b1e391bb2e2ce80e15e7527df5c82e4c787907ee86",
       "RuntimeStartFailed": "9cfa2cc1ef1f489e20e794a191e55e470f32ac4dd93544ebf9d536ba27a16302",
       "RuntimeStarting": "5ad6780c8aa1d03428338ff288a91cfb757726af25fc05801bfecc45d0b44e86",
+      "RuntimeStateReadSubjectURA": "af9425853733582f726de12c21ee2349164ed28174f7fbaff0b9a2ba6e7778ce",
       "RuntimeStateRoot": "e5e4fd6b2c54fb5e678b1b056e12410d452db38c8b0c50a4e015dde3ea9f8f52",
       "RuntimeStopped": "da36af8fbc351670e8ad3b2de7f0733e87e677342a0768821c37ae264792e04e",
       "RuntimeStopping": "183880c749ec7b18f8a381c9518a57929385fba6ed99c5ee4d3c3814140d9809",
@@ -20199,6 +20224,7 @@
       "retryable_for_hint": "a40a2da8049667e10c4c894f7520a59e71afbfce282f40eb308cb9968d49a6cd",
       "runtime_credentials_path": "6c1ae4611dddb961afae5da922282a2cd85bf764e353fc97e164267305969291",
       "runtime_identity_projection_from_json": "be857347b4ed0ba5c1cb7afcab41dd17c1fefc435e983f7aae465c9fca2bac7b",
+      "runtime_state_read_subject_ura": "4c878a4d663616e92873eb375d7fc572cc2bf21975416893fc0cf7a6df83a8cd",
       "runtime_state_root": "11d059c666917fdd1c911d85554303f9280be712e3daa81967c7965acf3648e0",
       "signer_handle_provenance_error": "aa5868ffdd58327eafaef435f268018806e1fe20599c19b1e3eb8b62a3f088e1",
       "start_runtime_host": "d7bbebf68c08ed7990346d08ddb5e71c4250c067e7c2ecc8991f26fd7b83a137",
@@ -20789,7 +20815,8 @@
       "StreamTransport.close": "79868c4e8cb0b57aaeb70c2775e3e0f52fa05d22ce42f9fb1388772cd7fd9373",
       "StreamTransport.receive": "4c9e7b1813860c626d8f748dd8da89cd1e609c8690393d9a0bfeb2caa27b13cc",
       "profileErrorDetails": "d39236e5812769428151f2020c2307c0a77c431e9df53a38680e23c6df09346b",
-      "profileSourceRef": "cf77b0912dfe6600c6cc31579ebd968396167f23b7203cc4659d74dfea7e0ef4"
+      "profileSourceRef": "cf77b0912dfe6600c6cc31579ebd968396167f23b7203cc4659d74dfea7e0ef4",
+      "runtimeStateReadSubjectURA": "568e8cec37b2455d0875e68c9e2f76dcbfb50483569dc2339b34052792e24cee"
     },
     "java": {
       "AsyncRuntimeClient": "3e8fa158193a83b15d66d595f3b21b4faa0ba17b289a9b064f52c03f658ec9d7",
@@ -21138,6 +21165,7 @@
       "RuntimeReceipt.rawProjection": "9c457101c154b2084b61d9b3046c9c477c0dfadff1d44ae61317e809d2575557",
       "RuntimeReceipt.receiptType": "f7861006aad7bffb228f546a3f04ae68efa1cbf130577f44fbf0ce7631a34a85",
       "RuntimeReceipt.state": "c08ee7d8f0c6e9ae06a73fbfefa42f17bcfd35d412c1451cf8692ada4b53f7bb",
+      "RuntimeReceiptProofFacts": "e7db0d7b5e3880dcd92c6935ddf1efae38c8b339bd3f47889f1827dc1260c329",
       "RuntimeTransport": "cb46823ad065fb864edf4ae547dc8fee30c35fdd7e997095c197d46ffa0960ae",
       "RuntimeTransport.awaitHandle": "2020558deb26195dc73cbbb8c65f5c49d051e0705d7600d0fc4eb15e330ad3ba",
       "RuntimeTransport.cancelHandle": "059789d37ff3410c6cc13cdafd4d0219a4b9afc740f24a13978b6c54fd0221cf",
@@ -21532,6 +21560,13 @@
       "RuntimeHealth.runtimeReady": "441b9a56df3241c21dcb9b91c83c6e094b66ba709c50772968410170ad837023",
       "RuntimeHealth.trustReady": "495facfd8bfc97d0bc072f7f926f6132b7756dc8daec1a356eab884a13320a75",
       "RuntimeHealth.version": "ca895b6e8690aa0a7d0e5b5fdbe54cd12be0f557db0b321d9385c0cee67110c9",
+      "RuntimeReceipt": "37acd468ff17fcf1fa00545b1d5a30f084793a0540062028bc8457ba9d922e3a",
+      "RuntimeReceipt.init(_:)": "1d70568f6347aa93b6991ab623d181c76e9d1d78bb3b2713dd5a568e3e5e1c2b",
+      "RuntimeReceipt.invocationId": "7c2646ecd4999b9c7768ea05bcd11ac85baf31f399933b055a6676c7a7f020d0",
+      "RuntimeReceipt.lifecycleState()": "094e9103c6763fb6cbdd3331fbb8a1cbab6f879652948f2eaff03690f3d01539",
+      "RuntimeReceipt.projection()": "f18d8a03258a5b09658e2d72597c2bd44cc5560baf83da444a719ec571bd12f1",
+      "RuntimeReceipt.receiptType": "97b197f6a353401363ff9ea551519ed16b2925d05310b4d567318dfb5cf8afc0",
+      "RuntimeReceipt.state": "bf23e7ee7f973af41d634f5285fffe47cfa595e7734f583e70803971dea30f2c",
       "RuntimeTransport": "c50f7cfdf8ccf48d693ee61a5135fb8c35148e5f7c5d1ff22bfbda17fad80efb",
       "RuntimeTransport.awaitHandle(_:)": "b60cf9a87655514faa75618348165d4fed0ea1a5abcac0f9231a9ca6db89ba09",
       "RuntimeTransport.awaitHandle(_:)#a327c83e": "b60cf9a87655514faa75618348165d4fed0ea1a5abcac0f9231a9ca6db89ba09",

@@ -2822,6 +2822,21 @@ if go:
         "func runtimeSessionAuthorityAdmitsSubject(",
         "sdk_go_authority_subject_shared_helper_missing",
     )
+    require(
+        go_helper_path,
+        "func RuntimeStateReadSubjectURA(",
+        "sdk_go_runtime_state_read_subject_constructor_missing",
+    )
+    require(
+        go_helper_path,
+        'const runtimeStateReadSubjectPath = "runtime-state/read"',
+        "sdk_go_runtime_state_read_subject_path_missing",
+    )
+    require(
+        go_helper_path,
+        'containsAllZeroPrincipal(userID)',
+        "sdk_go_runtime_state_read_subject_all_zero_guard_missing",
+    )
     for token in (
         "ParseURAParts(strings.TrimSpace(subjectURA))",
         "parts.Kind != URAKindResource",
@@ -2848,6 +2863,21 @@ if go:
     )
     require(
         go_test_path,
+        "RuntimeStateReadSubjectURA(\"example\", \"alice\")",
+        "sdk_go_history_success_path_not_using_runtime_state_subject_constructor",
+    )
+    require(
+        go_test_path,
+        "TestRuntimeStateReadSubjectURABuildsUserOwnedResourceSubject",
+        "sdk_go_runtime_state_read_subject_constructor_test_missing",
+    )
+    require(
+        go_test_path,
+        "TestRuntimeStateReadSubjectURARejectsAllZeroUserBeforeDeviceFallback",
+        "sdk_go_runtime_state_read_subject_all_zero_test_missing",
+    )
+    require(
+        go_test_path,
         "TestAuthorizedRuntimeSessionHistoryRejectsPathSubstringOwnerSubjectBeforeReceiptProvider",
         "sdk_go_history_authority_path_substring_test_missing",
     )
@@ -2869,6 +2899,21 @@ if py:
         py_helper_path,
         "def session_authority_admits_subject(",
         "sdk_python_authority_subject_shared_helper_missing",
+    )
+    require(
+        py_helper_path,
+        "def runtime_state_read_subject_ura(",
+        "sdk_python_runtime_state_read_subject_constructor_missing",
+    )
+    require(
+        py_helper_path,
+        '_RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read"',
+        "sdk_python_runtime_state_read_subject_path_missing",
+    )
+    require(
+        py_helper_path,
+        "contains_all_zero_principal(clean_user_id)",
+        "sdk_python_runtime_state_read_subject_all_zero_guard_missing",
     )
     for token in (
         "subject.components.get(\"owner_id\")",
@@ -2904,6 +2949,21 @@ if py:
     )
     require(
         py_test_path,
+        'runtime_state_read_subject_ura("example", "alice")',
+        "sdk_python_history_success_path_not_using_runtime_state_subject_constructor",
+    )
+    require(
+        py_test_path,
+        "test_runtime_state_read_subject_ura_builds_user_owned_resource_subject",
+        "sdk_python_runtime_state_read_subject_constructor_test_missing",
+    )
+    require(
+        py_test_path,
+        "test_runtime_state_read_subject_ura_rejects_all_zero_user_before_device_fallback",
+        "sdk_python_runtime_state_read_subject_all_zero_test_missing",
+    )
+    require(
+        py_test_path,
         "test_history_rejects_path_substring_owner_subject_before_receipt_provider",
         "sdk_python_history_authority_path_substring_test_missing",
     )
@@ -2924,6 +2984,9 @@ if node:
         "function validateSessionHistoryFilterBinding(call, filter)",
         "function validateSessionHistorySessionBinding(",
         "sessionAuthorityAdmitsSubject(authority, subjectURA)",
+        "export function runtimeStateReadSubjectURA(",
+        "const RUNTIME_STATE_READ_SUBJECT_PATH = \"runtime-state/read\"",
+        "containsAllZeroPrincipal(cleanUserID)",
         "session authority subject does not admit receipt query subject_ura",
         "receipt filter caller_ura does not match receipt query caller_ura",
         "receipt filter callee_ura does not match receipt query callee_ura",
@@ -2948,6 +3011,9 @@ if node:
     for token in (
         "session history preflight rejects authority subject mismatch before receipt provider",
         "session history keeps subject filters as ledger predicates",
+        "runtime-state read subject helper builds user-owned resource subject",
+        "runtime-state read subject helper rejects all-zero user before device fallback",
+        'sdk.runtimeStateReadSubjectURA("example", "alice")',
         "providerCalls, 0",
     ):
         if token not in node_test:

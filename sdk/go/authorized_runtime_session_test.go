@@ -204,11 +204,15 @@ func TestAuthorizedRuntimeSessionHistoryRejectsAllZeroSubjectBeforeReceiptProvid
 
 func TestAuthorizedRuntimeSessionHistoryAllowsUserOwnedResourceSubjectBeforeReceiptProvider(t *testing.T) {
 	session := newAuthorizedRuntimeSessionFixture(t)
+	subject, err := RuntimeStateReadSubjectURA("example", "alice")
+	if err != nil {
+		t.Fatalf("runtime-state read subject: %v", err)
+	}
 	request := ReceiptListRequest{
 		Call: RuntimeCallContext{
 			CallerURA:     "easynet:///r/example/agent/backend",
 			CalleeURA:     "easynet:///r/example/device/dev-a",
-			SubjectURA:    "easynet:///r/example/resource/user.alice/session/session-2",
+			SubjectURA:    subject,
 			NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 			CausalContext: map[string]any{"form": "none"},
 			Authority: sessionAuthorityFixture(t, map[string]any{
@@ -219,12 +223,29 @@ func TestAuthorizedRuntimeSessionHistoryAllowsUserOwnedResourceSubjectBeforeRece
 		Limit: 10,
 	}
 
-	_, err := session.sdk.History().List(context.Background(), request)
+	_, err = session.sdk.History().List(context.Background(), request)
 	if err != nil {
 		t.Fatalf("history list: %v", err)
 	}
 	if session.receipts.listCalls != 1 {
 		t.Fatalf("receipt provider calls = %d, want 1", session.receipts.listCalls)
+	}
+}
+
+func TestRuntimeStateReadSubjectURABuildsUserOwnedResourceSubject(t *testing.T) {
+	subject, err := RuntimeStateReadSubjectURA("example", "alice")
+	if err != nil {
+		t.Fatalf("RuntimeStateReadSubjectURA error = %v", err)
+	}
+	if subject != "easynet:///r/example/resource/user.alice/runtime-state/read" {
+		t.Fatalf("subject = %q", subject)
+	}
+}
+
+func TestRuntimeStateReadSubjectURARejectsAllZeroUserBeforeDeviceFallback(t *testing.T) {
+	_, err := RuntimeStateReadSubjectURA("example", "00000000-0000-0000-0000-000000000000")
+	if err == nil || !strings.Contains(err.Error(), "user_id must not be all-zero") {
+		t.Fatalf("RuntimeStateReadSubjectURA all-zero error = %v", err)
 	}
 }
 

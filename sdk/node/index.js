@@ -81,6 +81,7 @@ export const DELEGATION_METADATA_KEY = "x-runtime-delegation";
 export const SESSION_AUTHORITY_METADATA_KEY = "x-runtime-session-authority";
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
+const RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read";
 
 export class SDKError extends Error {
   constructor({
@@ -2511,6 +2512,24 @@ export function profileErrorDetails(profile, details = {}) {
     value.source_ref = profileSourceRef(profile);
   }
   return value;
+}
+
+export function runtimeStateReadSubjectURA(realm, userID) {
+  const cleanRealm = runtimeStateSubjectString(realm, "realm");
+  const cleanUserID = runtimeStateSubjectString(userID, "user_id");
+  if (containsAllZeroPrincipal(cleanUserID)) {
+    throw invalidInvocation("runtime-state read subject user_id must not be all-zero");
+  }
+  const subject = `easynet:///r/${cleanRealm}/resource/user.${cleanUserID}/${RUNTIME_STATE_READ_SUBJECT_PATH}`;
+  parseCanonicalURA(subject, "runtime-state read subject_ura");
+  return subject;
+}
+
+function runtimeStateSubjectString(value, field) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw invalidInvocation(`runtime-state read subject ${field} is required`);
+  }
+  return value.trim();
 }
 
 function detailString(details, key) {

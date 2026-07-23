@@ -5,6 +5,46 @@ from __future__ import annotations
 from .authority import SessionAuthority
 from .axon_addressing import AddressingProjection, parse_ura
 from .errors import SDKError
+from ._identity_guards import contains_all_zero_principal
+
+_RUNTIME_STATE_READ_SUBJECT_PATH = "runtime-state/read"
+
+
+def runtime_state_read_subject_ura(realm: str, user_id: str) -> str:
+    """Build the canonical user-owned subject for runtime-state reads."""
+
+    clean_realm = str(realm).strip()
+    clean_user_id = str(user_id).strip()
+    if not clean_realm:
+        _invalid_runtime_state_subject("runtime-state read subject realm is required")
+    if not clean_user_id:
+        _invalid_runtime_state_subject("runtime-state read subject user_id is required")
+    if contains_all_zero_principal(clean_user_id):
+        _invalid_runtime_state_subject(
+            "runtime-state read subject user_id must not be all-zero"
+        )
+    subject = (
+        f"easynet:///r/{clean_realm}/resource/user.{clean_user_id}/"
+        f"{_RUNTIME_STATE_READ_SUBJECT_PATH}"
+    )
+    try:
+        parse_ura(subject)
+    except SDKError as error:
+        _invalid_runtime_state_subject(
+            "runtime-state read subject_ura must be canonical", error
+        )
+    return subject
+
+
+def _invalid_runtime_state_subject(message: str, cause: Exception | None = None) -> None:
+    raise SDKError(
+        code="INVALID_INVOCATION",
+        stage="authority",
+        retry="never",
+        retryable=False,
+        message=message,
+        cause=cause,
+    )
 
 
 def session_authority_admits_subject(

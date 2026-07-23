@@ -29,6 +29,7 @@ from easynet_sdk import (
     StaticCallerIdentityProvider,
     SubjectRef,
     is_code,
+    runtime_state_read_subject_ura,
 )
 from easynet_sdk.authorized_runtime_session import _descriptor_resolution_from_error
 
@@ -190,7 +191,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
                 callee_ura="easynet:///r/example/device/dev-a",
-                subject_ura="easynet:///r/example/resource/user.alice/session/session-2",
+                subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
                 authority=_session_authority(),
@@ -201,6 +202,20 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         fixture.session.history.list(request)
 
         self.assertEqual(fixture.receipts.list_calls, 1)
+
+    def test_runtime_state_read_subject_ura_builds_user_owned_resource_subject(self) -> None:
+        self.assertEqual(
+            runtime_state_read_subject_ura("example", "alice"),
+            "easynet:///r/example/resource/user.alice/runtime-state/read",
+        )
+
+    def test_runtime_state_read_subject_ura_rejects_all_zero_user_before_device_fallback(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(SDKError, "user_id must not be all-zero"):
+            runtime_state_read_subject_ura(
+                "example", "00000000-0000-0000-0000-000000000000"
+            )
 
     def test_history_rejects_path_substring_owner_subject_before_receipt_provider(self) -> None:
         fixture = _SessionFixture()

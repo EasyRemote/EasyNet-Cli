@@ -411,6 +411,8 @@ export class RuntimeCallContext {
   toJSON(): Record<string, unknown>;
 }
 
+export declare function runtimeStateReadSubjectURA(realm: string, userID: string): string;
+
 export interface ReceiptFilterFields {
   caller_ura?: string | null;
   callee_ura?: string | null;

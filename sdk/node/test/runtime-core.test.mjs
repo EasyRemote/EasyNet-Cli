@@ -52,6 +52,7 @@ const expectedExports = [
   "StreamHandle",
   "profileErrorDetails",
   "profileSourceRef",
+  "runtimeStateReadSubjectURA",
 ];
 
 const productSymbols = [
@@ -996,7 +997,7 @@ test("session history keeps subject filters as ledger predicates", async () => {
     call: {
       caller_ura: caller,
       callee_ura: callee,
-      subject_ura: "easynet:///r/example/resource/user.alice/session/session-1",
+      subject_ura: sdk.runtimeStateReadSubjectURA("example", "alice"),
       metadata: {
         [sdk.SESSION_AUTHORITY_METADATA_KEY]: historySessionValue(),
       },
@@ -1012,6 +1013,20 @@ test("session history keeps subject filters as ledger predicates", async () => {
   assert.equal(seenRequest.filter.subjectURA, callee);
   assert.equal(page.source, "invocation.history.list");
   assert.equal(page.records.length, 1);
+});
+
+test("runtime-state read subject helper builds user-owned resource subject", () => {
+  assert.equal(
+    sdk.runtimeStateReadSubjectURA("example", "alice"),
+    "easynet:///r/example/resource/user.alice/runtime-state/read",
+  );
+});
+
+test("runtime-state read subject helper rejects all-zero user before device fallback", () => {
+  assert.throws(
+    () => sdk.runtimeStateReadSubjectURA("example", "00000000-0000-0000-0000-000000000000"),
+    /user_id must not be all-zero/,
+  );
 });
 
 test("stream and bidi state machines retain bounded history", async () => {

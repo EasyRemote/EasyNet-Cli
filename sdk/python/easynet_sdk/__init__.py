@@ -68,6 +68,7 @@ from .authority import (
     new_canonical_authority_client,
     validate_authority_metadata,
 )
+from ._session_authority_subjects import runtime_state_read_subject_ura
 from .authorized_runtime_session import (
     AbilityRef,
     ActingPrincipalRef,
@@ -686,6 +687,7 @@ __all__ = [
     "resource_ura",
     "retryable_for_hint",
     "runtime_credentials_path",
+    "runtime_state_read_subject_ura",
     "runtime_identity_projection_from_json",
     "runtime_state_root",
     "signer_handle_provenance_error",
