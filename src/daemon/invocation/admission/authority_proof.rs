@@ -95,6 +95,14 @@ impl AuthorityProof {
         let bytes = crate::daemon::ability::canonical_json_bytes(&self.canonical_material());
         format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
     }
+
+    #[must_use]
+    pub(crate) fn matches_route_binding(&self, binding: &AuthorityProofRouteBinding<'_>) -> bool {
+        self.callee_ura == binding.callee_ura
+            && self.subject_ura == binding.subject_ura
+            && self.ability_ura == binding.ability_ura
+            && self.audience_ura == binding.audience_ura
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +121,14 @@ pub struct AuthorityProofVerificationContext<'a> {
     pub session_id: Option<&'a str>,
     pub session_owner_user_id: Option<&'a str>,
     pub now: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AuthorityProofRouteBinding<'a> {
+    pub callee_ura: &'a str,
+    pub subject_ura: &'a str,
+    pub ability_ura: &'a str,
+    pub audience_ura: &'a str,
 }
 
 pub trait AuthorityProofIssuerResolver {
@@ -195,6 +211,12 @@ fn verify_invocation_binding(
     proof: &AuthorityProof,
     context: &AuthorityProofVerificationContext<'_>,
 ) -> Result<(), AuthorityProofDenyReason> {
+    let route_binding = AuthorityProofRouteBinding {
+        callee_ura: context.callee_ura,
+        subject_ura: context.subject_ura,
+        ability_ura: context.ability_ura,
+        audience_ura: context.audience_ura,
+    };
     if proof.audience_ura != context.audience_ura {
         return Err(AuthorityProofDenyReason::AuthorityProofAudienceMismatch);
     }
@@ -202,9 +224,7 @@ fn verify_invocation_binding(
         || proof.principal_kind != context.principal_kind
         || proof.principal_id != context.principal_id
         || proof.token_id.as_deref() != context.token_id
-        || proof.callee_ura != context.callee_ura
-        || proof.subject_ura != context.subject_ura
-        || proof.ability_ura != context.ability_ura
+        || !proof.matches_route_binding(&route_binding)
         || proof.action != context.action
     {
         return Err(AuthorityProofDenyReason::AuthorityProofMismatch);

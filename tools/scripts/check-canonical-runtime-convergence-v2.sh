@@ -2166,9 +2166,10 @@ check_authority_proof_session_fact_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local proof="$cli_root/src/daemon/invocation/admission/authority_proof.rs"
   local facade="$cli_root/src/daemon/invocation/admission/admission_facade.rs"
+  local child="$cli_root/src/daemon/invocation/admission/child_invocation_builder.rs"
   [[ -f "$proof" ]] || return 0
 
-  "$PYTHON_BIN" - "$proof" "$facade" <<'PY'
+  "$PYTHON_BIN" - "$proof" "$facade" "$child" <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -2176,8 +2177,12 @@ from pathlib import Path
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
 facade_path = Path(sys.argv[2])
 facade = facade_path.read_text(encoding="utf-8") if facade_path.exists() else ""
+child_path = Path(sys.argv[3])
+child = child_path.read_text(encoding="utf-8") if child_path.exists() else ""
 
 for required in (
+    "pub(crate) fn matches_route_binding(&self, binding: &AuthorityProofRouteBinding<'_>) -> bool",
+    "pub(crate) struct AuthorityProofRouteBinding<'a>",
     "fn verify_session_binding_facts(",
     "verify_session_binding_facts(proof, context)?",
     "if proof.session_id.is_some()",
@@ -2215,12 +2220,43 @@ binding = re.search(
 )
 if binding is None:
     raise SystemExit("authority_proof_session_fact:binding_not_inspectable")
+for required in (
+    "let route_binding = AuthorityProofRouteBinding {",
+    "!proof.matches_route_binding(&route_binding)",
+):
+    if required not in binding.group("body"):
+        raise SystemExit(f"authority_proof_route_binding:verifier_missing:{required}")
+for forbidden in (
+    "proof.callee_ura != context.callee_ura",
+    "proof.subject_ura != context.subject_ura",
+    "proof.ability_ura != context.ability_ura",
+):
+    if forbidden in binding.group("body"):
+        raise SystemExit(f"authority_proof_route_binding:verifier_duplicate:{forbidden}")
 legacy_inline = (
     "if proof.session_owner_user_id.as_deref().is_some()\n"
     "        && proof.session_owner_user_id.as_deref() != context.session_owner_user_id"
 )
 if legacy_inline in binding.group("body"):
     raise SystemExit("authority_proof_session_fact:legacy_optional_inline_check")
+
+if child:
+    for required in (
+        "AuthorityProofRouteBinding",
+        "let route_binding = AuthorityProofRouteBinding {",
+        "!proof.matches_route_binding(&route_binding)",
+    ):
+        if required not in child:
+            raise SystemExit(f"authority_proof_route_binding:child_missing:{required}")
+    child_production = child.split("#[cfg(test)]", 1)[0]
+    for forbidden in (
+        r"proof\.callee_ura\s*!=",
+        r"proof\.subject_ura\s*!=",
+        r"proof\.ability_ura\s*!=",
+        r"proof\.audience_ura\s*!=",
+    ):
+        if re.search(forbidden, child_production):
+            raise SystemExit(f"authority_proof_route_binding:child_duplicate:{forbidden}")
 
 if "request_scoped_one_time_authority_proof" not in facade:
     raise SystemExit("authority_proof_scope_classifier:facade_missing_domain_predicate")
@@ -14005,6 +14041,94 @@ fn request_scoped_one_time_authority_proof(proof: &AuthorityProof) -> bool {
 EOF
   if ( CLI_ROOT="$tmp/authority-proof-scope-classifier-legacy"; check_authority_proof_session_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected authority proof scope classifier duplication gate to fail"
+  fi
+  mkdir -p "$tmp/authority-proof-route-binding-child-legacy/src/daemon/invocation/admission"
+  cat >"$tmp/authority-proof-route-binding-child-legacy/src/daemon/invocation/admission/authority_proof.rs" <<'EOF'
+pub struct AuthorityProof {
+    pub permission_request_id: Option<String>,
+    pub grant_id: Option<String>,
+    pub session_id: Option<String>,
+    pub session_owner_user_id: Option<String>,
+}
+impl AuthorityProof {
+    pub(crate) fn matches_route_binding(&self, binding: &AuthorityProofRouteBinding<'_>) -> bool {
+        true
+    }
+}
+pub(crate) struct AuthorityProofRouteBinding<'a> {
+    pub callee_ura: &'a str,
+    pub subject_ura: &'a str,
+    pub ability_ura: &'a str,
+    pub audience_ura: &'a str,
+}
+pub struct AuthorityProofVerificationContext<'a> {
+    pub callee_ura: &'a str,
+    pub subject_ura: &'a str,
+    pub ability_ura: &'a str,
+    pub audience_ura: &'a str,
+    pub session_owner_user_id: Option<&'a str>,
+}
+fn verify_invocation_binding(
+    proof: &AuthorityProof,
+    context: &AuthorityProofVerificationContext<'_>,
+) -> Result<(), AuthorityProofDenyReason> {
+    let route_binding = AuthorityProofRouteBinding {
+        callee_ura: context.callee_ura,
+        subject_ura: context.subject_ura,
+        ability_ura: context.ability_ura,
+        audience_ura: context.audience_ura,
+    };
+    if !proof.matches_route_binding(&route_binding) {
+        return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
+    verify_session_binding_facts(proof, context)?;
+    if request_scoped_one_time_authority_proof(proof) && !proof_binds_invocation_identity(proof) {
+        return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
+    Ok(())
+}
+fn verify_session_binding_facts(
+    proof: &AuthorityProof,
+    context: &AuthorityProofVerificationContext<'_>,
+) -> Result<(), AuthorityProofDenyReason> {
+    if proof.session_id.is_some() {
+        let proof_owner = proof.session_owner_user_id.as_deref().map(str::trim).filter(|owner| !owner.is_empty()).ok_or(AuthorityProofDenyReason::AuthorityProofMismatch)?;
+        let context_owner = context.session_owner_user_id.map(str::trim).filter(|owner| !owner.is_empty()).ok_or(AuthorityProofDenyReason::AuthorityProofMismatch)?;
+        if proof_owner != context_owner { return Err(AuthorityProofDenyReason::AuthorityProofMismatch); }
+    }
+    Ok(())
+}
+fn normalized_followup_abilities() {}
+pub(crate) fn request_scoped_one_time_authority_proof(proof: &AuthorityProof) -> bool {
+    proof.permission_request_id.is_some() && proof.grant_id.is_none() && proof.session_id.is_none()
+}
+fn proof_binds_invocation_identity(proof: &AuthorityProof) -> bool { true }
+#[cfg(test)]
+mod tests {
+    fn verifier_rejects_session_proof_without_session_owner_fact() {
+        proof.session_owner_user_id = None;
+        let _ = "session proof must bind session owner";
+    }
+}
+EOF
+  cat >"$tmp/authority-proof-route-binding-child-legacy/src/daemon/invocation/admission/admission_facade.rs" <<'EOF'
+use crate::daemon::invocation::admission::authority_proof::request_scoped_one_time_authority_proof;
+EOF
+  cat >"$tmp/authority-proof-route-binding-child-legacy/src/daemon/invocation/admission/child_invocation_builder.rs" <<'EOF'
+fn validate_authority_proof_binding(route: &SelectedChildRoute, subject_ura: &str, proof: &AuthorityProof) -> Result<(), ChildInvocationBuildFailure> {
+    let ability_ura = ability_ura(route)?;
+    if proof.callee_ura != route.selected_callee_ura
+        || proof.subject_ura != subject_ura
+        || proof.ability_ura != ability_ura
+        || proof.audience_ura != route.execution_host_ura.as_deref().unwrap_or(route.selected_callee_ura.as_str())
+    {
+        return Err(failure(route));
+    }
+    Ok(())
+}
+EOF
+  if ( CLI_ROOT="$tmp/authority-proof-route-binding-child-legacy"; check_authority_proof_session_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected authority proof route binding child duplication gate to fail"
   fi
   mkdir -p "$tmp/resources-schema-legacy/src/daemon/persistence"
   cat >"$tmp/resources-schema-legacy/src/daemon/persistence/resources.rs" <<'EOF'

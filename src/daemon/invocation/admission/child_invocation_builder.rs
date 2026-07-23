@@ -26,7 +26,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::authority_proof::AuthorityProof;
+use super::authority_proof::{AuthorityProof, AuthorityProofRouteBinding};
 use super::decision::{PolicyDecisionReason, SignatureDecisionReason, TraceStage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -350,15 +350,17 @@ fn validate_authority_proof_binding(
     proof: &AuthorityProof,
 ) -> Result<(), ChildInvocationBuildFailure> {
     let ability_ura = ability_ura(route)?;
-    if proof.callee_ura != route.selected_callee_ura
-        || proof.subject_ura != subject_ura
-        || proof.ability_ura != ability_ura
-        || proof.audience_ura
-            != route
-                .execution_host_ura
-                .as_deref()
-                .unwrap_or(route.selected_callee_ura.as_str())
-    {
+    let audience_ura = route
+        .execution_host_ura
+        .as_deref()
+        .unwrap_or(route.selected_callee_ura.as_str());
+    let route_binding = AuthorityProofRouteBinding {
+        callee_ura: &route.selected_callee_ura,
+        subject_ura,
+        ability_ura: &ability_ura,
+        audience_ura,
+    };
+    if !proof.matches_route_binding(&route_binding) {
         return Err(failure(
             route,
             TraceStage::AuthorityDenied,
