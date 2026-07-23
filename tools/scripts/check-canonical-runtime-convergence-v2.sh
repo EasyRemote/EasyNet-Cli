@@ -5233,6 +5233,35 @@ for token, code in (
 PY
 }
 
+check_cli_device_directory_projection_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local devices="$cli_root/src/cli/commands/devices.rs"
+  [[ -f "$devices" ]] || return 0
+
+  "$PYTHON_BIN" - "$devices" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+production = text.split("\n#[cfg(test)]", 1)[0]
+
+for retired in (
+    'n.get("os")',
+    'n.get("arch")',
+    '"last_heartbeat_unix_ms"',
+):
+    if retired in production:
+        raise SystemExit(f"cli_device_directory_projection:retired_alias:{retired}")
+
+for required in (
+    "renderer_ignores_legacy_top_level_platform_aliases",
+    "renderer_ignores_legacy_last_heartbeat_alias",
+):
+    if required not in text:
+        raise SystemExit(f"cli_device_directory_projection:missing_test:{required}")
+PY
+}
+
 check_runtime_wire_target_state_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local descriptor_binding="$cli_root/src/daemon/invocation/dispatch/descriptor_binding.rs"
@@ -9713,6 +9742,21 @@ EOF
   if ( check_federation_probe_local_identity_contract "$tmp/federation-probe-local-identity-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected federation probe default/local identity gate to fail"
   fi
+  mkdir -p "$tmp/cli-device-directory-alias-legacy/src/cli/commands"
+  cat >"$tmp/cli-device-directory-alias-legacy/src/cli/commands/devices.rs" <<'EOF'
+fn device_platform_info(n: &Value) {
+    let os = n.get("os").and_then(|v| v.as_str());
+    let arch = n.get("arch").and_then(|v| v.as_str());
+}
+
+fn device_last_active(n: &Value) {
+    let last_seen = n.get("last_seen_unix_ms")
+        .or_else(|| n.get("last_heartbeat_unix_ms"));
+}
+EOF
+  if ( CLI_ROOT="$tmp/cli-device-directory-alias-legacy"; check_cli_device_directory_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected CLI device directory alias gate to fail"
+  fi
   mkdir -p "$tmp/ready-capability-mode-derived/src/bin" \
     "$tmp/ready-capability-mode-derived/src/daemon/boot/invocation"
   cat >"$tmp/ready-capability-mode-derived/src/bin/easynet-daemon.rs" <<'EOF'
@@ -9928,6 +9972,7 @@ EOF
   check_daemon_runtime_assembly_contract
   check_catalog_exact_runtime_key_contract
   check_federation_directory_device_projection_contract
+  check_cli_device_directory_projection_contract
   check_plugin_sidecar_helper_matrix_contract
   check_retired_browser_mock_surface_contract
   check_ability_deploy_product_neutrality_contract
@@ -10056,6 +10101,7 @@ check_canonical_ability_catalog_projection_contract
 check_daemon_runtime_assembly_contract
 check_catalog_exact_runtime_key_contract
 check_federation_directory_device_projection_contract
+check_cli_device_directory_projection_contract
 check_plugin_sidecar_helper_matrix_contract
 check_retired_browser_mock_surface_contract
 check_ability_deploy_product_neutrality_contract

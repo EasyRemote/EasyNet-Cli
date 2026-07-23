@@ -321,7 +321,6 @@ fn device_platform_info(n: &Value) -> (String, String, String) {
     let os = device_meta
         .and_then(|d| d.get("os"))
         .and_then(|v| v.as_str())
-        .or_else(|| n.get("os").and_then(|v| v.as_str()))
         .unwrap_or("");
     let os_version = device_meta
         .and_then(|d| d.get("os_version"))
@@ -334,7 +333,6 @@ fn device_platform_info(n: &Value) -> (String, String, String) {
     let arch = device_meta
         .and_then(|d| d.get("architecture"))
         .and_then(|v| v.as_str())
-        .or_else(|| n.get("arch").and_then(|v| v.as_str()))
         .unwrap_or("");
 
     let os_label = node::friendly_os(os);
@@ -358,10 +356,7 @@ fn device_platform_info(n: &Value) -> (String, String, String) {
 }
 
 fn device_last_active(n: &Value) -> String {
-    let last_seen = n
-        .get("last_seen_unix_ms")
-        .and_then(Value::as_i64)
-        .or_else(|| n.get("last_heartbeat_unix_ms").and_then(Value::as_i64));
+    let last_seen = n.get("last_seen_unix_ms").and_then(Value::as_i64);
     match last_seen {
         Some(ms) if ms > 0 => output::relative_time(ms),
         _ => String::new(),
@@ -491,5 +486,28 @@ mod tests {
             error.to_string().contains("does not match Device URA id"),
             "wrong error: {error}"
         );
+    }
+
+    #[test]
+    fn renderer_ignores_legacy_top_level_platform_aliases() {
+        let row = json!({
+            "os": "macos",
+            "arch": "arm64"
+        });
+
+        let (platform, os_detail, hardware_model) = device_platform_info(&row);
+
+        assert_eq!(platform, "—");
+        assert_eq!(os_detail, "");
+        assert_eq!(hardware_model, "");
+    }
+
+    #[test]
+    fn renderer_ignores_legacy_last_heartbeat_alias() {
+        let row = json!({
+            "last_heartbeat_unix_ms": 1784562194214i64
+        });
+
+        assert_eq!(device_last_active(&row), "");
     }
 }
