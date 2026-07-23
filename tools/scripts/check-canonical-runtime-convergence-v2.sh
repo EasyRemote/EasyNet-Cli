@@ -161,6 +161,7 @@ check_bidi_reverse_unary_terminal_state_contract() {
   [[ -f "$escalation" ]] || fail "bidi session escalation source is missing: ${escalation#$cli_root/}"
 
   "$PYTHON_BIN" - "$escalation" <<'PY'
+import re
 import sys
 from pathlib import Path
 
@@ -2503,6 +2504,7 @@ for retired in (
     "adding a field later must use `#[serde(default)]`",
     "so old libs ignore it",
     "old libs ignore",
+    "historical default",
 ):
     if retired in text:
         raise SystemExit(f"control_discovery_schema:retired_compat:{retired}")
@@ -2517,6 +2519,81 @@ for required in (
 ):
     if required not in text:
         raise SystemExit(f"control_discovery_schema:missing:{required}")
+PY
+}
+
+check_sdk_control_discovery_strict_wire_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_src="$cli_root/sdk/go/control_discovery.go"
+  local go_test="$cli_root/sdk/go/control_discovery_test.go"
+  local py_src="$cli_root/sdk/python/easynet_sdk/control_ipc.py"
+  local py_test="$cli_root/sdk/python/tests/test_control_ipc.py"
+
+  "$PYTHON_BIN" - "$go_src" "$go_test" "$py_src" "$py_test" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+go_src_path, go_test_path, py_src_path, py_test_path = map(Path, sys.argv[1:])
+for path in (go_src_path, go_test_path, py_src_path, py_test_path):
+    if not path.exists():
+        raise SystemExit(f"sdk_control_discovery_strict_wire:missing:{path}")
+
+go_src = go_src_path.read_text(encoding="utf-8")
+go_test = go_test_path.read_text(encoding="utf-8")
+py_src = py_src_path.read_text(encoding="utf-8")
+py_test = py_test_path.read_text(encoding="utf-8")
+
+for retired in (
+    "json.Unmarshal(raw, &wire)",
+    "if discovery.capabilityFlags == nil",
+    'decoded.get("capability_flags", [])',
+    "pages_port=_optional_non_negative_int(decoded.get(\"pages_port\"), \"pages_port\")",
+):
+    if retired in go_src or retired in py_src:
+        raise SystemExit(f"sdk_control_discovery_strict_wire:retired_loose_decode:{retired}")
+
+for token in (
+    "decoder.DisallowUnknownFields()",
+    "control discovery capability_flags is required",
+    "control discovery pages_port must be a positive TCP port",
+):
+    if token not in go_src:
+        raise SystemExit(f"sdk_control_discovery_strict_wire:go_missing:{token}")
+for field, ty in (
+    ("PID", r"\*int"),
+    ("SupportedIPCVersions", r"\*IpcVersionRange"),
+    ("CapabilityFlags", r"\*\[\]string"),
+):
+    if re.search(rf"\b{field}\s+{ty}\b", go_src) is None:
+        raise SystemExit(f"sdk_control_discovery_strict_wire:go_missing_pointer_field:{field}")
+
+for token in (
+    "allowed = {",
+    '"daemon_identity"',
+    "unknown = sorted(set(decoded).difference(allowed))",
+    "if field_name not in decoded or decoded.get(field_name) is None",
+    "control discovery capability_flags is required",
+    "pages_port must be a positive TCP port",
+):
+    if token not in py_src:
+        raise SystemExit(f"sdk_control_discovery_strict_wire:python_missing:{token}")
+
+for token in (
+    "TestFileControlDiscoveryReaderRejectsLooseControlJSON",
+    "legacy_attach_hint",
+    '"pages_port":0',
+):
+    if token not in go_test:
+        raise SystemExit(f"sdk_control_discovery_strict_wire:go_test_missing:{token}")
+
+for token in (
+    "test_discovery_rejects_loose_compatibility_shape",
+    "legacy_attach_hint",
+    '"pages_port": 0',
+):
+    if token not in py_test:
+        raise SystemExit(f"sdk_control_discovery_strict_wire:python_test_missing:{token}")
 PY
 }
 
@@ -14970,6 +15047,49 @@ EOF
   if ( CLI_ROOT="$tmp/control-discovery-schema-legacy"; check_control_discovery_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected control discovery schema compatibility gate to fail"
   fi
+  mkdir -p "$tmp/sdk-control-discovery-loose/sdk/go" \
+    "$tmp/sdk-control-discovery-loose/sdk/python/easynet_sdk" \
+    "$tmp/sdk-control-discovery-loose/sdk/python/tests"
+  cat >"$tmp/sdk-control-discovery-loose/sdk/go/control_discovery.go" <<'EOF'
+package easynet
+
+import "encoding/json"
+
+type IpcVersionRange struct { Min int; Max int }
+type controlDiscoveryJSON struct {
+    PID int
+    SupportedIPCVersions IpcVersionRange
+    CapabilityFlags []string
+    PagesPort int
+}
+
+func loose(raw []byte) error {
+    var wire controlDiscoveryJSON
+    return json.Unmarshal(raw, &wire)
+}
+EOF
+  cat >"$tmp/sdk-control-discovery-loose/sdk/go/control_discovery_test.go" <<'EOF'
+package easynet
+
+func TestFileControlDiscoveryReaderRejectsLooseControlJSON() {
+    _ = "legacy_attach_hint"
+    _ = `"pages_port":0`
+}
+EOF
+  cat >"$tmp/sdk-control-discovery-loose/sdk/python/easynet_sdk/control_ipc.py" <<'EOF'
+def from_json(decoded):
+    flags = decoded.get("capability_flags", [])
+    pages_port = _optional_non_negative_int(decoded.get("pages_port"), "pages_port")
+    return flags, pages_port
+EOF
+  cat >"$tmp/sdk-control-discovery-loose/sdk/python/tests/test_control_ipc.py" <<'EOF'
+def test_discovery_rejects_loose_compatibility_shape():
+    legacy_attach_hint = True
+    value = {"pages_port": 0}
+EOF
+  if ( CLI_ROOT="$tmp/sdk-control-discovery-loose"; check_sdk_control_discovery_strict_wire_contract ) >/dev/null 2>&1; then
+    fail "self-test expected SDK control discovery loose parser gate to fail"
+  fi
   mkdir -p "$tmp/control-frame-schema-legacy/src/daemon/control"
   cat >"$tmp/control-frame-schema-legacy/src/daemon/control/frames.rs" <<'EOF'
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15211,6 +15331,7 @@ EOF
   check_resources_schema_contract
   check_agent_spec_schema_contract
   check_control_discovery_schema_contract
+  check_sdk_control_discovery_strict_wire_contract
   check_control_frame_schema_contract
   check_sdk_history_authority_subject_contract
   check_sdk_descriptor_resolution_error_vocabulary_contract
@@ -15373,6 +15494,7 @@ check_authority_proof_session_fact_contract
 check_resources_schema_contract
 check_agent_spec_schema_contract
 check_control_discovery_schema_contract
+check_sdk_control_discovery_strict_wire_contract
 check_control_frame_schema_contract
 check_sdk_history_authority_subject_contract
 check_sdk_prepared_descriptor_ref_required_contract

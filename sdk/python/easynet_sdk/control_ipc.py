@@ -65,9 +65,51 @@ class _ControlDiscovery:
     @classmethod
     def from_json(cls, raw: bytes | str) -> "_ControlDiscovery":
         decoded = _json_object(raw, "control discovery")
-        flags = decoded.get("capability_flags", [])
+        allowed = {
+            "socket_path",
+            "pipe_name",
+            "invocation_endpoint",
+            "daemon_identity",
+            "pid",
+            "daemon_version",
+            "supported_ipc_versions",
+            "capability_flags",
+            "pages_port",
+        }
+        unknown = sorted(set(decoded).difference(allowed))
+        if unknown:
+            raise _invalid_control(
+                "control discovery contains unknown fields: " + ", ".join(unknown)
+            )
+        for field_name in ("pid", "daemon_version", "supported_ipc_versions"):
+            if field_name not in decoded or decoded.get(field_name) is None:
+                raise _invalid_control(f"control discovery {field_name} is required")
+        if "capability_flags" not in decoded or decoded.get("capability_flags") is None:
+            raise _invalid_control("control discovery capability_flags is required")
+        if "daemon_identity" in decoded and decoded.get("daemon_identity") is not None:
+            identity = decoded.get("daemon_identity")
+            if not isinstance(identity, Mapping):
+                raise _invalid_control("daemon_identity must be an object")
+            identity_unknown = sorted(set(identity).difference({"mode", "realm", "node_id"}))
+            if identity_unknown:
+                raise _invalid_control(
+                    "daemon_identity contains unknown fields: "
+                    + ", ".join(identity_unknown)
+                )
+        flags = decoded.get("capability_flags")
         if not isinstance(flags, list) or not all(isinstance(item, str) for item in flags):
             raise _invalid_control("capability_flags must be an array of strings")
+        if any(item == "" for item in flags):
+            raise _invalid_control("capability_flags must contain non-empty strings")
+        pid = _optional_non_negative_int(decoded.get("pid"), "pid")
+        if pid <= 0:
+            raise _invalid_control("control discovery pid is required")
+        daemon_version = _optional_string(decoded.get("daemon_version"), "daemon_version")
+        if not daemon_version:
+            raise _invalid_control("control discovery daemon_version is required")
+        pages_port = _optional_non_negative_int(decoded.get("pages_port"), "pages_port")
+        if "pages_port" in decoded and (pages_port <= 0 or pages_port > 65535):
+            raise _invalid_control("pages_port must be a positive TCP port")
         return cls(
             socket_path=_optional_string(decoded.get("socket_path"), "socket_path") or "",
             pipe_name=_optional_string(decoded.get("pipe_name"), "pipe_name") or "",
@@ -75,14 +117,13 @@ class _ControlDiscovery:
                 decoded.get("invocation_endpoint"), "invocation_endpoint"
             )
             or "",
-            pid=_optional_non_negative_int(decoded.get("pid"), "pid"),
-            daemon_version=_optional_string(decoded.get("daemon_version"), "daemon_version")
-            or "",
+            pid=pid,
+            daemon_version=daemon_version,
             supported_ipc_versions=_IpcVersionRange.from_mapping(
                 decoded.get("supported_ipc_versions")
             ),
             capability_flags=tuple(flags),
-            pages_port=_optional_non_negative_int(decoded.get("pages_port"), "pages_port"),
+            pages_port=pages_port,
         )
 
 

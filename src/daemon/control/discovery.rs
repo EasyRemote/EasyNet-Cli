@@ -103,9 +103,8 @@ pub struct ControlDiscovery {
 
     /// Actual local Pages listener port chosen by the daemon.
     ///
-    /// Older daemons did not write this field. Readers must treat
-    /// `None` as "unknown" and fall back to their historical default
-    /// or omit Pages URLs until Ready.
+    /// Readers must treat `None` as "unknown" and omit Pages URLs until
+    /// Ready proves the listener's bound port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pages_port: Option<u16>,
 }

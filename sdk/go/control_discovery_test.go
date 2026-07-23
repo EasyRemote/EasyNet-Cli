@@ -147,6 +147,62 @@ func TestFileControlDiscoveryReaderReadsControlJSON(t *testing.T) {
 	}
 }
 
+func TestFileControlDiscoveryReaderRejectsLooseControlJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "unknown field",
+			raw: `{
+				"socket_path":"/tmp/control.sock",
+				"invocation_endpoint":"unix:///tmp/daemon.sock",
+				"pid":42,
+				"daemon_version":"0.91.30",
+				"supported_ipc_versions":{"min":1,"max":1},
+				"capability_flags":["invocation"],
+				"legacy_attach_hint":true
+			}`,
+		},
+		{
+			name: "missing capability flags",
+			raw: `{
+				"socket_path":"/tmp/control.sock",
+				"invocation_endpoint":"unix:///tmp/daemon.sock",
+				"pid":42,
+				"daemon_version":"0.91.30",
+				"supported_ipc_versions":{"min":1,"max":1}
+			}`,
+		},
+		{
+			name: "zero pages port",
+			raw: `{
+				"socket_path":"/tmp/control.sock",
+				"invocation_endpoint":"unix:///tmp/daemon.sock",
+				"pid":42,
+				"daemon_version":"0.91.30",
+				"supported_ipc_versions":{"min":1,"max":1},
+				"capability_flags":["invocation"],
+				"pages_port":0
+			}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "control.json")
+			if err := os.WriteFile(path, []byte(test.raw), 0o600); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+
+			_, err := fileControlDiscoveryReader{}.readControlDiscovery(context.Background(), path)
+			if !IsCode(err, ErrInvalidArgument) {
+				t.Fatalf("readControlDiscovery error = %v, want INVALID_ARGUMENT", err)
+			}
+		})
+	}
+}
+
 func TestControlDiscoveryRuntimeConnectorPassesResolvedEndpointToInnerHandshake(t *testing.T) {
 	seen := map[string]any{}
 	inner := RuntimeConnectorFunc{

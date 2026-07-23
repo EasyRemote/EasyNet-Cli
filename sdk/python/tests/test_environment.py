@@ -169,6 +169,8 @@ def _write_control_discovery(directory: str) -> Path:
     path.write_text(
         '{"socket_path":"/tmp/control.sock",'
         '"invocation_endpoint":"unix:///tmp/daemon.sock",'
+        '"pid":123,'
+        '"daemon_version":"test",'
         '"supported_ipc_versions":{"min":1,"max":1},'
         '"capability_flags":["invocation"]}',
         encoding="utf-8",

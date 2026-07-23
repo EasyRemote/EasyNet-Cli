@@ -1,9 +1,11 @@
 package easynet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -33,29 +35,64 @@ type controlDiscovery struct {
 }
 
 type controlDiscoveryJSON struct {
-	SocketPath           string          `json:"socket_path,omitempty"`
-	PipeName             string          `json:"pipe_name,omitempty"`
-	InvocationEndpoint   string          `json:"invocation_endpoint,omitempty"`
-	PID                  int             `json:"pid,omitempty"`
-	DaemonVersion        string          `json:"daemon_version,omitempty"`
-	SupportedIPCVersions IpcVersionRange `json:"supported_ipc_versions,omitempty"`
-	CapabilityFlags      []string        `json:"capability_flags,omitempty"`
-	PagesPort            int             `json:"pages_port,omitempty"`
+	SocketPath           *string                `json:"socket_path,omitempty"`
+	PipeName             *string                `json:"pipe_name,omitempty"`
+	InvocationEndpoint   *string                `json:"invocation_endpoint,omitempty"`
+	DaemonIdentity       *controlDaemonIdentity `json:"daemon_identity,omitempty"`
+	PID                  *int                   `json:"pid,omitempty"`
+	DaemonVersion        *string                `json:"daemon_version,omitempty"`
+	SupportedIPCVersions *IpcVersionRange       `json:"supported_ipc_versions,omitempty"`
+	CapabilityFlags      *[]string              `json:"capability_flags,omitempty"`
+	PagesPort            *int                   `json:"pages_port,omitempty"`
+}
+
+type controlDaemonIdentity struct {
+	Mode   string  `json:"mode"`
+	Realm  string  `json:"realm"`
+	NodeID *string `json:"node_id,omitempty"`
 }
 
 func (d *controlDiscovery) UnmarshalJSON(raw []byte) error {
 	var wire controlDiscoveryJSON
-	if err := json.Unmarshal(raw, &wire); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&wire); err != nil {
 		return err
 	}
-	d.socketPath = wire.SocketPath
-	d.pipeName = wire.PipeName
-	d.invocationEndpoint = wire.InvocationEndpoint
-	d.pid = wire.PID
-	d.daemonVersion = wire.DaemonVersion
-	d.supportedIPCVersions = wire.SupportedIPCVersions
-	d.capabilityFlags = wire.CapabilityFlags
-	d.pagesPort = wire.PagesPort
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return fmt.Errorf("control discovery JSON contains trailing data")
+	}
+	if wire.PID == nil || *wire.PID <= 0 {
+		return fmt.Errorf("control discovery pid is required")
+	}
+	if wire.DaemonVersion == nil || *wire.DaemonVersion == "" {
+		return fmt.Errorf("control discovery daemon_version is required")
+	}
+	if wire.SupportedIPCVersions == nil ||
+		wire.SupportedIPCVersions.Min <= 0 ||
+		wire.SupportedIPCVersions.Max <= 0 ||
+		wire.SupportedIPCVersions.Min > wire.SupportedIPCVersions.Max {
+		return fmt.Errorf("control discovery supported_ipc_versions is required")
+	}
+	if wire.CapabilityFlags == nil {
+		return fmt.Errorf("control discovery capability_flags is required")
+	}
+	for _, flag := range *wire.CapabilityFlags {
+		if flag == "" {
+			return fmt.Errorf("control discovery capability_flags must contain non-empty strings")
+		}
+	}
+	if wire.PagesPort != nil && (*wire.PagesPort <= 0 || *wire.PagesPort > 65535) {
+		return fmt.Errorf("control discovery pages_port must be a positive TCP port")
+	}
+	d.socketPath = stringPointerValue(wire.SocketPath)
+	d.pipeName = stringPointerValue(wire.PipeName)
+	d.invocationEndpoint = stringPointerValue(wire.InvocationEndpoint)
+	d.pid = *wire.PID
+	d.daemonVersion = *wire.DaemonVersion
+	d.supportedIPCVersions = *wire.SupportedIPCVersions
+	d.capabilityFlags = append([]string(nil), (*wire.CapabilityFlags)...)
+	d.pagesPort = intPointerValue(wire.PagesPort)
 	return nil
 }
 
@@ -117,10 +154,21 @@ func newControlDiscoveryFromJSON(raw []byte) (controlDiscovery, error) {
 	if err := json.Unmarshal(raw, &discovery); err != nil {
 		return controlDiscovery{}, invalidRuntimePayload(fmt.Sprintf("decode control discovery JSON: %v", err), err)
 	}
-	if discovery.capabilityFlags == nil {
-		discovery.capabilityFlags = []string{}
-	}
 	return discovery, nil
+}
+
+func stringPointerValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func intPointerValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 // controlDiscoveryRuntimeConnector resolves RuntimeEndpoint from daemon

@@ -51,6 +51,40 @@ class ControlIpcTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.RUNTIME_OFFLINE))
 
+    def test_discovery_rejects_loose_compatibility_shape(self) -> None:
+        cases = [
+            {
+                "socket_path": "/tmp/control.sock",
+                "invocation_endpoint": "/tmp/daemon.sock",
+                "pid": 123,
+                "daemon_version": "test",
+                "supported_ipc_versions": {"min": 1, "max": 1},
+                "capability_flags": ["boot_status"],
+                "legacy_attach_hint": True,
+            },
+            {
+                "socket_path": "/tmp/control.sock",
+                "invocation_endpoint": "/tmp/daemon.sock",
+                "pid": 123,
+                "daemon_version": "test",
+                "supported_ipc_versions": {"min": 1, "max": 1},
+            },
+            {
+                "socket_path": "/tmp/control.sock",
+                "invocation_endpoint": "/tmp/daemon.sock",
+                "pid": 123,
+                "daemon_version": "test",
+                "supported_ipc_versions": {"min": 1, "max": 1},
+                "capability_flags": ["boot_status"],
+                "pages_port": 0,
+            },
+        ]
+        for value in cases:
+            with self.subTest(value=value):
+                with self.assertRaises(SDKError) as caught:
+                    _ControlDiscovery.from_json(json.dumps(value))
+                self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
     def test_disjoint_version_range_fails_before_dial(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "control.json"
@@ -61,6 +95,7 @@ class ControlIpcTests(unittest.TestCase):
                         "pid": 123,
                         "daemon_version": "test",
                         "supported_ipc_versions": {"min": 99, "max": 100},
+                        "capability_flags": ["boot_status"],
                     }
                 )
             )
@@ -201,6 +236,7 @@ class ControlIpcTests(unittest.TestCase):
                         "pid": 123,
                         "daemon_version": "test",
                         "supported_ipc_versions": {"min": 1, "max": 1},
+                        "capability_flags": ["boot_status"],
                     }
                 )
             )
