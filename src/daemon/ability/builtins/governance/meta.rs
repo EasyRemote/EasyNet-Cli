@@ -719,6 +719,52 @@ mod tests {
         handler(envelope, json!({}))
     }
 
+    fn invoke_list_targeted(
+        reg: &AxonAbilityCatalog,
+        callee_ura: &str,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        reg.execute_rpc(explicit_meta_target(
+            ABILITY_LIST_ABILITIES,
+            callee_ura,
+            args,
+        ))
+    }
+
+    fn invoke_describe_targeted(
+        reg: &AxonAbilityCatalog,
+        callee_ura: &str,
+    ) -> anyhow::Result<Value> {
+        reg.execute_rpc(explicit_meta_target(
+            ABILITY_DESCRIBE,
+            callee_ura,
+            json!({}),
+        ))
+    }
+
+    fn explicit_meta_target(
+        ability: &str,
+        callee_ura: &str,
+        args: Value,
+    ) -> crate::daemon::invocation::routing::target::InvocationTarget {
+        let ability_ura = crate::core::ura::owner_ability_ura(callee_ura, ability)
+            .expect("canonical meta ability URA for explicit target");
+        let callee = crate::core::ura::parse_ura(callee_ura)
+            .expect("explicit meta target callee must be canonical");
+        let subject_ura = if callee.kind == crate::core::ura::URAKind::Authority {
+            ability_ura.clone()
+        } else {
+            callee_ura.to_string()
+        };
+        crate::daemon::invocation::routing::target::InvocationTarget::local_explicit_tuple(
+            ability_ura,
+            args,
+            crate::daemon::invocation::routing::target::CallMode::Rpc,
+            subject_ura,
+            axon_sdk::invocation::CausalContext::None,
+        )
+    }
+
     fn canonical_meta_fixtures() -> Vec<AbilityDescriptor> {
         const FIXTURE_OWNER: &str = "easynet:///r/test/device/meta-fixture";
         [ABILITY_DESCRIBE, ABILITY_LIST_ABILITIES]
@@ -742,13 +788,7 @@ mod tests {
         owners: Vec<OwnerKind>,
     ) -> Arc<AxonAbilityCatalog> {
         let handle = Arc::new(std::sync::OnceLock::new());
-        let mut registry = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-                None,
-            ),
-            authority_context,
-        );
+        let mut registry = runtime_metadata_test_catalog(authority_context);
         super::register(
             &mut registry,
             owners,
@@ -763,6 +803,37 @@ mod tests {
         registry
     }
 
+    fn metadata_test_authority_context(
+        device_ura: &str,
+    ) -> crate::daemon::ability::dispatch::AbilityAuthorityContext {
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+            device_ura,
+        )
+        .expect("explicit metadata-test Device authority must be canonical")
+    }
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        metadata_test_catalog_for_device("easynet:///r/test/device/01DEV")
+    }
+
+    fn metadata_test_catalog_for_device(device_ura: &str) -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_metadata_only_with_authority_context(
+            metadata_test_authority_context(device_ura),
+        )
+    }
+
+    fn runtime_metadata_test_catalog(
+        authority_context: crate::daemon::ability::dispatch::AbilityAuthorityContext,
+    ) -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            authority_context,
+        )
+    }
+
     fn registry_with_hosted_agent_authorities(
         device_ura: &str,
         hosted_agent_uras: impl IntoIterator<Item = &'static str>,
@@ -773,18 +844,12 @@ mod tests {
                 hosted_agent_uras.into_iter().map(str::to_string),
             )
             .expect("explicit hosted-Agent test authorities must be canonical");
-        AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-                None,
-            ),
-            authority_context,
-        )
+        runtime_metadata_test_catalog(authority_context)
     }
 
     #[test]
     fn registration_makes_both_abilities_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(&mut reg, Vec::new, empty_registry_handle());
         assert!(reg.has_rpc(ABILITY_DESCRIBE));
         assert!(reg.resolve_rpc_with_env(ABILITY_DESCRIBE).is_some());
@@ -808,7 +873,7 @@ mod tests {
             vec![OwnerKind::Hub],
         );
 
-        let response = invoke_list(&registry, &hub_ura, json!({})).unwrap();
+        let response = invoke_list_targeted(&registry, &hub_ura, json!({})).unwrap();
         let abilities = response["abilities"].as_array().unwrap();
         assert_eq!(abilities.len(), 2, "Hub view must contain only Hub rows");
         assert!(abilities.iter().all(|row| row["owner_ura"] == hub_ura));
@@ -826,7 +891,7 @@ mod tests {
         assert_eq!(list["scope_subjects"]["kind"], json!("any"));
         assert_eq!(list["scope_agents"]["kind"], json!("any"));
 
-        let describe = invoke_describe(&registry, &hub_ura).unwrap();
+        let describe = invoke_describe_targeted(&registry, &hub_ura).unwrap();
         assert_eq!(describe["ura"], hub_ura);
         assert_eq!(
             describe["identity_summary"]["signing_authority"],
@@ -845,11 +910,7 @@ mod tests {
         let provider_calls = Arc::new(AtomicUsize::new(0));
         let calls_for_provider = Arc::clone(&provider_calls);
         let handle = Arc::new(std::sync::OnceLock::new());
-        let mut registry = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-                None,
-            ),
+        let mut registry = runtime_metadata_test_catalog(
             AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
                 .expect("Hub authority context"),
         );
@@ -868,7 +929,7 @@ mod tests {
             .set(Arc::clone(&registry))
             .expect("publish Hub registry");
 
-        let response = invoke_list(&registry, &hub_ura, json!({})).expect("Hub list");
+        let response = invoke_list_targeted(&registry, &hub_ura, json!({})).expect("Hub list");
         let rows = response["abilities"].as_array().expect("ability rows");
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|row| row["owner_ura"] == hub_ura));
@@ -882,7 +943,7 @@ mod tests {
             })
         }));
 
-        let describe = invoke_describe(&registry, &hub_ura).expect("Hub describe");
+        let describe = invoke_describe_targeted(&registry, &hub_ura).expect("Hub describe");
         assert_eq!(describe["abilities_summary"]["total"], 2);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
     }
@@ -899,8 +960,8 @@ mod tests {
             vec![OwnerKind::Device, OwnerKind::Hub],
         );
 
-        let device_response = invoke_list(&registry, &device_ura, json!({})).unwrap();
-        let hub_response = invoke_list(&registry, &hub_ura, json!({})).unwrap();
+        let device_response = invoke_list_targeted(&registry, &device_ura, json!({})).unwrap();
+        let hub_response = invoke_list_targeted(&registry, &hub_ura, json!({})).unwrap();
         let device_rows = device_response["abilities"].as_array().unwrap();
         let hub_rows = hub_response["abilities"].as_array().unwrap();
         assert_eq!(device_rows.len(), 2);
@@ -930,8 +991,8 @@ mod tests {
         );
         assert_ne!(device_list["ability_ura"], hub_list["ability_ura"]);
 
-        let device_describe = invoke_describe(&registry, &device_ura).unwrap();
-        let hub_describe = invoke_describe(&registry, &hub_ura).unwrap();
+        let device_describe = invoke_describe_targeted(&registry, &device_ura).unwrap();
+        let hub_describe = invoke_describe_targeted(&registry, &hub_ura).unwrap();
         assert_eq!(device_describe["ura"], device_ura);
         assert_eq!(hub_describe["ura"], hub_ura);
         assert_eq!(
@@ -943,7 +1004,7 @@ mod tests {
 
     #[test]
     fn list_abilities_projects_static_descriptors_to_public_catalog_names() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(
             &mut reg,
             || vec![d("observe.health"), d("agent.list")],
@@ -1006,7 +1067,7 @@ mod tests {
             },
         );
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         let provider_rows = vec![monitored, unmonitored];
         register(
             &mut reg,
@@ -1053,7 +1114,7 @@ mod tests {
         use crate::daemon::federation::client::ability_contract::HubAbilityEntry;
         let hub_published_abilities = HubPublishedAbilityStore::new();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         super::register(
             &mut reg,
             vec![OwnerKind::Device],
@@ -1124,7 +1185,7 @@ mod tests {
     fn list_abilities_filters_by_agent_ura_and_ability_subject() {
         let alice = "easynet:///r/test-realm/agent/user-1.alice";
         let bob = "easynet:///r/test-realm/agent/user-1.bob";
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(
             &mut reg,
             move || {
@@ -1181,7 +1242,7 @@ mod tests {
 
     #[test]
     fn list_abilities_rejects_unknown_query_fields() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(&mut reg, Vec::new, empty_registry_handle());
         let err = invoke_list(
             &reg,
@@ -1206,16 +1267,12 @@ mod tests {
         let alice_ura = crate::core::ura::device_agent_ura("alice-realm", "test-node", "alice");
         let bob_ura = crate::core::ura::device_agent_ura("alice-realm", "test-node", "bob");
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
 
         // Registration imports the manifest into the governed descriptor;
         // meta.list_abilities reads that committed descriptor directly.
-        let mut live_reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-                None,
-            ),
+        let mut live_reg = runtime_metadata_test_catalog(
             AbilityAuthorityContext::for_device_authority_root(device_ura)
                 .expect("fixed Device authority context"),
         );
@@ -1380,11 +1437,7 @@ mod tests {
         use std::sync::OnceLock;
 
         let device_ura = "easynet:///r/test/device/01DEV";
-        let mut live_reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-                None,
-            ),
+        let mut live_reg = runtime_metadata_test_catalog(
             AbilityAuthorityContext::for_device_authority_root(device_ura)
                 .expect("fixed Device authority context"),
         );
@@ -1399,7 +1452,7 @@ mod tests {
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         handle.set(Arc::new(live_reg)).expect("set live registry");
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(&mut reg, Vec::new, handle);
         let resp = invoke_list(&reg, device_ura, json!({})).unwrap();
         let names: Vec<_> = resp["abilities"]
@@ -1431,7 +1484,9 @@ mod tests {
         })
         .expect("seed local-agents.json");
 
-        let live_reg = Arc::new(AxonAbilityCatalog::new());
+        let live_reg = Arc::new(metadata_test_catalog_for_device(
+            "easynet:///r/test-realm/device/dev-1",
+        ));
         let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "hot_echo",
             "Echo a hot-reloaded MCP payload.",
@@ -1454,7 +1509,7 @@ mod tests {
             )
             .expect("dynamic RPC manifest registers");
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog_for_device("easynet:///r/test-realm/device/dev-1");
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         handle
             .set(Arc::clone(&live_reg))
@@ -1497,7 +1552,7 @@ mod tests {
         })
         .expect("seed local-agents.json");
 
-        let mut live_reg = AxonAbilityCatalog::new();
+        let mut live_reg = metadata_test_catalog_for_device("easynet:///r/test-realm/device/dev-1");
         let limits = PluginRuntimeLimits::new(128, 8);
         let mut builder = PluginContributionBuilder::new(
             "easynet.remote_desktop",
@@ -1518,7 +1573,7 @@ mod tests {
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         handle.set(Arc::new(live_reg)).expect("set live registry");
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog_for_device("easynet:///r/test-realm/device/dev-1");
         register(&mut reg, Vec::new, handle);
         let resp = invoke_list(&reg, "easynet:///r/test-realm/device/dev-1", json!({})).unwrap();
         let ability = resp["abilities"]
@@ -1596,7 +1651,7 @@ mod tests {
             .set(Arc::new(live_registry))
             .expect("set live registry");
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog_for_device("easynet:///r/test-realm/device/dev-1");
         register(&mut reg, Vec::new, handle);
         let resp = invoke_list(&reg, "easynet:///r/test-realm/device/dev-1", json!({})).unwrap();
         let abilities = resp["abilities"].as_array().unwrap();
@@ -1682,7 +1737,7 @@ mod tests {
             .set(Arc::new(live_registry))
             .expect("set live registry");
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog_for_device("easynet:///r/test-realm/device/dev-1");
         register(&mut reg, Vec::new, handle);
         let resp = invoke_list(&reg, "easynet:///r/test-realm/device/dev-1", json!({})).unwrap();
         let chats: Vec<&Value> = resp["abilities"]
@@ -1720,7 +1775,7 @@ mod tests {
 
     #[test]
     fn describe_buckets_abilities_by_namespace() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(
             &mut reg,
             || {
@@ -1746,7 +1801,7 @@ mod tests {
 
     #[test]
     fn describe_handles_empty_catalog() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(&mut reg, Vec::new, empty_registry_handle());
         let resp = invoke_describe(&reg, "easynet:///r/test/device/01DEV").unwrap();
         assert_eq!(resp["abilities_summary"]["total"], 0);
