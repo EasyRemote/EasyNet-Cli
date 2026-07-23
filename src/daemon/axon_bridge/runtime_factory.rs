@@ -502,65 +502,22 @@ fn ledger_invocation_ura(invocation_id: &str, binding: &AxiomBinding) -> String 
 }
 
 fn ledger_route_ura(ability_name: &str, binding: &AxiomBinding) -> String {
-    if let Some(ability_ura) = canonical_ledger_ability_ura(ability_name, binding) {
+    if let Some(ability_ura) = callee_ledger_ability_ura(ability_name, binding) {
         return ability_ura;
     }
 
-    // RFC-005: a route names the same canonical `/ability/` URA the owner
-    // publishes. Axon's ledger sink passes the daemon registry key here
-    // (`liangbing.chat`, `fs.read`, ...), while public Ability URAs
-    // store the owner-local name (`chat`, `fs.read`, ...). Project through
-    // the CLI URA boundary object before calling Axon's canonical builder;
-    // do not duplicate URA grammar in this adapter.
-    let callee_public_name =
-        crate::core::ura::owner_local_ability_name(&binding.callee.ura, ability_name);
-    let caller_public_name =
-        crate::core::ura::owner_local_ability_name(&binding.caller.ura, ability_name);
-
-    crate::core::ura::published_route_ura(&binding.callee.ura, &callee_public_name)
-        .or_else(|| crate::core::ura::published_route_ura(&binding.caller.ura, &caller_public_name))
-        .unwrap_or_else(|| {
-            panic!(
-                "LedgerSink cannot derive ability URA from binding callee=`{}` caller=`{}` ability=`{}`",
-                binding.callee.ura, binding.caller.ura, ability_name
-            )
-        })
+    panic!(
+        "LedgerSink cannot derive ability URA from binding callee=`{}` caller=`{}` ability=`{}`",
+        binding.callee.ura, binding.caller.ura, ability_name
+    )
 }
 
-fn descriptor_ref_ability_ura_for_binding(
-    descriptor_ref: &str,
-    binding: &AxiomBinding,
-) -> Option<String> {
+fn callee_ledger_ability_ura(ability_name: &str, binding: &AxiomBinding) -> Option<String> {
     crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
         &binding.callee.ura,
-        descriptor_ref,
+        ability_name,
     )
     .ok()
-    .or_else(|| {
-        crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
-            &binding.caller.ura,
-            descriptor_ref,
-        )
-        .ok()
-    })
-}
-
-fn canonical_ledger_ability_ura(ability_name: &str, binding: &AxiomBinding) -> Option<String> {
-    let ability_name = ability_name.trim();
-    if ability_name.is_empty() {
-        return None;
-    }
-    if let Ok(descriptor_ref) = axon_sdk::invocation::canonical_ability_descriptor_ref(ability_name)
-    {
-        if let Some(ability_ura) = descriptor_ref_ability_ura_for_binding(&descriptor_ref, binding)
-        {
-            return Some(ability_ura);
-        }
-    }
-    if let Ok(selector) = crate::core::ura::AbilitySelector::parse(ability_name) {
-        return Some(selector.ability_ura().to_string());
-    }
-    None
 }
 
 #[cfg(test)]
@@ -673,6 +630,69 @@ mod tests {
         };
 
         let _ = ledger_route_ura("chat", &binding);
+    }
+
+    #[test]
+    #[should_panic(expected = "LedgerSink cannot derive ability URA from binding")]
+    fn ledger_route_resolver_rejects_caller_owned_explicit_ability() {
+        let caller = AgentIdentity::new(
+            "easynet:///r/localhost/agent/dev.caller",
+            UraProfile::StrictV2,
+        );
+        let binding = AxiomBinding {
+            caller: caller.clone(),
+            callee: AgentIdentity::new(
+                "easynet:///r/localhost/agent/dev.callee",
+                UraProfile::StrictV2,
+            ),
+            subject: SubjectIdentity::new("easynet:///r/localhost/user/dev", UraProfile::StrictV2),
+            invocation_nonce: [0u8; 16],
+            causal: CausalContext::None,
+            payload_digest: [0u8; 32],
+            callee_signature: None,
+            signer_binding: None,
+            host_attestation: Vec::new(),
+            ability_binding: "chat".to_string(),
+            authority_binding: AuthorityBinding::Self_ {
+                principal_ura: caller.ura.clone(),
+            },
+        };
+        let caller_ability =
+            crate::core::ura::owner_ability_ura(&binding.caller.ura, "chat").expect("ability URA");
+
+        let _ = ledger_route_ura(&caller_ability, &binding);
+    }
+
+    #[test]
+    #[should_panic(expected = "LedgerSink cannot derive ability URA from binding")]
+    fn ledger_route_resolver_rejects_caller_owned_descriptor_ref() {
+        let caller = AgentIdentity::new(
+            "easynet:///r/localhost/agent/dev.caller",
+            UraProfile::StrictV2,
+        );
+        let binding = AxiomBinding {
+            caller: caller.clone(),
+            callee: AgentIdentity::new(
+                "easynet:///r/localhost/agent/dev.callee",
+                UraProfile::StrictV2,
+            ),
+            subject: SubjectIdentity::new("easynet:///r/localhost/user/dev", UraProfile::StrictV2),
+            invocation_nonce: [0u8; 16],
+            causal: CausalContext::None,
+            payload_digest: [0u8; 32],
+            callee_signature: None,
+            signer_binding: None,
+            host_attestation: Vec::new(),
+            ability_binding: "chat".to_string(),
+            authority_binding: AuthorityBinding::Self_ {
+                principal_ura: caller.ura.clone(),
+            },
+        };
+        let caller_ability =
+            crate::core::ura::owner_ability_ura(&binding.caller.ura, "chat").expect("ability URA");
+        let caller_descriptor_ref = format!("{caller_ability}@1.0.0#{}!invoke", "11".repeat(32));
+
+        let _ = ledger_route_ura(&caller_descriptor_ref, &binding);
     }
 
     #[test]

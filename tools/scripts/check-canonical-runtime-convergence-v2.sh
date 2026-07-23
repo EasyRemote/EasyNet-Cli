@@ -7285,6 +7285,7 @@ check_daemon_runtime_assembly_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local runtime_binding="$cli_root/src/daemon/invocation/dispatch/deps.rs"
   local invocation_service="$cli_root/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
+  local runtime_factory="$cli_root/src/daemon/axon_bridge/runtime_factory.rs"
   local ability_catalog="$cli_root/src/daemon/ability/catalog/build.rs"
   local ability_catalog_tests="$cli_root/src/daemon/ability/catalog/assembly_tests.rs"
 
@@ -7293,17 +7294,18 @@ check_daemon_runtime_assembly_contract() {
     fail "daemon Invocation transport retains a bare LocalRuntime construction path"
   fi
 
-  if [[ ! -f "$ability_catalog" || ! -f "$ability_catalog_tests" ]]; then
+  if [[ ! -f "$ability_catalog" || ! -f "$ability_catalog_tests" || ! -f "$runtime_factory" ]]; then
     fail "daemon runtime assembly contract sources are missing"
   fi
 
-  "$PYTHON_BIN" - "$ability_catalog" "$ability_catalog_tests" <<'PY'
+  "$PYTHON_BIN" - "$ability_catalog" "$ability_catalog_tests" "$runtime_factory" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 catalog = Path(sys.argv[1]).read_text(encoding="utf-8")
 tests = Path(sys.argv[2]).read_text(encoding="utf-8")
+runtime_factory = Path(sys.argv[3]).read_text(encoding="utf-8")
 
 if "fn replays_hosted_agent_runtime(self) -> bool" not in catalog:
     raise SystemExit("daemon_runtime_assembly:hosted_agent_replay_mode_missing")
@@ -7324,6 +7326,31 @@ if re.search(r"if\s+hosts_device_authority\s*\{\s*if\s+let\s+Some\(hot_registrar
 
 if "fn deterministic_registry_snapshot_does_not_replay_hosted_agent_runtime" not in tests:
     raise SystemExit("daemon_runtime_assembly:deterministic_snapshot_replay_regression_test_missing")
+
+production_factory = runtime_factory.split("\n#[cfg(test)]\nmod tests", 1)[0]
+if "published_route_ura(&binding.caller.ura" in production_factory:
+    raise SystemExit("daemon_runtime_assembly:ledger_route_caller_owner_fallback")
+if "ability_ura_for_wire(\n            &binding.caller.ura" in production_factory:
+    raise SystemExit("daemon_runtime_assembly:descriptor_ref_caller_owner_retry")
+for forbidden in (
+    "fn canonical_ledger_ability_ura(",
+    "fn descriptor_ref_ability_ura_for_binding(",
+    "AbilitySelector::parse(ability_name)",
+):
+    if forbidden in production_factory:
+        raise SystemExit(f"daemon_runtime_assembly:ledger_route_duplicate_resolver:{forbidden}")
+for required in (
+    "fn callee_ledger_ability_ura(",
+    "descriptor_ref::ability_ura_for_wire(\n        &binding.callee.ura,\n        ability_name,",
+):
+    if required not in production_factory:
+        raise SystemExit(f"daemon_runtime_assembly:callee_bound_ledger_route_missing:{required}")
+for required_test in (
+    "ledger_route_resolver_rejects_caller_owned_explicit_ability",
+    "ledger_route_resolver_rejects_caller_owned_descriptor_ref",
+):
+    if required_test not in runtime_factory:
+        raise SystemExit(f"daemon_runtime_assembly:missing_ledger_route_authority_test:{required_test}")
 PY
 }
 
@@ -11008,6 +11035,57 @@ EOF
     > "$tmp/cli-bare-runtime/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
   if ( CLI_ROOT="$tmp/cli-bare-runtime"; check_daemon_runtime_assembly_contract ) >/dev/null 2>&1; then
     fail "self-test expected bare daemon LocalRuntime construction gate to fail"
+  fi
+  mkdir -p "$tmp/ledger-route-caller-fallback/src/daemon/invocation/dispatch" \
+    "$tmp/ledger-route-caller-fallback/src/daemon/ability/catalog" \
+    "$tmp/ledger-route-caller-fallback/src/daemon/axon_bridge"
+  printf 'enum RuntimeBinding { Daemon(DaemonRuntimeAssembly) }\n' \
+    > "$tmp/ledger-route-caller-fallback/src/daemon/invocation/dispatch/deps.rs"
+  printf 'pub fn with_runtime_assembly(self, runtime: DaemonRuntimeAssembly) -> Self { self }\n' \
+    > "$tmp/ledger-route-caller-fallback/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
+  cat >"$tmp/ledger-route-caller-fallback/src/daemon/ability/catalog/build.rs" <<'EOF'
+impl RuntimeAssemblyMode {
+    fn replays_hosted_agent_runtime(self) -> bool { true }
+}
+fn build() {
+    let replay_hosted_agent_runtime = hosts_device_authority && assembly_mode.replays_hosted_agent_runtime();
+    if replay_hosted_agent_runtime {
+        if let Some(hot_registrar) = hot_registrar {}
+    }
+}
+EOF
+  printf 'fn deterministic_registry_snapshot_does_not_replay_hosted_agent_runtime() {}\n' \
+    > "$tmp/ledger-route-caller-fallback/src/daemon/ability/catalog/assembly_tests.rs"
+  cat >"$tmp/ledger-route-caller-fallback/src/daemon/axon_bridge/runtime_factory.rs" <<'EOF'
+fn ledger_route_ura(ability_name: &str, binding: &AxiomBinding) -> String {
+    crate::core::ura::published_route_ura(&binding.callee.ura, ability_name)
+        .or_else(|| crate::core::ura::published_route_ura(&binding.caller.ura, ability_name))
+        .unwrap()
+}
+
+fn descriptor_ref_ability_ura_for_binding(descriptor_ref: &str, binding: &AxiomBinding) -> Option<String> {
+    crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        &binding.callee.ura,
+        descriptor_ref,
+    )
+    .ok()
+    .or_else(|| {
+        crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+            &binding.caller.ura,
+            descriptor_ref,
+        )
+        .ok()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    fn ledger_route_resolver_rejects_caller_owned_explicit_ability() {}
+    fn ledger_route_resolver_rejects_caller_owned_descriptor_ref() {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/ledger-route-caller-fallback"; check_daemon_runtime_assembly_contract ) >/dev/null 2>&1; then
+    fail "self-test expected ledger route caller fallback gate to fail"
   fi
   mkdir -p "$tmp/cli-sidecar-template/src/cli/commands/groups"
   cp "$ROOT/src/cli/commands/groups/plugin_template.rs" \
