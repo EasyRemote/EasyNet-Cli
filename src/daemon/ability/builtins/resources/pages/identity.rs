@@ -70,27 +70,54 @@ impl PagesIdentity {
     /// deterministic regardless of process env state.
     pub fn try_from_env() -> anyhow::Result<Self> {
         let credentials = crate::daemon::persistence::config::load_credentials_optional()?;
-        let user = std::env::var("EASYNET_PAGES_USER")
-            .ok()
-            .filter(|v| !v.is_empty())
-            .or_else(|| credentials.as_ref().and_then(|c| c.username.clone()))
-            .filter(|v| !v.is_empty());
         Ok(Self {
-            user,
+            user: pages_user_from_env_or_credentials(credentials.as_ref())?,
             // Follow the daemon's actual realm before the public
             // default: EASYNET_PAGES_REALM override → credentials
             // realm → None for unpaired state.
             // Without the credentials step a daemon joined to a
             // non-default realm (e.g. `localhost`) would mint pages
             // URLs under `easynet.run`, which don't resolve to it.
-            realm: std::env::var("EASYNET_PAGES_REALM")
-                .ok()
-                .filter(|v| !v.is_empty())
-                .or_else(|| credentials.as_ref().map(|c| c.realm.clone()))
-                .filter(|v| !v.is_empty()),
+            realm: pages_realm_from_env_or_credentials(credentials.as_ref()),
             listener_port: pages_listener_port_from_env()?,
         })
     }
+}
+
+fn pages_user_from_env_or_credentials(
+    credentials: Option<&crate::daemon::persistence::config::Credentials>,
+) -> anyhow::Result<Option<String>> {
+    if let Some(user) = non_blank_env("EASYNET_PAGES_USER") {
+        return Ok(Some(user));
+    }
+    let Some(credentials) = credentials else {
+        return Ok(None);
+    };
+    if credentials.username.is_none() && credentials.join_receipt_hash().is_some() {
+        return Ok(None);
+    }
+    credentials
+        .username_slug()
+        .map(|username| Some(username.to_string()))
+}
+
+fn pages_realm_from_env_or_credentials(
+    credentials: Option<&crate::daemon::persistence::config::Credentials>,
+) -> Option<String> {
+    non_blank_env("EASYNET_PAGES_REALM").or_else(|| {
+        credentials
+            .map(crate::daemon::persistence::config::Credentials::realm_str)
+            .map(str::trim)
+            .filter(|realm| !realm.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn non_blank_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn pages_listener_port_from_env() -> anyhow::Result<Option<u16>> {
@@ -164,6 +191,22 @@ mod tests {
         }
     }
 
+    fn federation_native_credentials(username: Option<&str>) -> Credentials {
+        Credentials {
+            node_id: "device-1".to_string(),
+            credential_token: String::new(),
+            hub_endpoint: "https://hub.example:50443".to_string(),
+            realm: "localhost".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: username.map(str::to_string),
+            user_id: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: Some("a".repeat(64)),
+        }
+    }
+
     #[test]
     fn pages_identity_missing_credentials_is_unpaired_state() {
         let _home = HomeGuard::new();
@@ -178,6 +221,19 @@ mod tests {
     }
 
     #[test]
+    fn pages_identity_trims_env_user_and_realm_overrides() {
+        let _home = HomeGuard::new();
+        let _user = EnvGuard::set("EASYNET_PAGES_USER", " alice ");
+        let _realm = EnvGuard::set("EASYNET_PAGES_REALM", " localhost ");
+        let _port = EnvGuard::remove("EASYNET_PAGES_PORT");
+
+        let identity = PagesIdentity::try_from_env().expect("env identity");
+
+        assert_eq!(identity.user.as_deref(), Some("alice"));
+        assert_eq!(identity.realm.as_deref(), Some("localhost"));
+    }
+
+    #[test]
     fn pages_identity_reads_credentials_when_present() {
         let _home = HomeGuard::new();
         let _realm = EnvGuard::remove("EASYNET_PAGES_REALM");
@@ -188,6 +244,46 @@ mod tests {
 
         assert_eq!(identity.user.as_deref(), Some("alice"));
         assert_eq!(identity.realm.as_deref(), Some("localhost"));
+    }
+
+    #[test]
+    fn pages_identity_projects_federation_native_credentials_as_device_only() {
+        let _home = HomeGuard::new();
+        let _user = EnvGuard::remove("EASYNET_PAGES_USER");
+        let _realm = EnvGuard::remove("EASYNET_PAGES_REALM");
+        let _port = EnvGuard::remove("EASYNET_PAGES_PORT");
+        config::save_credentials(&federation_native_credentials(None))
+            .expect("save federation-native credentials");
+
+        let identity = PagesIdentity::try_from_env().expect("device-only identity");
+
+        assert_eq!(identity.user, None);
+        assert_eq!(identity.realm.as_deref(), Some("localhost"));
+        assert!(
+            identity
+                .user_root_identity()
+                .expect("device-only projection")
+                .is_none(),
+            "device-only credentials must not register user-rooted Pages surfaces"
+        );
+    }
+
+    #[test]
+    fn pages_identity_rejects_blank_credential_username_instead_of_defaulting() {
+        let _home = HomeGuard::new();
+        let _user = EnvGuard::remove("EASYNET_PAGES_USER");
+        let _realm = EnvGuard::remove("EASYNET_PAGES_REALM");
+        let _port = EnvGuard::remove("EASYNET_PAGES_PORT");
+        config::save_credentials(&federation_native_credentials(Some("   ")))
+            .expect("save blank federation-native username");
+
+        let error = PagesIdentity::try_from_env()
+            .expect_err("blank credential username must fail boot identity projection");
+
+        assert!(
+            error.to_string().contains("missing username"),
+            "error should surface the invalid username fact: {error}"
+        );
     }
 
     #[test]

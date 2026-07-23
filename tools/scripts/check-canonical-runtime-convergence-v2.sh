@@ -2310,6 +2310,9 @@ if "pub struct PagesUserRootIdentity" not in identity:
 for retired in (
     "load_credentials()\n                    .ok()",
     "load_credentials().ok()",
+    "credentials.as_ref().and_then(|c| c.username.clone())",
+    ".and_then(|c| c.username.clone())",
+    ".username.clone()",
     'parse::<u16>().ok()',
     ".and_then(|s| s.parse::<u16>().ok())",
 ):
@@ -2317,6 +2320,11 @@ for retired in (
         raise SystemExit(f"pages_identity_retired_fallback:{retired}")
 for required in (
     "load_credentials_optional()?",
+    "fn pages_user_from_env_or_credentials(",
+    "fn pages_realm_from_env_or_credentials(",
+    "fn non_blank_env(key: &str) -> Option<String>",
+    ".username_slug()",
+    "credentials.join_receipt_hash().is_some()",
     "pages_listener_port_from_env()?",
     "EASYNET_PAGES_PORT must be greater than 0",
 ):
@@ -2333,6 +2341,9 @@ for test in (
     "pages_identity_rejects_malformed_credentials_instead_of_defaulting",
     "pages_identity_rejects_invalid_port_instead_of_defaulting",
     "load_credentials_optional_rejects_malformed_existing_file",
+    "pages_identity_trims_env_user_and_realm_overrides",
+    "pages_identity_projects_federation_native_credentials_as_device_only",
+    "pages_identity_rejects_blank_credential_username_instead_of_defaulting",
     "pages_identity_user_root_projection_requires_realm",
     "pages_identity_user_root_projection_accepts_complete_identity",
 ):
