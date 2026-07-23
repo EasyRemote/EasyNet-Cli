@@ -1927,6 +1927,20 @@ for required in (
 ):
     if required not in text:
         raise SystemExit(f"target_gate_credential_state_missing:{required}")
+
+start = text.find("fn local_runtime_authority_ura(")
+end = text.find("// ── Route-outcome wire mapping", start)
+if start < 0 or end < 0:
+    raise SystemExit("target_gate_local_runtime_authority_missing")
+body = text[start:end]
+for retired in (
+    ".map(crate::core::ura::hub_ura)",
+    "local_runtime_authority_falls_back_to_hub_ura_without_daemon_identity",
+):
+    if retired in body or retired in text:
+        raise SystemExit(f"target_gate_local_runtime_authority_retired_fallback:{retired}")
+if "local_runtime_authority_rejects_session_realm_without_daemon_identity" not in text:
+    raise SystemExit("target_gate_local_runtime_authority_missing_fail_closed_test")
 PY
 }
 

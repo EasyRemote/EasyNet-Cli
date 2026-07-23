@@ -499,10 +499,7 @@ fn local_runtime_authority_ura(
         }
         return Some(daemon_ura.to_string());
     }
-    session_realm
-        .map(str::trim)
-        .filter(|realm| !realm.is_empty())
-        .map(crate::core::ura::hub_ura)
+    None
 }
 
 // ── Route-outcome wire mapping ─────────────────────────────────────
@@ -743,11 +740,8 @@ mod tests {
     }
 
     #[test]
-    fn local_runtime_authority_falls_back_to_hub_ura_without_daemon_identity() {
-        assert_eq!(
-            local_runtime_authority_ura(None, Some("test-realm")),
-            Some(crate::core::ura::hub_ura("test-realm"))
-        );
+    fn local_runtime_authority_rejects_session_realm_without_daemon_identity() {
+        assert_eq!(local_runtime_authority_ura(None, Some("test-realm")), None);
     }
 
     #[test]
