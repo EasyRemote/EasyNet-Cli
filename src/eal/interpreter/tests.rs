@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 #[cfg(test)]
 mod cases {
     use super::*;
-    use crate::daemon::execution::mission::invocation_gateway::{
-        MissionInvocationRecord, MissionReceiptReference,
+    use crate::daemon::execution::child_invocation::{
+        ChildInvocationReceiptAnchor, ChildInvocationRecord,
     };
     use crate::eal::{parser, runtime::planner};
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -71,7 +71,7 @@ mod cases {
             ability: &AbilityName,
             _arguments: &Value,
             timeout_ms: Option<u64>,
-            _dependency_receipts: &[MissionReceiptReference],
+            _dependency_receipts: &[ChildInvocationReceiptAnchor],
         ) -> Result<StepDispatchOutcome, EalError> {
             let ability_str = ability.as_str().to_string();
             let call_num = self.call_count.fetch_add(1, Ordering::SeqCst);
@@ -353,7 +353,7 @@ mod cases {
                 _ability: &AbilityName,
                 _arguments: &Value,
                 _timeout_ms: Option<u64>,
-                _dependency_receipts: &[MissionReceiptReference],
+                _dependency_receipts: &[ChildInvocationReceiptAnchor],
             ) -> Result<StepDispatchOutcome, EalError> {
                 self.seen.lock().unwrap().push(
                     crate::daemon::execution::mission::context::current().map(|c| c.mission_id),
@@ -807,7 +807,7 @@ mod cases {
                 ability: &AbilityName,
                 _: &Value,
                 _: Option<u64>,
-                _: &[MissionReceiptReference],
+                _: &[ChildInvocationReceiptAnchor],
             ) -> Result<StepDispatchOutcome, EalError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(serde_json::json!({"ok": true, "function": ability.as_str()}).into())
@@ -896,7 +896,7 @@ mod cases {
             ability: &AbilityName,
             arguments: &Value,
             _timeout_ms: Option<u64>,
-            _dependency_receipts: &[MissionReceiptReference],
+            _dependency_receipts: &[ChildInvocationReceiptAnchor],
         ) -> Result<StepDispatchOutcome, EalError> {
             self.seen
                 .lock()
@@ -930,7 +930,7 @@ mod cases {
                 _ability: &AbilityName,
                 _arguments: &Value,
                 _timeout_ms: Option<u64>,
-                _dependency_receipts: &[MissionReceiptReference],
+                _dependency_receipts: &[ChildInvocationReceiptAnchor],
             ) -> Result<StepDispatchOutcome, EalError> {
                 Err(EalError::NotFound("device 'node-x' not registered".into()))
             }
@@ -1098,7 +1098,7 @@ mod cases {
             "upstream".to_string(),
             CapturedResult {
                 value: b"{not json".to_vec(),
-                invocation: MissionInvocationRecord::for_test("test.malformed", 0x61),
+                invocation: ChildInvocationRecord::for_test("test.malformed", 0x61),
             },
         );
 
@@ -1203,7 +1203,7 @@ mod cases {
             "upstream".to_string(),
             CapturedResult {
                 value: b"{\"answer\": 42}".to_vec(),
-                invocation: MissionInvocationRecord::for_test("test.producer", 0x62),
+                invocation: ChildInvocationRecord::for_test("test.producer", 0x62),
             },
         );
 
@@ -1349,7 +1349,7 @@ mod cases {
             ability: &AbilityName,
             _arguments: &Value,
             _timeout_ms: Option<u64>,
-            _dependency_receipts: &[MissionReceiptReference],
+            _dependency_receipts: &[ChildInvocationReceiptAnchor],
         ) -> Result<StepDispatchOutcome, EalError> {
             let k = ability.as_str().to_string();
             self.calls.lock().unwrap().push(k.clone());
@@ -1421,7 +1421,7 @@ mod cases {
     /// (trace_id = mission_id).
     #[test]
     fn loop_steps_retain_dependency_receipts_and_trace_id() {
-        type RecordedCalls = Arc<Mutex<Vec<(String, String, Vec<MissionReceiptReference>)>>>;
+        type RecordedCalls = Arc<Mutex<Vec<(String, String, Vec<ChildInvocationReceiptAnchor>)>>>;
 
         struct RecordingDispatcher {
             // (ability, trace_id, dependency receipts) per dispatch.
@@ -1435,7 +1435,7 @@ mod cases {
                 ability: &AbilityName,
                 _arguments: &Value,
                 _timeout_ms: Option<u64>,
-                dependency_receipts: &[MissionReceiptReference],
+                dependency_receipts: &[ChildInvocationReceiptAnchor],
             ) -> Result<StepDispatchOutcome, EalError> {
                 let qualified = format!("a.{}", ability.as_str());
                 self.calls.lock().unwrap().push((
@@ -1445,7 +1445,7 @@ mod cases {
                 ));
                 Ok(StepDispatchOutcome {
                     value: serde_json::json!({"done": true}),
-                    invocation: MissionInvocationRecord::for_test(&qualified, 0xab),
+                    invocation: ChildInvocationRecord::for_test(&qualified, 0xab),
                 })
             }
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
@@ -1497,7 +1497,7 @@ mod cases {
 
     #[test]
     fn fan_in_join_retains_each_producer_receipt() {
-        type RecordedCalls = Arc<Mutex<Vec<(String, Vec<MissionReceiptReference>)>>>;
+        type RecordedCalls = Arc<Mutex<Vec<(String, Vec<ChildInvocationReceiptAnchor>)>>>;
 
         struct JoinRecordingDispatcher {
             calls: RecordedCalls,
@@ -1512,7 +1512,7 @@ mod cases {
                 ability: &AbilityName,
                 _arguments: &Value,
                 _timeout_ms: Option<u64>,
-                dependency_receipts: &[MissionReceiptReference],
+                dependency_receipts: &[ChildInvocationReceiptAnchor],
             ) -> Result<StepDispatchOutcome, EalError> {
                 self.calls
                     .lock()
@@ -1521,7 +1521,7 @@ mod cases {
                 let marker = self.next_marker.fetch_add(1, Ordering::SeqCst) as u8;
                 Ok(StepDispatchOutcome {
                     value: serde_json::json!({"ability": ability.as_str()}),
-                    invocation: MissionInvocationRecord::for_test(ability.as_str(), marker),
+                    invocation: ChildInvocationRecord::for_test(ability.as_str(), marker),
                 })
             }
 
@@ -1599,7 +1599,7 @@ mod cases {
     /// invocation records.
     #[test]
     fn loop_result_feeds_downstream_step_with_receipt_chain() {
-        type RecordedCalls = Arc<Mutex<Vec<(String, Value, Vec<MissionReceiptReference>)>>>;
+        type RecordedCalls = Arc<Mutex<Vec<(String, Value, Vec<ChildInvocationReceiptAnchor>)>>>;
 
         struct ArgRecordingDispatcher {
             // (ability, arguments, dependency receipts) per dispatch.
@@ -1613,7 +1613,7 @@ mod cases {
                 ability: &AbilityName,
                 arguments: &Value,
                 _timeout_ms: Option<u64>,
-                dependency_receipts: &[MissionReceiptReference],
+                dependency_receipts: &[ChildInvocationReceiptAnchor],
             ) -> Result<StepDispatchOutcome, EalError> {
                 let qualified = format!("a.{}", ability.as_str());
                 self.calls.lock().unwrap().push((
@@ -1623,7 +1623,7 @@ mod cases {
                 ));
                 Ok(StepDispatchOutcome {
                     value: serde_json::json!({"done": true}),
-                    invocation: MissionInvocationRecord::for_test(&qualified, 0xab),
+                    invocation: ChildInvocationRecord::for_test(&qualified, 0xab),
                 })
             }
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {

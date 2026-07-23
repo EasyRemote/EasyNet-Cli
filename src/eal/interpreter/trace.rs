@@ -279,6 +279,5 @@ pub(super) struct CapturedResult {
     /// Mandatory child Invocation record for the step that produced
     /// this binding. Downstream joins retain its verified terminal
     /// receipt as typed dependency evidence.
-    pub(super) invocation:
-        crate::daemon::execution::mission::invocation_gateway::MissionInvocationRecord,
+    pub(super) invocation: crate::daemon::execution::child_invocation::ChildInvocationRecord,
 }

@@ -5128,20 +5128,25 @@ PY
 check_mission_terminal_receipt_projection_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local gateway="$cli_root/src/daemon/execution/mission/invocation_gateway.rs"
+  local child="$cli_root/src/daemon/execution/child_invocation.rs"
   [[ -f "$gateway" ]] || fail "mission invocation gateway source is missing: ${gateway#$cli_root/}"
+  [[ -f "$child" ]] || fail "child invocation source is missing: ${child#$cli_root/}"
 
-  "$PYTHON_BIN" - "$gateway" <<'PY'
+  "$PYTHON_BIN" - "$gateway" "$child" <<'PY'
 import sys
 from pathlib import Path
 
-text = Path(sys.argv[1]).read_text(encoding="utf-8")
-if "pub(crate) fn projection(&self) -> Value" not in text:
+gateway = Path(sys.argv[1]).read_text(encoding="utf-8")
+child = Path(sys.argv[2]).read_text(encoding="utf-8")
+if "pub(crate) fn projection(&self) -> Value" not in child:
     raise SystemExit("mission_terminal_receipt_projection:projection_missing")
-projection = text.split("pub(crate) fn projection(&self) -> Value", 1)[1].split("#[cfg(test)]", 1)[0]
+projection = child.split("pub(crate) fn projection(&self) -> Value", 1)[1].split("#[cfg(test)]", 1)[0]
 if '"receipt": {"anchor": self.terminal_receipt.projection()}' in projection:
     raise SystemExit("mission_terminal_receipt_projection:retired_receipt_anchor_wrapper")
 if '"terminal_receipt": self.terminal_receipt.projection()' not in projection:
     raise SystemExit("mission_terminal_receipt_projection:terminal_receipt_field_missing")
+if "ChildInvocationReceiptAnchor::new(" not in gateway or "ChildInvocationRecord::new(" not in gateway:
+    raise SystemExit("mission_terminal_receipt_projection:gateway_not_using_generic_child_invocation_record")
 for required in (
     '"dependency_receipts"',
     "child_is_receipt_anchored_and_inherits_subject_trace_and_parent_deadline",
@@ -5149,7 +5154,7 @@ for required in (
     'invocation_record["terminal_receipt"]["receipt_ura"]',
     'invocation_record["terminal_receipt"]["receipt_hash"]',
 ):
-    if required not in text:
+    if required not in gateway and required not in child:
         raise SystemExit(f"mission_terminal_receipt_projection:missing:{required}")
 PY
 }
@@ -7246,9 +7251,39 @@ check_key_custody_boundary_contract() {
 }
 
 check_daemon_mission_eal_boundary_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
   bash "$ROOT/tools/scripts/check-dispatch-mission-context-boundary.sh" >/dev/null
   bash "$ROOT/tools/scripts/check-runtime-abilities-manifest-boundary.sh" >/dev/null
   bash "$ROOT/tools/scripts/check-orchestration-service-boundary.sh" >/dev/null
+  local child_invocation="$cli_root/src/daemon/execution/child_invocation.rs"
+  [[ -f "$child_invocation" ]] || fail "child invocation receipt anchor source is missing: ${child_invocation#$cli_root/}"
+  "$PYTHON_BIN" - "$cli_root" "$child_invocation" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+child = pathlib.Path(sys.argv[2]).read_text()
+
+for required in (
+    "pub(crate) struct ChildInvocationReceiptAnchor",
+    "pub(crate) struct ChildInvocationRecord",
+    "pub(crate) struct ChildInvocationOutcome",
+    "pub(crate) fn terminal_receipt(&self) -> &ChildInvocationReceiptAnchor",
+):
+    if required not in child:
+        raise SystemExit(f"child_invocation_receipt_anchor:missing:{required}")
+
+for path in (root / "src/eal/interpreter").glob("**/*.rs"):
+    body = path.read_text()
+    if "mission::invocation_gateway::ChildInvocation" in body:
+        raise SystemExit(
+            f"eal_child_invocation_product_dependency:{path.relative_to(root)}"
+        )
+    if "ChildInvocationReceiptAnchor" in body and "execution::child_invocation" not in body:
+        raise SystemExit(
+            f"eal_child_invocation_anchor_import_missing:{path.relative_to(root)}"
+        )
+PY
 }
 
 check_product_identity_boundary_contract() {

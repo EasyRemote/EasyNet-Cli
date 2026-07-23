@@ -142,7 +142,7 @@ const RECEIPT_GRAPH_SENTINEL: &str = "__runner_receipt_graph__";
 fn dependency_receipts_from_captured(
     step: &IrStep,
     captured: &HashMap<String, CapturedResult>,
-) -> Vec<crate::daemon::execution::mission::invocation_gateway::MissionReceiptReference> {
+) -> Vec<crate::daemon::execution::child_invocation::ChildInvocationReceiptAnchor> {
     let mut seen = std::collections::HashSet::new();
     let mut parents = Vec::new();
     for binding in step.input_refs.values() {
@@ -200,7 +200,7 @@ fn dispatch_batch(request: BatchDispatchRequest<'_>) -> Vec<(usize, StepExecResu
             usize,
             Box<dyn StepDispatcher + Send>,
             Value,
-            Vec<crate::daemon::execution::mission::invocation_gateway::MissionReceiptReference>,
+            Vec<crate::daemon::execution::child_invocation::ChildInvocationReceiptAnchor>,
         );
         let mut tasks: Vec<PreparedTask> = Vec::new();
         // Lock-free result queue — each rayon task pushes without contention.

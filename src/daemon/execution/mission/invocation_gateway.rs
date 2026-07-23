@@ -19,6 +19,9 @@ use serde_json::Value;
 
 use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::daemon::axon_bridge::local_runtime_request::AXON_TRACE_CONTEXT_METADATA_KEY;
+use crate::daemon::execution::child_invocation::{
+    ChildInvocationOutcome, ChildInvocationReceiptAnchor, ChildInvocationRecord,
+};
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, HostedAgentNameLookupError,
 };
@@ -33,7 +36,7 @@ pub(crate) struct MissionInvocationRequest {
     args: Value,
     target: MissionInvocationTarget,
     timeout: Duration,
-    dependency_receipts: Vec<MissionReceiptReference>,
+    dependency_receipts: Vec<ChildInvocationReceiptAnchor>,
     trace_id: Option<String>,
 }
 
@@ -176,7 +179,7 @@ impl MissionInvocationRequest {
 
     pub(crate) fn with_dependency_receipts(
         mut self,
-        dependency_receipts: Vec<MissionReceiptReference>,
+        dependency_receipts: Vec<ChildInvocationReceiptAnchor>,
     ) -> Self {
         self.dependency_receipts = dependency_receipts;
         self
@@ -213,98 +216,7 @@ fn default_child_timeout() -> Duration {
 
 /// Mission-facing port for daemon-owned canonical Invocation.
 pub(crate) trait MissionInvocationGateway: Send + Sync {
-    fn invoke(&self, request: MissionInvocationRequest)
-        -> anyhow::Result<MissionInvocationOutcome>;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct MissionReceiptReference {
-    invocation_ura: String,
-    receipt_ura: String,
-    receipt_hash: [u8; 32],
-}
-
-impl MissionReceiptReference {
-    pub(crate) fn projection(&self) -> Value {
-        serde_json::json!({
-            "invocation_ura": self.invocation_ura,
-            "receipt_ura": self.receipt_ura,
-            "receipt_hash": hex::encode(self.receipt_hash),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct MissionInvocationRecord {
-    envelope: axon_sdk::invocation::InvocationEnvelope,
-    invocation_ura: String,
-    terminal_receipt: MissionReceiptReference,
-    dependency_receipts: Vec<MissionReceiptReference>,
-}
-
-impl MissionInvocationRecord {
-    pub(crate) fn terminal_receipt(&self) -> &MissionReceiptReference {
-        &self.terminal_receipt
-    }
-
-    pub(crate) fn projection(&self) -> Value {
-        serde_json::json!({
-            "invocation_ura": self.invocation_ura,
-            "caller_ura": self.envelope.caller.ura,
-            "callee_ura": self.envelope.callee.ura,
-            "ability": self.envelope.ability,
-            "subject_ura": self.envelope.subject.ura,
-            "invocation_nonce": hex::encode(self.envelope.invocation_nonce),
-            "causal_context": causal_context_projection(&self.envelope.causal_context),
-            "dependency_receipts": self.dependency_receipts.iter()
-                .map(MissionReceiptReference::projection)
-                .collect::<Vec<_>>(),
-            "terminal_receipt": self.terminal_receipt.projection(),
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn for_test(ability: &str, marker: u8) -> Self {
-        let caller = AgentIdentity::new("easynet:///r/test/device/mission", UraProfile::StrictV2);
-        let callee = AgentIdentity::new("easynet:///r/test/agent/worker", UraProfile::StrictV2);
-        let subject =
-            SubjectIdentity::new("easynet:///r/test/resource/mission", UraProfile::StrictV2);
-        let invocation_id = format!("mission-test-{marker:02x}");
-        let invocation_ura = crate::core::ura::invocation_record_ura_for_binding(
-            &subject.ura,
-            &callee.ura,
-            &caller.ura,
-            &invocation_id,
-        )
-        .expect("test identities own canonical Invocation records");
-        let envelope = axon_sdk::invocation::CanonicalEnvelopeBuilder::new(
-            caller,
-            callee,
-            subject,
-            axon_sdk::invocation::InvocationDerivationPolicy::Explicit {
-                invocation_nonce: [marker; 16],
-                causal_context: axon_sdk::invocation::CausalContext::None,
-            },
-        )
-        .and_then(|builder| builder.invocation_envelope(ability, &[marker]))
-        .expect("construct canonical Mission test Invocation");
-        Self {
-            envelope,
-            terminal_receipt: MissionReceiptReference {
-                invocation_ura: invocation_ura.clone(),
-                receipt_ura: format!("{invocation_ura}/receipt/1"),
-                receipt_hash: [marker; 32],
-            },
-            invocation_ura,
-            dependency_receipts: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct MissionInvocationOutcome {
-    pub(crate) value: Value,
-    pub(crate) invocation: MissionInvocationRecord,
+    fn invoke(&self, request: MissionInvocationRequest) -> anyhow::Result<ChildInvocationOutcome>;
 }
 
 trait MissionChildTargetResolver: Send + Sync {
@@ -465,7 +377,7 @@ impl DaemonMissionInvocationGateway {
     async fn invoke_child(
         &self,
         request: MissionInvocationRequest,
-    ) -> anyhow::Result<MissionInvocationOutcome> {
+    ) -> anyhow::Result<ChildInvocationOutcome> {
         let callee_ura = self.target_resolver.callee_ura(&request)?;
         let MissionInvocationRequest {
             ability,
@@ -606,19 +518,19 @@ impl DaemonMissionInvocationGateway {
                 )
             };
         let invocation_ura = canonical_invocation_ura(&invocation_id, &signed_child.envelope)?;
-        let terminal_receipt = MissionReceiptReference {
-            receipt_ura: format!("{invocation_ura}/receipt/{receipt_index}"),
-            invocation_ura: invocation_ura.clone(),
+        let terminal_receipt = ChildInvocationReceiptAnchor::new(
+            invocation_ura.clone(),
+            format!("{invocation_ura}/receipt/{receipt_index}"),
             receipt_hash,
-        };
-        Ok(MissionInvocationOutcome {
+        );
+        Ok(ChildInvocationOutcome {
             value,
-            invocation: MissionInvocationRecord {
-                envelope: signed_child.envelope,
+            invocation: ChildInvocationRecord::new(
+                signed_child.envelope,
                 invocation_ura,
                 terminal_receipt,
                 dependency_receipts,
-            },
+            ),
         })
     }
 
@@ -811,34 +723,8 @@ async fn wait_for_deadline(deadline: Option<tokio::time::Instant>) {
     }
 }
 
-fn causal_context_projection(causal: &axon_sdk::invocation::CausalContext) -> Value {
-    match causal {
-        axon_sdk::invocation::CausalContext::None => serde_json::json!({"kind": "none"}),
-        axon_sdk::invocation::CausalContext::Scalar(receipt) => serde_json::json!({
-            "kind": "scalar",
-            "receipt_hash": hex::encode(receipt.receipt_hash),
-            "receipt_ura": receipt.receipt_ura,
-        }),
-        axon_sdk::invocation::CausalContext::List(receipts) => serde_json::json!({
-            "kind": "list",
-            "receipts": receipts.iter().map(|receipt| serde_json::json!({
-                "receipt_hash": hex::encode(receipt.receipt_hash),
-                "receipt_ura": receipt.receipt_ura,
-            })).collect::<Vec<_>>(),
-        }),
-        axon_sdk::invocation::CausalContext::Merkle { root, proof_ura } => serde_json::json!({
-            "kind": "merkle",
-            "root": hex::encode(root),
-            "proof_ura": proof_ura,
-        }),
-    }
-}
-
 impl MissionInvocationGateway for DaemonMissionInvocationGateway {
-    fn invoke(
-        &self,
-        request: MissionInvocationRequest,
-    ) -> anyhow::Result<MissionInvocationOutcome> {
+    fn invoke(&self, request: MissionInvocationRequest) -> anyhow::Result<ChildInvocationOutcome> {
         crate::support::async_bridge::run_blocking(
             self.invoke_child(request),
             crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
@@ -860,10 +746,7 @@ impl CatalogMissionInvocationGateway {
 
 #[cfg(test)]
 impl MissionInvocationGateway for CatalogMissionInvocationGateway {
-    fn invoke(
-        &self,
-        request: MissionInvocationRequest,
-    ) -> anyhow::Result<MissionInvocationOutcome> {
+    fn invoke(&self, request: MissionInvocationRequest) -> anyhow::Result<ChildInvocationOutcome> {
         let ability = match request.target {
             MissionInvocationTarget::HostedAgent(agent) => format!("{agent}.{}", request.ability),
             MissionInvocationTarget::LocalDevice | MissionInvocationTarget::RemoteNode(_) => {
@@ -880,9 +763,9 @@ impl MissionInvocationGateway for CatalogMissionInvocationGateway {
             self.catalog.invoke_rpc_target_json(invocation_target)
         }));
         match result {
-            Ok(result) => result.map(|value| MissionInvocationOutcome {
+            Ok(result) => result.map(|value| ChildInvocationOutcome {
                 value,
-                invocation: MissionInvocationRecord::for_test(&ability, 0x63),
+                invocation: ChildInvocationRecord::for_test(&ability, 0x63),
             }),
             Err(payload) => {
                 let message = if let Some(value) = payload.downcast_ref::<&'static str>() {

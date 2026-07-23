@@ -686,23 +686,23 @@ mod tests {
         fn invoke(
             &self,
             request: MissionInvocationRequest,
-        ) -> anyhow::Result<
-            crate::daemon::execution::mission::invocation_gateway::MissionInvocationOutcome,
-        > {
+        ) -> anyhow::Result<crate::daemon::execution::child_invocation::ChildInvocationOutcome>
+        {
             self.calls.lock().expect("record calls").push((
                 request.ability().to_string(),
                 request.hosted_agent_name().map(str::to_string),
             ));
             Ok(
-                crate::daemon::execution::mission::invocation_gateway::MissionInvocationOutcome {
+                crate::daemon::execution::child_invocation::ChildInvocationOutcome {
                     value: json!({
                         "reply": "gateway-routed response",
                         "session_id": "session-1",
                     }),
-                    invocation: crate::daemon::execution::mission::invocation_gateway::MissionInvocationRecord::for_test(
-                        "alice.chat",
-                        0x62,
-                    ),
+                    invocation:
+                        crate::daemon::execution::child_invocation::ChildInvocationRecord::for_test(
+                            "alice.chat",
+                            0x62,
+                        ),
                 },
             )
         }

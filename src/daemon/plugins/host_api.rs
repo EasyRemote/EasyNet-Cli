@@ -459,9 +459,7 @@ impl crate::daemon::execution::mission::invocation_gateway::MissionInvocationGat
     fn invoke(
         &self,
         request: crate::daemon::execution::mission::invocation_gateway::MissionInvocationRequest,
-    ) -> anyhow::Result<
-        crate::daemon::execution::mission::invocation_gateway::MissionInvocationOutcome,
-    > {
+    ) -> anyhow::Result<crate::daemon::execution::child_invocation::ChildInvocationOutcome> {
         let gateway =
             crate::daemon::execution::mission::invocation_gateway::DaemonMissionInvocationGateway::from_admitted_envelope(
                 &self.admitted_parent,

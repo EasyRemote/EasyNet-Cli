@@ -34,8 +34,9 @@ use anyhow::Context as _;
 use serde_json::Value;
 
 use super::*;
+use crate::daemon::execution::child_invocation::ChildInvocationReceiptAnchor;
 use crate::daemon::execution::mission::invocation_gateway::{
-    MissionInvocationGateway, MissionInvocationRequest, MissionReceiptReference,
+    MissionInvocationGateway, MissionInvocationRequest,
 };
 use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 
@@ -89,7 +90,7 @@ impl StepDispatcher for AgentAwareDispatcher {
         ability: &AbilityName,
         arguments: &Value,
         timeout_ms: Option<u64>,
-        dependency_receipts: &[MissionReceiptReference],
+        dependency_receipts: &[ChildInvocationReceiptAnchor],
     ) -> Result<StepDispatchOutcome, EalError> {
         let (request, target_timeout) = match target {
             IrTarget::Agent(agent_id) => {
@@ -210,9 +211,8 @@ mod tests {
         fn invoke(
             &self,
             _request: MissionInvocationRequest,
-        ) -> anyhow::Result<
-            crate::daemon::execution::mission::invocation_gateway::MissionInvocationOutcome,
-        > {
+        ) -> anyhow::Result<crate::daemon::execution::child_invocation::ChildInvocationOutcome>
+        {
             panic!("registry-load tests must not invoke the Mission gateway");
         }
     }

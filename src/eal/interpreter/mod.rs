@@ -42,9 +42,10 @@ mod retry;
 mod tests;
 mod trace;
 
-use crate::daemon::execution::mission::invocation_gateway::{
-    MissionInvocationGateway, MissionInvocationRecord, MissionReceiptReference,
+use crate::daemon::execution::child_invocation::{
+    ChildInvocationReceiptAnchor, ChildInvocationRecord,
 };
+use crate::daemon::execution::mission::invocation_gateway::MissionInvocationGateway;
 pub(crate) use dispatch::AgentAwareDispatcher;
 use phases::{
     calls_from_partition, execute_calls_phase_partition, execute_loop, split_phase_steps,
@@ -124,7 +125,7 @@ pub(crate) trait StepDispatcher {
         ability: &AbilityName,
         arguments: &Value,
         timeout_ms: Option<u64>,
-        dependency_receipts: &[MissionReceiptReference],
+        dependency_receipts: &[ChildInvocationReceiptAnchor],
     ) -> Result<StepDispatchOutcome, EalError>;
 
     /// Create an independent clone for parallel dispatch.
@@ -139,7 +140,7 @@ pub(crate) trait StepDispatcher {
 #[derive(Debug)]
 pub(crate) struct StepDispatchOutcome {
     pub value: Value,
-    pub invocation: MissionInvocationRecord,
+    pub invocation: ChildInvocationRecord,
 }
 
 #[cfg(test)]
@@ -147,7 +148,7 @@ impl From<Value> for StepDispatchOutcome {
     fn from(value: Value) -> Self {
         Self {
             value,
-            invocation: MissionInvocationRecord::for_test("test.dispatch", 0x7f),
+            invocation: ChildInvocationRecord::for_test("test.dispatch", 0x7f),
         }
     }
 }
@@ -445,7 +446,7 @@ enum StepExecResult {
         retry_count: u32,
         retry_history: Vec<RetryRecord>,
         /// Seven-tuple invocation record from the daemon lowering path.
-        invocation: MissionInvocationRecord,
+        invocation: ChildInvocationRecord,
     },
     Error {
         message: String,

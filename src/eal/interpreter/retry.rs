@@ -101,7 +101,7 @@ pub(super) fn execute_step_with_retry(
     step: &IrStep,
     arguments: &Value,
     dependency_receipts: &[
-        crate::daemon::execution::mission::invocation_gateway::MissionReceiptReference
+        crate::daemon::execution::child_invocation::ChildInvocationReceiptAnchor
     ],
 ) -> StepExecResult {
     // Mission runtime semantics: `max_retries` is the number of retries AFTER the
@@ -373,7 +373,7 @@ pub(super) fn process_step_result(
     StepOutcome,
     StepTrace,
     Option<Vec<u8>>,
-    Option<crate::daemon::execution::mission::invocation_gateway::MissionInvocationRecord>,
+    Option<crate::daemon::execution::child_invocation::ChildInvocationRecord>,
 ) {
     match result {
         StepExecResult::Ok {
