@@ -764,6 +764,132 @@ export class RuntimeReceipt {
   }
 }
 
+export class RuntimeCallContext {
+  constructor(fields) {
+    const value = objectValue(fields, "runtime call context");
+    rejectRuntimeFields(value, ["caller_ura", "callee_ura", "subject_ura", "metadata", "authority"]);
+    this.callerURA = requiredHistoryPrincipalString(value.caller_ura, "caller_ura");
+    this.calleeURA = requiredHistoryPrincipalString(value.callee_ura, "callee_ura");
+    this.subjectURA = requiredHistoryPrincipalString(value.subject_ura, "subject_ura");
+    this.metadata = objectValue(value.metadata ?? {}, "metadata");
+    this.authority = normalizeRuntimeCallAuthority(value.authority ?? null);
+  }
+
+  toJSON() {
+    return {
+      caller_ura: this.callerURA,
+      callee_ura: this.calleeURA,
+      subject_ura: this.subjectURA,
+      metadata: { ...this.metadata },
+    };
+  }
+}
+
+export class ReceiptFilter {
+  constructor(fields = {}) {
+    const value = objectValue(fields, "receipt filter");
+    rejectRuntimeFields(value, [
+      "caller_ura",
+      "callee_ura",
+      "subject_ura",
+      "ability_ura",
+      "agent_ura",
+      "state",
+    ]);
+    this.callerURA = optionalHistoryPrincipalString(value.caller_ura, "filter.caller_ura");
+    this.calleeURA = optionalHistoryPrincipalString(value.callee_ura, "filter.callee_ura");
+    this.subjectURA = optionalHistoryPrincipalString(value.subject_ura, "filter.subject_ura");
+    this.abilityURA = optionalRuntimeString(value.ability_ura, "filter.ability_ura") ?? "";
+    this.agentURA = optionalRuntimeString(value.agent_ura, "filter.agent_ura") ?? "";
+    this.state = optionalRuntimeString(value.state, "filter.state") ?? "";
+  }
+
+  toJSON() {
+    const value = {};
+    if (this.callerURA) value.caller_ura = this.callerURA;
+    if (this.calleeURA) value.callee_ura = this.calleeURA;
+    if (this.subjectURA) value.subject_ura = this.subjectURA;
+    if (this.abilityURA) value.ability_ura = this.abilityURA;
+    if (this.agentURA) value.agent_ura = this.agentURA;
+    if (this.state) value.state = this.state;
+    return value;
+  }
+}
+
+export class ReceiptListRequest {
+  constructor(fields) {
+    const value = objectValue(fields, "receipt list request");
+    rejectRuntimeFields(value, ["call", "filter", "limit", "cursor"]);
+    this.call = value.call instanceof RuntimeCallContext
+      ? value.call
+      : new RuntimeCallContext(objectValue(value.call, "call"));
+    this.filter = value.filter === undefined || value.filter === null
+      ? null
+      : (value.filter instanceof ReceiptFilter ? value.filter : new ReceiptFilter(value.filter));
+    this.limit = boundedRuntimeLimit(value.limit, "limit", 50);
+    this.cursor = optionalRuntimeString(value.cursor, "cursor") ?? "";
+  }
+
+  toJSON() {
+    return {
+      call: this.call.toJSON(),
+      filter: this.filter ? this.filter.toJSON() : {},
+      limit: this.limit,
+      cursor: this.cursor,
+    };
+  }
+}
+
+export class ReceiptHistoryPage {
+  constructor(fields) {
+    const value = objectValue(fields, "receipt history page");
+    rejectRuntimeFields(value, ["records", "next_cursor", "limit", "source"]);
+    if (!Array.isArray(value.records)) {
+      throw invalidHistory("records must be an array");
+    }
+    this.records = value.records.map((record, index) => objectValue(record, `records[${index}]`));
+    this.nextCursor = optionalRuntimeString(value.next_cursor, "next_cursor") ?? "";
+    this.limit = boundedRuntimeLimit(value.limit, "limit", 50);
+    this.source = requiredRuntimeString(value.source, "source");
+  }
+
+  static fromJSON(raw) {
+    return new ReceiptHistoryPage(parseJSON(raw, "receipt history page"));
+  }
+
+  toJSON() {
+    return {
+      records: this.records.map((record) => ({ ...record })),
+      next_cursor: this.nextCursor,
+      limit: this.limit,
+      source: this.source,
+    };
+  }
+}
+
+export class SessionHistoryOperations {
+  constructor(receipts) {
+    if (!receipts || typeof receipts.list !== "function") {
+      throw invalidHistory("receipt provider is required");
+    }
+    this.receipts = receipts;
+  }
+
+  async list(request) {
+    const payload = request instanceof ReceiptListRequest
+      ? request
+      : new ReceiptListRequest(request);
+    validateSessionHistoryRequest(payload);
+    const result = await this.receipts.list(payload);
+    if (result instanceof ReceiptHistoryPage) {
+      return result;
+    }
+    return result instanceof Uint8Array || Buffer.isBuffer(result) || typeof result === "string"
+      ? ReceiptHistoryPage.fromJSON(result)
+      : new ReceiptHistoryPage(result);
+  }
+}
+
 export class InvocationBuilder {
   constructor() {
     this.fields = { metadata: {} };
@@ -2340,6 +2466,29 @@ function requiredBuilderPrincipalString(value, field) {
   return cleaned;
 }
 
+function requiredHistoryPrincipalString(value, field) {
+  if (typeof value !== "string" || value.trim() === "" || value.trim() !== value) {
+    throw historyError(ErrorCode.INVALID_INVOCATION, `${field} is required`);
+  }
+  if (containsAllZeroPrincipal(value)) {
+    throw historyError(ErrorCode.INVALID_INVOCATION, `${field} must not be all-zero`);
+  }
+  return value;
+}
+
+function optionalHistoryPrincipalString(value, field) {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (typeof value !== "string" || value.trim() !== value) {
+    throw historyError(ErrorCode.INVALID_INVOCATION, `${field} must be a string or null`);
+  }
+  if (value && containsAllZeroPrincipal(value)) {
+    throw historyError(ErrorCode.INVALID_INVOCATION, `${field} must not be all-zero`);
+  }
+  return value;
+}
+
 function requiredWireString(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
     throw invalidRuntimeError(`${field} is required`);
@@ -2907,6 +3056,194 @@ function invocationAuthorityFromMetadata(metadata) {
   return null;
 }
 
+function validateSessionHistoryRequest(request) {
+  if (!(request instanceof ReceiptListRequest)) {
+    throw historyError(ErrorCode.INVALID_INVOCATION, "Receipt list request is required");
+  }
+  validateSessionHistoryRuntimeCall(request.call);
+  validateSessionHistoryFilterBinding(request.call, request.filter);
+}
+
+function validateSessionHistoryRuntimeCall(call) {
+  if (!(call instanceof RuntimeCallContext)) {
+    throw historyError(ErrorCode.INVALID_INVOCATION, "runtime call context is required");
+  }
+  const authority = runtimeCallAuthority(call);
+  if (authority === null) {
+    throw historyError(
+      ErrorCode.AUTHORITY_DENIED,
+      "session history requires runtime authority bound to the receipt query tuple",
+      runtimeCallDetails(call),
+    );
+  }
+  validateSessionHistoryAuthorityBinding(authority, call);
+}
+
+function validateSessionHistoryFilterBinding(call, filter) {
+  if (filter === null) {
+    return;
+  }
+  if (!(filter instanceof ReceiptFilter)) {
+    throw historyError(
+      ErrorCode.INVALID_INVOCATION,
+      "Receipt filter is required",
+      runtimeCallDetails(call),
+    );
+  }
+  const callerURA = call.callerURA.trim();
+  const calleeURA = call.calleeURA.trim();
+  const details = runtimeCallDetails(call);
+  if (filter.callerURA && filter.callerURA.trim() !== callerURA) {
+    details.filter_caller_ura = filter.callerURA;
+    throw historyError(
+      ErrorCode.AUTHORITY_DENIED,
+      "receipt filter caller_ura does not match receipt query caller_ura",
+      details,
+    );
+  }
+  if (filter.calleeURA && filter.calleeURA.trim() !== calleeURA) {
+    details.filter_callee_ura = filter.calleeURA;
+    throw historyError(
+      ErrorCode.AUTHORITY_DENIED,
+      "receipt filter callee_ura does not match receipt query callee_ura",
+      details,
+    );
+  }
+}
+
+function runtimeCallAuthority(call) {
+  const metadata = objectValue(call.metadata ?? {}, "metadata");
+  validateAuthorityMetadata(metadata);
+  const rawPresent = Boolean(
+    authorityMetadataValue(metadata, DELEGATION_METADATA_KEY) ||
+      authorityMetadataValue(metadata, SESSION_AUTHORITY_METADATA_KEY),
+  );
+  if (call.authority !== null) {
+    if (rawPresent) {
+      throw historyError(
+        ErrorCode.INVALID_INVOCATION,
+        "runtime call authority must be supplied once as a typed authority or metadata, not both",
+        runtimeCallDetails(call),
+      );
+    }
+    return call.authority;
+  }
+  return invocationAuthorityFromMetadata(metadata);
+}
+
+function normalizeRuntimeCallAuthority(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (value instanceof DelegationProof || value instanceof SessionAuthority) {
+    return value;
+  }
+  if (typeof value === "object") {
+    const object = objectValue(value, "authority");
+    if (object.kind === "delegation" || object.key === DELEGATION_METADATA_KEY) {
+      return object.value ? DelegationProof.fromMetadata(object.value) : new DelegationProof(object);
+    }
+    if (object.kind === "session_authority" || object.key === SESSION_AUTHORITY_METADATA_KEY) {
+      return object.value ? SessionAuthority.fromMetadata(object.value) : new SessionAuthority(object);
+    }
+  }
+  throw historyError(ErrorCode.AUTHORITY_DENIED, "runtime call authority has an unsupported canonical type");
+}
+
+function validateSessionHistoryAuthorityBinding(authority, call) {
+  const callerURA = call.callerURA.trim();
+  const calleeURA = call.calleeURA.trim();
+  const subjectURA = call.subjectURA.trim();
+  const details = runtimeCallDetails(call);
+  if (authority instanceof DelegationProof) {
+    validateSessionHistoryDelegationBinding(authority, callerURA, calleeURA, subjectURA, details);
+    return;
+  }
+  if (authority instanceof SessionAuthority) {
+    validateSessionHistorySessionBinding(authority, callerURA, calleeURA, subjectURA, details);
+    return;
+  }
+  throw historyError(ErrorCode.AUTHORITY_DENIED, "runtime call authority has an unsupported canonical type");
+}
+
+function validateSessionHistoryDelegationBinding(proof, callerURA, calleeURA, subjectURA, details) {
+  if (proof.callerURA.trim() !== callerURA) {
+    throw historyError(
+      ErrorCode.AUTHORITY_DENIED,
+      "delegation authority caller does not match receipt query caller_ura",
+      details,
+    );
+  }
+  if (proof.subjectURA.trim() !== subjectURA) {
+    throw historyError(
+      ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
+      "delegation authority subject does not match receipt query subject_ura",
+      details,
+    );
+  }
+  if (!authorityAudienceAdmits(proof.audience, calleeURA)) {
+    throw historyError(
+      ErrorCode.AUTHORITY_DENIED,
+      "delegation authority audience does not admit receipt query callee_ura",
+      details,
+    );
+  }
+  if (!authorityScopeMatchesList(proof.scopes, "invocation.history.list")) {
+    throw historyError(
+      ErrorCode.AUTHORITY_DENIED,
+      "delegation authority scopes do not admit invocation.history.list",
+      details,
+    );
+  }
+}
+
+function validateSessionHistorySessionBinding(authority, callerURA, calleeURA, subjectURA, details) {
+  details.authority_session_subject = authority.subjectURA;
+  if (authority.issuerURA.trim() !== callerURA) {
+    throw historyError(
+      ErrorCode.AUTHORITY_DENIED,
+      "session authority issuer does not match receipt query caller_ura",
+      details,
+    );
+  }
+  if (authority.calleeURA.trim() !== calleeURA) {
+    throw historyError(
+      ErrorCode.AUTHORITY_DENIED,
+      "session authority callee does not match receipt query callee_ura",
+      details,
+    );
+  }
+  if (!authorityAudienceAdmits(authority.audience, calleeURA)) {
+    throw historyError(
+      ErrorCode.AUTHORITY_DENIED,
+      "session authority audience does not admit receipt query callee_ura",
+      details,
+    );
+  }
+  if (!sessionAuthorityAdmitsSubject(authority, subjectURA)) {
+    throw historyError(
+      ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
+      "session authority subject does not admit receipt query subject_ura",
+      details,
+    );
+  }
+  if (!authorityScopeMatchesList(authority.scopes, "invocation.history.list")) {
+    throw historyError(
+      ErrorCode.AUTHORITY_DENIED,
+      "session authority scopes do not admit invocation.history.list",
+      details,
+    );
+  }
+}
+
+function runtimeCallDetails(call) {
+  return {
+    caller_ura: call.callerURA,
+    callee_ura: call.calleeURA,
+    subject_ura: call.subjectURA,
+  };
+}
+
 function sessionAuthorityAdmitsSubject(authority, subjectURA) {
   const subject = subjectURA.trim();
   if (authority.subjectURA.trim() === subject) {
@@ -2960,6 +3297,10 @@ function authorityScopesAdmit(patterns, ability) {
 
 function authorityListAdmits(patterns, value) {
   return patterns.some((pattern) => authorityScopeMatches(pattern, value));
+}
+
+function authorityScopeMatchesList(patterns, value) {
+  return Array.isArray(patterns) && patterns.some((pattern) => authorityScopeMatches(pattern, value));
 }
 
 function authorityScopeMatches(pattern, value) {
@@ -3174,6 +3515,21 @@ function invalidRuntime(message) {
     stage: "runtime",
     retry: RetryHint.NEVER,
     message,
+  });
+}
+
+function invalidHistory(message, details = {}) {
+  return historyError(ErrorCode.INVALID_INVOCATION, message, details);
+}
+
+function historyError(code, message, details = {}, cause = undefined) {
+  return new SDKError({
+    code,
+    stage: "history",
+    retry: RetryHint.NEVER,
+    message,
+    details,
+    cause,
   });
 }
 

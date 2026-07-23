@@ -8805,6 +8805,66 @@ for (
             )
 
 
+# Node participates in the same canonical runtime model. Keep the history
+# preflight at the SDK boundary so product callers cannot submit stale
+# session-authority subjects and discover deterministic mismatches only after
+# daemon admission.
+node_history = cli_root / "sdk/node/index.js"
+node_history_test = cli_root / "sdk/node/test/runtime-core.test.mjs"
+if node_history.exists():
+    text = source(node_history)
+    for token, detail in (
+        ("export class SessionHistoryOperations", "Node SDK must expose generic session history operations"),
+        ("export class RuntimeCallContext", "Node SDK must model the authority-bearing runtime call tuple"),
+        ("export class ReceiptListRequest", "Node SDK must model canonical receipt history requests"),
+        ("function validateSessionHistoryRequest(request)", "Node SDK history list must validate complete requests"),
+        ("function validateSessionHistoryFilterBinding(call, filter)", "Node SDK must keep receipt filters explicit"),
+        ("function validateSessionHistorySessionBinding(", "Node SDK must validate session authority before provider I/O"),
+        ("sessionAuthorityAdmitsSubject(authority, subjectURA)", "Node history must reuse canonical session subject admission"),
+        ("session authority subject does not admit receipt query subject_ura", "Node history must surface typed subject mismatch"),
+        ("receipt filter caller_ura does not match receipt query caller_ura", "Node history caller filter must only narrow the tuple"),
+        ("receipt filter callee_ura does not match receipt query callee_ura", "Node history callee filter must only narrow the tuple"),
+    ):
+        if token not in text:
+            add("R96_SDK_HISTORY_FILTER_TUPLE_BINDING", node_history, 1, detail)
+    history_offset = text.find("export class SessionHistoryOperations")
+    if history_offset >= 0:
+        next_class = text.find("\nexport class ", history_offset + 1)
+        body = text[history_offset : next_class if next_class >= 0 else len(text)]
+        if "validateSessionHistoryRequest(payload);" not in body:
+            add(
+                "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
+                node_history,
+                line_number(text, history_offset),
+                "Node session history list must validate before calling the receipt provider",
+            )
+        if ".receipts.list(payload)" not in body:
+            add(
+                "R96_SDK_HISTORY_FILTER_TUPLE_BINDING",
+                node_history,
+                line_number(text, history_offset),
+                "Node session history list must delegate through one receipt provider boundary",
+            )
+    if node_history_test.exists():
+        tests = source(node_history_test)
+        for token, detail in (
+            (
+                "session history preflight rejects authority subject mismatch before receipt provider",
+                "Node history subject mismatch preflight test is missing",
+            ),
+            (
+                "session history keeps subject filters as ledger predicates",
+                "Node history subject-filter ledger predicate test is missing",
+            ),
+            (
+                "providerCalls, 0",
+                "Node history mismatch test must prove provider I/O was not reached",
+            ),
+        ):
+            if token not in tests:
+                add("R96_SDK_HISTORY_FILTER_TUPLE_BINDING", node_history_test, 1, detail)
+
+
 # Rule 92: Invocation attempt audit is the product-visible pre-runtime
 # failure ledger. It must fail closed when unavailable or corrupt; otherwise
 # descriptor/admission/route failures disappear from invocation.history.list

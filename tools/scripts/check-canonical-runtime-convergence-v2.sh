@@ -2730,8 +2730,10 @@ check_sdk_history_authority_subject_contract() {
   local py="$cli_root/sdk/python/easynet_sdk/authorized_runtime_session.py"
   local py_helper="$cli_root/sdk/python/easynet_sdk/_session_authority_subjects.py"
   local py_test="$cli_root/sdk/python/tests/test_authorized_runtime_session.py"
+  local node="$cli_root/sdk/node/index.js"
+  local node_test="$cli_root/sdk/node/test/runtime-core.test.mjs"
 
-  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_test" "$py" "$py_helper" "$py_test" <<'PY'
+  "$PYTHON_BIN" - "$go" "$go_runtime" "$go_helper" "$go_test" "$py" "$py_helper" "$py_test" "$node" "$node_test" <<'PY'
 import sys
 from pathlib import Path
 
@@ -2743,6 +2745,8 @@ from pathlib import Path
     py_path,
     py_helper_path,
     py_test_path,
+    node_path,
+    node_test_path,
 ) = map(Path, sys.argv[1:])
 
 def read(path: Path) -> str:
@@ -2858,6 +2862,46 @@ if py:
         "test_rejects_path_substring_owner_subject_before_dispatch",
         "sdk_python_authority_path_substring_regression_test_missing",
     )
+
+node = read(node_path)
+if node:
+    node_test = read(node_test_path)
+    for token in (
+        "export class SessionHistoryOperations",
+        "export class RuntimeCallContext",
+        "export class ReceiptListRequest",
+        "function validateSessionHistoryRequest(request)",
+        "function validateSessionHistoryFilterBinding(call, filter)",
+        "function validateSessionHistorySessionBinding(",
+        "sessionAuthorityAdmitsSubject(authority, subjectURA)",
+        "session authority subject does not admit receipt query subject_ura",
+        "receipt filter caller_ura does not match receipt query caller_ura",
+        "receipt filter callee_ura does not match receipt query callee_ura",
+    ):
+        if token not in node:
+            raise SystemExit(f"sdk_node_history_authority_subject_missing:{token}")
+    body = section(
+        node,
+        "export class SessionHistoryOperations",
+        "export class InvocationBuilder",
+    )
+    if "validateSessionHistoryRequest(payload);" not in body:
+        raise SystemExit("sdk_node_history_list_preflight_missing")
+    if ".receipts.list(payload)" not in body:
+        raise SystemExit("sdk_node_history_receipt_provider_boundary_missing")
+    for forbidden in (
+        "filter_subject_ura",
+        "receipt filter subject_uras must be bound to receipt query subject_ura",
+    ):
+        if forbidden in node:
+            raise SystemExit("sdk_node_history_subject_filter_authority_alias")
+    for token in (
+        "session history preflight rejects authority subject mismatch before receipt provider",
+        "session history keeps subject filters as ledger predicates",
+        "providerCalls, 0",
+    ):
+        if token not in node_test:
+            raise SystemExit(f"sdk_node_history_authority_subject_test_missing:{token}")
 PY
 }
 

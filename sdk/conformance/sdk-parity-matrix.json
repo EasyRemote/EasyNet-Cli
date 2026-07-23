@@ -47638,6 +47638,10 @@
           "sha256": "8af792e2180081284456eeb86996d8dcd6e699b872ecd4e8f4193e7e49a28bbb"
         },
         {
+          "item": "InvocationAuthorityBindingValidator",
+          "sha256": "24e90a196814b277485fad13403ea8e34a960db3a1e8d3658cefcf27d42349f1"
+        },
+        {
           "item": "SessionAuthority",
           "sha256": "7dd9c96f40d680629ca005240c325c2d2d454449cb70e5bebb7f3e2416024dd0"
         },
@@ -47995,6 +47999,10 @@
             {
               "item": "DelegationRequest",
               "sha256": "8af792e2180081284456eeb86996d8dcd6e699b872ecd4e8f4193e7e49a28bbb"
+            },
+            {
+              "item": "InvocationAuthorityBindingValidator",
+              "sha256": "24e90a196814b277485fad13403ea8e34a960db3a1e8d3658cefcf27d42349f1"
             },
             {
               "item": "SessionAuthority",
@@ -48356,6 +48364,10 @@
               "sha256": "8af792e2180081284456eeb86996d8dcd6e699b872ecd4e8f4193e7e49a28bbb"
             },
             {
+              "item": "InvocationAuthorityBindingValidator",
+              "sha256": "24e90a196814b277485fad13403ea8e34a960db3a1e8d3658cefcf27d42349f1"
+            },
+            {
               "item": "SessionAuthority",
               "sha256": "7dd9c96f40d680629ca005240c325c2d2d454449cb70e5bebb7f3e2416024dd0"
             },
@@ -48713,6 +48725,10 @@
             {
               "item": "DelegationRequest",
               "sha256": "8af792e2180081284456eeb86996d8dcd6e699b872ecd4e8f4193e7e49a28bbb"
+            },
+            {
+              "item": "InvocationAuthorityBindingValidator",
+              "sha256": "24e90a196814b277485fad13403ea8e34a960db3a1e8d3658cefcf27d42349f1"
             },
             {
               "item": "SessionAuthority",
@@ -49074,6 +49090,10 @@
               "sha256": "8af792e2180081284456eeb86996d8dcd6e699b872ecd4e8f4193e7e49a28bbb"
             },
             {
+              "item": "InvocationAuthorityBindingValidator",
+              "sha256": "24e90a196814b277485fad13403ea8e34a960db3a1e8d3658cefcf27d42349f1"
+            },
+            {
               "item": "SessionAuthority",
               "sha256": "7dd9c96f40d680629ca005240c325c2d2d454449cb70e5bebb7f3e2416024dd0"
             },
@@ -49431,6 +49451,10 @@
             {
               "item": "DelegationRequest",
               "sha256": "8af792e2180081284456eeb86996d8dcd6e699b872ecd4e8f4193e7e49a28bbb"
+            },
+            {
+              "item": "InvocationAuthorityBindingValidator",
+              "sha256": "24e90a196814b277485fad13403ea8e34a960db3a1e8d3658cefcf27d42349f1"
             },
             {
               "item": "SessionAuthority",
@@ -49792,6 +49816,10 @@
               "sha256": "8af792e2180081284456eeb86996d8dcd6e699b872ecd4e8f4193e7e49a28bbb"
             },
             {
+              "item": "InvocationAuthorityBindingValidator",
+              "sha256": "24e90a196814b277485fad13403ea8e34a960db3a1e8d3658cefcf27d42349f1"
+            },
+            {
               "item": "SessionAuthority",
               "sha256": "7dd9c96f40d680629ca005240c325c2d2d454449cb70e5bebb7f3e2416024dd0"
             },
@@ -50149,6 +50177,10 @@
             {
               "item": "DelegationRequest",
               "sha256": "8af792e2180081284456eeb86996d8dcd6e699b872ecd4e8f4193e7e49a28bbb"
+            },
+            {
+              "item": "InvocationAuthorityBindingValidator",
+              "sha256": "24e90a196814b277485fad13403ea8e34a960db3a1e8d3658cefcf27d42349f1"
             },
             {
               "item": "SessionAuthority",
@@ -50510,6 +50542,10 @@
               "sha256": "8af792e2180081284456eeb86996d8dcd6e699b872ecd4e8f4193e7e49a28bbb"
             },
             {
+              "item": "InvocationAuthorityBindingValidator",
+              "sha256": "24e90a196814b277485fad13403ea8e34a960db3a1e8d3658cefcf27d42349f1"
+            },
+            {
               "item": "SessionAuthority",
               "sha256": "7dd9c96f40d680629ca005240c325c2d2d454449cb70e5bebb7f3e2416024dd0"
             },
@@ -50867,6 +50903,10 @@
             {
               "item": "DelegationRequest",
               "sha256": "8af792e2180081284456eeb86996d8dcd6e699b872ecd4e8f4193e7e49a28bbb"
+            },
+            {
+              "item": "InvocationAuthorityBindingValidator",
+              "sha256": "24e90a196814b277485fad13403ea8e34a960db3a1e8d3658cefcf27d42349f1"
             },
             {
               "item": "SessionAuthority",
@@ -145215,6 +145255,10 @@
           "sha256": "e126ec05eda32ea602a26045678d7a12e222e08b29a4cffcf2f2d05687416c2b"
         },
         {
+          "item": "SessionHistoryOperations",
+          "sha256": "9f901ce7ace2fa4f1e4c111ff31db87aa227d182e35721041020aff29e62dc3b"
+        },
+        {
           "item": "SignedInvocation",
           "sha256": "b6fa2e2c5954891fc57281e7b694d099749126df2832988aa8b74ef5bdc5565f"
         },
@@ -145353,6 +145397,14 @@
         {
           "item": "PreparedInvocationFields.tuple",
           "sha256": "59c8d582307d9e6c73e1082459d7b75c1e63e2c69acd6a3451c3697064a8080e"
+        },
+        {
+          "item": "SessionHistoryOperations.list",
+          "sha256": "cd4aa81929843ea82d718949bfb7f9a3e9a8416473734d723bc3b426cf0c9373"
+        },
+        {
+          "item": "SessionHistoryOperations.new",
+          "sha256": "a64429a8846f1eedcad4898d71db04217b27cbff6fcd30f45e332875e2acbfe2"
         },
         {
           "item": "SignedInvocation.bindRuntime",
@@ -145538,6 +145590,10 @@
               "sha256": "e126ec05eda32ea602a26045678d7a12e222e08b29a4cffcf2f2d05687416c2b"
             },
             {
+              "item": "SessionHistoryOperations",
+              "sha256": "9f901ce7ace2fa4f1e4c111ff31db87aa227d182e35721041020aff29e62dc3b"
+            },
+            {
               "item": "SignedInvocation",
               "sha256": "b6fa2e2c5954891fc57281e7b694d099749126df2832988aa8b74ef5bdc5565f"
             },
@@ -145676,6 +145732,14 @@
             {
               "item": "PreparedInvocationFields.tuple",
               "sha256": "59c8d582307d9e6c73e1082459d7b75c1e63e2c69acd6a3451c3697064a8080e"
+            },
+            {
+              "item": "SessionHistoryOperations.list",
+              "sha256": "cd4aa81929843ea82d718949bfb7f9a3e9a8416473734d723bc3b426cf0c9373"
+            },
+            {
+              "item": "SessionHistoryOperations.new",
+              "sha256": "a64429a8846f1eedcad4898d71db04217b27cbff6fcd30f45e332875e2acbfe2"
             },
             {
               "item": "SignedInvocation.bindRuntime",
@@ -145861,6 +145925,10 @@
               "sha256": "e126ec05eda32ea602a26045678d7a12e222e08b29a4cffcf2f2d05687416c2b"
             },
             {
+              "item": "SessionHistoryOperations",
+              "sha256": "9f901ce7ace2fa4f1e4c111ff31db87aa227d182e35721041020aff29e62dc3b"
+            },
+            {
               "item": "SignedInvocation",
               "sha256": "b6fa2e2c5954891fc57281e7b694d099749126df2832988aa8b74ef5bdc5565f"
             },
@@ -145999,6 +146067,14 @@
             {
               "item": "PreparedInvocationFields.tuple",
               "sha256": "59c8d582307d9e6c73e1082459d7b75c1e63e2c69acd6a3451c3697064a8080e"
+            },
+            {
+              "item": "SessionHistoryOperations.list",
+              "sha256": "cd4aa81929843ea82d718949bfb7f9a3e9a8416473734d723bc3b426cf0c9373"
+            },
+            {
+              "item": "SessionHistoryOperations.new",
+              "sha256": "a64429a8846f1eedcad4898d71db04217b27cbff6fcd30f45e332875e2acbfe2"
             },
             {
               "item": "SignedInvocation.bindRuntime",
@@ -146184,6 +146260,10 @@
               "sha256": "e126ec05eda32ea602a26045678d7a12e222e08b29a4cffcf2f2d05687416c2b"
             },
             {
+              "item": "SessionHistoryOperations",
+              "sha256": "9f901ce7ace2fa4f1e4c111ff31db87aa227d182e35721041020aff29e62dc3b"
+            },
+            {
               "item": "SignedInvocation",
               "sha256": "b6fa2e2c5954891fc57281e7b694d099749126df2832988aa8b74ef5bdc5565f"
             },
@@ -146322,6 +146402,14 @@
             {
               "item": "PreparedInvocationFields.tuple",
               "sha256": "59c8d582307d9e6c73e1082459d7b75c1e63e2c69acd6a3451c3697064a8080e"
+            },
+            {
+              "item": "SessionHistoryOperations.list",
+              "sha256": "cd4aa81929843ea82d718949bfb7f9a3e9a8416473734d723bc3b426cf0c9373"
+            },
+            {
+              "item": "SessionHistoryOperations.new",
+              "sha256": "a64429a8846f1eedcad4898d71db04217b27cbff6fcd30f45e332875e2acbfe2"
             },
             {
               "item": "SignedInvocation.bindRuntime",
@@ -146507,6 +146595,10 @@
               "sha256": "e126ec05eda32ea602a26045678d7a12e222e08b29a4cffcf2f2d05687416c2b"
             },
             {
+              "item": "SessionHistoryOperations",
+              "sha256": "9f901ce7ace2fa4f1e4c111ff31db87aa227d182e35721041020aff29e62dc3b"
+            },
+            {
               "item": "SignedInvocation",
               "sha256": "b6fa2e2c5954891fc57281e7b694d099749126df2832988aa8b74ef5bdc5565f"
             },
@@ -146645,6 +146737,14 @@
             {
               "item": "PreparedInvocationFields.tuple",
               "sha256": "59c8d582307d9e6c73e1082459d7b75c1e63e2c69acd6a3451c3697064a8080e"
+            },
+            {
+              "item": "SessionHistoryOperations.list",
+              "sha256": "cd4aa81929843ea82d718949bfb7f9a3e9a8416473734d723bc3b426cf0c9373"
+            },
+            {
+              "item": "SessionHistoryOperations.new",
+              "sha256": "a64429a8846f1eedcad4898d71db04217b27cbff6fcd30f45e332875e2acbfe2"
             },
             {
               "item": "SignedInvocation.bindRuntime",
@@ -146830,6 +146930,10 @@
               "sha256": "e126ec05eda32ea602a26045678d7a12e222e08b29a4cffcf2f2d05687416c2b"
             },
             {
+              "item": "SessionHistoryOperations",
+              "sha256": "9f901ce7ace2fa4f1e4c111ff31db87aa227d182e35721041020aff29e62dc3b"
+            },
+            {
               "item": "SignedInvocation",
               "sha256": "b6fa2e2c5954891fc57281e7b694d099749126df2832988aa8b74ef5bdc5565f"
             },
@@ -146968,6 +147072,14 @@
             {
               "item": "PreparedInvocationFields.tuple",
               "sha256": "59c8d582307d9e6c73e1082459d7b75c1e63e2c69acd6a3451c3697064a8080e"
+            },
+            {
+              "item": "SessionHistoryOperations.list",
+              "sha256": "cd4aa81929843ea82d718949bfb7f9a3e9a8416473734d723bc3b426cf0c9373"
+            },
+            {
+              "item": "SessionHistoryOperations.new",
+              "sha256": "a64429a8846f1eedcad4898d71db04217b27cbff6fcd30f45e332875e2acbfe2"
             },
             {
               "item": "SignedInvocation.bindRuntime",
@@ -147153,6 +147265,10 @@
               "sha256": "e126ec05eda32ea602a26045678d7a12e222e08b29a4cffcf2f2d05687416c2b"
             },
             {
+              "item": "SessionHistoryOperations",
+              "sha256": "9f901ce7ace2fa4f1e4c111ff31db87aa227d182e35721041020aff29e62dc3b"
+            },
+            {
               "item": "SignedInvocation",
               "sha256": "b6fa2e2c5954891fc57281e7b694d099749126df2832988aa8b74ef5bdc5565f"
             },
@@ -147291,6 +147407,14 @@
             {
               "item": "PreparedInvocationFields.tuple",
               "sha256": "59c8d582307d9e6c73e1082459d7b75c1e63e2c69acd6a3451c3697064a8080e"
+            },
+            {
+              "item": "SessionHistoryOperations.list",
+              "sha256": "cd4aa81929843ea82d718949bfb7f9a3e9a8416473734d723bc3b426cf0c9373"
+            },
+            {
+              "item": "SessionHistoryOperations.new",
+              "sha256": "a64429a8846f1eedcad4898d71db04217b27cbff6fcd30f45e332875e2acbfe2"
             },
             {
               "item": "SignedInvocation.bindRuntime",
@@ -147476,6 +147600,10 @@
               "sha256": "e126ec05eda32ea602a26045678d7a12e222e08b29a4cffcf2f2d05687416c2b"
             },
             {
+              "item": "SessionHistoryOperations",
+              "sha256": "9f901ce7ace2fa4f1e4c111ff31db87aa227d182e35721041020aff29e62dc3b"
+            },
+            {
               "item": "SignedInvocation",
               "sha256": "b6fa2e2c5954891fc57281e7b694d099749126df2832988aa8b74ef5bdc5565f"
             },
@@ -147614,6 +147742,14 @@
             {
               "item": "PreparedInvocationFields.tuple",
               "sha256": "59c8d582307d9e6c73e1082459d7b75c1e63e2c69acd6a3451c3697064a8080e"
+            },
+            {
+              "item": "SessionHistoryOperations.list",
+              "sha256": "cd4aa81929843ea82d718949bfb7f9a3e9a8416473734d723bc3b426cf0c9373"
+            },
+            {
+              "item": "SessionHistoryOperations.new",
+              "sha256": "a64429a8846f1eedcad4898d71db04217b27cbff6fcd30f45e332875e2acbfe2"
             },
             {
               "item": "SignedInvocation.bindRuntime",
@@ -147799,6 +147935,10 @@
               "sha256": "e126ec05eda32ea602a26045678d7a12e222e08b29a4cffcf2f2d05687416c2b"
             },
             {
+              "item": "SessionHistoryOperations",
+              "sha256": "9f901ce7ace2fa4f1e4c111ff31db87aa227d182e35721041020aff29e62dc3b"
+            },
+            {
               "item": "SignedInvocation",
               "sha256": "b6fa2e2c5954891fc57281e7b694d099749126df2832988aa8b74ef5bdc5565f"
             },
@@ -147937,6 +148077,14 @@
             {
               "item": "PreparedInvocationFields.tuple",
               "sha256": "59c8d582307d9e6c73e1082459d7b75c1e63e2c69acd6a3451c3697064a8080e"
+            },
+            {
+              "item": "SessionHistoryOperations.list",
+              "sha256": "cd4aa81929843ea82d718949bfb7f9a3e9a8416473734d723bc3b426cf0c9373"
+            },
+            {
+              "item": "SessionHistoryOperations.new",
+              "sha256": "a64429a8846f1eedcad4898d71db04217b27cbff6fcd30f45e332875e2acbfe2"
             },
             {
               "item": "SignedInvocation.bindRuntime",
@@ -176817,11 +176965,1630 @@
       "capability_id": "receipt_history",
       "language": "node",
       "profile": "receipts",
-      "status": "unsupported",
+      "status": "seam",
       "evidence_case_ids": [],
       "unproven_requirement_ids": [],
-      "shape_evidence": [],
-      "step_shape_evidence": [],
+      "shape_evidence": [
+        {
+          "item": "ReceiptFilter",
+          "sha256": "a4f5b27dbec189714a525479542a271a5f25c57829cd638af10a9a0f81cba4e2"
+        },
+        {
+          "item": "ReceiptFilterFields",
+          "sha256": "3513346aed286aa38f1810069b0bd81a6d7807ae384a50554b6205c8c5e78dae"
+        },
+        {
+          "item": "ReceiptHistoryPage",
+          "sha256": "87aa5604ad9466387ab1e4e364e79186241f5a3d83158cea1da0776c3bc42fbf"
+        },
+        {
+          "item": "ReceiptHistoryPageFields",
+          "sha256": "4d7c65359ad2dd8bc165bf7edb83da379163fd2622c3babbe831bb284e9bdf35"
+        },
+        {
+          "item": "ReceiptListRequest",
+          "sha256": "98ce5820e76a2d513b1786f0ee812fa01999f6dcc5116a013b9076d80d0b0312"
+        },
+        {
+          "item": "ReceiptListRequestFields",
+          "sha256": "c755fa80e20d3b1722b70116c392b264015e58cd0283d083dee1b0b03a7101d5"
+        },
+        {
+          "item": "ReceiptProvider",
+          "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
+        },
+        {
+          "item": "RuntimeCallContextFields",
+          "sha256": "d9d8263e0558d96cba926daf9a2174f673e0dc9159e534ecd48425e9cb25959e"
+        },
+        {
+          "item": "ReceiptFilter.abilityURA",
+          "sha256": "dc08a7ab561890e705071a8fe885b8c9e59a89bdc9929a47e6f7c840133d224c"
+        },
+        {
+          "item": "ReceiptFilter.agentURA",
+          "sha256": "71bc997177d4fd2c6d4b14deaf1b371e11ba20f97dc86a825c7fff95f2276c89"
+        },
+        {
+          "item": "ReceiptFilter.calleeURA",
+          "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+        },
+        {
+          "item": "ReceiptFilter.callerURA",
+          "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+        },
+        {
+          "item": "ReceiptFilter.new",
+          "sha256": "fe3b417be2a77568a6bc6bd840996868f8d36b94cd05f40f88ea30f74a2b058e"
+        },
+        {
+          "item": "ReceiptFilter.state",
+          "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+        },
+        {
+          "item": "ReceiptFilter.subjectURA",
+          "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+        },
+        {
+          "item": "ReceiptFilter.toJSON",
+          "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+        },
+        {
+          "item": "ReceiptFilterFields.ability_ura",
+          "sha256": "2b082ffbd270e446feca3bac654d83f0d638674bbec787d73c0176014de8e49c"
+        },
+        {
+          "item": "ReceiptFilterFields.agent_ura",
+          "sha256": "4b6f96f939592effdd4eb89b58764d64e733dbc9763fc47a54de8d68f088f729"
+        },
+        {
+          "item": "ReceiptFilterFields.callee_ura",
+          "sha256": "cbdb5b91cdac44235da10df6e9d69637ce7dffedf159ef6d5b5cae3b02e71c85"
+        },
+        {
+          "item": "ReceiptFilterFields.caller_ura",
+          "sha256": "681ad43ca495c026a4dd35b59abaa94d8a215a58ded67eb11acc5a1dea62e9c1"
+        },
+        {
+          "item": "ReceiptFilterFields.state",
+          "sha256": "27f6731142d50e785092fe934639828286d80f39f08b6227b488c4121c64fe18"
+        },
+        {
+          "item": "ReceiptFilterFields.subject_ura",
+          "sha256": "bde76992912be25db4921af337b24bcd7affa96c8b6bc0c01f7396b838f88597"
+        },
+        {
+          "item": "ReceiptHistoryPage.fromJSON",
+          "sha256": "d83366f0f78bfa78a7dca767c52d51f8013f88b946479471baa6643ff1427455"
+        },
+        {
+          "item": "ReceiptHistoryPage.limit",
+          "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+        },
+        {
+          "item": "ReceiptHistoryPage.new",
+          "sha256": "b2d2d0d879e3484cc077c095ca74a66e89ef50ae7c7861a19533b9bae7ad2aa9"
+        },
+        {
+          "item": "ReceiptHistoryPage.nextCursor",
+          "sha256": "e9dc5fd1c69a146d92411f2529cbba11de34906edc4ed2e2969b330f560d7c8e"
+        },
+        {
+          "item": "ReceiptHistoryPage.records",
+          "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+        },
+        {
+          "item": "ReceiptHistoryPage.source",
+          "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+        },
+        {
+          "item": "ReceiptHistoryPage.toJSON",
+          "sha256": "5cde57bb584a6b9a7b691d94aa091b1dc68f8e35956888c1d1258c107271afd8"
+        },
+        {
+          "item": "ReceiptHistoryPageFields.limit",
+          "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+        },
+        {
+          "item": "ReceiptHistoryPageFields.next_cursor",
+          "sha256": "ad303af6961af289ae9f6d00f871a9932e21692523b018a553ef06421641d652"
+        },
+        {
+          "item": "ReceiptHistoryPageFields.records",
+          "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+        },
+        {
+          "item": "ReceiptHistoryPageFields.source",
+          "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+        },
+        {
+          "item": "ReceiptListRequest.call",
+          "sha256": "38448e3e2fd9f6840cc302409c582f7814be19aba3b257cf28869425b292b9b8"
+        },
+        {
+          "item": "ReceiptListRequest.cursor",
+          "sha256": "fd443bcafa70e367cdb535dcf9def1a9f8b0ced4896e4972dab07905cb43442a"
+        },
+        {
+          "item": "ReceiptListRequest.filter",
+          "sha256": "aceb55dc13cd96c99f34220ca9019b7d93854a502fe4e7d62ebbfefc5edb5ae7"
+        },
+        {
+          "item": "ReceiptListRequest.limit",
+          "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+        },
+        {
+          "item": "ReceiptListRequest.new",
+          "sha256": "31015e44dbeac32e2ba636207d983aeccb1d73dc7d91d925fdbd19e1af7b3649"
+        },
+        {
+          "item": "ReceiptListRequest.toJSON",
+          "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+        },
+        {
+          "item": "ReceiptListRequestFields.call",
+          "sha256": "c1c239e4462cabe3fa8a48c28fa1ffe0b4931de54a7b3da9afc6cf95005d7bde"
+        },
+        {
+          "item": "ReceiptListRequestFields.cursor",
+          "sha256": "6ecbc17f8f0214ab21112cbefc64e57689a50f9e5a0c7b5ba68ce4e828006d7e"
+        },
+        {
+          "item": "ReceiptListRequestFields.filter",
+          "sha256": "a33b3ebf89544c071626bf145bea3bd71b613cccc74c943fcbd0c3fba544a314"
+        },
+        {
+          "item": "ReceiptListRequestFields.limit",
+          "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+        },
+        {
+          "item": "ReceiptProvider.list",
+          "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+        },
+        {
+          "item": "RuntimeCallContextFields.authority",
+          "sha256": "a4d67c476516f09a64b8cfc76e07f79228f9a5d5d2a3078aa2aeb25c5161bf43"
+        },
+        {
+          "item": "RuntimeCallContextFields.callee_ura",
+          "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+        },
+        {
+          "item": "RuntimeCallContextFields.caller_ura",
+          "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+        },
+        {
+          "item": "RuntimeCallContextFields.metadata",
+          "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+        },
+        {
+          "item": "RuntimeCallContextFields.subject_ura",
+          "sha256": "20dda8e773fb018befd87ef84ce2e6840dc3630aadc90147363a3cc58c6ed492"
+        }
+      ],
+      "step_shape_evidence": [
+        {
+          "case_id": "receipt/history_provider",
+          "action": "project_axon_receipt_reference",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "ReceiptFilter",
+              "sha256": "a4f5b27dbec189714a525479542a271a5f25c57829cd638af10a9a0f81cba4e2"
+            },
+            {
+              "item": "ReceiptFilterFields",
+              "sha256": "3513346aed286aa38f1810069b0bd81a6d7807ae384a50554b6205c8c5e78dae"
+            },
+            {
+              "item": "ReceiptHistoryPage",
+              "sha256": "87aa5604ad9466387ab1e4e364e79186241f5a3d83158cea1da0776c3bc42fbf"
+            },
+            {
+              "item": "ReceiptHistoryPageFields",
+              "sha256": "4d7c65359ad2dd8bc165bf7edb83da379163fd2622c3babbe831bb284e9bdf35"
+            },
+            {
+              "item": "ReceiptListRequest",
+              "sha256": "98ce5820e76a2d513b1786f0ee812fa01999f6dcc5116a013b9076d80d0b0312"
+            },
+            {
+              "item": "ReceiptListRequestFields",
+              "sha256": "c755fa80e20d3b1722b70116c392b264015e58cd0283d083dee1b0b03a7101d5"
+            },
+            {
+              "item": "ReceiptProvider",
+              "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
+            },
+            {
+              "item": "RuntimeCallContextFields",
+              "sha256": "d9d8263e0558d96cba926daf9a2174f673e0dc9159e534ecd48425e9cb25959e"
+            },
+            {
+              "item": "ReceiptFilter.abilityURA",
+              "sha256": "dc08a7ab561890e705071a8fe885b8c9e59a89bdc9929a47e6f7c840133d224c"
+            },
+            {
+              "item": "ReceiptFilter.agentURA",
+              "sha256": "71bc997177d4fd2c6d4b14deaf1b371e11ba20f97dc86a825c7fff95f2276c89"
+            },
+            {
+              "item": "ReceiptFilter.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "ReceiptFilter.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "ReceiptFilter.new",
+              "sha256": "fe3b417be2a77568a6bc6bd840996868f8d36b94cd05f40f88ea30f74a2b058e"
+            },
+            {
+              "item": "ReceiptFilter.state",
+              "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+            },
+            {
+              "item": "ReceiptFilter.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "ReceiptFilter.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+            },
+            {
+              "item": "ReceiptFilterFields.ability_ura",
+              "sha256": "2b082ffbd270e446feca3bac654d83f0d638674bbec787d73c0176014de8e49c"
+            },
+            {
+              "item": "ReceiptFilterFields.agent_ura",
+              "sha256": "4b6f96f939592effdd4eb89b58764d64e733dbc9763fc47a54de8d68f088f729"
+            },
+            {
+              "item": "ReceiptFilterFields.callee_ura",
+              "sha256": "cbdb5b91cdac44235da10df6e9d69637ce7dffedf159ef6d5b5cae3b02e71c85"
+            },
+            {
+              "item": "ReceiptFilterFields.caller_ura",
+              "sha256": "681ad43ca495c026a4dd35b59abaa94d8a215a58ded67eb11acc5a1dea62e9c1"
+            },
+            {
+              "item": "ReceiptFilterFields.state",
+              "sha256": "27f6731142d50e785092fe934639828286d80f39f08b6227b488c4121c64fe18"
+            },
+            {
+              "item": "ReceiptFilterFields.subject_ura",
+              "sha256": "bde76992912be25db4921af337b24bcd7affa96c8b6bc0c01f7396b838f88597"
+            },
+            {
+              "item": "ReceiptHistoryPage.fromJSON",
+              "sha256": "d83366f0f78bfa78a7dca767c52d51f8013f88b946479471baa6643ff1427455"
+            },
+            {
+              "item": "ReceiptHistoryPage.limit",
+              "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+            },
+            {
+              "item": "ReceiptHistoryPage.new",
+              "sha256": "b2d2d0d879e3484cc077c095ca74a66e89ef50ae7c7861a19533b9bae7ad2aa9"
+            },
+            {
+              "item": "ReceiptHistoryPage.nextCursor",
+              "sha256": "e9dc5fd1c69a146d92411f2529cbba11de34906edc4ed2e2969b330f560d7c8e"
+            },
+            {
+              "item": "ReceiptHistoryPage.records",
+              "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+            },
+            {
+              "item": "ReceiptHistoryPage.source",
+              "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+            },
+            {
+              "item": "ReceiptHistoryPage.toJSON",
+              "sha256": "5cde57bb584a6b9a7b691d94aa091b1dc68f8e35956888c1d1258c107271afd8"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.limit",
+              "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.next_cursor",
+              "sha256": "ad303af6961af289ae9f6d00f871a9932e21692523b018a553ef06421641d652"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.records",
+              "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.source",
+              "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+            },
+            {
+              "item": "ReceiptListRequest.call",
+              "sha256": "38448e3e2fd9f6840cc302409c582f7814be19aba3b257cf28869425b292b9b8"
+            },
+            {
+              "item": "ReceiptListRequest.cursor",
+              "sha256": "fd443bcafa70e367cdb535dcf9def1a9f8b0ced4896e4972dab07905cb43442a"
+            },
+            {
+              "item": "ReceiptListRequest.filter",
+              "sha256": "aceb55dc13cd96c99f34220ca9019b7d93854a502fe4e7d62ebbfefc5edb5ae7"
+            },
+            {
+              "item": "ReceiptListRequest.limit",
+              "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+            },
+            {
+              "item": "ReceiptListRequest.new",
+              "sha256": "31015e44dbeac32e2ba636207d983aeccb1d73dc7d91d925fdbd19e1af7b3649"
+            },
+            {
+              "item": "ReceiptListRequest.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+            },
+            {
+              "item": "ReceiptListRequestFields.call",
+              "sha256": "c1c239e4462cabe3fa8a48c28fa1ffe0b4931de54a7b3da9afc6cf95005d7bde"
+            },
+            {
+              "item": "ReceiptListRequestFields.cursor",
+              "sha256": "6ecbc17f8f0214ab21112cbefc64e57689a50f9e5a0c7b5ba68ce4e828006d7e"
+            },
+            {
+              "item": "ReceiptListRequestFields.filter",
+              "sha256": "a33b3ebf89544c071626bf145bea3bd71b613cccc74c943fcbd0c3fba544a314"
+            },
+            {
+              "item": "ReceiptListRequestFields.limit",
+              "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+            },
+            {
+              "item": "ReceiptProvider.list",
+              "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+            },
+            {
+              "item": "RuntimeCallContextFields.authority",
+              "sha256": "a4d67c476516f09a64b8cfc76e07f79228f9a5d5d2a3078aa2aeb25c5161bf43"
+            },
+            {
+              "item": "RuntimeCallContextFields.callee_ura",
+              "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+            },
+            {
+              "item": "RuntimeCallContextFields.caller_ura",
+              "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+            },
+            {
+              "item": "RuntimeCallContextFields.metadata",
+              "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+            },
+            {
+              "item": "RuntimeCallContextFields.subject_ura",
+              "sha256": "20dda8e773fb018befd87ef84ce2e6840dc3630aadc90147363a3cc58c6ed492"
+            }
+          ]
+        },
+        {
+          "case_id": "receipt/history_provider",
+          "action": "delegate_axon_receipt_verification",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "ReceiptFilter",
+              "sha256": "a4f5b27dbec189714a525479542a271a5f25c57829cd638af10a9a0f81cba4e2"
+            },
+            {
+              "item": "ReceiptFilterFields",
+              "sha256": "3513346aed286aa38f1810069b0bd81a6d7807ae384a50554b6205c8c5e78dae"
+            },
+            {
+              "item": "ReceiptHistoryPage",
+              "sha256": "87aa5604ad9466387ab1e4e364e79186241f5a3d83158cea1da0776c3bc42fbf"
+            },
+            {
+              "item": "ReceiptHistoryPageFields",
+              "sha256": "4d7c65359ad2dd8bc165bf7edb83da379163fd2622c3babbe831bb284e9bdf35"
+            },
+            {
+              "item": "ReceiptListRequest",
+              "sha256": "98ce5820e76a2d513b1786f0ee812fa01999f6dcc5116a013b9076d80d0b0312"
+            },
+            {
+              "item": "ReceiptListRequestFields",
+              "sha256": "c755fa80e20d3b1722b70116c392b264015e58cd0283d083dee1b0b03a7101d5"
+            },
+            {
+              "item": "ReceiptProvider",
+              "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
+            },
+            {
+              "item": "RuntimeCallContextFields",
+              "sha256": "d9d8263e0558d96cba926daf9a2174f673e0dc9159e534ecd48425e9cb25959e"
+            },
+            {
+              "item": "ReceiptFilter.abilityURA",
+              "sha256": "dc08a7ab561890e705071a8fe885b8c9e59a89bdc9929a47e6f7c840133d224c"
+            },
+            {
+              "item": "ReceiptFilter.agentURA",
+              "sha256": "71bc997177d4fd2c6d4b14deaf1b371e11ba20f97dc86a825c7fff95f2276c89"
+            },
+            {
+              "item": "ReceiptFilter.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "ReceiptFilter.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "ReceiptFilter.new",
+              "sha256": "fe3b417be2a77568a6bc6bd840996868f8d36b94cd05f40f88ea30f74a2b058e"
+            },
+            {
+              "item": "ReceiptFilter.state",
+              "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+            },
+            {
+              "item": "ReceiptFilter.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "ReceiptFilter.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+            },
+            {
+              "item": "ReceiptFilterFields.ability_ura",
+              "sha256": "2b082ffbd270e446feca3bac654d83f0d638674bbec787d73c0176014de8e49c"
+            },
+            {
+              "item": "ReceiptFilterFields.agent_ura",
+              "sha256": "4b6f96f939592effdd4eb89b58764d64e733dbc9763fc47a54de8d68f088f729"
+            },
+            {
+              "item": "ReceiptFilterFields.callee_ura",
+              "sha256": "cbdb5b91cdac44235da10df6e9d69637ce7dffedf159ef6d5b5cae3b02e71c85"
+            },
+            {
+              "item": "ReceiptFilterFields.caller_ura",
+              "sha256": "681ad43ca495c026a4dd35b59abaa94d8a215a58ded67eb11acc5a1dea62e9c1"
+            },
+            {
+              "item": "ReceiptFilterFields.state",
+              "sha256": "27f6731142d50e785092fe934639828286d80f39f08b6227b488c4121c64fe18"
+            },
+            {
+              "item": "ReceiptFilterFields.subject_ura",
+              "sha256": "bde76992912be25db4921af337b24bcd7affa96c8b6bc0c01f7396b838f88597"
+            },
+            {
+              "item": "ReceiptHistoryPage.fromJSON",
+              "sha256": "d83366f0f78bfa78a7dca767c52d51f8013f88b946479471baa6643ff1427455"
+            },
+            {
+              "item": "ReceiptHistoryPage.limit",
+              "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+            },
+            {
+              "item": "ReceiptHistoryPage.new",
+              "sha256": "b2d2d0d879e3484cc077c095ca74a66e89ef50ae7c7861a19533b9bae7ad2aa9"
+            },
+            {
+              "item": "ReceiptHistoryPage.nextCursor",
+              "sha256": "e9dc5fd1c69a146d92411f2529cbba11de34906edc4ed2e2969b330f560d7c8e"
+            },
+            {
+              "item": "ReceiptHistoryPage.records",
+              "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+            },
+            {
+              "item": "ReceiptHistoryPage.source",
+              "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+            },
+            {
+              "item": "ReceiptHistoryPage.toJSON",
+              "sha256": "5cde57bb584a6b9a7b691d94aa091b1dc68f8e35956888c1d1258c107271afd8"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.limit",
+              "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.next_cursor",
+              "sha256": "ad303af6961af289ae9f6d00f871a9932e21692523b018a553ef06421641d652"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.records",
+              "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.source",
+              "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+            },
+            {
+              "item": "ReceiptListRequest.call",
+              "sha256": "38448e3e2fd9f6840cc302409c582f7814be19aba3b257cf28869425b292b9b8"
+            },
+            {
+              "item": "ReceiptListRequest.cursor",
+              "sha256": "fd443bcafa70e367cdb535dcf9def1a9f8b0ced4896e4972dab07905cb43442a"
+            },
+            {
+              "item": "ReceiptListRequest.filter",
+              "sha256": "aceb55dc13cd96c99f34220ca9019b7d93854a502fe4e7d62ebbfefc5edb5ae7"
+            },
+            {
+              "item": "ReceiptListRequest.limit",
+              "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+            },
+            {
+              "item": "ReceiptListRequest.new",
+              "sha256": "31015e44dbeac32e2ba636207d983aeccb1d73dc7d91d925fdbd19e1af7b3649"
+            },
+            {
+              "item": "ReceiptListRequest.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+            },
+            {
+              "item": "ReceiptListRequestFields.call",
+              "sha256": "c1c239e4462cabe3fa8a48c28fa1ffe0b4931de54a7b3da9afc6cf95005d7bde"
+            },
+            {
+              "item": "ReceiptListRequestFields.cursor",
+              "sha256": "6ecbc17f8f0214ab21112cbefc64e57689a50f9e5a0c7b5ba68ce4e828006d7e"
+            },
+            {
+              "item": "ReceiptListRequestFields.filter",
+              "sha256": "a33b3ebf89544c071626bf145bea3bd71b613cccc74c943fcbd0c3fba544a314"
+            },
+            {
+              "item": "ReceiptListRequestFields.limit",
+              "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+            },
+            {
+              "item": "ReceiptProvider.list",
+              "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+            },
+            {
+              "item": "RuntimeCallContextFields.authority",
+              "sha256": "a4d67c476516f09a64b8cfc76e07f79228f9a5d5d2a3078aa2aeb25c5161bf43"
+            },
+            {
+              "item": "RuntimeCallContextFields.callee_ura",
+              "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+            },
+            {
+              "item": "RuntimeCallContextFields.caller_ura",
+              "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+            },
+            {
+              "item": "RuntimeCallContextFields.metadata",
+              "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+            },
+            {
+              "item": "RuntimeCallContextFields.subject_ura",
+              "sha256": "20dda8e773fb018befd87ef84ce2e6840dc3630aadc90147363a3cc58c6ed492"
+            }
+          ]
+        },
+        {
+          "case_id": "receipt/history_provider",
+          "action": "require_bounded_history_query",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "ReceiptFilter",
+              "sha256": "a4f5b27dbec189714a525479542a271a5f25c57829cd638af10a9a0f81cba4e2"
+            },
+            {
+              "item": "ReceiptFilterFields",
+              "sha256": "3513346aed286aa38f1810069b0bd81a6d7807ae384a50554b6205c8c5e78dae"
+            },
+            {
+              "item": "ReceiptHistoryPage",
+              "sha256": "87aa5604ad9466387ab1e4e364e79186241f5a3d83158cea1da0776c3bc42fbf"
+            },
+            {
+              "item": "ReceiptHistoryPageFields",
+              "sha256": "4d7c65359ad2dd8bc165bf7edb83da379163fd2622c3babbe831bb284e9bdf35"
+            },
+            {
+              "item": "ReceiptListRequest",
+              "sha256": "98ce5820e76a2d513b1786f0ee812fa01999f6dcc5116a013b9076d80d0b0312"
+            },
+            {
+              "item": "ReceiptListRequestFields",
+              "sha256": "c755fa80e20d3b1722b70116c392b264015e58cd0283d083dee1b0b03a7101d5"
+            },
+            {
+              "item": "ReceiptProvider",
+              "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
+            },
+            {
+              "item": "RuntimeCallContextFields",
+              "sha256": "d9d8263e0558d96cba926daf9a2174f673e0dc9159e534ecd48425e9cb25959e"
+            },
+            {
+              "item": "ReceiptFilter.abilityURA",
+              "sha256": "dc08a7ab561890e705071a8fe885b8c9e59a89bdc9929a47e6f7c840133d224c"
+            },
+            {
+              "item": "ReceiptFilter.agentURA",
+              "sha256": "71bc997177d4fd2c6d4b14deaf1b371e11ba20f97dc86a825c7fff95f2276c89"
+            },
+            {
+              "item": "ReceiptFilter.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "ReceiptFilter.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "ReceiptFilter.new",
+              "sha256": "fe3b417be2a77568a6bc6bd840996868f8d36b94cd05f40f88ea30f74a2b058e"
+            },
+            {
+              "item": "ReceiptFilter.state",
+              "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+            },
+            {
+              "item": "ReceiptFilter.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "ReceiptFilter.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+            },
+            {
+              "item": "ReceiptFilterFields.ability_ura",
+              "sha256": "2b082ffbd270e446feca3bac654d83f0d638674bbec787d73c0176014de8e49c"
+            },
+            {
+              "item": "ReceiptFilterFields.agent_ura",
+              "sha256": "4b6f96f939592effdd4eb89b58764d64e733dbc9763fc47a54de8d68f088f729"
+            },
+            {
+              "item": "ReceiptFilterFields.callee_ura",
+              "sha256": "cbdb5b91cdac44235da10df6e9d69637ce7dffedf159ef6d5b5cae3b02e71c85"
+            },
+            {
+              "item": "ReceiptFilterFields.caller_ura",
+              "sha256": "681ad43ca495c026a4dd35b59abaa94d8a215a58ded67eb11acc5a1dea62e9c1"
+            },
+            {
+              "item": "ReceiptFilterFields.state",
+              "sha256": "27f6731142d50e785092fe934639828286d80f39f08b6227b488c4121c64fe18"
+            },
+            {
+              "item": "ReceiptFilterFields.subject_ura",
+              "sha256": "bde76992912be25db4921af337b24bcd7affa96c8b6bc0c01f7396b838f88597"
+            },
+            {
+              "item": "ReceiptHistoryPage.fromJSON",
+              "sha256": "d83366f0f78bfa78a7dca767c52d51f8013f88b946479471baa6643ff1427455"
+            },
+            {
+              "item": "ReceiptHistoryPage.limit",
+              "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+            },
+            {
+              "item": "ReceiptHistoryPage.new",
+              "sha256": "b2d2d0d879e3484cc077c095ca74a66e89ef50ae7c7861a19533b9bae7ad2aa9"
+            },
+            {
+              "item": "ReceiptHistoryPage.nextCursor",
+              "sha256": "e9dc5fd1c69a146d92411f2529cbba11de34906edc4ed2e2969b330f560d7c8e"
+            },
+            {
+              "item": "ReceiptHistoryPage.records",
+              "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+            },
+            {
+              "item": "ReceiptHistoryPage.source",
+              "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+            },
+            {
+              "item": "ReceiptHistoryPage.toJSON",
+              "sha256": "5cde57bb584a6b9a7b691d94aa091b1dc68f8e35956888c1d1258c107271afd8"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.limit",
+              "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.next_cursor",
+              "sha256": "ad303af6961af289ae9f6d00f871a9932e21692523b018a553ef06421641d652"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.records",
+              "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.source",
+              "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+            },
+            {
+              "item": "ReceiptListRequest.call",
+              "sha256": "38448e3e2fd9f6840cc302409c582f7814be19aba3b257cf28869425b292b9b8"
+            },
+            {
+              "item": "ReceiptListRequest.cursor",
+              "sha256": "fd443bcafa70e367cdb535dcf9def1a9f8b0ced4896e4972dab07905cb43442a"
+            },
+            {
+              "item": "ReceiptListRequest.filter",
+              "sha256": "aceb55dc13cd96c99f34220ca9019b7d93854a502fe4e7d62ebbfefc5edb5ae7"
+            },
+            {
+              "item": "ReceiptListRequest.limit",
+              "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+            },
+            {
+              "item": "ReceiptListRequest.new",
+              "sha256": "31015e44dbeac32e2ba636207d983aeccb1d73dc7d91d925fdbd19e1af7b3649"
+            },
+            {
+              "item": "ReceiptListRequest.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+            },
+            {
+              "item": "ReceiptListRequestFields.call",
+              "sha256": "c1c239e4462cabe3fa8a48c28fa1ffe0b4931de54a7b3da9afc6cf95005d7bde"
+            },
+            {
+              "item": "ReceiptListRequestFields.cursor",
+              "sha256": "6ecbc17f8f0214ab21112cbefc64e57689a50f9e5a0c7b5ba68ce4e828006d7e"
+            },
+            {
+              "item": "ReceiptListRequestFields.filter",
+              "sha256": "a33b3ebf89544c071626bf145bea3bd71b613cccc74c943fcbd0c3fba544a314"
+            },
+            {
+              "item": "ReceiptListRequestFields.limit",
+              "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+            },
+            {
+              "item": "ReceiptProvider.list",
+              "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+            },
+            {
+              "item": "RuntimeCallContextFields.authority",
+              "sha256": "a4d67c476516f09a64b8cfc76e07f79228f9a5d5d2a3078aa2aeb25c5161bf43"
+            },
+            {
+              "item": "RuntimeCallContextFields.callee_ura",
+              "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+            },
+            {
+              "item": "RuntimeCallContextFields.caller_ura",
+              "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+            },
+            {
+              "item": "RuntimeCallContextFields.metadata",
+              "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+            },
+            {
+              "item": "RuntimeCallContextFields.subject_ura",
+              "sha256": "20dda8e773fb018befd87ef84ce2e6840dc3630aadc90147363a3cc58c6ed492"
+            }
+          ]
+        },
+        {
+          "case_id": "receipt/history_provider",
+          "action": "accept_opaque_history_cursor",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "ReceiptFilter",
+              "sha256": "a4f5b27dbec189714a525479542a271a5f25c57829cd638af10a9a0f81cba4e2"
+            },
+            {
+              "item": "ReceiptFilterFields",
+              "sha256": "3513346aed286aa38f1810069b0bd81a6d7807ae384a50554b6205c8c5e78dae"
+            },
+            {
+              "item": "ReceiptHistoryPage",
+              "sha256": "87aa5604ad9466387ab1e4e364e79186241f5a3d83158cea1da0776c3bc42fbf"
+            },
+            {
+              "item": "ReceiptHistoryPageFields",
+              "sha256": "4d7c65359ad2dd8bc165bf7edb83da379163fd2622c3babbe831bb284e9bdf35"
+            },
+            {
+              "item": "ReceiptListRequest",
+              "sha256": "98ce5820e76a2d513b1786f0ee812fa01999f6dcc5116a013b9076d80d0b0312"
+            },
+            {
+              "item": "ReceiptListRequestFields",
+              "sha256": "c755fa80e20d3b1722b70116c392b264015e58cd0283d083dee1b0b03a7101d5"
+            },
+            {
+              "item": "ReceiptProvider",
+              "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
+            },
+            {
+              "item": "RuntimeCallContextFields",
+              "sha256": "d9d8263e0558d96cba926daf9a2174f673e0dc9159e534ecd48425e9cb25959e"
+            },
+            {
+              "item": "ReceiptFilter.abilityURA",
+              "sha256": "dc08a7ab561890e705071a8fe885b8c9e59a89bdc9929a47e6f7c840133d224c"
+            },
+            {
+              "item": "ReceiptFilter.agentURA",
+              "sha256": "71bc997177d4fd2c6d4b14deaf1b371e11ba20f97dc86a825c7fff95f2276c89"
+            },
+            {
+              "item": "ReceiptFilter.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "ReceiptFilter.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "ReceiptFilter.new",
+              "sha256": "fe3b417be2a77568a6bc6bd840996868f8d36b94cd05f40f88ea30f74a2b058e"
+            },
+            {
+              "item": "ReceiptFilter.state",
+              "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+            },
+            {
+              "item": "ReceiptFilter.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "ReceiptFilter.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+            },
+            {
+              "item": "ReceiptFilterFields.ability_ura",
+              "sha256": "2b082ffbd270e446feca3bac654d83f0d638674bbec787d73c0176014de8e49c"
+            },
+            {
+              "item": "ReceiptFilterFields.agent_ura",
+              "sha256": "4b6f96f939592effdd4eb89b58764d64e733dbc9763fc47a54de8d68f088f729"
+            },
+            {
+              "item": "ReceiptFilterFields.callee_ura",
+              "sha256": "cbdb5b91cdac44235da10df6e9d69637ce7dffedf159ef6d5b5cae3b02e71c85"
+            },
+            {
+              "item": "ReceiptFilterFields.caller_ura",
+              "sha256": "681ad43ca495c026a4dd35b59abaa94d8a215a58ded67eb11acc5a1dea62e9c1"
+            },
+            {
+              "item": "ReceiptFilterFields.state",
+              "sha256": "27f6731142d50e785092fe934639828286d80f39f08b6227b488c4121c64fe18"
+            },
+            {
+              "item": "ReceiptFilterFields.subject_ura",
+              "sha256": "bde76992912be25db4921af337b24bcd7affa96c8b6bc0c01f7396b838f88597"
+            },
+            {
+              "item": "ReceiptHistoryPage.fromJSON",
+              "sha256": "d83366f0f78bfa78a7dca767c52d51f8013f88b946479471baa6643ff1427455"
+            },
+            {
+              "item": "ReceiptHistoryPage.limit",
+              "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+            },
+            {
+              "item": "ReceiptHistoryPage.new",
+              "sha256": "b2d2d0d879e3484cc077c095ca74a66e89ef50ae7c7861a19533b9bae7ad2aa9"
+            },
+            {
+              "item": "ReceiptHistoryPage.nextCursor",
+              "sha256": "e9dc5fd1c69a146d92411f2529cbba11de34906edc4ed2e2969b330f560d7c8e"
+            },
+            {
+              "item": "ReceiptHistoryPage.records",
+              "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+            },
+            {
+              "item": "ReceiptHistoryPage.source",
+              "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+            },
+            {
+              "item": "ReceiptHistoryPage.toJSON",
+              "sha256": "5cde57bb584a6b9a7b691d94aa091b1dc68f8e35956888c1d1258c107271afd8"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.limit",
+              "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.next_cursor",
+              "sha256": "ad303af6961af289ae9f6d00f871a9932e21692523b018a553ef06421641d652"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.records",
+              "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.source",
+              "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+            },
+            {
+              "item": "ReceiptListRequest.call",
+              "sha256": "38448e3e2fd9f6840cc302409c582f7814be19aba3b257cf28869425b292b9b8"
+            },
+            {
+              "item": "ReceiptListRequest.cursor",
+              "sha256": "fd443bcafa70e367cdb535dcf9def1a9f8b0ced4896e4972dab07905cb43442a"
+            },
+            {
+              "item": "ReceiptListRequest.filter",
+              "sha256": "aceb55dc13cd96c99f34220ca9019b7d93854a502fe4e7d62ebbfefc5edb5ae7"
+            },
+            {
+              "item": "ReceiptListRequest.limit",
+              "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+            },
+            {
+              "item": "ReceiptListRequest.new",
+              "sha256": "31015e44dbeac32e2ba636207d983aeccb1d73dc7d91d925fdbd19e1af7b3649"
+            },
+            {
+              "item": "ReceiptListRequest.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+            },
+            {
+              "item": "ReceiptListRequestFields.call",
+              "sha256": "c1c239e4462cabe3fa8a48c28fa1ffe0b4931de54a7b3da9afc6cf95005d7bde"
+            },
+            {
+              "item": "ReceiptListRequestFields.cursor",
+              "sha256": "6ecbc17f8f0214ab21112cbefc64e57689a50f9e5a0c7b5ba68ce4e828006d7e"
+            },
+            {
+              "item": "ReceiptListRequestFields.filter",
+              "sha256": "a33b3ebf89544c071626bf145bea3bd71b613cccc74c943fcbd0c3fba544a314"
+            },
+            {
+              "item": "ReceiptListRequestFields.limit",
+              "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+            },
+            {
+              "item": "ReceiptProvider.list",
+              "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+            },
+            {
+              "item": "RuntimeCallContextFields.authority",
+              "sha256": "a4d67c476516f09a64b8cfc76e07f79228f9a5d5d2a3078aa2aeb25c5161bf43"
+            },
+            {
+              "item": "RuntimeCallContextFields.callee_ura",
+              "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+            },
+            {
+              "item": "RuntimeCallContextFields.caller_ura",
+              "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+            },
+            {
+              "item": "RuntimeCallContextFields.metadata",
+              "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+            },
+            {
+              "item": "RuntimeCallContextFields.subject_ura",
+              "sha256": "20dda8e773fb018befd87ef84ce2e6840dc3630aadc90147363a3cc58c6ed492"
+            }
+          ]
+        },
+        {
+          "case_id": "receipt/history_provider",
+          "action": "reject_repeated_history_cursor",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "ReceiptFilter",
+              "sha256": "a4f5b27dbec189714a525479542a271a5f25c57829cd638af10a9a0f81cba4e2"
+            },
+            {
+              "item": "ReceiptFilterFields",
+              "sha256": "3513346aed286aa38f1810069b0bd81a6d7807ae384a50554b6205c8c5e78dae"
+            },
+            {
+              "item": "ReceiptHistoryPage",
+              "sha256": "87aa5604ad9466387ab1e4e364e79186241f5a3d83158cea1da0776c3bc42fbf"
+            },
+            {
+              "item": "ReceiptHistoryPageFields",
+              "sha256": "4d7c65359ad2dd8bc165bf7edb83da379163fd2622c3babbe831bb284e9bdf35"
+            },
+            {
+              "item": "ReceiptListRequest",
+              "sha256": "98ce5820e76a2d513b1786f0ee812fa01999f6dcc5116a013b9076d80d0b0312"
+            },
+            {
+              "item": "ReceiptListRequestFields",
+              "sha256": "c755fa80e20d3b1722b70116c392b264015e58cd0283d083dee1b0b03a7101d5"
+            },
+            {
+              "item": "ReceiptProvider",
+              "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
+            },
+            {
+              "item": "RuntimeCallContextFields",
+              "sha256": "d9d8263e0558d96cba926daf9a2174f673e0dc9159e534ecd48425e9cb25959e"
+            },
+            {
+              "item": "ReceiptFilter.abilityURA",
+              "sha256": "dc08a7ab561890e705071a8fe885b8c9e59a89bdc9929a47e6f7c840133d224c"
+            },
+            {
+              "item": "ReceiptFilter.agentURA",
+              "sha256": "71bc997177d4fd2c6d4b14deaf1b371e11ba20f97dc86a825c7fff95f2276c89"
+            },
+            {
+              "item": "ReceiptFilter.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "ReceiptFilter.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "ReceiptFilter.new",
+              "sha256": "fe3b417be2a77568a6bc6bd840996868f8d36b94cd05f40f88ea30f74a2b058e"
+            },
+            {
+              "item": "ReceiptFilter.state",
+              "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+            },
+            {
+              "item": "ReceiptFilter.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "ReceiptFilter.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+            },
+            {
+              "item": "ReceiptFilterFields.ability_ura",
+              "sha256": "2b082ffbd270e446feca3bac654d83f0d638674bbec787d73c0176014de8e49c"
+            },
+            {
+              "item": "ReceiptFilterFields.agent_ura",
+              "sha256": "4b6f96f939592effdd4eb89b58764d64e733dbc9763fc47a54de8d68f088f729"
+            },
+            {
+              "item": "ReceiptFilterFields.callee_ura",
+              "sha256": "cbdb5b91cdac44235da10df6e9d69637ce7dffedf159ef6d5b5cae3b02e71c85"
+            },
+            {
+              "item": "ReceiptFilterFields.caller_ura",
+              "sha256": "681ad43ca495c026a4dd35b59abaa94d8a215a58ded67eb11acc5a1dea62e9c1"
+            },
+            {
+              "item": "ReceiptFilterFields.state",
+              "sha256": "27f6731142d50e785092fe934639828286d80f39f08b6227b488c4121c64fe18"
+            },
+            {
+              "item": "ReceiptFilterFields.subject_ura",
+              "sha256": "bde76992912be25db4921af337b24bcd7affa96c8b6bc0c01f7396b838f88597"
+            },
+            {
+              "item": "ReceiptHistoryPage.fromJSON",
+              "sha256": "d83366f0f78bfa78a7dca767c52d51f8013f88b946479471baa6643ff1427455"
+            },
+            {
+              "item": "ReceiptHistoryPage.limit",
+              "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+            },
+            {
+              "item": "ReceiptHistoryPage.new",
+              "sha256": "b2d2d0d879e3484cc077c095ca74a66e89ef50ae7c7861a19533b9bae7ad2aa9"
+            },
+            {
+              "item": "ReceiptHistoryPage.nextCursor",
+              "sha256": "e9dc5fd1c69a146d92411f2529cbba11de34906edc4ed2e2969b330f560d7c8e"
+            },
+            {
+              "item": "ReceiptHistoryPage.records",
+              "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+            },
+            {
+              "item": "ReceiptHistoryPage.source",
+              "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+            },
+            {
+              "item": "ReceiptHistoryPage.toJSON",
+              "sha256": "5cde57bb584a6b9a7b691d94aa091b1dc68f8e35956888c1d1258c107271afd8"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.limit",
+              "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.next_cursor",
+              "sha256": "ad303af6961af289ae9f6d00f871a9932e21692523b018a553ef06421641d652"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.records",
+              "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.source",
+              "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+            },
+            {
+              "item": "ReceiptListRequest.call",
+              "sha256": "38448e3e2fd9f6840cc302409c582f7814be19aba3b257cf28869425b292b9b8"
+            },
+            {
+              "item": "ReceiptListRequest.cursor",
+              "sha256": "fd443bcafa70e367cdb535dcf9def1a9f8b0ced4896e4972dab07905cb43442a"
+            },
+            {
+              "item": "ReceiptListRequest.filter",
+              "sha256": "aceb55dc13cd96c99f34220ca9019b7d93854a502fe4e7d62ebbfefc5edb5ae7"
+            },
+            {
+              "item": "ReceiptListRequest.limit",
+              "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+            },
+            {
+              "item": "ReceiptListRequest.new",
+              "sha256": "31015e44dbeac32e2ba636207d983aeccb1d73dc7d91d925fdbd19e1af7b3649"
+            },
+            {
+              "item": "ReceiptListRequest.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+            },
+            {
+              "item": "ReceiptListRequestFields.call",
+              "sha256": "c1c239e4462cabe3fa8a48c28fa1ffe0b4931de54a7b3da9afc6cf95005d7bde"
+            },
+            {
+              "item": "ReceiptListRequestFields.cursor",
+              "sha256": "6ecbc17f8f0214ab21112cbefc64e57689a50f9e5a0c7b5ba68ce4e828006d7e"
+            },
+            {
+              "item": "ReceiptListRequestFields.filter",
+              "sha256": "a33b3ebf89544c071626bf145bea3bd71b613cccc74c943fcbd0c3fba544a314"
+            },
+            {
+              "item": "ReceiptListRequestFields.limit",
+              "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+            },
+            {
+              "item": "ReceiptProvider.list",
+              "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+            },
+            {
+              "item": "RuntimeCallContextFields.authority",
+              "sha256": "a4d67c476516f09a64b8cfc76e07f79228f9a5d5d2a3078aa2aeb25c5161bf43"
+            },
+            {
+              "item": "RuntimeCallContextFields.callee_ura",
+              "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+            },
+            {
+              "item": "RuntimeCallContextFields.caller_ura",
+              "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+            },
+            {
+              "item": "RuntimeCallContextFields.metadata",
+              "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+            },
+            {
+              "item": "RuntimeCallContextFields.subject_ura",
+              "sha256": "20dda8e773fb018befd87ef84ce2e6840dc3630aadc90147363a3cc58c6ed492"
+            }
+          ]
+        },
+        {
+          "case_id": "receipt/history_provider",
+          "action": "require_exact_history_lookup",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "ReceiptFilter",
+              "sha256": "a4f5b27dbec189714a525479542a271a5f25c57829cd638af10a9a0f81cba4e2"
+            },
+            {
+              "item": "ReceiptFilterFields",
+              "sha256": "3513346aed286aa38f1810069b0bd81a6d7807ae384a50554b6205c8c5e78dae"
+            },
+            {
+              "item": "ReceiptHistoryPage",
+              "sha256": "87aa5604ad9466387ab1e4e364e79186241f5a3d83158cea1da0776c3bc42fbf"
+            },
+            {
+              "item": "ReceiptHistoryPageFields",
+              "sha256": "4d7c65359ad2dd8bc165bf7edb83da379163fd2622c3babbe831bb284e9bdf35"
+            },
+            {
+              "item": "ReceiptListRequest",
+              "sha256": "98ce5820e76a2d513b1786f0ee812fa01999f6dcc5116a013b9076d80d0b0312"
+            },
+            {
+              "item": "ReceiptListRequestFields",
+              "sha256": "c755fa80e20d3b1722b70116c392b264015e58cd0283d083dee1b0b03a7101d5"
+            },
+            {
+              "item": "ReceiptProvider",
+              "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
+            },
+            {
+              "item": "RuntimeCallContextFields",
+              "sha256": "d9d8263e0558d96cba926daf9a2174f673e0dc9159e534ecd48425e9cb25959e"
+            },
+            {
+              "item": "ReceiptFilter.abilityURA",
+              "sha256": "dc08a7ab561890e705071a8fe885b8c9e59a89bdc9929a47e6f7c840133d224c"
+            },
+            {
+              "item": "ReceiptFilter.agentURA",
+              "sha256": "71bc997177d4fd2c6d4b14deaf1b371e11ba20f97dc86a825c7fff95f2276c89"
+            },
+            {
+              "item": "ReceiptFilter.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "ReceiptFilter.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "ReceiptFilter.new",
+              "sha256": "fe3b417be2a77568a6bc6bd840996868f8d36b94cd05f40f88ea30f74a2b058e"
+            },
+            {
+              "item": "ReceiptFilter.state",
+              "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+            },
+            {
+              "item": "ReceiptFilter.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "ReceiptFilter.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+            },
+            {
+              "item": "ReceiptFilterFields.ability_ura",
+              "sha256": "2b082ffbd270e446feca3bac654d83f0d638674bbec787d73c0176014de8e49c"
+            },
+            {
+              "item": "ReceiptFilterFields.agent_ura",
+              "sha256": "4b6f96f939592effdd4eb89b58764d64e733dbc9763fc47a54de8d68f088f729"
+            },
+            {
+              "item": "ReceiptFilterFields.callee_ura",
+              "sha256": "cbdb5b91cdac44235da10df6e9d69637ce7dffedf159ef6d5b5cae3b02e71c85"
+            },
+            {
+              "item": "ReceiptFilterFields.caller_ura",
+              "sha256": "681ad43ca495c026a4dd35b59abaa94d8a215a58ded67eb11acc5a1dea62e9c1"
+            },
+            {
+              "item": "ReceiptFilterFields.state",
+              "sha256": "27f6731142d50e785092fe934639828286d80f39f08b6227b488c4121c64fe18"
+            },
+            {
+              "item": "ReceiptFilterFields.subject_ura",
+              "sha256": "bde76992912be25db4921af337b24bcd7affa96c8b6bc0c01f7396b838f88597"
+            },
+            {
+              "item": "ReceiptHistoryPage.fromJSON",
+              "sha256": "d83366f0f78bfa78a7dca767c52d51f8013f88b946479471baa6643ff1427455"
+            },
+            {
+              "item": "ReceiptHistoryPage.limit",
+              "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+            },
+            {
+              "item": "ReceiptHistoryPage.new",
+              "sha256": "b2d2d0d879e3484cc077c095ca74a66e89ef50ae7c7861a19533b9bae7ad2aa9"
+            },
+            {
+              "item": "ReceiptHistoryPage.nextCursor",
+              "sha256": "e9dc5fd1c69a146d92411f2529cbba11de34906edc4ed2e2969b330f560d7c8e"
+            },
+            {
+              "item": "ReceiptHistoryPage.records",
+              "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+            },
+            {
+              "item": "ReceiptHistoryPage.source",
+              "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+            },
+            {
+              "item": "ReceiptHistoryPage.toJSON",
+              "sha256": "5cde57bb584a6b9a7b691d94aa091b1dc68f8e35956888c1d1258c107271afd8"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.limit",
+              "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.next_cursor",
+              "sha256": "ad303af6961af289ae9f6d00f871a9932e21692523b018a553ef06421641d652"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.records",
+              "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.source",
+              "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+            },
+            {
+              "item": "ReceiptListRequest.call",
+              "sha256": "38448e3e2fd9f6840cc302409c582f7814be19aba3b257cf28869425b292b9b8"
+            },
+            {
+              "item": "ReceiptListRequest.cursor",
+              "sha256": "fd443bcafa70e367cdb535dcf9def1a9f8b0ced4896e4972dab07905cb43442a"
+            },
+            {
+              "item": "ReceiptListRequest.filter",
+              "sha256": "aceb55dc13cd96c99f34220ca9019b7d93854a502fe4e7d62ebbfefc5edb5ae7"
+            },
+            {
+              "item": "ReceiptListRequest.limit",
+              "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+            },
+            {
+              "item": "ReceiptListRequest.new",
+              "sha256": "31015e44dbeac32e2ba636207d983aeccb1d73dc7d91d925fdbd19e1af7b3649"
+            },
+            {
+              "item": "ReceiptListRequest.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+            },
+            {
+              "item": "ReceiptListRequestFields.call",
+              "sha256": "c1c239e4462cabe3fa8a48c28fa1ffe0b4931de54a7b3da9afc6cf95005d7bde"
+            },
+            {
+              "item": "ReceiptListRequestFields.cursor",
+              "sha256": "6ecbc17f8f0214ab21112cbefc64e57689a50f9e5a0c7b5ba68ce4e828006d7e"
+            },
+            {
+              "item": "ReceiptListRequestFields.filter",
+              "sha256": "a33b3ebf89544c071626bf145bea3bd71b613cccc74c943fcbd0c3fba544a314"
+            },
+            {
+              "item": "ReceiptListRequestFields.limit",
+              "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+            },
+            {
+              "item": "ReceiptProvider.list",
+              "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+            },
+            {
+              "item": "RuntimeCallContextFields.authority",
+              "sha256": "a4d67c476516f09a64b8cfc76e07f79228f9a5d5d2a3078aa2aeb25c5161bf43"
+            },
+            {
+              "item": "RuntimeCallContextFields.callee_ura",
+              "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+            },
+            {
+              "item": "RuntimeCallContextFields.caller_ura",
+              "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+            },
+            {
+              "item": "RuntimeCallContextFields.metadata",
+              "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+            },
+            {
+              "item": "RuntimeCallContextFields.subject_ura",
+              "sha256": "20dda8e773fb018befd87ef84ce2e6840dc3630aadc90147363a3cc58c6ed492"
+            }
+          ]
+        },
+        {
+          "case_id": "receipt/history_provider",
+          "action": "require_typed_trace_graph",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "ReceiptFilter",
+              "sha256": "a4f5b27dbec189714a525479542a271a5f25c57829cd638af10a9a0f81cba4e2"
+            },
+            {
+              "item": "ReceiptFilterFields",
+              "sha256": "3513346aed286aa38f1810069b0bd81a6d7807ae384a50554b6205c8c5e78dae"
+            },
+            {
+              "item": "ReceiptHistoryPage",
+              "sha256": "87aa5604ad9466387ab1e4e364e79186241f5a3d83158cea1da0776c3bc42fbf"
+            },
+            {
+              "item": "ReceiptHistoryPageFields",
+              "sha256": "4d7c65359ad2dd8bc165bf7edb83da379163fd2622c3babbe831bb284e9bdf35"
+            },
+            {
+              "item": "ReceiptListRequest",
+              "sha256": "98ce5820e76a2d513b1786f0ee812fa01999f6dcc5116a013b9076d80d0b0312"
+            },
+            {
+              "item": "ReceiptListRequestFields",
+              "sha256": "c755fa80e20d3b1722b70116c392b264015e58cd0283d083dee1b0b03a7101d5"
+            },
+            {
+              "item": "ReceiptProvider",
+              "sha256": "e47d54ddac44f9d9fba37d7b79219aa416cf6cd0239c00f0cb348503c355f28f"
+            },
+            {
+              "item": "RuntimeCallContextFields",
+              "sha256": "d9d8263e0558d96cba926daf9a2174f673e0dc9159e534ecd48425e9cb25959e"
+            },
+            {
+              "item": "ReceiptFilter.abilityURA",
+              "sha256": "dc08a7ab561890e705071a8fe885b8c9e59a89bdc9929a47e6f7c840133d224c"
+            },
+            {
+              "item": "ReceiptFilter.agentURA",
+              "sha256": "71bc997177d4fd2c6d4b14deaf1b371e11ba20f97dc86a825c7fff95f2276c89"
+            },
+            {
+              "item": "ReceiptFilter.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "ReceiptFilter.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "ReceiptFilter.new",
+              "sha256": "fe3b417be2a77568a6bc6bd840996868f8d36b94cd05f40f88ea30f74a2b058e"
+            },
+            {
+              "item": "ReceiptFilter.state",
+              "sha256": "f0370be83f78d63e2b0840d73e4e50c5cfb3ff2a869410d44b55617fa4e9ec43"
+            },
+            {
+              "item": "ReceiptFilter.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "ReceiptFilter.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+            },
+            {
+              "item": "ReceiptFilterFields.ability_ura",
+              "sha256": "2b082ffbd270e446feca3bac654d83f0d638674bbec787d73c0176014de8e49c"
+            },
+            {
+              "item": "ReceiptFilterFields.agent_ura",
+              "sha256": "4b6f96f939592effdd4eb89b58764d64e733dbc9763fc47a54de8d68f088f729"
+            },
+            {
+              "item": "ReceiptFilterFields.callee_ura",
+              "sha256": "cbdb5b91cdac44235da10df6e9d69637ce7dffedf159ef6d5b5cae3b02e71c85"
+            },
+            {
+              "item": "ReceiptFilterFields.caller_ura",
+              "sha256": "681ad43ca495c026a4dd35b59abaa94d8a215a58ded67eb11acc5a1dea62e9c1"
+            },
+            {
+              "item": "ReceiptFilterFields.state",
+              "sha256": "27f6731142d50e785092fe934639828286d80f39f08b6227b488c4121c64fe18"
+            },
+            {
+              "item": "ReceiptFilterFields.subject_ura",
+              "sha256": "bde76992912be25db4921af337b24bcd7affa96c8b6bc0c01f7396b838f88597"
+            },
+            {
+              "item": "ReceiptHistoryPage.fromJSON",
+              "sha256": "d83366f0f78bfa78a7dca767c52d51f8013f88b946479471baa6643ff1427455"
+            },
+            {
+              "item": "ReceiptHistoryPage.limit",
+              "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+            },
+            {
+              "item": "ReceiptHistoryPage.new",
+              "sha256": "b2d2d0d879e3484cc077c095ca74a66e89ef50ae7c7861a19533b9bae7ad2aa9"
+            },
+            {
+              "item": "ReceiptHistoryPage.nextCursor",
+              "sha256": "e9dc5fd1c69a146d92411f2529cbba11de34906edc4ed2e2969b330f560d7c8e"
+            },
+            {
+              "item": "ReceiptHistoryPage.records",
+              "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+            },
+            {
+              "item": "ReceiptHistoryPage.source",
+              "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+            },
+            {
+              "item": "ReceiptHistoryPage.toJSON",
+              "sha256": "5cde57bb584a6b9a7b691d94aa091b1dc68f8e35956888c1d1258c107271afd8"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.limit",
+              "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.next_cursor",
+              "sha256": "ad303af6961af289ae9f6d00f871a9932e21692523b018a553ef06421641d652"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.records",
+              "sha256": "a83168f1a4302c73698d52061717e522eeeab4ba192f998703d45585e76f404c"
+            },
+            {
+              "item": "ReceiptHistoryPageFields.source",
+              "sha256": "65aced0e1f41da3f4dcf0532b44390c9abea8da66fca559337d33a6fa502cba0"
+            },
+            {
+              "item": "ReceiptListRequest.call",
+              "sha256": "38448e3e2fd9f6840cc302409c582f7814be19aba3b257cf28869425b292b9b8"
+            },
+            {
+              "item": "ReceiptListRequest.cursor",
+              "sha256": "fd443bcafa70e367cdb535dcf9def1a9f8b0ced4896e4972dab07905cb43442a"
+            },
+            {
+              "item": "ReceiptListRequest.filter",
+              "sha256": "aceb55dc13cd96c99f34220ca9019b7d93854a502fe4e7d62ebbfefc5edb5ae7"
+            },
+            {
+              "item": "ReceiptListRequest.limit",
+              "sha256": "6cb46cc1849b9d2791edff21adf36a8d6d347af2aaf94f89c1963125cb139544"
+            },
+            {
+              "item": "ReceiptListRequest.new",
+              "sha256": "31015e44dbeac32e2ba636207d983aeccb1d73dc7d91d925fdbd19e1af7b3649"
+            },
+            {
+              "item": "ReceiptListRequest.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+            },
+            {
+              "item": "ReceiptListRequestFields.call",
+              "sha256": "c1c239e4462cabe3fa8a48c28fa1ffe0b4931de54a7b3da9afc6cf95005d7bde"
+            },
+            {
+              "item": "ReceiptListRequestFields.cursor",
+              "sha256": "6ecbc17f8f0214ab21112cbefc64e57689a50f9e5a0c7b5ba68ce4e828006d7e"
+            },
+            {
+              "item": "ReceiptListRequestFields.filter",
+              "sha256": "a33b3ebf89544c071626bf145bea3bd71b613cccc74c943fcbd0c3fba544a314"
+            },
+            {
+              "item": "ReceiptListRequestFields.limit",
+              "sha256": "0bb06724730fa5378d8bf9a124e02a048fb8da11f456f9ce0ba1800784264fcf"
+            },
+            {
+              "item": "ReceiptProvider.list",
+              "sha256": "b3412ad9de22c093df4a7a73f486b504b15035efbfa80fddbe3033e174c8307b"
+            },
+            {
+              "item": "RuntimeCallContextFields.authority",
+              "sha256": "a4d67c476516f09a64b8cfc76e07f79228f9a5d5d2a3078aa2aeb25c5161bf43"
+            },
+            {
+              "item": "RuntimeCallContextFields.callee_ura",
+              "sha256": "9151892692d93a3be649b4add650bf10467a5d403532d8979dcfc0c90b14f5ae"
+            },
+            {
+              "item": "RuntimeCallContextFields.caller_ura",
+              "sha256": "34500a0f6b10e5053b6517ab45502564d77b89d1d449cd6322b1579faa0aad4d"
+            },
+            {
+              "item": "RuntimeCallContextFields.metadata",
+              "sha256": "beb12eebef827e580e6bc721995f2c981ae685e6e9794f489a5f65a9f096186f"
+            },
+            {
+              "item": "RuntimeCallContextFields.subject_ura",
+              "sha256": "20dda8e773fb018befd87ef84ce2e6840dc3630aadc90147363a3cc58c6ed492"
+            }
+          ]
+        }
+      ],
       "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/receipt_history",
       "provider_proof_ref": null
     },
@@ -281638,6 +283405,10 @@
           "sha256": "01d40abc7e38397e23993da95351b5dce88de84d0d01d1df608e0669eddf69d7"
         },
         {
+          "item": "RuntimeCallContext",
+          "sha256": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719"
+        },
+        {
           "item": "RuntimeClient",
           "sha256": "a8b338cc619b0e25118e3aa634cde4441998775d437d6210830b87b37759686c"
         },
@@ -281830,6 +283601,34 @@
           "sha256": "26679c870ffc2212f0bc66c4b6eda6731884005990f792f1bf29edc4fb3508a1"
         },
         {
+          "item": "RuntimeCallContext.authority",
+          "sha256": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd"
+        },
+        {
+          "item": "RuntimeCallContext.calleeURA",
+          "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+        },
+        {
+          "item": "RuntimeCallContext.callerURA",
+          "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+        },
+        {
+          "item": "RuntimeCallContext.metadata",
+          "sha256": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed"
+        },
+        {
+          "item": "RuntimeCallContext.new",
+          "sha256": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71"
+        },
+        {
+          "item": "RuntimeCallContext.subjectURA",
+          "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+        },
+        {
+          "item": "RuntimeCallContext.toJSON",
+          "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
+        },
+        {
           "item": "RuntimeClient.awaitResult",
           "sha256": "c1343ad059a374c2e15bc240d599304a8d8c5b84e88eaac78844e41dc963ddcf"
         },
@@ -281911,6 +283710,10 @@
             {
               "item": "InvocationHandleFields",
               "sha256": "01d40abc7e38397e23993da95351b5dce88de84d0d01d1df608e0669eddf69d7"
+            },
+            {
+              "item": "RuntimeCallContext",
+              "sha256": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719"
             },
             {
               "item": "RuntimeClient",
@@ -282103,6 +283906,34 @@
             {
               "item": "InvocationHandleFields.terminal",
               "sha256": "26679c870ffc2212f0bc66c4b6eda6731884005990f792f1bf29edc4fb3508a1"
+            },
+            {
+              "item": "RuntimeCallContext.authority",
+              "sha256": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd"
+            },
+            {
+              "item": "RuntimeCallContext.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "RuntimeCallContext.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "RuntimeCallContext.metadata",
+              "sha256": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed"
+            },
+            {
+              "item": "RuntimeCallContext.new",
+              "sha256": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71"
+            },
+            {
+              "item": "RuntimeCallContext.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "RuntimeCallContext.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
             },
             {
               "item": "RuntimeClient.awaitResult",
@@ -282188,6 +284019,10 @@
               "sha256": "01d40abc7e38397e23993da95351b5dce88de84d0d01d1df608e0669eddf69d7"
             },
             {
+              "item": "RuntimeCallContext",
+              "sha256": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719"
+            },
+            {
               "item": "RuntimeClient",
               "sha256": "a8b338cc619b0e25118e3aa634cde4441998775d437d6210830b87b37759686c"
             },
@@ -282378,6 +284213,34 @@
             {
               "item": "InvocationHandleFields.terminal",
               "sha256": "26679c870ffc2212f0bc66c4b6eda6731884005990f792f1bf29edc4fb3508a1"
+            },
+            {
+              "item": "RuntimeCallContext.authority",
+              "sha256": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd"
+            },
+            {
+              "item": "RuntimeCallContext.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "RuntimeCallContext.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "RuntimeCallContext.metadata",
+              "sha256": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed"
+            },
+            {
+              "item": "RuntimeCallContext.new",
+              "sha256": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71"
+            },
+            {
+              "item": "RuntimeCallContext.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "RuntimeCallContext.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
             },
             {
               "item": "RuntimeClient.awaitResult",
@@ -282463,6 +284326,10 @@
               "sha256": "01d40abc7e38397e23993da95351b5dce88de84d0d01d1df608e0669eddf69d7"
             },
             {
+              "item": "RuntimeCallContext",
+              "sha256": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719"
+            },
+            {
               "item": "RuntimeClient",
               "sha256": "a8b338cc619b0e25118e3aa634cde4441998775d437d6210830b87b37759686c"
             },
@@ -282653,6 +284520,34 @@
             {
               "item": "InvocationHandleFields.terminal",
               "sha256": "26679c870ffc2212f0bc66c4b6eda6731884005990f792f1bf29edc4fb3508a1"
+            },
+            {
+              "item": "RuntimeCallContext.authority",
+              "sha256": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd"
+            },
+            {
+              "item": "RuntimeCallContext.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "RuntimeCallContext.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "RuntimeCallContext.metadata",
+              "sha256": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed"
+            },
+            {
+              "item": "RuntimeCallContext.new",
+              "sha256": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71"
+            },
+            {
+              "item": "RuntimeCallContext.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "RuntimeCallContext.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
             },
             {
               "item": "RuntimeClient.awaitResult",
@@ -282738,6 +284633,10 @@
               "sha256": "01d40abc7e38397e23993da95351b5dce88de84d0d01d1df608e0669eddf69d7"
             },
             {
+              "item": "RuntimeCallContext",
+              "sha256": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719"
+            },
+            {
               "item": "RuntimeClient",
               "sha256": "a8b338cc619b0e25118e3aa634cde4441998775d437d6210830b87b37759686c"
             },
@@ -282928,6 +284827,34 @@
             {
               "item": "InvocationHandleFields.terminal",
               "sha256": "26679c870ffc2212f0bc66c4b6eda6731884005990f792f1bf29edc4fb3508a1"
+            },
+            {
+              "item": "RuntimeCallContext.authority",
+              "sha256": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd"
+            },
+            {
+              "item": "RuntimeCallContext.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "RuntimeCallContext.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "RuntimeCallContext.metadata",
+              "sha256": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed"
+            },
+            {
+              "item": "RuntimeCallContext.new",
+              "sha256": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71"
+            },
+            {
+              "item": "RuntimeCallContext.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "RuntimeCallContext.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
             },
             {
               "item": "RuntimeClient.awaitResult",
@@ -283013,6 +284940,10 @@
               "sha256": "01d40abc7e38397e23993da95351b5dce88de84d0d01d1df608e0669eddf69d7"
             },
             {
+              "item": "RuntimeCallContext",
+              "sha256": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719"
+            },
+            {
               "item": "RuntimeClient",
               "sha256": "a8b338cc619b0e25118e3aa634cde4441998775d437d6210830b87b37759686c"
             },
@@ -283203,6 +285134,34 @@
             {
               "item": "InvocationHandleFields.terminal",
               "sha256": "26679c870ffc2212f0bc66c4b6eda6731884005990f792f1bf29edc4fb3508a1"
+            },
+            {
+              "item": "RuntimeCallContext.authority",
+              "sha256": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd"
+            },
+            {
+              "item": "RuntimeCallContext.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "RuntimeCallContext.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "RuntimeCallContext.metadata",
+              "sha256": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed"
+            },
+            {
+              "item": "RuntimeCallContext.new",
+              "sha256": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71"
+            },
+            {
+              "item": "RuntimeCallContext.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "RuntimeCallContext.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
             },
             {
               "item": "RuntimeClient.awaitResult",
@@ -283288,6 +285247,10 @@
               "sha256": "01d40abc7e38397e23993da95351b5dce88de84d0d01d1df608e0669eddf69d7"
             },
             {
+              "item": "RuntimeCallContext",
+              "sha256": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719"
+            },
+            {
               "item": "RuntimeClient",
               "sha256": "a8b338cc619b0e25118e3aa634cde4441998775d437d6210830b87b37759686c"
             },
@@ -283478,6 +285441,34 @@
             {
               "item": "InvocationHandleFields.terminal",
               "sha256": "26679c870ffc2212f0bc66c4b6eda6731884005990f792f1bf29edc4fb3508a1"
+            },
+            {
+              "item": "RuntimeCallContext.authority",
+              "sha256": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd"
+            },
+            {
+              "item": "RuntimeCallContext.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "RuntimeCallContext.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "RuntimeCallContext.metadata",
+              "sha256": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed"
+            },
+            {
+              "item": "RuntimeCallContext.new",
+              "sha256": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71"
+            },
+            {
+              "item": "RuntimeCallContext.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "RuntimeCallContext.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
             },
             {
               "item": "RuntimeClient.awaitResult",
@@ -283563,6 +285554,10 @@
               "sha256": "01d40abc7e38397e23993da95351b5dce88de84d0d01d1df608e0669eddf69d7"
             },
             {
+              "item": "RuntimeCallContext",
+              "sha256": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719"
+            },
+            {
               "item": "RuntimeClient",
               "sha256": "a8b338cc619b0e25118e3aa634cde4441998775d437d6210830b87b37759686c"
             },
@@ -283753,6 +285748,34 @@
             {
               "item": "InvocationHandleFields.terminal",
               "sha256": "26679c870ffc2212f0bc66c4b6eda6731884005990f792f1bf29edc4fb3508a1"
+            },
+            {
+              "item": "RuntimeCallContext.authority",
+              "sha256": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd"
+            },
+            {
+              "item": "RuntimeCallContext.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "RuntimeCallContext.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "RuntimeCallContext.metadata",
+              "sha256": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed"
+            },
+            {
+              "item": "RuntimeCallContext.new",
+              "sha256": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71"
+            },
+            {
+              "item": "RuntimeCallContext.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "RuntimeCallContext.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
             },
             {
               "item": "RuntimeClient.awaitResult",
@@ -283838,6 +285861,10 @@
               "sha256": "01d40abc7e38397e23993da95351b5dce88de84d0d01d1df608e0669eddf69d7"
             },
             {
+              "item": "RuntimeCallContext",
+              "sha256": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719"
+            },
+            {
               "item": "RuntimeClient",
               "sha256": "a8b338cc619b0e25118e3aa634cde4441998775d437d6210830b87b37759686c"
             },
@@ -284028,6 +286055,34 @@
             {
               "item": "InvocationHandleFields.terminal",
               "sha256": "26679c870ffc2212f0bc66c4b6eda6731884005990f792f1bf29edc4fb3508a1"
+            },
+            {
+              "item": "RuntimeCallContext.authority",
+              "sha256": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd"
+            },
+            {
+              "item": "RuntimeCallContext.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "RuntimeCallContext.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "RuntimeCallContext.metadata",
+              "sha256": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed"
+            },
+            {
+              "item": "RuntimeCallContext.new",
+              "sha256": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71"
+            },
+            {
+              "item": "RuntimeCallContext.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "RuntimeCallContext.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
             },
             {
               "item": "RuntimeClient.awaitResult",
@@ -284113,6 +286168,10 @@
               "sha256": "01d40abc7e38397e23993da95351b5dce88de84d0d01d1df608e0669eddf69d7"
             },
             {
+              "item": "RuntimeCallContext",
+              "sha256": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719"
+            },
+            {
               "item": "RuntimeClient",
               "sha256": "a8b338cc619b0e25118e3aa634cde4441998775d437d6210830b87b37759686c"
             },
@@ -284303,6 +286362,34 @@
             {
               "item": "InvocationHandleFields.terminal",
               "sha256": "26679c870ffc2212f0bc66c4b6eda6731884005990f792f1bf29edc4fb3508a1"
+            },
+            {
+              "item": "RuntimeCallContext.authority",
+              "sha256": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd"
+            },
+            {
+              "item": "RuntimeCallContext.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "RuntimeCallContext.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "RuntimeCallContext.metadata",
+              "sha256": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed"
+            },
+            {
+              "item": "RuntimeCallContext.new",
+              "sha256": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71"
+            },
+            {
+              "item": "RuntimeCallContext.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "RuntimeCallContext.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
             },
             {
               "item": "RuntimeClient.awaitResult",
@@ -284388,6 +286475,10 @@
               "sha256": "01d40abc7e38397e23993da95351b5dce88de84d0d01d1df608e0669eddf69d7"
             },
             {
+              "item": "RuntimeCallContext",
+              "sha256": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719"
+            },
+            {
               "item": "RuntimeClient",
               "sha256": "a8b338cc619b0e25118e3aa634cde4441998775d437d6210830b87b37759686c"
             },
@@ -284578,6 +286669,34 @@
             {
               "item": "InvocationHandleFields.terminal",
               "sha256": "26679c870ffc2212f0bc66c4b6eda6731884005990f792f1bf29edc4fb3508a1"
+            },
+            {
+              "item": "RuntimeCallContext.authority",
+              "sha256": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd"
+            },
+            {
+              "item": "RuntimeCallContext.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "RuntimeCallContext.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "RuntimeCallContext.metadata",
+              "sha256": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed"
+            },
+            {
+              "item": "RuntimeCallContext.new",
+              "sha256": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71"
+            },
+            {
+              "item": "RuntimeCallContext.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "RuntimeCallContext.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
             },
             {
               "item": "RuntimeClient.awaitResult",
@@ -284663,6 +286782,10 @@
               "sha256": "01d40abc7e38397e23993da95351b5dce88de84d0d01d1df608e0669eddf69d7"
             },
             {
+              "item": "RuntimeCallContext",
+              "sha256": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719"
+            },
+            {
               "item": "RuntimeClient",
               "sha256": "a8b338cc619b0e25118e3aa634cde4441998775d437d6210830b87b37759686c"
             },
@@ -284853,6 +286976,34 @@
             {
               "item": "InvocationHandleFields.terminal",
               "sha256": "26679c870ffc2212f0bc66c4b6eda6731884005990f792f1bf29edc4fb3508a1"
+            },
+            {
+              "item": "RuntimeCallContext.authority",
+              "sha256": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd"
+            },
+            {
+              "item": "RuntimeCallContext.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "RuntimeCallContext.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "RuntimeCallContext.metadata",
+              "sha256": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed"
+            },
+            {
+              "item": "RuntimeCallContext.new",
+              "sha256": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71"
+            },
+            {
+              "item": "RuntimeCallContext.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "RuntimeCallContext.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
             },
             {
               "item": "RuntimeClient.awaitResult",
@@ -284938,6 +287089,10 @@
               "sha256": "01d40abc7e38397e23993da95351b5dce88de84d0d01d1df608e0669eddf69d7"
             },
             {
+              "item": "RuntimeCallContext",
+              "sha256": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719"
+            },
+            {
               "item": "RuntimeClient",
               "sha256": "a8b338cc619b0e25118e3aa634cde4441998775d437d6210830b87b37759686c"
             },
@@ -285128,6 +287283,34 @@
             {
               "item": "InvocationHandleFields.terminal",
               "sha256": "26679c870ffc2212f0bc66c4b6eda6731884005990f792f1bf29edc4fb3508a1"
+            },
+            {
+              "item": "RuntimeCallContext.authority",
+              "sha256": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd"
+            },
+            {
+              "item": "RuntimeCallContext.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "RuntimeCallContext.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "RuntimeCallContext.metadata",
+              "sha256": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed"
+            },
+            {
+              "item": "RuntimeCallContext.new",
+              "sha256": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71"
+            },
+            {
+              "item": "RuntimeCallContext.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "RuntimeCallContext.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
             },
             {
               "item": "RuntimeClient.awaitResult",
@@ -285213,6 +287396,10 @@
               "sha256": "01d40abc7e38397e23993da95351b5dce88de84d0d01d1df608e0669eddf69d7"
             },
             {
+              "item": "RuntimeCallContext",
+              "sha256": "27bb5ea668ee1ffcf1e1a881d7012fa0ef0410bed31ff3b12a0183211d400719"
+            },
+            {
               "item": "RuntimeClient",
               "sha256": "a8b338cc619b0e25118e3aa634cde4441998775d437d6210830b87b37759686c"
             },
@@ -285403,6 +287590,34 @@
             {
               "item": "InvocationHandleFields.terminal",
               "sha256": "26679c870ffc2212f0bc66c4b6eda6731884005990f792f1bf29edc4fb3508a1"
+            },
+            {
+              "item": "RuntimeCallContext.authority",
+              "sha256": "40c27834011e8ff0e0a4ffe63057293eef2f4d34878dca3e9fd2f6bca66110dd"
+            },
+            {
+              "item": "RuntimeCallContext.calleeURA",
+              "sha256": "97355a18210bebde8537dc36e06ec6e52b32515dfbcd48d7e7c8e4f3c5642a27"
+            },
+            {
+              "item": "RuntimeCallContext.callerURA",
+              "sha256": "ca14060ffd8a04a3ee939472d51cd901afb51cd7ac75acaf288de38f292b32f7"
+            },
+            {
+              "item": "RuntimeCallContext.metadata",
+              "sha256": "19493dbe75a5c364aa5ca2d2d276f647cb47a684d84b40710627eba3ecafb2ed"
+            },
+            {
+              "item": "RuntimeCallContext.new",
+              "sha256": "d616e372836b28045033e63389efcb2f34ed6c01dbc03f3422e253fe178a4d71"
+            },
+            {
+              "item": "RuntimeCallContext.subjectURA",
+              "sha256": "aa326540be478c3b73ce7678d46ca9fd5be3dfb792750bb59fcc21d4cdfd3b37"
+            },
+            {
+              "item": "RuntimeCallContext.toJSON",
+              "sha256": "b0a84eb88b09d35a9954879512128aae5ad7dccb04d8a7a703a86858f3f4e68d"
             },
             {
               "item": "RuntimeClient.awaitResult",

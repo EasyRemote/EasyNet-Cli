@@ -33,7 +33,11 @@ const expectedExports = [
   "MAX_BIDI_BUFFERED_FRAMES",
   "MAX_STREAM_BUFFERED_EVENTS",
   "PreparedInvocation",
+  "ReceiptFilter",
+  "ReceiptHistoryPage",
+  "ReceiptListRequest",
   "RetryHint",
+  "RuntimeCallContext",
   "RuntimeClient",
   "RuntimeHealth",
   "RuntimeReceipt",
@@ -41,6 +45,7 @@ const expectedExports = [
   "SESSION_AUTHORITY_METADATA_KEY",
   "SessionAuthority",
   "SessionAuthorityRequest",
+  "SessionHistoryOperations",
   "SignedInvocation",
   "SignerPolicy",
   "SigningMaterial",
@@ -124,6 +129,22 @@ const sessionResourceValue = () =>
     scopes: ["observe.health"],
     allowed_actions: ["invoke"],
     allowed_followup_abilities: ["observe.health"],
+    issued_at_ms: 10,
+    expires_at_ms: 20,
+  });
+
+const historySessionValue = () =>
+  authorityValue({
+    issuer_ura: caller,
+    session_id: "session-1",
+    session_owner_user_id: "alice",
+    creator_principal_id: caller,
+    callee_ura: callee,
+    subject_ura: "easynet:///r/example/resource/user.alice/session/session-1",
+    audience: callee,
+    scopes: ["invocation.history.list"],
+    allowed_actions: ["invoke"],
+    allowed_followup_abilities: ["invocation.history.list"],
     issued_at_ms: 10,
     expires_at_ms: 20,
   });
@@ -839,6 +860,79 @@ test("authority metadata binds session subject to owner and session id", () => {
     }),
     /session authority subject_ura must be a canonical user or session subject/,
   );
+});
+
+test("session history preflight rejects authority subject mismatch before receipt provider", async () => {
+  let providerCalls = 0;
+  const history = new sdk.SessionHistoryOperations({
+    list: () => {
+      providerCalls += 1;
+      return {
+        records: [],
+        next_cursor: "",
+        limit: 50,
+        source: "invocation.history.list",
+      };
+    },
+  });
+
+  const request = new sdk.ReceiptListRequest({
+    call: {
+      caller_ura: caller,
+      callee_ura: callee,
+      subject_ura: callee,
+      metadata: {
+        [sdk.SESSION_AUTHORITY_METADATA_KEY]: historySessionValue(),
+      },
+    },
+    limit: 50,
+  });
+
+  await assert.rejects(
+    () => history.list(request),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.AUTHORITY_SUBJECT_MISMATCH &&
+      error.stage === "history" &&
+      /session authority subject does not admit receipt query subject_ura/.test(error.message),
+  );
+  assert.equal(providerCalls, 0);
+});
+
+test("session history keeps subject filters as ledger predicates", async () => {
+  let seenRequest = null;
+  const history = new sdk.SessionHistoryOperations({
+    list: (request) => {
+      seenRequest = request;
+      return JSON.stringify({
+        records: [{ receipt_ura: "easynet:///r/example/resource/runtime/invocation/i1/receipt/1" }],
+        next_cursor: "",
+        limit: 25,
+        source: "invocation.history.list",
+      });
+    },
+  });
+
+  const page = await history.list({
+    call: {
+      caller_ura: caller,
+      callee_ura: callee,
+      subject_ura: "easynet:///r/example/resource/user.alice/session/session-1",
+      metadata: {
+        [sdk.SESSION_AUTHORITY_METADATA_KEY]: historySessionValue(),
+      },
+    },
+    filter: {
+      caller_ura: caller,
+      callee_ura: callee,
+      subject_ura: callee,
+    },
+    limit: 25,
+  });
+
+  assert.equal(seenRequest.filter.subjectURA, callee);
+  assert.equal(page.source, "invocation.history.list");
+  assert.equal(page.records.length, 1);
 });
 
 test("stream and bidi state machines retain bounded history", async () => {

@@ -393,6 +393,86 @@ export class RuntimeReceipt {
   validateSummary(): void;
 }
 
+export interface RuntimeCallContextFields {
+  caller_ura: string;
+  callee_ura: string;
+  subject_ura: string;
+  metadata?: Record<string, unknown>;
+  authority?: DelegationProof | SessionAuthority | AuthorityMetadata | DelegationProofFields | SessionAuthorityFields | null;
+}
+
+export class RuntimeCallContext {
+  callerURA: string;
+  calleeURA: string;
+  subjectURA: string;
+  metadata: Record<string, unknown>;
+  authority: DelegationProof | SessionAuthority | null;
+  constructor(fields: RuntimeCallContextFields);
+  toJSON(): Record<string, unknown>;
+}
+
+export interface ReceiptFilterFields {
+  caller_ura?: string | null;
+  callee_ura?: string | null;
+  subject_ura?: string | null;
+  ability_ura?: string | null;
+  agent_ura?: string | null;
+  state?: string | null;
+}
+
+export class ReceiptFilter {
+  callerURA: string;
+  calleeURA: string;
+  subjectURA: string;
+  abilityURA: string;
+  agentURA: string;
+  state: string;
+  constructor(fields?: ReceiptFilterFields);
+  toJSON(): Record<string, unknown>;
+}
+
+export interface ReceiptListRequestFields {
+  call: RuntimeCallContext | RuntimeCallContextFields;
+  filter?: ReceiptFilter | ReceiptFilterFields | null;
+  limit?: number | null;
+  cursor?: string | null;
+}
+
+export class ReceiptListRequest {
+  call: RuntimeCallContext;
+  filter: ReceiptFilter | null;
+  limit: number;
+  cursor: string;
+  constructor(fields: ReceiptListRequestFields);
+  toJSON(): Record<string, unknown>;
+}
+
+export interface ReceiptHistoryPageFields {
+  records: Array<Record<string, unknown>>;
+  next_cursor?: string | null;
+  limit?: number | null;
+  source: string;
+}
+
+export class ReceiptHistoryPage {
+  records: Array<Record<string, unknown>>;
+  nextCursor: string;
+  limit: number;
+  source: string;
+  constructor(fields: ReceiptHistoryPageFields);
+  static fromJSON(raw: Uint8Array | string): ReceiptHistoryPage;
+  toJSON(): ReceiptHistoryPageFields;
+}
+
+export interface ReceiptProvider {
+  list(request: ReceiptListRequest): Promise<ReceiptHistoryPage | ReceiptHistoryPageFields | Uint8Array | string> | ReceiptHistoryPage | ReceiptHistoryPageFields | Uint8Array | string;
+}
+
+export class SessionHistoryOperations {
+  constructor(receipts: ReceiptProvider);
+  list(request: ReceiptListRequest | ReceiptListRequestFields): Promise<ReceiptHistoryPage>;
+}
+
 export class InvocationBuilder {
   withCallerURA(value: string): this;
   withCalleeURA(value: string): this;
