@@ -188,6 +188,39 @@ for needle, label in required.items():
 PY
 }
 
+check_cabi_bidi_cancel_reason_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local cabi="$cli_root/sdk/go/cabi_runtime.go"
+  local test="$cli_root/sdk/go/cabi_runtime_test.go"
+  [[ -f "$cabi" ]] || fail "Go C ABI runtime transport is missing"
+  [[ -f "$test" ]] || fail "Go C ABI runtime transport tests are missing"
+
+  "$PYTHON_BIN" - "$cabi" "$test" <<'PY'
+import sys
+from pathlib import Path
+
+cabi = Path(sys.argv[1]).read_text(encoding="utf-8")
+test = Path(sys.argv[2]).read_text(encoding="utf-8")
+
+start = cabi.find("func (b *cabiBidiTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {")
+end = cabi.find("func (b *cabiBidiTransport) closeFromOwner", start)
+if start < 0 or end < 0:
+    raise SystemExit("go_cabi_bidi_cancel_function_missing")
+body = cabi[start:end]
+for retired in (
+    "_ = reason",
+    '"reason":"cancelled"',
+    '`{"session_id":%q,"state":"CancelRequested","terminal":false,"reason":"cancelled"}`',
+):
+    if retired in body:
+        raise SystemExit(f"go_cabi_bidi_cancel_reason_fallback:{retired}")
+if "Reason    string `json:\"reason\"`" not in body or "Reason:    reason" not in body:
+    raise SystemExit("go_cabi_bidi_cancel_reason_projection_missing")
+if 'observation.cancel.Reason() != "client stop"' not in test:
+    raise SystemExit("go_cabi_bidi_cancel_reason_regression_test_missing")
+PY
+}
+
 check_terminal_lifecycle_args_contract() {
   local cli_root="${1:-$ROOT}"
   local lifecycle="$cli_root/src/daemon/ability/builtins/device_control/terminal/lifecycle.rs"
@@ -11408,6 +11441,7 @@ EOF
   check_failure_code_default_policy_contract
   check_bidi_dispatch_default_code_policy_contract
   check_bidi_reverse_unary_terminal_state_contract
+  check_cabi_bidi_cancel_reason_contract
   check_terminal_lifecycle_args_contract
   check_session_failure_wire_facts_contract
   check_active_source_contract
@@ -11548,6 +11582,7 @@ check_ffi_init_typed_connect_error_contract
 check_failure_code_default_policy_contract
 check_bidi_dispatch_default_code_policy_contract
 check_bidi_reverse_unary_terminal_state_contract
+check_cabi_bidi_cancel_reason_contract
 check_session_failure_wire_facts_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract

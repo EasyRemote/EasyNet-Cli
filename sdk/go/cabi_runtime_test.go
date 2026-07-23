@@ -513,6 +513,9 @@ func TestCABIRuntimeProviderRequestsBidiCancelBeforeCanonicalTerminal(t *testing
 		observation.cancel.Terminal() {
 		t.Fatalf("bidi cancel must be a non-terminal request: %#v", observation.cancel)
 	}
+	if observation.cancel.Reason() != "client stop" {
+		t.Fatalf("bidi cancel reason = %q, want caller reason", observation.cancel.Reason())
+	}
 	if !observation.terminal.Terminal() || len(observation.terminal.TerminalReceiptJSON()) == 0 {
 		t.Fatalf("bidi cancel did not drain a canonical terminal: %#v", observation.terminal)
 	}

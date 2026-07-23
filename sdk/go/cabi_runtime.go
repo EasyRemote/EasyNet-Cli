@@ -1259,11 +1259,24 @@ func (b *cabiBidiTransport) Cancel(ctx context.Context, reason string) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
-	_ = reason
 	if err := b.cancelWithHandle(handle); err != nil {
 		return nil, err
 	}
-	return []byte(fmt.Sprintf(`{"session_id":%q,"state":"CancelRequested","terminal":false,"reason":"cancelled"}`, strconv.FormatUint(b.bidiID, 10))), nil
+	outcome, err := json.Marshal(struct {
+		SessionID string `json:"session_id"`
+		State     string `json:"state"`
+		Terminal  bool   `json:"terminal"`
+		Reason    string `json:"reason"`
+	}{
+		SessionID: strconv.FormatUint(b.bidiID, 10),
+		State:     string(BidiCancelRequested),
+		Terminal:  false,
+		Reason:    reason,
+	})
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode C ABI bidi cancel outcome: %v", err), err)
+	}
+	return outcome, nil
 }
 
 func (b *cabiBidiTransport) closeFromOwner(handle uint64) error {
