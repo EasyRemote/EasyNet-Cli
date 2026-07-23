@@ -220,11 +220,7 @@ fn verify_invocation_binding(
     if proof.session_id.as_deref().is_some() && proof.session_id.as_deref() != context.session_id {
         return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
     }
-    if proof.session_owner_user_id.as_deref().is_some()
-        && proof.session_owner_user_id.as_deref() != context.session_owner_user_id
-    {
-        return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
-    }
+    verify_session_binding_facts(proof, context)?;
     if proof.session_id.is_some() {
         let allowed = normalized_followup_abilities(&proof.allowed_followup_abilities);
         if allowed.is_empty() {
@@ -235,6 +231,35 @@ fn verify_invocation_binding(
         }
     }
     if is_request_scoped_one_time_proof(proof) && !proof_binds_invocation_identity(proof) {
+        return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
+    Ok(())
+}
+
+fn verify_session_binding_facts(
+    proof: &AuthorityProof,
+    context: &AuthorityProofVerificationContext<'_>,
+) -> Result<(), AuthorityProofDenyReason> {
+    if proof.session_id.is_some() {
+        let proof_owner = proof
+            .session_owner_user_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|owner| !owner.is_empty())
+            .ok_or(AuthorityProofDenyReason::AuthorityProofMismatch)?;
+        let context_owner = context
+            .session_owner_user_id
+            .map(str::trim)
+            .filter(|owner| !owner.is_empty())
+            .ok_or(AuthorityProofDenyReason::AuthorityProofMismatch)?;
+        if proof_owner != context_owner {
+            return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
+        }
+        return Ok(());
+    }
+    if proof.session_owner_user_id.as_deref().is_some()
+        && proof.session_owner_user_id.as_deref() != context.session_owner_user_id
+    {
         return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
     }
     Ok(())
@@ -474,6 +499,16 @@ mod tests {
         let resolver = resign(&mut proof);
         let err = AuthorityProofVerifier::verify(Some(&proof), &context(), &resolver)
             .expect_err("session proof must bind follow-up ability set");
+        assert_eq!(err, AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
+
+    #[test]
+    fn verifier_rejects_session_proof_without_session_owner_fact() {
+        let (mut proof, _resolver) = signed_proof();
+        proof.session_owner_user_id = None;
+        let resolver = resign(&mut proof);
+        let err = AuthorityProofVerifier::verify(Some(&proof), &context(), &resolver)
+            .expect_err("session proof must bind session owner");
         assert_eq!(err, AuthorityProofDenyReason::AuthorityProofMismatch);
     }
 

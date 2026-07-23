@@ -2162,6 +2162,63 @@ for required in (
 PY
 }
 
+check_authority_proof_session_fact_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local proof="$cli_root/src/daemon/invocation/admission/authority_proof.rs"
+  [[ -f "$proof" ]] || return 0
+
+  "$PYTHON_BIN" - "$proof" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+for required in (
+    "fn verify_session_binding_facts(",
+    "verify_session_binding_facts(proof, context)?",
+    "if proof.session_id.is_some()",
+    ".ok_or(AuthorityProofDenyReason::AuthorityProofMismatch)?",
+    "verifier_rejects_session_proof_without_session_owner_fact",
+    "proof.session_owner_user_id = None",
+    "session proof must bind session owner",
+):
+    if required not in text:
+        raise SystemExit(f"authority_proof_session_fact:missing:{required}")
+
+helper = re.search(
+    r"fn verify_session_binding_facts\([^)]*\)\s*->\s*Result<\(\), AuthorityProofDenyReason>\s*\{(?P<body>.*?)\n\}\n\nfn normalized_followup_abilities",
+    text,
+    re.S,
+)
+if helper is None:
+    raise SystemExit("authority_proof_session_fact:helper_not_inspectable")
+body = helper.group("body")
+for required in (
+    "proof.session_owner_user_id",
+    "context.session_owner_user_id",
+    "map(str::trim)",
+    "filter(|owner| !owner.is_empty())",
+):
+    if required not in body:
+        raise SystemExit(f"authority_proof_session_fact:helper_missing:{required}")
+
+binding = re.search(
+    r"fn verify_invocation_binding\([^)]*\)\s*->\s*Result<\(\), AuthorityProofDenyReason>\s*\{(?P<body>.*?)\n\}\n\nfn verify_session_binding_facts",
+    text,
+    re.S,
+)
+if binding is None:
+    raise SystemExit("authority_proof_session_fact:binding_not_inspectable")
+legacy_inline = (
+    "if proof.session_owner_user_id.as_deref().is_some()\n"
+    "        && proof.session_owner_user_id.as_deref() != context.session_owner_user_id"
+)
+if legacy_inline in binding.group("body"):
+    raise SystemExit("authority_proof_session_fact:legacy_optional_inline_check")
+PY
+}
+
 check_resources_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local resources="$cli_root/src/daemon/persistence/resources.rs"
@@ -13843,6 +13900,38 @@ EOF
   if ( CLI_ROOT="$tmp/auth-session-owner-fact-legacy"; check_auth_session_owner_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected auth session owner fact compatibility gate to fail"
   fi
+  mkdir -p "$tmp/authority-proof-session-fact-legacy/src/daemon/invocation/admission"
+  cat >"$tmp/authority-proof-session-fact-legacy/src/daemon/invocation/admission/authority_proof.rs" <<'EOF'
+pub struct AuthorityProof {
+    pub session_id: Option<String>,
+    pub session_owner_user_id: Option<String>,
+}
+pub struct AuthorityProofVerificationContext<'a> {
+    pub session_id: Option<&'a str>,
+    pub session_owner_user_id: Option<&'a str>,
+}
+fn verify_invocation_binding(
+    proof: &AuthorityProof,
+    context: &AuthorityProofVerificationContext<'_>,
+) -> Result<(), AuthorityProofDenyReason> {
+    if proof.session_id.as_deref().is_some() && proof.session_id.as_deref() != context.session_id {
+        return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
+    if proof.session_owner_user_id.as_deref().is_some()
+        && proof.session_owner_user_id.as_deref() != context.session_owner_user_id
+    {
+        return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
+    Ok(())
+}
+#[cfg(test)]
+mod tests {
+    fn verifier_rejects_session_proof_without_followup_set() {}
+}
+EOF
+  if ( CLI_ROOT="$tmp/authority-proof-session-fact-legacy"; check_authority_proof_session_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected authority proof session fact compatibility gate to fail"
+  fi
   mkdir -p "$tmp/resources-schema-legacy/src/daemon/persistence"
   cat >"$tmp/resources-schema-legacy/src/daemon/persistence/resources.rs" <<'EOF'
 /// Resource type taxonomy — RFC-005 v3.2. The wire form is a
@@ -14164,6 +14253,7 @@ EOF
   check_local_agents_schema_contract
   check_profile_store_schema_contract
   check_auth_session_owner_fact_contract
+  check_authority_proof_session_fact_contract
   check_resources_schema_contract
   check_agent_spec_schema_contract
   check_control_discovery_schema_contract
@@ -14325,6 +14415,7 @@ check_pages_publish_response_projection_contract
 check_pages_api_response_projection_contract
 check_profile_store_schema_contract
 check_auth_session_owner_fact_contract
+check_authority_proof_session_fact_contract
 check_resources_schema_contract
 check_agent_spec_schema_contract
 check_control_discovery_schema_contract
