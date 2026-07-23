@@ -10237,28 +10237,36 @@ check_java_sdk_runtime_receipt_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local result="$cli_root/sdk/java/src/main/java/run/runtime/sdk/InvocationResult.java"
   local receipt="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceipt.java"
+  local proof="$cli_root/sdk/java/src/main/java/run/runtime/sdk/RuntimeReceiptProofFacts.java"
   local tests="$cli_root/sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
   [[ -f "$result" ]] || fail "Java InvocationResult source is missing: ${result#$cli_root/}"
   [[ -f "$receipt" ]] || fail "Java RuntimeReceipt source is missing: ${receipt#$cli_root/}"
+  [[ -f "$proof" ]] || fail "Java RuntimeReceiptProofFacts source is missing: ${proof#$cli_root/}"
   [[ -f "$tests" ]] || fail "Java runtime seam tests are missing: ${tests#$cli_root/}"
 
-  "$PYTHON_BIN" - "$result" "$receipt" "$tests" <<'PY'
+  "$PYTHON_BIN" - "$result" "$receipt" "$proof" "$tests" <<'PY'
 import sys
 from pathlib import Path
 
-result_path, receipt_path, tests_path = map(Path, sys.argv[1:])
+result_path, receipt_path, proof_path, tests_path = map(Path, sys.argv[1:])
 result = result_path.read_text(encoding="utf-8")
 receipt = receipt_path.read_text(encoding="utf-8")
+proof = proof_path.read_text(encoding="utf-8")
 tests = tests_path.read_text(encoding="utf-8")
 
 if "public final class RuntimeReceipt" not in receipt:
     raise SystemExit("java_runtime_receipt_projection:runtime_receipt_type_missing")
 for fragment, label in {
-    "validateProofFacts": "proof_fact_validator_missing",
+    "final class RuntimeReceiptProofFacts": "proof_fact_validator_missing",
     '"authority_proof"': "authority_proof_required_missing",
     '"parent_receipts"': "parent_receipts_required_missing",
     "receiptHash(": "hash_validator_missing",
     "base64Bytes(": "base64_validator_missing",
+}.items():
+    if fragment not in proof:
+        raise SystemExit(f"java_runtime_receipt_projection:{label}")
+for fragment, label in {
+    "RuntimeReceiptProofFacts.validate(raw)": "runtime_receipt_not_using_proof_fact_validator",
     "canonicalLifecycleState": "lifecycle_state_machine_missing",
 }.items():
     if fragment not in receipt:

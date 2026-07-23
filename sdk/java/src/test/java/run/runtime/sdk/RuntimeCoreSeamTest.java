@@ -2,6 +2,7 @@ package run.runtime.sdk;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Base64;
@@ -294,6 +295,52 @@ public final class RuntimeCoreSeamTest {
         ErrorCode.INVALID_ARGUMENT,
         "authority_proof",
         () -> RuntimeReceipt.fromMap(missingProof));
+
+    Map<String, Object> mismatchedProofHash = new LinkedHashMap<>(complete);
+    Map<String, Object> mismatchedProof = mutableAuthorityProof(mismatchedProofHash);
+    mismatchedProof.put("proof_hash_hex", "ff".repeat(32));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "authority_proof_hash_mismatch",
+        () -> RuntimeReceipt.fromMap(mismatchedProofHash));
+
+    Map<String, Object> bindingHashProof = new LinkedHashMap<>(complete);
+    Map<String, Object> proof = mutableAuthorityProof(bindingHashProof);
+    proof.put("proof_payload_base64", "");
+    proof.put("proof_hash_hex", authorityBindingProofHashSelf(CALLEE));
+    proof.remove("signature");
+    RuntimeReceipt bindingHashReceipt = RuntimeReceipt.fromMap(bindingHashProof);
+    check(
+        "COMPLETED".equals(bindingHashReceipt.lifecycleState()),
+        "binding-hash proof without payload/signature is accepted");
+
+    Map<String, Object> wrongIssuer = new LinkedHashMap<>(complete);
+    Map<String, Object> wrongIssuerProof = mutableAuthorityProof(wrongIssuer);
+    wrongIssuerProof.put(
+        "issuer",
+        Map.of("ura", "easynet:///r/example/device/other", "profile", "axon-strict-v2"));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "authority_proof issuer does not match callee_binding",
+        () -> RuntimeReceipt.fromMap(wrongIssuer));
+
+    Map<String, Object> hostedSignerWithoutAttestation = new LinkedHashMap<>(complete);
+    hostedSignerWithoutAttestation.put(
+        "signer_binding",
+        Map.of("ura", "easynet:///r/example/device/runtime-host", "profile", "axon-strict-v2"));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "hosted runtime receipt is missing host_attestation_base64",
+        () -> RuntimeReceipt.fromMap(hostedSignerWithoutAttestation));
+
+    Map<String, Object> selfSignerWithAttestation = new LinkedHashMap<>(complete);
+    selfSignerWithAttestation.put(
+        "host_attestation_base64", Base64.getEncoder().encodeToString(repeatedByte(0x73, 64)));
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        "self-signed runtime receipt must not carry host_attestation_base64",
+        () -> RuntimeReceipt.fromMap(selfSignerWithAttestation));
+
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
         "authority_proof",
@@ -1091,6 +1138,26 @@ public final class RuntimeCoreSeamTest {
     byte[] bytes = new byte[count];
     java.util.Arrays.fill(bytes, (byte) value);
     return bytes;
+  }
+
+  private static Map<String, Object> mutableAuthorityProof(Map<String, Object> receipt) {
+    @SuppressWarnings("unchecked")
+    Map<String, Object> rawProof = (Map<String, Object>) receipt.get("authority_proof");
+    Map<String, Object> proof = new LinkedHashMap<>(rawProof);
+    @SuppressWarnings("unchecked")
+    Map<String, Object> rawBinding = (Map<String, Object>) proof.get("binding");
+    proof.put("binding", new LinkedHashMap<>(rawBinding));
+    receipt.put("authority_proof", proof);
+    return proof;
+  }
+
+  private static String authorityBindingProofHashSelf(String principalURA) {
+    byte[] principal = bytes(principalURA);
+    ByteBuffer canonical = ByteBuffer.allocate(1 + 4 + principal.length);
+    canonical.put((byte) 0x01);
+    canonical.putInt(principal.length);
+    canonical.put(principal);
+    return sha256Hex(canonical.array());
   }
 
   private static String sha256Hex(byte[] bytes) {
