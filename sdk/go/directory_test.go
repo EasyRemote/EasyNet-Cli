@@ -121,6 +121,19 @@ func TestProjectDirectoryResolutionRejectsNegativeWithoutAnswerKind(t *testing.T
 	}
 }
 
+func TestProjectDirectoryRecordDoesNotPromoteLegacyAliases(t *testing.T) {
+	record := ProjectDirectoryRecord(map[string]any{
+		"type":           "URA_KIND_DEVICE",
+		"canonical_name": "easynet:///r/example/device/dev-1",
+	})
+	if record.Kind != "" || record.URA != "" {
+		t.Fatalf("legacy aliases were promoted into canonical fields: %#v", record)
+	}
+	if record.Raw["type"] != "URA_KIND_DEVICE" || record.Raw["canonical_name"] != "easynet:///r/example/device/dev-1" {
+		t.Fatalf("raw provider facts were not preserved: %#v", record.Raw)
+	}
+}
+
 func TestDirectoryHelpersRejectUnboundedCursorAndSurfaceNegativeDetail(t *testing.T) {
 	if _, err := directoryCursor(strings.Repeat("x", maxDirectoryCursorLen+1)); err == nil {
 		t.Fatal("oversized directory cursor was accepted")

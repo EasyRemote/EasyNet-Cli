@@ -5938,9 +5938,14 @@ for token, code in (
 for retired in (
     'answerKind == "" && len(negative) > 0',
     'answerKind = "RESOLVE_ANSWER_KIND_NEGATIVE"',
+    'directoryString(raw, "kind", "type")',
+    'directoryString(raw, "ura", "canonical_name")',
+    'func directoryString(value map[string]any, keys ...string)',
 ):
     if retired in go_directory:
         raise SystemExit("go_directory_projection_answer_kind_fallback")
+if 'func directoryText(value map[string]any, key string)' not in go_directory:
+    raise SystemExit("go_directory_single_field_text_projector_missing")
 
 map_slice = re.search(
     r"func optionalDirectoryMapSlice\(.*?\n\}",
@@ -5991,9 +5996,14 @@ if "Directory answer must be an object" not in project_resolution.group(0):
 for retired in (
     'if not answer_kind and _optional_mapping(output.get("negative"), "negative")',
     'answer_kind = "RESOLVE_ANSWER_KIND_NEGATIVE"',
+    '_mapping_text(value, "kind", "type")',
+    '_mapping_text(value, "ura", "canonical_name")',
+    'def _mapping_text(value: Mapping[str, object], *keys: str)',
 ):
     if retired in py_directory:
         raise SystemExit("python_directory_projection_answer_kind_fallback")
+if 'def _mapping_text(value: Mapping[str, object], key: str) -> str:' not in py_directory:
+    raise SystemExit("python_directory_single_field_text_projector_missing")
 
 py_sequence = re.search(
     r"def _optional_mapping_sequence\(.*?\n\n",
@@ -6015,6 +6025,8 @@ for text, name in ((go_test, "go"), (py_test, "python")):
         raise SystemExit(f"{name}_directory_malformed_present_facts_test_missing")
     if "RejectsNegativeWithoutAnswerKind" not in text and "rejects_negative_without_answer_kind" not in text:
         raise SystemExit(f"{name}_directory_negative_without_answer_kind_test_missing")
+    if "DoesNotPromoteLegacyAliases" not in text and "does_not_promote_legacy_aliases" not in text:
+        raise SystemExit(f"{name}_directory_legacy_alias_projection_test_missing")
     for field in (
         "answer",
         "records",

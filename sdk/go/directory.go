@@ -236,7 +236,7 @@ func ParseDirectoryEvent(raw []byte) (DirectoryEvent, error) {
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return DirectoryEvent{}, fmt.Errorf("directory event: decode JSON: %w", err)
 	}
-	eventType := directoryString(event, "type")
+	eventType := directoryText(event, "type")
 	if eventType == "" {
 		return DirectoryEvent{}, invalidDirectory("Directory event type is required", nil)
 	}
@@ -253,7 +253,7 @@ func ProjectDirectoryResolution(output map[string]any) (DirectoryResolution, err
 		}
 		output = answer
 	}
-	answerKind := directoryString(output, "answer_kind")
+	answerKind := directoryText(output, "answer_kind")
 	negative, err := optionalDirectoryMap(output, "negative")
 	if err != nil {
 		return DirectoryResolution{}, err
@@ -297,17 +297,17 @@ func ProjectDirectoryResolution(output map[string]any) (DirectoryResolution, err
 	}
 	return DirectoryResolution{
 		AnswerKind:      answerKind,
-		CanonicalURA:    directoryString(output, "canonical_name"),
-		OwnerURA:        directoryString(output, "owner_ura"),
-		AbilityURA:      directoryString(output, "ability_ura"),
-		RouteURA:        directoryString(output, "route_ura"),
+		CanonicalURA:    directoryText(output, "canonical_name"),
+		OwnerURA:        directoryText(output, "owner_ura"),
+		AbilityURA:      directoryText(output, "ability_ura"),
+		RouteURA:        directoryText(output, "route_ura"),
 		NextHop:         nextHop,
 		SelectedRoute:   selectedRoute,
 		RouteCandidates: routeCandidates,
 		Records:         records,
 		Negative:        negative,
-		NextCursor:      directoryString(output, "next_cursor"),
-		ReleaseProfile:  directoryString(output, "release_profile"),
+		NextCursor:      directoryText(output, "next_cursor"),
+		ReleaseProfile:  directoryText(output, "release_profile"),
 		Authority:       authority,
 		CachePolicy:     cachePolicy,
 	}, nil
@@ -341,11 +341,11 @@ func ProjectDirectoryRecord(raw map[string]any) DirectoryRecord {
 		copyRaw[key] = value
 	}
 	return DirectoryRecord{
-		Kind:       directoryString(raw, "kind", "type"),
-		URA:        directoryString(raw, "ura", "canonical_name"),
-		OwnerURA:   directoryString(raw, "owner_ura"),
-		AbilityURA: directoryString(raw, "ability_ura"),
-		RouteURA:   directoryString(raw, "route_ura"),
+		Kind:       directoryText(raw, "kind"),
+		URA:        directoryText(raw, "ura"),
+		OwnerURA:   directoryText(raw, "owner_ura"),
+		AbilityURA: directoryText(raw, "ability_ura"),
+		RouteURA:   directoryText(raw, "route_ura"),
 		Raw:        copyRaw,
 	}
 }
@@ -378,11 +378,9 @@ func directoryNegativeDetail(resolution DirectoryResolution) string {
 	return "runtime Directory listing returned a negative answer"
 }
 
-func directoryString(value map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if text, ok := value[key].(string); ok && strings.TrimSpace(text) != "" {
-			return strings.TrimSpace(text)
-		}
+func directoryText(value map[string]any, key string) string {
+	if text, ok := value[key].(string); ok && strings.TrimSpace(text) != "" {
+		return strings.TrimSpace(text)
 	}
 	return ""
 }

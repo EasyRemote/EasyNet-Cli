@@ -132,6 +132,20 @@ def test_project_directory_resolution_rejects_negative_without_answer_kind() -> 
         )
 
 
+def test_project_directory_record_does_not_promote_legacy_aliases() -> None:
+    record = directory_module._project_record(
+        {
+            "type": "URA_KIND_DEVICE",
+            "canonical_name": "easynet:///r/example/device/dev-1",
+        }
+    )
+
+    assert record.kind == ""
+    assert record.ura == ""
+    assert record.raw["type"] == "URA_KIND_DEVICE"
+    assert record.raw["canonical_name"] == "easynet:///r/example/device/dev-1"
+
+
 def test_directory_helpers_reject_unbounded_cursor_and_surface_negative_detail() -> None:
     with pytest.raises(SDKError, match="cursor exceeds"):
         directory_module._directory_cursor("x" * 4097)

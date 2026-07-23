@@ -243,8 +243,8 @@ def _project_record(value: object) -> DirectoryRecord:
     if not isinstance(value, Mapping):
         raise _invalid("Directory record must be an object")
     return DirectoryRecord(
-        kind=_mapping_text(value, "kind", "type"),
-        ura=_mapping_text(value, "ura", "canonical_name"),
+        kind=_mapping_text(value, "kind"),
+        ura=_mapping_text(value, "ura"),
         owner_ura=_mapping_text(value, "owner_ura"),
         ability_ura=_mapping_text(value, "ability_ura"),
         route_ura=_mapping_text(value, "route_ura"),
@@ -289,11 +289,10 @@ def _negative_detail(resolution: DirectoryResolution) -> str:
     return "runtime Directory listing returned a negative answer"
 
 
-def _mapping_text(value: Mapping[str, object], *keys: str) -> str:
-    for key in keys:
-        raw = value.get(key)
-        if isinstance(raw, str) and raw.strip():
-            return raw.strip()
+def _mapping_text(value: Mapping[str, object], key: str) -> str:
+    raw = value.get(key)
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
     return ""
 
 
