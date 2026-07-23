@@ -585,11 +585,12 @@ mod tests {
 
     #[test]
     fn register_publishes_invoke_manifest_description() {
-        let mut reg = AxonAbilityCatalog::new_with_runtime(
+        let mut reg = AxonAbilityCatalog::new_test_runtime_for_device_authority(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                 None,
             ),
+            "easynet:///r/test/device/agent-invoke",
         );
         register_for_agent(
             &mut reg,
@@ -643,11 +644,12 @@ mod tests {
         target_handlers: &[(&str, crate::daemon::ability::dispatch::LocalRpcHandler)],
         agents: AgentRegistry,
     ) -> impl Fn(Value) -> anyhow::Result<Value> {
-        let mut reg = AxonAbilityCatalog::new_with_runtime(
+        let mut reg = AxonAbilityCatalog::new_test_runtime_for_device_authority(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                 None,
             ),
+            "easynet:///r/test/device/agent-invoke",
         );
         for (name, h) in target_handlers {
             reg.register_rpc_with_owner_and_action(
@@ -1106,7 +1108,9 @@ mod tests {
     fn invoke_unset_dispatch_handle_is_internal_error() {
         // Direct construction so we skip the fixture's `handle.set()`
         // call. This pins the daemon-boot-ordering check.
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_test_metadata_for_device_authority(
+            "easynet:///r/test/device/agent-invoke",
+        );
         let handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
             Arc::new(std::sync::OnceLock::new());
         register_for_agent(
