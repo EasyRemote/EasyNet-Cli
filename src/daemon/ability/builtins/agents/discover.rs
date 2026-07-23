@@ -1403,12 +1403,7 @@ mod tests {
     #[test]
     fn register_publishes_discover_manifest_description() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-                None,
-            ),
-        );
+        let mut reg = runtime_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1491,15 +1486,26 @@ mod tests {
         crate::core::ura::owner_ability_ura(owner_ura, public_name).expect("test ability URA")
     }
 
-    #[test]
-    fn unknown_scope_is_rejected() {
-        let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new_with_runtime(
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/agent-discover";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
+    fn runtime_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_runtime_for_device_authority(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                 None,
             ),
-        );
+            TEST_DEVICE_URA,
+        )
+    }
+
+    #[test]
+    fn unknown_scope_is_rejected() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let mut reg = runtime_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1514,7 +1520,7 @@ mod tests {
     #[test]
     fn discover_propagates_durable_registry_load_failure() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1646,7 +1652,7 @@ mod tests {
         // The user tier is the canonical same-realm federation scope.
         // Under HomeGuard it should fail softly with a typed envelope.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1666,7 +1672,7 @@ mod tests {
     #[test]
     fn public_scope_falls_through_when_not_joined() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1690,7 +1696,7 @@ mod tests {
         // a typed envelope so the LLM falls through gracefully.
         // Pin the wire-level code so a SKILL.md grep stays stable.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1724,7 +1730,7 @@ mod tests {
         agents.agents.insert("codex".into(), entry_b);
         let agents_clone = agents.clone();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1760,7 +1766,7 @@ mod tests {
         let agents = one_agent("claude", entry);
         let agents_clone = agents.clone();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1810,7 +1816,7 @@ mod tests {
         agents.agents.insert("codex".into(), codex_entry);
         let agents_clone = agents.clone();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "codex".into(),
@@ -1857,7 +1863,7 @@ mod tests {
         agents.agents.insert("codex".into(), codex_entry);
         let agents_clone = agents.clone();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "codex".into(),
@@ -1889,7 +1895,7 @@ mod tests {
         let agents = one_agent("claude", entry);
         let agents_clone = agents.clone();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1911,7 +1917,7 @@ mod tests {
         let agents = one_agent("claude", entry);
         let agents_clone = agents.clone();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1931,7 +1937,7 @@ mod tests {
     #[test]
     fn top_k_zero_is_rejected() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1962,7 +1968,7 @@ mod tests {
         let agents = one_agent("claude", entry);
         let agents_clone = agents.clone();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1982,7 +1988,7 @@ mod tests {
     #[test]
     fn source_window_all_rejects_top_k() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -2020,12 +2026,7 @@ mod tests {
         // discover. Wire the OnceLock to the same runtime-backed registry so
         // the provider delegation exercises the same LocalRuntime boundary as
         // daemon dispatch.
-        let mut reg = AxonAbilityCatalog::new_with_runtime(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-                None,
-            ),
-        );
+        let mut reg = runtime_test_catalog();
         reg.register_rpc_with_owner_and_action(
             "userx.discover",
             crate::daemon::ability::dispatch::OwnerKind::Device,
@@ -2069,7 +2070,7 @@ mod tests {
 
     #[test]
     fn provider_target_is_descriptor_bound_with_explicit_subject() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         reg.register_rpc_with_owner_and_action(
             "userx.discover",
             crate::daemon::ability::dispatch::OwnerKind::Device,
@@ -2107,7 +2108,7 @@ mod tests {
     #[test]
     fn provider_without_dot_is_rejected() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -2122,7 +2123,7 @@ mod tests {
     #[test]
     fn provider_not_registered_returns_typed_error() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         let handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
             Arc::new(std::sync::OnceLock::new());
         let mut agents = AgentRegistry::default();
