@@ -922,18 +922,25 @@ mod tests {
         register_with_backend(reg, Arc::new(SyntheticScreenBackend));
     }
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/screen-snapshot";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
     fn executable_catalog() -> AxonAbilityCatalog {
-        AxonAbilityCatalog::new_with_runtime(
+        AxonAbilityCatalog::new_test_runtime_for_device_authority(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                 None,
             ),
+            TEST_DEVICE_URA,
         )
     }
 
     #[test]
     fn registration_publishes_screen_descriptors_to_catalog_snapshot() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_with_synthetic(&mut reg);
         let rows = reg.authority_ability_catalog_snapshot();
 
