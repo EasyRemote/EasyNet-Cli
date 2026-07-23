@@ -6042,7 +6042,7 @@ for text, name in ((go_test, "go"), (py_test, "python")):
 PY
 }
 
-check_sdk_runtime_recovery_event_terminal_contract() {
+check_sdk_runtime_recovery_report_fail_closed_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local go_runtime="$cli_root/sdk/go/runtime.go"
   local go_test="$cli_root/sdk/go/runtime_test.go"
@@ -6069,6 +6069,20 @@ if "Terminal     *bool  `json:\"terminal\"`" not in go_runtime:
     raise SystemExit("go_runtime_recovery_event_terminal_pointer_missing")
 if "recovery event terminal is required" not in go_runtime:
     raise SystemExit("go_runtime_recovery_event_terminal_required_gate_missing")
+for field in (
+    "RecoveredInvocations     *int",
+    "ReapedOrphans            *int",
+    "ReplayedTerminalReceipts *int",
+):
+    if field not in go_runtime:
+        raise SystemExit("go_runtime_recovery_counter_pointer_missing")
+for token in (
+    "requiredRuntimeRecoveryCounter(",
+    'field+" is required"',
+    'field+" must be non-negative"',
+):
+    if token not in go_runtime:
+        raise SystemExit("go_runtime_recovery_counter_required_gate_missing")
 decoder = re.search(
     r"func NewRuntimeRecoveryReportFromJSON\(.*?\n\}",
     go_runtime,
@@ -6078,14 +6092,34 @@ if not decoder:
     raise SystemExit("go_runtime_recovery_decoder_missing")
 if re.search(r"Events\s+\[\]RuntimeRecoveryEvent\s+`json:\"events\"`", decoder.group(0)):
     raise SystemExit("go_runtime_recovery_event_public_dto_decode_fallback")
+for retired in (
+    "RecoveredInvocations     int",
+    "ReapedOrphans            int",
+    "ReplayedTerminalReceipts int",
+):
+    if retired in decoder.group(0):
+        raise SystemExit("go_runtime_recovery_counter_zero_default_fallback")
 if "_required_bool(value, \"terminal\")" not in py_runtime:
     raise SystemExit("python_runtime_recovery_event_terminal_required_gate_missing")
+if "_required_non_negative_int(" not in py_runtime:
+    raise SystemExit("python_runtime_required_counter_helper_missing")
+for retired in (
+    '_optional_non_negative_int(\n                decoded.get("recovered_invocations")',
+    '_optional_non_negative_int(\n                decoded.get("reaped_orphans")',
+    '_optional_non_negative_int(\n                decoded.get("replayed_terminal_receipts")',
+):
+    if retired in py_runtime:
+        raise SystemExit("python_runtime_recovery_counter_zero_default_fallback")
 for text, name in ((go_test, "go"), (py_test, "python")):
     if (
         "missing recovery event terminal" not in text
         and '"events":[{"sequence":1,"kind":"orphan_reaped"}]' not in text
     ):
         raise SystemExit(f"{name}_runtime_recovery_event_terminal_test_missing")
+    if "missing recovery counter" not in text and "missing_counter_caught" not in text:
+        raise SystemExit(f"{name}_runtime_recovery_counter_missing_test_missing")
+    if "negative recovery counter" not in text and "negative_counter_caught" not in text:
+        raise SystemExit(f"{name}_runtime_recovery_counter_negative_test_missing")
 PY
 }
 
@@ -11612,7 +11646,7 @@ check_invocation_wire_callee_target_contract
 check_local_session_descriptor_ref_test_authority_contract
 check_local_daemon_loopback_explicit_subject_contract
 check_sdk_directory_projection_fail_closed_contract
-check_sdk_runtime_recovery_event_terminal_contract
+check_sdk_runtime_recovery_report_fail_closed_contract
 check_sdk_principal_projection_fail_closed_contract
 check_runtime_owner_signer_custody_contract
 check_remote_invocation_signer_first_contract

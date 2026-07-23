@@ -1339,6 +1339,27 @@ class RuntimeTests(unittest.TestCase):
             )
         self.assertTrue(is_code(terminal_caught.exception, ErrorCode.INVALID_ARGUMENT))
 
+        with self.assertRaises(SDKError) as missing_counter_caught:
+            RuntimeRecoveryReport.from_json(
+                b'{"recovery_id":"recovery-1","state":"runtime_started",'
+                b'"reaped_orphans":0,"replayed_terminal_receipts":0,'
+                b'"bounded_scan":true,"cleanup_complete":true,"events":[]}'
+            )
+        self.assertTrue(
+            is_code(missing_counter_caught.exception, ErrorCode.INVALID_ARGUMENT)
+        )
+
+        with self.assertRaises(SDKError) as negative_counter_caught:
+            RuntimeRecoveryReport.from_json(
+                b'{"recovery_id":"recovery-1","state":"runtime_started",'
+                b'"recovered_invocations":-1,"reaped_orphans":0,'
+                b'"replayed_terminal_receipts":0,'
+                b'"bounded_scan":true,"cleanup_complete":true,"events":[]}'
+            )
+        self.assertTrue(
+            is_code(negative_counter_caught.exception, ErrorCode.INVALID_ARGUMENT)
+        )
+
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)
         with self.assertRaises(SDKError) as request_caught:

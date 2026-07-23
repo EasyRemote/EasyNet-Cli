@@ -19738,11 +19738,11 @@
       "RuntimeRecoveryEvent.sequence": "89a45a44cf02ec1e16ec1a8391a1e347c435aac02b04a74ca1b3a0a9c938f4cd",
       "RuntimeRecoveryEvent.state": "0180f4a5578e01e54733caf078d73d201ee70a931e8146b9fd1097e9373f1fbc",
       "RuntimeRecoveryEvent.terminal": "30d72b0cb2f24a12f30ebba7243c1137c081850d6a42a5c74e4261146f1b237f",
-      "RuntimeRecoveryReport": "ca0be69b41073501dd2f671a815cf1532431716c7f3df05cf8788da3ae208ad7",
+      "RuntimeRecoveryReport": "ae4d54d7f737280d0b84e0bd558f4d86a777eeae3f091b45e182490bdea680f8",
       "RuntimeRecoveryReport.bounded_scan": "f5b23a2e603211c0856fe64804b240e86ff8301bcefb98b6e4c39e20cc700f80",
       "RuntimeRecoveryReport.cleanup_complete": "4639bdbcb1d23088079fb8b99f9fb375a99f0b398fafed6d1e527c7dd2f510c4",
       "RuntimeRecoveryReport.events": "123a9b3400967976691ef250e123c1de1a594414b50a5bf45d3a3dbc474eb6b8",
-      "RuntimeRecoveryReport.from_json": "196d169b48e52966c51c8f0e64b71340b2c8bc696c727773522a2d507b3e2381",
+      "RuntimeRecoveryReport.from_json": "87225888e3a1c7158a7bcfc2e6781b6bf0e1390c6f635b848b86725fc645ec0d",
       "RuntimeRecoveryReport.reaped_orphans": "a2b614522c83ebb54b2d02017dcc4c3193b68ad61e5485007b319476be90a005",
       "RuntimeRecoveryReport.recovered_invocations": "7ae622616e58d4683f4acb6a03ff371d755c30b8b0a93b08e7b62779d9771aa1",
       "RuntimeRecoveryReport.recovery_id": "ff42bcb09b7246a84f21135657965c3f39bdecfe19eada22a85e1d3f03acd2bb",
@@ -22125,7 +22125,7 @@
       "sha256": "90e356683509f8327c304d9ba380d20227759c536101a64fcaea1a007f229657",
       "interface": "RuntimeTransport",
       "interface_path": "sdk/go/runtime.go",
-      "interface_sha256": "32c6ea2608f17baac420fff1f20b057fb73162b516480ea04e05d777234fc20d",
+      "interface_sha256": "633918ef3354188a80355d0582b80bb2ac4c6beb2a914f3dba54314f9d30cac2",
       "capability_ids": [
         "stream",
         "bidi"

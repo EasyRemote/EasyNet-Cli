@@ -183,13 +183,13 @@ class RuntimeRecoveryReport:
         return cls(
             recovery_id=_required_string(decoded, "recovery_id"),
             state=state,
-            recovered_invocations=_optional_non_negative_int(
+            recovered_invocations=_required_non_negative_int(
                 decoded.get("recovered_invocations"), "recovered_invocations"
             ),
-            reaped_orphans=_optional_non_negative_int(
+            reaped_orphans=_required_non_negative_int(
                 decoded.get("reaped_orphans"), "reaped_orphans"
             ),
-            replayed_terminal_receipts=_optional_non_negative_int(
+            replayed_terminal_receipts=_required_non_negative_int(
                 decoded.get("replayed_terminal_receipts"),
                 "replayed_terminal_receipts",
             ),
@@ -1318,6 +1318,14 @@ def _optional_non_negative_int(value: object, field_name: str) -> int:
     if value is None:
         return 0
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise _invalid_runtime(f"{field_name} must be a non-negative integer")
+    return value
+
+
+def _required_non_negative_int(value: object, field_name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise _invalid_runtime(f"{field_name} is required")
+    if value < 0:
         raise _invalid_runtime(f"{field_name} must be a non-negative integer")
     return value
 

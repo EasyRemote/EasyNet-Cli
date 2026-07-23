@@ -256,6 +256,12 @@ func TestRuntimeClientRestartRecoveryProviderContract(t *testing.T) {
 	if _, err := NewRuntimeRecoveryReportFromJSON([]byte(`{"recovery_id":"recovery-1","state":"runtime_started","bounded_scan":true,"cleanup_complete":true,"events":[{"sequence":1,"kind":"orphan_reaped"}]}`)); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("missing recovery event terminal error = %v, want %s", err, ErrInvalidArgument)
 	}
+	if _, err := NewRuntimeRecoveryReportFromJSON([]byte(`{"recovery_id":"recovery-1","state":"runtime_started","reaped_orphans":0,"replayed_terminal_receipts":0,"bounded_scan":true,"cleanup_complete":true,"events":[]}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("missing recovery counter error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if _, err := NewRuntimeRecoveryReportFromJSON([]byte(`{"recovery_id":"recovery-1","state":"runtime_started","recovered_invocations":-1,"reaped_orphans":0,"replayed_terminal_receipts":0,"bounded_scan":true,"cleanup_complete":true,"events":[]}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("negative recovery counter error = %v, want %s", err, ErrInvalidArgument)
+	}
 
 	invalidClient, err := NewRuntimeClient(RuntimeTransportFunc{
 		RecoverFunc: func(context.Context, []byte) ([]byte, error) {

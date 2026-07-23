@@ -639,9 +639,9 @@ func NewRuntimeRecoveryReportFromJSON(raw []byte) (RuntimeRecoveryReport, error)
 	var dto struct {
 		RecoveryID               string                    `json:"recovery_id"`
 		State                    string                    `json:"state"`
-		RecoveredInvocations     int                       `json:"recovered_invocations"`
-		ReapedOrphans            int                       `json:"reaped_orphans"`
-		ReplayedTerminalReceipts int                       `json:"replayed_terminal_receipts"`
+		RecoveredInvocations     *int                      `json:"recovered_invocations"`
+		ReapedOrphans            *int                      `json:"reaped_orphans"`
+		ReplayedTerminalReceipts *int                      `json:"replayed_terminal_receipts"`
 		BoundedScan              *bool                     `json:"bounded_scan"`
 		CleanupComplete          *bool                     `json:"cleanup_complete"`
 		Events                   []runtimeRecoveryEventDTO `json:"events"`
@@ -655,8 +655,23 @@ func NewRuntimeRecoveryReportFromJSON(raw []byte) (RuntimeRecoveryReport, error)
 	if dto.State != "runtime_started" {
 		return RuntimeRecoveryReport{}, invalidRuntimePayload("runtime recovery state must be runtime_started", nil)
 	}
-	if dto.RecoveredInvocations < 0 || dto.ReapedOrphans < 0 || dto.ReplayedTerminalReceipts < 0 {
-		return RuntimeRecoveryReport{}, invalidRuntimePayload("runtime recovery counters must be non-negative", nil)
+	recoveredInvocations, err := requiredRuntimeRecoveryCounter(
+		dto.RecoveredInvocations,
+		"recovered_invocations",
+	)
+	if err != nil {
+		return RuntimeRecoveryReport{}, err
+	}
+	reapedOrphans, err := requiredRuntimeRecoveryCounter(dto.ReapedOrphans, "reaped_orphans")
+	if err != nil {
+		return RuntimeRecoveryReport{}, err
+	}
+	replayedTerminalReceipts, err := requiredRuntimeRecoveryCounter(
+		dto.ReplayedTerminalReceipts,
+		"replayed_terminal_receipts",
+	)
+	if err != nil {
+		return RuntimeRecoveryReport{}, err
 	}
 	if dto.BoundedScan == nil || !*dto.BoundedScan {
 		return RuntimeRecoveryReport{}, invalidRuntimePayload("bounded_scan must be true", nil)
@@ -680,13 +695,23 @@ func NewRuntimeRecoveryReportFromJSON(raw []byte) (RuntimeRecoveryReport, error)
 	return RuntimeRecoveryReport{
 		RecoveryID:               dto.RecoveryID,
 		State:                    dto.State,
-		RecoveredInvocations:     dto.RecoveredInvocations,
-		ReapedOrphans:            dto.ReapedOrphans,
-		ReplayedTerminalReceipts: dto.ReplayedTerminalReceipts,
+		RecoveredInvocations:     recoveredInvocations,
+		ReapedOrphans:            reapedOrphans,
+		ReplayedTerminalReceipts: replayedTerminalReceipts,
 		BoundedScan:              *dto.BoundedScan,
 		CleanupComplete:          *dto.CleanupComplete,
 		Events:                   events,
 	}, nil
+}
+
+func requiredRuntimeRecoveryCounter(value *int, field string) (int, error) {
+	if value == nil {
+		return 0, invalidRuntimePayload(field+" is required", nil)
+	}
+	if *value < 0 {
+		return 0, invalidRuntimePayload(field+" must be non-negative", nil)
+	}
+	return *value, nil
 }
 
 type runtimeRecoveryEventDTO struct {
