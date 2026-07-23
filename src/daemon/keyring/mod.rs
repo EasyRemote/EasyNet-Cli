@@ -72,6 +72,7 @@ use crate::daemon::persistence::config::{
 pub mod abilities;
 pub mod federated_bindings;
 pub mod lifecycle;
+pub mod managed_signing_projection;
 mod passphrase;
 pub mod resolver;
 pub mod service;

@@ -36,6 +36,9 @@ use crate::core::ura::user_realm_from_ura;
 use crate::daemon::ability::descriptors::AdmissionAction;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::identity::self_identity::KeyringClient;
+use crate::daemon::keyring::managed_signing_projection::{
+    ManagedSigningCreateResponse, ManagedSigningListResponse, ManagedSigningPublicResponse,
+};
 
 /// Provider boundary used by daemon abilities. Production is always backed by
 /// the daemon-local key-service endpoint; tests use the same state-machine
@@ -172,28 +175,6 @@ fn b64_decode(s: &str) -> Result<Vec<u8>> {
         .map_err(|e| anyhow!("base64 decode: {e}"))
 }
 
-fn entry_view(e: &ManagedSigningKeyProjection, full: bool) -> Value {
-    let mut v = json!({
-        "key_id":         e.key_id,
-        "algo":           "ed25519",
-        "purpose":        e.purpose,
-        "status":         match e.status { ManagedSigningStatus::Active => "active", ManagedSigningStatus::Retired => "retired", ManagedSigningStatus::Revoked => "revoked" },
-        "rotation_epoch": e.rotation_epoch,
-        "bound_subject":  e.bound_subject,
-        "rotated_from":   e.rotated_from,
-        "created_unix_ms": e.created_unix_ms,
-        "expires_unix_ms": e.expires_unix_ms,
-        "revoked_unix_ms": e.revoked_unix_ms,
-    });
-    if full {
-        v["public_key"] = json!(e.public_key_b64);
-        if let Ok(public_key) = b64_decode(&e.public_key_b64) {
-            v["fingerprint"] = json!(b64_encode(&super::public_key_fingerprint(&public_key)));
-        }
-    }
-    v
-}
-
 fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     args.get(key)
         .and_then(|v| v.as_str())
@@ -208,12 +189,10 @@ pub fn handle_create(provider: &dyn ManagedSigningProvider, args: Value) -> Resu
         .map(|s| s.to_string());
     let entry = provider.create(purpose, bound_subject)?;
     let fp = super::public_key_fingerprint(&b64_decode(&entry.public_key_b64)?);
-    Ok(json!({
-        "key_id":         entry.key_id,
-        "public_key":     entry.public_key_b64,
-        "fingerprint":    b64_encode(&fp),
-        "rotation_epoch": entry.rotation_epoch,
-    }))
+    Ok(serde_json::to_value(ManagedSigningCreateResponse::new(
+        &entry,
+        b64_encode(&fp),
+    ))?)
 }
 
 pub fn handle_list(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
@@ -228,24 +207,20 @@ pub fn handle_list(provider: &dyn ManagedSigningProvider, args: Value) -> Result
         .and_then(|v| v.as_str())
         .map(parse_status)
         .transpose()?;
-    let entries: Vec<Value> = provider
-        .list(purpose_filter, status_filter)?
-        .into_iter()
-        .map(|e| entry_view(&e, false))
-        .collect();
-    Ok(json!({ "entries": entries }))
+    let entries = provider.list(purpose_filter, status_filter)?;
+    Ok(serde_json::to_value(
+        ManagedSigningListResponse::from_entries(entries.iter()),
+    )?)
 }
 
 pub fn handle_get_public(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
     let key_id = require_str(&args, "key_id")?;
     let entry = provider.public_key(key_id)?;
     let fp = super::public_key_fingerprint(&b64_decode(&entry.public_key_b64)?);
-    Ok(json!({
-        "public_key":     entry.public_key_b64,
-        "fingerprint":    b64_encode(&fp),
-        "status":         match entry.status { ManagedSigningStatus::Active => "active", ManagedSigningStatus::Retired => "retired", ManagedSigningStatus::Revoked => "revoked" },
-        "rotation_epoch": entry.rotation_epoch,
-    }))
+    Ok(serde_json::to_value(ManagedSigningPublicResponse::new(
+        &entry,
+        b64_encode(&fp),
+    ))?)
 }
 
 fn parse_status(value: &str) -> Result<ManagedSigningStatus> {
@@ -744,15 +719,31 @@ mod tests {
         let (h, _d) = handle();
         let created = handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
         let key_id = created["key_id"].as_str().unwrap().to_string();
+        assert!(!created["public_key"].as_str().unwrap().is_empty());
+        assert!(!created["fingerprint"].as_str().unwrap().is_empty());
+        assert_eq!(created["rotation_epoch"], json!(0));
+        assert!(created.get("seed_hex").is_none());
+        assert!(created.get("signer_policy_ref").is_none());
 
         let listed = handle_list(&h, json!({})).unwrap();
         let entries = listed["entries"].as_array().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["key_id"], json!(key_id));
+        assert_eq!(entries[0]["algo"], json!("ed25519"));
+        assert_eq!(entries[0]["purpose"], json!("agent_signing"));
+        assert_eq!(entries[0]["status"], json!("active"));
+        assert!(entries[0].get("public_key").is_none());
+        assert!(entries[0].get("public_key_b64").is_none());
+        assert!(entries[0].get("signer_policy_ref").is_none());
+        assert!(entries[0].get("seed_hex").is_none());
 
         let pub_view = handle_get_public(&h, json!({"key_id": key_id})).unwrap();
         assert_eq!(pub_view["status"], json!("active"));
         assert!(!pub_view["public_key"].as_str().unwrap().is_empty());
+        assert!(!pub_view["fingerprint"].as_str().unwrap().is_empty());
+        assert_eq!(pub_view["rotation_epoch"], json!(0));
+        assert!(pub_view.get("seed_hex").is_none());
+        assert!(pub_view.get("signer_policy_ref").is_none());
     }
 
     #[test]

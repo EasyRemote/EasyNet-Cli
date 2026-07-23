@@ -3874,6 +3874,115 @@ for required in (
 PY
 }
 
+check_managed_signing_response_projection_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local abilities="$cli_root/src/daemon/keyring/abilities.rs"
+  local projection="$cli_root/src/daemon/keyring/managed_signing_projection.rs"
+  local keyring_mod="$cli_root/src/daemon/keyring/mod.rs"
+  [[ -f "$abilities" ]] || return 0
+  [[ -f "$projection" ]] || fail "managed signing response projection source is missing: $projection"
+
+  "$PYTHON_BIN" - "$abilities" "$projection" "$keyring_mod" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+abilities, projection = [Path(arg).read_text(encoding="utf-8") for arg in sys.argv[1:3]]
+keyring_mod = Path(sys.argv[3]).read_text(encoding="utf-8") if Path(sys.argv[3]).exists() else ""
+
+if "pub mod managed_signing_projection;" not in keyring_mod:
+    raise SystemExit("managed_signing_response_projection:module_not_exported")
+
+def struct_with_attrs(name: str) -> tuple[str, str]:
+    match = re.search(
+        r"(?P<attrs>(?:#\[[^\n]+\]\n)*)"
+        + rf"pub struct {name} \{{(?P<body>.*?)\n\}}",
+        projection,
+        re.S,
+    )
+    if match is None:
+        raise SystemExit(f"managed_signing_response_projection:{name}:missing")
+    attrs = match.group("attrs")
+    body = match.group("body")
+    if "#[serde(deny_unknown_fields)]" not in attrs:
+        raise SystemExit(f"managed_signing_response_projection:{name}:missing_deny_unknown_fields")
+    return attrs, body
+
+_, create_body = struct_with_attrs("ManagedSigningCreateResponse")
+_, list_entry_body = struct_with_attrs("ManagedSigningListEntry")
+_, list_body = struct_with_attrs("ManagedSigningListResponse")
+_, public_body = struct_with_attrs("ManagedSigningPublicResponse")
+
+for field in (
+    "pub key_id: String",
+    "pub public_key: String",
+    "pub fingerprint: String",
+    "pub rotation_epoch: u64",
+):
+    if field not in create_body:
+        raise SystemExit(f"managed_signing_response_projection:create_missing_field:{field}")
+for field in (
+    "pub key_id: String",
+    "pub algo: String",
+    "pub purpose: String",
+    "pub status: String",
+    "pub rotation_epoch: u64",
+    "pub bound_subject: Option<String>",
+    "pub rotated_from: Option<String>",
+    "pub created_unix_ms: i64",
+    "pub expires_unix_ms: Option<i64>",
+    "pub revoked_unix_ms: Option<i64>",
+):
+    if field not in list_entry_body:
+        raise SystemExit(f"managed_signing_response_projection:list_entry_missing_field:{field}")
+if "pub entries: Vec<ManagedSigningListEntry>" not in list_body:
+    raise SystemExit("managed_signing_response_projection:list_missing_entries")
+for field in (
+    "pub public_key: String",
+    "pub fingerprint: String",
+    "pub status: String",
+    "pub rotation_epoch: u64",
+):
+    if field not in public_body:
+        raise SystemExit(f"managed_signing_response_projection:public_missing_field:{field}")
+if "public_key" in list_entry_body or "public_key_b64" in list_entry_body or "signer_policy_ref" in list_entry_body or "seed_hex" in list_entry_body:
+    raise SystemExit("managed_signing_response_projection:list_entry_leaks_key_material")
+
+for required in (
+    "ManagedSigningCreateResponse::new(",
+    "ManagedSigningListResponse::from_entries(",
+    "ManagedSigningPublicResponse::new(",
+    "managed_signing_create_response_preserves_public_shape",
+    "managed_signing_list_response_preserves_public_shape_without_key_material",
+    "managed_signing_public_response_preserves_public_shape",
+    "managed_signing_response_dtos_reject_unknown_fields",
+):
+    if required not in projection:
+        raise SystemExit(f"managed_signing_response_projection:projection_missing:{required}")
+
+for retired in (
+    "fn entry_view(",
+    '"key_id":         e.key_id',
+    '"public_key":     entry.public_key_b64',
+    '"fingerprint":    b64_encode(&fp)',
+    'Ok(json!({ "entries": entries }))',
+):
+    if retired in abilities:
+        raise SystemExit(f"managed_signing_response_projection:handler_retired:{retired}")
+
+for required in (
+    "ManagedSigningCreateResponse::new(",
+    "ManagedSigningListResponse::from_entries(",
+    "ManagedSigningPublicResponse::new(",
+    "create_then_list_then_get_public",
+    "entries[0].get(\"public_key\").is_none()",
+    "entries[0].get(\"signer_policy_ref\").is_none()",
+):
+    if required not in abilities:
+        raise SystemExit(f"managed_signing_response_projection:handler_missing:{required}")
+PY
+}
+
 check_cli_credentials_optional_read_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local src_root="$cli_root/src"
@@ -11551,6 +11660,38 @@ EOF
   if ( check_api_key_response_projection_contract "$tmp/api-key-response-projection-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected API key response projection gate to fail"
   fi
+  mkdir -p "$tmp/managed-signing-response-projection-legacy/src/daemon/keyring"
+  cat >"$tmp/managed-signing-response-projection-legacy/src/daemon/keyring/mod.rs" <<'EOF'
+pub mod abilities;
+EOF
+  cat >"$tmp/managed-signing-response-projection-legacy/src/daemon/keyring/managed_signing_projection.rs" <<'EOF'
+pub struct ManagedSigningListEntry {
+    pub key_id: String,
+    pub public_key: String,
+}
+EOF
+  cat >"$tmp/managed-signing-response-projection-legacy/src/daemon/keyring/abilities.rs" <<'EOF'
+fn entry_view(e: &ManagedSigningKeyProjection, full: bool) -> Value {
+    json!({
+        "key_id":         e.key_id,
+        "public_key":     e.public_key_b64,
+    })
+}
+fn handle_create() -> Value {
+    Ok(json!({
+        "key_id":         entry.key_id,
+        "public_key":     entry.public_key_b64,
+        "fingerprint":    b64_encode(&fp),
+        "rotation_epoch": entry.rotation_epoch,
+    }))
+}
+fn handle_list() -> Value {
+    Ok(json!({ "entries": entries }))
+}
+EOF
+  if ( check_managed_signing_response_projection_contract "$tmp/managed-signing-response-projection-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected managed signing response projection gate to fail"
+  fi
   mkdir -p "$tmp/local-api-key-cache-legacy/src/daemon/ability/builtins/governance" \
     "$tmp/local-api-key-cache-legacy/src/cli/commands"
   printf '%s\n' \
@@ -13362,6 +13503,7 @@ EOF
   check_api_key_cli_identity_contract
   check_api_key_store_schema_contract
   check_api_key_response_projection_contract
+  check_managed_signing_response_projection_contract
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
   check_runtime_trust_user_key_inventory_scope_contract
@@ -13518,6 +13660,7 @@ check_target_gate_credential_state_contract
 check_api_key_cli_identity_contract
 check_api_key_store_schema_contract
 check_api_key_response_projection_contract
+check_managed_signing_response_projection_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_runtime_trust_user_key_inventory_scope_contract
