@@ -567,9 +567,8 @@ impl AbilityDescriptorWire {
     fn try_from_descriptor(d: &AbilityDescriptor) -> Result<Self, String> {
         AbilityDescriptor::validate_owner_ura(&d.owner_ura).map_err(|error| error.to_string())?;
         let name = d.public_name();
-        let ability_ura = crate::core::ura::owner_ability_ura(&d.owner_ura, &name)
-            .or_else(|| d.canonical_ability_ura())
-            .ok_or_else(|| {
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&d.owner_ura, &name).ok_or_else(|| {
                 format!(
                     "descriptor owner {:?} and name {name:?} do not derive a canonical Ability URA",
                     d.owner_ura
@@ -1655,6 +1654,24 @@ mod tests {
                 .to_string()
                 .contains("do not derive a canonical Ability URA"),
             "unexpected descriptor_ref error: {error}"
+        );
+    }
+
+    #[test]
+    fn descriptor_wire_projection_fails_closed_for_corrupt_identity() {
+        let mut descriptor = must(
+            "agent.list",
+            "easynet:///r/acme/device/dev-1",
+            Visibility::Scoped,
+        );
+        descriptor.name = "   ".into();
+        let error =
+            serde_json::to_value(&descriptor).expect_err("wire projection must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("do not derive a canonical Ability URA"),
+            "unexpected descriptor wire projection error: {error}"
         );
     }
 

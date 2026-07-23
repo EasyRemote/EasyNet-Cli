@@ -7190,8 +7190,12 @@ if "InvalidDescriptorIdentity" not in descriptor_production:
     raise SystemExit("ability_descriptor:descriptor_identity_error_missing")
 if ".descriptor_ref().ok()" in descriptor_production or ".descriptor_ref().is_none()" in descriptor_production:
     raise SystemExit("ability_descriptor:descriptor_ref_optional_collapse")
+if ".or_else(|| d.canonical_ability_ura())" in descriptor_production:
+    raise SystemExit("ability_descriptor:wire_identity_duplicate_fallback")
 if "descriptor_ref_derivation_fails_closed_for_corrupt_identity" not in descriptor:
     raise SystemExit("ability_descriptor:descriptor_ref_fail_closed_test_missing")
+if "descriptor_wire_projection_fails_closed_for_corrupt_identity" not in descriptor:
+    raise SystemExit("ability_descriptor:wire_projection_fail_closed_test_missing")
 if "entries: BTreeMap<String, AbilityDescriptor>" not in production_store:
     raise SystemExit("hub_published_store:entries_not_canonical_descriptor")
 if "entries: BTreeMap<String, HubAbilityEntry>" in production_store:
@@ -14433,6 +14437,47 @@ mod tests {
 EOF
   if ( CLI_ROOT="$tmp/control-frame-schema-legacy"; check_control_frame_schema_contract ) >/dev/null 2>&1; then
     fail "self-test expected control frame schema compatibility gate to fail"
+  fi
+  mkdir -p "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/ability/descriptors" \
+    "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/federation/read_model" \
+    "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/ability/builtins/governance" \
+    "$tmp/descriptor-wire-identity-fallback-legacy/src/ffi/invocation" \
+    "$tmp/descriptor-wire-identity-fallback-legacy/src/cli/daemon_client" \
+    "$tmp/descriptor-wire-identity-fallback-legacy/src/cli/commands/groups"
+  cat >"$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/ability/descriptors/surface.rs" <<'EOF'
+enum DescriptorError {
+    InvalidDescriptorIdentity { detail: String },
+}
+
+impl AbilityDescriptor {
+    pub fn descriptor_ref(&self) -> Result<String, DescriptorError> {
+        todo!()
+    }
+}
+
+impl AbilityDescriptorWire {
+    fn try_from_descriptor(d: &AbilityDescriptor) -> Result<Self, String> {
+        let name = d.public_name();
+        let ability_ura = crate::core::ura::owner_ability_ura(&d.owner_ura, &name)
+            .or_else(|| d.canonical_ability_ura())
+            .ok_or_else(|| "descriptor owner does not derive a canonical Ability URA".to_string())?;
+        todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn descriptor_ref_derivation_fails_closed_for_corrupt_identity() {}
+    fn descriptor_wire_projection_fails_closed_for_corrupt_identity() {}
+}
+EOF
+  touch "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/federation/read_model/hub_published_abilities.rs" \
+    "$tmp/descriptor-wire-identity-fallback-legacy/src/daemon/ability/builtins/governance/meta.rs" \
+    "$tmp/descriptor-wire-identity-fallback-legacy/src/ffi/invocation/mod.rs" \
+    "$tmp/descriptor-wire-identity-fallback-legacy/src/cli/daemon_client/ability_catalog.rs" \
+    "$tmp/descriptor-wire-identity-fallback-legacy/src/cli/commands/groups/ability.rs"
+  if ( CLI_ROOT="$tmp/descriptor-wire-identity-fallback-legacy"; check_canonical_ability_catalog_projection_contract ) >/dev/null 2>&1; then
+    fail "self-test expected descriptor wire identity fallback gate to fail"
   fi
   mkdir -p "$tmp/remote-subject-provenance-legacy/src/daemon/invocation/routing" \
     "$tmp/remote-subject-provenance-legacy/src/ffi/invocation"
