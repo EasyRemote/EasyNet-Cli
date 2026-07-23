@@ -13,7 +13,7 @@
 //   *.localhost     → Local mode, no hub
 //   *.easynet       → Federated, hub list from rendezvous config
 //   *.<other-tld>   → Federated, hub from DNS TXT (or static config)
-//   anything else   → Local mode by default (preserves pre-RFC-002 behaviour)
+//   anything else   → invalid realm input
 //
 // `UraScope` (Prv|Org) remains as informational metadata for callers
 // that want a hint at the federation posture, but does NOT influence
@@ -64,6 +64,27 @@ pub struct RealmResolution {
     /// Echo of the realm used for traceability in receipts.
     pub realm: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RealmResolutionError {
+    EmptyRealm,
+    UnsupportedBareRealm { realm: String },
+}
+
+impl std::fmt::Display for RealmResolutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyRealm => write!(f, "realm must not be empty"),
+            Self::UnsupportedBareRealm { realm } => write!(
+                f,
+                "unsupported bare realm `{realm}`; use `localhost`, `*.localhost`, \
+                 `*.easynet`, or a fully-qualified domain realm"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RealmResolutionError {}
 
 /// Static configuration for resolver behaviour. In production this is
 /// loaded from `~/.config/easynet/rendezvous.json`; tests inject a
@@ -135,34 +156,38 @@ impl<'de> serde::Deserialize<'de> for ResolverConfig {
 }
 
 /// Resolve a realm into mode + scope + endpoints.
-pub fn resolve(realm: &str, cfg: &ResolverConfig) -> RealmResolution {
+pub fn resolve(realm: &str, cfg: &ResolverConfig) -> Result<RealmResolution, RealmResolutionError> {
+    let realm = realm.trim();
+    if realm.is_empty() {
+        return Err(RealmResolutionError::EmptyRealm);
+    }
     let lower = realm.to_ascii_lowercase();
 
     if let Some(endpoints) = cfg.static_hubs.get(&lower) {
-        return RealmResolution {
+        return Ok(RealmResolution {
             mode: AdmissionMode::Federated,
             scope: UraScope::Org,
             hub_endpoints: endpoints.clone(),
             realm: realm.to_string(),
-        };
+        });
     }
 
     if lower.ends_with(".localhost") || lower == "localhost" {
-        return RealmResolution {
+        return Ok(RealmResolution {
             mode: AdmissionMode::LocalFast,
             scope: UraScope::Prv,
             hub_endpoints: Vec::new(),
             realm: realm.to_string(),
-        };
+        });
     }
 
     if lower.ends_with(".easynet") {
-        return RealmResolution {
+        return Ok(RealmResolution {
             mode: AdmissionMode::Federated,
             scope: UraScope::Org,
             hub_endpoints: cfg.easynet_rendezvous.clone(),
             realm: realm.to_string(),
-        };
+        });
     }
 
     // FQDN: defer DNS TXT lookup to a future phase; for now treat as
@@ -170,22 +195,17 @@ pub fn resolve(realm: &str, cfg: &ResolverConfig) -> RealmResolution {
     // static_hubs entry configured, otherwise federation is a no-op
     // until the operator adds one.
     if lower.contains('.') {
-        return RealmResolution {
+        return Ok(RealmResolution {
             mode: AdmissionMode::Federated,
             scope: UraScope::Org,
             hub_endpoints: Vec::new(),
             realm: realm.to_string(),
-        };
+        });
     }
 
-    // Bare token (legacy `tenant-test`, `acme`, etc.). Backward-compat:
-    // treat as Local-fast under prv scope.
-    RealmResolution {
-        mode: AdmissionMode::LocalFast,
-        scope: UraScope::Prv,
-        hub_endpoints: Vec::new(),
+    Err(RealmResolutionError::UnsupportedBareRealm {
         realm: realm.to_string(),
-    }
+    })
 }
 
 /// Build a v4.1.5 standard device URA. Shape is identical regardless
@@ -218,7 +238,7 @@ mod tests {
 
     #[test]
     fn localhost_suffix_is_local_fast_prv() {
-        let r = resolve("silan.localhost", &cfg());
+        let r = resolve("silan.localhost", &cfg()).expect("localhost realm");
         assert_eq!(r.mode, AdmissionMode::LocalFast);
         assert_eq!(r.scope, UraScope::Prv);
         assert!(r.hub_endpoints.is_empty());
@@ -226,7 +246,7 @@ mod tests {
 
     #[test]
     fn easynet_suffix_is_federated_with_rendezvous() {
-        let r = resolve("silan.easynet", &cfg());
+        let r = resolve("silan.easynet", &cfg()).expect("easynet realm");
         assert_eq!(r.mode, AdmissionMode::Federated);
         assert_eq!(r.scope, UraScope::Org);
         assert_eq!(r.hub_endpoints.len(), 1);
@@ -235,7 +255,7 @@ mod tests {
 
     #[test]
     fn static_hubs_take_precedence() {
-        let r = resolve("acme.com", &cfg());
+        let r = resolve("acme.com", &cfg()).expect("static hub realm");
         assert_eq!(r.mode, AdmissionMode::Federated);
         assert_eq!(r.scope, UraScope::Org);
         assert_eq!(r.hub_endpoints[0], "http://acme-hub.acme.com:7700");
@@ -243,21 +263,37 @@ mod tests {
 
     #[test]
     fn unknown_fqdn_is_federated_but_endpointless() {
-        let r = resolve("alice.xyz", &cfg());
+        let r = resolve("alice.xyz", &cfg()).expect("fqdn realm");
         assert_eq!(r.mode, AdmissionMode::Federated);
         assert!(r.hub_endpoints.is_empty());
     }
 
     #[test]
-    fn bare_token_falls_back_to_local() {
-        let r = resolve("tenant-test", &cfg());
-        assert_eq!(r.mode, AdmissionMode::LocalFast);
-        assert_eq!(r.scope, UraScope::Prv);
+    fn bare_realm_token_is_invalid_instead_of_local_fast_fallback() {
+        let error = resolve("tenant-test", &cfg()).expect_err("bare token must be invalid");
+
+        assert_eq!(
+            error,
+            RealmResolutionError::UnsupportedBareRealm {
+                realm: "tenant-test".to_string()
+            }
+        );
+        assert!(
+            error.to_string().contains("unsupported bare realm"),
+            "diagnostic must name unsupported bare realm: {error}"
+        );
+    }
+
+    #[test]
+    fn empty_realm_is_invalid_instead_of_local_fast_fallback() {
+        let error = resolve("   ", &cfg()).expect_err("blank realm must be invalid");
+
+        assert_eq!(error, RealmResolutionError::EmptyRealm);
     }
 
     #[test]
     fn case_insensitive_suffix_match() {
-        let r = resolve("Silan.LOCALHOST", &cfg());
+        let r = resolve("Silan.LOCALHOST", &cfg()).expect("case-insensitive realm");
         assert_eq!(r.mode, AdmissionMode::LocalFast);
     }
 
@@ -266,8 +302,8 @@ mod tests {
         // v4.1.5 §A.URA-7: one device shape, no scope-dependent forms,
         // no `?tenant_id=` query. The legacy
         // `r/{prv,org}/reg/agent.<id>?tenant_id=<t>` shapes are dead.
-        let local = resolve("silan.localhost", &cfg());
-        let net = resolve("silan.easynet", &cfg());
+        let local = resolve("silan.localhost", &cfg()).expect("local realm");
+        let net = resolve("silan.easynet", &cfg()).expect("net realm");
         assert_eq!(
             canonical_device_ura("01HABC", &local),
             "easynet:///r/silan.localhost/device/01HABC"

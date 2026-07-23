@@ -746,6 +746,61 @@ check_core_ura_realm_projection_contract() {
   fi
 }
 
+check_federation_realm_resolver_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local resolver="$cli_root/src/daemon/federation/resolver.rs"
+  [[ -f "$resolver" ]] || return 0
+
+  "$PYTHON_BIN" - "$resolver" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+for required in (
+    "pub enum RealmResolutionError",
+    "EmptyRealm",
+    "UnsupportedBareRealm { realm: String }",
+    "impl std::error::Error for RealmResolutionError",
+    "pub fn resolve(realm: &str, cfg: &ResolverConfig) -> Result<RealmResolution, RealmResolutionError>",
+    "let realm = realm.trim();",
+    "return Err(RealmResolutionError::EmptyRealm)",
+    "Err(RealmResolutionError::UnsupportedBareRealm",
+    "bare_realm_token_is_invalid_instead_of_local_fast_fallback",
+    "empty_realm_is_invalid_instead_of_local_fast_fallback",
+):
+    if required not in text:
+        raise SystemExit(f"federation_realm_resolver:missing:{required}")
+
+for retired in (
+    "anything else   → Local mode by default",
+    "preserves pre-RFC-002 behaviour",
+    "Bare token (legacy",
+    "Backward-compat",
+    "treat as Local-fast",
+    "bare_token_falls_back_to_local",
+):
+    if retired in text:
+        raise SystemExit(f"federation_realm_resolver:retired_fallback:{retired}")
+
+fn = re.search(
+    r"pub fn resolve\(realm: &str, cfg: &ResolverConfig\) -> Result<RealmResolution, RealmResolutionError> \{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if fn is None:
+    raise SystemExit("federation_realm_resolver:resolve_body_missing")
+body = fn.group("body")
+fqdn = body.find("if lower.contains('.')")
+invalid = body.find("Err(RealmResolutionError::UnsupportedBareRealm")
+if fqdn < 0 or invalid < 0 or invalid < fqdn:
+    raise SystemExit("federation_realm_resolver:invalid_state_not_terminal_after_known_syntax")
+tail = body[invalid:]
+if "AdmissionMode::LocalFast" in tail or "RealmResolution {" in tail:
+    raise SystemExit("federation_realm_resolver:bare_realm_tail_projects_resolution")
+PY
+}
+
 check_resolve_key_request_dto_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local wire="$cli_root/src/daemon/federation/wire_contract.rs"
@@ -9017,6 +9072,38 @@ EOF
   if ( check_core_ura_realm_projection_contract "$tmp/core-ura-realm-projection-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected core URA realm projection gate to fail"
   fi
+  mkdir -p "$tmp/federation-realm-resolver-legacy/src/daemon/federation"
+  cat >"$tmp/federation-realm-resolver-legacy/src/daemon/federation/resolver.rs" <<'EOF'
+pub enum AdmissionMode { LocalFast, Federated }
+pub enum UraScope { Prv, Org }
+pub struct ResolverConfig { pub static_hubs: std::collections::HashMap<String, Vec<String>>, pub easynet_rendezvous: Vec<String> }
+pub struct RealmResolution {
+    pub mode: AdmissionMode,
+    pub scope: UraScope,
+    pub hub_endpoints: Vec<String>,
+    pub realm: String,
+}
+/// anything else   → Local mode by default (preserves pre-RFC-002 behaviour)
+pub fn resolve(realm: &str, cfg: &ResolverConfig) -> RealmResolution {
+    let lower = realm.to_ascii_lowercase();
+    if lower.ends_with(".localhost") || lower == "localhost" {
+        return RealmResolution { mode: AdmissionMode::LocalFast, scope: UraScope::Prv, hub_endpoints: vec![], realm: realm.to_string() };
+    }
+    if lower.contains('.') {
+        return RealmResolution { mode: AdmissionMode::Federated, scope: UraScope::Org, hub_endpoints: vec![], realm: realm.to_string() };
+    }
+    // Bare token (legacy `tenant-test`, `acme`, etc.). Backward-compat:
+    // treat as Local-fast under prv scope.
+    RealmResolution { mode: AdmissionMode::LocalFast, scope: UraScope::Prv, hub_endpoints: vec![], realm: realm.to_string() }
+}
+#[cfg(test)]
+mod tests {
+    #[test] fn bare_token_falls_back_to_local() {}
+}
+EOF
+  if ( check_federation_realm_resolver_contract "$tmp/federation-realm-resolver-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected federation realm resolver fallback gate to fail"
+  fi
   mkdir -p "$tmp/resolve-key-request-dto-legacy/src/daemon/federation/client" \
     "$tmp/resolve-key-request-dto-legacy/src/daemon/invocation/admission" \
     "$tmp/resolve-key-request-dto-legacy/src/cli/commands"
@@ -10777,6 +10864,7 @@ EOF
   check_cli_invocation_history_read_model_contract
   check_local_runtime_state_read_subject_contract
   check_runtime_state_kind_required_contract
+  check_federation_realm_resolver_contract
   check_daemon_config_mode_required_contract
   check_chat_session_index_schema_contract
   check_local_agents_schema_contract
@@ -10912,6 +11000,7 @@ check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
 check_local_runtime_state_read_subject_contract
 check_runtime_state_kind_required_contract
+check_federation_realm_resolver_contract
 check_resources_schema_contract
 check_agent_spec_schema_contract
 check_control_discovery_schema_contract
