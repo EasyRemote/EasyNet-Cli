@@ -2348,8 +2348,8 @@ mod tests {
         assert_eq!(hub_selector.owner_kind, RouteOwnerKind::Authority);
 
         let agent_ura = crate::core::ura::agent_ura("test-realm", "alice", "worker");
-        let agent_ability = crate::core::ura::owner_ability_ura(&agent_ura, "browser.open_session")
-            .expect("agent ability");
+        let agent_ability =
+            crate::core::ura::owner_ability_ura(&agent_ura, "chat").expect("agent ability");
         let agent_selector = route_selector_from_query(&agent_ura, &agent_ability)
             .expect("agent selector")
             .expect("agent selector present");

@@ -8073,6 +8073,7 @@ check_retired_browser_mock_surface_contract() {
     "$cli_root/src/daemon/ability/names/device_control.rs"
     "$cli_root/src/daemon/ability/wire/mod.rs"
     "$cli_root/src/daemon/invocation/dispatch/local_session_dispatcher.rs"
+    "$cli_root/src/daemon/invocation/routing/route_resolver.rs"
     "$cli_root/sdk/go/live_smoke_cabi_test.go"
     "$cli_root/tools/scripts/python-sdk-live-smoke.sh"
     "$cli_root/tools/scripts/ffi-smoke.sh"
