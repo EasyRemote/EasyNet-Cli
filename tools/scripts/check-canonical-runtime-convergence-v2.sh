@@ -4137,6 +4137,61 @@ for required in (
 PY
 }
 
+check_user_binding_token_wire_strictness_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local token="$cli_root/src/daemon/keyring/user_binding_chain.rs"
+  [[ -f "$token" ]] || return 0
+
+  "$PYTHON_BIN" - "$token" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+match = re.search(
+    r"(?P<attrs>(?:#\[[^\n]+\]\n)*)pub struct UserBindingToken \{(?P<body>.*?)\n\}",
+    text,
+    re.S,
+)
+if match is None:
+    raise SystemExit("user_binding_token_wire_strictness:token_struct_missing")
+attrs = match.group("attrs")
+body = match.group("body")
+if "#[serde(deny_unknown_fields)]" not in attrs:
+    raise SystemExit("user_binding_token_wire_strictness:missing_deny_unknown_fields")
+
+for field in (
+    "pub source_realm: String",
+    "pub source_user_ura: String",
+    "pub source_user_pubkey: Vec<u8>",
+    "pub target_realm: String",
+    "pub issued_at_ms: u64",
+    "pub nonce: Vec<u8>",
+    "pub signature: Vec<u8>",
+):
+    if field not in body:
+        raise SystemExit(f"user_binding_token_wire_strictness:missing_field:{field}")
+
+for forbidden in (
+    "#[serde(default)]",
+    "flatten",
+    "extra_fields",
+    "extensions",
+):
+    if forbidden in attrs or forbidden in body:
+        raise SystemExit(f"user_binding_token_wire_strictness:permissive_token_shape:{forbidden}")
+
+for required in (
+    "token_wire_shape_rejects_unknown_fields",
+    "unsigned_extension",
+    "canonical_user_binding_bytes",
+    "verify_user_binding_signature",
+):
+    if required not in text:
+        raise SystemExit(f"user_binding_token_wire_strictness:missing_evidence:{required}")
+PY
+}
+
 check_cli_credentials_optional_read_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local src_root="$cli_root/src"
@@ -12026,6 +12081,27 @@ EOF
   if ( check_user_binding_response_projection_contract "$tmp/user-binding-response-projection-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected user binding response projection gate to fail"
   fi
+  mkdir -p "$tmp/user-binding-token-permissive-legacy/src/daemon/keyring"
+  cat >"$tmp/user-binding-token-permissive-legacy/src/daemon/keyring/user_binding_chain.rs" <<'EOF'
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserBindingToken {
+    pub source_realm: String,
+    pub source_user_ura: String,
+    pub source_user_pubkey: Vec<u8>,
+    pub target_realm: String,
+    pub issued_at_ms: u64,
+    pub nonce: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+fn token_wire_shape_rejects_unknown_fields() {
+    let _ = "unsigned_extension";
+}
+fn canonical_user_binding_bytes() {}
+fn verify_user_binding_signature() {}
+EOF
+  if ( check_user_binding_token_wire_strictness_contract "$tmp/user-binding-token-permissive-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected user binding token strict wire gate to fail"
+  fi
   mkdir -p "$tmp/local-api-key-cache-legacy/src/daemon/ability/builtins/governance" \
     "$tmp/local-api-key-cache-legacy/src/cli/commands"
   printf '%s\n' \
@@ -13839,6 +13915,7 @@ EOF
   check_api_key_response_projection_contract
   check_managed_signing_response_projection_contract
   check_user_binding_response_projection_contract
+  check_user_binding_token_wire_strictness_contract
   check_local_api_key_cache_contract
   check_runtime_trust_revoke_credentials_contract
   check_runtime_trust_user_key_inventory_scope_contract
@@ -13997,6 +14074,7 @@ check_api_key_store_schema_contract
 check_api_key_response_projection_contract
 check_managed_signing_response_projection_contract
 check_user_binding_response_projection_contract
+check_user_binding_token_wire_strictness_contract
 check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_runtime_trust_user_key_inventory_scope_contract

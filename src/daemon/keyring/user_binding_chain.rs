@@ -61,6 +61,7 @@ pub const USER_BINDING_FRESHNESS_MS: u64 = 24 * 60 * 60 * 1000;
 /// `canonical_user_binding_bytes`. Changing field order is a
 /// wire-break.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct UserBindingToken {
     /// Realm of the issuing user / hub. Must be a non-empty
     /// realm string per the canonical URA scheme.
@@ -412,6 +413,23 @@ mod tests {
         let bytes = serde_json::to_vec(&token).expect("serialise");
         let restored: UserBindingToken = serde_json::from_slice(&bytes).expect("deserialise");
         assert_eq!(token, restored);
+    }
+
+    #[test]
+    fn token_wire_shape_rejects_unknown_fields() {
+        let signing = SigningKey::from_bytes(&[0x45; 32]);
+        let token = fixture_token(&signing);
+        let mut wire = serde_json::to_value(&token).expect("serialise token");
+        wire.as_object_mut()
+            .expect("token wire is object")
+            .insert("unsigned_extension".to_string(), serde_json::json!(true));
+
+        let error = serde_json::from_value::<UserBindingToken>(wire)
+            .expect_err("unknown token fields must be rejected");
+        assert!(
+            error.to_string().contains("unsigned_extension"),
+            "strict token error should name unknown field: {error}"
+        );
     }
 
     #[test]
