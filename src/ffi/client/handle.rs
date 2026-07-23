@@ -31,7 +31,7 @@
 // The FFI layer uses a small multi-thread runtime. Long-running
 // Invocation observers, stream readers, and short health/status calls
 // can then make progress independently even when the embedding app
-// still calls a legacy blocking ABI function on one thread.
+// calls a synchronous ABI function on one thread.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -43,7 +43,7 @@ use tokio::runtime::Runtime;
 
 use crate::ffi::client::IpcClient;
 
-const FALLBACK_FFI_WORKER_THREADS: usize = 4;
+const MIN_FFI_WORKER_THREADS: usize = 4;
 
 /// Opaque handle exposed to the C ABI. A value of 0 is reserved as
 /// "null handle" / "not yet allocated".
@@ -284,13 +284,13 @@ fn ffi_worker_threads() -> usize {
         .ok()
         .and_then(|raw| raw.trim().parse::<usize>().ok())
         .filter(|threads| *threads > 0)
-        .unwrap_or_else(device_default_ffi_worker_threads)
+        .unwrap_or_else(host_default_ffi_worker_threads)
 }
 
-fn device_default_ffi_worker_threads() -> usize {
+fn host_default_ffi_worker_threads() -> usize {
     std::thread::available_parallelism()
-        .map(|n| n.get().saturating_mul(2).max(FALLBACK_FFI_WORKER_THREADS))
-        .unwrap_or(FALLBACK_FFI_WORKER_THREADS)
+        .map(|n| n.get().saturating_mul(2).max(MIN_FFI_WORKER_THREADS))
+        .unwrap_or(MIN_FFI_WORKER_THREADS)
 }
 
 /// Allocate a new handle for the given `ClientSession` and return
@@ -450,6 +450,14 @@ mod tests {
         let (a, _) = alloc(test_session());
         let (b, _) = alloc(test_session());
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn host_default_ffi_worker_threads_respects_minimum() {
+        assert!(
+            host_default_ffi_worker_threads() >= MIN_FFI_WORKER_THREADS,
+            "host-derived FFI runtime sizing must never shrink below the fixed progress floor"
+        );
     }
 
     #[test]

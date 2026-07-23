@@ -77,6 +77,25 @@ check_runtime_session_projection_accessor_contract() {
   fi
 }
 
+check_ffi_runtime_sizing_policy_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local handle="$cli_root/src/ffi/client/handle.rs"
+  [[ -f "$handle" ]] || fail "FFI client handle source is missing: ${handle#$cli_root/}"
+
+  if rg -n 'FALLBACK_FFI_WORKER_THREADS|device_default_ffi_worker_threads|legacy blocking ABI' "$handle"; then
+    fail "FFI runtime sizing preserves retired fallback/device ownership vocabulary"
+  fi
+  if ! rg -q 'const MIN_FFI_WORKER_THREADS: usize = 4;' "$handle"; then
+    fail "FFI runtime sizing must name the automatic worker lower bound explicitly"
+  fi
+  if ! rg -q 'fn host_default_ffi_worker_threads\(\) -> usize' "$handle"; then
+    fail "FFI runtime sizing must compute host-default worker count"
+  fi
+  if ! rg -q 'unwrap_or_else\(host_default_ffi_worker_threads\)' "$handle"; then
+    fail "FFI worker override must fall through to host-default sizing"
+  fi
+}
+
 check_manifest_contract() {
   "$PYTHON_BIN" - \
     "$MANIFEST" \
@@ -7885,6 +7904,7 @@ EOF
   fi
   check_mcp_reflection_async_bridge_contract
   check_runtime_session_projection_accessor_contract
+  check_ffi_runtime_sizing_policy_contract
   check_active_source_contract
   check_sdk_root_runtime_description_contract
   check_go_sdk_public_ura_alias_contract
@@ -7981,6 +8001,7 @@ check_lifecycle_evidence_freshness_contract
 check_manifest_contract
 check_mcp_reflection_async_bridge_contract
 check_runtime_session_projection_accessor_contract
+check_ffi_runtime_sizing_policy_contract
 check_active_source_contract
 check_sdk_root_runtime_description_contract
 check_go_sdk_public_ura_alias_contract
