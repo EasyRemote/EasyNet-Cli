@@ -173,7 +173,9 @@ mod tests {
 
     #[test]
     fn registration_makes_meta_list_resources_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_test_metadata_for_device_authority(
+            "easynet:///r/test/device/resource-list",
+        );
         register(&mut reg);
         assert!(reg.get_rpc(ABILITY_META_LIST_RESOURCES).is_some());
     }
