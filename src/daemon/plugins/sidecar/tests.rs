@@ -14,7 +14,7 @@ use serde_json::json;
 use super::io::{capture_stderr_diagnostics, collect_stderr};
 use super::{
     SidecarCommand, SidecarExecutionModel, SidecarInvocationEnvelope, SidecarRequestFrame,
-    SidecarRuntimeHost, SidecarRuntimeLimits,
+    SidecarResponseFrame, SidecarRuntimeHost, SidecarRuntimeLimits,
 };
 use crate::daemon::ability::dispatch::StreamSource;
 use crate::daemon::plugins::errors::PluginHostError;
@@ -59,6 +59,69 @@ fn sidecar_open_frame_carries_daemon_invocation_envelope() {
     );
     assert!(encoded.get("ability").is_none());
     assert!(encoded.get("args").is_none());
+}
+
+#[test]
+fn sidecar_request_frame_rejects_unknown_variant_fields() {
+    let raw = json!({
+        "type": "invoke",
+        "call_id": "call-1",
+        "invocation": {
+            "caller": "easynet:///r/acme/user/alice",
+            "callee": "easynet:///r/acme/device/mac",
+            "ability": "device.test.echo",
+            "subject": "easynet:///r/acme/resource/display.primary",
+            "invocation_nonce": vec![7; 16],
+            "causal_context": {},
+            "args": {}
+        },
+        "legacy_route": "rpc"
+    });
+
+    let err = serde_json::from_value::<SidecarRequestFrame>(raw)
+        .expect_err("sidecar request frames must reject unknown variant fields");
+    assert!(
+        err.to_string().contains("unknown field `legacy_route`"),
+        "strict sidecar request decode should name the rejected field: {err}"
+    );
+}
+
+#[test]
+fn sidecar_invocation_envelope_rejects_unknown_identity_fields() {
+    let raw = json!({
+        "caller": "easynet:///r/acme/user/alice",
+        "callee": "easynet:///r/acme/device/mac",
+        "ability": "device.test.echo",
+        "subject": "easynet:///r/acme/resource/display.primary",
+        "invocation_nonce": vec![7; 16],
+        "causal_context": {},
+        "args": {},
+        "legacy_subject": "easynet:///r/acme/device/mac"
+    });
+
+    let err = serde_json::from_value::<SidecarInvocationEnvelope>(raw)
+        .expect_err("sidecar envelope must reject hidden identity aliases");
+    assert!(
+        err.to_string().contains("unknown field `legacy_subject`"),
+        "strict sidecar envelope decode should name the rejected field: {err}"
+    );
+}
+
+#[test]
+fn sidecar_response_frame_rejects_unknown_variant_fields() {
+    let raw = json!({
+        "type": "result",
+        "call_id": "call-1",
+        "value": {"ok": true},
+        "receipt": {"legacy": true}
+    });
+
+    let err = serde_json::from_value::<SidecarResponseFrame>(raw)
+        .expect_err("sidecar response frames must reject hidden receipt projections");
+    assert!(
+        err.to_string().contains("unknown field `receipt`"),
+        "strict sidecar response decode should name the rejected field: {err}"
+    );
 }
 
 #[test]

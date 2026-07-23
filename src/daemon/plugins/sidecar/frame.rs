@@ -14,6 +14,7 @@ use serde_json::Value;
 /// causal ordering. What this is NOT: authority for sidecars to modify caller,
 /// callee, subject, nonce, or causal context; the daemon constructs this value.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct SidecarInvocationEnvelope {
     /// Agent identity that initiated and signs the call.
     pub caller: String,
@@ -38,7 +39,7 @@ pub struct SidecarInvocationEnvelope {
 
 /// Host-to-sidecar request frame.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SidecarRequestFrame {
     Invoke {
         call_id: String,
@@ -64,7 +65,7 @@ pub enum SidecarRequestFrame {
 
 /// Sidecar-to-host response frame.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SidecarResponseFrame {
     Result { call_id: String, value: Value },
     StreamItem { call_id: String, value: Value },
