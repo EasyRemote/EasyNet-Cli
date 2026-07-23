@@ -460,6 +460,26 @@ func TestDirectRuntimeGRPCErrorClassifiesHTTP2ProtocolReset(t *testing.T) {
 	}
 }
 
+func TestDirectRuntimeGRPCErrorProjectsProviderNotFoundAsDescriptorNotFound(t *testing.T) {
+	err := directRuntimeGRPCError(
+		status.Error(codes.NotFound, "descriptor_ref not found"),
+		"unix:///tmp/easynet-daemon.sock",
+	)
+	if !IsCode(err, ErrDescriptorNotFound) {
+		t.Fatalf("directRuntimeGRPCError = %#v, want DESCRIPTOR_NOT_FOUND", err)
+	}
+	var sdkErr *SDKError
+	if !errors.As(err, &sdkErr) {
+		t.Fatalf("directRuntimeGRPCError = %#v, want SDKError", err)
+	}
+	if sdkErr.Stage != "direct_runtime" {
+		t.Fatalf("stage = %q, want direct_runtime", sdkErr.Stage)
+	}
+	if sdkErr.Class() != ErrorClassRouting {
+		t.Fatalf("class = %s, want %s", sdkErr.Class(), ErrorClassRouting)
+	}
+}
+
 func TestDirectRuntimeTransportUsesAxonCanonicalPublicRoute(t *testing.T) {
 	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, directRuntimeOptions{
 		DialTimeoutMS: 3000,

@@ -2291,7 +2291,7 @@ def _grpc_error(error: grpc.RpcError, *, endpoint: str) -> SDKError:
             False,
         ),
         grpc.StatusCode.NOT_FOUND: (
-            ErrorCode.ABILITY_NOT_FOUND,
+            ErrorCode.DESCRIPTOR_NOT_FOUND,
             RetryHint.NEVER,
             False,
         ),

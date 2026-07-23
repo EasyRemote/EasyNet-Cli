@@ -1675,7 +1675,7 @@ func directRuntimeGRPCError(err error, endpoint string) error {
 	case codes.PermissionDenied:
 		code, retry, retryable = ErrPermissionDenied, RetryNever, false
 	case codes.NotFound:
-		code, retry, retryable = ErrAbilityNotFound, RetryNever, false
+		code, retry, retryable = ErrDescriptorNotFound, RetryNever, false
 	case codes.Unimplemented:
 		code, retry, retryable = ErrProtocolMismatch, RetryNever, false
 	case codes.Unknown, codes.Internal, codes.DataLoss:

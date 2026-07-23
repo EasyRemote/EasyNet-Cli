@@ -1017,6 +1017,58 @@ if py_errors:
 PY
 }
 
+check_sdk_direct_runtime_descriptor_not_found_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local go_direct="$cli_root/sdk/go/direct_runtime.go"
+  local go_direct_test="$cli_root/sdk/go/direct_runtime_test.go"
+  local py_direct="$cli_root/sdk/python/easynet_sdk/direct_runtime.py"
+  local py_direct_test="$cli_root/sdk/python/tests/test_direct_runtime.py"
+
+  "$PYTHON_BIN" - \
+    "$go_direct" \
+    "$go_direct_test" \
+    "$py_direct" \
+    "$py_direct_test" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+go_direct_path, go_direct_test_path, py_direct_path, py_direct_test_path = map(Path, sys.argv[1:])
+
+def read(path: Path) -> str:
+    if not path.exists():
+        raise SystemExit(f"sdk_direct_runtime_descriptor_not_found_source_missing:{path}")
+    return path.read_text()
+
+def section(text: str, start: str, end: str) -> str:
+    offset = text.find(start)
+    if offset < 0:
+        raise SystemExit(f"sdk_direct_runtime_descriptor_not_found_missing_section:{start}")
+    stop = text.find(end, offset + len(start))
+    return text[offset : stop if stop >= 0 else len(text)]
+
+go_direct = read(go_direct_path)
+go_body = section(go_direct, "func directRuntimeGRPCError(", "func directRuntimeError(")
+if re.search(r"case\s+codes\.NotFound:\s*code,\s*retry,\s*retryable\s*=\s*ErrAbilityNotFound", go_body):
+    raise SystemExit("sdk_go_direct_runtime_not_found_legacy_ability_projection")
+if "case codes.NotFound:" not in go_body or "ErrDescriptorNotFound" not in go_body:
+    raise SystemExit("sdk_go_direct_runtime_not_found_descriptor_projection_missing")
+go_tests = read(go_direct_test_path)
+if "TestDirectRuntimeGRPCErrorProjectsProviderNotFoundAsDescriptorNotFound" not in go_tests:
+    raise SystemExit("sdk_go_direct_runtime_not_found_descriptor_test_missing")
+
+py_direct = read(py_direct_path)
+py_body = section(py_direct, "def _grpc_error(", "def _direct_error(")
+if re.search(r"grpc\.StatusCode\.NOT_FOUND:\s*\(\s*ErrorCode\.ABILITY_NOT_FOUND", py_body, re.S):
+    raise SystemExit("sdk_python_direct_runtime_not_found_legacy_ability_projection")
+if "grpc.StatusCode.NOT_FOUND" not in py_body or "ErrorCode.DESCRIPTOR_NOT_FOUND" not in py_body:
+    raise SystemExit("sdk_python_direct_runtime_not_found_descriptor_projection_missing")
+py_tests = read(py_direct_test_path)
+if "test_direct_runtime_grpc_not_found_projects_descriptor_not_found" not in py_tests:
+    raise SystemExit("sdk_python_direct_runtime_not_found_descriptor_test_missing")
+PY
+}
+
 check_principal_lifecycle_cli_schema_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local principal="$cli_root/src/cli/commands/groups/principal.rs"
@@ -8132,6 +8184,35 @@ EOF
   if ( check_sdk_runtime_failure_code_contract "$tmp/sdk-runtime-stage-fallback" ) >/dev/null 2>&1; then
     fail "self-test expected SDK runtime error stage fallback gate to fail"
   fi
+  mkdir -p "$tmp/sdk-direct-runtime-not-found-legacy/sdk/go" \
+    "$tmp/sdk-direct-runtime-not-found-legacy/sdk/python/easynet_sdk" \
+    "$tmp/sdk-direct-runtime-not-found-legacy/sdk/python/tests"
+  printf '%s\n' \
+    'func directRuntimeGRPCError() error {' \
+    '  switch statusValue.Code() {' \
+    '  case codes.NotFound:' \
+    '    code, retry, retryable = ErrAbilityNotFound, RetryNever, false' \
+    '  }' \
+    '  return nil' \
+    '}' \
+    'func directRuntimeError() {}' \
+    > "$tmp/sdk-direct-runtime-not-found-legacy/sdk/go/direct_runtime.go"
+  printf 'func TestDirectRuntimeGRPCErrorProjectsProviderNotFoundAsDescriptorNotFound(t *testing.T) {}\n' \
+    > "$tmp/sdk-direct-runtime-not-found-legacy/sdk/go/direct_runtime_test.go"
+  printf '%s\n' \
+    'def _grpc_error(error, *, endpoint):' \
+    '    mapping = {' \
+    '        grpc.StatusCode.NOT_FOUND: (ErrorCode.ABILITY_NOT_FOUND, RetryHint.NEVER, False),' \
+    '    }' \
+    '    return mapping' \
+    '' \
+    'def _direct_error(): pass' \
+    > "$tmp/sdk-direct-runtime-not-found-legacy/sdk/python/easynet_sdk/direct_runtime.py"
+  printf 'def test_direct_runtime_grpc_not_found_projects_descriptor_not_found(): pass\n' \
+    > "$tmp/sdk-direct-runtime-not-found-legacy/sdk/python/tests/test_direct_runtime.py"
+  if ( check_sdk_direct_runtime_descriptor_not_found_contract "$tmp/sdk-direct-runtime-not-found-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected SDK direct runtime NOT_FOUND ability projection gate to fail"
+  fi
   mkdir -p "$tmp/sdk-root-product-named/sdk/go" \
     "$tmp/sdk-root-product-named/sdk/python/easynet_sdk"
   printf '// Package easynet provides the Go binding for the canonical EasyNet runtime SDK.\npackage easynet\n' \
@@ -8351,6 +8432,7 @@ EOF
   check_cli_invocation_history_read_model_contract
   check_sdk_history_authority_subject_contract
   check_sdk_runtime_failure_code_contract
+  check_sdk_direct_runtime_descriptor_not_found_contract
   check_principal_lifecycle_cli_schema_contract
   check_auth_agents_backend_shape_contract
   check_pages_identity_credentials_contract
@@ -8457,6 +8539,7 @@ check_invocation_history_filter_scope_contract
 check_cli_invocation_history_read_model_contract
 check_sdk_history_authority_subject_contract
 check_sdk_runtime_failure_code_contract
+check_sdk_direct_runtime_descriptor_not_found_contract
 check_principal_lifecycle_cli_schema_contract
 check_auth_agents_backend_shape_contract
 check_pages_identity_credentials_contract

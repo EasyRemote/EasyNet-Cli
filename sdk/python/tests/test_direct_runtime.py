@@ -20,6 +20,7 @@ from easynet_sdk import (
     ConnectOptions,
     RuntimeInvocationTransport,
     ErrorCode,
+    ErrorClass,
     InvocationHandle,
     InvocationSignature,
     RuntimeClient,
@@ -39,6 +40,7 @@ from easynet_sdk.direct_runtime import (
     DirectRuntimeTransport,
     _canonical_receipt_document,
     _canonical_receipt_projection,
+    _grpc_error,
     _response_error_code,
 )
 from test_runtime import complete_draft
@@ -66,6 +68,19 @@ def _caller_signature() -> InvocationSignature:
 
 def _signed_draft():
     return replace(complete_draft(), caller_signature=_caller_signature())
+
+
+class _FakeRpcError(grpc.RpcError):
+    def __init__(self, status_code: grpc.StatusCode, details: str) -> None:
+        super().__init__()
+        self._status_code = status_code
+        self._details = details
+
+    def code(self) -> grpc.StatusCode:
+        return self._status_code
+
+    def details(self) -> str:
+        return self._details
 
 
 def _canonical_receipt(
@@ -301,6 +316,16 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
 
 
 class DirectRuntimeTests(unittest.TestCase):
+    def test_direct_runtime_grpc_not_found_projects_descriptor_not_found(self) -> None:
+        error = _grpc_error(
+            _FakeRpcError(grpc.StatusCode.NOT_FOUND, "descriptor_ref not found"),
+            endpoint="unix:///tmp/easynet-daemon.sock",
+        )
+
+        self.assertEqual(error.code, ErrorCode.DESCRIPTOR_NOT_FOUND)
+        self.assertEqual(error.error_class, ErrorClass.ROUTING)
+        self.assertEqual(error.stage, "direct_runtime")
+
     def test_direct_connector_resolves_invocation_endpoint_from_discovery(self) -> None:
         connector = DirectRuntimeConnector(
             control_path="/tmp/control.json",
