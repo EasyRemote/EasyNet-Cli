@@ -3598,6 +3598,49 @@ for required_test in (
 PY
 }
 
+check_ffi_descriptor_probe_not_found_vocabulary_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local ffi_invocation="$cli_root/src/ffi/invocation/mod.rs"
+  [[ -f "$ffi_invocation" ]] || return 0
+
+  "$PYTHON_BIN" - "$ffi_invocation" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+production = text.split("\nmod tests {", 1)[0].split("\n#[cfg(test)]", 1)[0]
+
+classifier = re.search(
+    r"fn from_remote_probe_rejection\([^)]*\)\s*->\s*Self\s*\{(?P<body>.*?)\n    fn message\(",
+    production,
+    re.S,
+)
+if classifier is None:
+    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:classifier_missing")
+body = classifier.group("body")
+if "code: tonic::Code::NotFound" in body:
+    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:daemon_not_found_owner_offline_fallback")
+if '"NOT_FOUND"' in body:
+    raise SystemExit("ffi_descriptor_probe_not_found_vocabulary:generic_not_found_owner_offline_fallback")
+owner_offline_branch = body[body.find("RemoteInvocationFailure::InvocationRejected"):]
+for required in (
+    '"ROUTE_NEGATIVE"',
+    '"DESCRIPTOR_OWNER_OFFLINE"',
+    "Self::OwnerOffline(error.to_string())",
+):
+    if required not in owner_offline_branch:
+        raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:typed_owner_offline_missing:{required}")
+for required_test in (
+    "descriptor_resolution_errors_project_canonical_runtime_codes",
+    "descriptor_remote_probe_not_found_requires_typed_descriptor_vocabulary",
+):
+    if required_test not in text:
+        raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:missing_test:{required_test}")
+PY
+}
+
 check_cli_discover_candidate_projection_contract() {
   local cli_root="${CLI_ROOT:-$ROOT}"
   local discover="$cli_root/src/cli/commands/discover.rs"
@@ -6940,6 +6983,47 @@ EOF
   if ( CLI_ROOT="$tmp/cli-ffi-descriptor-owner-legacy"; check_ffi_descriptor_runtime_owner_contract ) >/dev/null 2>&1; then
     fail "self-test expected FFI descriptor runtime owner fallback gate to fail"
   fi
+  mkdir -p "$tmp/cli-ffi-descriptor-notfound-vocabulary-legacy/src/ffi/invocation"
+  cat >"$tmp/cli-ffi-descriptor-notfound-vocabulary-legacy/src/ffi/invocation/mod.rs" <<'EOF'
+enum DescriptorResolutionError {
+    OwnerOffline(String),
+    DescriptorNotFound(String),
+}
+
+impl DescriptorResolutionError {
+    fn from_remote_probe_rejection(
+        error: crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure,
+    ) -> Self {
+        match error {
+            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::DaemonRejected {
+                code: tonic::Code::NotFound,
+                ..
+            } => Self::OwnerOffline(error.to_string()),
+            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::InvocationRejected {
+                ref code,
+                ..
+            } if matches!(
+                code.as_str(),
+                "ROUTE_NEGATIVE" | "NOT_FOUND" | "DESCRIPTOR_OWNER_OFFLINE"
+            ) => Self::OwnerOffline(error.to_string()),
+            _ => Self::DescriptorNotFound(error.to_string()),
+        }
+    }
+
+    fn message(&self) -> &str {
+        ""
+    }
+}
+
+#[test]
+fn descriptor_resolution_errors_project_canonical_runtime_codes() {}
+
+#[test]
+fn descriptor_remote_probe_not_found_requires_typed_descriptor_vocabulary() {}
+EOF
+  if ( CLI_ROOT="$tmp/cli-ffi-descriptor-notfound-vocabulary-legacy"; check_ffi_descriptor_probe_not_found_vocabulary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected FFI descriptor probe generic NOT_FOUND vocabulary gate to fail"
+  fi
   mkdir -p "$tmp/cli-opaque-hub-catalog/src/daemon/federation/read_model"
   mkdir -p "$tmp/cli-opaque-hub-catalog/src/daemon/ability/descriptors"
   mkdir -p "$tmp/cli-opaque-hub-catalog/src/daemon/ability/builtins/governance"
@@ -8780,6 +8864,7 @@ EOF
   check_namespace_resolver_authority_projection_contract
   check_daemon_invocation_service_descriptor_ref_route_projection_contract
   check_ffi_descriptor_runtime_owner_contract
+  check_ffi_descriptor_probe_not_found_vocabulary_contract
   check_cli_discover_candidate_projection_contract
   check_ffi_invocation_json_projection_contract
   check_ffi_last_error_typed_tls_contract
@@ -8893,6 +8978,7 @@ check_route_resolver_descriptor_ref_selector_contract
 check_namespace_resolver_authority_projection_contract
 check_daemon_invocation_service_descriptor_ref_route_projection_contract
 check_ffi_descriptor_runtime_owner_contract
+check_ffi_descriptor_probe_not_found_vocabulary_contract
 check_cli_discover_candidate_projection_contract
 check_ffi_invocation_json_projection_contract
 check_ffi_last_error_typed_tls_contract

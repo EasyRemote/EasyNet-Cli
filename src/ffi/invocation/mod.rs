@@ -448,17 +448,10 @@ impl DescriptorResolutionError {
             | crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::Transport(
                 _,
             ) => Self::RuntimeOffline(error.to_string()),
-            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::DaemonRejected {
-                code: tonic::Code::NotFound,
-                ..
-            } => Self::OwnerOffline(error.to_string()),
             crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::InvocationRejected {
                 ref code,
                 ..
-            } if matches!(
-                code.as_str(),
-                "ROUTE_NEGATIVE" | "NOT_FOUND" | "DESCRIPTOR_OWNER_OFFLINE"
-            ) =>
+            } if matches!(code.as_str(), "ROUTE_NEGATIVE" | "DESCRIPTOR_OWNER_OFFLINE") =>
             {
                 Self::OwnerOffline(error.to_string())
             }
@@ -9915,13 +9908,13 @@ mod tests {
                     .to_string(),
                 execution_target_ura: "easynet:///r/localhost/device/dev-a".to_string(),
                 code: tonic::Code::NotFound,
-                message: "namespace.resolve negative".to_string(),
+                message: "descriptor_ref not found".to_string(),
             },
         )
         .abi_projection();
         assert_eq!(abi_code, ERR_NOT_FOUND);
-        assert_eq!(projection.code, "DESCRIPTOR_OWNER_OFFLINE");
-        assert_eq!(projection.retry, "after_backoff");
+        assert_eq!(projection.code, "DESCRIPTOR_NOT_FOUND");
+        assert_eq!(projection.retry, "never");
 
         let (abi_code, projection) =
             DescriptorResolutionError::invalid_catalog_payload(
@@ -9931,6 +9924,46 @@ mod tests {
         assert_eq!(abi_code, ERR_INVALID_ARG);
         assert_eq!(projection.code, "INVALID_ARGUMENT");
         assert_eq!(projection.stage, "provider_payload");
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn descriptor_remote_probe_not_found_requires_typed_descriptor_vocabulary() {
+        let (abi_code, projection) = DescriptorResolutionError::from_remote_probe_rejection(
+            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::InvocationRejected {
+                state: "FAILED".to_string(),
+                code: "NOT_FOUND".to_string(),
+                message: "descriptor catalog miss".to_string(),
+            },
+        )
+        .abi_projection();
+        assert_eq!(abi_code, ERR_NOT_FOUND);
+        assert_eq!(projection.code, "DESCRIPTOR_NOT_FOUND");
+        assert_eq!(projection.retry, "never");
+
+        let (abi_code, projection) = DescriptorResolutionError::from_remote_probe_rejection(
+            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::InvocationRejected {
+                state: "FAILED".to_string(),
+                code: "ROUTE_NEGATIVE".to_string(),
+                message: "namespace resolver reports owner unavailable".to_string(),
+            },
+        )
+        .abi_projection();
+        assert_eq!(abi_code, ERR_NOT_FOUND);
+        assert_eq!(projection.code, "DESCRIPTOR_OWNER_OFFLINE");
+        assert_eq!(projection.retry, "after_backoff");
+
+        let (abi_code, projection) = DescriptorResolutionError::from_remote_probe_rejection(
+            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationFailure::InvocationRejected {
+                state: "FAILED".to_string(),
+                code: "DESCRIPTOR_OWNER_OFFLINE".to_string(),
+                message: "descriptor owner is offline".to_string(),
+            },
+        )
+        .abi_projection();
+        assert_eq!(abi_code, ERR_NOT_FOUND);
+        assert_eq!(projection.code, "DESCRIPTOR_OWNER_OFFLINE");
+        assert_eq!(projection.retry, "after_backoff");
     }
 
     #[cfg(feature = "axon-pb")]
