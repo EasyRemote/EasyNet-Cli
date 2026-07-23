@@ -161,20 +161,26 @@ pub fn register(
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-/// Resolve the local node's identity from credentials + runtime state.
-/// Returns the `(node_id, tenant_id, hub_endpoint, paired)` tuple that
-/// every device operation handler needs to know "what is this device". `paired
-/// = false` when `~/.easynet/credentials.json` is absent — the
-/// daemon may still serve local abilities, but federation-tier
-/// answers should reflect the unpaired state.
-fn local_identity() -> (String, String, Option<String>, bool) {
-    let local = federation_probe::local_identity();
-    (
-        local.node_id,
-        local.tenant_id,
-        local.hub_endpoint,
-        local.paired,
-    )
+#[derive(Debug, Clone)]
+struct LocalDeviceIdentity {
+    node_id: String,
+    tenant_id: String,
+}
+
+/// Resolve the local node's identity from canonical runtime credentials.
+/// Device-management operations require an explicit local owner; they must not
+/// synthesize local rows when credentials are unavailable.
+fn local_identity() -> anyhow::Result<LocalDeviceIdentity> {
+    match federation_probe::local_identity() {
+        federation_probe::LocalIdentity::Paired {
+            node_id,
+            tenant_id,
+            hub_endpoint: _,
+        } => Ok(LocalDeviceIdentity { node_id, tenant_id }),
+        federation_probe::LocalIdentity::Unavailable { reason } => {
+            anyhow::bail!("device operation local identity unavailable: {reason}")
+        }
+    }
 }
 
 /// Treat a node id as "this device". Accepts the literal `local`,
@@ -263,8 +269,8 @@ fn describe_node_handler(
     if node_id.is_empty() {
         anyhow::bail!("node.describe: `node_id` is required");
     }
-    let (local_id, _tenant, _hub, paired) = local_identity();
-    if is_local_target(node_id, &local_id) {
+    let local = local_identity()?;
+    if is_local_target(node_id, &local.node_id) {
         let catalog = local_catalog.get().ok_or_else(|| {
             anyhow::anyhow!("node.describe: live ability catalog is not attached")
         })?;
@@ -274,13 +280,11 @@ fn describe_node_handler(
                 record.ability_summaries,
             ));
         }
-        if paired {
-            if let Some(record) = federation_probe::resolve_device_record(resolver, &local_id)? {
-                return Ok(node_json_with_abilities(
-                    &record.node,
-                    record.ability_summaries,
-                ));
-            }
+        if let Some(record) = federation_probe::resolve_device_record(resolver, &local.node_id)? {
+            return Ok(node_json_with_abilities(
+                &record.node,
+                record.ability_summaries,
+            ));
         }
         let view = federation_probe::collect_device_view(resolver);
         let node = view
@@ -328,8 +332,8 @@ fn remove_node_handler(args: Value) -> anyhow::Result<Value> {
     if node_id.is_empty() {
         anyhow::bail!("node.remove: `node_id` is required");
     }
-    let (local_id, _tenant, _hub, _paired) = local_identity();
-    if is_local_target(node_id, &local_id) {
+    let local = local_identity()?;
+    if is_local_target(node_id, &local.node_id) {
         anyhow::bail!(
             "node.remove refuses to remove this device (would delete its own \
              pairing). Use `easynet device reset` for that — it is the local \
@@ -477,10 +481,10 @@ fn deploy_ability_handler_with_clock(
         .and_then(Value::as_str)
         .unwrap_or("local")
         .trim();
-    let (local_id, tenant, _hub, _paired) = local_identity();
-    let owner_ura = crate::core::ura::device_ura(&tenant, &local_id);
+    let local = local_identity()?;
+    let owner_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
     let mutated_by = require_local_device_authority(&env, &owner_ura, "ability.deploy")?;
-    if !is_local_target(node_id, &local_id) {
+    if !is_local_target(node_id, &local.node_id) {
         return Err(federation_not_wired(&format!(
             "deploying an ability to remote node {node_id:?}"
         )));
@@ -524,7 +528,7 @@ fn deploy_ability_handler_with_clock(
         "public_name": bundle.public_name,
         "namespace": bundle.namespace.as_str(),
         "ability_ura": ability_ura,
-        "node_id": local_id,
+        "node_id": local.node_id,
         "mutated_by": mutated_by,
         "install_id": install_id,
         "bundle": bundle.display_path,
@@ -570,10 +574,10 @@ fn uninstall_ability_handler(
         .and_then(Value::as_str)
         .unwrap_or("local")
         .trim();
-    let (local_id, tenant, _hub, _paired) = local_identity();
-    let owner_ura = crate::core::ura::device_ura(&tenant, &local_id);
+    let local = local_identity()?;
+    let owner_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
     let mutated_by = require_local_device_authority(&env, &owner_ura, "ability.uninstall")?;
-    if !is_local_target(node_id, &local_id) {
+    if !is_local_target(node_id, &local.node_id) {
         return Err(federation_not_wired(&format!(
             "uninstalling ability {ability_ura:?} from remote node {node_id:?}"
         )));
@@ -602,7 +606,7 @@ fn uninstall_ability_handler(
     Ok(json!({
         "public_name": public_name,
         "ability_ura": ability_ura,
-        "node_id": local_id,
+        "node_id": local.node_id,
         "mutated_by": mutated_by,
         "install_ids": outcome.install_ids,
         "runtime_removed": outcome.runtime_removed,
@@ -732,6 +736,7 @@ mod tests {
 
     #[test]
     fn list_nodes_returns_at_least_self() {
+        let _home = provision_local_device_credentials();
         let resolver = detached_resolver();
         let resp = list_nodes_handler(json!({}), resolver.as_ref()).unwrap();
         let nodes = resp.get("nodes").and_then(Value::as_array).unwrap();
@@ -744,6 +749,7 @@ mod tests {
 
     #[test]
     fn registration_publishes_device_ops_manifests() {
+        let _home = provision_local_device_credentials();
         let mut reg = AxonAbilityCatalog::new();
         register(
             &mut reg,
@@ -777,11 +783,7 @@ mod tests {
 
     #[test]
     fn describe_node_with_local_returns_self_envelope() {
-        // HomeGuard isolates ~/.easynet so the handler runs the
-        // unpaired-fallback arm (collect_device_view's self node).
-        // The paired arm goes through federation_probe::resolve_device_record
-        // which dials the local runtime bridge — absent in unit tests.
-        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let _home = provision_local_device_credentials();
         let resolver = detached_resolver();
         let catalog = populated_catalog_cell();
         let resp = describe_node_handler(json!({"node_id": "local"}), resolver.as_ref(), &catalog)
@@ -790,10 +792,8 @@ mod tests {
     }
 
     #[test]
-    fn describe_node_with_remote_returns_not_found() {
-        // Same HomeGuard isolation: unpaired fallback bails
-        // "node X not found" without reaching the runtime bridge.
-        let _g = crate::cli::commands::test_support::HomeGuard::new();
+    fn describe_node_with_remote_reports_federation_unavailable() {
+        let _home = provision_local_device_credentials();
         let resolver = detached_resolver();
         let catalog = populated_catalog_cell();
         let err = describe_node_handler(
@@ -802,11 +802,15 @@ mod tests {
             &catalog,
         )
         .unwrap_err();
-        assert!(format!("{err}").contains("not found"));
+        assert!(
+            format!("{err}").contains("federation.resolve"),
+            "remote describe must preserve resolver failure instead of returning fallback not-found: {err}"
+        );
     }
 
     #[test]
     fn remove_node_refuses_to_remove_self() {
+        let _home = provision_local_device_credentials();
         let err = remove_node_handler(json!({"node_id": "local"})).unwrap_err();
         let msg = format!("{err}");
         assert!(
@@ -836,12 +840,30 @@ mod tests {
         )
     }
 
+    fn provision_local_device_credentials() -> crate::cli::commands::test_support::HomeGuard {
+        let guard = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "local".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "axon://hub.example:50051".to_string(),
+                realm: "test".to_string(),
+                username: Some("alice".to_string()),
+                user_id: Some("user-alice".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("write local device credentials");
+        guard
+    }
+
     fn local_device_env() -> EnvelopeContext {
         EnvelopeContext::for_test(LOCAL_SYSTEM_AGENT_URA, "easynet:///r/test/device/local")
     }
 
     #[test]
     fn deploy_ability_rejects_missing_resource_ref() {
+        let _home = provision_local_device_credentials();
         let err = deploy_ability_handler(local_device_env(), json!({}), &empty_device_cell())
             .unwrap_err();
         assert!(format!("{err}").contains("resource_ref"));
@@ -849,6 +871,7 @@ mod tests {
 
     #[test]
     fn deploy_ability_local_validates_manifest() {
+        let _home = provision_local_device_credentials();
         let dir = tempfile::tempdir().unwrap();
         let resource_ref =
             filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
@@ -864,6 +887,7 @@ mod tests {
 
     #[test]
     fn deploy_ability_parses_canonical_manifest_then_needs_registrar() {
+        let _home = provision_local_device_credentials();
         // New contract: a well-formed manifest parses (verb-only name,
         // schema, exec), then the transaction needs a wired registrar.
         // With an empty cell the handler fails honestly at the binding
@@ -894,6 +918,7 @@ mod tests {
 
     #[test]
     fn deploy_ability_rejects_missing_namespace_before_registrar() {
+        let _home = provision_local_device_credentials();
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ability.json"),
@@ -919,6 +944,7 @@ mod tests {
 
     #[test]
     fn deploy_ability_rejects_reserved_namespace() {
+        let _home = provision_local_device_credentials();
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ability.json"),
@@ -941,6 +967,7 @@ mod tests {
 
     #[test]
     fn uninstall_ability_needs_wired_registrar() {
+        let _home = provision_local_device_credentials();
         let err = uninstall_ability_handler(
             local_device_env(),
             json!({
@@ -955,6 +982,7 @@ mod tests {
 
     #[test]
     fn deploy_ability_wired_transaction_completes_inside_current_thread_runtime() {
+        let _home = provision_local_device_credentials();
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ability.json"),

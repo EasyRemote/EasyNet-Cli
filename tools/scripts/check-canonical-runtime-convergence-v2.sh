@@ -3110,6 +3110,13 @@ from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
 
+for retired_global in (
+    "UNPAIRED_LOCAL_REALM",
+    "UNPAIRED_LOCAL_DEVICE_ID",
+):
+    if retired_global in text:
+        raise SystemExit(f"local_device_identity:retired_default_constant:{retired_global}")
+
 if "pub(crate) fn local_device_ura() -> anyhow::Result<String>" not in text:
     raise SystemExit("local_device_identity:local_device_ura_not_fallible")
 
@@ -3194,6 +3201,65 @@ for required_test in (
 ):
     if required_test not in text:
         raise SystemExit(f"filesystem_resource_owner:test_missing:{required_test}")
+PY
+}
+
+check_federation_probe_local_identity_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local probe="$cli_root/src/daemon/ability/builtins/integrations/federation_probe.rs"
+  local ops="$cli_root/src/daemon/ability/builtins/device_control/ability_management/ops.rs"
+  [[ -f "$probe" ]] || return 0
+
+  "$PYTHON_BIN" - "$probe" "$ops" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+ops = Path(sys.argv[2]).read_text(encoding="utf-8") if len(sys.argv) > 2 and Path(sys.argv[2]).exists() else ""
+
+if "pub(crate) enum LocalIdentity" not in text:
+    raise SystemExit("federation_probe_local_identity:not_explicit_state")
+for required in (
+    "Paired {",
+    "Unavailable {",
+    "local device identity unavailable",
+    "collect_device_view_rejects_missing_local_identity_without_default_node",
+):
+    if required not in text:
+        raise SystemExit(f"federation_probe_local_identity:missing:{required}")
+
+start = text.find("pub(crate) fn local_identity()")
+end = text.find("pub(crate) fn collect_device_view", start)
+if start < 0 or end < 0:
+    raise SystemExit("federation_probe_local_identity:local_identity_section_missing")
+body = text[start:end]
+for retired in (
+    "UNPAIRED_LOCAL_REALM",
+    "UNPAIRED_LOCAL_DEVICE_ID",
+    'node_id: "local"',
+    'tenant_id: "default"',
+    'paired: false',
+):
+    if retired in body:
+        raise SystemExit(f"federation_probe_local_identity:retired_default_identity:{retired}")
+
+collect = text[text.find("fn collect_device_view_with_probe("):]
+collect = collect[: collect.find("/// Resolve one device", 0) if "/// Resolve one device" in collect else len(collect)]
+if "nodes: Vec::new()" not in collect:
+    raise SystemExit("federation_probe_local_identity:missing_unavailable_empty_nodes")
+
+for retired in (
+    "fn local_identity() -> (String, String, Option<String>, bool)",
+    ".paired",
+):
+    if retired in ops:
+        raise SystemExit(f"federation_probe_local_identity:ops_retired_tuple_helper:{retired}")
+for required in (
+    "struct LocalDeviceIdentity",
+    "device operation local identity unavailable",
+):
+    if ops and required not in ops:
+        raise SystemExit(f"federation_probe_local_identity:ops_missing:{required}")
 PY
 }
 
@@ -9617,6 +9683,36 @@ EOF
   if ( check_filesystem_resource_owner_contract "$tmp/filesystem-resource-owner-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected filesystem ResourceRef default/local owner gate to fail"
   fi
+  mkdir -p "$tmp/federation-probe-local-identity-legacy/src/daemon/ability/builtins/integrations"
+  cat >"$tmp/federation-probe-local-identity-legacy/src/daemon/ability/builtins/integrations/federation_probe.rs" <<'EOF'
+pub(crate) struct LocalIdentity {
+    node_id: String,
+    tenant_id: String,
+    paired: bool,
+}
+
+pub(crate) fn local_identity() -> LocalIdentity {
+    match crate::daemon::persistence::config::load_credentials() {
+        Ok(c) => LocalIdentity {
+            node_id: c.node_id,
+            tenant_id: c.realm,
+            paired: true,
+        },
+        Err(_) => LocalIdentity {
+            node_id: crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_DEVICE_ID.to_string(),
+            tenant_id: crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM.to_string(),
+            paired: false,
+        },
+    }
+}
+
+pub(crate) fn collect_device_view() {
+    let nodes = vec![local_identity()];
+}
+EOF
+  if ( check_federation_probe_local_identity_contract "$tmp/federation-probe-local-identity-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected federation probe default/local identity gate to fail"
+  fi
   mkdir -p "$tmp/ready-capability-mode-derived/src/bin" \
     "$tmp/ready-capability-mode-derived/src/daemon/boot/invocation"
   cat >"$tmp/ready-capability-mode-derived/src/bin/easynet-daemon.rs" <<'EOF'
@@ -9812,6 +9908,7 @@ EOF
   check_daemon_runtime_route_inventory_contract
   check_daemon_local_device_identity_contract
   check_filesystem_resource_owner_contract
+  check_federation_probe_local_identity_contract
   check_ready_capability_proof_contract
   check_daemon_local_runtime_identity_contract
   check_kernel_runtime_session_read_model_contract
@@ -9938,6 +10035,7 @@ check_remote_invocation_subject_provenance_contract
 check_daemon_runtime_route_inventory_contract
 check_daemon_local_device_identity_contract
 check_filesystem_resource_owner_contract
+check_federation_probe_local_identity_contract
 check_ready_capability_proof_contract
 check_daemon_local_runtime_identity_contract
 check_kernel_runtime_session_read_model_contract

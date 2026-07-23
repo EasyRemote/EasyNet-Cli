@@ -45,11 +45,15 @@ const DEVICE_NETWORK_HEALTH_ABILITY: &str = governance::OBSERVE_NETWORK_HEALTH;
 const MAX_DEVICE_PROBES: usize = 64;
 
 #[derive(Debug, Clone)]
-pub(crate) struct LocalIdentity {
-    pub node_id: String,
-    pub tenant_id: String,
-    pub hub_endpoint: Option<String>,
-    pub paired: bool,
+pub(crate) enum LocalIdentity {
+    Paired {
+        node_id: String,
+        tenant_id: String,
+        hub_endpoint: Option<String>,
+    },
+    Unavailable {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -88,26 +92,27 @@ pub(crate) struct ResolvedDeviceRecord {
 pub(crate) fn local_device_record(
     catalog: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
 ) -> anyhow::Result<Option<ResolvedDeviceRecord>> {
-    let local = local_identity();
-    if !local.paired {
+    let LocalIdentity::Paired {
+        node_id,
+        tenant_id,
+        hub_endpoint,
+    } = local_identity()
+    else {
         return Ok(None);
-    }
-    let owner_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
+    };
+    let owner_ura = crate::core::ura::device_ura(&tenant_id, &node_id);
     let abilities =
         crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(catalog)
             .owner_projection_values(&owner_ura)
             .map_err(|error| anyhow::anyhow!("local device ability publication: {error}"))?;
     Ok(Some(ResolvedDeviceRecord {
         node: DeviceNodeSnapshot {
-            node_id: local.node_id.clone(),
-            tenant_id: local.tenant_id.clone(),
-            agent_ura: Some(crate::core::ura::device_ura(
-                &local.tenant_id,
-                &local.node_id,
-            )),
+            node_id: node_id.clone(),
+            tenant_id: tenant_id.clone(),
+            agent_ura: Some(crate::core::ura::device_ura(&tenant_id, &node_id)),
             is_self: true,
             paired: true,
-            hub_endpoint: local.hub_endpoint,
+            hub_endpoint,
             state: "HEALTHY".to_string(),
             online: true,
             probe_status: "local".to_string(),
@@ -161,7 +166,7 @@ impl DeviceProfileAbilitySet {
 
 pub(crate) fn local_identity() -> LocalIdentity {
     match config::load_credentials() {
-        Ok(c) => LocalIdentity {
+        Ok(c) => LocalIdentity::Paired {
             node_id: c.node_id,
             tenant_id: c.realm,
             hub_endpoint: if c.hub_endpoint.trim().is_empty() {
@@ -169,14 +174,9 @@ pub(crate) fn local_identity() -> LocalIdentity {
             } else {
                 Some(c.hub_endpoint)
             },
-            paired: true,
         },
-        Err(_) => LocalIdentity {
-            node_id: crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_DEVICE_ID
-                .to_string(),
-            tenant_id: crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM.to_string(),
-            hub_endpoint: None,
-            paired: false,
+        Err(error) => LocalIdentity::Unavailable {
+            reason: format!("local device identity unavailable: {error}"),
         },
     }
 }
@@ -189,44 +189,36 @@ fn collect_device_view_with_probe(
     resolver: &dyn DiscoverFederationResolver,
     probe: &dyn DeviceProbe,
 ) -> DeviceNetworkView {
-    let local = local_identity();
+    let (node_id, tenant_id, hub_endpoint) = match local_identity() {
+        LocalIdentity::Paired {
+            node_id,
+            tenant_id,
+            hub_endpoint,
+        } => (node_id, tenant_id, hub_endpoint),
+        LocalIdentity::Unavailable { reason } => {
+            return DeviceNetworkView {
+                nodes: Vec::new(),
+                unavailable_nodes: Vec::new(),
+                federation_view: "local_only".to_string(),
+                federation_view_reason: Some(reason),
+                resolve_latency_ms: None,
+            };
+        }
+    };
     let mut nodes = vec![DeviceNodeSnapshot {
-        node_id: local.node_id.clone(),
-        tenant_id: local.tenant_id.clone(),
-        agent_ura: if local.paired {
-            Some(crate::core::ura::device_ura(
-                &local.tenant_id,
-                &local.node_id,
-            ))
-        } else {
-            None
-        },
+        node_id: node_id.clone(),
+        tenant_id: tenant_id.clone(),
+        agent_ura: Some(crate::core::ura::device_ura(&tenant_id, &node_id)),
         is_self: true,
-        paired: local.paired,
-        hub_endpoint: local.hub_endpoint.clone(),
-        state: if local.paired {
-            "HEALTHY".to_string()
-        } else {
-            "STANDALONE".to_string()
-        },
+        paired: true,
+        hub_endpoint: hub_endpoint.clone(),
+        state: "HEALTHY".to_string(),
         online: true,
         probe_status: "local".to_string(),
         probe_error: None,
         latency_ms: None,
     }];
     let mut unavailable_nodes = Vec::new();
-    if !local.paired {
-        return DeviceNetworkView {
-            nodes,
-            unavailable_nodes,
-            federation_view: "local_only".to_string(),
-            federation_view_reason: Some(
-                "device is not paired with a realm; only the local daemon can be described"
-                    .to_string(),
-            ),
-            resolve_latency_ms: None,
-        };
-    }
 
     let creds = match config::load_credentials() {
         Ok(c) => c,
@@ -272,7 +264,7 @@ fn collect_device_view_with_probe(
 
     let mut probed = 0usize;
     for (node_id, agent_ura) in device_agents {
-        if node_id == local.node_id {
+        if node_id == creds.node_id {
             if let Some(self_node) = nodes.first_mut() {
                 self_node.agent_ura = Some(agent_ura);
             }
@@ -294,7 +286,7 @@ fn collect_device_view_with_probe(
         };
         let node = DeviceNodeSnapshot {
             node_id,
-            tenant_id: local.tenant_id.clone(),
+            tenant_id: creds.realm.clone(),
             agent_ura: Some(agent_ura),
             is_self: false,
             paired: true,
@@ -356,11 +348,6 @@ fn resolve_device_record_with_probe(
     node_id: &str,
     probe: &dyn DeviceProbe,
 ) -> anyhow::Result<Option<ResolvedDeviceRecord>> {
-    let local = local_identity();
-    if !local.paired {
-        return Ok(None);
-    }
-
     let creds = config::load_credentials()
         .map_err(|e| anyhow::anyhow!("device credentials are unavailable: {e}"))?;
     let caller_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
@@ -709,6 +696,24 @@ mod tests {
         assert_eq!(value["online"], Value::Bool(false));
         assert_eq!(value["probe_status"], "probe_failed");
         assert_eq!(value["latency_ms"], 123);
+    }
+
+    #[test]
+    fn collect_device_view_rejects_missing_local_identity_without_default_node() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let resolver = StaticResolver { agents: Vec::new() };
+
+        let view = collect_device_view_with_probe(&resolver, &unreachable_probe());
+
+        assert!(
+            view.nodes.is_empty(),
+            "missing identity must not synthesize a local node: {view:#?}"
+        );
+        assert_eq!(view.federation_view, "local_only");
+        assert!(view
+            .federation_view_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("local device identity unavailable")));
     }
 
     #[test]

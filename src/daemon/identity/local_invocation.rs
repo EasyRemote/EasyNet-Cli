@@ -15,9 +15,6 @@ use std::sync::{Arc, OnceLock};
 
 pub(crate) use crate::core::ura::LOCAL_SYSTEM_AGENT_URA;
 
-pub(crate) const UNPAIRED_LOCAL_REALM: &str = "default";
-pub(crate) const UNPAIRED_LOCAL_DEVICE_ID: &str = "local";
-
 /// Build an Axon identity for a daemon-local agent URA.
 pub(crate) fn agent_identity(ura: impl Into<String>) -> AgentIdentity {
     AgentIdentity::new(ura, UraProfile::StrictV2)
