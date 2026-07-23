@@ -2168,6 +2168,46 @@ for expected in (
 PY
 }
 
+check_device_trust_sync_caller_classification_contract() {
+  local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
+  local device_sync="$cli_root/src/daemon/invocation/admission/device_trust_sync.rs"
+  [[ -f "$device_sync" ]] || fail "device trust sync source is missing: ${device_sync#$cli_root/}"
+
+  "$PYTHON_BIN" - "$device_sync" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+
+match = re.search(
+    r"fn syncable_caller\s*\([^)]*\)\s*->\s*(?P<ret>[^{]+)\{(?P<body>.*?)\n    \}",
+    text,
+    re.S,
+)
+if match is None:
+    raise SystemExit("device_trust_sync_caller_classification:syncable_caller_missing")
+body = match.group("body")
+ret = match.group("ret")
+if "Result<Option<SyncableCaller>, String>" not in ret:
+    raise SystemExit("device_trust_sync_caller_classification:not_typed_result")
+for retired in (
+    "parse_ura(caller_ura).ok()?",
+    "parse_ura(caller_ura).ok()",
+):
+    if retired in body:
+        raise SystemExit(f"device_trust_sync_caller_classification:retired_parse_fallback:{retired}")
+for required in (
+    "MalformedCaller(String)",
+    "DeviceTrustSyncStatus::MalformedCaller(err)",
+    "invalid caller_ura",
+    "malformed_caller_ura_is_not_reported_as_non_syncable",
+):
+    if required not in text:
+        raise SystemExit(f"device_trust_sync_caller_classification:missing:{required}")
+PY
+}
+
 check_observe_health_contract_projection_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local health="$cli_root/src/daemon/ability/builtins/governance/health.rs"
@@ -8547,6 +8587,31 @@ EOF
   if ( check_runtime_trust_user_key_write_scope_contract "$tmp/runtime-trust-user-key-write-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected runtime trust user-key write scope gate to fail"
   fi
+  mkdir -p "$tmp/device-trust-sync-caller-classification-legacy/src/daemon/invocation/admission"
+  cat >"$tmp/device-trust-sync-caller-classification-legacy/src/daemon/invocation/admission/device_trust_sync.rs" <<'EOF'
+enum DeviceTrustSyncStatus {
+    NotSyncable,
+}
+enum SyncableCaller {
+    Device,
+}
+impl DeviceTrustSync {
+    fn syncable_caller(
+        &self,
+        caller_ura: &str,
+        presented_pubkey_b64: Option<&str>,
+    ) -> Option<SyncableCaller> {
+        let parsed = crate::core::ura::parse_ura(caller_ura).ok()?;
+        match parsed.kind {
+            crate::core::ura::URAKind::Device => Some(SyncableCaller::Device),
+            _ => None,
+        }
+    }
+}
+EOF
+  if ( check_device_trust_sync_caller_classification_contract "$tmp/device-trust-sync-caller-classification-legacy" ) >/dev/null 2>&1; then
+    fail "self-test expected device trust sync caller classification fallback gate to fail"
+  fi
   mkdir -p "$tmp/product-e2e-history-fallback/tools/scripts"
   printf '%s\n' \
     'provider_cli "invocation list --ability-ura '\''$ADD_URA'\'' --format json" >"$OUT_DIR/provider-invocation-list-add-after-cli.json"' \
@@ -9274,6 +9339,7 @@ EOF
   check_runtime_trust_revoke_credentials_contract
   check_runtime_trust_user_key_inventory_scope_contract
   check_runtime_trust_user_key_write_scope_contract
+  check_device_trust_sync_caller_classification_contract
   check_product_e2e_invocation_history_exact_scope_contract
   check_observe_health_contract_projection_contract
   check_admission_owner_credentials_contract
@@ -9393,6 +9459,7 @@ check_local_api_key_cache_contract
 check_runtime_trust_revoke_credentials_contract
 check_runtime_trust_user_key_inventory_scope_contract
 check_runtime_trust_user_key_write_scope_contract
+check_device_trust_sync_caller_classification_contract
 check_product_e2e_invocation_history_exact_scope_contract
 check_observe_health_contract_projection_contract
 check_admission_owner_credentials_contract

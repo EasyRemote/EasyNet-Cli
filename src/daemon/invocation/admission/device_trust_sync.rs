@@ -64,6 +64,7 @@ enum KeySource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum DeviceTrustSyncStatus {
     NotSyncable,
+    MalformedCaller(String),
     AlreadyTrusted,
     Synced,
     NegativeCached,
@@ -82,6 +83,7 @@ impl DeviceTrustSyncStatus {
     pub(crate) fn diagnostic(&self) -> Option<String> {
         match self {
             Self::NotSyncable | Self::AlreadyTrusted | Self::Synced => None,
+            Self::MalformedCaller(err) => Some(format!("caller URA is malformed: {err}")),
             Self::NegativeCached => Some("negative cache is active".to_string()),
             Self::HubReturnedNoKeys => Some("hub returned no public keys".to_string()),
             Self::ResolveFailed(err) => Some(format!("hub resolve_key failed: {err}")),
@@ -232,8 +234,10 @@ impl DeviceTrustSync {
         caller_ura: &str,
         presented_pubkey_b64: Option<&str>,
     ) -> DeviceTrustSyncStatus {
-        let Some(role) = self.syncable_caller(caller_ura, presented_pubkey_b64) else {
-            return DeviceTrustSyncStatus::NotSyncable;
+        let role = match self.syncable_caller(caller_ura, presented_pubkey_b64) {
+            Ok(Some(role)) => role,
+            Ok(None) => return DeviceTrustSyncStatus::NotSyncable,
+            Err(err) => return DeviceTrustSyncStatus::MalformedCaller(err),
         };
         if self.anchor_has_caller_key(caller_ura, &role) {
             return DeviceTrustSyncStatus::AlreadyTrusted;
@@ -294,22 +298,23 @@ impl DeviceTrustSync {
         &self,
         caller_ura: &str,
         presented_pubkey_b64: Option<&str>,
-    ) -> Option<SyncableCaller> {
-        let parsed = crate::core::ura::parse_ura(caller_ura).ok()?;
+    ) -> Result<Option<SyncableCaller>, String> {
+        let parsed = crate::core::ura::parse_ura(caller_ura)
+            .map_err(|error| format!("invalid caller_ura `{caller_ura}`: {error}"))?;
         match parsed.kind {
-            crate::core::ura::URAKind::Device => Some(SyncableCaller::Device {
+            crate::core::ura::URAKind::Device => Ok(Some(SyncableCaller::Device {
                 presented_pubkey_b64: presented_pubkey_b64
                     .filter(|pk| !pk.is_empty())
                     .map(str::to_string),
-            }),
+            })),
             crate::core::ura::URAKind::User if parsed.realm == self.daemon_realm => {
-                Some(SyncableCaller::User {
+                Ok(Some(SyncableCaller::User {
                     presented_pubkey_b64: presented_pubkey_b64
                         .filter(|pk| !pk.is_empty())
                         .map(str::to_string),
-                })
+                }))
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 
@@ -782,6 +787,33 @@ mod tests {
                     Some(&test_key_b64()),
                 )
                 .await
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_caller_ura_is_not_reported_as_non_syncable() {
+        fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
+            panic!("resolver must not run for malformed callers");
+        }
+        let dir = tempfile::tempdir().expect("tmp");
+        let sync = sync_with(resolver, &dir);
+
+        let status = sync
+            .ensure_caller_key_status("not-a-canonical-ura", Some(&test_key_b64()))
+            .await;
+
+        match status {
+            DeviceTrustSyncStatus::MalformedCaller(message) => {
+                assert!(
+                    message.contains("invalid caller_ura"),
+                    "malformed status must preserve parse context: {message}"
+                );
+            }
+            other => panic!("malformed caller must be typed separately, got {other:?}"),
+        }
+        assert!(
+            !sync.ensure_caller_key("not-a-canonical-ura").await,
+            "public bool helper must still fail closed"
         );
     }
 }
